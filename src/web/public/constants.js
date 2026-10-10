@@ -1023,11 +1023,13 @@ function tabClusterNameSplit(name, label) {
 /**
  * Session-list search: the vertical rail's search box and the sidebar's filter
  * box. Trimmed, case-insensitive substring; a whitespace-only query is no query.
+ * Lower-cased with toLowerCase(), never toLocaleLowerCase(): under a Turkish or
+ * Azeri browser locale "API" lowers to "apı" and a search for "api" would miss it.
  * @param {unknown} query
  * @returns {string} the needle, '' when there is nothing to search for
  */
 function tabSearchNeedle(query) {
-  return typeof query === 'string' ? query.trim().toLocaleLowerCase() : '';
+  return typeof query === 'string' ? query.trim().toLowerCase() : '';
 }
 
 /**
@@ -1056,7 +1058,7 @@ function filterTabSearchRows(rows, query) {
   for (const row of Array.isArray(rows) ? rows : []) {
     const hasSection = row.section !== null && row.section !== undefined;
     if (hasSection && !counts.has(row.section)) counts.set(row.section, 0);
-    const text = typeof row.text === 'string' ? row.text.toLocaleLowerCase() : '';
+    const text = typeof row.text === 'string' ? row.text.toLowerCase() : '';
     const matches = !needle || text.includes(needle);
     if (!matches && row.keep !== true) {
       hidden.add(row.key);

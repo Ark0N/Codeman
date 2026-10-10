@@ -16,7 +16,15 @@
  * - Only the grouped rail is a tree: hidden rows and the headers of hidden
  *   groups leave the roving walk and the posinset/setsize count.
  * - The rail matches the NAME (a web tab's title); the sidebar keeps matching
- *   name + working directory.
+ *   name + working directory. Lower-casing never follows the browser locale
+ *   (a Turkish locale lowers "API" to "apı").
+ * - A session row with a tab alert is never hidden, and keeps its group or
+ *   case box on screen (the owner's call on #580).
+ * - Escape in a box that holds text clears the search and closes nothing else:
+ *   the global key handler runs first (capture phase) and must route it.
+ * - A change in what shows redraws the connector lines, which are anchored to
+ *   row positions; an unchanged re-apply does not.
+ * - The sidebar hides a case box its filter emptied, like the rail.
  * - The input is labelled, sits at the top of #tabRail, and every new string
  *   reads in zh-CN.
  *
@@ -125,6 +133,24 @@ describe('CodemanTabSearch (pure)', () => {
     expect(result.matchCount).toBe(0);
     expect(result.counts.get('g')).toBe(0);
     expect(search.filter(null as never, 'x').matchCount).toBe(0);
+  });
+
+  it('lower-cases without the browser locale, so a Turkish locale still finds "API"', () => {
+    // A context of its own, whose locale-aware lower-casing behaves like the
+    // Turkish locale (I -> dotless i). The prototypes are this context's alone.
+    const context = vm.createContext({ window: {}, globalThis: {} });
+    vm.runInContext(
+      "String.prototype.toLocaleLowerCase = function () { return String(this).replace(/I/g, '\\u0131').toLowerCase(); };",
+      context
+    );
+    vm.runInContext(read('constants.js'), context, { filename: 'constants.js' });
+    const turkish = (context.window as { CodemanTabSearch: TabSearch }).CodemanTabSearch;
+    expect(vm.runInContext("'API'.toLocaleLowerCase()", context)).toBe('apı');
+
+    expect(turkish.needle('API')).toBe('api');
+    const result = turkish.filter([{ key: 'r', text: 'API Review', section: null }], 'api');
+    expect(result.hidden.size).toBe(0);
+    expect(result.matchCount).toBe(1);
   });
 });
 
