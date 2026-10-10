@@ -5621,6 +5621,22 @@ html[data-skin="og"] .welcome-primary:hover {
   color: #eef2ff;
 }
 
+/* GitHub Copilot mode colors */
+.btn-toolbar.btn-run.mode-copilot,
+.btn-toolbar.btn-run-gear.mode-copilot {
+  background: linear-gradient(135deg, #2e1065 0%, #6d28d9 55%, #7c3aed 100%);
+  border-color: rgba(163, 113, 247, 0.5);
+  color: #ede9fe;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.btn-toolbar.btn-run.mode-copilot:hover,
+.btn-toolbar.btn-run-gear.mode-copilot:hover {
+  background: linear-gradient(135deg, #3b0f8c 0%, #7c3aed 55%, #8b5cf6 100%);
+  box-shadow: 0 0 12px rgba(163, 113, 247, 0.35), 0 2px 8px rgba(109, 40, 217, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-color: rgba(196, 167, 252, 0.6);
+  color: #f5f3ff;
+}
+
 /* Grok mode colors. Same cascade note as pi above: this base-sheet pair only
    renders on the `og` skin — the nested `html:not([data-skin="og"])` block
    re-declares `.btn-toolbar.btn-run` at a HIGHER specificity, so grok also
@@ -5780,6 +5796,7 @@ html[data-skin="og"] .welcome-primary:hover {
 .run-mode-dot.opencode,
 .run-mode-dot.pi,
 .run-mode-dot.grok,
+.run-mode-dot.copilot,
 .run-mode-dot.shell,
 .run-mode-dot.web {
   width: 1.15em;
@@ -5800,6 +5817,7 @@ html[data-skin="og"] .welcome-primary:hover {
 .run-mode-dot.opencode,
 .run-mode-dot.pi,
 .run-mode-dot.grok,
+.run-mode-dot.copilot,
 .run-mode-dot.shell,
 .run-mode-dot.web {
   background-color: currentColor;
@@ -5815,6 +5833,7 @@ html[data-skin="og"] .welcome-primary:hover {
 .run-mode-dot.opencode { --run-mode-logo: url("data:image/svg+xml,%3Csvg fill-rule='evenodd' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M16 6H8v12h8V6zm4 16H4V2h16v20z'/%3E%3C/svg%3E"); }
 .run-mode-dot.pi { --run-mode-logo: url("data:image/svg+xml,%3Csvg fill-rule='evenodd' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath clip-rule='evenodd' d='M1 1h16.5v11H12v5.5H6.5V23H1V1zm5.5 5.5V12H12V6.5H6.5z'/%3E%3Cpath d='M17.5 12H23v11h-5.5V12z'/%3E%3C/svg%3E"); }
 .run-mode-dot.grok { --run-mode-logo: url("data:image/svg+xml,%3Csvg fill-rule='evenodd' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815'/%3E%3C/svg%3E"); }
+.run-mode-dot.copilot { --run-mode-logo: url("data:image/svg+xml,%3Csvg fill-rule='evenodd' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 3C7 3 3 6.5 3 11v4a3 3 0 003 3h12a3 3 0 003-3v-4c0-4.5-4-8-9-8zM8.5 11.5a1.5 2 0 110 4 1.5 2 0 010-4zm7 0a1.5 2 0 110 4 1.5 2 0 010-4z'/%3E%3C/svg%3E"); }
 .run-mode-dot.shell { --run-mode-logo: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.5' y='3.5' width='19' height='17' rx='3'/%3E%3Cpath d='M7 9.5l3 2.5-3 2.5M12.5 15h4.5'/%3E%3C/svg%3E"); }
 .run-mode-dot.web { --run-mode-logo: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20'/%3E%3C/svg%3E"); }
 
@@ -15833,6 +15852,12 @@ html:not([data-skin="og"]) {
   color: #e0e7ff;
 }
 .btn-toolbar.btn-run.mode-omp:hover { box-shadow: 0 0 14px -2px rgba(129, 140, 248, 0.45); }
+.btn-toolbar.btn-run.mode-copilot {
+  background: linear-gradient(135deg, #6d28d9, #8b5cf6);
+  border-color: #5b21b6;
+  color: #ede9fe;
+}
+.btn-toolbar.btn-run.mode-copilot:hover { box-shadow: 0 0 14px -2px rgba(163, 113, 247, 0.45); }
 .btn-toolbar.btn-run.mode-pi {
   background: linear-gradient(135deg, #be185d, #f472b6);
   border-color: #be185d;

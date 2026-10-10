@@ -3527,6 +3527,7 @@ Object.assign(CodemanApp.prototype, {
         opencode: 'openCodeConfig',
         pi: 'piConfig',
         grok: 'grokConfig',
+        copilot: 'copilotConfig',
         omp: 'ompConfig',
       }[effectiveMode];
       // codex names a thread by an id of its own, not by Codeman's session id,

@@ -277,5 +277,33 @@
         "docsUrl": "https://omp.sh"
       }
     }
+  },
+  {
+    "id": "copilot",
+    "label": "GitHub Copilot",
+    "shortBadge": "CP",
+    "enabled": true,
+    "order": 100,
+    "kind": "agent",
+    "discovery": {
+      "binaries": [
+        "copilot"
+      ],
+      "searchDirs": [
+        "~/.local/bin",
+        "/usr/local/bin",
+        "~/.bun/bin",
+        "~/.npm-global/bin",
+        "~/bin"
+      ],
+      "install": {
+        "command": {
+          "linux": "npm install -g @github/copilot",
+          "darwin": "npm install -g @github/copilot"
+        },
+        "npmPackage": "@github/copilot",
+        "docsUrl": "https://github.com/github/copilot-cli"
+      }
+    }
   }
 ]

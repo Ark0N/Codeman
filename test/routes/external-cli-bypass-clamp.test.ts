@@ -104,6 +104,25 @@ describe('clampExternalCliBypassForOwner — multi-user mode', () => {
     expect(out.grokConfig).toEqual({ alwaysApprove: false, model: 'grok-4.5' });
   });
 
+  it("forces a non-granted owner's copilot --yolo off and keeps the model", async () => {
+    const out = await _clampExternalCliBypassForOwner(
+      'peon',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { allowAll: true, model: 'claude-sonnet-5.5' }
+    );
+    expect(out.copilotConfig).toEqual({ allowAll: false, model: 'claude-sonnet-5.5' });
+  });
+
+  it('leaves copilot absent when nothing was sent (a bare copilot is already Manual Approval)', async () => {
+    const out = await _clampExternalCliBypassForOwner('peon', undefined, undefined, undefined, undefined, undefined);
+    expect(out.copilotConfig).toBeUndefined();
+  });
+
   it("keeps a non-granted owner's codex reasoning effort while forcing bypass off", async () => {
     // The clamp rewrites one field and must carry the rest; a clamp rebuilt from named
     // fields would drop the effort here without a word.

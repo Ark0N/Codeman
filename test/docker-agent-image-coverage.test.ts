@@ -128,7 +128,7 @@ describe('docker server image divergence is declared, not accidental', () => {
   // untouched by this change because two other open PRs already modify it. Asserting the
   // omissions here makes the divergence reviewable without editing the file: if someone adds
   // a CLI there, or the intent changes, this fails and the list has to be restated.
-  const SERVER_INTENTIONAL_OMISSIONS = new Set(['antigravity', 'pi', 'grok', 'deepseek', 'omp']);
+  const SERVER_INTENTIONAL_OMISSIONS = new Set(['antigravity', 'pi', 'grok', 'deepseek', 'omp', 'copilot']);
 
   it('installs exactly the CLIs it declares, and no more', () => {
     for (const entry of enabledAgents) {

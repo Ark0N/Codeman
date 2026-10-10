@@ -1205,6 +1205,20 @@ html.mobile-init .file-browser-panel {
     border-color: rgba(129, 140, 248, 0.5) !important;
   }
 
+  /* GitHub Copilot mode colors on mobile. Same `!important` rationale as the pi/grok/deepseek/omp blocks above. */
+  .btn-toolbar.btn-run.mode-copilot,
+  .btn-toolbar.btn-run-gear.mode-copilot {
+    background: #2e1065 !important;
+    border-color: rgba(163, 113, 247, 0.3) !important;
+    color: #ede9fe !important;
+  }
+
+  .btn-toolbar.btn-run.mode-copilot:active,
+  .btn-toolbar.btn-run-gear.mode-copilot:active {
+    background: #6d28d9 !important;
+    border-color: rgba(163, 113, 247, 0.5) !important;
+  }
+
   /* Run mode dropdown menu — positioned above toolbar on mobile */
   .run-mode-menu {
     bottom: 100%;
@@ -3290,6 +3304,12 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-omp, .btn-toolbar.btn-run-gear.mode-omp) {
   background: linear-gradient(135deg, #4f46e5, #6366f1);
   border-color: #4338ca;
+  color: #ffffff;
+}
+
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-toolbar.btn-run.mode-copilot, .btn-toolbar.btn-run-gear.mode-copilot) {
+  background: linear-gradient(135deg, #6d28d9, #8b5cf6);
+  border-color: #5b21b6;
   color: #ffffff;
 }
 

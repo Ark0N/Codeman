@@ -533,7 +533,7 @@ Harness TUI reports `idle`/`working`/`blocked` to Codeman over the supervisor co
 implements, so dsh is the one external CLI with definitive `stop`/`blocked` signals
 instead of guessed-from-silence ones — and it writes a structured transcript, which is
 what `last-response` reads for it. `shell`, `opencode`, `codex`, `gemini`, `antigravity`,
-`pi`, `grok` and `omp` have neither and still need markers ([§5.5](reference/verbs.md#55-markers-for-hook-less-workers)).
+`pi`, `grok`, `omp` and `copilot` have neither and still need markers ([§5.5](reference/verbs.md#55-markers-for-hook-less-workers)).
 
 Three things to know before you spawn one:
 

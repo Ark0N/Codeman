@@ -15,7 +15,7 @@
  * PR B2: the single source for every non-Claude, non-Shell run mode's launch
  * shape, consumed by `_runCliMode()` below. Before this table existed, each of
  * `runOpenCode`/`runCodex`/`runGemini`/`runAntigravity`/`runPi`/`runOmp`/
- * `runGrok`/`runDeepSeek` was a ~45-line copy of the same probe/launch/select
+ * `runGrok`/`runDeepSeek`/`runCopilot` was a ~45-line copy of the same probe/launch/select
  * skeleton with only the CLI-specific pieces below actually differing — eight
  * near-identical bodies guaranteed to drift, exactly what the CLI registry's
  * own no-id-branching rule exists to prevent server-side.
@@ -78,6 +78,16 @@ const RUN_MODE_LAUNCH = {
     installHint: 'OMP CLI not found. Install with: curl -fsSL https://omp.sh/install | sh',
     supportsCustomModel: true,
     buildConfig: () => null,
+  },
+  copilot: {
+    label: 'GitHub Copilot',
+    installHint: 'GitHub Copilot CLI not found. Install with: npm install -g @github/copilot',
+    // Custom endpoints go in through Copilot's BYOK env vars (COPILOT_PROVIDER_*).
+    supportsCustomModel: true,
+    // Sends `copilotConfig: { allowAll: true }` the way grok sends `alwaysApprove: true`:
+    // Codeman sessions exist for autonomous work, so the Run button opts into `--yolo`.
+    // The multi-user clamp forces it back off for non-granted owners server-side.
+    buildConfig: () => ({ copilotConfig: { allowAll: true } }),
   },
   grok: {
     label: 'Grok',
@@ -2417,6 +2427,10 @@ Object.assign(CodemanApp.prototype, {
 
   async runDeepSeek() {
     return this._runCliMode('deepseek');
+  },
+
+  async runCopilot() {
+    return this._runCliMode('copilot');
   },
 
 

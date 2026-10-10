@@ -126,7 +126,7 @@ RUN set -eux; \
 # ⚠️ The default is in REGISTRY order, byte-identical to what the generator emits.
 # A different order is a different RUN string, which is a different layer hash and
 # so a needless cache miss between a bare `docker build` and a scripted one.
-ARG CLI_NPM_PACKAGES="@anthropic-ai/claude-code opencode-ai @openai/codex @google/gemini-cli"
+ARG CLI_NPM_PACKAGES="@anthropic-ai/claude-code opencode-ai @openai/codex @google/gemini-cli @github/copilot"
 # uv/uvx: MCP servers are commonly launched with `uvx <package>` (e.g. the Nginx
 # Proxy Manager MCP), and Codex failed to enable them with "uvx not found". Copied
 # from the pinned upstream image into root-owned /usr/local/bin, never pip-installed.

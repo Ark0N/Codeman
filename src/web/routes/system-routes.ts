@@ -712,6 +712,20 @@ export function registerSystemRoutes(
     };
   });
 
+  // ========== GitHub Copilot ==========
+
+  // Carries `version` like pi/grok/omp: `copilot` is a generic binary name, so the resolver
+  // only accepts one whose `--version` says "GitHub Copilot CLI".
+  app.get('/api/copilot/status', async () => {
+    const { isCopilotAvailable, resolveCopilotDir, getCopilotCliVersion } =
+      await import('../../utils/copilot-cli-resolver.js');
+    return {
+      available: isCopilotAvailable(),
+      path: resolveCopilotDir(),
+      version: getCopilotCliVersion(),
+    };
+  });
+
   // ═══════════════════════════════════════════════════════════════
   // State & Lifecycle (cleanup, lifecycle log, stats)
   // ═══════════════════════════════════════════════════════════════

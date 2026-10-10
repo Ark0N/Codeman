@@ -21,6 +21,7 @@ import { isPiAvailable } from '../src/utils/pi-cli-resolver.js';
 import { isGrokAvailable } from '../src/utils/grok-cli-resolver.js';
 import { isDeepSeekAvailable, isDeepSeekRunnable } from '../src/utils/deepseek-cli-resolver.js';
 import { isOmpAvailable } from '../src/utils/omp-cli-resolver.js';
+import { isCopilotAvailable } from '../src/utils/copilot-cli-resolver.js';
 import { isCloudflaredAvailable } from '../src/utils/cloudflared-resolver.js';
 import { isGitAvailable } from '../src/git-clone.js';
 import { enabledClis, reloadCliRegistry } from '../src/config/cli-registry/registry.js';
@@ -75,6 +76,10 @@ vi.mock('../src/utils/deepseek-cli-resolver.js', () => ({
 vi.mock('../src/utils/omp-cli-resolver.js', () => ({
   isOmpAvailable: vi.fn(() => false),
   resolveOmpDir: vi.fn(() => null),
+}));
+vi.mock('../src/utils/copilot-cli-resolver.js', () => ({
+  isCopilotAvailable: vi.fn(() => false),
+  resolveCopilotDir: vi.fn(() => null),
 }));
 vi.mock('../src/utils/cloudflared-resolver.js', () => ({
   isCloudflaredAvailable: vi.fn(() => false),
@@ -190,6 +195,7 @@ describe('WebServer.renderIndexHtml', () => {
     vi.mocked(isDeepSeekAvailable).mockReturnValue(false);
     vi.mocked(isDeepSeekRunnable).mockReturnValue(false);
     vi.mocked(isOmpAvailable).mockReturnValue(true);
+    vi.mocked(isCopilotAvailable).mockReturnValue(true);
     vi.mocked(isCloudflaredAvailable).mockReturnValue(true);
     vi.mocked(isGitAvailable).mockReturnValue(true);
     const { server } = makeServer({});
@@ -208,6 +214,7 @@ describe('WebServer.renderIndexHtml', () => {
       deepseek: false,
       deepseekBinary: false,
       omp: true,
+      copilot: true,
       cloudflared: true,
       git: true,
       shell: true,
@@ -348,6 +355,7 @@ describe('WebServer.renderIndexHtml', () => {
       isDeepSeekAvailable,
       isDeepSeekRunnable,
       isOmpAvailable,
+      isCopilotAvailable,
       isCloudflaredAvailable,
       isGitAvailable,
     ]) {
