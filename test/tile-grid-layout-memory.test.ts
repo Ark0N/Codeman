@@ -475,6 +475,29 @@ describe('a session that went away by itself while the grid was open', () => {
     expect(app._tileGrid.ids).not.toContain('s-e');
   });
 
+  it('popped out while open (the pop-out button, or another tab announcing it): the count stays, the cell refills after re-dock', () => {
+    const app = six();
+    // What the real pop-out paths touch: detachSession and the window channel
+    // both mark through _markDetached; _redock clears it again.
+    app._detachOrphanStrikes = new Map();
+    app._detachWatchTimers = new Map();
+    app._redockGrace = new Map();
+    app.detachedWindows = new Map();
+    app._elemCache = {};
+    app._onWindowMessage({ type: 'detached', id: 's-e' });
+    expect(app.detachedSessions.has('s-e')).toBe(true);
+    expect(app._tileGrid.cells).toEqual(['s-a', 's-b', 's-c', 's-d', null, 's-f']);
+    // Not the user's hand: the count stays six, the same as a pop-out with the grid closed.
+    expect(stored()).toMatchObject({ ids: ['s-a', 's-b', 's-c', 's-d', null, 's-f'], count: 6 });
+    app._redock('s-e');
+    expect(app.detachedSessions.has('s-e')).toBe(false);
+    app.toggleTileGrid();
+    app.toggleTileGrid();
+    // The freed cell is filled from the ranking (all quiet here: tab order, s-other first).
+    expect(app._tileGrid.cells).toEqual(['s-a', 's-b', 's-c', 's-d', 's-other', 's-f']);
+    expect(stored().count).toBe(6);
+  });
+
   it('removed by hand instead: the hole stays a hole', () => {
     const app = six(['s-g']);
     app.removeTile('s-d');

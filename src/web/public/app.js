@@ -1820,8 +1820,11 @@ class CodemanApp {
   _markDetached(id, on) {
     if (on) this.detachedSessions.add(id); else this.detachedSessions.delete(id);
     // A popped-out session's window owns its PTY size now, so it leaves the
-    // tile grid (one place per session in this browser tab).
-    if (on && this._tileGrid?.has(id)) this.removeTile(id);
+    // tile grid (one place per session in this browser tab). `gone`: it left by
+    // itself, not by a tile the user removed, so the grid's count stays and the
+    // ranking fills that cell the next time the grid opens, as when it pops out
+    // with the grid closed.
+    if (on && this._tileGrid?.has(id)) this.removeTile(id, { gone: true });
     const container = this.$('sessionTabs');
     const tab = container && container.querySelector(`.session-tab[data-id="${id}"]`);
     if (tab) tab.classList.toggle('detached', on);
