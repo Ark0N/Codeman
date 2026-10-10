@@ -87,6 +87,85 @@ the HTTP status.
 
 Adding a new error code is non-breaking; removing or renaming one is a major change.
 
+## Cron jobs
+
+Saved jobs and their launch history are separate from the legacy `/api/scheduled`
+duration-bounded loops. Use `/api/v1/cron/...` in external clients; `/api/cron/...`
+is the unversioned alias. These routes use the response envelope above; the table
+lists the value inside `data` on success.
+
+| Method | Path | Request body | Response `data` |
+| --- | --- | --- | --- |
+| GET | `/api/v1/cron/jobs` | None | `CronJob[]` |
+| POST | `/api/v1/cron/jobs` | Full job definition below | `{ job: CronJob }` |
+| GET | `/api/v1/cron/jobs/:id` | None | `CronJob` |
+| PUT | `/api/v1/cron/jobs/:id` | Partial job definition | `{ job: CronJob }` |
+| DELETE | `/api/v1/cron/jobs/:id` | None | `{}` |
+| PUT | `/api/v1/cron/jobs/:id/enabled` | `{ enabled: boolean }` | `{ job: CronJob }` |
+| POST | `/api/v1/cron/jobs/:id/run` | None | `{ run: CronJobRun, activeAgents: number }` |
+| GET | `/api/v1/cron/jobs/:id/runs` | None | `CronJobRun[]` |
+| GET | `/api/v1/cron/runs` | None | `CronJobRun[]` |
+
+### Job request fields
+
+The create body requires `name`, `agentType`, `workingDir`, `promptMode`,
+`inputMode`, `scheduleType`, `enabled`, and `concurrencyPolicy`. Additional fields
+are required according to the selected prompt and schedule:
+
+| Field | Type / validation |
+| --- | --- |
+| `name` | String, 1–200 characters |
+| `agentType` | A supported session mode (including `shell`) |
+| `workingDir` | Existing, allowed working-directory path |
+| `launchCommand` | Optional single-line string, at most 2000 characters; for shell jobs |
+| `promptMode` | `inline_text` or `prompt_file_path` |
+| `promptText` | Required for `inline_text`; nonempty single-line string, at most 100000 characters |
+| `promptFilePath` | Required for `prompt_file_path`; regular file confined to `workingDir`, at most 1 MiB, read when the job fires |
+| `inputMode` | `paste` or `typed` |
+| `scheduleType` | `once`, `interval`, `daily`, or `weekly` |
+| `runAt` | Required for `once`; positive integer Unix timestamp in milliseconds |
+| `intervalMinutes` | Required for `interval`; integer from 1 to 525600 |
+| `dailyTime` | Required for `daily`; `HH:MM` in server-local time |
+| `weeklyDays` | Required for `weekly`; 1–7 weekday integers, 0 (Sunday) through 6 (Saturday) |
+| `weeklyTime` | Required for `weekly`; `HH:MM` in server-local time |
+| `enabled` | Boolean |
+| `concurrencyPolicy` | `warn_only` or `skip_if_same_agent_running`; scheduled runs only |
+| `autoClosePreviousSession` | Optional boolean, default `true`; ignored for `once` |
+| `notes` | Optional string, at most 2000 characters |
+
+`PUT /jobs/:id` accepts any subset of these fields, then validates the merged job.
+When changing `promptMode` or `scheduleType`, supply the fields the new mode needs.
+`Run Now` works even when the job is disabled, bypasses the scheduled concurrency
+policy, and does not change the schedule. `activeAgents` counts live sessions of
+the same agent type, excluding sessions created by this job.
+
+### Job and run response fields
+
+`CronJob` contains the request fields plus server-maintained `id`, optional
+`owner` (multi-user mode), `createdAt`, `updatedAt`, `lastRunAt`, `nextRunAt`,
+`lastStatus`, `lastDueKey`, and optional `completedOnce`. Times are Unix
+milliseconds; `lastRunAt`, `nextRunAt`, `lastStatus`, and `lastDueKey` can be `null`.
+
+`CronJobRun` contains `id`, `cronJobId`, nullable `sessionId` and `sessionName`,
+`startedAt`, nullable `finishedAt`, `status`, optional `errorMessage`,
+`triggerType` (`scheduled` or `manual_run_now`), and nullable `createdSessionUrl`.
+Run times are also Unix milliseconds. Status is one of `created`,
+`session_started`, `prompt_sent`, `failed`, or `skipped`.
+
+Prompt delivery continues asynchronously after session launch, so `Run Now` can
+return `session_started` before the prompt is sent. Read run history for the later
+status. `finishedAt` refers to the launch/prompt-delivery attempt, **not completion
+of the agent's task**; `prompt_sent` does not prove that the task succeeded.
+
+In multi-user mode, list/history endpoints filter to accessible jobs. An unknown
+or inaccessible job returns `NOT_FOUND`. Job creation and updates can return
+`FORBIDDEN` for a working directory outside the owner's workspace or a shell /
+launch-command job without the required privilege grant. Invalid definitions or
+working directories return `INVALID_INPUT`; launch/delivery failures are recorded
+on the run, so inspect its `status` and `errorMessage` even after an HTTP success.
+
+See [Cron Jobs](wiki/Cron-Jobs.md) for the UI, scheduling, and prompt-file rules.
+
 ## Long-polling (agent wait)
 
 Three calls block until something happens instead of answering immediately. They
