@@ -135,6 +135,10 @@ export function buildRemoteFileCommand(remote: SessionRemote, shellCommand: stri
  * `echo` (which land before the script runs) from the records without any "last N
  * lines" guesswork. `realPath` is the last field, so a `|` in a path still parses.
  *
+ * A path starting with `~/` is taken relative to the remote user's `$HOME`: this
+ * server does not know that home, and a clicked `~/…` link means the host the
+ * session runs on. The record's `realPath` is absolute, as for any other path.
+ *
  * Symlink resolution is portable AND fails closed. `readlink -f` where available
  * (Linux, macOS >= 12.3); otherwise the fallback canonicalizes the directory chain
  * with `cd -P`/`pwd -P` and then follows the LAST component with plain `readlink`
@@ -166,6 +170,8 @@ export function buildRemoteProbeCommand(paths: readonly string[]): string {
     'probe() {',
     '  i=$1',
     '  p=$2',
+    // `~/…` from a clicked link: THIS host's home (assignment, so no word splitting).
+    "  case $p in '~/'*) p=$HOME/${p#??} ;; esac",
     `  if [ ! -e "$p" ]; then printf '%s|${NOT_FOUND_MARKER}\\0' "$i"; return; fi`,
     `  r=$(readlink -f "$p" 2>/dev/null) || r=$(resolve_last "$p") || { printf '%s|${UNRESOLVABLE_MARKER}\\0' "$i"; return; }`,
     `  [ -n "$r" ] || { printf '%s|${UNRESOLVABLE_MARKER}\\0' "$i"; return; }`,

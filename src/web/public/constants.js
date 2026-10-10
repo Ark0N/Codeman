@@ -1976,6 +1976,95 @@ function previewsInFileViewer(filePath) {
   return FILE_PREVIEW_EXTENSIONS.has(ext);
 }
 
+/**
+ * Home-relative and relative file paths: `~/repos/x/garage.png` (how Claude Code
+ * echoes an attached image), `builds/captures/shot.png`, `./a.md`, `../b.json`,
+ * or a bare `look_montage.png`. Same extension list and body as
+ * {@link FILE_PATH_LINK_PATTERN} (test/link-provider-regex.test.ts pins the two
+ * equal).
+ *
+ * Without a known root to anchor on, the START is what has to be unambiguous:
+ * group 1 is the boundary in front of the path (line start, whitespace, a quote,
+ * an opening bracket, `=`, `,`, `>`), so a match can never begin in the middle of
+ * a word, of an absolute path (`/nix/store/x.png` is not `nix/store/x.png`) or of
+ * a URL. The path itself is group 2. Its first character is never `/`: absolute
+ * paths belong to the rooted pattern, which deliberately leaves `/etc` out. A
+ * token containing `://` is a URL, never a path. Brackets, `=` and `,` end a
+ * relative path (unlike a rooted one): `(garage.png)` and `OUT=shots/a.png` link
+ * the file, not the punctuation around it.
+ *
+ * ⚠ Like its sibling, never share an instance (`lastIndex`): use
+ * {@link findFilePathLinks}.
+ */
+const RELATIVE_FILE_PATH_LINK_PATTERN =
+  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html|toml|ini|sql|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|mp4|webm|mov|mp3|wav))\b/g;
+
+/** The `(?:log|txt|…)` extension group, read off the rooted pattern so it cannot drift. */
+const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LINK_PATTERN.source)[1];
+
+/**
+ * Every linkable file path in `text`, in order: absolute (rooted) paths first,
+ * then `~/` and relative ones that do not overlap them or a URL.
+ *
+ * The one entry point for both consumers (terminal link provider, response
+ * viewer), so a path form is clickable in both or in neither.
+ *
+ * @param {string} text
+ * @returns {Array<{path: string, index: number}>} `index` is where `path` starts in `text`.
+ */
+function findFilePathLinks(text) {
+  const value = String(text || '');
+  const found = [];
+  const overlaps = (index, length) => found.some((f) => index < f.index + f.path.length && f.index < index + length);
+  // Web URLs are never cut into a path: `https://x.io/a/home/b.png` and
+  // `?img=b.png` belong to the URL link, not to a second, overlapping file link.
+  // (`file:///home/x.png` is not one of them: its path is the file.)
+  const urls = [];
+  const urlPattern = /\bhttps?:\/\/\S+/gi;
+  let match;
+  while ((match = urlPattern.exec(value)) !== null) urls.push({ index: match.index, path: match[0] });
+  const inUrl = (index, length) => urls.some((u) => index < u.index + u.path.length && u.index < index + length);
+
+  const absolute = absoluteFilePathPattern();
+  while ((match = absolute.exec(value)) !== null) {
+    if (!inUrl(match.index, match[1].length)) found.push({ path: match[1], index: match.index });
+  }
+  const relative = new RegExp(RELATIVE_FILE_PATH_LINK_PATTERN.source, 'g');
+  while ((match = relative.exec(value)) !== null) {
+    const path = match[2];
+    const index = match.index + match[1].length;
+    if (overlaps(index, path.length) || inUrl(index, path.length)) continue;
+    found.push({ path, index });
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+
+/**
+ * Where a clicked path points, as the preview routes need it.
+ *
+ * Absolute and `~/` paths pass through unchanged — `~` is the home of the
+ * session's HOST, which only the server knows (a remote case's home is on the
+ * remote machine), so the server expands it. A relative path is resolved
+ * against the session's working directory, `.` and `..` collapsed, so a
+ * `../other/x.png` ends up outside the workspace and routes like any other
+ * external path. Without a working directory it is returned as is.
+ *
+ * @param {string} filePath
+ * @param {string} [workingDir]
+ * @returns {string}
+ */
+function resolveLinkedFilePath(filePath, workingDir) {
+  const path = String(filePath || '');
+  if (!path || path.startsWith('/') || path.startsWith('~/') || !workingDir) return path;
+  const parts = [];
+  for (const part of `${workingDir}/${path}`.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return `/${parts.join('/')}`;
+}
+
 
 /**
  * The LOGICAL line a terminal row belongs to — the rows it spans, its text as one
@@ -2078,6 +2167,125 @@ function terminalLogicalLine(buffer, row, cols, maxRows) {
   };
 
   return { startRow, endRow, text, offsetToCell, cellToOffset };
+}
+
+/** Roots of {@link FILE_PATH_LINK_PATTERN}, read off its source (`home|Users|…`). */
+const FILE_LINK_ROOT_GROUP = /^\(\\\/\(\?:([^()]*)\)/.exec(FILE_PATH_LINK_PATTERN.source)[1];
+const PATH_TOKEN_ENDS_WITH_EXTENSION = new RegExp(`\\.${FILE_LINK_EXTENSION_GROUP}$`);
+const PATH_TOKEN_HAS_EXTENSION = new RegExp(`\\.${FILE_LINK_EXTENSION_GROUP}\\b`);
+const PATH_TOKEN_STARTS_NEW_PATH = new RegExp(`^(?:~\\/|\\/(?:${FILE_LINK_ROOT_GROUP})\\/)`);
+
+/**
+ * Whether the line `nextText` carries on a file path `prevText` broke off.
+ *
+ * Answers `'join'` when the path ends (reaches a known extension) on the next
+ * line, `'chain'` when the next line is nothing but more of the path (a path
+ * spanning three or more lines; only worth keeping once a later line ends it),
+ * and `null` otherwise. The broken-off token must already look like a path in
+ * progress: it contains a `/`, ends on a path character and does not yet end
+ * on an extension. A next line that opens a NEW rooted path (`/home/…`, `~/…`)
+ * is never glued on.
+ */
+function pathContinuation(prevText, nextText) {
+  const tail = /[^\s"'<>|;&]+$/.exec(String(prevText || '').replace(/\s+$/, ''))?.[0] || '';
+  if (!tail.includes('/') || !/[\w\-.~+@%/]$/.test(tail) || PATH_TOKEN_ENDS_WITH_EXTENSION.test(tail)) return null;
+  const next = String(nextText || '').replace(/^\s+/, '');
+  const head = /^[^\s"'<>|;&]+/.exec(next)?.[0] || '';
+  if (!head || PATH_TOKEN_STARTS_NEW_PATH.test(head)) return null;
+  if (PATH_TOKEN_HAS_EXTENSION.test(head)) return 'join';
+  return head === next.replace(/\s+$/, '') ? 'chain' : null;
+}
+
+/**
+ * {@link terminalLogicalLine}, extended across the line breaks a program puts
+ * INSIDE a file path. Used by the link provider only; touch selection keeps the
+ * plain logical line.
+ *
+ * Claude Code wraps its tool output itself, a few columns short of the terminal
+ * edge, so neither continuation signal of terminalLogicalLine fires (no
+ * `isWrapped`, the row does not reach the last column) and a long path was only
+ * linked up to the break:
+ *
+ *       ⎿  BILD /mnt/build/neon_getaway-mgr-hebel/builds/captures/2
+ *          026-10-10/ghost1b_gameplay.png err=0 …
+ *
+ * A following logical line is glued on (its indent dropped, cell mapping kept
+ * exact) when {@link pathContinuation} says it carries the path on and the row it
+ * broke off is at least as long as the row it continues on. Bounded by the same
+ * `maxRows` as the logical line.
+ *
+ * @returns Same shape as {@link terminalLogicalLine}; null when the row does not exist.
+ */
+function terminalPathLine(buffer, row, cols, maxRows) {
+  const base = terminalLogicalLine(buffer, row, cols, maxRows);
+  if (!base) return null;
+  const bound = Math.max(1, maxRows || 12);
+  const lineAt = (r) => terminalLogicalLine(buffer, r, cols, bound);
+  const rowsOf = (line) => line.endRow - line.startRow + 1;
+  // A program breaking a long token fills the row to its wrap width, and no
+  // later row of that block is wider. So the row a path broke off is at least as
+  // long as the row it continues on — which keeps `cd /mnt/foo` from being glued
+  // to a longer `  file.png written` below it.
+  const rowLength = (r) => (buffer.getLine(r)?.translateToString(true) || '').length;
+  const continues = (prev, next, prevText) =>
+    rowLength(prev.endRow) >= rowLength(next.startRow) && pathContinuation(prevText, next.text);
+
+  /** `first` and the lines a path carries on into, stopping at the last confirmed join. */
+  const extend = (first) => {
+    const parts = [first];
+    let text = first.text;
+    let rows = rowsOf(first);
+    let confirmed = 1;
+    for (;;) {
+      const next = lineAt(parts[parts.length - 1].endRow + 1);
+      if (!next || rows + rowsOf(next) > bound) break;
+      const kind = continues(parts[parts.length - 1], next, text);
+      if (!kind) break;
+      parts.push(next);
+      text += next.text.replace(/^\s+/, '');
+      rows += rowsOf(next);
+      if (kind === 'join') confirmed = parts.length;
+    }
+    return parts.slice(0, confirmed);
+  };
+
+  // The hovered row may be the second or third line of a broken path: walk back
+  // to where it could start, then let the forward pass decide what really joins.
+  let first = base;
+  let rows = rowsOf(base);
+  while (first.startRow > 0) {
+    const prev = lineAt(first.startRow - 1);
+    if (!prev || rows + rowsOf(prev) > bound || !continues(prev, first, prev.text)) break;
+    first = prev;
+    rows += rowsOf(prev);
+  }
+  let parts = extend(first);
+  if (parts[parts.length - 1].endRow < base.startRow) parts = extend(base);
+  if (parts.length === 1) return parts[0];
+
+  const segments = [];
+  let text = '';
+  for (const [i, part] of parts.entries()) {
+    const skip = i === 0 ? 0 : part.text.length - part.text.replace(/^\s+/, '').length;
+    segments.push({ part, textStart: text.length, skip });
+    text += part.text.slice(skip);
+  }
+  const offsetToCell = (offset) => {
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const seg = segments[i];
+      if (offset >= seg.textStart || i === 0) return seg.part.offsetToCell(offset - seg.textStart + seg.skip);
+    }
+    return segments[0].part.offsetToCell(offset);
+  };
+  const cellToOffset = (targetRow, targetCol) => {
+    for (const seg of segments) {
+      if (targetRow < seg.part.startRow || targetRow > seg.part.endRow) continue;
+      const offset = seg.part.cellToOffset(targetRow, targetCol);
+      return offset < 0 ? -1 : seg.textStart + Math.max(0, offset - seg.skip);
+    }
+    return -1;
+  };
+  return { startRow: parts[0].startRow, endRow: parts[parts.length - 1].endRow, text, offsetToCell, cellToOffset };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2992,8 +3200,14 @@ function describeSessionHarness(session, catalog) {
 if (typeof window !== 'undefined') {
   window.CodemanSessionHarness = { describeSessionHarness, SESSION_MODEL_MAX_CHARS };
   window.CodemanHistoryFormat = { formatHistoryBytes, computeHistoryTruncationNotice, computeRewriteScrollLine };
-  window.CodemanFilePaths = { absoluteFilePathPattern, previewsInFileViewer, FILE_PREVIEW_EXTENSIONS };
-  window.CodemanTerminalLines = { terminalLogicalLine };
+  window.CodemanFilePaths = {
+    absoluteFilePathPattern,
+    findFilePathLinks,
+    resolveLinkedFilePath,
+    previewsInFileViewer,
+    FILE_PREVIEW_EXTENSIONS,
+  };
+  window.CodemanTerminalLines = { terminalLogicalLine, terminalPathLine };
   window.CodemanUrlSession = { sessionIdFromFragment };
   window.CodemanSplitPane = {
     clampDividerPercent,

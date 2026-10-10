@@ -2744,7 +2744,12 @@ class CodemanApp {
         const filePath = pathLink.dataset.path;
         // A rendered document's links name the session the preview was opened
         // for (_rebaseFilePreviewMarkdownRefs), which need not be the active tab.
-        if (filePath) this.openFilePreview(filePath, pathLink.dataset.sessionId || this.activeSessionId);
+        // A path the linkifier found in prose may be relative: resolve it against
+        // that session's working directory. A markdown document's own links
+        // (rebased, no `linkified` mark) already are what the routes expect.
+        const sessionId = pathLink.dataset.sessionId || this.activeSessionId;
+        const target = pathLink.dataset.linkified ? this._resolveLinkedFilePath?.(filePath, sessionId) : filePath;
+        if (filePath) this.openFilePreview(target || filePath, sessionId);
         return;
       }
 
@@ -2862,7 +2867,8 @@ class CodemanApp {
   }
 
   /**
-   * Make absolute file paths in a rendered message clickable.
+   * Make file paths in a rendered message clickable: absolute, `~/` and
+   * relative ones (`findFilePathLinks`, constants.js).
    *
    * The terminal's link provider never sees these: the response viewer is
    * markdown, and a path the agent wrote as prose or inline code renders as
@@ -2880,8 +2886,7 @@ class CodemanApp {
     if (!root || typeof document === 'undefined') return;
     // Guarded: a stale cached constants.js must degrade to plain text, not throw
     // out of the middle of rendering a message.
-    if (typeof absoluteFilePathPattern !== 'function') return;
-    const pattern = absoluteFilePathPattern();
+    if (typeof findFilePathLinks !== 'function') return;
 
     // Collect first: replacing a node while the walker is positioned on it
     // invalidates the traversal.
@@ -2889,27 +2894,25 @@ class CodemanApp {
     const targets = [];
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (node.parentElement?.closest('a')) continue;
-      pattern.lastIndex = 0;
-      if (pattern.test(node.nodeValue || '')) targets.push(node);
+      const found = findFilePathLinks(node.nodeValue || '');
+      if (found.length > 0) targets.push([node, found]);
     }
 
-    for (const node of targets) {
+    for (const [node, found] of targets) {
       const value = node.nodeValue;
       const frag = document.createDocumentFragment();
       let cursor = 0;
-      let match;
-      pattern.lastIndex = 0;
-      while ((match = pattern.exec(value)) !== null) {
-        const path = match[1];
-        if (match.index > cursor) frag.appendChild(document.createTextNode(value.slice(cursor, match.index)));
+      for (const { path, index } of found) {
+        if (index > cursor) frag.appendChild(document.createTextNode(value.slice(cursor, index)));
         const link = document.createElement('a');
         link.className = 'rv-path';
         link.href = '#';
         link.dataset.path = path;
+        link.dataset.linkified = '1';
         link.title = path;
         link.textContent = path;
         frag.appendChild(link);
-        cursor = match.index + path.length;
+        cursor = index + path.length;
       }
       if (cursor < value.length) frag.appendChild(document.createTextNode(value.slice(cursor)));
       node.parentNode?.replaceChild(frag, node);

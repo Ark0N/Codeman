@@ -4037,6 +4037,9 @@ Object.assign(CodemanApp.prototype, {
    * unknown workingDir answers false, leaving the historical path untouched.
    */
   _isExternalPreviewPath(filePath, sessionId) {
+    // `~/…` (a terminal or response-viewer link): only the server knows the home
+    // of the session's host, and only the attachment route expands it.
+    if (typeof filePath === 'string' && filePath.startsWith('~/')) return true;
     if (typeof filePath !== 'string' || !filePath.startsWith('/')) return false;
     const workingDir = this.sessions.get(sessionId)?.workingDir;
     if (!workingDir) return false;

@@ -36,7 +36,13 @@ function shippedPattern(name: string): RegExp {
   return new RegExp(lit.slice(1, lastSlash), lit.slice(lastSlash + 1));
 }
 
-const PATTERN_NAMES = ['urlPattern', 'cmdPattern', 'FILE_PATH_LINK_PATTERN', 'bashPattern'];
+const PATTERN_NAMES = [
+  'urlPattern',
+  'cmdPattern',
+  'FILE_PATH_LINK_PATTERN',
+  'RELATIVE_FILE_PATH_LINK_PATTERN',
+  'bashPattern',
+];
 
 /** Lines that made 0.9.10's cmdPattern backtrack exponentially (>2s each). */
 const KILLER_LINES = [
@@ -167,11 +173,17 @@ describe('terminal link-provider regexes (shipped source)', () => {
     }
   });
 
-  it('terminal-ui builds its path pattern from the shared factory', () => {
+  it('terminal-ui finds its paths through the shared helper', () => {
     // Structural guard: a local literal here would drift from the response
     // viewer's linkifier, which is the divergence the move exists to prevent.
-    expect(SOURCE).toContain('absoluteFilePathPattern()');
+    expect(SOURCE).toContain('findFilePathLinks(lineText)');
     expect(SOURCE).not.toMatch(/const extPattern =\s*\n?\s*\//);
+  });
+
+  it('the rooted and the relative path pattern link the same extensions', () => {
+    const extensions = (name: string) => /\\\.\(\?:([^()]*)\)\)\\b$/.exec(shippedPattern(name).source)?.[1];
+    expect(extensions('FILE_PATH_LINK_PATTERN')).toBeTruthy();
+    expect(extensions('RELATIVE_FILE_PATH_LINK_PATTERN')).toBe(extensions('FILE_PATH_LINK_PATTERN'));
   });
 
   it('cmdPattern arg group cannot match empty tokens (the exponential trigger)', () => {
