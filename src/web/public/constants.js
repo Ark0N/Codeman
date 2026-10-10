@@ -2285,7 +2285,8 @@ function dragTrackFractions(fr, index, deltaPx, totalPx, minPx) {
 
 /**
  * The sessions the Tiles button can open (case c of tileGridOpenSet, and the
- * ones a count fills a grid with), in tab order: live ones only, never a session popped out to
+ * ones a count fills a grid with), in the order given (tab order, or the
+ * ranking): live ones only, never a session popped out to
  * its own window (that window owns its PTY size). A session with no PTY
  * attached IS offered: its tile shows the Attach overlay.
  *
@@ -2299,10 +2300,72 @@ function buildTilePickerSessions(sessions, sessionOrder, detachedIds) {
   for (const id of sessionOrder) {
     if (detachedIds?.has?.(id)) continue;
     const session = sessions.get(id);
-    if (!session) continue;
+    if (!session || result.some((r) => r.id === id)) continue;
     result.push({ id, label: session.name || 'Session' });
   }
   return result;
+}
+
+// Ranking groups (rankTileSessions): working first, then the sessions waiting
+// on the user, then everything else.
+const TILE_RANK_GROUP = { working: 0, needs: 1, waiting: 1 };
+
+/**
+ * The stamp a session is ranked by inside its group. A WORKING session keys
+ * off the pane's last Enter (`lastSubmitAt`) ONLY: a working pane repaints
+ * about once a second, so its last-activity stamp is always "now", and one
+ * that never submitted would otherwise claim the head of the group. 0 means
+ * unknown. Every other state is the home screens' anchor (sessionActivityAnchor:
+ * the last byte the pane printed, i.e. when it went quiet).
+ */
+function tileRankStamp(row) {
+  if (row.state === 'working') return Number(row.lastSubmitAt) || 0;
+  return sessionActivityAnchor(row);
+}
+
+/**
+ * Which open sessions the tile grid shows when nobody said which (the Tiles
+ * button with no stored grid to bring back, and every place the grid fills a
+ * tile on its own: a count picked in its menu, a freed cell), best first
+ * (owner request: "prefer to load in tiles that are working and then the most
+ * recent, so the oldest don't get opened"):
+ *   1. WORKING, the most recently started turn first;
+ *   2. then the ones that NEED INPUT, the red and yellow tab alerts (`needs`: a
+ *      permission or question dialog; `waiting`: a finished turn not seen
+ *      yet), most recent first;
+ *   3. then every other one (idle, done, error), most recently active first.
+ * Inside a group the newest stamp wins (tileRankStamp) and a session with no
+ * stamp (0) sorts last; the final tiebreak is the tab order (`orderIndex`), so
+ * the result never shuffles. The states are the home screens' own
+ * (`_mobileOverviewState()`, mobile-overview.js), as are the stamps; only the
+ * order differs: the home screens put the longest-running turn first, the grid
+ * the most recent.
+ *
+ * Pure. Unit-tested in test/tile-grid-ranking.test.ts.
+ *
+ * @param {Array<{id: string, state: string, lastActivityAt?: number, lastSubmitAt?: number, orderIndex?: number}>} rows
+ * @returns {string[]} the ids, best first, each once
+ */
+function rankTileSessions(rows) {
+  const group = (row) => TILE_RANK_GROUP[row.state] ?? 2;
+  const list = (Array.isArray(rows) ? rows : []).filter((row) => row && typeof row.id === 'string' && row.id);
+  list.sort((a, b) => {
+    const byGroup = group(a) - group(b);
+    if (byGroup !== 0) return byGroup;
+    const atA = tileRankStamp(a);
+    const atB = tileRankStamp(b);
+    if (atA !== atB) {
+      if (!atA) return 1;
+      if (!atB) return -1;
+      return atB - atA;
+    }
+    const orderA = Number.isFinite(a.orderIndex) ? a.orderIndex : Number.MAX_SAFE_INTEGER;
+    const orderB = Number.isFinite(b.orderIndex) ? b.orderIndex : Number.MAX_SAFE_INTEGER;
+    return orderA - orderB;
+  });
+  const ids = [];
+  for (const row of list) if (!ids.includes(row.id)) ids.push(row.id);
+  return ids;
 }
 
 /**
@@ -2311,17 +2374,31 @@ function buildTilePickerSessions(sessions, sessionOrder, detachedIds) {
  *   a. the grid this tab last had (`stored`, already sanitized: live, not
  *      detached, at most the cap), if any of its sessions survive;
  *   b. else an open split's two sessions, Pane A focused;
- *   c. else the open sessions in tab order (buildTilePickerSessions: no
- *      detached ones), up to `limit`, the active session always among them and focused
- *      (when it sits past the limit, the first `limit - 1` others come with it).
+ *   c. else the open sessions in `ranked` order (rankTileSessions: working,
+ *      then needing input, then the most recent; tab order when no ranking is
+ *      given), detached ones never, up to `limit`, the active session always
+ *      among them and focused (when it ranks past the limit, the first
+ *      `limit - 1` others come with it).
  * Null when there is nothing to open.
  *
  * @param {{stored?: {ids: string[], focused: string|null, zoomed: string|null}|null,
- *   split?: string[]|null, sessions: Map<string, object>, sessionOrder: string[],
+ *   split?: string[]|null, ranked?: string[]|null, sessions: Map<string, object>, sessionOrder: string[],
  *   detachedIds?: {has(id: string): boolean}, activeId?: string|null, limit: number}} p
- * @returns {{source: 'stored'|'split'|'tabs', ids: string[], focusedId: string|null}|null}
+ * @returns {{source: 'stored'|'split'|'ranked', ids: string[], focusedId: string|null}|null}
  */
-function tileGridOpenSet({ stored = null, split = null, sessions, sessionOrder, detachedIds, activeId = null, limit }) {
+function tileGridOpenSet({
+  stored = null,
+  split = null,
+  ranked = null,
+  sessions,
+  sessionOrder,
+  detachedIds,
+  activeId = null,
+  limit,
+}) {
+  const all = buildTilePickerSessions(sessions, Array.isArray(ranked) ? ranked : sessionOrder, detachedIds).map(
+    (c) => c.id
+  );
   if (stored?.ids?.length) {
     const focus = stored.zoomed || stored.focused;
     return { source: 'stored', ids: stored.ids.slice(), focusedId: stored.ids.includes(focus) ? focus : stored.ids[0] };
@@ -2330,13 +2407,12 @@ function tileGridOpenSet({ stored = null, split = null, sessions, sessionOrder, 
   const pair = (split || []).filter(usable);
   if (split && pair.length) return { source: 'split', ids: [...new Set(pair)], focusedId: pair[0] };
   const max = Math.max(1, Math.min(Math.floor(Number(limit) || 0), TILE_GRID_MAX));
-  const all = buildTilePickerSessions(sessions, sessionOrder, detachedIds).map((c) => c.id);
   if (all.length === 0) return null;
   let ids = all.slice(0, max);
   if (all.includes(activeId) && !ids.includes(activeId)) {
     ids = [...all.filter((id) => id !== activeId).slice(0, max - 1), activeId];
   }
-  return { source: 'tabs', ids, focusedId: ids.includes(activeId) ? activeId : ids[0] };
+  return { source: 'ranked', ids, focusedId: ids.includes(activeId) ? activeId : ids[0] };
 }
 
 /**
@@ -2356,8 +2432,9 @@ function sanitizeTileCount(raw) {
  * `base` (what the grid would open, or what an open grid shows, in its order)
  * trimmed or filled to `n` tiles: trimmed from the end, the session to focus
  * (`keepId`) always kept (it takes the last place when it sat past `n`, as in
- * tileGridOpenSet's case c); filled from `all` (the open sessions in tab order)
- * with the ones not in it yet. Fewer sessions than `n` give fewer tiles.
+ * tileGridOpenSet's case c); filled from `all` (the open sessions, best first:
+ * the app passes the ranking, rankTileSessions) with the ones not in it yet.
+ * Fewer sessions than `n` give fewer tiles.
  *
  * @param {string[]} base
  * @param {string[]} all
@@ -2866,6 +2943,7 @@ if (typeof window !== 'undefined') {
     fitTileCells,
     cycleTile,
     tileGridOpenSet,
+    rankTileSessions,
     sanitizeTileCount,
     tileGridSetForCount,
     tileCellCols,

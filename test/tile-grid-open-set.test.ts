@@ -3,10 +3,11 @@
  *
  * - `tileGridOpenSet` (constants.js, pure): what opens, in order: (a) the grid
  *   this tab last had, if any of its sessions survive; (b) else an open
- *   split's two sessions; (c) else the open sessions in tab order up to the
- *   limit (never past the cap of 6), the active one always among them and
- *   focused. Detached sessions and ones that no longer exist are left out, as
- *   in the picker.
+ *   split's two sessions; (c) else the open sessions in ranked order (tab
+ *   order when no ranking is given, as here; the ranking itself is pinned in
+ *   test/tile-grid-ranking.test.ts) up to the limit (never past the cap of
+ *   6), the active one always among them and focused. Detached sessions and
+ *   ones that no longer exist are left out, as in the picker.
  * - The button's click and Ctrl+Shift+G are the same function
  *   (`toggleTileGrid`); right-click (contextmenu) opens the count menu (owner
  *   decision 10). With the grid open a pick re-forms it, the focused tile kept.
@@ -59,9 +60,9 @@ describe('tileGridOpenSet (what the Tiles button opens)', () => {
     });
   });
 
-  it('c: else the open sessions in tab order up to the limit, the active one focused', () => {
+  it('c: else the open sessions (no ranking given: tab order) up to the limit, the active one focused', () => {
     expect(T.tileGridOpenSet({ ...base, activeId: 't3' })).toEqual({
-      source: 'tabs',
+      source: 'ranked',
       ids: order.slice(0, 6),
       focusedId: 't3',
     });
@@ -69,7 +70,7 @@ describe('tileGridOpenSet (what the Tiles button opens)', () => {
 
   it('c: an active session past the limit still comes, with the first ones before it', () => {
     expect(T.tileGridOpenSet({ ...base, activeId: 't9' })).toEqual({
-      source: 'tabs',
+      source: 'ranked',
       ids: ['t1', 't2', 't3', 't4', 't5', 't9'],
       focusedId: 't9',
     });
@@ -171,7 +172,7 @@ describe('opening at once, in the app', () => {
     app.openTileCountMenu({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
     expect(app._tilesOwnTerminal()).toBe(true);
     pick(4);
-    // Its two first, then the open sessions in tab order.
+    // Its two first, then the ranking (every session quiet and unstamped here: tab order).
     expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-other', 's-c']);
     expect(app.activeSessionId).toBe('s-b');
     app.openTileCountMenu({ preventDefault: vi.fn(), stopPropagation: vi.fn() });

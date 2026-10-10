@@ -1012,8 +1012,8 @@ Object.assign(CodemanApp.prototype, {
     }
     const T = window.CodemanTileGrid;
     const n = Math.min(T.sanitizeTileCount(count), this._tileGridLimit().capacity);
-    const all = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions).map((c) => c.id);
-    this._reformTileGrid(T.tileGridSetForCount(grid.ids, all, n, grid.focusedId));
+    // The tiles that join are the ranking's best (_tileGridRanking).
+    this._reformTileGrid(T.tileGridSetForCount(grid.ids, this._tileGridRanking(), n, grid.focusedId));
   },
 
   /**
@@ -1152,10 +1152,12 @@ Object.assign(CodemanApp.prototype, {
    * remembered count of tiles (the right-click menu's last pick, default 6,
    * at most what the window fits; owner decision 10), chosen by
    * `tileGridOpenSet` (constants.js): the grid this tab last had, else an open
-   * split's two sessions, else the open sessions in tab order, the active one
-   * focused; then trimmed or filled to the count (the focused one kept). A
-   * remembered grid comes back with its tiles in their cells, the ones the
-   * count adds filling its empty cells first (_openStoredTileGrid).
+   * split's two sessions, else the open sessions as the ranking orders them
+   * (_tileGridRanking: working, then needing input, then the most recent), the
+   * active one always among them and focused; then trimmed or filled (from the
+   * ranking) to the count, the focused one kept. A remembered grid comes back
+   * with its tiles in their cells, the ones the count adds filling its empty
+   * cells first (_openStoredTileGrid).
    */
   toggleTileGrid() {
     this.closeTileCountMenu();
@@ -1182,9 +1184,11 @@ Object.assign(CodemanApp.prototype, {
   _tileGridOpenSet(stored = this._readStoredTileGrid(), count = this._tileGridCount()) {
     const T = window.CodemanTileGrid;
     const n = Math.max(1, Math.min(count, this._tileGridLimit().capacity));
+    const ranked = this._tileGridRanking();
     const set = T.tileGridOpenSet({
       stored,
       split: this._splitPane ? [this.activeSessionId, this._splitSessionId] : null,
+      ranked,
       sessions: this.sessions,
       sessionOrder: this.sessionOrder,
       detachedIds: this.detachedSessions,
@@ -1192,8 +1196,39 @@ Object.assign(CodemanApp.prototype, {
       limit: n,
     });
     if (!set) return null;
-    const all = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions).map((c) => c.id);
-    return { ...set, ids: T.tileGridSetForCount(set.ids, all, n, set.focusedId) };
+    return { ...set, ids: T.tileGridSetForCount(set.ids, ranked, n, set.focusedId) };
+  },
+
+  /**
+   * The open sessions the grid takes when nobody said which (the Tiles button
+   * with nothing stored, and every tile it fills on its own), best first:
+   * working (the most recently started turn first), then the ones needing
+   * input (the red and yellow tab alerts), then the rest by most recent
+   * activity, tab order breaking ties (rankTileSessions, constants.js). The
+   * states and stamps are the home screens' own (`_mobileOverviewState()`,
+   * mobile-overview.js). Detached sessions are never in it. Guarded like
+   * the sorted rail: without the classifier (a stale cached
+   * mobile-overview.js) it is plain tab order.
+   *
+   * @returns {string[]}
+   */
+  _tileGridRanking() {
+    const T = window.CodemanTileGrid;
+    const open = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions);
+    if (typeof this._mobileOverviewState !== 'function' || typeof T.rankTileSessions !== 'function') {
+      return open.map((c) => c.id);
+    }
+    const rows = open.map(({ id }, orderIndex) => {
+      const session = this.sessions.get(id);
+      return {
+        id,
+        state: this._mobileOverviewState(session, this.pendingHooks?.get(id)),
+        lastActivityAt: Number(session.lastActivityAt) || 0,
+        lastSubmitAt: Number(session.lastSubmitAt) || 0,
+        orderIndex,
+      };
+    });
+    return T.rankTileSessions(rows);
   },
 
   /** Alt+Shift+Arrows: a human selection of the tile in that direction. */
