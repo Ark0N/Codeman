@@ -443,6 +443,8 @@ const capabilitiesSchema = z
       .object({
         // Home-relative, no traversal: sync writes to this path.
         path: mcpRelativePath,
+        // Home-relative fallback read when `path` is absent (never written).
+        altPath: mcpRelativePath.optional(),
         // Every value must be a known McpConfigFormat (types.ts); mcp-sync.ts's dialect table is
         // keyed by the same type, so an adapter-less format fails to compile there.
         format: z.enum([

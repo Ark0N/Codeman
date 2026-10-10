@@ -644,7 +644,12 @@ export interface CliCapabilities {
    * reported `skipped` rather than written somewhere the CLI never reads. Absent = the file
    * only follows `$HOME`.
    */
-  mcpConfig?: { path: string; format: McpConfigFormat; relocation?: { envVar: string; path: string } };
+  mcpConfig?: {
+    path: string;
+    altPath?: string;
+    format: McpConfigFormat;
+    relocation?: { envVar: string; path: string };
+  };
   /**
    * How this CLI is pointed at a user-supplied custom OpenAI-compatible
    * endpoint (local, e.g. llama.cpp, or cloud, e.g. Azure AI Foundry) — the

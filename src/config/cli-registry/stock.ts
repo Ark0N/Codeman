@@ -536,6 +536,7 @@ const OPENCODE: CliEntry = {
     // opencode's global config dir is xdg-basedir's `$XDG_CONFIG_HOME/opencode`.
     mcpConfig: {
       path: '.config/opencode/opencode.json',
+      altPath: '.config/opencode/opencode.jsonc',
       format: 'opencode-json',
       relocation: { envVar: 'XDG_CONFIG_HOME', path: 'opencode/opencode.json' },
     },
