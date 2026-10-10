@@ -93,6 +93,11 @@
     'Move down': '下移',
     'Move to Ungrouped': '移到未分组',
     'Move to new group': '移到新分组',
+    // The Focus section pinned at the top of the vertical rail (shortcuts to tabs).
+    Focus: '焦点',
+    'Add to Focus': '添加到焦点',
+    'Remove from Focus': '从焦点移除',
+    'Focus actions': '焦点操作',
     'Could not save tab groups.': '无法保存标签分组。',
     'Tab groups changed elsewhere; part of your edit no longer applies.':
       '标签分组已在别处更改；你的部分编辑已不再适用。',

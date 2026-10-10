@@ -815,6 +815,141 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tabs--grouped .tab-layo
   user-select: none;
 }
 
+/* --- Focus section (pinned shortcuts, app.js _renderTabFocus) ---------- */
+/* Its own element above #sessionTabs in the rail, so it shows above the flat
+   rail and the grouped one alike and never takes part in the list's order,
+   tree or Alt+N numbering. Capped so a long Focus never starves the list. */
+.tab-focus {
+  display: none;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus:not([hidden]) {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40%;
+  min-height: 0;
+  padding: 0.35rem 0.35rem 0.3rem calc(0.35rem + 24px);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px 2px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-toggle:hover {
+  background: var(--bg-hover);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail :is(.tab-focus-toggle, .tab-focus-item):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tab-focus-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tab-focus-count {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.tab-focus--collapsed .tab-layout-group-chevron::before {
+  content: '\25B8';
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-list[hidden] {
+  display: none;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 4px;
+  color: var(--text-dim, var(--text-muted));
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-item:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-focus-item[aria-current='true'] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.tab-focus-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The tab's own status dot and alert colour, so a shortcut says what its tab
+   says (the row keeps its full alert ring; a shortcut only recolours the dot). */
+.tab-focus-item .tab-status {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--green);
+}
+.tab-focus-item .tab-status.error { background: var(--red); }
+.tab-focus-item .tab-status.ended { background: var(--text-muted); opacity: 0.5; }
+.tab-focus-item.tab-alert-action .tab-status { background: var(--red); box-shadow: 0 0 6px rgba(239, 68, 68, 0.7); }
+.tab-focus-item.tab-alert-idle .tab-status { background: var(--yellow); box-shadow: 0 0 6px rgba(234, 179, 8, 0.6); }
+.tab-focus-item .tab-web-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-dim, var(--text-muted));
+}
+
 html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drag-active {
   cursor: grabbing;
 }

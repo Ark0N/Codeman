@@ -578,13 +578,14 @@ describe('row actions in the vertical rail', () => {
     installFetch();
     const flat = makeApp({ ...serverLayout(), groups: [], ungrouped: [s('s1'), s('s2'), s('s3')] });
     flat.openTabRailActionMenu({ preventDefault() {}, stopPropagation() {}, currentTarget: row('s1') }, 's1');
-    expect(menuLabels()).toEqual(['Session options', 'Move to new group', 'Close session']);
+    expect(menuLabels()).toEqual(['Session options', 'Add to Focus', 'Move to new group', 'Close session']);
     flat.closeTabRailActionMenu();
 
     const app = makeApp();
     app.openTabRailActionMenu({ preventDefault() {}, stopPropagation() {}, currentTarget: row('s2') }, 's2');
     expect(menuLabels()).toEqual([
       'Session options',
+      'Add to Focus',
       'Move down',
       'Move to "Later"',
       'Move to Ungrouped',
@@ -611,6 +612,7 @@ describe('row actions in the vertical rail', () => {
     app.openTabRailActionMenu({ preventDefault() {}, stopPropagation() {}, currentTarget: row('s2') }, 's2');
     expect(menuLabels()).toEqual([
       'Session options',
+      'Add to Focus',
       'Move to "ungrouped"',
       'Move to Ungrouped',
       'Move to new group',
@@ -687,6 +689,7 @@ describe('web tab rows', () => {
     key(web, 'F10', { shiftKey: true });
     expect(menuLabels()).toEqual([
       'Web tab settings',
+      'Add to Focus',
       'Move up',
       'Move to "Later"',
       'Move to Ungrouped',
