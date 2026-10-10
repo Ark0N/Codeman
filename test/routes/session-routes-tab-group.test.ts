@@ -24,6 +24,9 @@ import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { Session } from '../../src/session.js';
+import { TabLayoutService } from '../../src/tab-layout-service.js';
+import { ownerLayoutKey } from '../../src/tab-layout-persistence.js';
+import type { TabLayout } from '../../src/tab-layout.js';
 
 const LAYOUT = {
   version: 4,
@@ -127,5 +130,97 @@ describe('create routes: tabGroupId', () => {
       expect(JSON.parse(res.body).errorCode).toBe('INVALID_INPUT');
     }
     expect(ctx.addSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('create routes: tabGroupId through the real layout service', () => {
+  let app: FastifyInstance;
+  let ctx: MockRouteContext;
+  let workingDir: string;
+  const layouts: Record<string, TabLayout> = {};
+  let order: string[] = [];
+
+  beforeEach(async () => {
+    vi.spyOn(Session.prototype, 'startShell').mockResolvedValue(undefined);
+    workingDir = await mkdtemp(join(tmpdir(), 'codeman-tab-group-real-'));
+    app = Fastify({ logger: false });
+    await app.register(fastifyCookie);
+    ctx = createMockRouteContext();
+    ctx.sessions.clear(); // only the sessions these requests create
+    for (const key of Object.keys(layouts)) delete layouts[key];
+    order = [];
+    // The real service over an in-memory store, wired the way server.ts wires it.
+    const service = new TabLayoutService({
+      store: {
+        getTabLayout: (owner: string) => layouts[owner] ?? null,
+        getTabLayouts: () => ({ ...layouts }),
+        getSessions: () => ({}),
+        getSessionOrder: () => [...order],
+        commitTabLayoutProjection: (
+          updates: Readonly<Record<string, TabLayout>>,
+          project: (latest: readonly string[]) => readonly string[]
+        ) => {
+          order = [...project(order)];
+          Object.assign(layouts, structuredClone(updates));
+          return { layouts: structuredClone(updates), sessionOrder: [...order] };
+        },
+      } as never,
+      sessions: ctx.sessions as never,
+      readWebviews: async () => [],
+      broadcast: () => {},
+      broadcastSessionOrder: () => {},
+    });
+    service.markRestorationSkipped();
+    ctx.addSession.mockImplementation((session: Session, placement?: { tabGroupId?: string }) =>
+      service.sessionCreated(ownerLayoutKey(session.owner), session.id, placement, () => {
+        ctx.sessions.set(session.id, session as never);
+        return () => ctx.sessions.delete(session.id);
+      })
+    );
+    registerSessionRoutes(app, ctx);
+    installRouteErrorHandler(app);
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    await rm(workingDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  const unwrap = (raw: string) => {
+    const parsed = JSON.parse(raw);
+    return parsed.data ?? parsed;
+  };
+
+  it('places the created session at the end of an existing group and returns the stored layout', async () => {
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { name: 'w1-x', mode: 'shell', workingDir },
+    });
+    const firstId = unwrap(first.body).session.id as string;
+    const owner = Object.keys(layouts)[0];
+    layouts[owner] = {
+      ...layouts[owner],
+      groups: [{ id: 'g1', name: 'Core', refs: [{ kind: 'session', id: firstId }] }],
+      ungrouped: [],
+    };
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { name: 'w2-x', mode: 'shell', workingDir, tabGroupId: 'g1' },
+    });
+    expect(res.statusCode).toBe(200);
+    const data = unwrap(res.body);
+    expect(data.tabLayout).toEqual(layouts[owner]);
+    expect(data.tabLayout.version).toBe(layouts[owner].version);
+    expect(data.tabLayout.groups[0].refs).toEqual([
+      { kind: 'session', id: firstId },
+      { kind: 'session', id: data.session.id },
+    ]);
+    expect(data.tabLayout.ungrouped).toEqual([]);
+    expect(order).toEqual([firstId, data.session.id]);
   });
 });

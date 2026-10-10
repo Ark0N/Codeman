@@ -25,6 +25,8 @@
     '.response-viewer-content',
     '.file-preview-content',
     '.session-tab-name',
+    // Tab names are user text: the strip, rail and sidebar draw them in .tab-name.
+    '.tab-name',
     '.session-name',
     '.case-name',
     '.notif-item-message',
@@ -430,6 +432,9 @@
     'Ultracode Floating Windows': 'Ultracode 浮动窗口',
     'Approvals Inbox': '审批收件箱',
     'Auto-name Sessions': '自动命名会话',
+    'Spawned Tabs Follow Their Parent': '派生的标签跟随父会话',
+    "A session started by another one keeps following its parent's tab into its group and moves with it, until you move it by hand. Off: it starts next to its parent and stays where it is.":
+      '由另一个会话启动的会话会跟随父会话的标签进入其分组并随之移动，直到你手动移动它。关闭时：它出现在父会话旁边并停留在原处。',
     Approvals: '审批',
     'Prompts waiting on you, across all sessions': '所有会话中等待您处理的提示',
     'No pending approvals': '没有待处理的审批',

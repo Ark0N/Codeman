@@ -13,6 +13,7 @@ import {
   materializeOrphans,
   moveRef,
   normalizeTabLayout,
+  setManualPlacement,
   TabLayoutValidationError,
   validateTabLayout,
   type TabLayout,
@@ -43,6 +44,12 @@ interface TabLayoutServiceDeps {
   readWebviews(): Promise<readonly TabLayoutWebviewRecord[]>;
   broadcast(event: string, data: unknown): void;
   broadcastSessionOrder(change: SessionOrderProjectionChange): void;
+  /**
+   * The synced `spawnedTabsFollowParent` setting, read at every creation. Off (or
+   * absent), a spawned session lands after its parent once and is hand-placed
+   * from then on; on, it keeps following its parent until moved by hand.
+   */
+  childrenFollowParent?(): boolean | Promise<boolean>;
   now?: () => string;
 }
 
@@ -109,6 +116,23 @@ const refKey = (ref: Pick<TabRef, 'kind' | 'id'>): string => `${ref.kind}\u0000$
 const sameLayout = (a: TabLayout, b: TabLayout): boolean => JSON.stringify(a) === JSON.stringify(b);
 const sameOrder = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && a.every((id, index) => id === b[index]);
+
+/**
+ * Hand-place a just-created child where normalization put it (right after its
+ * parent), so it stops following. A session that does not follow anything is
+ * left alone.
+ */
+function pinCreatedChild(layout: TabLayout, sessionId: string, metadata: readonly TabRefMetadata[]): TabLayout {
+  const item = metadata.find((fact) => fact.kind === 'session' && fact.id === sessionId);
+  const parentId = item?.parentSessionId;
+  if (!item?.ownerValid || !parentId) return layout;
+  const refs = [...layout.groups.flatMap((group) => group.refs), ...layout.ungrouped];
+  const ref = refs.find((candidate) => candidate.kind === 'session' && candidate.id === sessionId);
+  const parentStored = refs.some((candidate) => candidate.kind === 'session' && candidate.id === parentId);
+  const parentValid = metadata.some((fact) => fact.kind === 'session' && fact.id === parentId && fact.ownerValid);
+  if (!ref || ref.placement === 'manual' || !parentStored || !parentValid) return layout;
+  return setManualPlacement(layout, ref, true);
+}
 
 /** Move a just-created session to the end of `groupId`, or leave the layout alone. */
 function placeCreatedSession(
@@ -487,6 +511,12 @@ export class TabLayoutService {
    * session keeps its normal placement: after its parent when it has one,
    * otherwise at the end of Ungrouped. An explicit group is a hand placement, so
    * a child session placed this way is marked `manual` and stops following.
+   *
+   * Whether a child placed by its lineage KEEPS following is the synced
+   * `spawnedTabsFollowParent` setting, read here at creation: off (the default),
+   * the child lands after its parent once and is marked `manual` in the same
+   * write; on, it follows its parent until moved by hand. Flipping the setting
+   * later leaves existing tabs as they are.
    */
   async sessionCreated(
     owner: string,
@@ -495,15 +525,18 @@ export class TabLayoutService {
     register?: RegisterCreatedSession
   ): Promise<TabLayout> {
     return this.withOwner(owner, async () => {
+      const follow = sessionId ? (await this.deps.childrenFollowParent?.()) === true : true;
       const rollback = register?.();
       try {
         const groupId = placement.tabGroupId;
-        return await this.getUnlocked(
-          owner,
-          sessionId && groupId
-            ? (layout, metadata) => placeCreatedSession(layout, sessionId, groupId, metadata)
-            : undefined
-        );
+        const adjust =
+          sessionId && (groupId || !follow)
+            ? (layout: TabLayout, metadata: readonly TabRefMetadata[]) => {
+                const placed = groupId ? placeCreatedSession(layout, sessionId, groupId, metadata) : layout;
+                return follow ? placed : pinCreatedChild(placed, sessionId, metadata);
+              }
+            : undefined;
+        return await this.getUnlocked(owner, adjust);
       } catch (error) {
         if (typeof rollback === 'function') rollback();
         throw error;

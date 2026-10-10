@@ -1362,6 +1362,14 @@ export const SettingsUpdateSchema = z
      */
     autoNameSessions: z.boolean().optional(),
     /**
+     * Spawned tabs follow their parent: a session created by another one keeps
+     * following its parent's tab (into its group, moving with it) until moved by
+     * hand. SYNCED, default OFF, because the server does the placement:
+     * TabLayoutService.sessionCreated() reads it at every creation, and with it
+     * off the child lands after its parent once and is hand-placed from then on.
+     */
+    spawnedTabsFollowParent: z.boolean().optional(),
+    /**
      * Read My Mind (docs/readmymind-plan.md): capture the user's submitted
      * prompts into per-case intent profiles. SYNCED, default OFF (opt-in:
      * captured prompts are sensitive). OFF stops capture immediately; already

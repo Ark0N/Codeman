@@ -16,6 +16,8 @@ function createHarness(
     live?: SessionFact[];
     webviews?: Array<{ id: string; owner?: string }>;
     now?: () => string;
+    /** The synced spawnedTabsFollowParent setting (absent = off, the default). */
+    follow?: boolean;
   } = {}
 ) {
   const layouts = { ...(options.layouts ?? {}) };
@@ -45,6 +47,7 @@ function createHarness(
     readWebviews,
     broadcast,
     broadcastSessionOrder,
+    childrenFollowParent: vi.fn(() => options.follow === true),
     now: options.now ?? (() => '2026-08-16T12:00:00.000Z'),
   });
   return { service, store, broadcast, broadcastSessionOrder, layouts, order, live, persisted, readWebviews };
@@ -1368,8 +1371,8 @@ describe('TabLayoutService grouped session creation', () => {
     expect(h.layouts.alice).toEqual(grouped());
   });
 
-  it("a child follows its parent into the parent's group; an explicit group pins it manual", async () => {
-    const h = createHarness({ layouts: { alice: grouped() }, live: facts() });
+  it('with the follow setting on, a child follows its parent; an explicit group pins it manual', async () => {
+    const h = createHarness({ layouts: { alice: grouped() }, live: facts(), follow: true });
     const followed = await h.service.sessionCreated(
       'alice',
       'child',
@@ -1388,18 +1391,89 @@ describe('TabLayoutService grouped session creation', () => {
       register(h, { id: 'child-2', owner: 'alice', createdAt: 4, parentSessionId: 'a' })
     );
     expect(pinned.groups[1].refs).toEqual([{ kind: 'session', id: 'child-2', placement: 'manual' }]);
-    // Moving the parent later leaves the hand-placed child where it was.
+    // Move ONLY the parent: the following child goes with it, the hand-placed one stays.
     const moved = await h.service.put(
       'alice',
       {
         ...pinned,
-        groups: [{ ...pinned.groups[0], refs: [] }, pinned.groups[1]],
-        ungrouped: [...pinned.ungrouped, ...pinned.groups[0].refs],
+        groups: [{ ...pinned.groups[0], refs: [{ kind: 'session', id: 'child' }] }, pinned.groups[1]],
+        ungrouped: [...pinned.ungrouped, { kind: 'session', id: 'a' }],
       },
       pinned.version
     );
+    expect(moved.layout.groups[0].refs).toEqual([]);
     expect(moved.layout.groups[1].refs).toEqual([{ kind: 'session', id: 'child-2', placement: 'manual' }]);
-    expect(moved.layout.ungrouped.map((ref) => ref.id)).toEqual(['b', 'a', 'child']);
+    expect(moved.layout.ungrouped).toEqual([
+      { kind: 'session', id: 'b' },
+      { kind: 'session', id: 'a' },
+      { kind: 'session', id: 'child' },
+    ]);
+  });
+
+  it('with the follow setting off (the default), a child lands after its parent once and is hand-placed', async () => {
+    const h = createHarness({ layouts: { alice: grouped() }, live: facts() });
+    const created = await h.service.sessionCreated(
+      'alice',
+      'child',
+      {},
+      register(h, { id: 'child', owner: 'alice', createdAt: 3, parentSessionId: 'a' })
+    );
+    // Same place as a following child, in ONE write, but pinned there.
+    expect(created.version).toBe(8);
+    expect(h.store.commitTabLayoutProjection).toHaveBeenCalledTimes(1);
+    expect(created.groups[0].refs).toEqual([
+      { kind: 'session', id: 'a' },
+      { kind: 'session', id: 'child', placement: 'manual' },
+    ]);
+    const moved = await h.service.put(
+      'alice',
+      {
+        ...created,
+        groups: [{ ...created.groups[0], refs: [created.groups[0].refs[1]] }, created.groups[1]],
+        ungrouped: [...created.ungrouped, { kind: 'session', id: 'a' }],
+      },
+      created.version
+    );
+    expect(moved.layout.groups[0].refs).toEqual([{ kind: 'session', id: 'child', placement: 'manual' }]);
+    expect(moved.layout.ungrouped.map((ref) => ref.id)).toEqual(['b', 'a']);
+  });
+
+  it('reads the follow setting fresh at every creation', async () => {
+    const h = createHarness({ layouts: { alice: grouped() }, live: facts() });
+    const setting = vi.fn<() => boolean>().mockReturnValueOnce(true).mockReturnValueOnce(false);
+    (h.service as unknown as { deps: { childrenFollowParent: typeof setting } }).deps.childrenFollowParent = setting;
+    await h.service.sessionCreated(
+      'alice',
+      'c1',
+      {},
+      register(h, { id: 'c1', owner: 'alice', createdAt: 3, parentSessionId: 'a' })
+    );
+    const layout = await h.service.sessionCreated(
+      'alice',
+      'c2',
+      {},
+      register(h, { id: 'c2', owner: 'alice', createdAt: 4, parentSessionId: 'a' })
+    );
+    expect(setting).toHaveBeenCalledTimes(2);
+    expect(layout.groups[0].refs).toEqual([
+      { kind: 'session', id: 'a' },
+      { kind: 'session', id: 'c1' },
+      { kind: 'session', id: 'c2', placement: 'manual' },
+    ]);
+  });
+
+  it('a session without a parent is never pinned, whatever the setting', async () => {
+    const h = createHarness({ layouts: { alice: grouped() }, live: facts() });
+    const layout = await h.service.sessionCreated(
+      'alice',
+      'plain',
+      {},
+      register(h, { id: 'plain', owner: 'alice', createdAt: 3 })
+    );
+    expect(layout.ungrouped).toEqual([
+      { kind: 'session', id: 'b' },
+      { kind: 'session', id: 'plain' },
+    ]);
   });
 
   it('rolls the registration back when the layout write fails', async () => {
@@ -1412,5 +1486,77 @@ describe('TabLayoutService grouped session creation', () => {
     expect(added).toHaveBeenCalledOnce();
     expect(h.live.has('new')).toBe(false);
     expect(h.layouts.alice).toEqual(grouped());
+  });
+});
+
+describe('TabLayoutService legacy order PUTs keep a following child following', () => {
+  const family = (): TabLayout => ({
+    version: 4,
+    groups: [
+      {
+        id: 'g1',
+        name: 'Core',
+        refs: [
+          { kind: 'session', id: 'x' },
+          { kind: 'session', id: 'p' },
+          { kind: 'session', id: 'kid' },
+        ],
+      },
+    ],
+    ungrouped: [{ kind: 'session', id: 'y' }],
+    updatedAt: '2026-08-15T00:00:00.000Z',
+  });
+  const live = [
+    { id: 'x', owner: 'alice', createdAt: 1 },
+    { id: 'p', owner: 'alice', createdAt: 2 },
+    { id: 'kid', owner: 'alice', createdAt: 3, parentSessionId: 'p' },
+    { id: 'y', owner: 'alice', createdAt: 4 },
+  ];
+
+  for (const actor of [
+    { owner: 'alice', isAdmin: false },
+    { owner: 'admin', isAdmin: true },
+  ]) {
+    it(`a PUT of the current order leaves placement alone (${actor.isAdmin ? 'admin' : 'owner'})`, async () => {
+      const h = createHarness({ layouts: { alice: family() }, live, order: ['x', 'p', 'kid', 'y'] });
+      await h.service.putLegacyOrder(actor, ['x', 'p', 'kid', 'y']);
+      expect(h.layouts.alice).toEqual(family());
+      expect(h.store.commitTabLayoutProjection.mock.calls.every(([updates]) => !Object.hasOwn(updates, 'alice'))).toBe(
+        true
+      );
+    });
+  }
+
+  it('a reorder that keeps the child after its parent keeps it following, so it moves with its parent', async () => {
+    const h = createHarness({ layouts: { alice: family() }, live, order: ['x', 'p', 'kid', 'y'] });
+    await h.service.putLegacyOrder({ owner: 'alice', isAdmin: false }, ['p', 'kid', 'x', 'y']);
+    expect(h.layouts.alice.groups[0].refs).toEqual([
+      { kind: 'session', id: 'p' },
+      { kind: 'session', id: 'kid' },
+      { kind: 'session', id: 'x' },
+    ]);
+    // Still following: moving only the parent takes the child along.
+    const current = h.layouts.alice;
+    const moved = await h.service.put(
+      'alice',
+      {
+        ...current,
+        groups: [{ ...current.groups[0], refs: [current.groups[0].refs[1], current.groups[0].refs[2]] }],
+        ungrouped: [...current.ungrouped, { kind: 'session', id: 'p' }],
+      },
+      current.version
+    );
+    expect(moved.layout.ungrouped.map((ref) => ref.id)).toEqual(['y', 'p', 'kid']);
+    expect(moved.layout.groups[0].refs).toEqual([{ kind: 'session', id: 'x' }]);
+  });
+
+  it('a reorder that splits the child from its parent pins it', async () => {
+    const h = createHarness({ layouts: { alice: family() }, live, order: ['x', 'p', 'kid', 'y'] });
+    await h.service.putLegacyOrder({ owner: 'alice', isAdmin: false }, ['kid', 'x', 'p', 'y']);
+    expect(h.layouts.alice.groups[0].refs).toEqual([
+      { kind: 'session', id: 'kid', placement: 'manual' },
+      { kind: 'session', id: 'x' },
+      { kind: 'session', id: 'p' },
+    ]);
   });
 });

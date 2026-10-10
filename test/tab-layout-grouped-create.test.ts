@@ -1,8 +1,9 @@
 /**
  * @fileoverview End to end through the real WebServer: a session created with a
  * `tabGroupId` lands in that group in ONE layout version, and a session spawned
- * by another one (the X-Codeman-Parent-Session header) follows its parent into
- * the parent's group until it is moved by hand.
+ * by another one (the X-Codeman-Parent-Session header) lands after its parent in
+ * the parent's group: hand-placed from then on by default, or following its
+ * parent until moved by hand with the synced `spawnedTabsFollowParent` setting.
  *
  * The service and route halves have their own unit tests; this pins the wiring
  * in server.ts (the session joins the live map inside the layout owner lock and
@@ -14,8 +15,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebServer } from '../src/web/server.js';
 
-const TEST_PORT = 3301;
-
 type Ref = { kind: string; id: string; placement?: string };
 type Layout = {
   version: number;
@@ -26,7 +25,7 @@ type Layout = {
 
 describe('grouped session creation through the server', () => {
   let server: WebServer;
-  const base = `http://localhost:${TEST_PORT}`;
+  let base = '';
   const workingDir = mkdtempSync(join(tmpdir(), 'codeman-grouped-create-'));
 
   const api = async (
@@ -49,8 +48,9 @@ describe('grouped session creation through the server', () => {
   const ids = (refs: Ref[]) => refs.map((ref) => ref.id);
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
+    base = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -85,24 +85,51 @@ describe('grouped session creation through the server', () => {
     expect(ids((await layout()).ungrouped)).toContain(loose.session.id);
   });
 
-  it('a spawned child follows its parent into the group, and stays put once moved by hand', async () => {
+  it('by default a spawned child lands after its parent once and is hand-placed', async () => {
+    const start = await layout();
+    const parentId = start.groups[0].refs[0].id;
+    const child = await create({ name: 'pinned-child' }, { 'X-Codeman-Parent-Session': parentId });
+    const after = await layout();
+    expect(after.groups[0].refs.slice(0, 2)).toEqual([
+      { kind: 'session', id: parentId },
+      { kind: 'session', id: child.session.id, placement: 'manual' },
+    ]);
+  });
+
+  it('with the follow setting on, a spawned child follows its parent until moved by hand', async () => {
+    const saved = await api('/api/settings', { method: 'PUT', body: { spawnedTabsFollowParent: true } });
+    expect(saved.status).toBe(200);
     const start = await layout();
     const parentId = start.groups[0].refs[0].id;
     const child = await create({ name: 'child' }, { 'X-Codeman-Parent-Session': parentId });
     const followed = await layout();
-    expect(ids(followed.groups[0].refs).slice(0, 2)).toEqual([parentId, child.session.id]);
+    expect(followed.groups[0].refs.slice(0, 2)).toEqual([
+      { kind: 'session', id: parentId },
+      { kind: 'session', id: child.session.id },
+    ]);
+
+    // A legacy order PUT of the current order (what any device may send) keeps it following.
+    const order = [...followed.groups.flatMap((group) => group.refs), ...followed.ungrouped]
+      .filter((ref) => ref.kind === 'session')
+      .map((ref) => ref.id);
+    const echoed = await api('/api/session-order', { method: 'PUT', body: { order } });
+    expect(echoed.status).toBe(200);
+    expect(echoed.json.data.order).toEqual(order);
+    expect((await layout()).groups[0].refs.find((ref) => ref.id === child.session.id)).toEqual({
+      kind: 'session',
+      id: child.session.id,
+    });
 
     // Hand-move the child to Ungrouped (what the browser sends for a moveRef).
+    const before = await layout();
     const moved = await api('/api/tab-layout', {
       method: 'PUT',
       body: {
-        baseVersion: followed.version,
+        baseVersion: before.version,
         layout: {
-          ...followed,
-          groups: [
-            { ...followed.groups[0], refs: followed.groups[0].refs.filter((ref) => ref.id !== child.session.id) },
-          ],
-          ungrouped: [...followed.ungrouped, { kind: 'session', id: child.session.id, placement: 'manual' }],
+          ...before,
+          groups: [{ ...before.groups[0], refs: before.groups[0].refs.filter((ref) => ref.id !== child.session.id) }],
+          ungrouped: [...before.ungrouped, { kind: 'session', id: child.session.id, placement: 'manual' }],
         },
       },
     });

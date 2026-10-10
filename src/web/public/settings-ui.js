@@ -442,6 +442,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsLineageLines').checked = settings.sessionLineageLines ?? defaults.sessionLineageLines ?? true;
     // Auto-name sessions: synced, default OFF (opt-in; only an explicit true enables).
     document.getElementById('appSettingsAutoNameSessions').checked = settings.autoNameSessions === true;
+    // Spawned tabs follow their parent: synced (the server places the tab), default OFF.
+    document.getElementById('appSettingsSpawnedTabsFollowParent').checked = settings.spawnedTabsFollowParent === true;
     const lineageItem = document.getElementById('appSettingsLineageLinesItem');
     if (lineageItem) lineageItem.style.display = MobileDetection.getDeviceType() === 'desktop' ? '' : 'none';
     document.getElementById('appSettingsMobileOverview').checked = settings.mobileOverviewEnabled ?? defaults.mobileOverviewEnabled ?? false;
@@ -2551,6 +2553,7 @@ Object.assign(CodemanApp.prototype, {
       mobileOverviewEnabled: document.getElementById('appSettingsMobileOverview').checked,
       sessionLineageLines: document.getElementById('appSettingsLineageLines').checked,
       autoNameSessions: document.getElementById('appSettingsAutoNameSessions').checked,
+      spawnedTabsFollowParent: document.getElementById('appSettingsSpawnedTabsFollowParent').checked,
       showSessionButton: document.getElementById('appSettingsShowSessionButton').checked,
       showAwayDigestButton: document.getElementById('appSettingsShowAwayDigestButton').checked,
       showCronButton: document.getElementById('appSettingsShowCronButton').checked,

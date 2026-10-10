@@ -457,6 +457,9 @@ export class WebServer extends EventEmitter {
         this.cachedLightState = null;
         this.sse.broadcastSessionOrder(change);
       },
+      // Fresh, not the 2s cache: the settings PUT does not invalidate it, and a
+      // flip must apply to the very next spawn.
+      childrenFollowParent: async () => (await this.readSettings(true)).spawnedTabsFollowParent === true,
     });
     if (this.testMode) this.tabLayouts.markRestorationSkipped();
 

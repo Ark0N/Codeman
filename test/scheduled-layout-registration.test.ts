@@ -6,9 +6,17 @@ describe('scheduled session layout registration', () => {
   it('registers the layout before lifecycle work and rolls back a rejected tentative session', async () => {
     const sessions = new Map<string, { id: string; owner?: string }>();
     const session = { id: 'scheduled-session', owner: 'alice' };
-    const sessionCreated = vi.fn(async () => {
-      throw new Error('layout unavailable');
-    });
+    let registeredBeforeFailure = false;
+    // The layout service registers the session inside its owner lock, then the
+    // write fails and it calls the undo it was handed.
+    const sessionCreated = vi.fn(
+      async (_owner: string, _id: string, _placement: unknown, register: () => void | (() => void)) => {
+        const undo = register();
+        registeredBeforeFailure = sessions.get(session.id) === session;
+        if (typeof undo === 'function') undo();
+        throw new Error('layout unavailable');
+      }
+    );
     const server = Object.create(WebServer.prototype) as {
       sessions: typeof sessions;
       tabLayouts: { sessionCreated: typeof sessionCreated };
@@ -19,7 +27,8 @@ describe('scheduled session layout registration', () => {
 
     await expect(server.registerSessionWithLayout(session)).rejects.toThrow('layout unavailable');
 
-    expect(sessionCreated).toHaveBeenCalledWith('alice');
+    expect(sessionCreated).toHaveBeenCalledWith('alice', 'scheduled-session', undefined, expect.any(Function));
+    expect(registeredBeforeFailure).toBe(true);
     expect(sessions.has(session.id)).toBe(false);
   });
 
