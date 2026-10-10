@@ -204,6 +204,15 @@ export interface PaneCaptureOptions {
    * rendering it needs the real height to know the frame fits.
    */
   capturedGeometry?: { cols: number; rows: number };
+  /**
+   * Filled in by the implementation with the number of rows the pane holds in
+   * scrollback ABOVE the visible frame (tmux `#{history_size}`), read in the
+   * same query as the geometry. 0 means a full-history capture can return
+   * nothing beyond the visible frame: a pane in the alternate screen (a
+   * fullscreen CLI that keeps its transcript itself) never accumulates any.
+   * Absent when the pane could not be queried.
+   */
+  capturedHistoryLines?: number;
 }
 
 /**

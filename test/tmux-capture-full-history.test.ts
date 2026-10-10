@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { formatCursorRestore, formatPaneSnapshot, hasVisibleContent } from '../src/tmux-manager.js';
+import { formatCursorRestore, formatPaneSnapshot, hasVisibleContent, queryPaneCursor } from '../src/tmux-manager.js';
 
 describe('tmux full-history pane capture (COD-47)', () => {
   const source = readFileSync(resolve(import.meta.dirname, '../src/tmux-manager.ts'), 'utf8');
@@ -150,6 +150,48 @@ describe('the geometry a capture reports back', () => {
     // snapshot repaint is skipped in that case. Reporting a size anyway would
     // describe a frame that was never positioned.
     expect(methodBody).toContain('if (opts && geometry)');
+  });
+});
+
+describe('the capture reports how much scrollback tmux holds (#{history_size})', () => {
+  const source = readFileSync(resolve(import.meta.dirname, '../src/tmux-manager.ts'), 'utf8');
+  const methodStart = source.indexOf('capturePaneBuffer(muxName: string');
+  const methodBody = source.slice(methodStart, source.indexOf('captureActivePaneBuffer(muxName: string', methodStart));
+
+  it('reads it from the one cursor query the capture already makes', () => {
+    // No extra tmux call: every capture is a synchronous exec on the server.
+    expect(methodBody).toContain("'#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size}'");
+    expect(methodBody.match(/display-message/g)).toHaveLength(1);
+    expect(methodBody).toContain('opts.capturedHistoryLines = geometry.historyLines');
+  });
+
+  it('parses the fifth field as historyLines', () => {
+    expect(queryPaneCursor(() => '3 5 120 40 812\n')).toEqual({
+      cursorX: 3,
+      cursorY: 5,
+      cols: 120,
+      rows: 40,
+      historyLines: 812,
+    });
+    // A pane in the alternate screen (fullscreen claude) holds none.
+    expect(queryPaneCursor(() => '0 31 187 32 0')?.historyLines).toBe(0);
+  });
+
+  it('never lets a missing or bad history field void the caret', () => {
+    for (const raw of ['3 5 120 40', '3 5 120 40 ', '3 5 120 40 x', '3 5 120 40 -1']) {
+      const geometry = queryPaneCursor(() => raw);
+      expect(geometry).toEqual({ cursorX: 3, cursorY: 5, cols: 120, rows: 40 });
+      expect(geometry && 'historyLines' in geometry).toBe(false);
+    }
+  });
+
+  it('still returns null when the geometry itself is bad', () => {
+    expect(queryPaneCursor(() => 'x 5 120 40 812')).toBeNull();
+    expect(
+      queryPaneCursor(() => {
+        throw new Error('no pane');
+      })
+    ).toBeNull();
   });
 });
 

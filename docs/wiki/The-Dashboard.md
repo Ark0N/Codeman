@@ -212,7 +212,10 @@ Worth knowing:
 - **Scrollback.** Agent/TUI sessions pull their entire tmux scrollback on first open.
   Shell sessions open from a bounded recent tail so a large transcript cannot stall tab
   switching. Scrolling to the top of a Shell pane pulls the most recent 1 MiB of its tmux
-  history; press **Load full history** to pull the rest explicitly. Automatic output
+  history; press **Load full history** to pull the rest explicitly. That notice only
+  appears once you scroll to the top, leaves when you scroll back down, and stays away
+  for that tab once you close it. Sessions whose CLI keeps its own history (fullscreen
+  Claude) never show it, since there is nothing more to load. Automatic output
   recovery stays within the bounded browser buffer.
 - **Wheel and touch scrolling** are forwarded into Claude's own transcript when a recent
   Claude runs fullscreen (`CLAUDE_CODE_NO_FLICKER=1`, or `"tui": "fullscreen"` in

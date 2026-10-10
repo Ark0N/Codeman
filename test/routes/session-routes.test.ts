@@ -946,6 +946,53 @@ describe('session-routes', () => {
       expect(body.data.captureRows).toBeUndefined();
     });
 
+    it('reports how many scrollback rows tmux holds for the captured pane', async () => {
+      // `truncated` measures the byte stream; this is what a `full=1` pull can
+      // return. 0 (a fullscreen CLI in the alternate screen) is the case where
+      // the client must not offer to load the rest.
+      harness.ctx._session.terminalBuffer = 'x'.repeat(4096);
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        (
+          _name: string,
+          opts?: { capturedGeometry?: { cols: number; rows: number }; capturedHistoryLines?: number }
+        ) => {
+          if (opts) {
+            opts.capturedGeometry = { cols: 100, rows: 50 };
+            opts.capturedHistoryLines = 0;
+          }
+          return 'visible frame';
+        }
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?tail=1024`,
+      });
+
+      const body = JSON.parse(res.body);
+      expect(body.data.truncated).toBe(true);
+      expect(body.data.paneHistoryLines).toBe(0);
+    });
+
+    it('omits paneHistoryLines when the body is the byte history, not a capture', async () => {
+      harness.ctx._session.terminalBuffer = 'byte history only';
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        (_name: string, opts?: { capturedHistoryLines?: number }) => {
+          if (opts) opts.capturedHistoryLines = 12;
+          return null;
+        }
+      );
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal`,
+      });
+
+      const body = JSON.parse(res.body);
+      expect(body.data.source).toBe('history');
+      expect(body.data.paneHistoryLines).toBeUndefined();
+    });
+
     // ── COD-47: full tmux scrollback replay on full page reload ──
     it('full reload (?full=1) requests full tmux history and replays boundary markers', async () => {
       // A realistic scrollback-length capture: ~5000 lines, well past one screen.
