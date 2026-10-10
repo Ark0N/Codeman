@@ -483,7 +483,7 @@ class NotificationManager {
       notif.read = true;
       this.unreadCount = Math.max(0, this.unreadCount - 1);
       this.updateBadge();
-      }
+    }
 
     // Switch to session if available
     if (notif.sessionId && this.app.sessions.has(notif.sessionId)) {

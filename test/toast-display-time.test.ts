@@ -1,7 +1,6 @@
 /**
- * @fileoverview showToast() display time and drawer logging: a toast with no explicit
- * `duration` uses the notification preference, an explicit `duration` (0 = sticky) still wins,
- * and every toast is recorded in the notification drawer.
+ * @fileoverview showToast() display time: a toast with no explicit `duration` uses the
+ * notification preference, and an explicit `duration` (0 = sticky) still wins.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';

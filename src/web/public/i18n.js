@@ -595,6 +595,11 @@
     'Audio Alerts': '声音提醒',
     'Push Notifications': '推送通知',
     'Notification Levels': '通知级别',
+    'Toast display time': '弹出提示显示时长',
+    'How long the corner pop-ups stay on screen.': '角落弹出提示在屏幕上停留的时长。',
+    'Browser notification display time': '浏览器通知显示时长',
+    'How long a desktop notification stays up before Codeman closes it. Your OS may close it sooner.':
+      '桌面通知在 Codeman 关闭它之前保持显示的时长。系统可能会更早关闭它。',
     Critical: '严重',
     'Per-Event Settings': '按事件设置',
     'Permission prompts': '权限提示',

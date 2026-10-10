@@ -24,9 +24,6 @@ type Manager = {
   normalizePreferences: (preferences: Record<string, unknown>) => NotificationPreferences;
   notify: (notification: Record<string, unknown>) => void;
   getToastDurationMs: () => number;
-  unreadCount: number;
-  markAllRead: () => void;
-  clearAll: () => void;
 };
 
 const openWindows: JSDOM[] = [];
