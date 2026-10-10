@@ -11334,6 +11334,24 @@ kbd {
 .file-tree-download:hover {
   color: #4fc3f7;
 }
+.file-tree-delete {
+  display: none;
+  margin-left: 2px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: #888;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.file-tree-item:hover .file-tree-delete {
+  display: inline;
+}
+.file-tree-delete:hover {
+  color: #ef5350;
+}
 
 /* File tree indent levels */
 .file-tree-item[data-depth="0"] { padding-left: 0.5rem; }
