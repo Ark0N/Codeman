@@ -437,3 +437,78 @@ describe('mobile prompt composer', () => {
     expect((document.querySelector('.paste-send') as HTMLButtonElement).disabled).toBe(false);
   });
 });
+
+// The shell bar's Paste button (and Compose, which redirects here for a shell
+// session) must deliver a multi-line block the way a real terminal paste does:
+// one bracketed write, so the shell takes the block as one edit instead of
+// running every line the moment its newline arrives, and no Enter, so the
+// user reviews the block at the prompt before running it.
+describe('mobile shell Paste', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  function openShellPaste() {
+    const harness = loadComposer();
+    harness.app.sessions.set('session-1', { mode: 'shell' });
+    harness.bar.composePrompt();
+    const input = harness.document.querySelector('.paste-textarea') as HTMLTextAreaElement;
+    const send = harness.document.querySelector('.paste-overlay .paste-send') as HTMLButtonElement;
+    return { ...harness, input, send };
+  }
+
+  it('sends a multi-line block once, bracketed, and never presses Enter', () => {
+    const { app, document, input, send, runTimers } = openShellPaste();
+    expect(document.querySelector('.prompt-composer-overlay')).toBeNull();
+    input.value = 'cd ~/dotfiles\ngit pull\n./sync.sh';
+
+    send.click();
+    runTimers();
+
+    expect(app._sendInputAsync).toHaveBeenCalledOnce();
+    expect(app._sendInputAsync).toHaveBeenCalledWith(
+      'session-1',
+      '\x1b[200~cd ~/dotfiles\rgit pull\r./sync.sh\x1b[201~'
+    );
+    expect(document.querySelector('.paste-overlay')).toBeNull();
+  });
+
+  it('normalizes CRLF line endings to the CR a terminal paste carries', () => {
+    const { app, input, send } = openShellPaste();
+    input.value = 'echo one\r\necho two';
+
+    send.click();
+
+    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '\x1b[200~echo one\recho two\x1b[201~');
+  });
+
+  it('refuses a paste longer than one input frame and keeps the text for trimming', () => {
+    const { app, bar, document, input, send } = openShellPaste();
+    input.value = 'x'.repeat(bar._composerMaxLength + 1);
+
+    send.click();
+
+    expect(app._sendInputAsync).not.toHaveBeenCalled();
+    expect(app.showToast).toHaveBeenCalledWith(expect.stringContaining('too long'), 'error');
+    expect(document.querySelector('.paste-overlay')).not.toBeNull();
+    expect(input.value.length).toBe(bar._composerMaxLength + 1);
+  });
+
+  it('delivers to the shell it was opened for after a tab switch', () => {
+    const { app, input, send } = openShellPaste();
+    input.value = 'ls\npwd';
+    app.activeSessionId = 'session-2';
+
+    send.click();
+
+    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '\x1b[200~ls\rpwd\x1b[201~');
+  });
+
+  it('sends nothing for an empty paste', () => {
+    const { app, document, send, runTimers } = openShellPaste();
+
+    send.click();
+    runTimers();
+
+    expect(app._sendInputAsync).not.toHaveBeenCalled();
+    expect(document.querySelector('.paste-overlay')).toBeNull();
+  });
+});
