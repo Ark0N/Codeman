@@ -736,7 +736,7 @@ For AI agents and automation that control Codeman without a browser: an agent th
 Everything in this section also ships as a **Claude Code skill** in [`skills/codeman`](skills/codeman/SKILL.md). Install it once and you never paste API docs into a prompt again. You ask for what you want in plain English, and the agent already sitting inside a Codeman session loads the recipes and drives the API itself.
 
 <p align="center">
-  <a href="docs/images/codeman-skill-20261010.png"><img src="docs/images/codeman-skill-20261010.gif" alt="A real codeman skill run: one plain-English request to a lead session, three Claude Code workers opening as new tabs, and lineage lines from the lead to every worker" width="900"></a>
+  <a href="docs/images/codeman-skill-crt-20261010.png"><img src="docs/images/codeman-skill-crt-20261010.gif" alt="A real codeman skill run: one short prompt typed into Claude Code, the tile grid powering on, then a DeepSeek Harness worker on a local qwen model and a Claude Code worker powering on as new tiles, with lineage lines from the lead to both" width="900"></a>
 </p>
 
 #### Step 1: install it
