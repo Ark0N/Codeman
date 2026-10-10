@@ -10,7 +10,7 @@
  * closes sessions unattended, which turns that from an occasional loss into a
  * routine one.
  *
- * Port: 3188
+ * Port: 0 (ephemeral, read from `server.boundPort`)
  */
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,6 +18,12 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { WebServer } from '../src/web/server.js';
 import { pasteImageDirInUseByOtherSession } from '../src/web/paste-image-gc.js';
+import { probePathKind } from '../src/utils/bounded-path-probe.js';
+
+vi.mock('../src/utils/bounded-path-probe.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/utils/bounded-path-probe.js')>();
+  return { ...real, probePathKind: vi.fn(real.probePathKind) };
+});
 
 describe('pasteImageDirInUseByOtherSession', () => {
   const none = new Set<string>();
@@ -148,9 +154,14 @@ describe('deleting a session that shares its working directory', () => {
     expect(existsSync(join(uploadDir, 'paste-1.png'))).toBe(true);
     expect(existsSync(join(legacyDir, 'paste-0.png'))).toBe(true);
 
+    // The delete acts on one path at the user's request, so its probe goes past
+    // the bulk stall cap (#516); the hourly sweep keeps the cap. Cleared first:
+    // the create path probes the same workspace past the cap too.
+    vi.mocked(probePathKind).mockClear();
     expect((await remove(second)).status).toBe(200);
     expect(existsSync(uploadDir)).toBe(false);
     expect(existsSync(legacyDir)).toBe(false);
+    expect(probePathKind).toHaveBeenCalledWith(workingDir, { pastCap: true });
   });
 
   it('does not follow a planted symlink at the upload dir into another case when the last session closes', async () => {

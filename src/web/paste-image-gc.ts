@@ -13,9 +13,10 @@
  * upload dir.
  */
 import fs from 'node:fs/promises';
-import { lstatSync, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { getDataDir } from '../config/instance.js';
+import { probePathKind, type PathProbeOptions } from '../utils/bounded-path-probe.js';
 import type { SessionPort } from './ports/index.js';
 
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -43,31 +44,53 @@ export const UPLOAD_DIR_NAMES = [UPLOADS_DIR, LEGACY_UPLOADS_DIR];
  * act on what this returns, the hourly sweep and the recursive delete in
  * cleanupSession(), so it lists only REAL directories (a link planted by a
  * workspace script, `.codeman-uploads -> /other-case/.codeman-uploads`, is
- * not one; readdir follows a link to a directory), none that is, contains or
- * sits inside this instance's data dir (a home workspace reaches it under a
- * contrived instance name, `CODEMAN_INSTANCE=uploads`, and `CODEMAN_DATA_DIR`
- * can point inside one), and nothing for a remote (SSH) session, whose
+ * not one; readdir follows a link to a directory), none that is or contains
+ * this instance's data dir (a home workspace reaches it under a contrived
+ * instance name, `CODEMAN_INSTANCE=uploads`, and `CODEMAN_DATA_DIR` can point
+ * inside one; a directory strictly below the data dir only ever holds uploads
+ * and is listed, or the uploads of a workspace like `~/.codeman/app` would
+ * never be collected), and nothing for a remote (SSH) session, whose
  * workingDir is the remote path and would name a same-named LOCAL directory
- * here. The check is made when listing: a same-user process that swaps a
- * listed directory for a link afterwards is accepted, since it already writes
- * anywhere this process can.
+ * here. The working directory is a user-chosen path, so it is probed BOUNDED
+ * first (#516): one on a mount that stopped answering reads `unknown` and is
+ * skipped, never touched. The sweep keeps the probe's stall cap; the delete,
+ * acting on one path at the user's request, passes `pastCap`. The check is
+ * made when listing: a same-user process that swaps a listed directory for a
+ * link afterwards is accepted, since it already writes anywhere this process
+ * can.
  */
-export function uploadDirs(session: { workingDir: string; remote?: unknown }): string[] {
+export async function uploadDirs(
+  session: { workingDir: string; remote?: unknown },
+  probe: PathProbeOptions = {}
+): Promise<string[]> {
   if (session.remote) return [];
-  const dataDir = canonicalDir(getDataDir());
-  return UPLOAD_DIR_NAMES.map((name) => join(session.workingDir, name)).filter((dir) => {
-    if (!isRealDir(dir)) return false;
-    const real = canonicalDir(dir);
-    return real !== dataDir && !real.startsWith(dataDir + sep) && !dataDir.startsWith(real + sep);
-  });
+  if ((await probePathKind(session.workingDir, probe)) !== 'directory') return [];
+  const dataDir = await realDir(getDataDir());
+  const dirs: string[] = [];
+  for (const dir of UPLOAD_DIR_NAMES.map((name) => join(session.workingDir, name))) {
+    if (!(await isRealDir(dir))) continue;
+    const real = await realDir(dir);
+    if (real === dataDir || dataDir.startsWith(real + sep)) continue;
+    dirs.push(dir);
+  }
+  return dirs;
 }
 
 /** lstat, so a symlink is not a directory, whatever it points at. */
-function isRealDir(p: string): boolean {
+async function isRealDir(p: string): Promise<boolean> {
   try {
-    return lstatSync(p).isDirectory();
+    return (await fs.lstat(p)).isDirectory();
   } catch {
     return false;
+  }
+}
+
+/** `canonicalDir()` for the listing, which must not block the event loop on a user path. */
+async function realDir(dir: string): Promise<string> {
+  try {
+    return await fs.realpath(dir);
+  } catch {
+    return resolve(dir);
   }
 }
 
@@ -79,7 +102,7 @@ export async function sweepPasteImagesOnce(
   let scanned = 0;
   let deleted = 0;
   for (const session of ctx.sessions.values()) {
-    for (const dir of uploadDirs(session)) {
+    for (const dir of await uploadDirs(session)) {
       let entries: string[];
       try {
         entries = await fs.readdir(dir);

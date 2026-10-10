@@ -37,7 +37,7 @@ import { pasteImageDirInUseByOtherSession, startPasteImageGc, uploadDirs } from 
 import { CLEAN_EXIT_CLOSE_REASON, shouldCloseCleanlyExitedSession } from '../pane-exit-sweep.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, readFileSync, chmodSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, chmodSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { hostname as getHostname, uptime as osUptime } from 'node:os';
@@ -1547,10 +1547,12 @@ export class WebServer extends EventEmitter {
         })
       ) {
         // Both upload dirs, the pre-move one too; uploadDirs() lists only real
-        // directories clear of the data dir, and none for a remote session.
-        for (const uploadDir of uploadDirs(session)) {
+        // directories that are not the data dir and do not contain it, none for a
+        // remote session, and nothing on a workspace whose bounded probe did not
+        // answer (pastCap: this acts on one path at the user's request).
+        for (const uploadDir of await uploadDirs(session, { pastCap: true })) {
           try {
-            rmSync(uploadDir, { recursive: true, force: true });
+            await fs.rm(uploadDir, { recursive: true, force: true });
           } catch {
             // Best-effort cleanup
           }

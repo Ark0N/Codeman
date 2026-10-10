@@ -399,8 +399,9 @@ async function ensureUploadDir(workingDir: string): Promise<string | null> {
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === 'EEXIST') return uploadDir;
     // The create can succeed before the write fails (ENOSPC): an empty ignore
-    // file would read as the user's on the next upload, so take it back.
-    await fs.rm(ignoreFile, { force: true });
+    // file would read as the user's on the next upload, so take it back; its own
+    // failure must not replace the cause.
+    await fs.rm(ignoreFile, { force: true }).catch(() => {});
     throw err;
   }
   return uploadDir;
