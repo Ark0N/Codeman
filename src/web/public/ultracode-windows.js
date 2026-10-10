@@ -194,8 +194,8 @@ Object.assign(CodemanApp.prototype, {
       </div>
     `;
 
-    // Position: spawn from the parent tab if we can find it, else cascade.
-    const parentTab = parentSessionId ? document.querySelector(`.session-tab[data-id="${parentSessionId}"]`) : null;
+    // Position: spawn from the parent tab if it is painted, else cascade.
+    const parentTab = this._paintedSessionTab(parentSessionId);
     if (parentTab) {
       // _tabAnchor() puts the spawn point below the tab in header layout and to
       // the RIGHT of it in sidebar layout, so the window never lands on the
@@ -312,9 +312,12 @@ Object.assign(CodemanApp.prototype, {
     });
   },
 
-  /** Genie the window toward the center of its tab, then invoke `done` to tear it down. */
+  /**
+   * Genie the window toward the center of its tab, then invoke `done` to tear it
+   * down. A tab that is not painted (hidden by a search) tears down at once.
+   */
   _animateUltracodeWindowToTab(element, sessionId, done) {
-    const tab = sessionId ? document.querySelector(`.session-tab[data-id="${sessionId}"]`) : null;
+    const tab = this._paintedSessionTab(sessionId);
     if (!tab || !element) {
       done();
       return;
@@ -781,7 +784,7 @@ Object.assign(CodemanApp.prototype, {
       if (!parentSessionId) continue;
       const tabKey = 'tab:' + parentSessionId;
       if (!rects.has(tabKey)) {
-        const tab = document.querySelector(`.session-tab[data-id="${parentSessionId}"]`);
+        const tab = this._paintedSessionTab(parentSessionId);
         if (tab) rects.set(tabKey, tab.getBoundingClientRect());
       }
       winList.push({ runId, parentSessionId, winRect: data.element.getBoundingClientRect() });
@@ -830,7 +833,7 @@ Object.assign(CodemanApp.prototype, {
         if (!parentSessionId) continue;
         const tabKey = 'tab:' + parentSessionId;
         if (!rects.has(tabKey)) {
-          const tab = document.querySelector(`.session-tab[data-id="${parentSessionId}"]`);
+          const tab = this._paintedSessionTab(parentSessionId);
           if (tab) rects.set(tabKey, tab.getBoundingClientRect());
         }
         const tabRect = rects.get(tabKey);

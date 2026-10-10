@@ -25,6 +25,10 @@
  * - A change in what shows redraws the connector lines, which are anchored to
  *   row positions; an unchanged re-apply does not.
  * - The sidebar hides a case box its filter emptied, like the rail.
+ * - A floating window whose parent row the search hid draws no connector,
+ *   spawns where it would without a tab and tears down without a genie: a
+ *   hidden row measures as an all-zero rect, which is truthy, so it used to
+ *   anchor them at the viewport's top-left corner.
  * - The input is labelled, sits at the top of #tabRail, and every new string
  *   reads in zh-CN.
  *
@@ -185,6 +189,10 @@ beforeAll(async () => {
       read('app.js') +
       '\n' +
       read('webview-tabs.js') +
+      '\n' +
+      read('subagent-windows.js') +
+      '\n' +
+      read('ultracode-windows.js') +
       '\n;window.__RailSearchCodemanApp = CodemanApp;'
   );
   CodemanApp = window.__RailSearchCodemanApp;
@@ -793,6 +801,151 @@ describe('connector lines follow the rows a search moves', () => {
     expect(redraw).toHaveBeenCalledTimes(1);
     app.applySidebarFilter('/srv/api');
     expect(redraw).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('floating windows whose parent row the search hid', () => {
+  type Box = { left: number; top: number; width: number; height: number };
+  const rect = ({ left, top, width, height }: Box) => ({
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    x: left,
+    y: top,
+  });
+
+  /**
+   * jsdom has no layout: every rect is zero and getClientRects() is always
+   * empty. Lay the page out by hand the way a browser would: painted rows
+   * stack 40px apart down the rail, a window takes the box in its
+   * data-box, and anything a filter hid (`tab-filtered-out` on it or an
+   * ancestor) has no client rects and an all-zero, still truthy, rect.
+   */
+  function layOut() {
+    const hidden = (el: Element) => !el.isConnected || !!el.closest('.tab-filtered-out');
+    const box = (el: Element) => {
+      if (hidden(el)) return rect({ left: 0, top: 0, width: 0, height: 0 });
+      if (el.classList.contains('session-tab')) {
+        const rows = [...document.querySelectorAll('#sessionTabs .session-tab')].filter((row) => !hidden(row));
+        return rect({ left: 0, top: 100 + rows.indexOf(el) * 40, width: 240, height: 32 });
+      }
+      const [left, top, width, height] = ((el as HTMLElement).dataset?.box ?? '0,0,0,0').split(',').map(Number);
+      return rect({ left, top, width, height });
+    };
+    vi.spyOn(window.Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      return box(this);
+    });
+    vi.spyOn(window.Element.prototype, 'getClientRects').mockImplementation(function (this: Element) {
+      return (hidden(this) ? [] : [box(this)]) as never;
+    });
+  }
+
+  /** A subagent window, an ultracode run window and an ultracode agent window, all from "API Review". */
+  function openWindows(app: Record<string, any>) {
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      '<svg id="connectionLines"></svg>' +
+        '<div id="subWin" data-box="600,300,320,200"></div>' +
+        '<div id="runWin" data-box="600,560,320,160"></div>' +
+        '<div id="agentWin" data-box="960,300,280,200"></div>'
+    );
+    app.subagentWindows = new Map([
+      ['ag1', { element: document.getElementById('subWin'), minimized: false, hidden: false }],
+    ]);
+    app.subagentParentMap = new Map([['ag1', 'review']]);
+    app.planSubagents = new Map();
+    app.ultracodeWindows = new Map([
+      ['run1', { element: document.getElementById('runWin'), parentSessionId: 'review' }],
+    ]);
+    // An agent window whose run has no window of its own anchors to the run's tab.
+    app.ultracodeAgentWindows = new Map([['ua1', { element: document.getElementById('agentWin'), runId: 'run2' }]]);
+    app.workflowRuns = new Map([['run2', { runId: 'run2' }]]);
+    app._resolveUltracodeParentSession = () => 'review';
+  }
+
+  /** What the shared SVG pass drew: which window each line serves, and where it starts. */
+  const lines = () =>
+    [...document.querySelectorAll('#connectionLines path')].map((path) => ({
+      win: path.getAttribute('data-run-id') || path.getAttribute('data-agent-id'),
+      from: (path.getAttribute('d') || '').split(' C ')[0],
+    }));
+
+  it('draws no connector from a hidden parent row, and draws it again once the search is cleared', () => {
+    const app = makeApp({ tabLayout: null });
+    app._fullRenderSessionTabs();
+    layOut();
+    openWindows(app);
+    // review is the third row: top 180, so its right edge's midpoint is (240, 196).
+    const fromReview = [
+      { win: 'ag1', from: 'M 240 196' },
+      { win: 'run1', from: 'M 240 196' },
+      { win: 'ua1', from: 'M 240 196' },
+    ];
+
+    app._updateConnectionLinesImmediate();
+    expect(lines()).toEqual(fromReview);
+
+    app.setTabRailSearch('notes');
+    // The trap: the hidden row still answers with a rect, all zero but truthy.
+    const row = document.querySelector('#sessionTabs [data-id="review"]')!;
+    expect(row.getBoundingClientRect()).toMatchObject({ left: 0, top: 0, width: 0 });
+    app._updateConnectionLinesImmediate();
+    expect(lines()).toEqual([]);
+
+    app.clearTabRailSearch();
+    app._updateConnectionLinesImmediate();
+    expect(lines()).toEqual(fromReview);
+  });
+
+  it('spawns an ultracode window from a painted parent row, and cascades instead when the row is hidden', () => {
+    const app = makeApp({ tabLayout: null });
+    app._fullRenderSessionTabs();
+    layOut();
+    app.ultracodeWindows = new Map();
+    app.ultracodeWindowZIndex = 0;
+    app._resolveUltracodeParentSession = () => 'review';
+    app.makeWindowDraggable = () => ({});
+    app.renderUltracodeWindowContent = () => {};
+    app._fetchWorkflowRunDetail = () => {};
+    const spawn = (runId: string) => {
+      app.createUltracodeWindow({ runId, workflowName: runId });
+      const win = document.getElementById(`ultracode-window-${runId}`) as HTMLElement;
+      return { left: win.style.left, top: win.style.top };
+    };
+
+    app.setTabRailSearch('notes');
+    // The cascade's first slot, not the corner a zero rect would give.
+    expect(spawn('hidden-parent')).toEqual({ left: '24px', top: '96px' });
+
+    app.clearTabRailSearch();
+    // To the right of the row (rail layout): right edge 240 + 14, at the row's top.
+    expect(spawn('painted-parent')).toEqual({ left: '254px', top: '180px' });
+  });
+
+  it('tears an ultracode window down at once rather than flying it to a hidden row', () => {
+    const app = makeApp({ tabLayout: null });
+    app._fullRenderSessionTabs();
+    layOut();
+    const win = document.createElement('div');
+    win.dataset.box = '600,300,320,200';
+    document.body.appendChild(win);
+
+    app.setTabRailSearch('notes');
+    const gone = vi.fn();
+    app._animateUltracodeWindowToTab(win, 'review', gone);
+    expect(gone).toHaveBeenCalledTimes(1);
+    expect(win.style.transition).toBe('');
+
+    app.clearTabRailSearch();
+    const flown = vi.fn();
+    app._animateUltracodeWindowToTab(win, 'review', flown);
+    expect(flown).not.toHaveBeenCalled();
+    expect(win.style.transition).toContain('transform');
+    win.dispatchEvent(new window.Event('transitionend'));
+    expect(flown).toHaveBeenCalledTimes(1);
   });
 });
 

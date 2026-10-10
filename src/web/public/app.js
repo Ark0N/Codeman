@@ -6282,6 +6282,20 @@ class CodemanApp {
     };
   }
 
+  /**
+   * The session's tab row when it is painted, else null: not rendered (a
+   * collapsed group) or hidden by the rail search or the sidebar filter. A
+   * display:none row still answers getBoundingClientRect() with an all-zero
+   * rect, which is truthy, so a connector, a spawn or a genie measured from it
+   * would start at the viewport's top-left corner. Every floating window that
+   * anchors to its parent tab measures through this.
+   */
+  _paintedSessionTab(sessionId) {
+    if (!sessionId) return null;
+    const tab = document.querySelector(`.session-tab[data-id="${sessionId}"]`);
+    return tab && tab.getClientRects().length > 0 ? tab : null;
+  }
+
   /** Bezier from a _tabAnchor() to a window rect, curving along the right axis. */
   _tabConnectorPath(anchor, winRect) {
     if (anchor.vertical) {

@@ -7,7 +7,10 @@
  * oninput/onkeydown/onclick handlers in index.html reach the app, that a match
  * inside a collapsed group can be clicked, and that Escape in the box clears
  * the search WITHOUT the global key handler (installed for real, capture
- * phase, so it runs before the box's own onkeydown) also closing every panel.
+ * phase, so it runs before the box's own onkeydown) also closing every panel,
+ * and that a subagent connector whose parent row the search hid is not drawn
+ * from the viewport's corner (a display:none row's rect is all zero, but
+ * truthy, and only real layout says so).
  * The real #tabRail markup is lifted from index.html, and the shipping
  * constants.js, tab-layout-browser.js, app.js, webview-tabs.js and styles.css
  * are loaded into a page.
@@ -82,6 +85,7 @@ describe('vertical rail session search in Chromium', () => {
         '\nwindow.CodemanApp = CodemanApp; window.__setApp = (value) => { app = value; };',
     });
     await page.addScriptTag({ content: read('webview-tabs.js') });
+    await page.addScriptTag({ content: read('subagent-windows.js') });
     await page.evaluate(() => {
       const w = window as any;
       const app = Object.create(w.CodemanApp.prototype);
@@ -248,6 +252,54 @@ describe('vertical rail session search in Chromium', () => {
     expect(await paintedRows()).toEqual(['notes']);
     expect(await notesTop()).toBeLessThan(before);
     expect(await page.evaluate(() => (window as any).__redraws)).toBe(1);
+  });
+
+  it('draws no subagent connector from a parent row the search hid, and draws it again when cleared', async () => {
+    const connector = () =>
+      page.evaluate(() => {
+        (window as any).__app._updateConnectionLinesImmediate();
+        const path = document.querySelector('#connectionLines path[data-parent-tab="alpha"]');
+        return path ? path.getAttribute('d')!.split(' C ')[0] : null;
+      });
+    const rowAnchor = () =>
+      page.evaluate(() => {
+        const r = document.querySelector('#sessionTabs [data-id="alpha"]')!.getBoundingClientRect();
+        return `M ${r.right} ${r.top + r.height / 2}`;
+      });
+    await page.evaluate(() => {
+      const app = (window as any).__app;
+      document.body.insertAdjacentHTML(
+        'beforeend',
+        '<svg id="connectionLines"></svg>' +
+          '<div id="subWin" style="position:fixed;left:700px;top:300px;width:320px;height:200px"></div>'
+      );
+      app.subagentWindows = new Map([
+        ['ag1', { element: document.getElementById('subWin'), minimized: false, hidden: false }],
+      ]);
+      app.subagentParentMap = new Map([['ag1', 'alpha']]);
+      app.planSubagents = new Map();
+    });
+    try {
+      const anchor = await rowAnchor();
+      expect(anchor).not.toBe('M 0 0');
+      expect(await connector()).toBe(anchor);
+
+      await page.getByRole('searchbox', { name: 'Search sessions' }).fill('notes');
+      expect(await paintedRows()).toEqual(['notes']);
+      // The trap: Chromium still answers the hidden row with a rect, all zero.
+      expect(await rowAnchor()).toBe('M 0 0');
+      expect(await connector()).toBeNull();
+
+      await page.getByRole('button', { name: 'Clear search' }).click();
+      expect(await connector()).toBe(await rowAnchor());
+    } finally {
+      await page.evaluate(() => {
+        const app = (window as any).__app;
+        app.subagentWindows = new Map();
+        document.getElementById('connectionLines')?.remove();
+        document.getElementById('subWin')?.remove();
+      });
+    }
   });
 
   it('hides a case box the sidebar filter emptied, in the sidebar layout only', async () => {
