@@ -150,6 +150,7 @@ Object.assign(CodemanApp.prototype, {
     const total = files.length;
     let done = 0;
     let failed = 0;
+    let failReason = ''; // first server reason, shown in the toast so a failure is not just a count
     const results = new Array(total); // preserve selection order for insertion
     const progress = () =>
       this.showToast(`Uploading ${Math.min(done + 1, total)}/${total} image${total > 1 ? 's' : ''}…`, 'info');
@@ -173,6 +174,7 @@ Object.assign(CodemanApp.prototype, {
           results[i] = await this._uploadPasteImage(sessionId, normalized);
         } catch (err) {
           failed++;
+          if (!failReason && err && err.message) failReason = err.message;
           console.warn('Image upload failed:', err);
           results[i] = null;
         } finally {
@@ -196,7 +198,7 @@ Object.assign(CodemanApp.prototype, {
     // Final status: successes, plus any failures / cap so nothing is silent.
     const parts = [];
     if (paths.length > 0) parts.push(`${paths.length} image${paths.length > 1 ? 's' : ''} ready`);
-    if (failed > 0) parts.push(`${failed} failed`);
+    if (failed > 0) parts.push(failReason ? `${failed} failed: ${failReason}` : `${failed} failed`);
     if (capped) parts.push(`max ${this._maxBatchImages} per batch`);
     const tone = paths.length > 0 ? (failed > 0 || capped ? 'info' : 'success') : 'error';
     this.showToast(parts.join(' · ') || 'No images uploaded', tone);
