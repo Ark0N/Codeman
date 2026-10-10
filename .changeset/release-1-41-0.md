@@ -18,7 +18,7 @@
 
 **Settings: Apply (#565).** Next to Save, an Apply button saves the same way but keeps Settings open. Switching on MCP server sync makes its Preview and Sync usable straight away, and CLI management's add, enable and disable work without closing and reopening Settings.
 
-**Notifications stay as long as you want (#564).** Settings → Notifications has a Toast display time and a Browser notification display time (seconds, per device; the defaults stay 3 s and 8 s).
+**Notifications stay up longer if you want (#564).** Settings → Notifications has a Toast display time and a Browser notification display time (1 second to 5 minutes, per device; the defaults stay 3 s and 8 s).
 
 **CLI logos on tabs can be switched off (#569).** App Settings → Appearance → Tabs → **CLI Logos on Tabs** hides the agent logo on every tab surface (header strip, rails, sidebar, phone chips, the desktop home list) on this device. On by default. Tile headers, split pane headers and the Run menus keep their logos.
 
@@ -32,4 +32,4 @@
 
 **For contributors (#570).** Every in-process test server binds an ephemeral port, the mobile suite included, and the port guard now also refuses raw listeners on a fixed port, so two test runs on one machine never collide.
 
-**Fixes applied while landing.** zh-CN translations for the two new notification display-time settings, and test and doc cleanups left over from review.
+**Fixes applied while landing.** zh-CN translations for the two new notification display-time settings and for the new Animations section. A session whose name matches an interface word ("Lab", "New session") is no longer translated in the tab strip when the interface is in Chinese. Plus test and doc cleanups left over from review.
