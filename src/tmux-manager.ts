@@ -694,6 +694,16 @@ export function normalizeScrollbackEol(buffer: string): string {
   return buffer.replace(/\r?\n/g, '\r\n');
 }
 
+/**
+ * Put scrollback rows read elsewhere (`PaneCaptureOptions.scrollbackOverride`)
+ * above a visible-frame capture, as one capture in tmux's own shape: rows joined
+ * by a bare `\n`. Undefined or empty scrollback leaves the frame as it is.
+ */
+export function joinScrollbackAndFrame(scrollback: string | undefined, frame: string): string {
+  if (!scrollback) return frame;
+  return `${scrollback.replace(/\n$/, '')}\n${frame}`;
+}
+
 /** Pane geometry and caret position, as `display-message` reports them. */
 interface PaneCursorGeometry {
   cols: number;
@@ -960,6 +970,19 @@ const REMOTE_TMUX_SOCKET = 'codeman-remote';
  */
 export function remoteTmuxSessionName(sessionId: string): string {
   return `codeman-ssh-${sessionId.slice(0, 8)}`;
+}
+
+/**
+ * The remote tmux socket and session a remote Codeman session's pane is attached
+ * to, matching the command that attached it: an owned session is the one
+ * `buildRemoteLaunchCommand` created on the private socket, a non-owned one is the
+ * discovered session `buildRemoteAttachCommand` joined on `-L codeman`.
+ */
+export function remoteTmuxLocation(remote: SessionRemote, sessionId: string): { socket: string; sessionName: string } {
+  if (remote.owned === false) {
+    return { socket: 'codeman', sessionName: remote.remoteSessionName || remoteTmuxSessionName(sessionId) };
+  }
+  return { socket: REMOTE_TMUX_SOCKET, sessionName: remoteTmuxSessionName(sessionId) };
 }
 
 /**
@@ -3870,7 +3893,14 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         typeof requestedLines === 'number' && Number.isFinite(requestedLines) && requestedLines > 0
           ? Math.trunc(requestedLines)
           : DEFAULT_TMUX_HISTORY_LIMIT;
-      const captureFlags = fullHistory ? `capture-pane -p -e -J -S -${historyLines}` : 'capture-pane -p -e';
+      // With a scrollback override this pane's own history is not read at all:
+      // `-S 0` starts at the top of the visible frame.
+      const scrollbackOverride = fullHistory ? opts?.scrollbackOverride : undefined;
+      const captureFlags = !fullHistory
+        ? 'capture-pane -p -e'
+        : scrollbackOverride !== undefined
+          ? 'capture-pane -p -e -J -S 0'
+          : `capture-pane -p -e -J -S -${historyLines}`;
       // execSync's default maxBuffer (1MB) kills multi-MB scrollback dumps
       // (ENOBUFS) and would silently degrade full-history capture to the byte
       // buffer for exactly the long sessions it exists for — size it from the
@@ -3883,7 +3913,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         execOpts.maxBuffer =
           (opts?.maxCaptureBytes ?? DEFAULT_TERMINAL_BUFFER_MAX_BYTES) + FULL_HISTORY_CAPTURE_SLACK_BYTES;
       }
-      const rawCapture = execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, execOpts);
+      const rawCapture = joinScrollbackAndFrame(
+        scrollbackOverride,
+        execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, execOpts)
+      );
       // Query the cursor BEFORE deciding anything else. On the full-history path
       // it settles both how the capture is trimmed and whether a cursor move is
       // appended, and those two have to agree: trailing blank rows are only safe

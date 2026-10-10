@@ -56,6 +56,11 @@ vi.mock('../../src/remote-hosts.js', async (orig) => {
   };
 });
 
+// The remote scrollback read is an ssh round trip; the route only decides when to
+// ask and what to do with the answer.
+const remoteScrollback = vi.hoisted(() => vi.fn(async (): Promise<string | null> => null));
+vi.mock('../../src/remote-pane-history.js', () => ({ fetchRemoteScrollback: remoteScrollback }));
+
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { RemoteWakeRegistry, REMOTE_WAKE_REQUEST_READY_TIMEOUT_MS } from '../../src/remote-wake.js';
 import { resolveTerminalHistoryConfig } from '../../src/config/terminal-history.js';
@@ -1141,6 +1146,44 @@ describe('session-routes', () => {
       for (const bad of ['0', '-5', 'abc', '1.5', '', '1e4', '9999999999']) {
         expect(await linesFor(`full=1&lines=${bad}`), `lines=${bad}`).toBe(limit);
       }
+    });
+
+    it("a remote session's full capture takes its scrollback from the remote tmux", async () => {
+      const remote = { hostId: 'h1', label: 'proxx', host: 'proxx.lan', username: 'tim', remotePath: '/home/tim' };
+      (harness.ctx._session as unknown as { remote?: unknown }).remote = remote;
+      harness.ctx._session.mode = 'shell';
+      const captureSpy = vi.fn((_name: string, _opts?: { scrollbackOverride?: string }) => 'captured frame');
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = captureSpy;
+      const load = async (query: string) => {
+        captureSpy.mockClear();
+        remoteScrollback.mockClear();
+        await harness.app.inject({ method: 'GET', url: `/api/sessions/${harness.ctx._sessionId}/terminal?${query}` });
+        return captureSpy.mock.calls[0]?.[1];
+      };
+
+      remoteScrollback.mockResolvedValueOnce('remote line 1\nremote line 2\n');
+      const opts = await load('full=1&lines=500');
+      expect(remoteScrollback).toHaveBeenCalledWith(remote, harness.ctx._sessionId, 500, expect.any(Number));
+      expect(opts).toEqual(
+        expect.objectContaining({
+          fullHistory: true,
+          historyLimitLines: 500,
+          scrollbackOverride: 'remote line 1\nremote line 2\n',
+        })
+      );
+
+      // Unreachable host / back-off: the local capture, unchanged.
+      remoteScrollback.mockResolvedValueOnce(null);
+      expect(await load('full=1&lines=500')).not.toHaveProperty('scrollbackOverride');
+
+      // A visible-frame load reads no history, so it never asks the remote.
+      await load(`tail=${1024 * 1024}`);
+      expect(remoteScrollback).not.toHaveBeenCalled();
+
+      // A local session never asks either.
+      (harness.ctx._session as unknown as { remote?: unknown }).remote = undefined;
+      await load('full=1');
+      expect(remoteScrollback).not.toHaveBeenCalled();
     });
 
     it('`lines=` leaves a visible-frame capture (no full=1) exactly as it was', async () => {
