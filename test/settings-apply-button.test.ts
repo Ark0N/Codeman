@@ -1,6 +1,6 @@
 /**
  * @fileoverview Settings "Apply": saves like Save but keeps the modal open and refreshes the
- * groups that depend on a saved value (MCP sync, custom model endpoints, CLI management).
+ * groups that depend on a saved value (MCP sync, and CLI management's add/enable/disable writes).
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
