@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/subagent-demo-20260724.gif" alt="Codeman — 并行子智能体可视化" width="900">
+  <img src="docs/images/tiles-crt-20261010.gif" alt="Codeman 平铺视图：六个实时智能体（DeepSeek Harness、Claude Code、Pi、Codex、OpenCode 和一个 shell）以 CRT 动画开启与关闭" width="800">
 </p>
 
 > 本文档由英文版 [`README.md`](README.md) 翻译而来。如有出入，以英文版为准。
