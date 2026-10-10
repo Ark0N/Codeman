@@ -1011,13 +1011,17 @@ exits green. Use the browser runner for those files and read the file count.
    viewer keeps a stale width and renders garbled output (#464).
 3. WebSocket backpressure (`bufferedAmount` threshold, drop and send `{t:'r'}`
    on drain) for grids over slow links.
-4. Tile parity extras: mouse-wheel forwarding for Claude's fullscreen renderer,
-   a "Load full history" action inside a tile. (Done since: a tile pages a
-   hollow buffer's CLI transcript with PageUp/PageDown, the primary pane's
-   #555 route, and hand-reports a plain click while its session has
-   `cliMouseTracking` on, both through the primary pane's gates aimed at the
-   tile. The SGR wheel forwarding itself is still open: a fullscreen Claude
-   tile leaves the wheel to xterm.)
+4. Tile parity extras: a "Load full history" action inside a tile. (Done
+   since: a tile pages a hollow buffer's CLI transcript with PageUp/PageDown,
+   the primary pane's #555 route, hand-reports a plain click while its session
+   has `cliMouseTracking` on, and forwards the wheel to Claude's fullscreen
+   renderer as SGR wheel reports from its own cells
+   (`TerminalTile._maybeForwardWheelToCli`, encoding shared with the primary
+   pane via `CodemanTerminalInput.sgrWheelReports`), all through the primary
+   pane's gates aimed at the tile. Before that, a fullscreen Claude tile left
+   the wheel to xterm, which scrolled only stale replayed frames. Shift+wheel
+   scrolls the tile's local scrollback itself (`_maybeScrollLocalOnShift`),
+   since xterm turns it into a horizontal no-op off macOS.)
 5. WebGL in tiles, after measuring the DOM renderer with nine busy tiles.
 6. Named grid presets, possibly per owner on the server.
 7. The end state: the main terminal becomes a 1x1 grid of `TerminalTile`,
