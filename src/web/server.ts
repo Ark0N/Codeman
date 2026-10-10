@@ -3682,6 +3682,17 @@ export class WebServer extends EventEmitter {
               if (savedState.flickerFilterEnabled !== undefined) {
                 session.flickerFilterEnabled = savedState.flickerFilterEnabled;
               }
+              // Tab colour, pin and the image watcher are user-set and persisted like the settings
+              // above, but this path never read them back: after a restart every surviving pane came
+              // back uncoloured and unpinned with its image watcher off, and the next persist
+              // overwrote the saved values. `reapplyPersistedSessionState()` (the reboot-restore
+              // path) already restores all three. The watcher flag has to be set before
+              // `setupSessionListeners()` below, which reads it to decide whether to start one.
+              if (savedState.color) session.setColor(savedState.color);
+              if (savedState.pinned) session.restorePin(true, savedState.pinnedAt);
+              if (savedState.imageWatcherEnabled !== undefined) {
+                session.imageWatcherEnabled = savedState.imageWatcherEnabled;
+              }
               // Respawn controller (not supported for external-CLI sessions)
               if (!isExternalCliMode(session.mode) && savedState.respawnEnabled && savedState.respawnConfig) {
                 try {
