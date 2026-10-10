@@ -97,7 +97,10 @@ or settled a question the spec left open. The invariants as built are in
   `test/header-icon-hover.test.ts`.
 - **The grid opens and closes with a short animation, on by default** (owner request:
   "when clicking on the tile button first make this animation nicer"). It is the grid's
-  own, not an `entrance-animations.js` theme (those are off by default). Opening, each tile
+  own `settle` style, the default of App Settings → Animations → Tile Animations, which
+  switches on other styles (`fly` out of the tabs, `deal` from the Tiles button, `crt`,
+  `beam`, ...; docs/architecture-invariants.md#entrance-animations).
+  Opening, each tile
   fades and settles in (opacity, translateY 6px and scale .97), 180 ms, 24 ms apart in
   reading order (`--tile-enter-index`): the last of six is done at 300 ms; a tile added
   later enters the same way. Its terminal stays transparent (`.tile--revealing`) until the
