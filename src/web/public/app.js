@@ -2286,6 +2286,8 @@ class CodemanApp {
   }
 
   _onSessionCreated(data) {
+    // A session this tab is closing stays closed until the server answers.
+    if (this._closingSessions?.has(data.id)) return;
     this.sessions.set(data.id, data);
     // Add new session to end of tab order
     if (!this.sessionOrder.includes(data.id)) {
@@ -2310,6 +2312,9 @@ class CodemanApp {
 
   _onSessionUpdated(data) {
     const session = data.session || data;
+    // A session this tab is closing stays closed until the server answers
+    // (closeSession() puts it back if the delete is refused).
+    if (this._closingSessions?.has(session.id)) return;
     const oldSession = this.sessions.get(session.id);
     const claudeSessionIdJustSet = session.claudeSessionId && (!oldSession || !oldSession.claudeSessionId);
     this.sessions.set(session.id, session);
@@ -5954,9 +5959,19 @@ class CodemanApp {
   // Session Tabs
   // ═══════════════════════════════════════════════════════════════
 
-  renderSessionTabs() {
+  renderSessionTabs({ immediate = false } = {}) {
     // Don't re-render while user is typing in the inline rename input
     if (this._inlineRenameActive) return;
+    if (immediate) {
+      // For a change the user just made and is watching for (closing a tab). The
+      // debounce restarts on every session update, so with busy sessions around a
+      // debounced pass can lag well past its 100ms. A pass still pending would only
+      // repeat this one, so it is dropped.
+      clearTimeout(this._debounceTimers.sessionTabs);
+      this._debounceTimers.sessionTabs = null;
+      this._renderSessionTabsImmediate();
+      return;
+    }
     this._debouncedCall('sessionTabs', this._renderSessionTabsImmediate);
   }
 
@@ -9639,27 +9654,32 @@ class CodemanApp {
   }
 
   async closeSession(sessionId, killMux = true) {
-    // ⚠️ Captured BEFORE the await, and the delete is announced to
-    // _onSessionDeleted through _closingSessions. The `session_deleted` SSE
-    // broadcast for THIS delete routinely lands while the request is still in
-    // flight, and that handler nulls activeSessionId and shows the welcome
-    // screen. Re-reading the field after the await therefore made the fallback
-    // below a coin flip: closing the tab you were on either moved you to the
-    // next session or dumped you on the home screen, depending on which path
-    // won the race (both outcomes measured on one build, 2026-08-17).
+    // Already on its way out (a repeated click, the mux panel racing the tab).
+    if (this._closingSessions.has(sessionId)) return;
+    // The tab goes FIRST and the server is asked after. The kill takes the server
+    // a few hundred ms (SIGTERM grace, the process tree, tmux), and a tab that sat
+    // there that long after "Kill" read as a click that did nothing. A refused
+    // delete puts the row back below.
+    //
+    // ⚠️ Everything is read BEFORE the first await, and the delete is announced
+    // to _onSessionDeleted through _closingSessions: the `session_deleted` SSE
+    // broadcast for THIS delete arrives while the request is still in flight, and
+    // that handler must leave the follow-up selection to this method (both
+    // outcomes of that race were measured on one build, 2026-08-17).
+    const session = this.sessions.get(sessionId);
+    const orderIndex = this.sessionOrder.indexOf(sessionId);
     const wasActive = this.activeSessionId === sessionId;
     // Tile grid open: the fallback is the NEIGHBOURING TILE, never the first
     // sessionOrder entry (often not tiled, which would collapse the grid).
-    // Captured here for the same reason as wasActive: the SSE delete can remove
-    // the tile while the request is still in flight.
     const grid = this._tileGrid;
     const tileNeighborId = grid?.has(sessionId) ? window.CodemanTileGrid.tileNeighbor(grid.ids, sessionId) : null;
     this._closingSessions.add(sessionId);
+    let res = null;
     try {
-      await this._apiDelete(`/api/sessions/${sessionId}?killMux=${killMux}`);
-      this._cleanupSessionData(sessionId);
-      // The last tile leaving closes the grid (no reselect): the pick below runs.
-      if (grid?.has(sessionId)) this.removeTile(sessionId, { refocus: false });
+      // The same teardown the SSE event runs (split pane, tile, detached window,
+      // WebSocket, per-session state), only now instead of when the server is
+      // done. It is idempotent, so the real event finds nothing left to do.
+      this._onSessionDeleted({ id: sessionId });
 
       if (wasActive && grid?.open) {
         // `auto`: the app chose this tile because the previous one went away.
@@ -9684,18 +9704,50 @@ class CodemanApp {
         }
       }
 
-      this.renderSessionTabs();
+      this.renderSessionTabs({ immediate: true });
 
+      res = await this._apiDelete(`/api/sessions/${sessionId}?killMux=${killMux}`);
+    } catch (err) {
+      // `res` stays null: handled below like a delete that got no answer.
+      console.warn('[closeSession] close failed:', err);
+    } finally {
+      this._closingSessions.delete(sessionId);
+    }
+
+    // 404: already gone (closed from another tab or device), which is what was asked.
+    let gone = !!res && (res.ok || res.status === 404);
+    if (!gone) {
+      // Refused, or no answer. Ask rather than guess: a delete can land on the
+      // server and still lose its reply, and its session_deleted event has then
+      // already been spent while the request was in flight.
+      const check = await this._api(`/api/sessions/${sessionId}`);
+      gone = check?.status === 404;
+    }
+
+    if (gone) {
+      // An SSE resync (handleInit) that landed mid-request rebuilds the list from
+      // the server, which still had the session then.
+      if (this.sessions.has(sessionId)) this._onSessionDeleted({ id: sessionId });
       if (killMux) {
         this.showToast('Session closed and tmux killed', 'success');
       } else {
         this.showToast('Tab hidden, tmux still running', 'info');
       }
-    } catch (err) {
-      this.showToast('Failed to close session', 'error');
-    } finally {
-      this._closingSessions.delete(sessionId);
+      return;
     }
+
+    // Still on the server (or the server is unreachable, in which case the resync
+    // on reconnect has the last word): its row comes back where it was.
+    if (session && !this.sessions.has(sessionId)) {
+      this.sessions.set(sessionId, session);
+      if (!this.sessionOrder.includes(sessionId)) {
+        const at = orderIndex === -1 ? this.sessionOrder.length : Math.min(orderIndex, this.sessionOrder.length);
+        this.sessionOrder.splice(at, 0, sessionId);
+        this.saveSessionOrder();
+      }
+      this.renderSessionTabs();
+    }
+    this.showToast('Failed to close session', 'error');
   }
 
   // Request confirmation before closing a session

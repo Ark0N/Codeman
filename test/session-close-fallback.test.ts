@@ -16,6 +16,11 @@
  * leaves the active-session handoff alone for a close this tab started. A delete
  * from anywhere else still lands on the welcome screen.
  *
+ * The close is also OPTIMISTIC: the tab goes and the next one is selected before
+ * the DELETE is even sent (the server's kill takes a few hundred ms, and a tab
+ * sitting there that long read as a dead button). A refused delete puts the row
+ * back where it was; one whose reply was lost is checked with a GET first.
+ *
  * Loaded via `vm` with a stubbed context (no jsdom), like input-send-order.test.ts.
  * Port: N/A.
  */
@@ -74,7 +79,11 @@ function makeApp(active: string | null, order = [A, B]): TestApp {
   app.isSoloWindow = false;
   app._wsSessionId = null;
   app.terminal = { clear: vi.fn() };
-  app._apiDelete = vi.fn(async () => ({ success: true }));
+  // Shaped like the Response the real helper resolves with (or null: no answer).
+  app._apiDelete = vi.fn(async () => ({ ok: true, status: 200 }));
+  // The failure path's "is it still there?" check: yes, by default.
+  app._api = vi.fn(async () => ({ ok: true, status: 200 }));
+  app.saveSessionOrder = vi.fn();
   // The real one touches ~20 maps; the parts this behavior depends on are the
   // session map and the tab order, so those are pruned for real.
   app._cleanupSessionData = vi.fn((id: string) => {
@@ -101,7 +110,7 @@ describe('closing the active session', () => {
     // delete lands before the request resolves.
     app._apiDelete = vi.fn(async () => {
       app._onSessionDeleted({ id: A });
-      return { success: true };
+      return { ok: true, status: 200 };
     });
 
     await app.closeSession(A);
@@ -172,5 +181,86 @@ describe('closing the active session', () => {
 
     expect((app._closingSessions as Set<string>).size).toBe(0);
     expect(app.showToast).toHaveBeenCalledWith('Failed to close session', 'error');
+  });
+});
+
+describe('closing is optimistic', () => {
+  it('drops the tab and selects the next one BEFORE the server answers', async () => {
+    const app = makeApp(A);
+    let answer: (value: unknown) => void = () => {};
+    app._apiDelete = vi.fn(() => new Promise((r) => (answer = r)));
+
+    const closing = app.closeSession(A);
+
+    expect(app.sessions.has(A)).toBe(false);
+    expect(app.selectSession).toHaveBeenCalledWith(B, { auto: true });
+    // Rendered now, not on the debounce that every session update restarts.
+    expect(app.renderSessionTabs).toHaveBeenCalledWith({ immediate: true });
+    expect(app.showToast).not.toHaveBeenCalled();
+
+    answer({ ok: true, status: 200 });
+    await closing;
+    expect(app.showToast).toHaveBeenCalledWith('Session closed and tmux killed', 'success');
+  });
+
+  it('a refused delete puts the row back where it was, and says so', async () => {
+    const app = makeApp(B, [A, B]);
+    app._apiDelete = vi.fn(async () => ({ ok: false, status: 500 }));
+
+    await app.closeSession(A);
+
+    expect(app._api).toHaveBeenCalledWith(`/api/sessions/${A}`);
+    expect(app.sessions.has(A)).toBe(true);
+    expect(app.sessionOrder).toEqual([A, B]);
+    expect(app.showToast).toHaveBeenCalledWith('Failed to close session', 'error');
+  });
+
+  it('a delete that landed but lost its reply counts as closed', async () => {
+    const app = makeApp(A);
+    app._apiDelete = vi.fn(async () => null);
+    app._api = vi.fn(async () => ({ ok: false, status: 404 }));
+
+    await app.closeSession(A);
+
+    expect(app.sessions.has(A)).toBe(false);
+    expect(app.showToast).toHaveBeenCalledWith('Session closed and tmux killed', 'success');
+  });
+
+  it('a 404 from the delete is a close that already happened', async () => {
+    const app = makeApp(A);
+    app._apiDelete = vi.fn(async () => ({ ok: false, status: 404 }));
+
+    await app.closeSession(A);
+
+    expect(app._api).not.toHaveBeenCalled();
+    expect(app.sessions.has(A)).toBe(false);
+    expect(app.showToast).toHaveBeenCalledWith('Session closed and tmux killed', 'success');
+  });
+
+  it('a session update arriving mid-close does not bring the tab back', async () => {
+    const app = makeApp(A);
+    app.updateCost = vi.fn();
+    app.updateSubagentParentNames = vi.fn();
+    app._apiDelete = vi.fn(async () => {
+      (app as unknown as { _onSessionUpdated: (d: unknown) => void })._onSessionUpdated({ id: A, status: 'idle' });
+      return { ok: true, status: 200 };
+    });
+
+    await app.closeSession(A);
+
+    expect(app.sessions.has(A)).toBe(false);
+  });
+
+  it('a second close of the same tab while the first is in flight is a no-op', async () => {
+    const app = makeApp(A);
+    let answer: (value: unknown) => void = () => {};
+    app._apiDelete = vi.fn(() => new Promise((r) => (answer = r)));
+
+    const first = app.closeSession(A);
+    await app.closeSession(A);
+    answer({ ok: true, status: 200 });
+    await first;
+
+    expect(app._apiDelete).toHaveBeenCalledTimes(1);
   });
 });

@@ -12,6 +12,7 @@ export { Debouncer, KeyedDebouncer } from './debouncer.js';
 export { startEventLoopMonitor } from './event-loop-monitor.js';
 export type { EventLoopMonitorHandle } from './event-loop-monitor.js';
 export { StaleExpirationMap } from './stale-expiration-map.js';
+export { isProcessRunning, waitForProcessesExit, PROCESS_EXIT_POLL_MS } from './process-exit-wait.js';
 export {
   ANSI_ESCAPE_PATTERN_FULL,
   ANSI_ESCAPE_PATTERN_SIMPLE,
