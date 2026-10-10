@@ -24,10 +24,6 @@
 </p>
 
 <p align="center">
-  ⭐ <strong>喜欢 Codeman？<a href="https://github.com/Ark0N/Codeman">在 GitHub 上给它点个 Star 吧！</a></strong>只需轻点一下，就能帮助更多人发现这个项目。⭐
-</p>
-
-<p align="center">
   <img src="docs/images/tiles-crt-20261010.gif" alt="Codeman 平铺视图：六个实时智能体（DeepSeek Harness、Claude Code、Pi、Codex、OpenCode 和一个 shell）以 CRT 动画开启与关闭" width="800">
 </p>
 
