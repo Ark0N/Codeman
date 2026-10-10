@@ -46,7 +46,7 @@ async function closedPort(): Promise<number> {
 }
 
 let port: number;
-/** Nothing listens one above the bound port: the "no server" path. */
+/** A port nothing listens on (`closedPort()`): the "no server" path. */
 let deadPort: number;
 let baseUrl: string;
 

@@ -77,11 +77,13 @@ A test that starts a server binds an ephemeral port, never a fixed one:
 
 - `WebServer`: `new WebServer(0, false, true)`, then read the port the OS handed out from
   `server.boundPort` after `await server.start()`. `test/test-ports-guard.test.ts` fails
-  any `WebServer` built under `test/` on a non-zero port (a shrink-only legacy list
-  excepted).
-- A raw Fastify or `ws` server: `listen({ port: 0 })`, then `address().port`.
-- The mobile suite (`test/mobile/**`, via `createTestServer(PORT)`) keeps the fixed-port
-  convention in `test/mobile/README.md` for now.
+  any `WebServer` built under `test/` on a non-zero port.
+- A raw `http`, `net`, Fastify or `ws` server: `listen({ port: 0 })`, then
+  `address().port`. The guard also fails a raw listen on a number or a `…PORT` constant.
+- The mobile suite (`test/mobile/**`) gets its server from `createTestServer()`, which
+  binds an ephemeral port too; read it from `server.boundPort`.
+- The one exception is `test/codex-predictive-echo.test.ts`, which starts a separate lab
+  server process on port 3222 that the guard cannot see.
 - Never port 3000: that is the live instance.
 
 `scripts/browser-comparison.mjs` is a standalone script outside the guard and still uses

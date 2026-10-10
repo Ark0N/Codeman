@@ -9,8 +9,8 @@
  *
  * Two rules, both over every file under test/:
  * - A `WebServer` is built with the literal `0` as its port — `new WebServer(…)`, a
- *   class declared `extends WebServer`, or a destructured alias (`{ WebServer: T }`) —
- *   and the test reads `server.boundPort`.
+ *   class declared `extends WebServer`, or a destructured alias (`{ WebServer: T }`).
+ *   The test then reads `server.boundPort`, which this guard does not check.
  * - A raw server (`http`/`net`/Fastify `listen`, `new WebSocketServer`) never listens
  *   on a number or a `…PORT` constant: `listen(0, …)` / `{ port: 0 }`, then
  *   `address().port`.
