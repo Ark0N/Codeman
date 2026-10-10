@@ -6,8 +6,6 @@
  *
  * Browser-driven, so excluded from `npm run test:ci` (config/test-suites.ts). Run locally:
  *   npm run test:browser -- test/markdown-anchor-links.browser.test.ts
- *
- * Port: 3294
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -16,7 +14,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3294;
 const filler = (n: number) =>
   Array.from({ length: n }, (_, i) => `Paragraph ${i} of filler text so the document is taller than the viewer.`).join(
     '\n\n'
@@ -50,14 +47,14 @@ describe('in-document links in the markdown File Viewer', () => {
         filler(10),
       ].join('\n')
     );
-    server = new WebServer(PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
     browser = await chromium.launch({ headless: true });
     page = await (await browser.newContext({ viewport: { width: 1100, height: 700 } })).newPage();
     // Reduced motion makes the scroll instant (the code uses behavior 'auto' for it), so the
     // position can be read right after the click instead of racing a smooth-scroll animation.
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    await page.goto(`http://localhost:${PORT}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`http://localhost:${server.boundPort}`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
     const sessionId = await page.evaluate(async (workingDir) => {
       const res = await fetch('/api/sessions', {
