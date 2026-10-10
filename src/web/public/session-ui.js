@@ -2534,6 +2534,7 @@ Object.assign(CodemanApp.prototype, {
     // Populate auto-resume on usage limit (token pause control)
     document.getElementById('modalAutoResumeEnabled').checked = session.autoResumeEnabled ?? false;
     this.updateAutoResumeStatus(sessionId);
+    this.updatePromptCacheStatus(sessionId);
     document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
     document.getElementById('modalFlickerFilterEnabled').checked = session.flickerFilterEnabled ?? false;
 
@@ -2782,6 +2783,27 @@ Object.assign(CodemanApp.prototype, {
       el.textContent = '';
       el.classList.remove('active');
     }
+  },
+
+  /**
+   * Session Options → Respawn → "Prompt cache": the main conversation's cache state as
+   * Claude Code reports it on the statusline (`session.promptCache`, v2.1.251+), worded by
+   * the pure `CodemanPromptCache.format` (constants.js). Refreshed on open and on the
+   * `session:promptCache` SSE event while the modal shows that session.
+   */
+  updatePromptCacheStatus(sessionId) {
+    const el = document.getElementById('promptCacheStatus');
+    if (!el || this.editingSessionId !== sessionId) return;
+    const session = this.sessions.get(sessionId);
+    el.textContent = window.CodemanPromptCache.format(session?.promptCache, Date.now(), session?.statusLineTelemetry);
+  },
+
+  _onSessionPromptCache(data) {
+    const { sessionId, ...promptCache } = data;
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.promptCache = promptCache;
+    this.updatePromptCacheStatus(sessionId);
   },
 
   async toggleSessionImageWatcher() {

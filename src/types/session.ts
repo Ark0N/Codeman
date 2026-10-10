@@ -724,6 +724,49 @@ export interface PaneExit {
   at: number;
 }
 
+/**
+ * Normalized prompt-cache state of a session's main conversation, from the statusline's
+ * `prompt_cache` object (`parsePromptCache` in usage-telemetry.ts). `warm` is the only
+ * field Claude always reports: once the prefix has gone cold it sends `warm:false` with a
+ * null `expires_at`.
+ */
+export interface PromptCacheStatus {
+  warm: boolean;
+  /** Cache lifetime of the current prefix; Claude Code only ever reports these two. */
+  ttl?: '5m' | '1h';
+  /** Epoch MILLISECONDS when the cached prefix goes cold (the statusline reports seconds). */
+  expiresAt?: number;
+  /** Tokens the next request re-writes if the cache has gone cold by then. */
+  recacheTokensIfCold?: number;
+  /** Requests this session that re-processed content the cache already held. */
+  misses?: number;
+  /** Cache rebuilds that followed a compaction or a clearing of old tool results. */
+  expectedRebuilds?: number;
+  /** Cache read tokens as a fraction of all input tokens this session, 0-1. */
+  hitRatio?: number;
+  /** Claude Code's diagnosis of the last miss, e.g. `ttl_expired_1h` or `tools_changed`. */
+  lastMissCauses?: string[];
+  /**
+   * Epoch MS when Codeman first saw Claude Code's own idle compaction for the current prefix
+   * (`recacheTokensIfCold` null while `expectedRebuilds` rose). Derived in `Session.setPromptCache`,
+   * not reported by the statusline, so it is never set by `parsePromptCache`. Lets the readout say
+   * "compacted at HH:MM"; it is never an alert (CC's idle compaction is benign).
+   */
+  compactedAt?: number;
+}
+
+/**
+ * Whether this launch carries Codeman's statusLine exporter, the only source of
+ * `promptCache`, and why not when it does not. Decided once per claude spawn
+ * (`TmuxManager`), so a setting flipped later does not change it until the next launch.
+ * - `injected`: the exporter is on the launch.
+ * - `collection-off`: plan-usage collection (`showPlanUsageLimits`) was off at launch.
+ * - `workspace-statusline`: the workspace's own `.claude/settings.local.json` sets a
+ *   statusLine (or could not be read), and Codeman never replaces one there.
+ * - `remote`: remote and Docker launches never carry the exporter.
+ */
+export type StatusLineTelemetry = 'injected' | 'collection-off' | 'workspace-statusline' | 'remote';
+
 export interface SessionState {
   /** Unique session identifier */
   id: string;
@@ -775,6 +818,16 @@ export interface SessionState {
   autoResumeEnabled?: boolean;
   /** Pending usage-limit auto-resume fire time (epoch ms), if armed */
   autoResumeAt?: number;
+  /**
+   * Prompt-cache state of the main conversation as Claude Code last reported it on the
+   * statusline (v2.1.251+), fed by `POST /api/status-telemetry`. Absent until the first
+   * report. Restored on a restart (the Session constructor's `promptCache`) so the readout
+   * is not blank until the pane's next render; the readout is time-aware, so a value whose
+   * `expiresAt` has passed reads as cold rather than as a stale warm.
+   */
+  promptCache?: PromptCacheStatus;
+  /** Why a cache report will or will not arrive (see `StatusLineTelemetry`); absent when unknown. */
+  statusLineTelemetry?: StatusLineTelemetry;
   /** Pinned to the top of the session manager list (COD-139) */
   pinned?: boolean;
   /** When the session was pinned (epoch ms) — orders the pinned group, most-recent-first */

@@ -46,6 +46,8 @@ Claude Code (**v2.1.80+**; prod box runs **2.1.177**) pipes a JSON blob to a con
 
 The same stdin object also carries `model.display_name`, `context_window.{used_percentage, total_input_tokens, total_output_tokens, …}`, `cost.total_cost_usd`, `effort.level`, etc. The shipped feature uses **model + token totals + context %** to build the in-terminal footer (so the statusline stays useful even though we own it). The endpoint also broadcasts `contextUsedPercentage`/`costUsd`/`modelDisplayName` alongside the limits for future chip tooltips.
 
+Since Claude Code v2.1.251 the payload also carries a `prompt_cache` object for the main conversation: `warm`, `ttl` (`5m` or `1h`), `expires_at` (epoch seconds), `recache_tokens_if_cold`, `misses`, `expected_rebuilds`, `hit_ratio`, `last_miss_at` and `last_miss_cause`. `StatusTelemetrySchema` lists every documented scalar field null-tolerant (several are documented as possibly null, and the object gains fields across CLI versions, so a strict shape would 400 the post and blank the footer); `parsePromptCache()` normalizes only the subset Codeman stores. The footer appends `cache:until HH:MM` while warm or `cache:cold` otherwise, and Claude re-runs the statusline when `expires_at` passes, so the cold flip arrives without a turn. The Session Options readout adds the hit rate, the last miss's causes, and a `compacted at HH:MM` note for Claude Code's own idle compaction (`recache_tokens_if_cold` null while `expected_rebuilds` rose, never raised as an alert). The last report is restored on a Codeman restart and the readout is time-aware, so a value whose expiry has passed shows as cold rather than stale-warm.
+
 ### Alternatives considered & rejected
 
 | Source | Why not |

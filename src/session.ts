@@ -63,6 +63,7 @@ import {
   type SessionNameSource,
   type SessionWriteOptions,
   type PaneExit,
+  type PromptCacheStatus,
 } from './types.js';
 import { resolveAndClaimOmpSessionId } from './utils/omp-session-resolver.js';
 import { claudeTranscriptExists } from './utils/claude-transcript.js';
@@ -585,6 +586,8 @@ export class Session extends EventEmitter {
    * running. A session that comes back with no label has no chip on its screen.
    */
   private _watching: string | null = null;
+  /** Last `prompt_cache` report from the statusline exporter; null until Claude sends one. */
+  private _promptCache: PromptCacheStatus | null = null;
   /** Lazily compiled `capabilities.workDetect.workingLine`. See _workingLinePattern(). */
   private _workingLineRe: RegExp | undefined = undefined;
   /** Lazily compiled `capabilities.workDetect.watchingLine`. See _watchingLinePattern(). */
@@ -873,6 +876,8 @@ export class Session extends EventEmitter {
       paneExit?: PaneExit;
       /** The previous run's `displayModel`; a CLI-reported one is restored (see `displayModel`). */
       displayModel?: DisplayModel;
+      /** The previous run's last prompt-cache report, restored so the readout is not blank (see `promptCache`). */
+      promptCache?: PromptCacheStatus;
       /** This session was rebuilt from the tmux socket, so its metadata is a guess. */
       discoveredMuxSession?: boolean;
       /** Restored wall-clock ms of the pane's last output (recovery only; see `_wireActivityAt`). */
@@ -1041,6 +1046,11 @@ export class Session extends EventEmitter {
     // browser panel arms and disarms — see `startPaneExitWatcher`.
     this.setPaneExit(config.paneExit);
     this._reportedModel = restoredReportedModel(config.displayModel) ?? null;
+    // Last prompt-cache report, restored so the Session Options readout is not blank until
+    // the pane's next statusline render. The readout is time-aware, so a value whose expiry
+    // has passed renders as cold rather than stale-warm. Set directly, not via
+    // setPromptCache, so recovery does not re-stamp a compaction it did not just observe.
+    this._promptCache = config.promptCache ?? null;
     // Never self-parent: a session pointing at itself would draw a zero-length
     // lineage arc under its own tab. Only reachable via the recovery path, where
     // both the id and the saved parent come from disk.
@@ -1244,6 +1254,11 @@ export class Session extends EventEmitter {
     }
     if (newId === this._claudeSessionId) return;
     this._claudeSessionId = newId;
+    // The conversation itself changed (a post-/clear switch), so the old prefix's cache
+    // report and its compaction baseline belong to a conversation that is gone. Drop them
+    // rather than show the previous conversation's "warm until" against the new one; the
+    // next statusline render repopulates. A same-id reattach returned above, untouched.
+    this._promptCache = null;
   }
 
   /**
@@ -1412,6 +1427,53 @@ export class Session extends EventEmitter {
    */
   get watching(): string | null {
     return this._watching;
+  }
+
+  /**
+   * Prompt-cache state of the main conversation as Claude Code last reported it on the
+   * statusline (v2.1.251+), fed by `POST /api/status-telemetry`. Null until the first
+   * report. It rides `toState()` for the Session Options readout and is restored on a
+   * Codeman restart (constructor `promptCache`) so the row is not blank until the pane's
+   * next render; the readout is time-aware, so a value whose `expiresAt` has passed renders
+   * as cold rather than as a stale warm.
+   */
+  get promptCache(): PromptCacheStatus | null {
+    return this._promptCache;
+  }
+
+  /**
+   * Replace the prompt-cache report; true when it differs from the previous one. Stamps
+   * `compactedAt` when this report shows Claude Code's own idle compaction of the current
+   * prefix: `recacheTokensIfCold` is null (the transient post-compaction window the docs
+   * describe) while `expectedRebuilds` rose above the last report. The stamp is carried
+   * forward while that window holds, so the readout can say "compacted at HH:MM"; it is
+   * never an alert. A tool-result clearing bumps `expectedRebuilds` the same way, which the
+   * readout wording tolerates.
+   */
+  setPromptCache(status: PromptCacheStatus): boolean {
+    const prev = this._promptCache;
+    const inPostCompactWindow = status.recacheTokensIfCold == null && status.warm;
+    let compactedAt: number | undefined;
+    // A rise is only a rise against a KNOWN prior counter. Treating an absent prior as 0
+    // would invent a compaction out of the first report that already carries a high count
+    // (a restart mid-session, or `4 -> omitted -> 4`), so both counters must be present.
+    if (
+      inPostCompactWindow &&
+      prev?.expectedRebuilds != null &&
+      status.expectedRebuilds != null &&
+      status.expectedRebuilds > prev.expectedRebuilds
+    ) {
+      compactedAt = Date.now();
+    } else if (prev?.compactedAt != null && inPostCompactWindow && status.expectedRebuilds === prev.expectedRebuilds) {
+      compactedAt = prev.compactedAt;
+    }
+    // A NEW object when a stamp applies, never a mutation of the caller's parsed report: the
+    // route broadcasts the STORED object, so the stamp lives here and never leaks back into the
+    // parser's output (which would make the route's "broadcast the stored object" choice vacuous).
+    const next = compactedAt != null ? { ...status, compactedAt } : status;
+    const changed = JSON.stringify(next) !== JSON.stringify(prev);
+    this._promptCache = next;
+    return changed;
   }
 
   /**
@@ -1893,6 +1955,8 @@ export class Session extends EventEmitter {
       autoCompactPrompt: this._autoOps.autoCompactPrompt,
       autoResumeEnabled: this._autoOps.autoResumeEnabled,
       autoResumeAt: this._autoOps.autoResumeAt ?? undefined,
+      promptCache: this._promptCache ?? undefined,
+      statusLineTelemetry: this._muxSession?.statusLine,
       imageWatcherEnabled: this._imageWatcherEnabled,
       pinned: this._pinned || undefined,
       pinnedAt: this._pinned ? (this._pinnedAt ?? undefined) : undefined,

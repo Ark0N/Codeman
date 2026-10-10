@@ -625,6 +625,35 @@ most 64 characters, but treat it as untrusted text. A `statusline` or `screen` v
 persisted and restored after a server restart until the next report replaces it; a
 `config` value is read again at every pane start, attach and relaunch instead.
 
+## Prompt cache (`promptCache`)
+
+Claude-mode session state (`GET /api/v1/sessions`) carries the main conversation's
+prompt-cache state as Claude Code last reported it on the statusline (v2.1.251+), with a
+change-only `session:promptCache` event (`{ sessionId, ...promptCache }`):
+
+```json
+"promptCache": { "warm": true, "ttl": "1h", "expiresAt": 1791653039000, "recacheTokensIfCold": 45000, "misses": 2, "expectedRebuilds": 1, "hitRatio": 0.91, "lastMissCauses": ["ttl_expired_1h"], "compactedAt": 1791649439872 }
+```
+
+| Field                 | Meaning                                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------------------------- |
+| `warm`                | Whether the cached prefix is still within its TTL. The only field always present.                         |
+| `ttl`                 | `5m` or `1h`; absent when Claude reported neither.                                                         |
+| `expiresAt`           | Epoch MILLISECONDS when the prefix goes cold (the statusline reports seconds). Absent once cold.           |
+| `recacheTokensIfCold` | Tokens the next request re-writes if the cache has gone cold. Absent right after a compaction.             |
+| `misses`              | Requests that re-processed content the cache already held.                                                |
+| `expectedRebuilds`    | Cache rebuilds that followed a compaction or a clearing of old tool results.                               |
+| `hitRatio`            | Cache read tokens as a fraction of all input tokens this session, 0 to 1.                                  |
+| `lastMissCauses`      | Claude Code's diagnosis of the last miss (e.g. `ttl_expired_1h`, `tools_changed`); untrusted text.         |
+| `compactedAt`         | Epoch MILLISECONDS when Codeman first saw Claude Code's own idle compaction of the current prefix (derived, not reported). |
+
+The whole object is absent until the first report, and restored after a server restart
+(so the readout is not blank until the pane's next render) rather than recomputed; a value
+whose `expiresAt` has passed reads as cold. The statusline re-runs when a warm cache hits
+`expiresAt`, so the cold flip arrives on its own. A post-`/clear` conversation switch drops
+it. Shown in Session Options → Respawn and, for sessions without a statusline of their own,
+as a `cache:until HH:MM` / `cache:cold` group in the terminal footer.
+
 ## Approvals Inbox
 
 Cross-session queue of prompts waiting on a human (permission dialogs,

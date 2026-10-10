@@ -99,6 +99,14 @@ limit-paused. Without that, the next cycle would fire `/clear` and wipe the conv
 are waiting to resume. This is the single most useful setting for overnight runs on a
 subscription plan.
 
+## The prompt cache readout
+
+**Claude only.** On the Respawn tab, above the loop controls.
+
+Claude Code bills a turn against the cached conversation while that cache is warm, and lets the cache expire after a fixed idle time: one hour on a subscription within plan usage, five minutes on an API key, a cloud provider or extra-usage credits. The first turn after a longer break re-processes the whole context at the cache-write rate, which is why coming back to a big session after lunch costs more than the turns around it.
+
+Claude Code 2.1.251 and newer reports the cache state on the statusline after every response, and Codeman's statusline exporter keeps it per session. The row shows **Warm until HH:MM** with the lifetime and the tokens that would be re-read if it went cold, or **Cold** with the size of the re-read the next turn pays. When Claude reports them it also shows the session's cache hit rate and the cause of the last cache miss (for example `ttl_expired_1h` or `tools_changed`), so a surprise miss has a reason next to it. If the conversation is compacted while it stays warm (Claude Code now does this on its own on large idle sessions, and a manual `/compact` does it too), the row notes **Compacted at HH:MM**: the cache holds a smaller prefix, so there is nothing to re-read. None of this raises an alert. The row refreshes live and flips to cold on its own when the lifetime passes, and the last state is kept across a Codeman restart so it is not blank until the session's next turn. Sessions without a statusline of their own also get a short `cache:until HH:MM` or `cache:cold` group in the terminal footer. The readout rides the plan usage chip's telemetry collection, which is on by default on desktop.
+
 ## The plan usage chip
 
 **Claude only.** A header chip showing live subscription usage, on by default on desktop and

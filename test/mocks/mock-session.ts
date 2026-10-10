@@ -4,7 +4,7 @@
  */
 import { EventEmitter } from 'node:events';
 import { vi } from 'vitest';
-import type { SessionAttachmentHistoryItem, SessionStatus, SessionRemote } from '../../src/types.js';
+import type { PromptCacheStatus, SessionAttachmentHistoryItem, SessionStatus, SessionRemote } from '../../src/types.js';
 
 /**
  * Enhanced mock session for testing RespawnController.
@@ -41,6 +41,13 @@ export class MockSession extends EventEmitter {
    * need to be able to set it.
    */
   watching: string | null = null;
+  /** Mirrors Session.promptCache / setPromptCache (fed by POST /api/status-telemetry). */
+  promptCache: PromptCacheStatus | null = null;
+  setPromptCache(status: PromptCacheStatus): boolean {
+    const changed = JSON.stringify(status) !== JSON.stringify(this.promptCache);
+    this.promptCache = status;
+    return changed;
+  }
   private _activeChildProcesses: { pid: number; command: string }[] = [];
   ralphTracker: null = null;
   writeBuffer: string[] = [];

@@ -1286,6 +1286,22 @@
               <!-- Hidden wholesale for non-claude sessions and for a session with
                    no live process (session-ui.js: openSessionOptions). -->
               <div id="sessionRespawnSection">
+                <!-- Claude Code (v2.1.251+) reports the main conversation's prompt-cache
+                     state on the statusline; the exporter keeps it per session and this
+                     row shows it live (session-ui.js: updatePromptCacheStatus). -->
+                <div class="set-group">
+                  <div class="set-group-head"><h4>Prompt cache</h4></div>
+                  <p class="set-group-hint">While the cached conversation is warm, a turn re-reads it at the cheap cached rate. Once it sits idle past the cache lifetime, the next turn re-processes the whole context at the cache-write rate.</p>
+                  <div class="set-group-body">
+                    <div class="set-row">
+                      <div class="set-row-text">
+                        <span class="set-row-label">Status</span>
+                        <span class="set-row-desc" id="promptCacheStatus" data-i18n-skip>Not reported yet.</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <div class="set-group">
                   <div class="set-group-head"><h4>Loop control</h4></div>
                   <div class="set-group-body">

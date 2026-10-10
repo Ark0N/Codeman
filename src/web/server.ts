@@ -3569,6 +3569,11 @@ export class WebServer extends EventEmitter {
               // tile header keeps naming it until the next report; an idle claude
               // session re-renders its statusline only on its next turn.
               displayModel: savedState?.displayModel,
+              // The last prompt-cache report, restored for the same reason: an idle claude
+              // session re-renders its statusline only on its next turn, so without this the
+              // Session Options readout would read "not reported yet" after every restart. The
+              // readout is time-aware, so a value past its expiry shows as cold, not stale-warm.
+              promptCache: savedState?.promptCache,
               // A record rebuilt from the socket has no provenance, so its
               // apparent locality is a guess (see `MuxSession.discovered`).
               discoveredMuxSession: muxSession.discovered,
