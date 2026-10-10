@@ -1017,6 +1017,47 @@ function tabClusterNameSplit(name, label) {
   return match[2].slice(1).toLowerCase() === label.toLowerCase() ? { shown: match[1], hidden: match[2] } : null;
 }
 
+/**
+ * Session-list search: the vertical rail's search box and the sidebar's filter
+ * box. Trimmed, case-insensitive substring; a whitespace-only query is no query.
+ * @param {unknown} query
+ * @returns {string} the needle, '' when there is nothing to search for
+ */
+function tabSearchNeedle(query) {
+  return typeof query === 'string' ? query.trim().toLocaleLowerCase() : '';
+}
+
+/**
+ * Which rows a search hides. Pure: the caller reads the rows off the list it
+ * rendered and applies the result as classes, so the list itself (grouping,
+ * order, Alt+N badges) is never rebuilt or reordered by a search.
+ *
+ * @param {Array<{key: unknown, text: string, section?: unknown}>} rows in list
+ *   order; `section` is the row's group or case box, null/undefined for none.
+ * @param {unknown} query
+ * @returns {{active: boolean, hidden: Set<unknown>, counts: Map<unknown, number>, matchCount: number}}
+ *   `counts` has every section seen, an emptied one as 0, so it can be hidden;
+ *   `matchCount` is the number of rows left showing.
+ */
+function filterTabSearchRows(rows, query) {
+  const needle = tabSearchNeedle(query);
+  const hidden = new Set();
+  const counts = new Map();
+  let matchCount = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const hasSection = row.section !== null && row.section !== undefined;
+    if (hasSection && !counts.has(row.section)) counts.set(row.section, 0);
+    const text = typeof row.text === 'string' ? row.text.toLocaleLowerCase() : '';
+    if (needle && !text.includes(needle)) {
+      hidden.add(row.key);
+      continue;
+    }
+    matchCount++;
+    if (hasSection) counts.set(row.section, counts.get(row.section) + 1);
+  }
+  return { active: needle.length > 0, hidden, counts, matchCount };
+}
+
 // Terminal font stack — the single source for every xterm surface (the main
 // terminal in terminal-ui.js, the log-viewer terminal in panels-ui.js).
 // "Symbols Nerd Font Mono" is a bundled icons-only webfont (fonts/ +
@@ -1354,6 +1395,10 @@ if (typeof window !== 'undefined') {
     STRIDE: TAB_TRIAGE_STRIDE,
     groupFor: tabTriageGroupFor,
     layout: computeTabTriageLayout,
+  };
+  window.CodemanTabSearch = {
+    needle: tabSearchNeedle,
+    filter: filterTabSearchRows,
   };
   window.CodemanInputLimit = {
     FRAME_MAX_CHARS: INPUT_FRAME_MAX_CHARS,

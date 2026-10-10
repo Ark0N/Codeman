@@ -394,6 +394,19 @@
     <!-- Main Terminal Area -->
     <main class="main">
       <aside class="tab-rail" id="tabRail" aria-label="Session navigation">
+        <!-- Session-name search (app.js setTabRailSearch): a view filter over the
+             rows below, in memory only. Shown with the rail, never elsewhere. -->
+        <div class="session-sidebar-filter tab-rail-search">
+          <input type="search" id="tabRailSearch" class="session-sidebar-filter-input"
+            placeholder="Search sessions" aria-label="Search sessions"
+            autocomplete="off" spellcheck="false"
+            oninput="app.setTabRailSearch(this.value)"
+            onkeydown="app.handleTabRailSearchKeydown(event)">
+          <button type="button" id="tabRailSearchClear" class="tab-rail-search-clear"
+            aria-label="Clear search" title="Clear search"
+            onclick="app.clearTabRailSearch()" hidden>&times;</button>
+        </div>
+        <div id="tabRailSearchEmpty" class="tab-rail-search-empty" role="status" hidden>No sessions match</div>
         <div
           id="tabRailResizeHandle"
           class="tab-rail-resize-handle"

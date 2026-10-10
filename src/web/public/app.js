@@ -717,6 +717,7 @@ class CodemanApp {
     this.collapsedTabGroupIds = new Set(); // per-device, localStorage-backed
     this._hiddenTabGroupByRef = new Map(); // 'session:<id>' -> collapsed group id
     this._lastTabGroupStructureKey = null;
+    this._tabRailSearch = ''; // rail search box text: in memory only, never persisted
     this.cases = [];
     this.currentRun = null;
     this.totalTokens = 0;
@@ -5738,25 +5739,122 @@ class CodemanApp {
    */
   applySidebarFilter(query) {
     this._sidebarFilter = (query ?? '').trim().toLowerCase();
+    this._applyTabListFilter();
+  }
+
+  /**
+   * The ONE row filter behind both search boxes: the sidebar's filter box and
+   * the vertical rail's search box (only one of the two hosts the list at a
+   * time). Classes only, over whatever the last render drew, so grouping, order,
+   * Alt+N badges and the server layout never move; the matching itself is the
+   * pure CodemanTabSearch (constants.js).
+   *
+   * - Sidebar: name (aria-label) + working directory (title), as it always has.
+   * - Rail: the NAME only, a web tab's title included (it is a row in the same
+   *   list, and hiding every web tab would make a dashboard unfindable).
+   *
+   * A group or case box left with no match hides with its header, its count
+   * shows the matches, and the grouped tree's roving stop and posinset follow
+   * the visible items. A collapsed group's rows are not in the DOM at all,
+   * which is why the rail search also expands the projection (_projectTabGroups).
+   */
+  _applyTabListFilter() {
     const container = this.$('sessionTabs');
     if (!container) return;
-    const reachable =
-      this.isSessionSidebarActive() && document.documentElement.dataset.sidebar !== 'collapsed';
-    const needle = reachable ? this._sidebarFilter : '';
+    const rail = this._tabOrientation() === 'vertical';
+    const sidebarReachable =
+      !rail && this.isSessionSidebarActive() && document.documentElement.dataset.sidebar !== 'collapsed';
+    const query = rail ? this._tabRailSearch : sidebarReachable ? this._sidebarFilter : '';
+    const rows = [...container.querySelectorAll('.session-tab')].map((tab) => ({
+      key: tab,
+      text: rail
+        ? this._tabRowSearchName(tab)
+        : `${tab.getAttribute('aria-label') || ''} ${tab.getAttribute('title') || ''}`,
+      section: tab.closest('.tab-layout-group, .tab-cluster'),
+    }));
+    const result = window.CodemanTabSearch?.filter(rows, query);
+    if (!result) return;
     // State headings count the whole group, so they step aside while a filter
     // is narrowing the rows under them (styles.css, .tabs-filtering).
-    container.classList.toggle('tabs-filtering', !!needle);
-    for (const tab of container.querySelectorAll('.session-tab')) {
-      if (!needle) {
-        tab.classList.remove('tab-filtered-out');
-        continue;
+    container.classList.toggle('tabs-filtering', result.active);
+    for (const row of rows) row.key.classList.toggle('tab-filtered-out', result.hidden.has(row.key));
+    for (const section of container.querySelectorAll('.tab-layout-group, .tab-cluster')) {
+      const shown = result.counts.get(section) ?? 0;
+      section.classList.toggle('tab-filtered-out', result.active && shown === 0);
+      const count = section.querySelector('.tab-layout-group-count, .tab-cluster-count');
+      if (!count) continue;
+      if (count.dataset.total === undefined) count.dataset.total = count.textContent;
+      const text = result.active ? String(shown) : count.dataset.total;
+      if (count.textContent !== text) count.textContent = text;
+    }
+    const empty = document.getElementById('tabRailSearchEmpty');
+    if (empty) empty.hidden = !(rail && result.active && result.matchCount === 0);
+    if (container.getAttribute('role') === 'tree') {
+      const items = this._applyTabTreePositions(container);
+      const stop = container.querySelector('[role="treeitem"][tabindex="0"]');
+      if (items.length && !items.includes(stop)) {
+        this._setTabTreeStop(container, items.find((item) => item.getAttribute('aria-selected') === 'true') || items[0]);
       }
-      const haystack = `${tab.getAttribute('aria-label') || ''} ${tab.getAttribute('title') || ''}`.toLowerCase();
-      tab.classList.toggle('tab-filtered-out', !haystack.includes(needle));
     }
     // The count shows visible rows, so it moves with every filter change —
     // including keystrokes in the filter box, which call this directly.
     this.updateSidebarCount();
+  }
+
+  /** What the rail search matches on a row: a session's name, a web tab's title. */
+  _tabRowSearchName(tab) {
+    if (tab.dataset.webviewId) return this.webviews?.get(tab.dataset.webviewId)?.name || '';
+    return tab.querySelector('.tab-name')?.dataset.fullName || '';
+  }
+
+  /** True while the vertical rail's search box is narrowing the list. */
+  _tabRailSearchActive() {
+    return this._tabOrientation() === 'vertical' && !!window.CodemanTabSearch?.needle(this._tabRailSearch);
+  }
+
+  /**
+   * The rail search box's input handler. In-memory only: never persisted, never
+   * sent anywhere. Starting or ending a search re-renders once when it changes
+   * what a collapsed group hides (the projection ignores collapse while
+   * searching); every other keystroke only re-applies the row classes.
+   */
+  setTabRailSearch(value) {
+    this._tabRailSearch = typeof value === 'string' ? value : '';
+    const clear = document.getElementById('tabRailSearchClear');
+    if (clear) clear.hidden = this._tabRailSearch.length === 0;
+    if (this._isTabGroupStructureStale()) this._fullRenderSessionTabs();
+    else this._applyTabListFilter();
+  }
+
+  /** Clear button (and Escape): empty the box, restore the list, keep focus in the box. */
+  clearTabRailSearch() {
+    const input = document.getElementById('tabRailSearch');
+    if (input) input.value = '';
+    this.setTabRailSearch('');
+    input?.focus();
+  }
+
+  handleTabRailSearchKeydown(event) {
+    if (event.key !== 'Escape' || !this._tabRailSearch) return;
+    // Consumed here: the global Escape handler would otherwise close whatever
+    // else is open on the same keypress.
+    event.preventDefault();
+    event.stopPropagation();
+    this.clearTabRailSearch();
+  }
+
+  /**
+   * Forget the search without rendering: the list is leaving the rail
+   * (applyTabOrientation), and the render that follows draws it unfiltered.
+   */
+  _resetTabRailSearch() {
+    this._tabRailSearch = '';
+    const input = document.getElementById('tabRailSearch');
+    if (input) input.value = '';
+    const clear = document.getElementById('tabRailSearchClear');
+    if (clear) clear.hidden = true;
+    const empty = document.getElementById('tabRailSearchEmpty');
+    if (empty) empty.hidden = true;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -6965,6 +7063,8 @@ class CodemanApp {
     const orderOf = (el) => Number(getComputedStyle(el).order) || 0;
     const items = [];
     for (const section of container.querySelectorAll('.tab-layout-group')) {
+      // A group the search emptied is hidden whole, header included.
+      if (section.classList.contains('tab-filtered-out')) continue;
       const header = section.querySelector(':scope > [role="treeitem"]');
       if (header) items.push(header);
       const rows = [...section.querySelectorAll('.session-tab[role="treeitem"]:not(.tab-filtered-out)')];
@@ -7368,7 +7468,10 @@ class CodemanApp {
       // session the layout has not placed yet lands where the flat strip has it.
       liveSessionIds: this.sessionOrder.filter((id) => this.sessions.has(id)),
       openWebviewIds: (this.webviewOrder || []).filter((id) => this.webviews?.has(id)),
-      collapsedGroupIds: [...this.collapsedTabGroupIds],
+      // A rail search shows matches inside collapsed groups too, so it projects
+      // every group open. The stored per-device collapse state is untouched and
+      // applies again as soon as the search is cleared.
+      collapsedGroupIds: this._tabRailSearchActive() ? [] : [...this.collapsedTabGroupIds],
       activeSessionId: this.activeSessionId,
       activeWebviewId: this.activeWebviewId,
     });
@@ -7389,6 +7492,9 @@ class CodemanApp {
    * A storage failure leaves every group expanded rather than half-remembered.
    */
   toggleTabGroupCollapsed(groupId, forceCollapsed) {
+    // Every group is drawn open while the rail search runs; a toggle then would
+    // change what the user sees only after the search is cleared.
+    if (this._tabRailSearchActive()) return false;
     if (!this.tabLayout?.groups?.some((group) => group.id === groupId)) return false;
     const next = new Set(this.collapsedTabGroupIds);
     const shouldCollapse = forceCollapsed === undefined ? !next.has(groupId) : forceCollapsed === true;

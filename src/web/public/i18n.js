@@ -61,6 +61,8 @@
     'Collapse session sidebar': '收起会话侧边栏',
     'Expand session sidebar': '展开会话侧边栏',
     'Filter sessions': '筛选会话',
+    'Search sessions': '搜索会话',
+    'No sessions match': '没有匹配的会话',
     'Admin Panel': '管理面板',
     'Open admin panel': '打开管理面板',
     'Re-dock to dashboard (close window)': '重新停靠到主界面（关闭窗口）',

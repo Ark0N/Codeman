@@ -22,6 +22,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/tab-rail-resize.browser.test.ts',
   'test/tab-activation.browser.test.ts',
   'test/tab-layout-editing.browser.test.ts',
+  'test/tab-rail-search.browser.test.ts',
   'test/session-sidebar-ux.browser.test.ts',
   'test/session-options-responsive.browser.test.ts',
   'test/inline-rename.test.ts',
