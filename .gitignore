@@ -107,7 +107,9 @@ todo.md
 @fix_plan.md
 readme-preview.mjs
 
-# Uploaded images land here under each session working dir (runtime artifact)
+# Prompt uploads land here under each session working dir (runtime artifact);
+# .claude-images/ is where they landed before the move.
+.codeman-uploads/
 .claude-images/
 
 # Local-LLM harness smoke-test config (real IPs/keys) — see the .example.json

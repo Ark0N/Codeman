@@ -470,6 +470,23 @@ geometry was read. The capture runs synchronous tmux calls on the server; the
 
 `codeman agent ls|spawn|send|wait|read|interrupt|rm` (`src/cli-agent.ts`) is the command-line client for the endpoints above, for agents in modes that never receive the claude-only skill preamble. It adds no route: `spawn` is `POST /api/v1/quick-start` (+ `wait-output` on the mode's `capabilities.composerReadyMark` from the CLI registry, where it declares one), `send` is `POST …/input` with `clientId`+`seq` (and `wait`/`waitTimeout` for `--wait` / `--until <signals>`; `delivered:false` without `duplicate` and `wait.ended` both exit 3 — the CLI never reports a dead worker as done), `wait` is `GET …/wait` (`--until`) or `GET …/wait-output` (`--match`, `from=buffer` by default), `read` is `GET …/last-response` or `GET …/terminal?tail=`, `interrupt` is `POST …/input` with a bare `\u001b`, `rm` is `DELETE …/sessions/:id`. A fire-and-forget `send` to a sleeping wake-on-LAN host reads the route's `buffered` (own line, exit 0) and `dropped` (exit 1: the chunk is gone). An id may be the 8-character form `ls` prints, resolved through `GET /api/v1/sessions`; anything shorter refuses before any request, the same floor as `PARENT_SESSION_ID_MIN_PREFIX`. Every call carries `X-Codeman-Parent-Session`; only `spawn`'s quick-start carries `X-Codeman-Agent-Origin: codeman-agent-cli` (the agent-scratch label must never reach a request that cannot create the case directory). Basic auth comes from `CODEMAN_PASSWORD` or the data dir's `.env`. Server-side error codes are shown verbatim (`INVALID_INPUT: until=stop …` on a hook-less mode is not hidden); exit codes are `0` ok, `1` error, `2` timeout, `3` the session exited, `4` refused by a client-side guard. See the README section "`codeman agent`" for the guards and `test/cli-agent.test.ts` for the pinned behaviour.
 
+## Prompt uploads (`POST /api/v1/sessions/:id/paste-image`)
+
+A `multipart/form-data` body with one `image` part. The file is written into the
+session's workspace as `<workingDir>/.codeman-uploads/paste-<ms>-<hex>.<ext>`, and
+`data` carries `path` and `filename` for the client to type the path into the
+prompt. The folder is Codeman's own: hidden, created on first use with a
+`.gitignore` containing `*` (written once, never over a file already there), and
+cleaned up the way pasted images always were: `paste-*` files older than 7 days
+go in an hourly sweep, and the folder goes when the last session of that
+workspace is killed. Uploads made before this release sit in `.claude-images/`;
+that folder receives nothing new, and is swept and removed the same way for one
+release. A remote (SSH) session answers 400, since the file would land on the
+Codeman host under a path the remote agent cannot read. A Docker session of an
+owned case is fine, its workspace is bind-mounted at the same absolute path; an
+adopted container (`owned: false`) mounts nothing, so its agent can open the file
+only if the container itself exposes that host path.
+
 ## Session lineage (`parentSessionId`)
 
 A create request may name the session that spawned it, which the web UI draws as a

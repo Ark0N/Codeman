@@ -275,7 +275,7 @@ export function registerRebootRestoreRoutes(app: FastifyInstance, ctx: RebootRes
           // count this session's historical tokens into the lifetime totals, demote
           // a pinned record to `stopped` (which this pass reads as an intentional
           // kill, making the session permanently unrestorable) and delete the
-          // workspace's `.claude-images`. This undoes only the construction.
+          // workspace's `.codeman-uploads`. This undoes only the construction.
           await ctx
             .discardPartiallyBuiltSession(entry.sessionId)
             .catch((discardErr: unknown) =>
