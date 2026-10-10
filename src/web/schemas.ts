@@ -1379,6 +1379,14 @@ export const SettingsUpdateSchema = z
      */
     mcpSyncEnabled: z.boolean().optional(),
     /**
+     * Keep this computer awake while Codeman runs (src/keep-awake.ts). SYNCED, default OFF:
+     * it is machine state (an OS sleep lock), so in multi-user mode only an admin can change
+     * it; a non-admin's value is dropped by PUT /api/settings. `keepAwakeAcOnly` (default ON)
+     * releases the lock on battery.
+     */
+    keepAwakeEnabled: z.boolean().optional(),
+    keepAwakeAcOnly: z.boolean().optional(),
+    /**
      * Read My Mind predictor model override. Empty/absent = the AI-checker
      * default (opus: prediction quality is the product and it runs only on an
      * explicit press). Shell-safety is validated again at spawn time.

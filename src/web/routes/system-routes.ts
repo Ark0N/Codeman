@@ -17,7 +17,7 @@ import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } f
 import { isUnauthenticatedNetworkAcknowledged } from '../network-auth-policy.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { findUser, canUsernameRunPrivilegedCommands } from '../../user-store.js';
-import { getAuthUser, requireAdmin, canAccessOwned } from '../route-helpers.js';
+import { getAuthUser, isAdmin, requireAdmin, canAccessOwned } from '../route-helpers.js';
 import {
   ConfigUpdateSchema,
   SettingsUpdateSchema,
@@ -32,6 +32,8 @@ import {
 import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
 import { workflowRunWatcher } from '../../workflow-run-watcher.js';
+import { keepAwake } from '../../keep-awake-manager.js';
+import { resolveKeepAwakeConfig } from '../../keep-awake.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import {
   buildAwayDigest,
@@ -1004,6 +1006,13 @@ export function registerSystemRoutes(
       // acknowledgeUnauthTunnel is an ACTION field (not a stored setting) — strip
       // it before persisting so settings.json stays clean.
       const { acknowledgeUnauthTunnel, ...settingsToStore } = settings;
+      // Keep-awake is machine state (an OS sleep lock), so in multi-user mode only an
+      // admin changes it. A non-admin's save carries whatever value its page loaded, so
+      // the keys are dropped rather than refused: refusing would fail every settings save.
+      if (!isAdmin(req)) {
+        delete settingsToStore.keepAwakeEnabled;
+        delete settingsToStore.keepAwakeAcOnly;
+      }
       const merged = { ...existing, ...settingsToStore };
       await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
 
@@ -1031,6 +1040,10 @@ export function registerSystemRoutes(
         workflowRunWatcher,
         'Workflow run watcher'
       );
+
+      // Keep-awake reconciles from `merged` like the watchers above: a partial PUT
+      // must not read as "turn it off".
+      void keepAwake.apply(resolveKeepAwakeConfig(merged));
 
       // Handle image watcher toggle dynamically
       toggleService((merged.imageWatcherEnabled as boolean) ?? false, imageWatcher, 'Image watcher', () => {
@@ -1080,6 +1093,14 @@ export function registerSystemRoutes(
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }
+  });
+
+  // ========== Keep awake ==========
+
+  // Status of the sleep lock behind `keepAwakeEnabled` (src/keep-awake-manager.ts). A
+  // plain in-memory read: the settings toggle lives in PUT /api/settings.
+  app.get('/api/system/keep-awake', async () => {
+    return { success: true, data: keepAwake.getStatus() };
   });
 
   // ========== Model Configuration ==========

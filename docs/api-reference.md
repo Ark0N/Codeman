@@ -860,6 +860,10 @@ Delivery goes through the same egress guard as web tabs (refused on the resolved
 
 `GET /api/doctor[?category=core|office|other]` returns the `codeman doctor --json` report (`platform`, `summary`, `tools[]` with `status` `ok` \| `missing` \| `outdated` \| `skipped` \| `error`, `version`, `path`, `installHint`). The probe engine is synchronous, so it runs in a child process of the same entry script, never on the server's event loop (30 s timeout). It names install paths and versions, so it is admin only in multi-user mode (`403`). `400` for an unknown category, `500` if the child produces no report.
 
+## Keep awake
+
+`GET /api/system/keep-awake` reports the sleep lock behind the `keepAwakeEnabled` setting (switched through `PUT /api/settings`, together with `keepAwakeAcOnly`): `{ enabled, acOnly, platform: linux|macos|unsupported, state, onAc, lidHelper, detail }`. `state` is `off` \| `paused-battery` \| `starting` \| `active` \| `denied` (Linux refused the lock because no one is logged in to a desktop; retried every minute) \| `unavailable` \| `failed` (retried). `onAc` is `null` when unknown or not read; `lidHelper` is `installed` \| `missing` on macOS and `null` elsewhere. In multi-user mode a non-admin's `keepAwake*` values in `PUT /api/settings` are dropped (the rest of the save goes through).
+
 ## Voice dictation
 
 Browser dictation transcribed through this server's Claude Code login, i.e. the

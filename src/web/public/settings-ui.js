@@ -424,6 +424,11 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsMcpSync').checked = this._mcpSyncSavedOn;
     this.applyMcpSyncVisibility();
     this._applyDoctorAdminGate();
+    // Keep awake: server state (an OS sleep lock), default OFF; "only on AC" default ON.
+    document.getElementById('appSettingsKeepAwake').checked = settings.keepAwakeEnabled === true;
+    document.getElementById('appSettingsKeepAwakeAcOnly').checked = settings.keepAwakeAcOnly !== false;
+    this._applyKeepAwakeAdminGate();
+    this.loadKeepAwakeStatus();
     this.loadWebhook();
     // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
     document.getElementById('appSettingsReadMyMind').checked = settings.readMyMindEnabled === true;
@@ -1222,6 +1227,53 @@ Object.assign(CodemanApp.prototype, {
     if (!group) return;
     const me = window.__codemanUser || {};
     group.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+  },
+
+  /**
+   * Keep awake changes machine state, and PUT /api/settings drops a non-admin's value in
+   * multi-user mode, so a non-admin gets no Power group at all rather than a switch that
+   * silently does nothing. Also wired to `codeman:me` for the late-resolving role.
+   */
+  _applyKeepAwakeAdminGate() {
+    const group = document.getElementById('keepAwakeGroup');
+    if (!group) return;
+    const me = window.__codemanUser || {};
+    group.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+  },
+
+  /** One line on what the sleep lock is doing right now (GET /api/system/keep-awake). */
+  async loadKeepAwakeStatus() {
+    const out = document.getElementById('keepAwakeStatus');
+    if (!out) return;
+    let s = null;
+    try {
+      const res = await this._api('/api/system/keep-awake');
+      const body = res && res.ok ? await res.json() : null;
+      s = body?.success ? body.data : null;
+    } catch { /* leave hidden */ }
+    const text = s ? this.describeKeepAwakeStatus(s) : '';
+    out.textContent = text;
+    out.style.display = text ? 'block' : 'none';
+  },
+
+  /** Status → sentence. Pure; '' hides the note. */
+  describeKeepAwakeStatus(s) {
+    switch (s.state) {
+      case 'off': return '';
+      case 'starting': return 'Starting…';
+      case 'paused-battery': return 'Paused: running on battery. It comes back when you plug in.';
+      case 'unavailable': return `Not available here: ${s.detail || 'no supported sleep lock on this system.'}`;
+      case 'denied': return `${s.detail || 'The sleep lock was refused.'} Codeman retries every minute, so it applies once you log in.`;
+      case 'failed': return `Could not take the sleep lock (${s.detail || 'unknown error'}). Retrying every minute.`;
+      case 'active':
+        if (s.platform === 'macos') {
+          return s.lidHelper === 'installed'
+            ? 'Active: this Mac will not sleep while Codeman runs, even with the lid closed. Apple menu > Sleep is blocked too.'
+            : 'Active for idle sleep only: closing the lid still puts this Mac to sleep. To cover the lid, re-run the installer and answer yes to the lid question (asks for your admin password once).';
+        }
+        return "Active: closing the lid will not suspend this machine while Codeman runs. Your desktop's own Automatic Suspend timer is separate and still runs: if it is on, switch it off for when the machine is plugged in.";
+      default: return '';
+    }
   },
 
   /** Preview (apply=false) or run (apply=true) the MCP server sync across enabled CLIs. */
@@ -2633,6 +2685,8 @@ Object.assign(CodemanApp.prototype, {
       agentTeamsEnabled: document.getElementById('appSettingsAgentTeams').checked,
       agentSkillEnabled: document.getElementById('appSettingsAgentSkill').checked,
       workspaceHooksEnabled: document.getElementById('appSettingsWorkspaceHooks').checked,
+      keepAwakeEnabled: document.getElementById('appSettingsKeepAwake').checked,
+      keepAwakeAcOnly: document.getElementById('appSettingsKeepAwakeAcOnly').checked,
       claudeVoiceEnabled: document.getElementById('appSettingsClaudeVoice').checked,
       claudeModel: document.getElementById('appSettingsClaudeModel').value,
       opusContext1mEnabled: document.getElementById('appSettingsOpusContext1m').checked,
@@ -4766,4 +4820,5 @@ document.addEventListener?.('codeman:me', () => {
   window.app?._applyCliManagementAdminGate?.();
   window.app?._applyMcpSyncAdminGate?.();
   window.app?._applyDoctorAdminGate?.();
+  window.app?._applyKeepAwakeAdminGate?.();
 });
