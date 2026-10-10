@@ -11375,6 +11375,132 @@ kbd {
   display: flex;
 }
 
+/* Folder grid (panels-ui.js openFolderGrid): one step BELOW the file preview, so a
+   tile opens its preview on top and closing that preview lands back on the grid. */
+.folder-grid-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--modal-backdrop);
+  z-index: 5090;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.folder-grid-overlay.visible {
+  display: flex;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.folder-grid-window {
+  width: 92vw;
+  max-width: 1400px;
+  height: 88vh;
+  background: var(--floating-bg);
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  box-shadow: var(--elevated-shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.folder-grid-folders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  max-height: 6.5rem;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.folder-grid-folders:empty {
+  display: none;
+}
+
+.folder-grid-chip {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--control-border);
+  background: var(--bg-input);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.folder-grid-chip:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.folder-grid-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem;
+  background: var(--bg-dark);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-auto-rows: min-content;
+  gap: 0.6rem;
+}
+
+.folder-grid-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.3rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+
+.folder-grid-tile:hover,
+.folder-grid-tile.current {
+  border-color: var(--accent, #4ea1ff);
+}
+
+.folder-grid-thumb {
+  aspect-ratio: 4 / 3;
+  border-radius: 6px;
+  background: var(--bg-input);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted, #888);
+}
+
+.folder-grid-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.folder-grid-name {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-grid-empty {
+  grid-column: 1 / -1;
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-muted, #888);
+}
+
 .file-preview-window {
   width: 80vw;
   max-width: 900px;
@@ -19386,7 +19512,8 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
 
 /* No gutter of their own. */
 .modal,
-.file-preview-overlay {
+.file-preview-overlay,
+.folder-grid-overlay {
   padding-right: var(--fold-inline-end);
   padding-bottom: var(--fold-block-end);
 }

@@ -614,6 +614,9 @@
         <div class="file-preview-header">
           <span class="file-preview-title" id="filePreviewTitle">file.ts</span>
           <div class="file-preview-actions">
+            <button class="btn-icon-sm" id="filePreviewPrevBtn" onclick="app.stepFolderPreview(-1)" title="Previous file in folder (←)" aria-label="Previous file in folder" hidden>&lsaquo;</button>
+            <button class="btn-icon-sm" id="filePreviewNextBtn" onclick="app.stepFolderPreview(1)" title="Next file in folder (→)" aria-label="Next file in folder" hidden>&rsaquo;</button>
+            <button class="btn-icon-sm" id="filePreviewFolderBtn" onclick="app.openFolderOfPreview()" title="Show folder" aria-label="Show folder" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
             <button class="btn-icon-sm file-preview-pill" id="filePreviewMdBtn" onclick="app.toggleFilePreviewMd()" title="Rendered markdown" aria-label="Rendered markdown" aria-pressed="true" hidden>MD</button>
             <button class="btn-icon-sm" id="filePreviewLinesBtn" onclick="app.toggleFilePreviewLines()" title="Line numbers" aria-label="Line numbers" aria-pressed="false" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
             <button class="btn-icon-sm" id="filePreviewWrapBtn" onclick="app.toggleFilePreviewWrap()" title="Wrap lines" aria-label="Wrap lines" aria-pressed="true" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><line x1="3" y1="18" x2="10" y2="18"/></svg></button>
@@ -631,6 +634,22 @@
           <button class="file-preview-editbar-btn file-preview-editbar-btn--save" id="filePreviewSaveBtn" onclick="app.saveFilePreviewEdit()" disabled>Save</button>
         </div>
         <div class="file-preview-footer" id="filePreviewFooter"></div>
+      </div>
+    </div>
+
+    <!-- Folder Grid: every previewable file of one folder (panels-ui.js openFolderGrid) -->
+    <div class="folder-grid-overlay" id="folderGridOverlay">
+      <div class="folder-grid-window">
+        <div class="file-preview-header">
+          <span class="file-preview-title" id="folderGridTitle" data-i18n-skip></span>
+          <div class="file-preview-actions">
+            <button class="btn-icon-sm" id="folderGridUpBtn" onclick="app.folderGridUp()" title="Parent folder" aria-label="Parent folder">&uarr;</button>
+            <button class="btn-icon-sm" onclick="app.closeFolderGrid()" title="Close" aria-label="Close">&times;</button>
+          </div>
+        </div>
+        <div class="folder-grid-folders" id="folderGridFolders" data-i18n-skip></div>
+        <div class="folder-grid-body" id="folderGridBody" data-i18n-skip></div>
+        <div class="file-preview-footer" id="folderGridFooter" data-i18n-skip></div>
       </div>
     </div>
 

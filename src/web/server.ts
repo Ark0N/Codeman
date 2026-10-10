@@ -75,6 +75,7 @@ import {
 import { imageWatcher } from '../image-watcher.js';
 import { workflowRunWatcher, summarizeRun } from '../workflow-run-watcher.js';
 import { attachmentRegistry, buildFileThumbnailRoute, registerExternalAttachment } from '../attachment-registry.js';
+import { folderGrants } from '../folder-listing.js';
 import { getCli, enabledClis, listClis } from '../config/cli-registry/registry.js';
 import { isCliEntryInstalled, probeStockCliAvailability } from '../utils/cli-installed-probes.js';
 import { readCustomModelHosts } from '../custom-model-hosts.js';
@@ -1526,6 +1527,7 @@ export class WebServer extends EventEmitter {
       fileStreamManager.closeSessionStreams(sessionId);
       // Drop live external attachment registrations for this session
       attachmentRegistry.clearSession(sessionId);
+      folderGrants.clearSession(sessionId);
       // Stop watching for images in this session's directory
       imageWatcher.unwatchSession(sessionId);
       // Clean up pasted images directory for this session. The dir belongs to the
@@ -3423,6 +3425,7 @@ export class WebServer extends EventEmitter {
     // otherwise meet the retry, which reuses the same session id by design.
     this.stopTranscriptWatcher(sessionId);
     attachmentRegistry.clearSession(sessionId);
+    folderGrants.clearSession(sessionId);
     sessionWaits.notifySignal(sessionId, 'exit');
     sessionWaits.cancelAll(sessionId);
     approvalInbox.resolveForSession(sessionId, 'session_ended');

@@ -4037,6 +4037,9 @@ Object.assign(CodemanApp.prototype, {
    * unknown workingDir answers false, leaving the historical path untouched.
    */
   _isExternalPreviewPath(filePath, sessionId) {
+    // `~/…` (a terminal or response-viewer link): only the server knows the home
+    // of the session's host, and only the attachment route expands it.
+    if (typeof filePath === 'string' && filePath.startsWith('~/')) return true;
     if (typeof filePath !== 'string' || !filePath.startsWith('/')) return false;
     const workingDir = this.sessions.get(sessionId)?.workingDir;
     if (!workingDir) return false;
@@ -4083,8 +4086,19 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  async openFilePreview(filePath, sessionId = this.activeSessionId, attachmentId = null) {
+  /**
+   * @param {object} [options]
+   * @param {{folderId: string, name: string}} [options.folderFile] A file of a
+   *   granted folder (folder grid): rendered from the folder's by-name routes, so
+   *   paging through 300 renders never touches the attachment registry.
+   */
+  async openFilePreview(filePath, sessionId = this.activeSessionId, attachmentId = null, options = {}) {
     if (!sessionId || !filePath) return;
+    const folderFile = options.folderFile || null;
+    // Prev/next only while browsing a folder grid; a preview opened from anywhere
+    // else ends that browsing.
+    if (!folderFile && this.folderGrid) this.folderGrid.index = null;
+    this._updateFolderPreviewNav(folderFile ? null : this._previewFolderPath(filePath, sessionId, attachmentId));
 
     const overlay = this.$('filePreviewOverlay');
     const titleEl = this.$('filePreviewTitle');
@@ -4122,7 +4136,7 @@ Object.assign(CodemanApp.prototype, {
     // for a file that is sitting right there on disk.
     let externalError = '';
     let externalSize = 0;
-    if (!attachmentId && this._isExternalPreviewPath(filePath, sessionId)) {
+    if (!attachmentId && !folderFile && this._isExternalPreviewPath(filePath, sessionId)) {
       const external = await this._registerExternalPreview(filePath, sessionId);
       attachmentId = external.attachmentId || null;
       externalError = external.error || '';
@@ -4140,9 +4154,14 @@ Object.assign(CodemanApp.prototype, {
     // (html/htm arrive as a download there by design — file-raw serves them
     // attachment-only so widening READ never widens RUN.)
     const officeDoc = ext === 'docx' || ext === 'pptx';
+    const byIdBase = attachmentId
+      ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}`
+      : folderFile
+        ? `/api/sessions/${sessionId}/folders/${encodeURIComponent(folderFile.folderId)}/files/${encodeURIComponent(folderFile.name)}`
+        : null;
     this.filePreviewDetachUrl = CodemanBase.url(
-      attachmentId
-        ? `/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}/${officeDoc ? 'preview' : 'raw'}`
+      byIdBase
+        ? `${byIdBase}/${officeDoc ? 'preview' : 'raw'}`
         : officeDoc
           ? `/api/sessions/${sessionId}/file-preview?path=${encodeURIComponent(filePath)}`
           : `/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`
@@ -4152,8 +4171,9 @@ Object.assign(CodemanApp.prototype, {
     // Registered attachment: render straight from its by-id routes — images and
     // PDFs inline, Office docs via the server-converted PDF preview, text fetched
     // raw. (Workspace-path previews fall through to the file-content endpoint.)
-    if (attachmentId) {
-      const base = CodemanBase.url(`/api/sessions/${sessionId}/attachments/${encodeURIComponent(attachmentId)}`);
+    // A folder-grid file renders the same way, from its folder's by-name routes.
+    if (byIdBase) {
+      const base = CodemanBase.url(byIdBase);
       const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
       // VIDEO/AUDIO mirror VIDEO_ATTACHMENT_EXTENSIONS/AUDIO_ATTACHMENT_EXTENSIONS
       // (src/attachment-registry.ts, the single source); the frontend cannot import
@@ -4163,6 +4183,7 @@ Object.assign(CodemanApp.prototype, {
       // Size when we just registered the file ourselves, so a path opened from a
       // link reads like a workspace preview instead of a bare "PNG". History
       // cards arrive with an id and no size and keep the short form.
+      if (folderFile && !externalSize) externalSize = options.size || 0;
       footerEl.textContent = externalSize ? `${this.formatFileSize(externalSize)} • ${ext}` : ext.toUpperCase();
       if (IMAGE_EXTS.has(ext)) {
         bodyEl.innerHTML = `<img src="${escapeHtml(`${base}/raw`)}" alt="${escapeHtml(filePath)}">`;
@@ -4201,7 +4222,7 @@ Object.assign(CodemanApp.prototype, {
           this.filePreviewContent = shown;
           // attachmentId: a card's filePath is the bare file name, so the
           // rebase pass must know there is no directory to resolve against.
-          this.filePreviewText = { ext, sessionId, filePath, attachmentId };
+          this.filePreviewText = { ext, sessionId, filePath, attachmentId: attachmentId || folderFile?.folderId };
           this._renderFilePreviewText();
           if (clippedByLines || clippedByBytes) {
             const note = clippedByLines ? `showing first ${lineCap} lines` : 'showing the start of the file';
@@ -4304,9 +4325,254 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  // ===== Folder grid =====
+
+  /**
+   * Show every previewable file of a folder as a grid (absolute or `~/` path on the
+   * session's host). The server grants the folder an id (`POST …/folders`), and the
+   * grid and the previews it opens fetch files by `folderId + name` only.
+   *
+   * Opened from a clicked folder path: when the server finds a FILE there after all,
+   * it falls back to the file preview, i.e. what a click did before folders were links.
+   */
+  async openFolderGrid(folderPath, sessionId = this.activeSessionId) {
+    if (!sessionId || !folderPath) return;
+    const overlay = this.$('folderGridOverlay');
+    const body = this.$('folderGridBody');
+    if (!overlay || !body) return;
+    this._bindFolderGridKeys();
+    let result = null;
+    let status = 0;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/folders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: folderPath }),
+      });
+      status = res.status;
+      result = await res.json().catch(() => null);
+    } catch (err) {
+      this.showToast(`Cannot open folder: ${err.message || err}`, 'error');
+      return;
+    }
+    if (!result?.success || !result.data) {
+      const reason = result?.error || `HTTP ${status}`;
+      if (status === 400 && /not a folder/i.test(reason)) {
+        this.openFilePreview(folderPath, sessionId);
+        return;
+      }
+      this.showToast(`Cannot open folder ${folderPath}: ${reason}`, 'error');
+      return;
+    }
+    this.folderGrid = { sessionId, ...result.data, index: null };
+    this._renderFolderGrid();
+    overlay.classList.add('visible');
+    body.scrollTop = 0;
+  },
+
+  closeFolderGrid() {
+    this.$('folderGridOverlay')?.classList.remove('visible');
+    const body = this.$('folderGridBody');
+    // Drop the tiles: lazy <img>s still loading would keep fetching otherwise.
+    if (body) body.innerHTML = '';
+    this.folderGrid = null;
+    this._updateFolderPreviewNav(null);
+  },
+
+  folderGridUp() {
+    const grid = this.folderGrid;
+    if (!grid || grid.path === '/') return;
+    this.openFolderGrid(grid.path.slice(0, grid.path.lastIndexOf('/')) || '/', grid.sessionId);
+  },
+
+  _renderFolderGrid() {
+    const grid = this.folderGrid;
+    if (!grid) return;
+    const title = this.$('folderGridTitle');
+    const foldersEl = this.$('folderGridFolders');
+    const body = this.$('folderGridBody');
+    const footer = this.$('folderGridFooter');
+    title.textContent = grid.path;
+    title.title = grid.path;
+    const upBtn = this.$('folderGridUpBtn');
+    if (upBtn) upBtn.disabled = grid.path === '/';
+
+    foldersEl.innerHTML = '';
+    for (const name of grid.folders) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'folder-grid-chip';
+      chip.textContent = `${name}/`;
+      chip.onclick = () => this.openFolderGrid(`${grid.path === '/' ? '' : grid.path}/${name}`, grid.sessionId);
+      foldersEl.appendChild(chip);
+    }
+
+    body.innerHTML = '';
+    if (grid.files.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'folder-grid-empty';
+      empty.textContent = 'No previewable files in this folder.';
+      body.appendChild(empty);
+    }
+    grid.files.forEach((file, index) => {
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'folder-grid-tile';
+      tile.title = `${file.name} • ${this.formatFileSize(file.size)}`;
+      tile.dataset.index = String(index);
+      const thumb = document.createElement('div');
+      thumb.className = 'folder-grid-thumb';
+      const label = file.extension.toUpperCase();
+      const route = this._folderFileUrl(grid, file.name, '');
+      // Images load themselves (lazily — a folder can hold hundreds of renders);
+      // PDF/Office show their first page where the server can render one (local
+      // folders), everything else a type label.
+      const src =
+        file.attachmentType === 'image'
+          ? `${route}/raw`
+          : ['pdf', 'docx', 'pptx'].includes(file.extension)
+            ? `${route}/thumbnail`
+            : null;
+      if (src) {
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.alt = file.name;
+        img.src = src;
+        img.onerror = () => {
+          thumb.textContent = label;
+        };
+        thumb.appendChild(img);
+      } else {
+        thumb.textContent = label;
+      }
+      const name = document.createElement('span');
+      name.className = 'folder-grid-name';
+      name.textContent = file.name;
+      tile.append(thumb, name);
+      tile.onclick = () => this._openFolderGridFile(index);
+      body.appendChild(tile);
+    });
+
+    const count = `${grid.files.length} file${grid.files.length === 1 ? '' : 's'}`;
+    const subfolders = grid.folders.length ? ` • ${grid.folders.length} folder${grid.folders.length === 1 ? '' : 's'}` : '';
+    footer.textContent = `${count}${subfolders}${grid.truncated ? ' (folder too large — showing the first entries)' : ''}`;
+  },
+
+  _folderFileUrl(grid, name, suffix) {
+    return CodemanBase.url(
+      `/api/sessions/${grid.sessionId}/folders/${encodeURIComponent(grid.folderId)}/files/${encodeURIComponent(name)}${suffix}`
+    );
+  },
+
+  _openFolderGridFile(index) {
+    const grid = this.folderGrid;
+    const file = grid?.files[index];
+    if (!file) return;
+    const body = this.$('folderGridBody');
+    body?.querySelectorAll('.folder-grid-tile.current').forEach((t) => t.classList.remove('current'));
+    const tile = body?.querySelector(`.folder-grid-tile[data-index="${index}"]`);
+    tile?.classList.add('current');
+    tile?.scrollIntoView({ block: 'nearest' });
+    this.openFilePreview(`${grid.path === '/' ? '' : grid.path}/${file.name}`, grid.sessionId, null, {
+      folderFile: { folderId: grid.folderId, name: file.name },
+      size: file.size,
+    });
+    // After openFilePreview: it resets the index for previews from elsewhere.
+    grid.index = index;
+    grid.lastIndex = index;
+    this._updateFolderPreviewNav(null);
+  },
+
+  /** Page through the open folder from its preview (‹ › buttons, ←/→). */
+  stepFolderPreview(delta) {
+    const grid = this.folderGrid;
+    if (!grid || grid.index === null || grid.files.length === 0) return;
+    if (this.filePreviewEdit?.dirty && !confirm('Discard unsaved changes?')) return;
+    const next = (grid.index + delta + grid.files.length) % grid.files.length;
+    this._openFolderGridFile(next);
+  },
+
+  /** "Show folder" in the preview: the grid of the previewed file's folder. */
+  openFolderOfPreview() {
+    const target = this.filePreviewFolderTarget;
+    if (!target) return;
+    this.closeFilePreview();
+    this.openFolderGrid(target.dir, target.sessionId);
+  },
+
+  /**
+   * The folder a previewed file lives in, or null when that is unknown — an
+   * attachment card carries only a bare file name.
+   */
+  _previewFolderPath(filePath, sessionId, attachmentId) {
+    if (typeof filePath !== 'string' || (attachmentId && !filePath.includes('/'))) return null;
+    const workingDir = this.sessions?.get?.(sessionId)?.workingDir;
+    const resolved = typeof resolveLinkedFilePath === 'function' ? resolveLinkedFilePath(filePath, workingDir) : filePath;
+    if (!resolved.startsWith('/') && !resolved.startsWith('~/')) return null;
+    const cut = resolved.lastIndexOf('/');
+    return { dir: resolved.slice(0, cut) || '/', sessionId };
+  },
+
+  /** Show prev/next while browsing a folder grid, else "Show folder" when the file's folder is known. */
+  _updateFolderPreviewNav(folderTarget) {
+    const browsing = !!this.folderGrid && this.folderGrid.index !== null && this.folderGrid.files.length > 1;
+    const prev = this.$('filePreviewPrevBtn');
+    const next = this.$('filePreviewNextBtn');
+    if (prev) prev.hidden = !browsing;
+    if (next) next.hidden = !browsing;
+    if (folderTarget !== undefined) this.filePreviewFolderTarget = folderTarget;
+    const inGrid = !!this.folderGrid && this.folderGrid.index !== null;
+    const folderBtn = this.$('filePreviewFolderBtn');
+    if (folderBtn) folderBtn.hidden = inGrid || !this.filePreviewFolderTarget;
+  },
+
+  /**
+   * ←/→ page the folder preview, Escape steps back (preview → grid → closed).
+   * Capture phase + stopPropagation: the terminal keeps keyboard focus under the
+   * overlays, and an arrow key that reached xterm would be typed into the session.
+   */
+  _bindFolderGridKeys() {
+    if (this._folderGridKeysBound) return;
+    this._folderGridKeysBound = true;
+    document.addEventListener(
+      'keydown',
+      (ev) => {
+        const grid = this.folderGrid;
+        if (!grid || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+        const previewOpen = this.$('filePreviewOverlay')?.classList.contains('visible');
+        const gridOpen = this.$('folderGridOverlay')?.classList.contains('visible');
+        if (!gridOpen) return;
+        const t = ev.target;
+        const typing =
+          t && (t.isContentEditable || (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) && !t.classList?.contains('xterm-helper-textarea')));
+        if (typing || this.filePreviewEdit) return;
+        let handled = true;
+        if (previewOpen && grid.index !== null && ev.key === 'ArrowLeft') this.stepFolderPreview(-1);
+        else if (previewOpen && grid.index !== null && ev.key === 'ArrowRight') this.stepFolderPreview(1);
+        // Grid alone: an arrow opens the last viewed tile (or the first), so it
+        // pages the folder instead of landing in the terminal behind the grid.
+        else if (!previewOpen && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') && grid.files.length)
+          this._openFolderGridFile(grid.lastIndex ?? 0);
+        else if (ev.key === 'Escape') {
+          if (previewOpen) this.closeFilePreview();
+          else this.closeFolderGrid();
+        } else handled = false;
+        if (handled) {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }
+      },
+      true
+    );
+  },
+
   closeFilePreview() {
     if (this.filePreviewEdit?.dirty && !confirm('Discard unsaved changes?')) return;
     this._resetFilePreviewEdit();
+    // Back on the grid (if one is open underneath): its current tile stays marked.
+    if (this.folderGrid) this.folderGrid.index = null;
+    this._updateFolderPreviewNav(null);
     const overlay = this.$('filePreviewOverlay');
     if (overlay) {
       overlay.classList.remove('visible');

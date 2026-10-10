@@ -1919,6 +1919,17 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * A clicked path as the preview needs it: relative paths resolved against the
+   * session's working directory, absolute and `~/` paths unchanged
+   * (`resolveLinkedFilePath`, constants.js). Shared by the terminal link
+   * provider and the response viewer, so one path opens the same file in both.
+   */
+  _resolveLinkedFilePath(filePath, sessionId) {
+    if (typeof resolveLinkedFilePath !== 'function') return filePath;
+    return resolveLinkedFilePath(filePath, this.sessions?.get?.(sessionId)?.workingDir);
+  },
+
+  /**
    * Register a custom link provider for xterm.js that detects file paths
    * in terminal output and makes them clickable.
    * When clicked, opens a floating log viewer window with live streaming.
@@ -1970,10 +1981,14 @@ Object.assign(CodemanApp.prototype, {
         // both continuation kinds, the indent a hard wrap leaves on its
         // continuation, and the offset↔cell mapping — because touch selection
         // measures the SAME lines and the two must not disagree.
+        // `terminalPathLine` adds one thing on top, for links only: a path the
+        // program broke over lines itself (Claude Code wraps tool output short of
+        // the edge) is glued back together, so `…/captures/2` + `026-10-10/x.png`
+        // links as the one file it is.
         // Bounded so a screenful of full-width output (wide tables, box drawing)
         // cannot make every hover stitch and re-scan the entire viewport.
         const MAX_STITCHED_ROWS = 12;
-        const logical = window.CodemanTerminalLines?.terminalLogicalLine(
+        const logical = window.CodemanTerminalLines?.terminalPathLine(
           buffer,
           bufferLineNumber - 1,
           terminal.cols,
@@ -1991,12 +2006,18 @@ Object.assign(CodemanApp.prototype, {
           return { x: cell.col + 1, y: cell.row + 1 };
         };
 
-        if (!lineText || !lineText.includes('/')) {
+        // A path needs a `/` or an extension's `.`; a line with neither has no link.
+        if (!lineText || (!lineText.includes('/') && !lineText.includes('.'))) {
           callback(undefined);
           return;
         }
 
         const links = [];
+        // Text offsets of every link so far: a later pattern must not cut a
+        // second, overlapping link out of one already found (a relative `b.png`
+        // inside a URL's `?img=b.png`).
+        const taken = [];
+        const isTaken = (start, length) => taken.some((t) => start < t.end && t.start < start + length);
 
         // Pattern 0: URLs (https://, http://) — matched first so they take priority
         //
@@ -2016,6 +2037,7 @@ Object.assign(CodemanApp.prototype, {
           const start = coordAt(startCol);
           const end = coordAt(startCol + cleaned.length);
           if (links.some((l) => l.range.start.x === start.x && l.range.start.y === start.y)) return;
+          taken.push({ start: startCol, end: startCol + cleaned.length });
 
           links.push({
             text: cleaned,
@@ -2045,27 +2067,28 @@ Object.assign(CodemanApp.prototype, {
         // the whole tab on hover. Non-empty token + bounded reps is O(n).
         const cmdPattern = /\b(tail|cat|head|less|grep|watch|vim|nano)\s+(?:[^\s\/]+\s+){0,4}(\/[^\s"'<>|;&\n\x00-\x1f]+)/g;
 
-        // Pattern 2: Paths with common extensions. Image/PDF/media extensions are
+        // Pattern 2: Paths with common extensions — absolute, `~/` and relative
+        // (`findFilePathLinks`, constants.js). Image/PDF/media extensions are
         // included so pasted-attachment paths (`.codeman-uploads/paste-*.png`) and
         // screenshots an agent just wrote are clickable; those open the file
         // preview rather than the log viewer (see addLink).
         //
-        // The literal lives in constants.js because the response viewer linkifies
-        // the SAME paths out of markdown — one definition, two consumers. A fresh
-        // instance per call: `lastIndex` is per-object state.
-        const extPattern = absoluteFilePathPattern();
+        // The patterns live in constants.js because the response viewer linkifies
+        // the SAME paths out of markdown — one definition, two consumers.
 
         // Pattern 3: Bash() tool output
         const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
 
-        const addLink = (filePath, matchIndex) => {
+        const addLink = (filePath, matchIndex, folder = false) => {
           const startCol = lineText.indexOf(filePath, matchIndex);
           if (startCol === -1) return;
 
           const start = coordAt(startCol);
           const end = coordAt(startCol + filePath.length);
-          // Skip if already have link at this position
+          // Skip if already have link at this position, or one overlapping it
           if (links.some((l) => l.range.start.x === start.x && l.range.start.y === start.y)) return;
+          if (isTaken(startCol, filePath.length)) return;
+          taken.push({ start: startCol, end: startCol + filePath.length });
 
           links.push({
             text: filePath,
@@ -2088,12 +2111,23 @@ Object.assign(CodemanApp.prototype, {
               // path clicked in the response viewer previewed fine. The preview
               // reads those through the guarded attachment routes, so external
               // paths route there and the two surfaces agree.
+              //
+              // A relative path is resolved against the session's working
+              // directory first, and a `~/` path always previews (only the
+              // server knows that host's home, and the log viewer cannot ask).
               const sessionId = getSessionId();
-              if (previewsInFileViewer(text) || self._isExternalPreviewPath(text, sessionId)) {
-                self.openFilePreview(text, sessionId);
+              const target = self._resolveLinkedFilePath(text, sessionId);
+              // A folder path opens the folder grid (which falls back to the
+              // preview if the server finds a file there after all).
+              if (folder) {
+                self.openFolderGrid(target, sessionId);
                 return;
               }
-              self.openLogViewerWindow(text, sessionId);
+              if (previewsInFileViewer(target) || self._isExternalPreviewPath(target, sessionId)) {
+                self.openFilePreview(target, sessionId);
+                return;
+              }
+              self.openLogViewerWindow(target, sessionId);
             },
             hover() {
               setHovered(true);
@@ -2117,9 +2151,8 @@ Object.assign(CodemanApp.prototype, {
           addLink(match[2], match.index);
         }
 
-        extPattern.lastIndex = 0;
-        while ((match = extPattern.exec(lineText)) !== null) {
-          addLink(match[1], match.index);
+        for (const found of findFilePathLinks(lineText)) {
+          addLink(found.path, found.index, !!found.folder);
         }
 
         bashPattern.lastIndex = 0;

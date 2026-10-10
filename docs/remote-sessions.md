@@ -270,6 +270,8 @@ and it follows the same rule as the launch path: every ssh command line comes fr
 | `GET /api/sessions/:id/file-thumbnail` | `400` for remote files |
 | `POST /api/sessions/:id/attachments` | Registers an absolute path that lives on the **remote** host (a clicked link pointing outside the case directory) by probing it there |
 | `GET /api/sessions/:id/attachments/:attachmentId/raw` | Streams the registered remote file over ssh, same 200/206/416 contract; `preview` (office) and `thumbnail` answer `400` |
+| `POST /api/sessions/:id/folders` | Lists a folder (absolute or `~/`) on the **remote** host in one ssh round trip (`remoteListFolder`): resolved with `cd -P`, missing → `404`, a file → `400 Not a folder` |
+| `GET /api/sessions/:id/folders/:folderId/files/:name/raw` | Streams one file of a granted remote folder over ssh after the same re-probe + guard as an attachment; `preview` (office) and `thumbnail` answer `400` |
 | `GET /api/sessions/:id/attachments/:attachmentId`, `GET …/attachments` (history) | Size/mtime/existence resolved over ssh, so a remote entry is not reported `missing`; the history list resolves EVERY entry in one batched probe, never one connection per entry |
 
 ⚠️ The attachment route is the one a clicked path takes when it is **outside** the case

@@ -374,6 +374,15 @@ Two registration paths, with **different trust**:
   file outside the session's own workspace. Cross‑workspace attach must go through
   the explicit POST path above.
 
+**Folder grid grants** (`POST /api/sessions/:id/folders`, `src/folder-listing.ts`)
+follow the explicit-POST trust level: a deliberate, Origin‑guarded request, allowed
+cross‑workspace subject to the same guard (blocklist on the folder AND on every
+listed file, `confineToWorkspace` when set, hidden entries and unsupported types
+left out). The grant is an id for a resolved folder; files are served by
+`folderId` + a bare file name only (no `/`, `..` or NUL, supported type), and each
+request re‑runs `resolveServableAttachmentPath` on the joined path, so a file that
+was swapped for a symlink to a blocked target after listing is still refused.
+
 ### SSE log‑tail route — intentional extra read roots
 
 The live file‑tail SSE route (`FileStreamManager`, used to stream a growing log
