@@ -36,6 +36,7 @@ describe('per-mode capability predicates', () => {
     ['grok', true, false, false],
     ['deepseek', true, false, true],
     ['omp', true, false, false],
+    ['copilot', true, false, false],
   ] as Array<[SessionMode, boolean, boolean, boolean]>)(
     '%s: external=%s altScreenStrip=%s hooks=%s',
     (mode, external, altScreen, hooks) => {
@@ -48,7 +49,7 @@ describe('per-mode capability predicates', () => {
   it('covers every enabled mode (sanity)', () => {
     // If a CLI is added without a row above, this fails rather than the table silently
     // describing a subset of reality.
-    expect(MODES.length).toBe(10);
+    expect(MODES.length).toBe(11);
   });
 
   it('keeps the three predicates genuinely distinct', () => {

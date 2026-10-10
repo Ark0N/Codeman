@@ -1568,5 +1568,163 @@ const OMP: CliEntry = {
   },
 };
 
+// GitHub Copilot CLI (`copilot`, github/copilot-cli, npm @github/copilot). Measured on a live
+// 1.0.94 pane inside tmux (capture-pane through real turns, a shell tool call and /model,
+// 2026-10-09). It is an ALTERNATE-SCREEN TUI with mouse tracking on (tmux `alternate_on=1`,
+// `mouse_any_flag=1`, `history_size=0`), so it joins grok in the tmux-attach-time strip only.
+// Keystrokes sent with `tmux send-keys` reach its composer and a shell tool call completes
+// inside tmux, which github/copilot-cli#4180 (a driven PTY ignoring input) and #4223 (a shell
+// command never reported done under tmux) say they do not on 1.0.70 to 1.0.74: neither
+// reproduces on 1.0.94, and the register of `version` below is what would show a regression.
+const COPILOT: CliEntry = {
+  id: 'copilot' as CliEntry['id'],
+  label: 'GitHub Copilot',
+  shortBadge: 'CP',
+  accent: '#a371f7',
+  enabled: true,
+  stock: true,
+  order: 100,
+  kind: 'agent',
+  discovery: {
+    binaries: ['copilot'],
+    searchDirs: [HOME_DIRS.local, HOME_DIRS.usrLocal, HOME_DIRS.bunBin, HOME_DIRS.npmGlobal, HOME_DIRS.homeBin],
+    // `copilot --version` prints `GitHub Copilot CLI 1.0.94.`; anchoring on the product name
+    // keeps an unrelated `copilot` binary on PATH from passing the probe.
+    version: { arg: '--version', regex: 'GitHub Copilot CLI (\\d+\\.\\d+\\.\\d+)', requireVersionMatch: true },
+    install: {
+      command: { linux: 'npm install -g @github/copilot', darwin: 'npm install -g @github/copilot' },
+      npmPackage: '@github/copilot',
+      docsUrl: 'https://github.com/github/copilot-cli',
+    },
+  },
+  // `--yolo` (allow every tool, path and URL) is opt-in through `allowAll`, which the Run button
+  // sends like the other agent CLIs' bypass switches; an absent config spawns a bare `copilot`
+  // in its own Manual Approval mode. `--model` and `--resume=<id>` are Copilot's own flags
+  // (`copilot --help`, 1.0.94). `--resume` takes an id, id prefix or session NAME, so the id
+  // pattern below is what keeps a name or a path out of it.
+  launch: {
+    params: {
+      allowAll: { type: 'bool' },
+      model: { type: 'token', pattern: 'model' },
+      resumeId: { type: 'token', pattern: 'id-dotted' },
+      continueSession: { type: 'bool' },
+      // The tab's name, so the CLI's own session list reads the same as the tab.
+      sessionName: { type: 'engine', source: 'sessionName' },
+    },
+    variants: [
+      {
+        id: 'default',
+        args: [
+          { lit: 'copilot' },
+          { flag: '--yolo', when: { param: 'allowAll', is: true } },
+          // `--name` is refused next to `--resume` and `--continue` (copilot 1.0.95: "cannot be used
+          // with"), and a resumed session keeps the name it was created with.
+          {
+            flag: '--name',
+            valueFrom: 'sessionName',
+            quote: 'double',
+            when: {
+              allOf: [
+                { param: 'sessionName', state: 'set' },
+                { param: 'resumeId', state: 'unset' },
+                { not: { param: 'continueSession', is: true } },
+              ],
+            },
+          },
+          { flag: '--model', valueFrom: 'model', when: { param: 'model', state: 'set' } },
+          { flag: '--resume', valueFrom: 'resumeId', when: { param: 'resumeId', state: 'set' } },
+          {
+            lit: '--continue',
+            when: {
+              allOf: [
+                { param: 'continueSession', is: true },
+                { param: 'resumeId', state: 'unset' },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+    legacyConfigAliases: { resumeId: 'resumeSessionId' },
+    legacyConfigField: 'copilotConfig',
+    resumeAppend: { style: 'flag', flag: '--resume' },
+  },
+  env: {
+    exports: [{ name: 'COLORTERM', value: 'truecolor' }],
+    unset: ['NO_COLOR'],
+    // Sign-in is the CLI's own (`copilot login`, kept under ~/.copilot); a token in the
+    // environment (COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN) is what a headless host uses.
+    tmuxSetenvKeys: [],
+    dockerExecEnvNames: [],
+    allowedPrefixes: ['COPILOT_'],
+    allowedKeys: ['GH_TOKEN', 'GITHUB_TOKEN'],
+  },
+  capabilities: {
+    ...agentDefaults(),
+    altScreen: 'strip-mux-only',
+    echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // The composer row is a `❯` between two rules, and the submitted prompt is echoed as
+    // ` ❯ <text>  <time>` above it. While a turn runs the footer's left end reads
+    // `◉ Working esc edit prompt` (the dot alternates `◉` and `◎`); at rest it reads
+    // `← open sidebar · Interactive · Manual Approval · / commands · ? help · tab next tab`.
+    // A tool call that is waiting for approval replaces the composer and the footer's
+    // `Working` goes with it, so it reads as idle (waiting on the user), like gemini.
+    workDetect: {
+      promptGlyph: '❯',
+      workingLine: String.raw`[◉◎] Working\b`,
+    },
+    // The model is the right-hand field of the last row, both at rest and mid-turn
+    // (`... tab next tab        Claude Sonnet 5.5`, `◎ Working esc edit prompt     GPT-6 Luna`).
+    // Anchored on the footer's own words so a model-looking string in the transcript cannot match.
+    modelDetect: {
+      screenLine: String.raw`(?:tab next tab|\? help|esc edit prompt|github-mcp-server) {3,}([A-Za-z0-9][\w.:/@ -]{1,60}?) *(?:\n|$)`,
+      screenLines: 2,
+    },
+    // COPILOT_HOME can restate permissions and COPILOT_ALLOW_ALL turns every one on; both
+    // already match the COPILOT_ allowedPrefix, so a non-granted multi-user owner must not
+    // be able to set them through envOverrides.
+    privilegedEnvKeys: [
+      'COPILOT_HOME',
+      'COPILOT_ALLOW_ALL',
+      'COPILOT_PROVIDER_BASE_URL',
+      'COPILOT_PROVIDER_API_KEY',
+      'COPILOT_MODEL',
+    ],
+    // Grok/codex-shaped clamp: a bare spawn is already Manual Approval, so the multi-user clamp
+    // only forces an EXPLICITLY-SENT `--yolo` back off; nothing is materialized when absent.
+    privilegedParams: [{ param: 'allowAll', clampTo: false }],
+    // BYOK (`copilot help environment`, 1.0.95): COPILOT_PROVIDER_BASE_URL switches the CLI to a
+    // custom provider and drops the GitHub sign-in requirement; COPILOT_PROVIDER_TYPE defaults to
+    // "openai", which is what a Codeman custom endpoint is (llama.cpp, vLLM, Ollama).
+    // COPILOT_MODEL names the model and COPILOT_PROVIDER_MODEL_ID / _WIRE_MODEL default to it.
+    // The OpenAI-style route is `<base>/v1/chat/completions`, so the base gets the `/v1` suffix
+    // the same way deepseek's does. All four already match the COPILOT_ prefix allowlist, so
+    // they are privileged env keys below: a non-granted multi-user owner must not be able to
+    // redirect the session's endpoint or credentials through plain envOverrides.
+    customModelInjection: {
+      kind: 'env',
+      baseUrlVar: 'COPILOT_PROVIDER_BASE_URL',
+      apiKeyVar: 'COPILOT_PROVIDER_API_KEY',
+      modelVars: ['COPILOT_MODEL'],
+      appendV1Suffix: true,
+    },
+  },
+  overlays: {
+    credStore: { rel: '.copilot', seedFiles: ['config.json', 'mcp-config.json'] },
+  },
+};
+
 /** The full stock catalog, in the order the run menu shows by default. */
-export const STOCK_CLIS: CliEntry[] = [CLAUDE, SHELL, OPENCODE, CODEX, GEMINI, ANTIGRAVITY, PI, GROK, DEEPSEEK, OMP];
+export const STOCK_CLIS: CliEntry[] = [
+  CLAUDE,
+  SHELL,
+  OPENCODE,
+  CODEX,
+  GEMINI,
+  ANTIGRAVITY,
+  PI,
+  GROK,
+  DEEPSEEK,
+  OMP,
+  COPILOT,
+];

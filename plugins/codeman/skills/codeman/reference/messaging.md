@@ -56,7 +56,7 @@ own head: the worker enforcing the cap is the one who has to be told about it.
 | synchronize on end of turn | HTTP `wait until=stop` (fires for message-initiated turns too, verified live) |
 | liveness / death check | HTTP `wait?until=exit` |
 | interrupt a running turn (break-glass) | HTTP input, a bare `\x1b` with no `\r` |
-| non-claude modes (`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`/`omp`) | HTTP only (no other CLI has messaging) |
+| non-claude modes (`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`/`omp`/`copilot`) | HTTP only (no other CLI has messaging) |
 | delete | HTTP, via SKILL.md's `delete_session` guard |
 
 ## Availability: probe, never assume
@@ -352,7 +352,7 @@ Without a break-glass, a pair with a bad brief is a token bonfire with no off sw
 
 ### Mixed fleets: the pairing matrix
 
-Non-claude workers (`shell`, `opencode`, `codex`, `gemini`, `antigravity`, `pi`, `grok`, `deepseek`, `omp`) cannot be peers
+Non-claude workers (`shell`, `opencode`, `codex`, `gemini`, `antigravity`, `pi`, `grok`, `deepseek`, `omp`, `copilot`) cannot be peers
 at all; no other CLI has this feature. Their tasks route over HTTP, and you never mention
 messaging in their briefs. The claude half of the fleet can use messaging among itself,
 subject to the namespace rule: **messaging works between two sessions that share one

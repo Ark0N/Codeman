@@ -58,6 +58,7 @@ const MOBILE_OVERVIEW_RUN_MODES = [
   { mode: 'grok', label: 'Grok', short: 'Grok' },
   { mode: 'deepseek', label: 'DeepSeek', short: 'DeepSeek' },
   { mode: 'omp', label: 'OMP', short: 'OMP' },
+  { mode: 'copilot', label: 'GitHub Copilot', short: 'GitHub Copilot' },
   { mode: 'shell', label: 'Terminal / Shell', short: 'Shell' },
 ];
 

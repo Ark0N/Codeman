@@ -421,6 +421,25 @@ const GrokConfigSchema = z
   })
   .optional();
 
+const CopilotConfigSchema = z
+  .object({
+    model: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9._\-/]+$/)
+      .optional(),
+    allowAll: z.boolean().optional(),
+    continueSession: z.boolean().optional(),
+    // Ids only: --resume also matches session NAMES (arbitrary user strings), which this
+    // regex deliberately cannot express.
+    resumeSessionId: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9._-]+$/)
+      .optional(),
+  })
+  .optional();
+
 /**
  * Schema for OMP CLI-specific configuration.
  */
@@ -567,6 +586,7 @@ export const CreateSessionSchema = z.object({
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
   grokConfig: GrokConfigSchema,
+  copilotConfig: CopilotConfigSchema,
   deepSeekConfig: DeepSeekConfigSchema,
   ompConfig: OmpConfigSchema,
   /** Resume a previous Claude conversation by its session ID (used for reboot recovery) */
@@ -1092,6 +1112,7 @@ export const QuickStartSchema = z.object({
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
   grokConfig: GrokConfigSchema,
+  copilotConfig: CopilotConfigSchema,
   deepSeekConfig: DeepSeekConfigSchema,
   ompConfig: OmpConfigSchema,
   envOverrides: safeEnvOverridesSchema,

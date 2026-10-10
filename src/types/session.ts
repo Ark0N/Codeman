@@ -8,7 +8,7 @@
  * - SessionConfig — creation-time config (id, workingDir, createdAt)
  * - SessionOutput — captured stdout/stderr/exitCode
  * - SessionStatus — 'idle' | 'busy' | 'stopped' | 'error'
- * - SessionMode — 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp' (which CLI backend)
+ * - SessionMode — 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp' | 'copilot' (which CLI backend)
  * - ClaudeMode — CLI permission mode ('dangerously-skip-permissions' | 'auto' | 'normal' | 'allowedTools')
  * - SessionColor — visual differentiation color
  * - OpenCodeConfig — OpenCode-specific settings (model, autoAllowTools, continueSession)
@@ -17,6 +17,7 @@
  * - AntigravityConfig — Antigravity CLI (agy) settings (model, dangerouslySkipPermissions, resumeConversationId)
  * - PiConfig — Pi CLI (pi.dev) settings (model, provider, thinking, resume/continue, project trust)
  * - GrokConfig — Grok Build CLI (xAI `grok`) settings (model, alwaysApprove, resume/continue)
+ * - CopilotConfig — GitHub Copilot CLI settings (model, allowAll, resume/continue)
  * - DeepSeekConfig — DeepSeek Harness (`dsh`) settings (profile, permissionMode, resume, status bridge)
  *
  * Cross-domain relationships:
@@ -56,7 +57,8 @@ export type SessionMode =
   | 'pi'
   | 'grok'
   | 'deepseek'
-  | 'omp';
+  | 'omp'
+  | 'copilot';
 
 /**
  * Who owns a session's name. `placeholder`: Codeman's own `w<n>-<case>` (or no
@@ -78,7 +80,7 @@ export interface SessionWriteOptions {
 
 export type RemoteCommandMode = Extract<
   SessionMode,
-  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp'
+  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp' | 'copilot'
 >;
 
 /**
@@ -213,7 +215,7 @@ export interface RemoteSessionInfo {
 /** Which CLI backends a Docker case can run (same set as remote). */
 export type DockerCommandMode = Extract<
   SessionMode,
-  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp'
+  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp' | 'copilot'
 >;
 
 /** Container engine. Docker and Podman differ in the uid/userns + host-gateway alias. */
@@ -522,6 +524,29 @@ export interface GrokConfig {
   /** Continue the most recent session for the working directory (-c). Skipped when resumeSessionId is set. */
   continueSession?: boolean;
   /** Resume a specific session by ID (--resume). Ids only, never titles or paths. */
+  resumeSessionId?: string;
+}
+
+/**
+ * GitHub Copilot CLI (`copilot`) session configuration.
+ *
+ * Copilot asks before running tools ("Manual Approval") and before touching paths
+ * outside the trusted folder. `--yolo` is its allow-all switch (tools, paths and URLs),
+ * the one the Run button opts into like the other agent CLIs' bypass switches. Verified
+ * against copilot 1.0.94.
+ */
+export interface CopilotConfig {
+  /** Model ID passed via --model (e.g. "claude-sonnet-5.5", or "auto"). */
+  model?: string;
+  /**
+   * Allow every tool, path and URL without asking (passes --yolo). Absent = Copilot's own
+   * Manual Approval mode. Multi-user: forced off for non-granted owners by the only-if-sent
+   * clamp branch, like codex/antigravity/grok.
+   */
+  allowAll?: boolean;
+  /** Resume the most recent session (--continue). Skipped when resumeSessionId is set. */
+  continueSession?: boolean;
+  /** Resume a specific session by ID (--resume=<id>). Ids only, never names. */
   resumeSessionId?: string;
 }
 
@@ -838,6 +863,8 @@ export interface SessionState {
   piConfig?: PiConfig;
   /** Grok-specific configuration (only for mode === 'grok') */
   grokConfig?: GrokConfig;
+  /** GitHub Copilot CLI configuration (only for mode === 'copilot') */
+  copilotConfig?: CopilotConfig;
   /** DeepSeek Harness configuration (only for mode === 'deepseek') */
   deepSeekConfig?: DeepSeekConfig;
   /** OMP-specific configuration (only for mode === 'omp') */

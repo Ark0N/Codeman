@@ -1042,6 +1042,7 @@
                 <option value="grok">Grok</option>
                 <option value="deepseek">DeepSeek</option>
                 <option value="omp">OMP</option>
+                <option value="copilot">GitHub Copilot</option>
               </select>
             </div>
             <div class="form-row"><label>Working Directory</label><input type="text" id="schWorkingDir" placeholder="/absolute/path"></div>
@@ -3318,6 +3319,7 @@
                 <option value="grok" data-cli="grok">Grok</option>
                 <option value="deepseek" data-cli="deepseek">DeepSeek</option>
                 <option value="omp" data-cli="omp">OMP</option>
+                <option value="copilot" data-cli="copilot">GitHub Copilot</option>
                 <option value="shell">Shell (no agent)</option>
               </select>
               <span class="form-hint">Which CLI to point the Run button at once the clone finishes. Changeable any time from the Run dropdown.</span>
@@ -3496,7 +3498,7 @@
             <div class="form-row docker-create-only">
               <label>Image</label>
               <input type="text" id="dockerImage" placeholder="codeman/agent:base" autocomplete="off" autocapitalize="off" spellcheck="false">
-              <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/opencode/codex/gemini/agy/pi/grok/dsh/omp + tmux.</span>
+              <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/opencode/codex/gemini/agy/pi/grok/dsh/omp/copilot + tmux.</span>
             </div>
             <div class="form-row docker-create-only">
               <label>Network</label>

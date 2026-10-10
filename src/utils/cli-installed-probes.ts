@@ -7,7 +7,7 @@
  * and the badge could disagree with the Run menu.
  *
  * Every probe is a memoized resolver, so this is cheap to call per request. Dynamic imports
- * keep the nine resolvers out of any module that never asks.
+ * keep the ten resolvers out of any module that never asks.
  */
 
 import type { CliEntry } from '../config/cli-registry/types.js';
@@ -30,6 +30,7 @@ export async function probeStockCliAvailability(): Promise<Record<string, boolea
     { isGrokAvailable },
     { isDeepSeekRunnable },
     { isOmpAvailable },
+    { isCopilotAvailable },
   ] = await Promise.all([
     import('./claude-cli-resolver.js'),
     import('./opencode-cli-resolver.js'),
@@ -40,6 +41,7 @@ export async function probeStockCliAvailability(): Promise<Record<string, boolea
     import('./grok-cli-resolver.js'),
     import('./deepseek-cli-resolver.js'),
     import('./omp-cli-resolver.js'),
+    import('./copilot-cli-resolver.js'),
   ]);
   return {
     claude: isClaudeAvailable(),
@@ -51,6 +53,7 @@ export async function probeStockCliAvailability(): Promise<Record<string, boolea
     grok: isGrokAvailable(),
     deepseek: isDeepSeekRunnable(),
     omp: isOmpAvailable(),
+    copilot: isCopilotAvailable(),
   };
 }
 

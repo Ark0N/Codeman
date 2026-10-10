@@ -95,6 +95,7 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
   "web/routes/session-routes.ts::mode === 'antigravity'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/routes/session-routes.ts::mode === 'pi'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/routes/session-routes.ts::mode === 'grok'": allow(2, 'legacy <Mode>Config plumbing'),
+  "web/routes/session-routes.ts::mode === 'copilot'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/routes/session-routes.ts::mode === 'deepseek'": allow(2, 'legacy <Mode>Config plumbing'),
   "web/server.ts::mode === 'opencode'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'codex'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
@@ -102,6 +103,7 @@ const ALLOWED_BRANCHES: Record<string, Allowance> = {
   "web/server.ts::mode === 'antigravity'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'pi'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'grok'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
+  "web/server.ts::mode === 'copilot'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'deepseek'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
   "web/server.ts::mode === 'omp'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
 
