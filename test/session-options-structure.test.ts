@@ -103,4 +103,14 @@ describe('Session Options modal structure', () => {
     );
     expect(styles).not.toMatch(/@media \(min-width: 680px\)[\s\S]{0,1200}#sessionOptionsModal #context-tab/);
   });
+
+  it('shows the session working folder with a copy button', () => {
+    const modal = optionsModal();
+    expect(modal).toContain('id="modalSessionPath"');
+    expect(modal).toContain('app.copySessionPath()');
+    const open = methodBody('openSessionOptions(sessionId)');
+    expect(open).toContain("getElementById('modalSessionPath')");
+    expect(open).toContain('session.workingDir');
+    expect(methodBody('async copySessionPath()')).toContain('_copyText(session.workingDir)');
+  });
 });

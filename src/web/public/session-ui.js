@@ -2473,6 +2473,14 @@ Object.assign(CodemanApp.prototype, {
     if (tab) tab.classList.toggle('tab-show-detach', !!on);
   },
 
+  /** Copy the open session's working folder (Session Options > Session > Working folder). */
+  async copySessionPath() {
+    const session = this.sessions.get(this.editingSessionId);
+    if (!session?.workingDir) return;
+    const ok = await this._copyText(session.workingDir);
+    this.showToast(ok ? 'Path copied' : 'Copy failed', ok ? 'success' : 'error');
+  },
+
   openSessionOptions(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session) return;
@@ -2551,6 +2559,12 @@ Object.assign(CodemanApp.prototype, {
       document.getElementById('modalSessionName').value = session.name || '';
       document.getElementById('modalSessionName').placeholder = 'Auto (directory name)';
     }
+
+    // Working folder: the path the CLI was launched in on the Codeman host
+    const _pathEl = document.getElementById('modalSessionPath');
+    _pathEl.textContent = session.workingDir || '';
+    _pathEl.title = session.workingDir || '';
+    document.getElementById('modalSessionPathCopy').disabled = !session.workingDir;
 
     // Initialize color picker with current session color
     const currentColor = session.color || 'default';
