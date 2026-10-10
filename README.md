@@ -83,9 +83,16 @@ codeman users add alice --admin      # create the first admin account
 codeman web --multiuser              # named logins + per-user case spaces
 ```
 
-**Prefer Docker Compose?** A local-image Compose deployment ships in `docker/`: copy `docker/.env.example` to `docker/.env`, set `CODEMAN_PASSWORD`, then run `bash docker/Start-Codeman.sh` on Linux. Codeman runs in a container and spawns Docker cases as sibling containers through the host socket. After updating, run the script again rather than a plain `docker compose up`, so the rebuilt image, refreshed volumes and entrypoint arrive together. See the [Docker deployment guide](docker/README.md) for direct Compose commands, storage and networking options.
-
 Details in [Multi-User Mode](#multi-user-mode-opt-in) below.
+
+**Prefer Docker Compose?** Clone the repo and run one script (Linux, Docker with the Compose v2 plugin):
+
+```bash
+git clone https://github.com/Ark0N/Codeman.git && cd Codeman
+bash docker/Start-Codeman.sh
+```
+
+The first run asks three questions (data folder, port, password; Enter takes the default, including a generated password), writes `docker/.env` for you, builds the image and ends on the URL once Codeman answers. The image already includes Claude Code, Codex, Gemini CLI and OpenCode. Codeman runs in a container and spawns Docker cases as sibling containers through the host socket. To update, use **App Settings → Updates** or run the script again rather than a plain `docker compose up`, so the rebuilt image, refreshed volumes and entrypoint arrive together. See the [Docker deployment guide](docker/README.md) for Unraid, direct Compose commands, storage and networking options.
 
 <details>
 <summary><strong>Keep it running in the background</strong></summary>

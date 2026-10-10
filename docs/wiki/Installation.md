@@ -141,16 +141,23 @@ See [Contributing](Contributing) for the rest of the development loop.
 ## Route D: Docker Compose
 
 Codeman itself can run in a container and spawn Docker cases as sibling containers through
-the host's Docker socket. Copy `docker/.env.example` to `docker/.env`, set
-`CODEMAN_PASSWORD`, then:
+the host's Docker socket. You need Docker with the Compose v2 plugin (2.27.2 or newer), and
+an account that can use Docker without sudo (on Linux, the `docker` group). Then, on Linux:
 
 ```bash
+git clone https://github.com/Ark0N/Codeman.git && cd Codeman
 bash docker/Start-Codeman.sh
 ```
 
+The first run asks for a data folder, a port and a password. Enter takes each default,
+including a generated password that is printed once. It then writes `docker/.env`, builds the
+image (a few minutes the first time) and ends on the URL once Codeman answers. The image
+already includes Claude Code, Codex, Gemini CLI and OpenCode: start a session and log the CLI
+in once, and the login is kept in the data folder.
+
 Run the script again after updating rather than a plain `docker compose up`, so the rebuilt
 image, the refreshed volumes and the entrypoint arrive together. The full guide, including
-storage and networking options, is
+Unraid, storage and networking options, is
 [`docker/README.md`](https://github.com/Ark0N/Codeman/blob/master/docker/README.md).
 
 ## Installing an agent CLI
