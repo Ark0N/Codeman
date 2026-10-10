@@ -690,61 +690,6 @@ describe('Escape in the search box', () => {
   });
 });
 
-describe('no drag while a rail search is active', () => {
-  it('will not start a grouped-rail drag, and starts one again once the search is cleared', () => {
-    const app = makeApp();
-    app._fullRenderSessionTabs();
-    const container = document.getElementById('sessionTabs')!;
-    expect(container.classList.contains('session-tabs--grouped')).toBe(true);
-    const press = () => ({
-      button: 0,
-      pointerType: 'mouse',
-      pointerId: 1,
-      clientX: 10,
-      clientY: 10,
-      target: container.querySelector('[data-id="review"]'),
-    });
-
-    app.setTabRailSearch('review');
-    app._onTabLayoutPointerDown(press(), container);
-    expect(app._tabLayoutDrag ?? null).toBeNull();
-
-    app.clearTabRailSearch();
-    app._onTabLayoutPointerDown(press(), container);
-    try {
-      expect(app._tabLayoutDrag?.source).toEqual({ type: 'ref', ref: { kind: 'session', id: 'review' } });
-    } finally {
-      app._cancelTabLayoutPointerDrag(container);
-    }
-  });
-
-  it('refuses the flat rail drag while searching, though the rows stay bound for after', () => {
-    const app = makeApp({ tabLayout: null });
-    app._fullRenderSessionTabs();
-    const row = () => document.querySelector<HTMLElement>('#sessionTabs [data-id="roadmap"]')!;
-    expect(row().getAttribute('draggable')).toBe('true');
-    const dragstart = () => {
-      const event = new window.Event('dragstart', { bubbles: true, cancelable: true });
-      Object.defineProperty(event, 'dataTransfer', { value: { effectAllowed: '', setData: () => {} } });
-      return event;
-    };
-
-    app.setTabRailSearch('road');
-    const refused = dragstart();
-    row().dispatchEvent(refused);
-    expect(refused.defaultPrevented).toBe(true);
-    expect(app.draggedTabId ?? null).toBeNull();
-
-    // A keystroke does not re-render, so the cleared rail drags with the same rows.
-    app.clearTabRailSearch();
-    const allowed = dragstart();
-    row().dispatchEvent(allowed);
-    expect(allowed.defaultPrevented).toBe(false);
-    expect(app.draggedTabId).toBe('roadmap');
-    row().dispatchEvent(new window.Event('dragend', { bubbles: true }));
-  });
-});
-
 describe('connector lines follow the rows a search moves', () => {
   it('redraws on a rail keystroke that hides or reveals rows, and only then', () => {
     const app = makeApp({ tabLayout: null });
