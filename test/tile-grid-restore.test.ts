@@ -29,7 +29,15 @@ const KEY = 'codeman:tile-grid';
 const stored = () => JSON.parse(localStore.get(KEY) ?? 'null');
 
 /** A fresh page: the app as handleInit leaves it on its FIRST run (gen 1). */
-function pageLoad(liveIds: string[], setup: (app: GridApp) => void = () => {}) {
+function pageLoad(
+  liveIds: string[],
+  setup: (app: GridApp) => void = () => {},
+  {
+    sessions = liveIds.map((id) => ({ id, name: id, mode: 'claude', pid: 1 })),
+    sessionOrder,
+    realOrder = false,
+  }: { sessions?: Array<Record<string, unknown>>; sessionOrder?: string[]; realOrder?: boolean } = {}
+) {
   const app = makeGridApp(IDS);
   app._initGeneration = 0;
   app.activeSessionId = null;
@@ -39,7 +47,7 @@ function pageLoad(liveIds: string[], setup: (app: GridApp) => void = () => {}) {
   for (const name of [
     '_clearTimer',
     '_updateCjkInputState',
-    'syncSessionOrder',
+    ...(realOrder ? [] : ['syncSessionOrder']),
     '_loadTabLayout',
     'cleanupAllFloatingWindows',
     'startSystemStatsPolling',
@@ -50,10 +58,7 @@ function pageLoad(liveIds: string[], setup: (app: GridApp) => void = () => {}) {
   }
   app.$ = () => null;
   setup(app);
-  app.handleInit({
-    sessions: liveIds.map((id) => ({ id, name: id, mode: 'claude', pid: 1 })),
-    scheduledRuns: [],
-  });
+  app.handleInit({ sessions, scheduledRuns: [], ...(sessionOrder ? { sessionOrder } : {}) });
   return app;
 }
 
@@ -146,6 +151,27 @@ describe('page load with a stored open grid', () => {
     expect(app._tileGrid.cells).toEqual(['s-a', 's-c', 's-b']);
     expect(app.activeSessionId).toBe('s-a');
     expect(stored().ids).toEqual(['s-a', 's-c', 's-b']);
+  });
+
+  it('the reload fill ranks with the init payload: its states, stamps and synced tab order', () => {
+    // The tab order comes from the server snapshot (synced before the restore
+    // runs); the states from the session payload. Pending approvals arrive
+    // later (seedApprovals is async), so only status and stamps rank here.
+    storeGrid({ ids: ['s-a', 'gone', 's-b'], focused: 's-a' });
+    const now = 1_000_000;
+    const app = pageLoad(IDS, () => {}, {
+      realOrder: true,
+      sessionOrder: ['s-c', 's-b', 's-a', 's-d'],
+      sessions: [
+        { id: 's-a', name: 's-a', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now },
+        { id: 's-b', name: 's-b', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now },
+        { id: 's-c', name: 's-c', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now - 10 },
+        { id: 's-d', name: 's-d', mode: 'claude', pid: 1, status: 'busy', lastSubmitAt: now - 500 },
+      ],
+    });
+    expect(app.sessionOrder).toEqual(['s-c', 's-b', 's-a', 's-d']);
+    // s-d is working: it takes the freed cell, though s-c comes first in the tab order.
+    expect(app._tileGrid.cells).toEqual(['s-a', 's-d', 's-b']);
   });
 
   it('brings back the fractions (same layout only) and a zoom the user chose', () => {
