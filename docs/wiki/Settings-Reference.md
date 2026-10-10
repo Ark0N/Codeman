@@ -216,6 +216,8 @@ Some things are configured before the server starts, not in the UI:
 | `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledges exposing the server with no password.                  |
 | `CODEMAN_BASE_URL`                  | Mounts Codeman under a sub-path behind a reverse proxy that forwards the prefix unchanged. See [Remote Access](Remote-Access). |
 | `CODEMAN_MAX_DOWNLOAD_BYTES`        | Cap on raw file bodies and downloads. 2 GB by default, `0` for none.    |
+| `CODEMAN_MAX_PASTE_IMAGE_BYTES`     | Cap on one pasted, dropped or attached image. 50 MB by default.         |
+| `CODEMAN_MAX_PASTE_VIDEO_BYTES`     | Cap on one attached video (phone Attach, drop). 1 GB by default; videos stream to disk, so this bounds disk use, not memory. |
 | `CODEMAN_MAX_REMOTE_FILE_SSH`       | Concurrent ssh reads for files in remote cases. 4 by default.           |
 | `CODEMAN_PATH_PROBE_TIMEOUT_MS`     | How long a linked case's folder may take to answer before it is shown as unreachable. 1500 ms by default; raise it for a slow but healthy mount. |
 | `CODEMAN_PATH_PROBE_MAX_STALLED`    | Unanswered folder checks allowed to pile up before new ones are refused. 2 by default: one below the threadpool size minus one, so it follows `UV_THREADPOOL_SIZE` (4 unless set), and it is never allowed above that ceiling. A check you start by opening one case or session may use the one slot left above it. |

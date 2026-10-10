@@ -155,9 +155,13 @@ expose everyone.
 
 Paste from the clipboard or drag and drop straight onto the terminal. The image is written
 where the agent can read it and the reference is inserted into your prompt. On a phone, the
-image key in the keyboard bar opens the camera or photo library.
+toolbar's Attach button opens the camera or photo library, videos included, and puts the path
+on your prompt, where it behaves like text you typed; the Image button inside the Compose
+editor does the same into the editor. Dropping a video onto the terminal works the same way.
 
 HEIC images from an iPhone are converted to JPEG on the way in.
+Videos (mp4, webm, mov, m4v, ogv) are stored as recorded, up to 1 GB each by default
+(`CODEMAN_MAX_PASTE_VIDEO_BYTES`); they stream to disk rather than through server memory.
 
 ## Generated artifacts
 

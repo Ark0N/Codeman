@@ -26,6 +26,9 @@ function loadComposer(sessionId = 'session-1') {
       localEcho.pendingText = '';
     }),
     suppressBufferDetection: vi.fn(),
+    appendText: vi.fn((text: string) => {
+      localEcho.pendingText += text;
+    }),
   };
   const app = {
     activeSessionId: sessionId,
@@ -42,6 +45,8 @@ function loadComposer(sessionId = 'session-1') {
     _predictiveEcho: { clearPredictions: vi.fn() },
     _sendInputAsync: vi.fn(),
     _uploadAndInsertImages: vi.fn(async () => ['/tmp/image-one.png']),
+    _promptAttachKind: (file: { type: string }) =>
+      file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : null,
     showToast: vi.fn(),
   };
   const schedule = (callback: () => void, delay = 0) => {
@@ -330,7 +335,7 @@ describe('mobile prompt composer', () => {
     expect(app.showToast).not.toHaveBeenCalled();
   });
 
-  it('preserves the draft and focuses xterm when Use terminal keyboard is chosen', () => {
+  it('returns the text to the prompt and focuses xterm when Use terminal keyboard is chosen', () => {
     const { app, bar, document, localEcho, runTimers } = loadComposer();
     const composeButton = mountComposeButton(bar, document);
     bar.composePrompt();
@@ -339,11 +344,13 @@ describe('mobile prompt composer', () => {
     (document.querySelector('.prompt-composer-terminal') as HTMLButtonElement).click();
 
     expect(app.terminal.focus).toHaveBeenCalledOnce();
-    expect(composeButton.classList.contains('has-draft')).toBe(true);
-    expect(composeButton.title).toBe('Resume saved prompt draft');
+    // The text is on the prompt now, not parked, so there is no draft to resume.
+    expect(localEcho.pendingText).toBe('keep this');
+    expect(composeButton.classList.contains('has-draft')).toBe(false);
     runTimers();
-    localEcho.pendingText = '; then continue';
+    localEcho.pendingText += '; then continue';
     bar.composePrompt();
+    // Adopted back exactly once: a surviving draft would double the first half.
     expect(textarea(document).value).toBe('keep this; then continue');
   });
 
@@ -372,6 +379,138 @@ describe('mobile prompt composer', () => {
     expect((document.querySelector('.paste-send') as HTMLButtonElement).disabled).toBe(false);
     expect(app.terminal.paste).not.toHaveBeenCalled();
     expect(app._sendInputAsync).not.toHaveBeenCalled();
+  });
+
+  it('hands a single-line draft back to the terminal prompt and keeps no draft', () => {
+    const { app, bar, document } = loadComposer();
+    bar.composePrompt();
+    const input = textarea(document);
+    input.value = 'describe this image';
+    input.dispatchEvent(new document.defaultView!.Event('input', { bubbles: true }));
+
+    (document.querySelector('.prompt-composer-terminal') as HTMLButtonElement).click();
+
+    expect(app._localEchoOverlay.appendText).toHaveBeenCalledWith('describe this image');
+    expect(document.querySelector('.prompt-composer-overlay')).toBeNull();
+    bar.composePrompt();
+    expect(textarea(document).value).toBe('describe this image');
+  });
+
+  it('writes the text to the PTY when the session has no buffer overlay, as codex does', () => {
+    const { app, bar, document } = loadComposer();
+    // Codex turns the buffer overlay off and echoes write-through instead.
+    app._localEchoEnabled = false;
+    bar.composePrompt();
+    const input = textarea(document);
+    input.value = 'describe this image';
+    input.dispatchEvent(new document.defaultView!.Event('input', { bubbles: true }));
+
+    (document.querySelector('.prompt-composer-terminal') as HTMLButtonElement).click();
+
+    expect(app._localEchoOverlay.appendText).not.toHaveBeenCalled();
+    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', ' describe this image');
+    expect(app._predictiveEcho.clearPredictions).toHaveBeenCalled();
+  });
+
+  it('writes the handoff to the PTY, not the parked overlay, while the tile grid owns the terminal', () => {
+    const { app, bar, document } = loadComposer();
+    // The grid parks and hides the main terminal, and a tile's Enter cannot flush
+    // its overlay, so the text would strand there (same guard as _attachFromToolbar).
+    app._tilesOwnTerminal = () => true;
+    bar.composePrompt();
+    const input = textarea(document);
+    input.value = 'describe this image';
+    input.dispatchEvent(new document.defaultView!.Event('input', { bubbles: true }));
+
+    (document.querySelector('.prompt-composer-terminal') as HTMLButtonElement).click();
+
+    expect(app._localEchoOverlay.appendText).not.toHaveBeenCalled();
+    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', ' describe this image');
+  });
+
+  it('refuses an oversized handoff with the draft intact rather than losing it from both surfaces', () => {
+    const { app, bar, document } = loadComposer();
+    bar.composePrompt();
+    const input = textarea(document);
+    input.value = 'x'.repeat(bar._composerMaxLength + 1);
+    input.dispatchEvent(new document.defaultView!.Event('input', { bubbles: true }));
+
+    (document.querySelector('.prompt-composer-terminal') as HTMLButtonElement).click();
+
+    expect(app._sendInputAsync).not.toHaveBeenCalled();
+    expect(app._localEchoOverlay.appendText).not.toHaveBeenCalled();
+    expect(app.showToast).toHaveBeenCalled();
+    // Still open, still holding the text.
+    expect(document.querySelector('.prompt-composer-overlay')).not.toBeNull();
+    expect(textarea(document).value.length).toBe(bar._composerMaxLength + 1);
+  });
+
+  it('disables the terminal handoff while an upload is in flight', async () => {
+    const { app, bar, document } = loadComposer();
+    let finishUpload!: (paths: string[]) => void;
+    app._uploadAndInsertImages.mockImplementation(
+      () => new Promise<string[]>((resolveUpload) => (finishUpload = resolveUpload))
+    );
+    bar.composePrompt();
+    const fileInput = document.querySelector('.paste-file-input') as HTMLInputElement;
+    const image = new document.defaultView!.File(['image'], 'shot.png', { type: 'image/png' });
+    Object.defineProperty(fileInput, 'files', { configurable: true, value: [image] });
+    fileInput.dispatchEvent(new document.defaultView!.Event('change', { bubbles: true }));
+
+    // Tapping it mid-upload would close the overlay and let the upload rebuild a
+    // draft holding only the paths, which the next open would prepend.
+    expect((document.querySelector('.prompt-composer-terminal') as HTMLButtonElement).disabled).toBe(true);
+    finishUpload(['/tmp/image-one.png']);
+    await vi.waitFor(() =>
+      expect((document.querySelector('.prompt-composer-terminal') as HTMLButtonElement).disabled).toBe(false)
+    );
+  });
+
+  it('writes to the PTY when the session is in echo passthrough, where Enter skips the overlay', () => {
+    const { app, bar, document } = loadComposer();
+    app._echoPassthroughSessions = new Set(['session-1']);
+    bar.composePrompt();
+    const input = textarea(document);
+    input.value = 'describe this image';
+    input.dispatchEvent(new document.defaultView!.Event('input', { bubbles: true }));
+
+    (document.querySelector('.prompt-composer-terminal') as HTMLButtonElement).click();
+
+    expect(app._localEchoOverlay.appendText).not.toHaveBeenCalled();
+    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', ' describe this image');
+  });
+
+  // Forward lock, not a check on this diff: the pre-change handoff also preserved
+  // the draft and never appended, so this passes on either side of the change. It
+  // exists to pin that multi-line stays parked if the single-line route is widened.
+  it('parks a multi-line draft instead of mangling it on the single-line prompt', () => {
+    const { app, bar, document } = loadComposer();
+    bar.composePrompt();
+    const input = textarea(document);
+    input.value = 'first line\nsecond line';
+    input.dispatchEvent(new document.defaultView!.Event('input', { bubbles: true }));
+
+    (document.querySelector('.prompt-composer-terminal') as HTMLButtonElement).click();
+
+    expect(app._localEchoOverlay.appendText).not.toHaveBeenCalled();
+    bar.composePrompt();
+    expect(textarea(document).value).toBe('first line\nsecond line');
+  });
+
+  it('separates a parked draft from text put on the prompt before the next open', () => {
+    const { bar, document, localEcho, runTimers } = loadComposer();
+    bar.composePrompt();
+    const input = textarea(document);
+    input.value = 'describe this';
+    input.dispatchEvent(new document.defaultView!.Event('input', { bubbles: true }));
+    (document.querySelector('.paste-cancel') as HTMLButtonElement).click(); // parks the draft
+    runTimers();
+    // The toolbar Attach put a path on the now-empty prompt with no leading gap.
+    localEcho.pendingText = '/case/.codeman-uploads/paste-1-a.png ';
+
+    bar.composePrompt();
+
+    expect(textarea(document).value).toBe('describe this /case/.codeman-uploads/paste-1-a.png ');
   });
 
   it('finishes an upload into a reopened composer without restoring a deleted session draft', async () => {
@@ -435,5 +574,38 @@ describe('mobile prompt composer', () => {
     finishUploads[1](['/tmp/second.png']);
     await vi.waitFor(() => expect(input.value).toBe('/tmp/first.png /tmp/second.png'));
     expect((document.querySelector('.paste-send') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('offers videos in the Image key picker and filters the pick through the shared classifier', async () => {
+    const { app, bar, document } = loadComposer();
+    bar.composePrompt();
+    const fileInput = document.querySelector('.paste-file-input') as HTMLInputElement;
+    expect(fileInput.getAttribute('accept')).toBe('image/*,video/*');
+    const video = new document.defaultView!.File(['clip'], 'clip.mov', { type: 'video/quicktime' });
+    const pdf = new document.defaultView!.File(['%PDF'], 'notes.pdf', { type: 'application/pdf' });
+    Object.defineProperty(fileInput, 'files', { configurable: true, value: [video, pdf] });
+
+    fileInput.dispatchEvent(new document.defaultView!.Event('change', { bubbles: true }));
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video], { insert: false });
+    await vi.waitFor(() => expect(textarea(document).value).toContain('/tmp/image-one.png'));
+  });
+
+  it('takes a video pasted into the editor through the shared classifier', () => {
+    const { app, bar, document } = loadComposer();
+    bar.composePrompt();
+    const input = textarea(document);
+    const video = new document.defaultView!.File(['clip'], 'clip.mp4', { type: 'video/mp4' });
+    const event = new document.defaultView!.Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        items: [
+          { type: 'text/plain', getAsFile: () => null },
+          { type: 'video/mp4', getAsFile: () => video },
+        ],
+      },
+    });
+    input.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video], { insert: false });
   });
 });

@@ -334,7 +334,7 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
       'Could not attach the session',
       'This group has no session to show as tiles',
       'No sessions to show as tiles',
-      'Only image files are supported',
+      'Unsupported file type',
       'Split: unavailable while tiles are open',
       'Tiles: show several sessions side by side (right-click for how many)',
       'Tiles: back to a single session (right-click for how many tiles)',

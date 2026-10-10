@@ -153,7 +153,8 @@ import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort, TabLayout
 import { RunSummaryTracker } from '../../run-summary.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
-import { MAX_PASTE_IMAGE_BYTES } from '../../config/buffer-limits.js';
+import { MAX_PASTE_IMAGE_BYTES, MAX_PASTE_VIDEO_BYTES } from '../../config/buffer-limits.js';
+import { VIDEO_ATTACHMENT_EXTENSIONS } from '../../attachment-registry.js';
 import { dataPath, getDataDir } from '../../config/instance.js';
 import {
   checkRemoteTmuxAvailable,
@@ -357,6 +358,19 @@ export function imageMagicMatchesExt(data: Buffer, ext: string): boolean {
       const brand = data.subarray(8, 12).toString('ascii');
       return ['heic', 'heix', 'hevc', 'hevx', 'mif1', 'msf1'].includes(brand);
     }
+    case '.mp4':
+    case '.m4v':
+    case '.mov':
+      // ISO Base Media File Format / QuickTime: size + a top-level atom type. Brands
+      // vary too widely to enumerate (qt, isom, mp42, avc1, hev1, ...), and an older
+      // QuickTime file can open on an atom other than ftyp.
+      return ['ftyp', 'moov', 'mdat', 'wide', 'free', 'skip'].includes(data.subarray(4, 8).toString('ascii'));
+    case '.webm':
+      // EBML header (Matroska's WebM subset)
+      return u32be(0) === 0x1a45dfa3;
+    case '.ogv':
+      // Ogg container ("OggS")
+      return u32be(0) === 0x4f676753;
     default:
       return false;
   }
@@ -407,37 +421,70 @@ async function ensureUploadDir(workingDir: string): Promise<string | null> {
   return uploadDir;
 }
 
-// Per-(IP, sessionId) token bucket for paste-image. 30 requests/minute.
-// Bucket map entries are pruned when they drift > 1h stale to bound memory
-// against a flood of unique IP keys.
+/** Open a fresh, uniquely named paste file for writing. */
+async function openPasteFile(imageDir: string, ext: string) {
+  // Date.now() collides on same-ms uploads from two tabs (last-write wins
+  // silently). Append 8 hex chars so concurrent pastes get distinct names.
+  const filename = `paste-${Date.now()}-${randomBytes(4).toString('hex')}${ext}`;
+  const filepath = join(imageDir, filename);
+  // O_EXCL: refuse to overwrite (collision is impossible with random suffix,
+  // but defends against TOCTOU). O_NOFOLLOW: refuse if filepath is a symlink.
+  const fh = await fs.open(
+    filepath,
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW
+  );
+  return { filename, filepath, fh };
+}
+
+// Per-(IP, sessionId) token buckets for paste-image. Images: 30/min. Videos: 3/min,
+// a much lower rate because one video can be up to MAX_PASTE_VIDEO_BYTES (1GB), so the
+// 30/min cap would let a single authenticated client write 30GB of disk a minute; 3/min
+// bounds that to 3GB. Bucket entries are pruned when they drift > 1h stale to bound
+// memory against a flood of unique IP keys.
 const PASTE_RATE_TOKENS = 30;
-const PASTE_RATE_REFILL_PER_MS = PASTE_RATE_TOKENS / 60_000;
+const VIDEO_RATE_TOKENS = 3;
 const PASTE_BUCKET_TTL_MS = 60 * 60 * 1000;
 const PASTE_BUCKET_GC_THRESHOLD = 1000;
 const pasteRateBuckets = new Map<string, { tokens: number; lastRefill: number }>();
+const videoRateBuckets = new Map<string, { tokens: number; lastRefill: number }>();
 
-export function consumePasteToken(key: string, now: number = Date.now()): boolean {
-  if (pasteRateBuckets.size > PASTE_BUCKET_GC_THRESHOLD) {
-    for (const [k, b] of pasteRateBuckets) {
-      if (now - b.lastRefill > PASTE_BUCKET_TTL_MS) pasteRateBuckets.delete(k);
+function takeToken(
+  buckets: Map<string, { tokens: number; lastRefill: number }>,
+  key: string,
+  capacity: number,
+  now: number
+): boolean {
+  if (buckets.size > PASTE_BUCKET_GC_THRESHOLD) {
+    for (const [k, b] of buckets) {
+      if (now - b.lastRefill > PASTE_BUCKET_TTL_MS) buckets.delete(k);
     }
   }
-  let b = pasteRateBuckets.get(key);
+  let b = buckets.get(key);
   if (!b) {
-    b = { tokens: PASTE_RATE_TOKENS, lastRefill: now };
-    pasteRateBuckets.set(key, b);
+    b = { tokens: capacity, lastRefill: now };
+    buckets.set(key, b);
   }
-  const delta = (now - b.lastRefill) * PASTE_RATE_REFILL_PER_MS;
-  b.tokens = Math.min(PASTE_RATE_TOKENS, b.tokens + delta);
+  b.tokens = Math.min(capacity, b.tokens + (now - b.lastRefill) * (capacity / 60_000));
   b.lastRefill = now;
   if (b.tokens < 1) return false;
   b.tokens -= 1;
   return true;
 }
 
+export function consumePasteToken(key: string, now: number = Date.now()): boolean {
+  return takeToken(pasteRateBuckets, key, PASTE_RATE_TOKENS, now);
+}
+
+// Videos stream to disk under a far larger per-file cap, so they draw on their own,
+// much lower bucket (see the comment above the constants).
+export function consumeVideoToken(key: string, now: number = Date.now()): boolean {
+  return takeToken(videoRateBuckets, key, VIDEO_RATE_TOKENS, now);
+}
+
 // Test hook: reset between runs.
 export function _resetPasteRateBuckets(): void {
   pasteRateBuckets.clear();
+  videoRateBuckets.clear();
 }
 
 /**
@@ -5198,6 +5245,17 @@ export function registerSessionRoutes(
   // ═══════════════════════════════════════════════════════════════
 
   const ALLOWED_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.heif']);
+  // Single-sourced from the attachment registry (what the file viewer can also play),
+  // so an uploaded video is a type that previews. 3gp/mkv are deliberately out: they
+  // would upload but not preview, and a phone's camera roll produces neither.
+  const ALLOWED_VIDEO_EXTS = new Set([...VIDEO_ATTACHMENT_EXTENSIONS].map((e) => `.${e}`));
+  const VIDEO_MIME_EXT: Record<string, string> = {
+    mp4: '.mp4',
+    quicktime: '.mov',
+    'x-m4v': '.m4v',
+    webm: '.webm',
+    ogg: '.ogv',
+  };
   // The per-file size cap (MAX_PASTE_IMAGE_BYTES) is enforced by @fastify/multipart (registered in server.ts).
 
   app.post('/api/sessions/:id/paste-image', async (req, reply) => {
@@ -5233,13 +5291,23 @@ export function registerSessionRoutes(
     }
 
     const { id } = req.params as { id: string };
+    // `?kind=video` selects the disk-streamed path (see below). It is read here so the
+    // rate check draws on the right bucket before any work: videos get 3/min, images 30.
+    const isVideo = (req.query as { kind?: string }).kind === 'video';
 
-    // Rate limit per (IP, sessionId): 30/min. Defends against disk-fill DoS
-    // — even an authenticated attacker can otherwise loop large image POSTs.
-    if (!consumePasteToken(`${req.ip}:${id}`)) {
+    // Rate limit per (IP, sessionId). Defends against disk-fill DoS — even an
+    // authenticated client can otherwise loop large uploads. Videos get their own,
+    // far lower bucket because the per-file cap is 1GB (see the bucket constants).
+    const rateKey = `${req.ip}:${id}`;
+    if (!(isVideo ? consumeVideoToken(rateKey) : consumePasteToken(rateKey))) {
       reply.code(429);
       reply.header('Retry-After', '60');
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Rate limit exceeded (30 uploads/min per session)');
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        isVideo
+          ? 'Rate limit exceeded (3 video uploads/min per session)'
+          : 'Rate limit exceeded (30 uploads/min per session)'
+      );
     }
 
     const session = findSessionOrFail(ctx, id, req);
@@ -5269,9 +5337,17 @@ export function registerSessionRoutes(
     // boundary scanner with several bugs: literal boundary matches anywhere in
     // body, LF-only clients silently corrupted the last byte (hard-coded \r\n
     // offsets), no part-count cap.
+    // `?kind=video` (read above for the rate check) is the ONLY way onto the video
+    // path: it selects the larger, disk-streamed budget before the part is seen
+    // (busboy takes its limits up front), and it admits video types alone, so an
+    // image can never ride the video cap through memory. Without it the route is
+    // byte-identical to the image-only version. Truncation is checked on the stream
+    // below rather than thrown, since the file is being written as it arrives.
     let part: import('@fastify/multipart').MultipartFile | undefined;
     try {
-      part = await req.file();
+      part = await req.file(
+        isVideo ? { limits: { fileSize: MAX_PASTE_VIDEO_BYTES }, throwFileSizeLimit: false } : undefined
+      );
     } catch (err: unknown) {
       reply.code(413);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err) || 'Invalid multipart payload');
@@ -5284,6 +5360,73 @@ export function registerSessionRoutes(
       reply.code(400);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Unexpected field "${part.fieldname}", expected "image"`);
     }
+
+    if (isVideo) {
+      let ext = '';
+      if (part.filename) {
+        const origExt = extname(part.filename).toLowerCase();
+        if (ALLOWED_VIDEO_EXTS.has(origExt)) ext = origExt;
+      }
+      const videoMime = (part.mimetype || '').toLowerCase().match(/^video\/(mp4|quicktime|x-m4v|webm|ogg)$/);
+      if (videoMime) ext = VIDEO_MIME_EXT[videoMime[1]] ?? ext;
+      if (!ext) {
+        reply.code(400);
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          `Unsupported video type. Allowed: ${[...ALLOWED_VIDEO_EXTS].join(', ')}`
+        );
+      }
+      const imageDir = await ensureUploadDir(session.workingDir);
+      if (!imageDir) {
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `${UPLOADS_DIR} is not a regular directory`);
+      }
+      const { filename, filepath, fh } = await openPasteFile(imageDir, ext);
+      // Written as it arrives: a phone video is far too large to buffer the way an
+      // image is. The container is judged on the first 12 bytes as soon as they are
+      // in, so a mislabeled upload stops touching disk at its first chunk; the rest
+      // of the body is drained unwritten (as busboy does past its own size limit),
+      // which is what lets the answer reach the client. A transfer that dies midway
+      // (the phone left the network) leaves no partial file behind.
+      const head = Buffer.alloc(12);
+      let headLen = 0;
+      let mislabeled = false;
+      try {
+        for await (const chunk of part.file) {
+          if (mislabeled) continue;
+          if (headLen < head.length) {
+            headLen += chunk.copy(head, headLen, 0, head.length - headLen);
+            mislabeled = headLen === head.length && !imageMagicMatchesExt(head, ext);
+            if (mislabeled) continue;
+          }
+          // writeFile loops until the whole chunk is on disk; a bare write() may be short.
+          await fh.writeFile(chunk);
+        }
+      } catch (err: unknown) {
+        await fs.unlink(filepath).catch(() => {});
+        throw err;
+      } finally {
+        await fh.close();
+      }
+      let failure: { status: number; message: string } | null = null;
+      if (headLen === 0) failure = { status: 400, message: 'Empty file' };
+      else if (!imageMagicMatchesExt(head.subarray(0, headLen), ext)) {
+        console.warn(
+          `[paste-image] video magic mismatch: filename=${JSON.stringify(part.filename)} mime=${JSON.stringify(part.mimetype)} declaredExt=${ext} magic=${head.subarray(0, headLen).toString('hex')}`
+        );
+        failure = { status: 415, message: `Video bytes do not match declared type ${ext}` };
+      } else if (part.file.truncated) {
+        const maxMb = Math.round(MAX_PASTE_VIDEO_BYTES / (1024 * 1024));
+        failure = { status: 413, message: `File too large (max ${maxMb}MB)` };
+      }
+      if (failure) {
+        await fs.unlink(filepath).catch(() => {});
+        reply.code(failure.status);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, failure.message);
+      }
+      return { path: filepath, filename };
+    }
+
     let imageBytes: Buffer;
     try {
       imageBytes = await part.toBuffer();
@@ -5360,16 +5503,7 @@ export function registerSessionRoutes(
       reply.code(403);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, `${UPLOADS_DIR} is not a regular directory`);
     }
-    // Date.now() collides on same-ms uploads from two tabs (last-write wins
-    // silently). Append 8 hex chars so concurrent pastes get distinct names.
-    const filename = `paste-${Date.now()}-${randomBytes(4).toString('hex')}${ext}`;
-    const filepath = join(imageDir, filename);
-    // O_EXCL: refuse to overwrite (collision is impossible with random suffix,
-    // but defends against TOCTOU). O_NOFOLLOW: refuse if filepath is a symlink.
-    const fh = await fs.open(
-      filepath,
-      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW
-    );
+    const { filename, filepath, fh } = await openPasteFile(imageDir, ext);
     try {
       await fh.writeFile(imageBytes);
     } finally {
