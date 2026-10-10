@@ -20,6 +20,7 @@ import type {
   AntigravityConfig,
   PiConfig,
   GrokConfig,
+  CopilotConfig,
   DeepSeekConfig,
   OmpConfig,
   SessionRemote,
@@ -110,6 +111,7 @@ export interface CreateSessionOptions {
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
+  copilotConfig?: CopilotConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   /** When restoring after reboot, resume a previous Claude conversation by its session ID */
@@ -154,6 +156,7 @@ export interface RespawnPaneOptions {
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
+  copilotConfig?: CopilotConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   /** Resume a previous Claude conversation when respawning */

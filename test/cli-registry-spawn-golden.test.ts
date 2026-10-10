@@ -320,3 +320,50 @@ describe('unsafe values are DROPPED, never escaped into the command', () => {
     expect(cmd).not.toContain('..');
   });
 });
+
+describe('copilot', () => {
+  const cp = (copilotConfig?: SpawnBridgeOptions['copilotConfig']) =>
+    render({ mode: 'copilot' as never, sessionId: SID, copilotConfig });
+
+  it("spawns bare by default, in Copilot's own Manual Approval mode", () => {
+    expect(cp()).toBe('copilot');
+  });
+
+  it('emits --yolo only when asked, with the model', () => {
+    expect(cp({ allowAll: true, model: 'claude-sonnet-5.5' })).toBe('copilot --yolo --model claude-sonnet-5.5');
+    expect(cp({ allowAll: false })).toBe('copilot');
+  });
+
+  it("pins the tab's name as --name", () => {
+    expect(render({ mode: 'copilot' as never, sessionId: SID, sessionName: 'w4-Codeman' } as never)).toBe(
+      'copilot --name "w4-Codeman"'
+    );
+  });
+
+  it('drops --name next to --resume and --continue, which copilot refuses to combine', () => {
+    const named = (copilotConfig: SpawnBridgeOptions['copilotConfig']) =>
+      render({ mode: 'copilot' as never, sessionId: SID, sessionName: 'w4-Codeman', copilotConfig } as never);
+    expect(named({ resumeSessionId: '0c02c30f' })).toBe('copilot --resume 0c02c30f');
+    expect(named({ continueSession: true })).toBe('copilot --continue');
+    expect(named({ allowAll: true, model: 'auto' })).toBe('copilot --yolo --name "w4-Codeman" --model auto');
+  });
+
+  it('prefers an explicit resume id over --continue', () => {
+    expect(cp({ resumeSessionId: '0c02c30f-3383-4139-8b52-b28abad2ad43' })).toBe(
+      'copilot --resume 0c02c30f-3383-4139-8b52-b28abad2ad43'
+    );
+    expect(cp({ continueSession: true })).toBe('copilot --continue');
+    expect(cp({ continueSession: true, resumeSessionId: '0c02c30f' })).toBe('copilot --resume 0c02c30f');
+  });
+
+  it('drops unsafe values rather than escaping them', () => {
+    expect(cp({ model: 'a`b' })).toBe('copilot');
+    expect(cp({ resumeSessionId: 'my session; rm -rf /' })).toBe('copilot');
+  });
+
+  it('never puts a credential on the command line', () => {
+    const cmd = cp({ allowAll: true, model: 'auto' }) ?? '';
+    expect(cmd).not.toContain('token');
+    expect(cmd).not.toContain('key');
+  });
+});

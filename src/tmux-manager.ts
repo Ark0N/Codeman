@@ -53,6 +53,7 @@ import {
   type AntigravityConfig,
   type PiConfig,
   type GrokConfig,
+  type CopilotConfig,
   type DeepSeekConfig,
   type OmpConfig,
   type SessionRemote,
@@ -1081,6 +1082,7 @@ export function buildSpawnCommand(options: {
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
+  copilotConfig?: CopilotConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   resumeSessionId?: string;
@@ -2317,6 +2319,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       piConfig,
       grokConfig,
+      copilotConfig,
       deepSeekConfig,
       ompConfig,
       resumeSessionId,
@@ -2403,6 +2406,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       piConfig,
       grokConfig,
+      copilotConfig,
       deepSeekConfig,
       ompConfig,
       resumeSessionId,
@@ -2652,6 +2656,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       piConfig,
       grokConfig,
+      copilotConfig,
       deepSeekConfig,
       ompConfig,
       resumeSessionId,
@@ -2693,6 +2698,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       antigravityConfig,
       piConfig,
       grokConfig,
+      copilotConfig,
       deepSeekConfig,
       ompConfig,
       resumeSessionId,

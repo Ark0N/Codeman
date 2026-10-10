@@ -33,6 +33,7 @@ import type {
   EffortLevel,
   GeminiConfig,
   GrokConfig,
+  CopilotConfig,
   OmpConfig,
   OpenCodeConfig,
   PiConfig,
@@ -50,6 +51,7 @@ export interface SpawnBridgeOptions {
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
+  copilotConfig?: CopilotConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   resumeSessionId?: string;
