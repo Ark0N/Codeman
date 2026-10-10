@@ -98,7 +98,7 @@ describe('dialect parsing', () => {
     expect(servers.fs).toEqual({ transport: 'stdio', command: 'npx', args: ['-y'] });
   });
 
-  it('reads gemini url (sse) vs httpUrl / type http, and opencode local/remote', () => {
+  it('reads gemini bare url as http (v0.63), httpUrl / type sse, and opencode local/remote', () => {
     const g = parseServers(
       'gemini-json',
       JSON.stringify({
@@ -107,13 +107,15 @@ describe('dialect parsing', () => {
           b: { httpUrl: 'https://b' },
           c: { command: 'c', args: ['1'] },
           d: { url: 'https://d', type: 'http' },
+          e: { url: 'https://e', type: 'sse' },
         },
       })
     );
-    expect(g.a.transport).toBe('sse');
+    expect(g.a.transport).toBe('http');
     expect(g.b.transport).toBe('http');
     expect(g.c).toEqual({ transport: 'stdio', command: 'c', args: ['1'] });
     expect(g.d.transport).toBe('http');
+    expect(g.e.transport).toBe('sse');
     const o = parseServers(
       'opencode-json',
       JSON.stringify({
@@ -125,6 +127,24 @@ describe('dialect parsing', () => {
     );
     expect(o.l).toEqual({ transport: 'stdio', command: 'npx', args: ['-y', 'x'], env: { A: '1' } });
     expect(o.r).toEqual({ transport: 'http', url: 'https://r' });
+  });
+
+  it('reads OpenCode V2 servers nested under mcp.servers, with disabled', () => {
+    const o = parseServers(
+      'opencode-json',
+      JSON.stringify({
+        mcp: {
+          servers: {
+            off: { type: 'remote', url: 'https://off', disabled: true },
+            nested: { type: 'local', command: ['npx', '-y', 'x'] },
+          },
+          direct: { type: 'remote', url: 'https://direct' },
+        },
+      })
+    );
+    expect(o.off).toEqual({ transport: 'http', url: 'https://off', disabled: true });
+    expect(o.nested).toEqual({ transport: 'stdio', command: 'npx', args: ['-y', 'x'] });
+    expect(o.direct).toEqual({ transport: 'http', url: 'https://direct' });
   });
 
   it('throws on unparseable files so they are never written', () => {
@@ -324,6 +344,23 @@ describe('syncMcpServers', () => {
     put('.config/opencode/opencode.json', '{}');
     put('.gemini/config/mcp_config.json', '{}');
   };
+
+  it('reads opencode.jsonc when opencode.json is absent', async () => {
+    put('.config/opencode/opencode.jsonc', JSON.stringify({ mcp: { fs: { type: 'local', command: ['a'] } } }));
+    const opencode = target('opencode', { altPath: '.config/opencode/opencode.jsonc' });
+    const r = await syncMcpServers([opencode], { apply: false, home });
+    const o = result(r, 'opencode');
+    expect(o.status).toBe('ok');
+    expect(o.servers).toContain('fs');
+  });
+
+  it('reports opencode.jsonc with comments as unreadable, not absent', async () => {
+    put('.config/opencode/opencode.jsonc', '{\n  // jsonc comment\n  "mcp": {}\n}');
+    const opencode = target('opencode', { altPath: '.config/opencode/opencode.jsonc' });
+    const r = await syncMcpServers([opencode], { apply: false, home });
+    const o = result(r, 'opencode');
+    expect(o.status).toBe('unreadable');
+  });
 
   it('previews without writing and never leaks env values', async () => {
     setUpAll();
