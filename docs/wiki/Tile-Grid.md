@@ -137,13 +137,13 @@ removing a tile, changing the count, focusing or zooming a tile), and never sent
 server. However you leave it (the Tiles button, another tab, Home, a link, closing its last
 tile or session), the Tiles button brings it back as it was. A page reload brings it back
 when the grid was open; after you left it, a reload shows the single view and the Tiles
-button still brings the grid back. A session
-that was closed in the meantime frees its place for another one, picked the way a new grid
-picks them; the place stays empty only when no other session is left. Right after a page
-reload the page does not know yet which sessions are waiting for your answer, so that pick
-goes by which sessions are working and which you used last. If the window has become too
-small for all the tiles, the tile you were in fills the grid until the window is wide enough
-again, and the rest of the layout is kept.
+button still brings the grid back. A session that was closed or popped out into its own
+window in the meantime frees its place for another one, picked the way a new grid picks
+them; the place stays empty only when no other session is left. Right after a page reload
+the page does not know yet which sessions are waiting for your answer, so that pick goes by
+which sessions are working and which you used last. If the window has become too small for
+all the tiles, the tile you were in fills the grid until the window is wide enough again,
+and the rest of the layout is kept.
 
 Split shows the same logo, name and model above both of its panes.
 
