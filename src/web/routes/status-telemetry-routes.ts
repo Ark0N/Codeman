@@ -20,13 +20,14 @@ import { FastifyInstance } from 'fastify';
 import { StatusTelemetrySchema } from '../schemas.js';
 import { parseBody } from '../route-helpers.js';
 import {
+  parsePromptCache,
   parseStatusTelemetry,
   parseSessionStatus,
   formatSessionStatusText,
   telemetrySignature,
   type RawStatuslinePayload,
 } from '../../usage-telemetry.js';
-import { SessionStatusTelemetry } from '../sse-events.js';
+import { SessionPromptCache, SessionStatusTelemetry } from '../sse-events.js';
 import { setLatestPlanUsage } from '../plan-usage-latest.js';
 import type { SessionPort, EventPort } from '../ports/index.js';
 import { getCli } from '../../config/cli-registry/index.js';
@@ -57,6 +58,19 @@ export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: Session
     const session = ctx.sessions.get(sessionId);
     if (session && getCli(session.mode)?.capabilities.statusLineTelemetry) {
       session.noteReportedModel('statusline', payload?.model?.display_name);
+    }
+
+    // Prompt-cache state of the main conversation (Claude Code v2.1.251+): kept on the
+    // session for the Session Options readout and `toState()`, broadcast only when the
+    // report changes (the statusline fires on every assistant message). The broadcast
+    // carries the STORED object, so a compaction stamp set in setPromptCache rides along.
+    // Reports are applied in arrival order. When the exporter wraps a user's own statusline
+    // it backgrounds this POST (hooks-config.ts), so two sub-second loopback reports can
+    // arrive out of order; a stale one then briefly overwrites newer state until the next
+    // render corrects it. Accepted for a display-only readout rather than ordered here.
+    const promptCache = parsePromptCache(payload);
+    if (promptCache && session?.setPromptCache(promptCache)) {
+      ctx.broadcast(SessionPromptCache, { sessionId, ...session.promptCache });
     }
 
     // Plan-usage limits (account-wide) → broadcast to the header chip, when

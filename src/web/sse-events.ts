@@ -5,10 +5,10 @@
  * and referenced by the frontend (`SSE_EVENTS` in `constants.js`).
  * Both files MUST be kept in sync.
  *
- * 161 event constants organized by category:
+ * 162 event constants organized by category:
  * - **Core** (1): init
  * - **Transport** (1): sse:heartbeat
- * - **Session lifecycle** (23): created, updated, deleted, terminal, idle, working, ...
+ * - **Session lifecycle** (24): created, updated, deleted, terminal, idle, working, ...
  * - **Session: Ralph** (6): ralphLoopUpdate, todoUpdate, completionDetected, ...
  * - **Session: Bash tools** (3): bashToolStart, bashToolEnd, bashToolsUpdate
  * - **Session: Plan** (4): planTaskUpdate, planCheckpoint, planRollback, planTaskAdded
@@ -119,6 +119,8 @@ export const SessionInteractive = 'session:interactive' as const;
 export const SessionRunning = 'session:running' as const;
 /** Combined Claude and main Codex plan-usage telemetry for the shared header chip. */
 export const SessionStatusTelemetry = 'session:statusTelemetry' as const;
+/** Prompt-cache state of one session's main conversation changed (`{ sessionId, ...PromptCacheStatus }`). */
+export const SessionPromptCache = 'session:promptCache' as const;
 
 // ─── Session: Ralph ──────────────────────────────────────────────────────────
 
@@ -526,6 +528,7 @@ export const SseEvent = {
   SessionInteractive,
   SessionRunning,
   SessionStatusTelemetry,
+  SessionPromptCache,
 
   // Session: Ralph
   SessionRalphLoopUpdate,

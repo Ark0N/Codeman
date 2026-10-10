@@ -711,6 +711,45 @@ function computeConnectionLossUi(input) {
 
 // SSE staleness policy: is this stream a zombie?
 //
+// Session Options → Respawn → "Prompt cache": one sentence of the main
+// conversation's cache state as Claude Code reports it on the statusline
+// (`session.promptCache`, v2.1.251+). A clock time rather than a countdown
+// because the row refreshes on SSE, not on a timer, and a countdown would sit
+// stale between turns. Pure: no DOM, `now` is passed in. `statusLine` is the
+// session's `statusLineTelemetry`: a launch without the exporter never reports, so
+// it says why instead of "not reported yet" forever.
+const PROMPT_CACHE_NOT_COLLECTED = {
+  'collection-off':
+    'Not collected: Plan Usage was off when this session started. Turn it on in App Settings; sessions started after that report it.',
+  'workspace-statusline':
+    "Not collected: this workspace's .claude/settings.local.json sets its own statusLine, which Codeman never replaces.",
+  remote: 'Not collected for remote and Docker sessions.',
+};
+function formatPromptCacheStatus(cache, now, statusLine) {
+  if (PROMPT_CACHE_NOT_COLLECTED[statusLine]) return PROMPT_CACHE_NOT_COLLECTED[statusLine];
+  if (!cache || typeof cache.warm !== 'boolean') {
+    return 'Not reported yet. Claude Code 2.1.251 or newer reports it after the first response.';
+  }
+  const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const kTokens = (n) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
+  const stake = cache.recacheTokensIfCold;
+  const tokens = Number.isFinite(stake) && stake > 0 ? kTokens(stake) : null;
+  const parts = [];
+  if (cache.warm && Number.isFinite(cache.expiresAt) && cache.expiresAt > now) {
+    const ttl = cache.ttl ? ` (${cache.ttl} cache)` : '';
+    parts.push(`Warm until ${clock(cache.expiresAt)}${ttl}.`);
+    if (tokens) parts.push(`About ${tokens} tokens would be re-read if it goes cold.`);
+  } else {
+    parts.push(tokens ? `Cold. The next turn re-reads about ${tokens} tokens at the cache-write rate.` : 'Cold.');
+  }
+  // Claude Code's own idle compaction kept the prefix warm but smaller, so there is no
+  // re-read stake to show; naming when it happened explains the shrink. Never an alert.
+  if (Number.isFinite(cache.compactedAt)) parts.push(`Compacted at ${clock(cache.compactedAt)}.`);
+  if (Number.isFinite(cache.hitRatio)) parts.push(`${Math.round(cache.hitRatio * 100)}% cache hit rate.`);
+  if (cache.lastMissCauses && cache.lastMissCauses.length) parts.push(`Last miss: ${cache.lastMissCauses.join(', ')}.`);
+  return parts.join(' ');
+}
+
 // An EventSource that stops delivering does not always error. A proxy that
 // idle-closed the connection, a laptop resumed from sleep, a tailnet
 // reconnect: `onerror` never fires, the header dot stays green, and every
@@ -1447,6 +1486,9 @@ if (typeof window !== 'undefined') {
     compute: computeSseStale,
     TIMEOUT_MS: SSE_STALE_TIMEOUT_MS,
   };
+  window.CodemanPromptCache = {
+    format: formatPromptCacheStatus,
+  };
   window.CodemanSessionOrder = {
     RANK: SESSION_ACTIVITY_RANK,
     anchor: sessionActivityAnchor,
@@ -1632,6 +1674,7 @@ const SSE_EVENTS = {
   SESSION_INTERACTIVE: 'session:interactive',
   SESSION_RUNNING: 'session:running',
   SESSION_STATUS_TELEMETRY: 'session:statusTelemetry',
+  SESSION_PROMPT_CACHE: 'session:promptCache',
 
   // Scheduled runs
   SCHEDULED_CREATED: 'scheduled:created',

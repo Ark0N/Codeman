@@ -59,6 +59,7 @@ import {
   type SessionDocker,
   type DockerCommandMode,
   type PaneExit,
+  type StatusLineTelemetry,
 } from './types.js';
 import { getCli } from './config/cli-registry/registry.js';
 import { missingCliMessage, resolveCliBinDir } from './utils/cli-resolver.js';
@@ -2040,6 +2041,27 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * The statusLine exporter for one claude launch, and why it is missing when it is.
+   * Registry-gated (capabilities.statusLineTelemetry, claude only today), local spawns
+   * only (remote/docker have their own separate command builders). Resolving still runs
+   * with collection off, because it also self-heals: it strips any legacy disk-written
+   * exporter from an older Codeman build the first time a session starts in that
+   * workspace again. `state` lands on the mux record so the Status row and keep-warm can
+   * say why no cache report will come, instead of "not reported yet" forever.
+   */
+  private async _resolveStatusLine(
+    mode: SessionMode,
+    workingDir: string,
+    remoteOrDocker: boolean
+  ): Promise<{ command?: string; state?: StatusLineTelemetry }> {
+    if (!getCli(mode)?.capabilities.statusLineTelemetry) return {};
+    if (remoteOrDocker) return { state: 'remote' };
+    const enabled = await readPlanUsageTelemetryEnabled();
+    const command = await resolveStatusLineCliCommand(workingDir, enabled);
+    return { command, state: command ? 'injected' : enabled ? 'workspace-statusline' : 'collection-off' };
+  }
+
+  /**
    * Export the user's own REAL statusLine command (found by
    * findEffectiveUserStatusLineCommand) via tmux setenv, so the shared
    * exporter script (statusLineExporterScriptContent in hooks-config.ts) can
@@ -2156,14 +2178,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');
 
-    // Registry-gated (capabilities.statusLineTelemetry — claude only today), local
-    // spawns only (remote/docker have their own separate command builders — out of
-    // scope here). Also self-heals: strips any legacy disk-written exporter from an
-    // older Codeman build the first time a session starts in that workspace again.
-    const statusLineCommand =
-      getCli(mode)?.capabilities.statusLineTelemetry && !remote && !docker
-        ? await resolveStatusLineCliCommand(workingDir, await readPlanUsageTelemetryEnabled())
-        : undefined;
+    const { command: statusLineCommand, state: statusLine } = await this._resolveStatusLine(
+      mode,
+      workingDir,
+      !!(remote || docker)
+    );
     // The user's own REAL statusLine, if any (walked via Claude Code's own
     // settings precedence) — exported below so the shared exporter script
     // can wrap it. Only worth discovering when we're actually injecting.
@@ -2327,6 +2346,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         mode,
         attached: false,
         name,
+        statusLine,
       };
 
       this.sessions.set(sessionId, session);
@@ -2451,11 +2471,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');
 
-    // See createSession()'s identical resolution for rationale.
-    const statusLineCommand =
-      getCli(mode)?.capabilities.statusLineTelemetry && !remote && !docker
-        ? await resolveStatusLineCliCommand(workingDir, await readPlanUsageTelemetryEnabled())
-        : undefined;
+    const { command: statusLineCommand, state: statusLine } = await this._resolveStatusLine(
+      mode,
+      workingDir,
+      !!(remote || docker)
+    );
     const userStatusLineCommand = statusLineCommand ? await findEffectiveUserStatusLineCommand(workingDir) : undefined;
 
     const baseCmd = buildSpawnCommand({
@@ -2518,6 +2538,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       this.clearPaneExit(muxName);
       const pid = this.getPanePid(muxName);
       if (pid) session.pid = pid;
+      if (session.statusLine !== statusLine) {
+        session.statusLine = statusLine;
+        this.saveSessions();
+      }
       return pid;
     } catch (err) {
       console.error('[TmuxManager] Failed to respawn pane:', err);

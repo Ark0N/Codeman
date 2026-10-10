@@ -6,13 +6,14 @@
  * skip, per-session change-detection (dedup), rebroadcast on a displayed change,
  * NO rebroadcast on context-only drift, null-tolerance of Claude's undocumented
  * fields (the .nullish() schema — the project's recurring .optional()/null trap),
+ * the prompt-cache group of the footer (warm and cold shapes of `prompt_cache`),
  * and 400 on a malformed body. Also the session's model (`displayModel`) the route
  * records off the same payload.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 import { registerStatusTelemetryRoutes } from '../../src/web/routes/status-telemetry-routes.js';
-import { SessionStatusTelemetry } from '../../src/web/sse-events.js';
+import { SessionPromptCache, SessionStatusTelemetry } from '../../src/web/sse-events.js';
 import { Session } from '../../src/session.js';
 
 const SID = 'test-session-1'; // default id created by createMockRouteContext
@@ -97,6 +98,62 @@ describe('POST /api/status-telemetry', () => {
     expect(payload.sevenDay).toBeUndefined();
   });
 
+  it('prints the prompt-cache state in the footer: a clock time while warm, cold once Claude says so', async () => {
+    const expiresAtS = Math.floor(Date.now() / 1000) + 3600;
+    const warm = await post({
+      sessionId: SID,
+      data: {
+        ...REAL,
+        prompt_cache: { warm: true, ttl: '1h', expires_at: expiresAtS, recache_tokens_if_cold: 109833 },
+      },
+    });
+    expect(warm.statusCode).toBe(200);
+    expect(warm.body).toMatch(/^Opus 4\.8 \(1M context\)  in:562,411 out:1,188  ctx:56%  cache:until \d\d:\d\d$/);
+
+    // The cold flip Claude sends when expires_at passes: null expiry, and a last_miss_cause
+    // that carries numeric detail keys beside `causes` (must not 400, which would blank the footer).
+    const cold = await post({
+      sessionId: SID,
+      data: {
+        ...REAL,
+        prompt_cache: {
+          warm: false,
+          ttl: '1h',
+          expires_at: null,
+          misses: 1,
+          last_miss_cause: { causes: ['ttl_expired_1h'], system_char_delta: 0 },
+        },
+      },
+    });
+    expect(cold.statusCode).toBe(200);
+    expect(cold.body.endsWith('  cache:cold')).toBe(true);
+
+    // The report is kept on the session (toState / Session Options readout) and each CHANGE
+    // is broadcast on its own event; the plan chip did not change, so it broadcast once.
+    const session = h.ctx.sessions.get(SID) as unknown as { promptCache: { warm: boolean } | null };
+    expect(session.promptCache).toMatchObject({
+      warm: false,
+      ttl: '1h',
+      misses: 1,
+      lastMissCauses: ['ttl_expired_1h'],
+    });
+    const events = h.ctx.broadcast.mock.calls.map(([name]) => name);
+    expect(events.filter((e) => e === SessionStatusTelemetry)).toHaveLength(1);
+    expect(events.filter((e) => e === SessionPromptCache)).toHaveLength(2);
+    expect(h.ctx.broadcast).toHaveBeenCalledWith(
+      SessionPromptCache,
+      expect.objectContaining({ sessionId: SID, warm: true, ttl: '1h', recacheTokensIfCold: 109833 })
+    );
+  });
+
+  it('does not rebroadcast an unchanged prompt-cache report', async () => {
+    const pc = { warm: true, ttl: '1h', expires_at: Math.floor(Date.now() / 1000) + 3600 };
+    await post({ sessionId: SID, data: { ...REAL, prompt_cache: pc } });
+    await post({ sessionId: SID, data: { ...REAL, prompt_cache: pc } });
+    const events = h.ctx.broadcast.mock.calls.map(([name]) => name);
+    expect(events.filter((e) => e === SessionPromptCache)).toHaveLength(1);
+  });
+
   it('rejects a malformed body (missing sessionId) with 400', async () => {
     const res = await post({ data: REAL });
     expect(res.statusCode).toBe(400);
@@ -153,5 +210,37 @@ describe('POST /api/status-telemetry: the session model (displayModel)', () => {
     const session = realSession('codex', 'codex-1');
     await post({ sessionId: 'codex-1', data: { model: { display_name: 'Opus 4.8' } } });
     expect(session.toState().displayModel).toBeUndefined();
+  });
+
+  it('broadcasts the STORED prompt-cache object, so a compaction stamp reaches the live readout', async () => {
+    const session = realSession('claude', 'claude-compact');
+    const expiresAtS = Math.floor(Date.now() / 1000) + 3600;
+    // A normal warm report (rebuild baseline 0), then Claude Code's idle compaction: recache
+    // goes null (absent), expected_rebuilds rises above the known baseline, still warm. The
+    // session stamps compactedAt in setPromptCache.
+    await post({
+      sessionId: 'claude-compact',
+      data: {
+        prompt_cache: {
+          warm: true,
+          ttl: '1h',
+          expires_at: expiresAtS,
+          expected_rebuilds: 0,
+          recache_tokens_if_cold: 500000,
+        },
+      },
+    });
+    await post({
+      sessionId: 'claude-compact',
+      data: { prompt_cache: { warm: true, ttl: '1h', expires_at: expiresAtS, expected_rebuilds: 1 } },
+    });
+    expect(typeof session.toState().promptCache?.compactedAt).toBe('number');
+    // The broadcast must carry the stored object, not just the freshly parsed one, or the
+    // frontend's live update would never see the stamp (only a modal reopen would).
+    const last = (h.ctx.broadcast.mock.calls as [string, Record<string, unknown>][])
+      .filter(([name]) => name === SessionPromptCache)
+      .at(-1)?.[1];
+    expect(last).toMatchObject({ sessionId: 'claude-compact', warm: true });
+    expect(typeof last?.compactedAt).toBe('number');
   });
 });
