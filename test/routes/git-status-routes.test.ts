@@ -14,6 +14,8 @@ import { clearGitStatusCache, runGit, type GitRunner } from '../../src/git-works
 
 const ENV = {
   ...process.env,
+  // As the production runner (git-workspace-status.ts): git's not-a-repo message is matched in English.
+  LC_ALL: 'C',
   GIT_AUTHOR_NAME: 'T',
   GIT_AUTHOR_EMAIL: 't@example.com',
   GIT_COMMITTER_NAME: 'T',

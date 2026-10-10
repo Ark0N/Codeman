@@ -495,6 +495,10 @@ export function gitNonInteractiveEnv(base: NodeJS.ProcessEnv = process.env): Nod
     SSH_ASKPASS_REQUIRE: 'never',
     DISPLAY: '',
     GCM_INTERACTIVE: 'never',
+    // classifyGitFailure() matches git's ENGLISH stderr; a German or French locale would
+    // turn a missing ref into a generic FAILED (422 instead of 400).
+    LC_ALL: 'C',
+    LANG: 'C',
     GIT_SSH_COMMAND:
       base.GIT_SSH_COMMAND || 'ssh -oBatchMode=yes -oStrictHostKeyChecking=accept-new -oConnectTimeout=10',
   };
