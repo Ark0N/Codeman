@@ -98,8 +98,8 @@ keeps the focus.
 
 A moved tile takes the size of the place it lands in: column widths and row heights stay
 where you dragged the dividers. Tiles do not move while one is zoomed. Where everything is,
-the empty slot included, is saved with the grid and comes back on reload and when you turn
-the grid off and on.
+the empty slot included, is saved with the grid and comes back when you turn the grid off
+and on, and on a page reload while the grid is open.
 
 Closing a tile leaves its place empty when the grid keeps its shape (six tiles to five), and a
 new tile takes the first empty place. When the number of tiles changes the grid's shape (four
@@ -135,7 +135,9 @@ same. Narrowing the window below the desktop width also returns to the single vi
 The grid is saved in this browser every time you change it (moving, resizing, adding or
 removing a tile, changing the count, focusing or zooming a tile), and never sent to the
 server. However you leave it (the Tiles button, another tab, Home, a link, closing its last
-tile or session), the Tiles button and a page reload bring it back as it was. A session
+tile or session), the Tiles button brings it back as it was. A page reload brings it back
+when the grid was open; after you left it, a reload shows the single view and the Tiles
+button still brings the grid back. A session
 that was closed in the meantime frees its place for another one, picked the way a new grid
 picks them; the place stays empty only when no other session is left. Right after a page
 reload the page does not know yet which sessions are waiting for your answer, so that pick

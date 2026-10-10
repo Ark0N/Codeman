@@ -7,13 +7,14 @@
  * - Saved on every change (`codeman:tile-grid` in localStorage, never the
  *   server): which session sits in which cell, holes included, the tile count,
  *   the divider sizes, the focused tile and a zoom the user chose.
- * - The Tiles toggle and a page reload bring back exactly that, however the
- *   grid was closed: the toggle, a tab that is not tiled, a followed link
- *   (`leaveTiles`, or `#session=` on load), Home, the window narrowing past the
- *   desktop gate, the last tile removed, "Open group as tiles", closing a
- *   session, killing them all. It is never filled to the remembered count and
- *   never trimmed to the window (a too-small window shows the focused tile
- *   until it fits, the arrangement kept).
+ * - The Tiles toggle brings back exactly that, however the grid was closed:
+ *   the toggle, a tab that is not tiled, a followed link (`leaveTiles`, or
+ *   `#session=` on load), Home, the window narrowing past the desktop gate,
+ *   the last tile removed, "Open group as tiles", closing a session, killing
+ *   them all. A page reload brings it back only when the grid was open (a
+ *   closed one stays remembered for the toggle). It is never filled to the
+ *   remembered count and never trimmed to the window (a too-small window
+ *   shows the focused tile until it fits, the arrangement kept).
  * - A session that no longer exists frees its cell, and the ranking fills it
  *   (the hole a user left stays a hole); with none of the stored sessions left
  *   the grid opens from the ranking, as with nothing stored.
@@ -255,7 +256,7 @@ describe('saved on every change', () => {
   });
 });
 
-describe('the Tiles toggle and a reload bring back exactly what was arranged', () => {
+describe('the Tiles toggle (and a reload while it is open) brings back exactly what was arranged', () => {
   it('off and on: the cells and the hole, the count, the divider sizes, the focus and the zoom', async () => {
     const app = layoutApp();
     await arrange(app);
@@ -288,6 +289,23 @@ describe('the Tiles toggle and a reload bring back exactly what was arranged', (
     FakeTile.all = [];
     const next = layoutApp();
     expect(next._restoreTileGrid()).toBe(true);
+    expect(layoutOf(next)).toEqual(before);
+  });
+
+  it('a reload after the grid was closed: the single view, and the Tiles toggle brings it back exactly', async () => {
+    const app = layoutApp();
+    await arrange(app);
+    const before = layoutOf(app);
+    app.toggleTileGrid();
+    section.children = [];
+    FakeTile.all = [];
+    const next = layoutApp();
+    // The reload leaves it closed (handleInit then selects the single view)...
+    expect(next._restoreTileGrid()).toBe(false);
+    expect(next._tilesOwnTerminal()).toBe(false);
+    expect(stored()).toMatchObject({ open: false, ids: ARRANGED_CELLS });
+    // ...and remembered: the toggle puts it back as it was.
+    next.toggleTileGrid();
     expect(layoutOf(next)).toEqual(before);
   });
 

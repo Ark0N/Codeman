@@ -401,8 +401,8 @@ the harness/model request; see "As built")
 
 ### Persistence
 
-Decided: per device (per browser), restored on reload, and by the Tiles toggle
-(decision 11). Stored in localStorage key `codeman:tile-grid`, never on the
+Decided: per device (per browser), restored on reload when it was open, and by
+the Tiles toggle however it was closed (decision 11). Stored in localStorage key `codeman:tile-grid`, never on the
 server:
 
 ```json
@@ -1129,9 +1129,11 @@ exits green. Use the browser runner for those files and read the file count.
    last setting was, if there was no setting before take the working ones, that
    ones needs input and then the most recent ones in order"). The layout
    (cells and holes, tile count, divider sizes, focus, a zoom the user chose)
-   is saved per browser on every change and comes back exactly from the toggle
-   and a reload, however the grid closed; it is never filled to the remembered
-   count nor trimmed to the window. A session gone since frees its cell for the
+   is saved per browser on every change and comes back exactly from the toggle,
+   however the grid closed, and from a reload when the grid was open (a grid
+   closed before the reload stays remembered for the toggle; the page shows the
+   single view); it is never filled to the remembered count nor trimmed to the
+   window. A session gone since frees its cell for the
    ranking; with none left, the grid opens from the ranking (`rankTileSessions`:
    working, then needing input, then most recent), which also fills every place
    the grid fills on its own (a count picked in the menu, a freed cell, an open

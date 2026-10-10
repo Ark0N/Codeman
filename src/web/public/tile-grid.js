@@ -29,8 +29,8 @@ const TILE_GRID_FONT_KEY = 'codeman-tile-font-size';
 // how many tiles the user's own last change left (a session that went away by
 // itself does not lower it). Session ids and layout only, never content.
 // Written on every change while the grid is open; `open: false` keeps it for
-// the Tiles toggle, which brings it back exactly; restored on reload inside
-// handleInit. Never sent to the server.
+// the Tiles toggle, which brings it back exactly; a grid stored open is
+// restored on reload inside handleInit. Never sent to the server.
 const TILE_GRID_STORAGE_KEY = 'codeman:tile-grid';
 // The count last picked in the Tiles button's right-click menu (2, 4 or 6;
 // owner decision 10), per device: what a click opens when there is no stored
@@ -432,8 +432,8 @@ Object.assign(CodemanApp.prototype, {
    * queued loads dropped), the main terminal unparked.
    *
    * `keepStored` (every caller) keeps the grid as it was, holes, count, sizes,
-   * focus and zoom, for the Tiles toggle and the next reload to bring back;
-   * false would forget it. `reselect` shows the focused session in the single
+   * focus and zoom, closed, for the Tiles toggle to bring back (a reload
+   * restores only a grid stored open); false would forget it. `reselect` shows the focused session in the single
    * view through a forced reload; pass false when the caller selects
    * something itself. `animate` (the Tiles toggle only, owner answer 4)
    * leaves a still copy of the tiles over the stage until the single view has
