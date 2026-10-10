@@ -1,6 +1,6 @@
 {
   "name": "aicodeman",
-  "version": "1.40.0",
+  "version": "1.41.0",
   "description": "Self-hosted mission control for AI coding agents: run Claude Code, Codex, OpenCode, Gemini, DeepSeek, Grok and more 24/7 in tmux, from any device.",
   "type": "module",
   "main": "dist/index.js",
