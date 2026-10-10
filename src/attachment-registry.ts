@@ -149,6 +149,11 @@ class AttachmentRegistry {
 
 export const attachmentRegistry = new AttachmentRegistry();
 
+/** Every extension {@link isSupportedAttachmentExtension} accepts (lowercase, no dot). */
+export function supportedAttachmentExtensions(): string[] {
+  return [...SUPPORTED_ATTACHMENT_EXTENSIONS];
+}
+
 export function isSupportedAttachmentExtension(extension: string): boolean {
   return SUPPORTED_ATTACHMENT_EXTENSIONS.has(extension.toLowerCase().replace(/^\./, ''));
 }

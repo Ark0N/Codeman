@@ -275,6 +275,120 @@ export async function remoteProbePaths(
   return results;
 }
 
+/** One entry of a remote folder listing: a file (with size/mtime) or a subfolder. */
+export interface RemoteFolderEntry {
+  kind: 'file' | 'directory';
+  name: string;
+  size: number;
+  mtimeMs: number;
+}
+
+/** A remote folder listing; `dir` is the folder with symlinks resolved on the remote host. */
+export interface RemoteFolderListing {
+  dir: string;
+  entries: RemoteFolderEntry[];
+  truncated: boolean;
+}
+
+/**
+ * List one remote folder in a SINGLE ssh round trip: its canonical path, then every
+ * non-hidden subfolder and every regular file (symlinks followed) whose name ends in
+ * one of `extensions` (either case), up to `maxEntries`.
+ *
+ * Same output discipline as {@link buildRemoteProbeCommand}: a lone NUL first (so rc
+ * chatter before it is discarded), then NUL-terminated records — `E|n` (no such
+ * folder), `E|x` (cannot be canonicalized), `D|<dir>`, `d|0|0|<name>`,
+ * `f|<size>|<mtime>|<name>`, and `T|` when the cap cut the listing. The name is the
+ * last field, so a `|` in it still parses, and NUL is the one byte a filename cannot
+ * hold. A leading `~/` is the remote user's `$HOME`, as in the probe.
+ */
+export function buildRemoteFolderListCommand(dir: string, extensions: readonly string[], maxEntries: number): string {
+  const patterns = extensions
+    .flatMap((ext) => [ext.toLowerCase(), ext.toUpperCase()])
+    .map((ext) => `*.${ext}`)
+    .join('|');
+  return [
+    `d=${shellescape(dir)}`,
+    "case $d in '~/'*) d=$HOME/${d#??} ;; esac",
+    "printf '\\0'",
+    '[ -d "$d" ] || { [ -e "$d" ] && printf \'E|f\\0\' || printf \'E|n\\0\'; exit 0; }',
+    'r=$(cd -P "$d" 2>/dev/null && pwd -P) || { printf \'E|x\\0\'; exit 0; }',
+    'printf \'D|%s\\0\' "$r"',
+    'n=0',
+    'for f in "$r"/*; do',
+    '  [ -e "$f" ] || continue',
+    `  [ "$n" -lt ${Math.max(1, Math.floor(maxEntries))} ] || { printf 'T|\\0'; break; }`,
+    '  b=${f##*/}',
+    '  if [ -d "$f" ]; then n=$((n + 1)); printf \'d|0|0|%s\\0\' "$b"; continue; fi',
+    '  [ -f "$f" ] || continue',
+    `  case $b in ${patterns || '*.__none__'}) ;; *) continue ;; esac`,
+    "  sm=$(stat -L -c '%s %Y' \"$f\" 2>/dev/null || stat -L -f '%z %m' \"$f\" 2>/dev/null) || sm='0 0'",
+    '  n=$((n + 1))',
+    '  printf \'f|%s|%s|%s\\0\' "${sm% *}" "${sm#* }" "$b"',
+    'done',
+  ].join('\n');
+}
+
+/**
+ * Parse {@link buildRemoteFolderListCommand} output: null when nothing exists there
+ * (or it cannot be resolved), `'not-a-folder'` when it is a file.
+ */
+export function parseRemoteFolderListOutput(stdout: string): RemoteFolderListing | 'not-a-folder' | null {
+  const records = stdout.split('\0').slice(1);
+  let dir: string | null = null;
+  let truncated = false;
+  const entries: RemoteFolderEntry[] = [];
+  for (const record of records) {
+    if (record === 'E|f') return 'not-a-folder';
+    if (record.startsWith('E|')) return null;
+    if (record.startsWith('D|')) {
+      dir = record.slice(2);
+      continue;
+    }
+    if (record === 'T|') {
+      truncated = true;
+      continue;
+    }
+    const match = /^([fd])\|(\d*)\|(\d*)\|([\s\S]+)$/.exec(record);
+    if (!match) continue;
+    const size = Number.parseInt(match[2], 10);
+    const mtime = Number.parseInt(match[3], 10);
+    entries.push({
+      kind: match[1] === 'd' ? 'directory' : 'file',
+      name: match[4],
+      size: Number.isFinite(size) && size > 0 ? size : 0,
+      mtimeMs: Number.isFinite(mtime) && mtime > 0 ? mtime * 1000 : 0,
+    });
+  }
+  if (!dir) {
+    throw new RemoteFileAccessError('remote host returned no usable folder listing');
+  }
+  return { dir, entries, truncated };
+}
+
+/** List a remote folder (see {@link buildRemoteFolderListCommand}). */
+export async function remoteListFolder(
+  remote: SessionRemote,
+  dir: string,
+  extensions: readonly string[],
+  maxEntries: number
+): Promise<RemoteFolderListing | 'not-a-folder' | null> {
+  assertNotUnderTest();
+  const command = buildRemoteFileCommand(remote, buildRemoteFolderListCommand(dir, extensions, maxEntries));
+  let stdout: string;
+  try {
+    const result = await runWithRemoteSshLimit(() =>
+      execAsync(command, { timeout: REMOTE_PROBE_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 })
+    );
+    stdout = result.stdout;
+  } catch (err) {
+    throw new RemoteFileAccessError(
+      `remote host ${remote.label || remote.host} unreachable: ${describeExecError(err)}`
+    );
+  }
+  return parseRemoteFolderListOutput(stdout);
+}
+
 /** Read a whole remote file into memory, capped by `maxBytes`. */
 export async function remoteReadFile(remote: SessionRemote, remotePath: string, maxBytes: number): Promise<Buffer> {
   assertNotUnderTest();

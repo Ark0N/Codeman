@@ -2004,13 +2004,15 @@ const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LIN
 
 /**
  * Every linkable file path in `text`, in order: absolute (rooted) paths first,
- * then `~/` and relative ones that do not overlap them or a URL.
+ * then `~/` and relative ones, then folder paths — each only where it overlaps
+ * neither an earlier one nor a URL.
  *
  * The one entry point for both consumers (terminal link provider, response
  * viewer), so a path form is clickable in both or in neither.
  *
  * @param {string} text
- * @returns {Array<{path: string, index: number}>} `index` is where `path` starts in `text`.
+ * @returns {Array<{path: string, index: number, folder?: true}>} `index` is where `path` starts in
+ *   `text`; `folder` marks a folder path (folder grid) rather than a file.
  */
 function findFilePathLinks(text) {
   const value = String(text || '');
@@ -2036,7 +2038,45 @@ function findFilePathLinks(text) {
     if (overlaps(index, path.length) || inUrl(index, path.length)) continue;
     found.push({ path, index });
   }
+  const folders = new RegExp(FOLDER_PATH_LINK_PATTERN.source, 'g');
+  while ((match = folders.exec(value)) !== null) {
+    const path = folderLinkPath(match[2]);
+    const index = match.index + match[1].length;
+    if (!path || overlaps(index, path.length) || inUrl(index, path.length)) continue;
+    found.push({ path, index, folder: true });
+  }
   return found.sort((a, b) => a.index - b.index);
+}
+
+/**
+ * Folder paths, for the folder grid: rooted like {@link FILE_PATH_LINK_PATTERN}
+ * (`/mnt/raid1/neon_getaway/styleframes`), `~/renders`, or relative with a
+ * trailing slash (`builds/captures/`). Same boundary in front as the relative
+ * file pattern (group 1), the candidate itself is group 2 and goes through
+ * {@link folderLinkPath}, which decides whether it reads as a folder at all.
+ * File links are found first and win any overlap.
+ *
+ * ⚠ Like its siblings, never share an instance (`lastIndex`): use
+ * {@link findFilePathLinks}.
+ */
+const FOLDER_PATH_LINK_PATTERN =
+  /(^|[\s"'`(\[{<>=,:])((?:\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/|~\/|(?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*)/g;
+
+/**
+ * A {@link FOLDER_PATH_LINK_PATTERN} candidate as a folder link, or null.
+ *
+ * Sentence punctuation after the path is not part of it. A path ending in `/` is
+ * a folder; otherwise only a rooted or `~/` path whose last segment has no
+ * extension (`.cache` and `styleframes` do, `a.rs` does not) — a relative word
+ * without a slash at the end is prose, not a folder.
+ */
+function folderLinkPath(candidate) {
+  const path = String(candidate || '').replace(/[.,:;!?'"]+$/, '');
+  if (!path || path === '~/' || /^\/[^/]+\/$/.test(path)) return null;
+  if (path.endsWith('/')) return /[^/.]/.test(path) ? path : null;
+  if (!path.startsWith('/') && !path.startsWith('~/')) return null;
+  const last = path.slice(path.lastIndexOf('/') + 1);
+  return /^\.?[^.]+$/.test(last) ? path : null;
 }
 
 /**

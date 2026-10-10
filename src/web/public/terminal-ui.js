@@ -2079,7 +2079,7 @@ Object.assign(CodemanApp.prototype, {
         // Pattern 3: Bash() tool output
         const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
 
-        const addLink = (filePath, matchIndex) => {
+        const addLink = (filePath, matchIndex, folder = false) => {
           const startCol = lineText.indexOf(filePath, matchIndex);
           if (startCol === -1) return;
 
@@ -2117,6 +2117,12 @@ Object.assign(CodemanApp.prototype, {
               // server knows that host's home, and the log viewer cannot ask).
               const sessionId = getSessionId();
               const target = self._resolveLinkedFilePath(text, sessionId);
+              // A folder path opens the folder grid (which falls back to the
+              // preview if the server finds a file there after all).
+              if (folder) {
+                self.openFolderGrid(target, sessionId);
+                return;
+              }
               if (previewsInFileViewer(target) || self._isExternalPreviewPath(target, sessionId)) {
                 self.openFilePreview(target, sessionId);
                 return;
@@ -2146,7 +2152,7 @@ Object.assign(CodemanApp.prototype, {
         }
 
         for (const found of findFilePathLinks(lineText)) {
-          addLink(found.path, found.index);
+          addLink(found.path, found.index, !!found.folder);
         }
 
         bashPattern.lastIndex = 0;

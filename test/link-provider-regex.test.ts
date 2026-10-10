@@ -41,6 +41,7 @@ const PATTERN_NAMES = [
   'cmdPattern',
   'FILE_PATH_LINK_PATTERN',
   'RELATIVE_FILE_PATH_LINK_PATTERN',
+  'FOLDER_PATH_LINK_PATTERN',
   'bashPattern',
 ];
 
