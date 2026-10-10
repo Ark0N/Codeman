@@ -50,7 +50,7 @@ The installer asks before every system change, and re-running the same line upda
 - **Self-hosted and private** - loopback-only by default, MIT licensed, no telemetry, runs entirely on your machine
 
 <p align="center">
-  <img src="docs/images/codeman-tour-20260724.png" alt="Codeman dashboard tour: session tabs per case, one-click Run for new agents, live plan usage in the header" width="900">
+  <img src="docs/images/codeman-tour-20261010.png" alt="Codeman dashboard tour: session tabs per case, one-click Run for new agents, live plan usage in the header" width="900">
 </p>
 
 ---
