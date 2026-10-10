@@ -87,6 +87,93 @@ the HTTP status.
 
 Adding a new error code is non-breaking; removing or renaming one is a major change.
 
+## Cron jobs
+
+Saved jobs and their launch history are separate from the legacy `/api/scheduled`
+duration-bounded loops. Use `/api/v1/cron/...` in external clients; `/api/cron/...`
+is the unversioned alias. These routes use the response envelope above; the table
+lists the value inside `data` on success.
+
+| Method | Path | Request body | Response `data` |
+| --- | --- | --- | --- |
+| GET | `/api/v1/cron/jobs` | None | `CronJob[]` |
+| POST | `/api/v1/cron/jobs` | Full job definition below | `{ job: CronJob }` |
+| GET | `/api/v1/cron/jobs/:id` | None | `CronJob` |
+| PUT | `/api/v1/cron/jobs/:id` | Partial job definition | `{ job: CronJob }` |
+| DELETE | `/api/v1/cron/jobs/:id` | None | `{}` |
+| PUT | `/api/v1/cron/jobs/:id/enabled` | `{ enabled: boolean }` | `{ job: CronJob }` |
+| POST | `/api/v1/cron/jobs/:id/run` | None | `{ run: CronJobRun, activeAgents: number }` |
+| GET | `/api/v1/cron/jobs/:id/runs` | None | `CronJobRun[]` |
+| GET | `/api/v1/cron/runs` | None | `CronJobRun[]` |
+
+### Job request fields
+
+The create body requires `name`, `agentType`, `workingDir`, `promptMode`,
+`inputMode`, `scheduleType`, `enabled`, and `concurrencyPolicy`. Additional fields
+are required according to the selected prompt and schedule:
+
+| Field | Type / validation |
+| --- | --- |
+| `name` | String, 1–200 characters |
+| `agentType` | A supported session mode (including `shell`) |
+| `workingDir` | Existing, allowed working-directory path |
+| `launchCommand` | Optional single-line string, at most 2000 characters; for shell jobs |
+| `promptMode` | `inline_text` or `prompt_file_path` |
+| `promptText` | Required for `inline_text`; nonempty single-line string, at most 100000 characters |
+| `promptFilePath` | Required for `prompt_file_path`; absolute path inside `workingDir` to a regular file, at most 1 MiB, read when the job fires |
+| `inputMode` | `paste` or `typed` |
+| `scheduleType` | `once`, `interval`, `daily`, or `weekly` |
+| `runAt` | Required for `once`; positive integer Unix timestamp in milliseconds |
+| `intervalMinutes` | Required for `interval`; integer from 1 to 525600 |
+| `dailyTime` | Required for `daily`; `HH:MM` in server-local time |
+| `weeklyDays` | Required for `weekly`; 1–7 weekday integers, 0 (Sunday) through 6 (Saturday) |
+| `weeklyTime` | Required for `weekly`; `HH:MM` in server-local time |
+| `enabled` | Boolean |
+| `concurrencyPolicy` | `warn_only` or `skip_if_same_agent_running`; scheduled runs only |
+| `autoClosePreviousSession` | Optional boolean, default `true`; ignored for `once` |
+| `notes` | Optional string, at most 2000 characters |
+
+`PUT /jobs/:id` accepts any subset of these fields, then validates the merged job.
+When changing `promptMode` or `scheduleType`, supply the fields the new mode needs.
+`Run Now` works even when the job is disabled, bypasses the scheduled concurrency
+policy, and does not change the schedule. `activeAgents` counts live sessions of
+the same agent type, excluding sessions created by this job.
+For recurring jobs with `autoClosePreviousSession` enabled (the default), `Run Now`
+also closes the previous run's session before launching, even if it is still working.
+
+### Job and run response fields
+
+`CronJob` contains the request fields plus server-maintained `id`, optional
+`owner` (multi-user mode), `createdAt`, `updatedAt`, `lastRunAt`, `nextRunAt`,
+`lastStatus`, `lastDueKey`, and optional `completedOnce`. Times are Unix
+milliseconds; `lastRunAt`, `nextRunAt`, `lastStatus`, and `lastDueKey` can be `null`.
+`lastDueKey` is an opaque internal duplicate-launch guard, not a stable API format.
+
+`CronJobRun` contains `id`, `cronJobId`, nullable `sessionId` and `sessionName`,
+`startedAt`, nullable `finishedAt`, `status`, optional `errorMessage`,
+`triggerType` (`scheduled` or `manual_run_now`), and nullable `createdSessionUrl`.
+Run times are also Unix milliseconds. Status is one of `created`,
+`session_started`, `prompt_sent`, `failed`, or `skipped`.
+
+Prompt delivery continues asynchronously after session launch, so `Run Now` can
+return `session_started` before the prompt is sent. Read run history for subsequent
+updates, but do not assume a terminal status will follow: if the session is closed
+during the readiness wait or the server restarts before delivery, the run can remain
+`session_started` indefinitely with `finishedAt: null`.
+`finishedAt` refers to the launch/prompt-delivery attempt, **not completion
+of the agent's task**; `prompt_sent` does not prove that the task succeeded.
+
+In multi-user mode, list/history endpoints filter to accessible jobs. An unknown
+or inaccessible job returns `NOT_FOUND`. Job creation and updates can return
+`403 FORBIDDEN` for a working directory outside the owner's workspace or a shell /
+launch-command job without the required privilege grant. Invalid definitions or
+working directories return `INVALID_INPUT`; launch/delivery failures are recorded
+on the run, so inspect its `status` and `errorMessage` even after an HTTP success.
+
+See [Cron Jobs](wiki/Cron-Jobs.md) for the UI, scheduling, and prompt-file rules.
+See the [complete cron guide](cron-guide.md) for the `cron:runCreated` and
+`cron:runUpdated` SSE events.
+
 ## Long-polling (agent wait)
 
 Three calls block until something happens instead of answering immediately. They
@@ -466,6 +553,27 @@ geometry was read. The capture runs synchronous tmux calls on the server; the
 | `tail=<bytes>` | Keep the newest `<bytes>` of the result (`truncationReason: 'tail'` when it cut). |
 | `lines=<n>` | With `full=1` only: read at most `<n>` lines of tmux history above the visible frame. An integer of at least 1, clamped to the configured history limit; absent or malformed, the whole limit (100,000 lines by default), as before. `truncated` and `truncationReason` describe byte cuts only, not this bound. Without it a full capture reads all of that history before `tail` cuts it, so a client that keeps a fixed number of lines (the tile grid sends its xterm's scrollback plus its rows) should send it. |
 
+## The `codeman agent` CLI (client over these endpoints)
+
+`codeman agent ls|spawn|send|wait|read|interrupt|rm` (`src/cli-agent.ts`) is the command-line client for the endpoints above, for agents in modes that never receive the claude-only skill preamble. It adds no route: `spawn` is `POST /api/v1/quick-start` (+ `wait-output` on the mode's `capabilities.composerReadyMark` from the CLI registry, where it declares one), `send` is `POST …/input` with `clientId`+`seq` (and `wait`/`waitTimeout` for `--wait` / `--until <signals>`; `delivered:false` without `duplicate` and `wait.ended` both exit 3 — the CLI never reports a dead worker as done), `wait` is `GET …/wait` (`--until`) or `GET …/wait-output` (`--match`, `from=buffer` by default), `read` is `GET …/last-response` or `GET …/terminal?tail=`, `interrupt` is `POST …/input` with a bare `\u001b`, `rm` is `DELETE …/sessions/:id`. A fire-and-forget `send` to a sleeping wake-on-LAN host reads the route's `buffered` (own line, exit 0) and `dropped` (exit 1: the chunk is gone). An id may be the 8-character form `ls` prints, resolved through `GET /api/v1/sessions`; anything shorter refuses before any request, the same floor as `PARENT_SESSION_ID_MIN_PREFIX`. Every call carries `X-Codeman-Parent-Session`; only `spawn`'s quick-start carries `X-Codeman-Agent-Origin: codeman-agent-cli` (the agent-scratch label must never reach a request that cannot create the case directory). Basic auth comes from `CODEMAN_PASSWORD` or the data dir's `.env`. Server-side error codes are shown verbatim (`INVALID_INPUT: until=stop …` on a hook-less mode is not hidden); exit codes are `0` ok, `1` error, `2` timeout, `3` the session exited, `4` refused by a client-side guard. See the README section "`codeman agent`" for the guards and `test/cli-agent.test.ts` for the pinned behaviour.
+
+## Prompt uploads (`POST /api/v1/sessions/:id/paste-image`)
+
+A `multipart/form-data` body with one `image` part. The file is written into the
+session's workspace as `<workingDir>/.codeman-uploads/paste-<ms>-<hex>.<ext>`, and
+`data` carries `path` and `filename` for the client to type the path into the
+prompt. The folder is Codeman's own: hidden, created on first use with a
+`.gitignore` containing `*` (written once, never over a file already there), and
+cleaned up the way pasted images always were: `paste-*` files older than 7 days
+go in an hourly sweep, and the folder goes when the last session of that
+workspace is killed. Uploads made before this release sit in `.claude-images/`;
+that folder receives nothing new, and is swept and removed the same way for one
+release. A remote (SSH) session answers 400, since the file would land on the
+Codeman host under a path the remote agent cannot read. A Docker session of an
+owned case is fine, its workspace is bind-mounted at the same absolute path; an
+adopted container (`owned: false`) mounts nothing, so its agent can open the file
+only if the container itself exposes that host path.
+
 ## Session lineage (`parentSessionId`)
 
 A create request may name the session that spawned it, which the web UI draws as a
@@ -823,10 +931,10 @@ Copies MCP servers between the agent CLIs' own user-level config files (`docs/cl
 Result (`data`):
 
 - `applied` — `false` for the dry run.
-- `targets[]` — one per enabled CLI that declares an MCP config: `id`, `label`, `file`, `status`, `error?`, `servers` (names it already has), `added` (names added, or that would be), `skipped` (names its dialect cannot express, e.g. SSE for Codex and Antigravity).
+- `targets[]` — one per enabled CLI that declares an MCP config, plus GitHub Copilot CLI (`id: "copilot"`, a sync-only target that is not a run mode): `id`, `label`, `file`, `status`, `error?`, `servers` (names it already has), `added` (names added, or that would be), `skipped` (names its dialect cannot express, e.g. SSE for Codex and Antigravity).
   - `status`: `ok`; `absent` (not installed and no config file, so not read or created); `skipped` (the CLI's relocation env var, e.g. `CODEX_HOME`, is set to a relative path in the server's environment, so its file cannot be located safely and is neither read nor written); `unreadable` (the file exists but cannot be parsed safely, so it is not written); `failed` (a read or write error, the file may be unchanged).
   - `error` says why a target is not `ok`. A parse failure is reported by position only (`not valid TOML (line 3, column 21)`, `not valid JSON`), never with text from the file.
-  - `file` honours each CLI's own relocation env var as the server process sees it (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_CONFIG_HOME`, `GEMINI_CLI_HOME`); see `docs/cli-registry.md`.
+  - `file` honours each CLI's own relocation env var as the server process sees it (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_CONFIG_HOME`, `GEMINI_CLI_HOME`, and `COPILOT_HOME` for the sync-only Copilot CLI); see `docs/cli-registry.md`.
 - `conflicts[]` — names defined differently by different CLIs. Existing definitions are kept; the first CLI's is copied where the name is missing.
 - `disabled[]` — names left out because every definition is switched off in its own CLI (codex `enabled = false`, opencode `enabled: false`, antigravity `disabled: true`).
 - `unsupported[]` — labels of enabled agent CLIs with no known MCP config file (nothing is guessed).

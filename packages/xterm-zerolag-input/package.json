@@ -1,6 +1,6 @@
 {
   "name": "xterm-zerolag-input",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Instant keystroke feedback overlay for xterm.js: Mosh-inspired local echo that removes perceived input latency over SSH, tunnels and other high-RTT connections",
   "type": "module",
   "main": "dist/index.cjs",

@@ -428,7 +428,8 @@ Object.assign(CodemanApp.prototype, {
       line1.appendChild(badge);
     } else {
       // The agent's logo: PR #532's slot, the mode id as data (an id with no
-      // logo rule gets the slot's plain dot).
+      // logo rule gets the slot's plain dot). CLI Logos on Tabs hides it in CSS
+      // (html[data-tab-logos='off']), exactly as it does on the tab strip.
       const logo = document.createElement('span');
       logo.className = `home-sessions-harness run-mode-dot ${row.mode}`;
       logo.setAttribute('aria-hidden', 'true');

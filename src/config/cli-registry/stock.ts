@@ -218,6 +218,9 @@ const CLAUDE: CliEntry = {
     // in them, so a copy can drop two and paste flush. Claude and codex are the only
     // entries that declare this, because theirs are the only gutters that have been measured.
     transcriptGutter: 2,
+    // The composer's own hint text (`⏵⏵ … (shift+tab to cycle)`), not `❯`, which the
+    // trust dialog's selected row also carries. Measured by the agent skill's spawn_worker.
+    composerReadyMark: 'shift+tab',
     // The historical hard-coded pair, now stated as data. `workingLine` matches both the
     // `✻ Actualizing… (39s · ↓ 2.0k tokens)` status line and the bare `esc to interrupt`
     // footer, because tmux repaints partially and only one of the two may land in a chunk.
@@ -1342,6 +1345,8 @@ const DEEPSEEK: CliEntry = {
     // supervisor and Codeman is that supervisor. 'supervised' rather than 'always' because
     // the session can disarm the bridge, and docker/remote cannot reach it at all.
     hooks: 'supervised',
+    // dsh's composer glyph, drawn once the harness TUI can take a prompt.
+    composerReadyMark: '❯',
     transcript: 'deepseek-zstd',
     altScreen: 'strip-mux-only',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },

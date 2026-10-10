@@ -18,15 +18,14 @@
  * The CI gate's guard on the same handlers is the source check in
  * test/shift-enter-keypress-swallowed.test.ts.
  *
- * Port: 3267 (per CLAUDE.md, ports 3150+ for tests)
+ * Port: ephemeral
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3267;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 const MAIN_ID = 'shift-enter-probe-main';
 const PANE_B_ID = 'shift-enter-probe-pane-b';
 
@@ -45,11 +44,12 @@ describe('Shift/Ctrl+Enter through the shipped key handlers (keypress must be sw
   let page: Page;
 
   beforeAll(async () => {
-    server = new WebServer(PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
+    baseUrl = `http://localhost:${server.boundPort}`;
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage();
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
     await page.evaluate(
       ({ paneBId }) => {

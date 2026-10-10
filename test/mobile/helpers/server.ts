@@ -1,29 +1,22 @@
 import { WebServer } from '../../../src/web/server.js';
 
-let servers: Map<number, WebServer> = new Map();
+const servers = new Set<WebServer>();
 
-export async function createTestServer(port: number): Promise<WebServer> {
-  if (servers.has(port)) {
-    return servers.get(port)!;
-  }
-  const server = new WebServer(port, false, true); // testMode = true
+/** A test server on an ephemeral port; read the port from `server.boundPort` once this resolves. */
+export async function createTestServer(): Promise<WebServer> {
+  const server = new WebServer(0, false, true); // testMode = true
   await server.start();
-  servers.set(port, server);
+  servers.add(server);
   return server;
 }
 
 export async function stopTestServer(server: WebServer): Promise<void> {
   await server.stop();
-  for (const [port, s] of servers) {
-    if (s === server) {
-      servers.delete(port);
-      break;
-    }
-  }
+  servers.delete(server);
 }
 
 export async function stopAllTestServers(): Promise<void> {
-  for (const server of servers.values()) {
+  for (const server of servers) {
     await server.stop();
   }
   servers.clear();

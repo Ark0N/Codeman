@@ -585,3 +585,154 @@ describe('relocated config dirs (the CLI reads its file somewhere else)', () => 
     }
   });
 });
+
+describe('GitHub Copilot CLI (copilot-json)', () => {
+  const COPILOT: McpSyncTarget = {
+    id: 'copilot',
+    label: 'GitHub Copilot CLI',
+    path: '.copilot/mcp-config.json',
+    format: 'copilot-json',
+    relocation: { envVar: 'COPILOT_HOME', path: 'mcp-config.json' },
+    installed: true,
+  };
+  const withCopilot = (...ids: string[]) => [...only(...ids), COPILOT];
+
+  // Captured from `copilot mcp add` (1.0.94) into a throwaway COPILOT_HOME.
+  const REAL = JSON.stringify({
+    mcpServers: {
+      h1: {
+        tools: ['*'],
+        type: 'http',
+        url: 'https://example.invalid/mcp',
+        headers: { Authorization: 'Bearer x', 'X-A': 'b' },
+      },
+      s1: { tools: ['*'], type: 'sse', url: 'https://example.invalid/sse' },
+      l1: { tools: ['*'], type: 'local', command: 'node', args: ['server.js', '--flag'], env: { K: 'V', K2: 'V2' } },
+      l2: { tools: ['a', 'b'], type: 'local', command: 'npx', args: ['-y', 'pkg'] },
+    },
+  });
+
+  it('reads what `copilot mcp add` writes: local, http and sse, ignoring the tools filter', () => {
+    const servers = parseServers('copilot-json', REAL);
+    expect(servers.h1).toEqual({
+      transport: 'http',
+      url: 'https://example.invalid/mcp',
+      headers: { Authorization: 'Bearer x', 'X-A': 'b' },
+    });
+    expect(servers.s1).toEqual({ transport: 'sse', url: 'https://example.invalid/sse' });
+    expect(servers.l1).toEqual({
+      transport: 'stdio',
+      command: 'node',
+      args: ['server.js', '--flag'],
+      env: { K: 'V', K2: 'V2' },
+    });
+    expect(servers.l2).toEqual({ transport: 'stdio', command: 'npx', args: ['-y', 'pkg'] });
+  });
+
+  it('writes servers the way `copilot mcp add` does: tools ["*"], type local/http/sse', () => {
+    const out = JSON.parse(
+      addServers('copilot-json', null, {
+        fs: { transport: 'stdio', command: 'npx', args: ['-y', 'fs'], env: { T: '1' } },
+        web: { transport: 'http', url: 'https://w.test/mcp', headers: { A: 'b' } },
+        live: { transport: 'sse', url: 'https://l.test/sse' },
+      })
+    );
+    expect(out.mcpServers.fs).toEqual({
+      tools: ['*'],
+      type: 'local',
+      command: 'npx',
+      args: ['-y', 'fs'],
+      env: { T: '1' },
+    });
+    expect(out.mcpServers.web).toEqual({ tools: ['*'], type: 'http', url: 'https://w.test/mcp', headers: { A: 'b' } });
+    expect(out.mcpServers.live).toEqual({ tools: ['*'], type: 'sse', url: 'https://l.test/sse' });
+  });
+
+  it('keeps an existing server, its tools filter and every other key when adding', () => {
+    const out = JSON.parse(
+      addServers('copilot-json', JSON.stringify({ other: 1, mcpServers: JSON.parse(REAL).mcpServers }), {
+        l2: { transport: 'stdio', command: 'changed' },
+        n: { transport: 'stdio', command: 'x' },
+      })
+    );
+    expect(out.other).toBe(1);
+    expect(out.mcpServers.l2.tools).toEqual(['a', 'b']);
+    expect(out.mcpServers.l2.command).toBe('npx');
+    expect(out.mcpServers.n.type).toBe('local');
+  });
+
+  it('copies between Copilot and another CLI in both directions, with sse expressed', async () => {
+    put('.claude.json', JSON.stringify({ mcpServers: { fs: { type: 'stdio', command: 'npx', args: ['-y', 'fs'] } } }));
+    put('.copilot/mcp-config.json', REAL);
+    const r = await syncMcpServers(withCopilot('claude'), { apply: true, home });
+    expect(result(r, 'copilot').added).toEqual(['fs']);
+    expect(result(r, 'claude').added.sort()).toEqual(['h1', 'l1', 'l2', 's1']);
+    expect(JSON.parse(get('.copilot/mcp-config.json')).mcpServers.fs).toMatchObject({
+      type: 'local',
+      command: 'npx',
+      tools: ['*'],
+    });
+    expect(JSON.parse(get('.claude.json')).mcpServers.s1).toMatchObject({ type: 'sse' });
+    // second run: nothing left to do
+    const again = await syncMcpServers(withCopilot('claude'), { apply: true, home });
+    expect(again.targets.every((t) => t.added.length === 0)).toBe(true);
+  });
+
+  it('does not copy a server switched off with `copilot mcp disable` (it lives in settings.json)', async () => {
+    put('.copilot/mcp-config.json', REAL);
+    put('.copilot/settings.json', JSON.stringify({ disabledMcpServers: ['l2'], theme: 'dark' }));
+    put('.claude.json', JSON.stringify({ mcpServers: {} }));
+    const r = await syncMcpServers(withCopilot('claude'), { apply: true, home });
+    expect(result(r, 'claude').added.sort()).toEqual(['h1', 'l1', 's1']);
+    expect(JSON.parse(get('.claude.json')).mcpServers.l2).toBeUndefined();
+    expect(r.disabled).toEqual(['l2']);
+    // settings.json is only ever read
+    expect(JSON.parse(get('.copilot/settings.json'))).toEqual({ disabledMcpServers: ['l2'], theme: 'dark' });
+  });
+
+  it('a name switched off in Copilot but live in another CLI is still synced from the live one', async () => {
+    put('.copilot/mcp-config.json', REAL);
+    put('.copilot/settings.json', JSON.stringify({ disabledMcpServers: ['l2'] }));
+    put('.claude.json', JSON.stringify({ mcpServers: { l2: { type: 'stdio', command: 'npx', args: ['-y', 'pkg'] } } }));
+    const r = await syncMcpServers(withCopilot('claude'), { apply: false, home });
+    expect(r.disabled).toEqual([]);
+    expect(result(r, 'claude').added.sort()).toEqual(['h1', 'l1', 's1']);
+  });
+
+  it('reports the target unreadable, and writes nothing, when settings.json is not valid JSON', async () => {
+    put('.copilot/mcp-config.json', REAL);
+    put('.copilot/settings.json', '{ "disabledMcpServers": ["l2", "SECRET-NAME" ');
+    put('.claude.json', JSON.stringify({ mcpServers: { fs: { type: 'stdio', command: 'npx' } } }));
+    const r = await syncMcpServers(withCopilot('claude'), { apply: true, home });
+    expect(result(r, 'copilot').status).toBe('unreadable');
+    expect(result(r, 'copilot').error).toContain('settings.json');
+    expect(result(r, 'copilot').error).not.toContain('SECRET-NAME');
+    expect(get('.copilot/mcp-config.json')).toBe(REAL);
+  });
+
+  it('follows COPILOT_HOME and never touches ~/.copilot then', async () => {
+    put('.claude.json', JSON.stringify({ mcpServers: { fs: { type: 'stdio', command: 'npx', args: ['-y', 'fs'] } } }));
+    const copilotHome = join(home, 'elsewhere/copilot');
+    const r = await syncMcpServers(withCopilot('claude'), { apply: true, home, env: { COPILOT_HOME: copilotHome } });
+    expect(result(r, 'copilot').file).toBe(join(copilotHome, 'mcp-config.json'));
+    expect(JSON.parse(readFileSync(join(copilotHome, 'mcp-config.json'), 'utf8')).mcpServers.fs.type).toBe('local');
+    expect(existsSync(join(home, '.copilot'))).toBe(false);
+  });
+
+  it('is left alone when it is neither installed nor configured', async () => {
+    put('.claude.json', JSON.stringify({ mcpServers: { fs: { type: 'stdio', command: 'npx' } } }));
+    const r = await syncMcpServers([...only('claude'), { ...COPILOT, installed: false }], { apply: true, home });
+    expect(result(r, 'copilot').status).toBe('absent');
+    expect(existsSync(join(home, '.copilot'))).toBe(false);
+  });
+
+  it('keeps the env values of a copied server out of the result and the file private', async () => {
+    put(
+      '.claude.json',
+      JSON.stringify({ mcpServers: { s: { type: 'stdio', command: 'x', env: { TOKEN: 'hunter2' } } } })
+    );
+    const r = await syncMcpServers(withCopilot('claude'), { apply: true, home });
+    expect(JSON.stringify(r)).not.toContain('hunter2');
+    expect(statSync(join(home, '.copilot/mcp-config.json')).mode & 0o077).toBe(0);
+  });
+});

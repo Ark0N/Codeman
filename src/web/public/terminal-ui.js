@@ -107,6 +107,32 @@
         : delta / 25; // DOM_DELTA_PIXEL (Chrome/WebKit, and every trackpad)
   }
 
+  // The same travel rounded to whole lines for the SGR wheel reports: a pure
+  // horizontal swipe is 0 (nothing to send), and anything else moves at least
+  // one line, so the small pixel deltas of a precision touchpad still scroll.
+  // The body of the primary pane's _wheelScrollLines.
+  function wheelDeltaWholeLines(ev, rows) {
+    const lines = wheelDeltaLines(ev, rows);
+    if (!lines) return 0;
+    return Math.round(lines) || (lines > 0 ? 1 : -1);
+  }
+
+  // Ticks one gesture batch may report: Claude applies its own scroll-speed
+  // multiplier and acceleration on top, so a bigger batch only overshoots.
+  const SGR_WHEEL_MAX_TICKS = 5;
+
+  // Whole wheel lines → SGR wheel reports at a 1-based cell `pos` ({ col, row },
+  // live-screen relative): button 64 per line up, 65 per line down, capped at
+  // SGR_WHEEL_MAX_TICKS. '' when there is nothing to send. The encoding of the
+  // primary pane's _sendSyntheticSgrWheel, pure so a TerminalTile forwards
+  // byte-identical reports to its own session.
+  function sgrWheelReports(lines, pos) {
+    if (!lines || !pos) return '';
+    const btn = lines < 0 ? 64 : 65;
+    const ticks = Math.min(Math.abs(lines), SGR_WHEEL_MAX_TICKS);
+    return `\x1b[<${btn};${pos.col};${pos.row}M`.repeat(ticks);
+  }
+
   // Gesture travel → PageUp/PageDown keys for a terminal `rows` tall: adds
   // `lines` to the sub-page travel already `pending`, and returns the travel
   // left over plus the keys to send ('' below one page). The arithmetic of the
@@ -174,6 +200,18 @@
       return !!line && CODEX_COMPOSER_ROW_RE.test(line.translateToString(true));
     } catch {
       return false;
+    }
+  }
+
+  // Screen row of the cursor, for the local-echo prompt finders: xterm's cursorY is
+  // baseY-relative, so a viewport parked above the bottom shifts it. Null when off screen.
+  function cursorViewportRow(terminal) {
+    try {
+      const buf = terminal.buffer.active;
+      const row = buf.baseY + (buf.cursorY || 0) - buf.viewportY;
+      return row >= 0 && row < terminal.rows ? row : null;
+    } catch {
+      return null;
     }
   }
 
@@ -250,6 +288,7 @@
     isComposerNavKey,
     classifyPredictInput,
     isCodexComposerRow,
+    cursorViewportRow,
     CODEX_COMPOSER_ROW_RE,
     BRACKETED_PASTE_START,
     USER_SCROLL_STICKY_SUPPRESS_MS,
@@ -260,6 +299,9 @@
     PAGE_KEY_SCREEN_FRACTION,
     PAGE_KEY_MAX_PER_BATCH,
     wheelDeltaLines,
+    wheelDeltaWholeLines,
+    SGR_WHEEL_MAX_TICKS,
+    sgrWheelReports,
     pageKeysForTravel,
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
     MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR,
@@ -2004,7 +2046,7 @@ Object.assign(CodemanApp.prototype, {
         const cmdPattern = /\b(tail|cat|head|less|grep|watch|vim|nano)\s+(?:[^\s\/]+\s+){0,4}(\/[^\s"'<>|;&\n\x00-\x1f]+)/g;
 
         // Pattern 2: Paths with common extensions. Image/PDF/media extensions are
-        // included so pasted-attachment paths (`.claude-images/paste-*.png`) and
+        // included so pasted-attachment paths (`.codeman-uploads/paste-*.png`) and
         // screenshots an agent just wrote are clickable; those open the file
         // preview rather than the log viewer (see addLink).
         //
@@ -3991,14 +4033,15 @@ Object.assign(CodemanApp.prototype, {
       if (session.mode === 'opencode') {
         // OpenCode (Bubble Tea TUI): find the ┃ border on the cursor's row.
         // The input area is "┃  <text>" — the ┃ is the anchor, offset 3 skips "┃  ".
-        // We use the cursor row (cursorY) to find the right line, then scan for ┃.
+        // We use the cursor's screen row to find the right line, then scan for ┃.
         this._localEchoOverlay.setPrompt({
           type: 'custom',
           offset: 3,
           find: (terminal) => {
             try {
               const buf = terminal.buffer.active;
-              const row = buf.cursorY;
+              const row = window.CodemanTerminalInput.cursorViewportRow(terminal);
+              if (row === null) return null;
               const line = buf.getLine(buf.viewportY + row);
               if (!line) return null;
               const text = line.translateToString(true);
@@ -4028,23 +4071,25 @@ Object.assign(CodemanApp.prototype, {
         // the viewport, while xterm's cursor still marks the editable input
         // position. Fall back to cursor coordinates so phone typing appears at
         // the terminal cursor instead of disappearing into pending state.
+        // The glyph is looked for from the cursor's screen row up to the top of the
+        // live screen only: rows above that are parked scrollback with old composer glyphs.
         this._localEchoOverlay.setPrompt({
           type: 'custom',
           offset: 0,
           find: (terminal) => {
             try {
               const buf = terminal.buffer.active;
-              for (let row = terminal.rows - 1; row >= 0; row--) {
+              const cursorRow = window.CodemanTerminalInput.cursorViewportRow(terminal);
+              if (cursorRow === null) return null;
+              const lowest = Math.max(0, buf.baseY - buf.viewportY);
+              for (let row = cursorRow; row >= lowest; row--) {
                 const line = buf.getLine(buf.viewportY + row);
                 if (!line) continue;
                 const text = line.translateToString(true);
                 const idx = text.lastIndexOf('\u276f');
                 if (idx >= 0) return { row, col: idx + 2 };
               }
-              return {
-                row: Math.max(0, Math.min(terminal.rows - 1, buf.cursorY)),
-                col: Math.max(0, Math.min(terminal.cols - 1, buf.cursorX)),
-              };
+              return { row: cursorRow, col: Math.max(0, Math.min(terminal.cols - 1, buf.cursorX)) };
             } catch {
               return null;
             }
@@ -5563,9 +5608,8 @@ Object.assign(CodemanApp.prototype, {
   // the ±1 fallback — one line per notch, versus 4-5 for Chrome's ~110px. In
   // Claude mode the same value also capped the forwarded SGR report at one tick.
   _wheelScrollLines(ev) {
-    const lines = this._wheelScrollLinesFloat(ev);
-    if (!lines) return 0; // pure horizontal swipe: don't fall through to -1
-    return Math.round(lines) || (lines > 0 ? 1 : -1);
+    // Pure horizontal swipe: 0, never the ±1 fallback (wheelDeltaWholeLines).
+    return window.CodemanTerminalInput.wheelDeltaWholeLines(ev, this.terminal?.rows);
   },
 
   /** Unrounded variant for the smooth local-scroll path, which accumulates
@@ -5639,13 +5683,13 @@ Object.assign(CodemanApp.prototype, {
   // scroll-speed multiplier and acceleration on top), and the queue is bounded
   // so a wild scroll can't build a backlog that keeps scrolling after the finger
   // stops. Flushed via _sendInputEphemeral — loss-tolerant, off the durable queue.
+  // The encoding is the pure CodemanTerminalInput.sgrWheelReports, which a
+  // TerminalTile calls with its own cell (TerminalTile._maybeForwardWheelToCli).
   _sendSyntheticSgrWheel(clientX, clientY, lines) {
     if (!this.activeSessionId || !lines) return;
     const pos = this._clientPointToCell(clientX, clientY);
     if (!pos) return;
-    const btn = lines < 0 ? 64 : 65;
-    const ticks = Math.min(Math.abs(lines), 5);
-    this._queueScrollBytes(`\x1b[<${btn};${pos.col};${pos.row}M`.repeat(ticks));
+    this._queueScrollBytes(window.CodemanTerminalInput.sgrWheelReports(lines, pos));
   },
 
   /**

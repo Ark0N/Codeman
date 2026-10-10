@@ -4,7 +4,8 @@ Everything the dashboard does is HTTP, so an agent can do it too. This page is f
 that makes Codeman interesting: **Claude Code running inside a Codeman session, spawning and
 supervising other sessions.**
 
-Two routes. Start with the skill.
+Three routes. In a Claude session, start with the skill. In any other CLI mode, use the
+`codeman agent` commands. Raw HTTP is there for everything else.
 
 ## The agent skill
 
@@ -58,6 +59,36 @@ worked multi-worker recipes, endpoint tables, and cross-session messaging. It dr
 DeepSeek Harness workers the same way it drives Claude ones (`spawn_workers alpha
 beta:deepseek` is a mixed fleet in one call), since those are the two modes with real
 completion signals.
+
+## The `codeman agent` commands
+
+The skill is Claude-shaped: Codeman seeds its preamble for Claude sessions only. An
+`opencode`, `codex`, `pi` or `gemini` agent runs in the same environment but has nothing
+that teaches it the API, so `codeman agent` packages the same verbs as shell commands. It is
+a thin client over the endpoints in [the manual path](#the-manual-path), so auth and
+ownership apply unchanged, and it refuses to act outside a Codeman session. One line in a
+case's `AGENTS.md` is enough: *"other sessions: `codeman agent --help`"*.
+
+```bash
+codeman agent ls                                          # sessions; * marks this one
+SID=$(codeman agent spawn scratch-1 --mode claude)        # quick-start + wait for the composer where the mode has a ready mark
+codeman agent send "$SID" 'review src/, then say DONE' --until stop,exit --timeout 300000
+codeman agent read "$SID"                                 # last answer (as the server reads it for that mode)
+codeman agent read "$SID" --tail 3000                     # terminal tail, ANSI stripped (every mode)
+codeman agent send "$SID" 'run the tests, then print WORKDONE followed by _4711'   # hook-less modes: the marker in halves …
+codeman agent wait "$SID" --match WORKDONE_4711           # … and the wait on the joined form
+codeman agent interrupt "$SID"                            # a bare ESC, conversation intact
+codeman agent rm "$SID"                                   # any session except this one
+```
+
+- **Ids** may be the 8-character form `ls` prints. Anything shorter refuses, and so does an
+  ambiguous prefix.
+- **`send`** takes ONE quoted argument of printable text and presses Enter. A prompt that
+  starts with `-` goes after `--`: `codeman agent send "$SID" -- "- fix the bug"`.
+- **Markers** follow [the split-marker trick](#the-split-marker-trick): the echo of your own
+  prompt is output too, so ask for the marker in halves and wait on the joined form.
+- **Exit codes** are the same for every verb: `0` done, `1` error, `2` timeout, `3` the
+  worker exited, `4` refused. `--json` prints the response's `data`.
 
 ## The manual path
 

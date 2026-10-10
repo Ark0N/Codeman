@@ -2,8 +2,6 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdirSync } from 'node:fs';
 import { WebServer } from '../src/web/server.js';
 
-const TEST_PORT = 3102;
-
 describe('Interactive Session Lifecycle', () => {
   let server: WebServer;
   let baseUrl: string;
@@ -12,9 +10,9 @@ describe('Interactive Session Lifecycle', () => {
     // The 'custom working directory' test creates a session in /tmp/test; workingDir
     // validation requires the dir to exist, so ensure it does (idempotent, CI-safe).
     mkdirSync('/tmp/test', { recursive: true });
-    server = new WebServer(TEST_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {

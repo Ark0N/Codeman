@@ -16,23 +16,32 @@ It shows a **Tiles** button in the header, beside Split, and enables `Ctrl+Shift
 
 ## Opening a grid
 
-- **Tiles button**: one click shows the tiles straight away, as many as you last chose
-  (six until you choose; fewer if the window is too small or you have fewer sessions open).
-  You get the grid you last had, its tiles where they were, topped up with your open
-  sessions in tab order; if there is none, an open split's two first; otherwise your open
-  sessions in tab order, with the session you are on focused. With the grid open, the same
-  button closes it.
+- **Tiles button**: one click shows the tiles straight away. If you have used the grid in
+  this browser before, you get it back exactly as you left it: the same sessions in the
+  same places, an empty place where you left one, the same number of tiles, your column
+  widths and row heights, the tile you were in, and a zoomed tile still zoomed. A session
+  closed since frees its place, which is filled the way a new grid is filled (below).
+  Otherwise, or when none of those sessions is left, you get as many tiles as you last
+  chose (six until you choose; fewer if the window is too small or you have fewer sessions
+  open): an open split's two first; otherwise the sessions that are working (the most
+  recently started first), then the ones waiting on you (red and yellow tabs), then the
+  rest, the most recently used first, so the oldest are the ones left out. The session you
+  are on always comes along and is focused. With the grid open, the same button closes it.
 - **Rest the pointer on the Tiles button** (or tab to it) for a short card that shows the
-  count it opens and what a click and a right-click do.
+  count you chose and what a click and a right-click do.
 - **Right-click the Tiles button** (or press `Shift+F10` on it) to choose how many tiles:
-  **2**, **4** or **6**, each drawn as its layout. Your choice is remembered on this device
-  and is what the next click opens. With the grid open, picking a count re-forms it: the
-  tile you are in always stays, extra tiles leave from the end, new ones join from your tab
-  order. A count the window is too small for is greyed out, with the reason.
+  **2**, **4** or **6**, each drawn as its layout. Your choice is remembered in this
+  browser. Picking a count opens the grid with that many tiles (the grid you left, its
+  tiles in their places, new ones in the empty places first), and it is what a click opens
+  when there is no grid to bring back. With the grid open, picking a count re-forms it: the
+  tile you are in always stays, extra tiles leave from the end, new ones join working ones
+  first, then the ones waiting on you, then the most recent. A count the window is too
+  small for is greyed out, with the reason.
 - **`Ctrl+Shift+G`**: exactly what a click on the Tiles button does.
 - **`Ctrl`+click (or `Cmd`+click) a tab**: adds that session to the grid and focuses it. With
-  the grid closed it opens what the Tiles button would show, with that session among them
-  (still the count you chose in total). On macOS use
+  the grid closed it opens what the Tiles button would show with that session added: in the
+  empty place while the grid has fewer tiles than the count you chose, else in place of the
+  last tile (never more than the count). On macOS use
   `Cmd`: `Ctrl`+click there opens the tab's rename instead.
 - **Drag a tab onto a tile** to replace that tile with it (the replaced session keeps
   running), or onto an empty slot to add it. Dragging a session that is already tiled onto
@@ -89,7 +98,8 @@ keeps the focus.
 
 A moved tile takes the size of the place it lands in: column widths and row heights stay
 where you dragged the dividers. Tiles do not move while one is zoomed. Where everything is,
-the empty slot included, is saved with the grid and comes back on reload.
+the empty slot included, is saved with the grid and comes back when you turn the grid off
+and on, and on a page reload while the grid is open.
 
 Closing a tile leaves its place empty when the grid keeps its shape (six tiles to five), and a
 new tile takes the first empty place. When the number of tiles changes the grid's shape (four
@@ -122,8 +132,18 @@ session finder) shows that session on its own, the normal single view. The grid 
 remembered: the Tiles button or `Ctrl+Shift+G` brings it straight back. Going Home does the
 same. Narrowing the window below the desktop width also returns to the single view.
 
-The grid is saved on this device and comes back when you reload the page, with its focus,
-zoom and column widths. A session that was closed in the meantime is simply left out.
+The grid is saved in this browser every time you change it (moving, resizing, adding or
+removing a tile, changing the count, focusing or zooming a tile), and never sent to the
+server. However you leave it (the Tiles button, another tab, Home, a link, closing its last
+tile or session), the Tiles button brings it back as it was. A page reload brings it back
+when the grid was open; after you left it, a reload shows the single view and the Tiles
+button still brings the grid back. A session that was closed or popped out into its own
+window in the meantime frees its place for another one, picked the way a new grid picks
+them; the place stays empty only when no other session is left. Right after a page reload
+the page does not know yet which sessions are waiting for your answer, so that pick goes by
+which sessions are working and which you used last. If the window has become too small for
+all the tiles, the tile you were in fills the grid until the window is wide enough again,
+and the rest of the layout is kept.
 
 Split shows the same logo, name and model above both of its panes.
 

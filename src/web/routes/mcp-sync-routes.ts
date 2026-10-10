@@ -10,7 +10,8 @@
  * only, never env values, headers or file content (a parse failure is reported by position).
  *
  * A CLI takes part when it is ENABLED in the registry, declares an `mcpConfig`, and is installed
- * or already has its config file; one that is enabled but absent from the machine is reported
+ * or already has its config file (Copilot CLI, which is not a registry CLI, takes part when installed
+ * or when its config file exists); one that is enabled but absent from the machine is reported
  * `absent` and never created. Its file is located with this process's env (the env the CLIs
  * Codeman spawns inherit), so a relocation var such as `CODEX_HOME` is followed.
  */
@@ -28,6 +29,7 @@ import { isMultiUserMode } from '../../config/multiuser.js';
 import { enabledClis } from '../../config/cli-registry/registry.js';
 import { isCliEntryInstalled, probeStockCliAvailability } from '../../utils/cli-installed-probes.js';
 import { McpSyncBusyError, syncMcpServers, type McpSyncTarget } from '../../mcp-sync.js';
+import { mcpSyncOnlyTargets } from '../../mcp-sync-targets.js';
 
 /** Default OFF, same shape as `readCliManagementEnabled`: read fresh so a toggle applies at once. */
 export async function readMcpSyncEnabled(): Promise<boolean> {
@@ -35,9 +37,13 @@ export async function readMcpSyncEnabled(): Promise<boolean> {
   return settings.mcpSyncEnabled === true;
 }
 
-/** Enabled CLIs that declare an MCP config file, in registry order (first definition wins). */
+/**
+ * Enabled CLIs that declare an MCP config file, in registry order (first definition wins), then the
+ * sync-only tools (src/mcp-sync-targets.ts: Copilot CLI), which come last so a registry CLI's
+ * definition wins a same-name difference.
+ */
 export function mcpSyncTargets(availability: Record<string, boolean>): McpSyncTarget[] {
-  return enabledClis()
+  const registry = enabledClis()
     .filter((e) => e.capabilities.mcpConfig)
     .sort((a, b) => a.order - b.order)
     .map((e) => ({
@@ -46,6 +52,7 @@ export function mcpSyncTargets(availability: Record<string, boolean>): McpSyncTa
       ...e.capabilities.mcpConfig!,
       installed: isCliEntryInstalled(e, availability),
     }));
+  return [...registry, ...mcpSyncOnlyTargets(new Set(registry.map((t) => t.id)))];
 }
 
 /**

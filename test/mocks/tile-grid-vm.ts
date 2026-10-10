@@ -1,7 +1,8 @@
 /**
  * @fileoverview A `vm` harness for the tile grid (tile-grid.js) with the real
  * app around it: constants.js + app.js + terminal-ui.js + terminal-split.js +
- * tile-grid.js in one context, a small fake DOM (just what the grid touches) and a fake
+ * tile-grid.js + mobile-overview.js (the session state classifier the grid's
+ * ranking reuses) in one context, a small fake DOM (just what the grid touches) and a fake
  * TerminalTile that records what the grid asks of it.
  *
  * `makeGridApp()` returns an app instance with everything around the grid that
@@ -295,7 +296,7 @@ const context = vm.createContext({
 });
 vm.runInContext(
   `${read('constants.js')}\n${read('app.js')}\n${read('terminal-ui.js')}\n${read('terminal-split.js')}\n` +
-    `${read('tile-grid.js')}\n` +
+    `${read('tile-grid.js')}\n${read('mobile-overview.js')}\n` +
     'globalThis.__CodemanApp = CodemanApp;',
   context
 );

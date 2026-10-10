@@ -1412,6 +1412,13 @@ export const SettingsUpdateSchema = z
     // CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK env var. Stripped before persisting.
     acknowledgeUnauthTunnel: z.boolean().optional(),
     tabTwoRows: z.boolean().optional(),
+    /**
+     * CLI Logos on Tabs. Display key (per-device), default ON: only an explicit
+     * false hides the agent logo on session tabs and the desktop home rail
+     * (`html[data-tab-logos='off']`, a CSS-only switch). Tile and split headers
+     * and the Run menus keep their logos.
+     */
+    showTabCliLogos: z.boolean().optional(),
     tabOrientation: z.enum(['horizontal', 'vertical']).optional(),
     tabRailWidth: z.number().int().min(208).max(360).optional(),
     tabRailDetail: z.enum(['simple', 'rich']).optional(),
@@ -1538,6 +1545,8 @@ export const SettingsUpdateSchema = z
         browserNotifications: z.boolean().optional(),
         audioAlerts: z.boolean().optional(),
         stuckThresholdMs: z.number().optional(),
+        toastDurationMs: z.number().optional(),
+        browserAutoCloseMs: z.number().optional(),
         muteCritical: z.boolean().optional(),
         muteWarning: z.boolean().optional(),
         muteInfo: z.boolean().optional(),

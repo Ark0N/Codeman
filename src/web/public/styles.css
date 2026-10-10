@@ -1283,6 +1283,26 @@ html[data-tab-anim="blur"] .session-tab.tab-enter {
 }
 
 .anim-lab-range output { justify-self: end; color: var(--text); font-variant-numeric: tabular-nums; }
+
+.anim-lab-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: -2px 0 10px;
+  padding: 0 2px;
+  color: var(--text-dim);
+  font-size: 0.66rem;
+}
+
+.anim-lab-select select {
+  background: var(--bg-dark, #111);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.66rem;
+  padding: 2px 4px;
+}
 .anim-lab-range input { grid-column: 1 / -1; width: 100%; accent-color: #00ff66; }
 
 .anim-lab-demo {
@@ -1469,11 +1489,20 @@ html[data-win-anim="blur"] .ultracode-window.win-enter {
    frame. `will-change` is deliberately not set, the base rule needs its
    `will-change: contents` for terminal compositing. */
 
-.terminal-container.term-enter {
+/* A tile's screen (.tile-body, tile-grid.js) plays the same style when its
+   first capture lands: the same rules, so a tile combines its frame's own
+   entrance with the pane style. Its xterm's opacity fade stands aside for it. */
+.terminal-container.term-enter,
+.tile-body.term-enter {
   animation-fill-mode: both;
 }
 
-.terminal-container.term-enter::before {
+.tile-body.term-enter .xterm {
+  transition: none;
+}
+
+.terminal-container.term-enter::before,
+.tile-body.term-enter::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -1483,14 +1512,29 @@ html[data-win-anim="blur"] .ultracode-window.win-enter {
   animation-fill-mode: both;
 }
 
+/* A screen whose content lands while its frame is still entering waits for
+   it (--tile-screen-delay, entrance-animations.js): the body holds its first
+   keyframe meanwhile (hidden), its wash does not (a held wash is a bright
+   static block). */
+.tile-body.term-enter {
+  animation-delay: var(--tile-screen-delay, 0ms);
+}
+
+.tile-body.term-enter::before {
+  animation-delay: var(--tile-screen-delay, 0ms);
+  animation-fill-mode: forwards;
+}
+
 /* CRT, power-on: a hot line that expands to full height. */
-html[data-term-anim="crt"] .terminal-container.term-enter {
+html[data-term-anim="crt"] .terminal-container.term-enter,
+html[data-term-anim="crt"] .tile-body.term-enter {
   animation-name: term-enter-crt;
   animation-duration: calc(560ms * var(--anim-enter-scale, 1));
   animation-timing-function: cubic-bezier(0.3, 0.9, 0.3, 1);
 }
 
-html[data-term-anim="crt"] .terminal-container.term-enter::before {
+html[data-term-anim="crt"] .terminal-container.term-enter::before,
+html[data-term-anim="crt"] .tile-body.term-enter::before {
   animation-name: term-enter-crt-flash;
   animation-duration: calc(560ms * var(--anim-enter-scale, 1));
   animation-timing-function: ease-out;
@@ -1511,55 +1555,16 @@ html[data-term-anim="crt"] .terminal-container.term-enter::before {
   100% { opacity: 0; background: transparent; }
 }
 
-/* Boot, flickers on under a green scan sweep. */
-html[data-term-anim="boot"] .terminal-container.term-enter {
-  animation-name: term-enter-boot;
-  animation-duration: calc(760ms * var(--anim-enter-scale, 1));
-  animation-timing-function: linear;
-}
-
-html[data-term-anim="boot"] .terminal-container.term-enter::before {
-  background: linear-gradient(
-    180deg,
-    transparent 0%,
-    rgba(0, 255, 102, 0.05) 40%,
-    rgba(200, 255, 220, 0.28) 50%,
-    rgba(0, 255, 102, 0.05) 60%,
-    transparent 100%
-  );
-  background-size: 100% 300%;
-  animation-name: term-enter-boot-scan;
-  animation-duration: calc(760ms * var(--anim-enter-scale, 1));
-  animation-timing-function: ease-in-out;
-}
-
-@keyframes term-enter-boot {
-  0%   { opacity: 0; transform: scale(0.995); }
-  8%   { opacity: 0.85; }
-  15%  { opacity: 0.1; }
-  24%  { opacity: 1; }
-  33%  { opacity: 0.35; }
-  45%  { opacity: 1; transform: none; }
-  58%  { opacity: 0.7; }
-  70%  { opacity: 1; }
-  100% { opacity: 1; transform: none; }
-}
-
-@keyframes term-enter-boot-scan {
-  0%   { opacity: 0; background-position: 0 -150%; }
-  12%  { opacity: 1; }
-  86%  { opacity: 1; }
-  100% { opacity: 0; background-position: 0 150%; }
-}
-
 /* Wipe, reveals top-to-bottom behind a bright edge. */
-html[data-term-anim="wipe"] .terminal-container.term-enter {
+html[data-term-anim="wipe"] .terminal-container.term-enter,
+html[data-term-anim="wipe"] .tile-body.term-enter {
   animation-name: term-enter-wipe;
   animation-duration: calc(520ms * var(--anim-enter-scale, 1));
   animation-timing-function: cubic-bezier(0.35, 0.85, 0.3, 1);
 }
 
-html[data-term-anim="wipe"] .terminal-container.term-enter::before {
+html[data-term-anim="wipe"] .terminal-container.term-enter::before,
+html[data-term-anim="wipe"] .tile-body.term-enter::before {
   background: linear-gradient(180deg, rgba(0, 255, 102, 0.16) 0%, rgba(190, 255, 215, 0.5) 82%, transparent 100%);
   animation-name: term-enter-wipe-edge;
   animation-duration: calc(520ms * var(--anim-enter-scale, 1));
@@ -1578,7 +1583,8 @@ html[data-term-anim="wipe"] .terminal-container.term-enter::before {
 }
 
 /* Slide up, rises into place from below. */
-html[data-term-anim="slide"] .terminal-container.term-enter {
+html[data-term-anim="slide"] .terminal-container.term-enter,
+html[data-term-anim="slide"] .tile-body.term-enter {
   animation-name: term-enter-slide;
   animation-duration: calc(420ms * var(--anim-enter-scale, 1));
   animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
@@ -1590,7 +1596,8 @@ html[data-term-anim="slide"] .terminal-container.term-enter {
 }
 
 /* Fade, quiet, with a touch of scale. */
-html[data-term-anim="fade"] .terminal-container.term-enter {
+html[data-term-anim="fade"] .terminal-container.term-enter,
+html[data-term-anim="fade"] .tile-body.term-enter {
   animation-name: term-enter-fade;
   animation-duration: calc(340ms * var(--anim-enter-scale, 1));
   animation-timing-function: ease-out;
@@ -1628,7 +1635,8 @@ html[data-term-anim="fade"] .terminal-container.term-enter {
    resize() and through to the PTY. `filter` is paint-only (measured live: 178x38
    before, during and after a run), and the property allowlist for every one of
    these keyframes is pinned by test/entrance-animations.test.ts. */
-html[data-term-anim="blur"] .terminal-container.term-enter {
+html[data-term-anim="blur"] .terminal-container.term-enter,
+html[data-term-anim="blur"] .tile-body.term-enter {
   animation-name: term-enter-blur;
   animation-duration: calc(520ms * var(--anim-enter-scale, 1));
   animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
@@ -1751,9 +1759,19 @@ html[data-line-anim="blur"] .connection-line.line-enter {
   .ultracode-window.win-enter::before,
   .terminal-container.term-enter,
   .terminal-container.term-enter::before,
+  .tile-body.term-enter,
+  .tile-body.term-enter::before,
+  .tile.tile--entering,
+  .tile.tile--entering::before,
   .connection-line.line-enter,
-  .connection-line-packet {
+  .connection-line-packet,
+  .connection-line.tile-beam-line,
+  .session-tab.tab-launch::after {
     animation: none !important;
+  }
+
+  .tile-beam-lines {
+    display: none;
   }
 }
 
@@ -3030,6 +3048,19 @@ body.solo-mode .btn-lifecycle-log {
    `.tab-harness.run-mode-dot <id>` slot that the run-mode-dot rules draw: brand
    marks as is, monochrome ones in the tab's own text colour, so no per-CLI tab
    colour lives here any more. Only the shell keeps a pill. */
+
+/* CLI Logos on Tabs off (`showTabCliLogos`, per-device; settings-ui.js
+   applyTabOrientation() and the pre-paint script in index.html stamp the
+   attribute). The logo leaves the session tabs (header strip, vertical rail,
+   sidebar, grouped rail, phone chips) and the desktop home rail; the status
+   dot and the shell's SH pill stay. Every row it sits in spaces its children
+   with flex `gap`, which skips a display:none item, so no empty slot is left.
+   Tile and split headers (.tile-harness, .split-harness) and the Run menus
+   keep their logos: only these two classes are named here. */
+html[data-tab-logos='off'] .session-tab .tab-harness,
+html[data-tab-logos='off'] .home-sessions-harness {
+  display: none;
+}
 
 /* Timer Banner - Compact */
 .timer-banner {
@@ -16995,6 +17026,12 @@ html[data-tab-orientation='vertical'] .home-sessions {
     transform 0.1s ease;
 }
 
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-save.set-head-apply {
+  background: transparent;
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
 :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-save:hover {
   filter: brightness(1.08);
 }
@@ -18798,9 +18835,81 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab.drag-over-right {
    Scoped to the sidebar layout on purpose: applySidebarFilter() already strips
    the class whenever the filter box is off screen, and this prefix is the
    second lock — a leaked class must never be able to hide tabs from the header
-   strip, which has no filter control to clear it with. */
-html[data-session-list="sidebar"] .session-tab.tab-filtered-out {
+   strip, which has no filter control to clear it with. The shared filter
+   (_applyTabListFilter) also marks a case box (tabArrangement 'case') the
+   filter emptied, which hides with its label and count rather than staying
+   on screen reading 0. */
+html[data-session-list="sidebar"] .session-tab.tab-filtered-out,
+html[data-session-list="sidebar"] .tab-cluster.tab-filtered-out {
   display: none !important;
+}
+
+/* The vertical rail's session search (app.js _applyTabListFilter) uses the same
+   class, and also hides a group or case box the search emptied. Rail-scoped for
+   the same reason as the sidebar rule above: the header strip has no box. */
+html[data-tab-orientation='vertical'] .tab-rail .session-tab.tab-filtered-out,
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group.tab-filtered-out,
+html[data-tab-orientation='vertical'] .tab-rail .tab-cluster.tab-filtered-out {
+  display: none !important;
+}
+
+/* The box reuses .session-sidebar-filter / -input; this only adds the clear
+   button over its right edge and the "No sessions match" line. */
+.tab-rail-search {
+  position: relative;
+  /* Clear of the 16px resize handle on the rail's right edge. */
+  padding-right: calc(0.25rem + 16px);
+}
+
+.tab-rail-search .session-sidebar-filter-input {
+  padding-right: 1.6rem;
+}
+
+/* The native WebKit clear glyph would sit under ours. */
+.tab-rail-search .session-sidebar-filter-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.tab-rail-search-clear {
+  position: absolute;
+  top: 50%;
+  right: calc(0.45rem + 16px);
+  width: 1.2rem;
+  height: 1.2rem;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tab-rail-search-clear:hover,
+.tab-rail-search-clear:focus-visible {
+  background: var(--control-bg-hover);
+  color: var(--text);
+}
+
+.tab-rail-search-clear[hidden],
+.tab-rail-search-empty[hidden] {
+  display: none;
+}
+
+.tab-rail-search-empty {
+  flex-shrink: 0;
+  padding: 0.5rem 0.75rem;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+/* Every group is drawn open while searching and its header will not toggle,
+   so the chevron dims to say so. */
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs.tabs-filtering .tab-layout-group-chevron {
+  opacity: 0.35;
 }
 
 /* --- Rich rows (sessionListLayout 'sidebar-rich' + tabRailDetail 'rich') --- */
@@ -20083,6 +20192,314 @@ body.tile-grid-resizing--row * {
   }
 }
 
+/* ── Tile grid entrance styles (entrance-animations.js TILE_ANIM_STYLES) ───
+   Picked in App Settings → Animations (Tile Animations, or preset by the
+   Entrance Theme) or per surface in the lab (?animlab=1); `settle` is the rule above, the default,
+   and what a reload restores with. Any other style is held one frame
+   (.tile--enter-hold: invisible, not animating) while the entrance module
+   orders the cascade and measures the tile's source on the final layout, then
+   arrives with .tile--enter-themed and an inline --tile-enter-delay (and, for
+   `fly` and `deal`, the --tile-from-* offset onto the tab or the Tiles button).
+   FRAME keyframes animate transform and opacity only: FitAddon reads the
+   untransformed layout box (#464), and six tiles run at once, so no filter
+   (a blur belongs to the screen beat, one tile at a time). Colour goes on a
+   ::before wash. Each style also has its own way out on the closing grid's
+   still copy (tile-leave-*, below). */
+html[data-tile-anim="settle"] .tile.tile--entering {
+  animation-name: tile-enter;
+}
+
+.tile.tile--entering.tile--enter-themed {
+  animation-delay: var(--tile-enter-delay, 0ms);
+  animation-fill-mode: both;
+  will-change: transform, opacity;
+}
+
+.tile.tile--entering.tile--enter-themed::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  animation-delay: var(--tile-enter-delay, 0ms);
+  animation-fill-mode: both;
+}
+
+.tile.tile--enter-hold {
+  opacity: 0;
+}
+
+.tile.tile--enter-hold,
+.tile.tile--enter-hold::before {
+  animation: none !important;
+}
+
+/* Fly from tab: grows out of its session tab (FLIP onto the tab's own box),
+   overshoots a hair and lands. */
+html[data-tile-anim="fly"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-fly;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+html[data-tile-anim="fly"] .tile.tile--entering.tile--enter-themed::before {
+  animation-name: tile-wash-launch;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes tile-enter-fly {
+  0% {
+    opacity: 0;
+    transform: translate(var(--tile-from-x, 0px), var(--tile-from-y, -48px))
+      scale(var(--tile-from-sx, 0.3), var(--tile-from-sy, 0.1));
+  }
+  16% {
+    opacity: 1;
+  }
+  74% {
+    transform: translate(0, 0) scale(1.01);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tile-wash-launch {
+  0% {
+    opacity: 1;
+    background: color-mix(in srgb, var(--accent, #4a9eff) 45%, transparent);
+    box-shadow: inset 0 0 0 2px var(--accent, #4a9eff);
+  }
+  55% {
+    opacity: 0.55;
+    background: color-mix(in srgb, var(--accent, #4a9eff) 12%, transparent);
+  }
+  100% {
+    opacity: 0;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+
+/* Deal: dealt out of the Tiles button like cards, each turned a little, then
+   squared up in its cell. */
+html[data-tile-anim="deal"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-deal;
+  animation-duration: calc(600ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.22, 0.85, 0.3, 1);
+}
+
+@keyframes tile-enter-deal {
+  0% {
+    opacity: 0;
+    transform: translate(var(--tile-from-x, 0px), var(--tile-from-y, -240px)) scale(var(--tile-from-sx, 0.1))
+      rotate(var(--tile-from-rot, -10deg));
+  }
+  10% {
+    opacity: 1;
+  }
+  70% {
+    transform: translate(0, 0) scale(1.02) rotate(calc(var(--tile-from-rot, -10deg) * -0.1));
+  }
+  88% {
+    transform: scale(0.996) rotate(0deg);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* CRT: powers on as a hot line, then unfolds, under the agent windows' flash. */
+html[data-tile-anim="crt"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-crt;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.3, 0.9, 0.3, 1);
+}
+
+html[data-tile-anim="crt"] .tile.tile--entering.tile--enter-themed::before {
+  animation-name: win-enter-crt-flash;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes tile-enter-crt {
+  0% {
+    opacity: 0;
+    transform: scale3d(0.5, 0.006, 1);
+  }
+  22% {
+    opacity: 1;
+    transform: scale3d(1, 0.01, 1);
+  }
+  58% {
+    opacity: 1;
+    transform: scale3d(1, 1.04, 1);
+  }
+  80% {
+    opacity: 1;
+    transform: scale3d(1, 0.985, 1);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Beam down: holds still while a beam draws down from its tab (the entrance
+   module's own overlay, .tile-beam-line), then materializes out of the agent
+   windows' green wash. No transform, so the beam lands where the tile is. */
+html[data-tile-anim="beam"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-beam;
+  animation-duration: calc(620ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+html[data-tile-anim="beam"] .tile.tile--entering.tile--enter-themed::before {
+  animation-name: win-enter-beam-wash;
+  animation-duration: calc(620ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes tile-enter-beam {
+  0% {
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.55;
+  }
+  32% {
+    opacity: 0.2;
+  }
+  48% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* Cascade: swings down from its top edge, a diagonal at a time. */
+html[data-tile-anim="cascade"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-cascade;
+  animation-duration: calc(600ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.3, 0.9, 0.3, 1);
+  transform-origin: 50% 0%;
+}
+
+@keyframes tile-enter-cascade {
+  0% {
+    opacity: 0;
+    transform: perspective(1400px) rotateX(-80deg);
+  }
+  55% {
+    opacity: 1;
+    transform: perspective(1400px) rotateX(8deg);
+  }
+  80% {
+    transform: perspective(1400px) rotateX(-2.5deg);
+  }
+  100% {
+    opacity: 1;
+    transform: perspective(1400px) rotateX(0deg);
+  }
+}
+
+/* Pop: springs open from its centre, rippling out from the focused tile. */
+html[data-tile-anim="pop"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-pop;
+  animation-duration: calc(480ms * var(--anim-enter-scale, 1));
+  animation-timing-function: ease-out;
+}
+
+@keyframes tile-enter-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  58% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+  80% {
+    transform: scale(0.993);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Soft: a slow drift up into place; with the Soft focus theme each screen
+   then focus-pulls in (the pane's `blur` style on .tile-body). */
+html[data-tile-anim="soft"] .tile.tile--entering.tile--enter-themed {
+  animation-name: tile-enter-soft;
+  animation-duration: calc(620ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes tile-enter-soft {
+  0% {
+    opacity: 0;
+    transform: translateY(16px) scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The tab a tile flies (or beams) out of glows as it goes. */
+.session-tab.tab-launch:not(.tab-loading)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: tab-launch-flash calc(520ms * var(--anim-enter-scale, 1)) ease-out var(--tab-launch-delay, 0ms) both;
+}
+
+@keyframes tab-launch-flash {
+  0% {
+    opacity: 0;
+    background: color-mix(in srgb, var(--accent, #4a9eff) 40%, transparent);
+    box-shadow: 0 0 0 1px var(--accent, #4a9eff), 0 0 14px 2px color-mix(in srgb, var(--accent, #4a9eff) 70%, transparent);
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    background: transparent;
+    box-shadow: 0 0 0 1px transparent, 0 0 0 0 transparent;
+  }
+}
+
+/* `beam`'s lines: the connection-line look, drawn from the tab down to the
+   tile, held while the tile materializes, then faded. Their own overlay
+   (#tileBeamLines), removed by the entrance module once they are done. */
+.connection-line.tile-beam-line {
+  stroke-dasharray: var(--line-len);
+  animation:
+    line-enter-draw calc(380ms * var(--anim-enter-scale, 1)) cubic-bezier(0.32, 0.8, 0.3, 1)
+      var(--line-enter-delay, 0ms) both,
+    tile-beam-out calc(420ms * var(--anim-enter-scale, 1)) ease-in
+      calc(var(--line-enter-delay, 0ms) + 640ms * var(--anim-enter-scale, 1)) forwards;
+}
+
+@keyframes tile-beam-out {
+  from {
+    opacity: 0.9;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 .tile-body .xterm {
   transition: opacity 160ms ease-out;
 }
@@ -20157,9 +20574,220 @@ body.tile-grid-resizing--row * {
   }
 }
 
+/* The entrance style's own way out (entrance-animations.js _stageTileExit),
+   on the still copy only and only for the Tiles toggle's close: a re-form's
+   copy (--now) covers tiles that stay, so it keeps the plain fade above.
+   Copies leave in reading order (--tile-exit-delay), so the last one ends
+   last and takes the layer with it. */
+.tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+}
+
+html[data-tile-anim="fly"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-fly calc(460ms * var(--anim-enter-scale, 1)) cubic-bezier(0.55, 0, 0.75, 0.2)
+    var(--tile-exit-delay, 0ms) both;
+}
+
+html[data-tile-anim="fly"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving::before {
+  animation: tile-wash-return calc(460ms * var(--anim-enter-scale, 1)) ease-in var(--tile-exit-delay, 0ms) both;
+}
+
+@keyframes tile-leave-fly {
+  0% {
+    opacity: 0.8;
+    transform: scale(0.985);
+  }
+  75% {
+    opacity: 0.8;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--tile-to-x, 0px), var(--tile-to-y, -48px))
+      scale(var(--tile-to-sx, 0.3), var(--tile-to-sy, 0.1));
+  }
+}
+
+@keyframes tile-wash-return {
+  0% {
+    opacity: 0;
+    background: transparent;
+  }
+  100% {
+    opacity: 1;
+    background: color-mix(in srgb, var(--accent, #4a9eff) 55%, transparent);
+  }
+}
+
+html[data-tile-anim="deal"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-deal calc(520ms * var(--anim-enter-scale, 1)) cubic-bezier(0.5, 0, 0.75, 0.25)
+    var(--tile-exit-delay, 0ms) both;
+}
+
+@keyframes tile-leave-deal {
+  0% {
+    opacity: 0.8;
+    transform: scale(0.985);
+  }
+  22% {
+    transform: scale(1.02) rotate(calc(var(--tile-to-rot, -10deg) * -0.15));
+  }
+  85% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--tile-to-x, 0px), var(--tile-to-y, -240px)) scale(var(--tile-to-sx, 0.1))
+      rotate(var(--tile-to-rot, -10deg));
+  }
+}
+
+/* CRT: the classic switch-off, down to a line, then a dot, then dark. */
+html[data-tile-anim="crt"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-crt calc(520ms * var(--anim-enter-scale, 1)) cubic-bezier(0.4, 0, 0.6, 1)
+    var(--tile-exit-delay, 0ms) both;
+}
+
+html[data-tile-anim="crt"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving::before {
+  animation: tile-wash-crt-off calc(520ms * var(--anim-enter-scale, 1)) ease-in var(--tile-exit-delay, 0ms) both;
+}
+
+@keyframes tile-leave-crt {
+  0% {
+    opacity: 0.8;
+    transform: scale(0.985);
+  }
+  42% {
+    opacity: 1;
+    transform: scale3d(1, 0.012, 1);
+  }
+  72% {
+    opacity: 1;
+    transform: scale3d(0.03, 0.012, 1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale3d(0, 0, 1);
+  }
+}
+
+@keyframes tile-wash-crt-off {
+  0% {
+    opacity: 0;
+    background: transparent;
+  }
+  38% {
+    opacity: 1;
+    background: rgba(220, 255, 235, 0.95);
+  }
+  100% {
+    opacity: 1;
+    background: rgba(255, 255, 255, 1);
+  }
+}
+
+/* Beam down: beamed back up, flickering out under a rising wash. */
+html[data-tile-anim="beam"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-beam calc(480ms * var(--anim-enter-scale, 1)) ease-in var(--tile-exit-delay, 0ms) both;
+}
+
+html[data-tile-anim="beam"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving::before {
+  animation: tile-wash-beam-up calc(480ms * var(--anim-enter-scale, 1)) ease-in var(--tile-exit-delay, 0ms) both;
+}
+
+@keyframes tile-leave-beam {
+  0% {
+    opacity: 0.8;
+  }
+  40% {
+    opacity: 0.9;
+  }
+  55% {
+    opacity: 0.3;
+  }
+  70% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes tile-wash-beam-up {
+  0% {
+    opacity: 0;
+    background: linear-gradient(0deg, rgba(0, 255, 102, 0.35), rgba(0, 255, 102, 0));
+  }
+  100% {
+    opacity: 1;
+    background: linear-gradient(0deg, rgba(190, 255, 215, 0.85), rgba(0, 255, 102, 0.2));
+  }
+}
+
+/* Cascade: folds back up on its top edge. */
+html[data-tile-anim="cascade"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-cascade calc(480ms * var(--anim-enter-scale, 1)) cubic-bezier(0.5, 0, 0.75, 0.2)
+    var(--tile-exit-delay, 0ms) both;
+  transform-origin: 50% 0%;
+}
+
+@keyframes tile-leave-cascade {
+  0% {
+    opacity: 0.8;
+    transform: perspective(1400px) rotateX(0deg) scale(0.985);
+  }
+  100% {
+    opacity: 0;
+    transform: perspective(1400px) rotateX(82deg) scale(0.985);
+  }
+}
+
+/* Pop: a last swell, then it pops away. */
+html[data-tile-anim="pop"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-pop calc(380ms * var(--anim-enter-scale, 1)) ease-in var(--tile-exit-delay, 0ms) both;
+}
+
+@keyframes tile-leave-pop {
+  0% {
+    opacity: 0.8;
+    transform: scale(0.985);
+  }
+  35% {
+    opacity: 0.9;
+    transform: scale(1.03);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+}
+
+/* Soft: sinks away slowly. */
+html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.tile-grid-ghosts--now) .tile.tile--leaving {
+  animation: tile-leave-soft calc(520ms * var(--anim-enter-scale, 1)) cubic-bezier(0.4, 0, 0.7, 0.4)
+    var(--tile-exit-delay, 0ms) both;
+}
+
+@keyframes tile-leave-soft {
+  0% {
+    opacity: 0.8;
+    transform: scale(0.985);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.94);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tile-count-menu,
   .tile.tile--entering,
+  .tile.tile--entering::before,
   .tile.tile--needs::after,
   .tile.tile--loading .tile-body::after,
   .tile-grid-ghosts .tile.tile--leaving,

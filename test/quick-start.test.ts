@@ -4,7 +4,6 @@ import { existsSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const TEST_PORT = 3299;
 const ORIGINAL_HOME = process.env.HOME;
 const TEST_HOME = mkdtempSync(join(tmpdir(), 'codeman-quick-start-'));
 const CASES_DIR = join(TEST_HOME, 'codeman-cases');
@@ -12,10 +11,10 @@ let webServerModule: Promise<typeof import('../src/web/server.js')> | undefined;
 
 process.env.HOME = TEST_HOME;
 
-async function createTestServer(port: number): Promise<WebServer> {
+async function createTestServer(): Promise<WebServer> {
   webServerModule ??= import('../src/web/server.js');
   const { WebServer: TestWebServer } = await webServerModule;
-  return new TestWebServer(port, false, true);
+  return new TestWebServer(0, false, true);
 }
 
 afterAll(() => {
@@ -30,9 +29,9 @@ describe('Quick Start API', () => {
   const createdCases: string[] = [];
 
   beforeAll(async () => {
-    server = await createTestServer(TEST_PORT);
+    server = await createTestServer();
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   }, 30000);
 
   afterEach(() => {
@@ -164,9 +163,9 @@ describe('Session Management', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    server = await createTestServer(TEST_PORT + 1);
+    server = await createTestServer();
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT + 1}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -223,9 +222,9 @@ describe('Case Management', () => {
   const createdCases: string[] = [];
 
   beforeAll(async () => {
-    server = await createTestServer(TEST_PORT + 2);
+    server = await createTestServer();
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT + 2}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -339,9 +338,9 @@ describe('Agent skill injection (agentSkillEnabled)', () => {
   const createdCases: string[] = [];
 
   beforeAll(async () => {
-    server = await createTestServer(TEST_PORT + 4); // 3103
+    server = await createTestServer();
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT + 4}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {

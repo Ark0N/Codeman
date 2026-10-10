@@ -22,8 +22,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { WebServer } from '../src/web/server.js';
 
-const TEST_PORT = 3183;
-
 /**
  * Fetch and fully drain the body. Both halves matter for teardown: an unconsumed
  * body leaves undici holding the socket, and a pooled keep-alive socket makes
@@ -40,9 +38,9 @@ describe('static asset Cache-Control headers', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {

@@ -105,7 +105,13 @@ export type ModelConfigResolverName = 'deepseek-route';
 export type LaunchDefaultSettingKey = 'codexModel' | 'codexReasoningEffort';
 
 /** The MCP config dialects `src/mcp-sync.ts` has an adapter for. */
-export type McpConfigFormat = 'claude-json' | 'gemini-json' | 'codex-toml' | 'opencode-json' | 'antigravity-json';
+export type McpConfigFormat =
+  | 'claude-json'
+  | 'gemini-json'
+  | 'codex-toml'
+  | 'opencode-json'
+  | 'antigravity-json'
+  | 'copilot-json';
 
 export interface CliLaunch {
   params: Record<string, ParamSpec>;
@@ -416,6 +422,17 @@ export interface CliCapabilities {
    * Absent means no strip at all, the same fail-safe direction `workDetect` takes.
    */
   transcriptGutter?: number;
+  /**
+   * Literal text the TUI draws once its composer can take a prompt — what `codeman agent
+   * spawn` waits for (a `wait-output` match) before it calls a worker ready.
+   *
+   * Deliberately NOT `workDetect.promptGlyph`: claude's `❯` also marks the selected row
+   * of its workspace-trust dialog, which is exactly the screen a readiness wait must not
+   * mistake for a composer, so claude declares its composer's own hint text instead.
+   * Absent means no readiness wait: a spawn returns as soon as the session exists, and
+   * the caller synchronizes on `wait-output` markers.
+   */
+  composerReadyMark?: string;
   /** No direct-PTY fallback: the CLI must run inside tmux (secrets ride tmux setenv). */
   requiresMux: boolean;
   /**

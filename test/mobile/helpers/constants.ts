@@ -1,16 +1,3 @@
-// Port assignments
-export const PORTS = {
-  KEYBOARD: 3200,
-  TABS: 3201,
-  SUBAGENT_WINDOWS: 3202,
-  SETTINGS: 3203,
-  LAYOUT: 3204,
-  DEVICE_MATRIX: 3205,
-  VISUAL_REGRESSION: 3206,
-  ACCESSIBILITY: 3207,
-  HEADER_BUTTONS: 3208,
-} as const;
-
 // CSS Selectors
 export const SELECTORS = {
   // Header

@@ -1,7 +1,7 @@
-// Port 3203 - Settings modal mobile tests
+// Ephemeral port - Settings modal mobile tests
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import type { Page, BrowserContext } from 'playwright';
-import { PORTS, SELECTORS, KEYBOARD, STORAGE_KEYS, BODY_CLASSES, WAIT } from './helpers/constants.js';
+import { SELECTORS, KEYBOARD, STORAGE_KEYS, BODY_CLASSES, WAIT } from './helpers/constants.js';
 import { createTestServer, stopTestServer } from './helpers/server.js';
 import { createDevicePage, closeAllBrowsers } from './helpers/browser.js';
 import { showKeyboard, hideKeyboard } from './helpers/keyboard-sim.js';
@@ -9,14 +9,14 @@ import { assertVisible, assertHidden, getCSSProperty, getCSSNumericValue } from 
 import { DEVICE_REGISTRY, REPRESENTATIVE_DEVICES } from './devices.js';
 import type { WebServer } from '../src/web/server.js';
 
-const PORT = PORTS.SETTINGS;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 describe('Settings Modal', () => {
   let server: WebServer;
 
   beforeAll(async () => {
-    server = await createTestServer(PORT);
+    server = await createTestServer();
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -32,7 +32,7 @@ describe('Settings Modal', () => {
     const device = REPRESENTATIVE_DEVICES['standard-phone'];
 
     beforeEach(async () => {
-      const result = await createDevicePage(device, BASE_URL, 'chromium');
+      const result = await createDevicePage(device, baseUrl, 'chromium');
       page = result.page;
       context = result.context;
     });
@@ -105,7 +105,7 @@ describe('Settings Modal', () => {
     const device = REPRESENTATIVE_DEVICES['standard-phone'];
 
     beforeEach(async () => {
-      const result = await createDevicePage(device, BASE_URL, 'chromium');
+      const result = await createDevicePage(device, baseUrl, 'chromium');
       page = result.page;
       context = result.context;
     });
@@ -210,7 +210,7 @@ describe('Settings Modal', () => {
     const device = REPRESENTATIVE_DEVICES['standard-phone'];
 
     beforeEach(async () => {
-      const result = await createDevicePage(device, BASE_URL, 'chromium');
+      const result = await createDevicePage(device, baseUrl, 'chromium');
       page = result.page;
       context = result.context;
 
@@ -295,7 +295,7 @@ describe('Settings Modal', () => {
     const device = REPRESENTATIVE_DEVICES['standard-phone'];
 
     it('settings survive page reload', async () => {
-      const { page, context } = await createDevicePage(device, BASE_URL, 'chromium');
+      const { page, context } = await createDevicePage(device, baseUrl, 'chromium');
 
       try {
         // Store a test setting
@@ -330,7 +330,7 @@ describe('Settings Modal', () => {
     });
 
     it('mobile notification prefs stored separately from desktop settings', async () => {
-      const { page, context } = await createDevicePage(device, BASE_URL, 'chromium');
+      const { page, context } = await createDevicePage(device, baseUrl, 'chromium');
 
       try {
         // Store both mobile and desktop settings
@@ -375,7 +375,7 @@ describe('Settings Modal', () => {
   describe('Tablet vs Desktop Settings', () => {
     it('tablet uses desktop settings key', async () => {
       const device = REPRESENTATIVE_DEVICES['standard-tablet'];
-      const { page, context } = await createDevicePage(device, BASE_URL, 'chromium');
+      const { page, context } = await createDevicePage(device, baseUrl, 'chromium');
 
       try {
         const key = await page.evaluate(() => {
@@ -393,7 +393,7 @@ describe('Settings Modal', () => {
 
     it('settings gear button not in toolbar on desktop', async () => {
       const device = REPRESENTATIVE_DEVICES['large-tablet'];
-      const { page, context } = await createDevicePage(device, BASE_URL, 'chromium');
+      const { page, context } = await createDevicePage(device, baseUrl, 'chromium');
 
       try {
         await assertHidden(page, SELECTORS.SETTINGS_MOBILE);
@@ -411,7 +411,7 @@ describe('Settings Modal', () => {
       // test/viewport-shape-change.test.ts; this drives the real resize.
       const inner = DEVICE_REGISTRY.find((entry) => entry.name === 'iPhone Duo (inner)')!;
       const outer = DEVICE_REGISTRY.find((entry) => entry.name === 'iPhone Duo (outer)')!;
-      const { page, context } = await createDevicePage(inner, BASE_URL, 'chromium');
+      const { page, context } = await createDevicePage(inner, baseUrl, 'chromium');
 
       try {
         await page.evaluate((key) => {
@@ -444,7 +444,7 @@ describe('Settings Modal', () => {
 
     it('keeps handheld settings when a foldable unfolds past the desktop breakpoint', async () => {
       const device = DEVICE_REGISTRY.find((entry) => entry.name === 'OPPO Find N5 (unfolded)')!;
-      const { page, context } = await createDevicePage(device, BASE_URL, 'chromium');
+      const { page, context } = await createDevicePage(device, baseUrl, 'chromium');
 
       try {
         // Seed the preferences while folded, exactly as a phone user does.

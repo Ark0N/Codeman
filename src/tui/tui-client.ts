@@ -48,6 +48,12 @@ import https from 'node:https';
 import { hostname as osHostname } from 'node:os';
 import { promisify } from 'node:util';
 import { CODEMAN_INSTANCE, dataPath, resolveTmuxSocketName } from '../config/instance.js';
+import {
+  basicAuthHeader,
+  parseEnvFile,
+  readCodemanCredentials,
+  type CodemanCredentials,
+} from '../codeman-credentials.js';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
 import { probeServer } from '../daemon-control.js';
 import { getErrorMessage } from '../types/api.js';
@@ -281,53 +287,9 @@ export function tuiServerCandidates(env: { apiUrl?: string; port?: string | numb
   return [`https://127.0.0.1:${port}`, `http://127.0.0.1:${port}`];
 }
 
-/**
- * Parse a `KEY=value` env file. Mirrors `readCodemanEnv()` in `cli.ts`: blank
- * lines and `#` comments skipped, one layer of matching quotes stripped.
- */
-export function parseEnvFile(text: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (!match) continue;
-    let value = match[2].trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    result[match[1]] = value;
-  }
-  return result;
-}
-
-export interface TuiCredentials {
-  username: string;
-  password?: string;
-}
-
-/**
- * Credentials for the API, env first and the data dir's `.env` as the fallback,
- * exactly like the `codeman attach` path. No password means no auth is
- * configured (or the user has it only in the server's environment, in which
- * case the API answers 401 and `connect()` reports `authRequired`).
- */
-export function readCodemanCredentials(envFilePath = dataPath('.env')): TuiCredentials {
-  let fileEnv: Record<string, string> = {};
-  try {
-    fileEnv = parseEnvFile(readFileSync(envFilePath, 'utf-8'));
-  } catch {
-    /* absent or unreadable: env-only */
-  }
-  const username = process.env.CODEMAN_USERNAME || fileEnv.CODEMAN_USERNAME || 'admin';
-  const password = process.env.CODEMAN_PASSWORD || fileEnv.CODEMAN_PASSWORD;
-  return password ? { username, password } : { username };
-}
-
-export function basicAuthHeader(credentials: TuiCredentials): string | undefined {
-  if (!credentials.password) return undefined;
-  return `Basic ${Buffer.from(`${credentials.username}:${credentials.password}`).toString('base64')}`;
-}
+// One credential reader for every client of the API (attach, tui, agent).
+export { parseEnvFile, readCodemanCredentials, basicAuthHeader };
+export type TuiCredentials = CodemanCredentials;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Degraded mode

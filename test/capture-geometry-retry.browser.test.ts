@@ -20,7 +20,7 @@
  * because the mismatch itself needs two viewports to stage against live tmux.
  * Without the fix the first assertion below sees one fetch instead of two.
  *
- * Port: 3252 (capture geometry retry)
+ * Port: ephemeral
  *
  * Run: npx vitest run --config config/vitest.browser.config.ts test/capture-geometry-retry.browser.test.ts
  */
@@ -29,15 +29,15 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3252;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 let server: WebServer;
 let browser: Browser;
 
 beforeAll(async () => {
-  server = new WebServer(PORT, false, true); // testMode
+  server = new WebServer(0, false, true); // testMode
   await server.start();
+  baseUrl = `http://localhost:${server.boundPort}`;
   browser = await chromium.launch({ headless: true });
 }, 60_000);
 
@@ -176,7 +176,7 @@ async function stubTerminalAtRequestedSize(page: Page, counter: { n: number; url
 const WIDER_THAN_ANY_TERMINAL_COLS = 500;
 
 async function openSession(page: Page): Promise<string> {
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.body.classList.contains('app-loaded'), { timeout: 10_000 });
   // xterm is loaded from /vendor, so the terminal appears a beat after the app.
   // Without it `app.terminal.rows` reads 0 and every height comparison below

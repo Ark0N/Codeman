@@ -720,6 +720,7 @@ class CodemanApp {
     this.collapsedTabGroupIds = new Set(); // per-device, localStorage-backed
     this._hiddenTabGroupByRef = new Map(); // 'session:<id>' -> collapsed group id
     this._lastTabGroupStructureKey = null;
+    this._tabRailSearch = ''; // rail search box text: in memory only, never persisted
     this.cases = [];
     this.currentRun = null;
     this.totalTokens = 0;
@@ -1429,6 +1430,13 @@ class CodemanApp {
           this.closeTileCountMenu({ refocus: true });
           return;
         }
+        // And so does the rail's search box while it holds text: that Escape
+        // clears the search and nothing else. This listener runs in the capture
+        // phase, before the box's own onkeydown, so the box cannot claim it there.
+        if (e.target?.id === 'tabRailSearch' && this._tabRailSearch) {
+          this.handleTabRailSearchKeydown(e);
+          return;
+        }
         this.closeAllPanels();
         this.closeHelp();
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();
@@ -1815,8 +1823,11 @@ class CodemanApp {
   _markDetached(id, on) {
     if (on) this.detachedSessions.add(id); else this.detachedSessions.delete(id);
     // A popped-out session's window owns its PTY size now, so it leaves the
-    // tile grid (one place per session in this browser tab).
-    if (on && this._tileGrid?.has(id)) this.removeTile(id);
+    // tile grid (one place per session in this browser tab). `gone`: it left by
+    // itself, not by a tile the user removed, so the grid's count stays and the
+    // ranking fills that cell the next time the grid opens, as when it pops out
+    // with the grid closed.
+    if (on && this._tileGrid?.has(id)) this.removeTile(id, { gone: true });
     const container = this.$('sessionTabs');
     const tab = container && container.querySelector(`.session-tab[data-id="${id}"]`);
     if (tab) tab.classList.toggle('detached', on);
@@ -2289,6 +2300,8 @@ class CodemanApp {
   }
 
   _onSessionCreated(data) {
+    // A session this tab is closing stays closed until the server answers.
+    if (this._closingSessions?.has(data.id)) return;
     this.sessions.set(data.id, data);
     if (!this.sessionOrder.includes(data.id)) {
       // The server placed it when it recorded the creation (a child after its
@@ -2316,6 +2329,9 @@ class CodemanApp {
 
   _onSessionUpdated(data) {
     const session = data.session || data;
+    // A session this tab is closing stays closed until the server answers
+    // (closeSession() puts it back if the delete is refused).
+    if (this._closingSessions?.has(session.id)) return;
     const oldSession = this.sessions.get(session.id);
     const claudeSessionIdJustSet = session.claudeSessionId && (!oldSession || !oldSession.claudeSessionId);
     this.sessions.set(session.id, session);
@@ -2735,6 +2751,23 @@ class CodemanApp {
         // A rendered document's links name the session the preview was opened
         // for (_rebaseFilePreviewMarkdownRefs), which need not be the active tab.
         if (filePath) this.openFilePreview(filePath, pathLink.dataset.sessionId || this.activeSessionId);
+        return;
+      }
+
+      // An in-document link (`[Install](#installation)`). The browser must not follow it: with
+      // `<base href="/">` a bare fragment points at the dashboard's root and would navigate the
+      // app away. Resolve it inside this rendered document and scroll there (constants.js).
+      // A fragment that matches nothing is simply ignored, never a navigation.
+      const fragmentLink = ev.target.closest('a[href^="#"]');
+      if (fragmentLink && body.contains(fragmentLink)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const root = fragmentLink.closest('.rv-text') || body;
+        const target = window.CodemanMarkdownAnchors?.find(root, fragmentLink.getAttribute('href'));
+        if (target) {
+          const calm = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+          target.scrollIntoView({ block: 'start', behavior: calm ? 'auto' : 'smooth' });
+        }
         return;
       }
 
@@ -5744,25 +5777,161 @@ class CodemanApp {
    */
   applySidebarFilter(query) {
     this._sidebarFilter = (query ?? '').trim().toLowerCase();
+    this._applyTabListFilter();
+  }
+
+  /**
+   * The ONE row filter behind both search boxes: the sidebar's filter box and
+   * the vertical rail's search box (only one of the two hosts the list at a
+   * time). Classes only, over whatever the last render drew, so grouping, order,
+   * Alt+N badges and the server layout never move; the matching itself is the
+   * pure CodemanTabSearch (constants.js).
+   *
+   * - Sidebar: name (aria-label) + working directory (title), as it always has.
+   * - Rail: the NAME only, a web tab's title included (it is a row in the same
+   *   list, and hiding every web tab would make a dashboard unfindable).
+   *
+   * A session row with a tab alert (red action or yellow idle, whatever
+   * tabAlerts holds, the set a collapsed group header surfaces) stays visible
+   * even when it does not match: a prompt waiting on you is never hidden by a
+   * view filter. Alerts come and go through renderSessionTabs(), and both
+   * render paths end here, so nothing else re-runs this for them.
+   *
+   * A group or case box left with nothing showing hides with its header, its
+   * count shows the rows left showing (a kept row included), and the grouped
+   * tree's roving stop and posinset follow the visible items. A collapsed
+   * group's rows are not in the DOM at all, which is why the rail search also
+   * expands the projection (_projectTabGroups). Rows that appear or disappear
+   * move the rows below them, so the connector lines are redrawn then.
+   */
+  _applyTabListFilter() {
     const container = this.$('sessionTabs');
     if (!container) return;
-    const reachable =
-      this.isSessionSidebarActive() && document.documentElement.dataset.sidebar !== 'collapsed';
-    const needle = reachable ? this._sidebarFilter : '';
+    const rail = this._tabOrientation() === 'vertical';
+    const sidebarReachable =
+      !rail && this.isSessionSidebarActive() && document.documentElement.dataset.sidebar !== 'collapsed';
+    const query = rail ? this._tabRailSearch : sidebarReachable ? this._sidebarFilter : '';
+    const rows = [...container.querySelectorAll('.session-tab')].map((tab) => ({
+      key: tab,
+      text: rail
+        ? this._tabRowSearchName(tab)
+        : `${tab.getAttribute('aria-label') || ''} ${tab.getAttribute('title') || ''}`,
+      section: tab.closest('.tab-layout-group, .tab-cluster'),
+      // Web tabs carry no alerts; only a session row can be kept.
+      keep: !tab.dataset.webviewId && !!tab.dataset.id && !!this.tabAlerts?.get(tab.dataset.id),
+    }));
+    const result = window.CodemanTabSearch?.filter(rows, query);
+    if (!result) return;
+    // Whether anything appeared or disappeared: the rows below it then moved.
+    let moved = false;
     // State headings count the whole group, so they step aside while a filter
     // is narrowing the rows under them (styles.css, .tabs-filtering).
-    container.classList.toggle('tabs-filtering', !!needle);
-    for (const tab of container.querySelectorAll('.session-tab')) {
-      if (!needle) {
-        tab.classList.remove('tab-filtered-out');
-        continue;
+    if (container.classList.contains('tabs-filtering') !== result.active) {
+      container.classList.toggle('tabs-filtering', result.active);
+      moved = true;
+    }
+    const setFilteredOut = (el, out) => {
+      if (el.classList.contains('tab-filtered-out') === out) return;
+      el.classList.toggle('tab-filtered-out', out);
+      moved = true;
+    };
+    for (const row of rows) setFilteredOut(row.key, result.hidden.has(row.key));
+    for (const section of container.querySelectorAll('.tab-layout-group, .tab-cluster')) {
+      const shown = result.counts.get(section) ?? 0;
+      setFilteredOut(section, result.active && shown === 0);
+      const count = section.querySelector('.tab-layout-group-count, .tab-cluster-count');
+      if (!count) continue;
+      if (count.dataset.total === undefined) count.dataset.total = count.textContent;
+      const text = result.active ? String(shown) : count.dataset.total;
+      if (count.textContent !== text) count.textContent = text;
+    }
+    const empty = document.getElementById('tabRailSearchEmpty');
+    const emptyHidden = !(rail && result.active && result.matchCount === 0);
+    if (empty && empty.hidden !== emptyHidden) {
+      empty.hidden = emptyHidden;
+      moved = true;
+    }
+    // Lineage and subagent/ultracode connectors are anchored to row positions.
+    // A render redraws them itself, but a keystroke in either box only toggles
+    // classes here, so the rows it moved would leave the lines pointing at where
+    // they were. Only when something moved: an unchanged re-apply at every
+    // render tail stays free, and the call coalesces with a render's own.
+    if (moved) this.updateConnectionLines?.();
+    // Both render paths already set posinset and the roving stop over an
+    // unfiltered tree, so this second pass only runs while a search hides
+    // something or right after one changed what shows.
+    if ((moved || result.active) && container.getAttribute('role') === 'tree') {
+      const items = this._applyTabTreePositions(container);
+      const stop = container.querySelector('[role="treeitem"][tabindex="0"]');
+      if (items.length && !items.includes(stop)) {
+        this._setTabTreeStop(container, items.find((item) => item.getAttribute('aria-selected') === 'true') || items[0]);
       }
-      const haystack = `${tab.getAttribute('aria-label') || ''} ${tab.getAttribute('title') || ''}`.toLowerCase();
-      tab.classList.toggle('tab-filtered-out', !haystack.includes(needle));
     }
     // The count shows visible rows, so it moves with every filter change —
     // including keystrokes in the filter box, which call this directly.
     this.updateSidebarCount();
+  }
+
+  /** What the rail search matches on a row: a session's name, a web tab's title. */
+  _tabRowSearchName(tab) {
+    if (tab.dataset.webviewId) return this.webviews?.get(tab.dataset.webviewId)?.name || '';
+    return tab.querySelector('.tab-name')?.dataset.fullName || '';
+  }
+
+  /** True while the vertical rail's search box is narrowing the list. */
+  _tabRailSearchActive() {
+    return this._tabOrientation() === 'vertical' && !!window.CodemanTabSearch?.needle(this._tabRailSearch);
+  }
+
+  /**
+   * The rail search box's input handler. In-memory only: never persisted, never
+   * sent anywhere. Starting or ending a search re-renders once when it changes
+   * what a collapsed group hides (the projection ignores collapse while
+   * searching); every other keystroke only re-applies the row classes.
+   */
+  setTabRailSearch(value) {
+    this._tabRailSearch = typeof value === 'string' ? value : '';
+    const clear = document.getElementById('tabRailSearchClear');
+    if (clear) clear.hidden = this._tabRailSearch.length === 0;
+    if (this._isTabGroupStructureStale()) this._fullRenderSessionTabs();
+    else this._applyTabListFilter();
+  }
+
+  /** Clear button (and Escape): empty the box, restore the list, keep focus in the box. */
+  clearTabRailSearch() {
+    const input = document.getElementById('tabRailSearch');
+    if (input) input.value = '';
+    this.setTabRailSearch('');
+    input?.focus();
+  }
+
+  /**
+   * Escape in a box that holds text clears the search and nothing else. The
+   * global key handler (setupEventListeners) runs in the CAPTURE phase, before
+   * the box's inline onkeydown, so it is the one that routes the key here and
+   * returns before its close-every-panel branch; stopping propagation from the
+   * inline handler would come too late. An empty box leaves Escape to it, and
+   * an Escape that cancels an IME composition is the IME's.
+   */
+  handleTabRailSearchKeydown(event) {
+    if (event.key !== 'Escape' || event.isComposing || !this._tabRailSearch) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.clearTabRailSearch();
+  }
+
+  /**
+   * Forget the search without rendering: the list is leaving the rail
+   * (applyTabOrientation), and the render that follows draws it unfiltered.
+   */
+  _resetTabRailSearch() {
+    this._tabRailSearch = '';
+    const input = document.getElementById('tabRailSearch');
+    if (input) input.value = '';
+    const clear = document.getElementById('tabRailSearchClear');
+    if (clear) clear.hidden = true;
+    const empty = document.getElementById('tabRailSearchEmpty');
+    if (empty) empty.hidden = true;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -5960,9 +6129,19 @@ class CodemanApp {
   // Session Tabs
   // ═══════════════════════════════════════════════════════════════
 
-  renderSessionTabs() {
+  renderSessionTabs({ immediate = false } = {}) {
     // Don't re-render while user is typing in the inline rename input
     if (this._inlineRenameActive) return;
+    if (immediate) {
+      // For a change the user just made and is watching for (closing a tab). The
+      // debounce restarts on every session update, so with busy sessions around a
+      // debounced pass can lag well past its 100ms. A pass still pending would only
+      // repeat this one, so it is dropped.
+      clearTimeout(this._debounceTimers.sessionTabs);
+      this._debounceTimers.sessionTabs = null;
+      this._renderSessionTabsImmediate();
+      return;
+    }
     this._debouncedCall('sessionTabs', this._renderSessionTabsImmediate);
   }
 
@@ -6125,6 +6304,20 @@ class CodemanApp {
       spawnTop: rect.bottom,
       vertical: true,
     };
+  }
+
+  /**
+   * The session's tab row when it is painted, else null: not rendered (a
+   * collapsed group) or hidden by the rail search or the sidebar filter. A
+   * display:none row still answers getBoundingClientRect() with an all-zero
+   * rect, which is truthy, so a connector, a spawn or a genie measured from it
+   * would start at the viewport's top-left corner. Every floating window that
+   * anchors to its parent tab measures through this.
+   */
+  _paintedSessionTab(sessionId) {
+    if (!sessionId) return null;
+    const tab = document.querySelector(`.session-tab[data-id="${sessionId}"]`);
+    return tab && tab.getClientRects().length > 0 ? tab : null;
   }
 
   /** Bezier from a _tabAnchor() to a window rect, curving along the right axis. */
@@ -6715,7 +6908,9 @@ class CodemanApp {
       // every agent CLI, claude included, shows its logo through PR #532's
       // `run-mode-dot <id>` slot, the id as DATA, so the tab, the tile and split
       // headers and the Run menus draw the same mark. An id with no logo rule (a
-      // CLI added through ~/.codeman/clis.json) gets that slot's plain dot.
+      // CLI added through ~/.codeman/clis.json) gets that slot's plain dot. The
+      // span is always emitted: CLI Logos on Tabs (`showTabCliLogos`) hides it
+      // in CSS under html[data-tab-logos='off'], so a toggle never re-renders.
       const tabModeHtml = mode === 'shell'
         ? '<span class="tab-mode shell" aria-hidden="true">sh</span>'
         : `<span class="tab-harness run-mode-dot ${escapeHtml(mode)}" aria-hidden="true"></span>`;
@@ -6972,6 +7167,8 @@ class CodemanApp {
     const orderOf = (el) => Number(getComputedStyle(el).order) || 0;
     const items = [];
     for (const section of container.querySelectorAll('.tab-layout-group')) {
+      // A group the search emptied is hidden whole, header included.
+      if (section.classList.contains('tab-filtered-out')) continue;
       const header = section.querySelector(':scope > [role="treeitem"]');
       if (header) items.push(header);
       const rows = [...section.querySelectorAll('.session-tab[role="treeitem"]:not(.tab-filtered-out)')];
@@ -7407,7 +7604,10 @@ class CodemanApp {
       // session the layout has not placed yet lands where the flat strip has it.
       liveSessionIds: this.sessionOrder.filter((id) => this.sessions.has(id)),
       openWebviewIds: (this.webviewOrder || []).filter((id) => this.webviews?.has(id)),
-      collapsedGroupIds: [...this.collapsedTabGroupIds],
+      // A rail search shows matches inside collapsed groups too, so it projects
+      // every group open. The stored per-device collapse state is untouched and
+      // applies again as soon as the search is cleared.
+      collapsedGroupIds: this._tabRailSearchActive() ? [] : [...this.collapsedTabGroupIds],
       activeSessionId: this.activeSessionId,
       activeWebviewId: this.activeWebviewId,
       // A session spawned by another one shows up in its parent's group at once.
@@ -7430,6 +7630,9 @@ class CodemanApp {
    * A storage failure leaves every group expanded rather than half-remembered.
    */
   toggleTabGroupCollapsed(groupId, forceCollapsed) {
+    // Every group is drawn open while the rail search runs; a toggle then would
+    // change what the user sees only after the search is cleared.
+    if (this._tabRailSearchActive()) return false;
     if (!this.tabLayout?.groups?.some((group) => group.id === groupId)) return false;
     const next = new Set(this.collapsedTabGroupIds);
     const shouldCollapse = forceCollapsed === undefined ? !next.has(groupId) : forceCollapsed === true;
@@ -9730,27 +9933,32 @@ class CodemanApp {
   }
 
   async closeSession(sessionId, killMux = true) {
-    // ⚠️ Captured BEFORE the await, and the delete is announced to
-    // _onSessionDeleted through _closingSessions. The `session_deleted` SSE
-    // broadcast for THIS delete routinely lands while the request is still in
-    // flight, and that handler nulls activeSessionId and shows the welcome
-    // screen. Re-reading the field after the await therefore made the fallback
-    // below a coin flip: closing the tab you were on either moved you to the
-    // next session or dumped you on the home screen, depending on which path
-    // won the race (both outcomes measured on one build, 2026-08-17).
+    // Already on its way out (a repeated click, the mux panel racing the tab).
+    if (this._closingSessions.has(sessionId)) return;
+    // The tab goes FIRST and the server is asked after. The kill takes the server
+    // a few hundred ms (SIGTERM grace, the process tree, tmux), and a tab that sat
+    // there that long after "Kill" read as a click that did nothing. A refused
+    // delete puts the row back below.
+    //
+    // ⚠️ Everything is read BEFORE the first await, and the delete is announced
+    // to _onSessionDeleted through _closingSessions: the `session_deleted` SSE
+    // broadcast for THIS delete arrives while the request is still in flight, and
+    // that handler must leave the follow-up selection to this method (both
+    // outcomes of that race were measured on one build, 2026-08-17).
+    const session = this.sessions.get(sessionId);
+    const orderIndex = this.sessionOrder.indexOf(sessionId);
     const wasActive = this.activeSessionId === sessionId;
     // Tile grid open: the fallback is the NEIGHBOURING TILE, never the first
     // sessionOrder entry (often not tiled, which would collapse the grid).
-    // Captured here for the same reason as wasActive: the SSE delete can remove
-    // the tile while the request is still in flight.
     const grid = this._tileGrid;
     const tileNeighborId = grid?.has(sessionId) ? window.CodemanTileGrid.tileNeighbor(grid.ids, sessionId) : null;
     this._closingSessions.add(sessionId);
+    let res = null;
     try {
-      await this._apiDelete(`/api/sessions/${sessionId}?killMux=${killMux}`);
-      this._cleanupSessionData(sessionId);
-      // The last tile leaving closes the grid (no reselect): the pick below runs.
-      if (grid?.has(sessionId)) this.removeTile(sessionId, { refocus: false });
+      // The same teardown the SSE event runs (split pane, tile, detached window,
+      // WebSocket, per-session state), only now instead of when the server is
+      // done. It is idempotent, so the real event finds nothing left to do.
+      this._onSessionDeleted({ id: sessionId });
 
       if (wasActive && grid?.open) {
         // `auto`: the app chose this tile because the previous one went away.
@@ -9775,18 +9983,50 @@ class CodemanApp {
         }
       }
 
-      this.renderSessionTabs();
+      this.renderSessionTabs({ immediate: true });
 
+      res = await this._apiDelete(`/api/sessions/${sessionId}?killMux=${killMux}`);
+    } catch (err) {
+      // `res` stays null: handled below like a delete that got no answer.
+      console.warn('[closeSession] close failed:', err);
+    } finally {
+      this._closingSessions.delete(sessionId);
+    }
+
+    // 404: already gone (closed from another tab or device), which is what was asked.
+    let gone = !!res && (res.ok || res.status === 404);
+    if (!gone) {
+      // Refused, or no answer. Ask rather than guess: a delete can land on the
+      // server and still lose its reply, and its session_deleted event has then
+      // already been spent while the request was in flight.
+      const check = await this._api(`/api/sessions/${sessionId}`);
+      gone = check?.status === 404;
+    }
+
+    if (gone) {
+      // An SSE resync (handleInit) that landed mid-request rebuilds the list from
+      // the server, which still had the session then.
+      if (this.sessions.has(sessionId)) this._onSessionDeleted({ id: sessionId });
       if (killMux) {
         this.showToast('Session closed and tmux killed', 'success');
       } else {
         this.showToast('Tab hidden, tmux still running', 'info');
       }
-    } catch (err) {
-      this.showToast('Failed to close session', 'error');
-    } finally {
-      this._closingSessions.delete(sessionId);
+      return;
     }
+
+    // Still on the server (or the server is unreachable, in which case the resync
+    // on reconnect has the last word): its row comes back where it was.
+    if (session && !this.sessions.has(sessionId)) {
+      this.sessions.set(sessionId, session);
+      if (!this.sessionOrder.includes(sessionId)) {
+        const at = orderIndex === -1 ? this.sessionOrder.length : Math.min(orderIndex, this.sessionOrder.length);
+        this.sessionOrder.splice(at, 0, sessionId);
+        this.saveSessionOrder();
+      }
+      this.renderSessionTabs();
+    }
+    this.showToast('Failed to close session', 'error');
   }
 
   // Request confirmation before closing a session
@@ -9919,8 +10159,10 @@ class CodemanApp {
 
     try {
       await this._apiDelete('/api/sessions');
-      // Every tiled session is gone: nothing left to remember or reselect.
-      this.closeTileGrid?.({ keepStored: false, reselect: false });
+      // Every tiled session is gone: nothing to reselect. The stored grid is
+      // kept like every other close; it now names only gone sessions, so the
+      // next Tiles click ranks the open sessions from scratch.
+      this.closeTileGrid?.({ keepStored: true, reselect: false });
       this.sessions.clear();
       this.terminalBuffers.clear();
       this.terminalBufferCache.clear();

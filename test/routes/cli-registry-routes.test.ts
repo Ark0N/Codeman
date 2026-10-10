@@ -12,10 +12,16 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
-import { installEnv, registerCliRegistryRoutes, type CliListItem } from '../../src/web/routes/cli-registry-routes.js';
+import {
+  installEnv,
+  npmGlobalPrefixWritable,
+  registerCliRegistryRoutes,
+  type CliListItem,
+} from '../../src/web/routes/cli-registry-routes.js';
 import { SETTINGS_PATH } from '../../src/web/route-helpers.js';
 import { CreateSessionSchema } from '../../src/web/schemas.js';
 import { buildSpawnCommandFromRegistry } from '../../src/session-cli-registry-bridge.js';
@@ -711,13 +717,98 @@ describe('registry writes are serialized and never clobber a file the reader wou
     } finally {
       delete process.env.CODEMAN_TEST_SECRET;
     }
-    expect(installEnv({ CODEMAN_PASSWORD: 'x', HOME: '/h' })).toEqual({ HOME: '/h' });
+    expect(installEnv({ CODEMAN_PASSWORD: 'x', HOME: '/h' }, () => true)).toEqual({ HOME: '/h' });
   });
 
   it('redirects npm installs to the persistent HOME inside the Compose container', () => {
     expect(
       installEnv({ CODEMAN_IN_CONTAINER: '1', HOME: '/home/codeman', NPM_CONFIG_PREFIX: '/opt/codeman-cli' })
     ).toEqual({ HOME: '/home/codeman', NPM_CONFIG_PREFIX: '/home/codeman/.local' });
+  });
+
+  it('redirects npm installs to ~/.local on a native install whose global prefix is not writable', () => {
+    // A system node under /usr: `npm install -g` as the server user dies with EACCES (exit 243).
+    expect(installEnv({ HOME: '/home/dev', CODEMAN_PASSWORD: 'x' }, () => false)).toEqual({
+      HOME: '/home/dev',
+      NPM_CONFIG_PREFIX: '/home/dev/.local',
+    });
+  });
+
+  it('leaves a writable, explicit or undeterminable npm prefix alone on a native install', () => {
+    expect(installEnv({ HOME: '/home/dev' }, () => true)).toEqual({ HOME: '/home/dev' });
+    // An operator-set prefix wins even if it is not writable: it is theirs to fix.
+    expect(installEnv({ HOME: '/home/dev', NPM_CONFIG_PREFIX: '/opt/npm' }, () => false)).toEqual({
+      HOME: '/home/dev',
+      NPM_CONFIG_PREFIX: '/opt/npm',
+    });
+    // No HOME means nowhere to redirect to.
+    expect(installEnv({ PATH: '/usr/bin' }, () => false)).toEqual({ PATH: '/usr/bin' });
+  });
+
+  it('drops every spelling of npm_config_prefix when it redirects (npm run exports the lowercase one)', () => {
+    // npm reads npm_config_* case-insensitively and a sorting /bin/sh lets the older key win.
+    expect(installEnv({ HOME: '/h', npm_config_prefix: '/usr' }, () => false)).toEqual({
+      HOME: '/h',
+      NPM_CONFIG_PREFIX: '/h/.local',
+    });
+    expect(installEnv({ HOME: '/h', Npm_Config_Prefix: '/usr', NPM_CONFIG_PREFIX: '' }, () => false)).toEqual({
+      HOME: '/h',
+      NPM_CONFIG_PREFIX: '/h/.local',
+    });
+    expect(
+      installEnv({ CODEMAN_IN_CONTAINER: '1', HOME: '/h', npm_config_prefix: '/usr', NPM_CONFIG_PREFIX: '/opt/x' })
+    ).toEqual({ HOME: '/h', NPM_CONFIG_PREFIX: '/h/.local' });
+    // The operator guard is the uppercase key only: npm run always injects the lowercase one.
+    expect(installEnv({ HOME: '/h', npm_config_prefix: '/usr' }, () => true)).toEqual({
+      HOME: '/h',
+      npm_config_prefix: '/usr',
+    });
+  });
+
+  describe('npmGlobalPrefixWritable', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(`${tmpdir()}/npm-prefix-`);
+    });
+    afterEach(() => {
+      chmodSync(dir, 0o755);
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    /** A fake `npm` on PATH that prints `prefix` for `npm config get prefix`. */
+    function fakeNpm(prefix: string): NodeJS.ProcessEnv {
+      const bin = `${dir}/bin`;
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(`${bin}/npm`, `#!/bin/sh\necho '${prefix}'\n`, { mode: 0o755 });
+      return { PATH: `${bin}:/usr/bin:/bin` };
+    }
+
+    it('is true for a writable prefix, whether or not lib/node_modules exists', async () => {
+      mkdirSync(`${dir}/w`);
+      expect(await npmGlobalPrefixWritable(fakeNpm(`${dir}/w`))).toBe(true);
+      mkdirSync(`${dir}/w/lib/node_modules`, { recursive: true });
+      expect(await npmGlobalPrefixWritable(fakeNpm(`${dir}/w`))).toBe(true);
+    });
+
+    it('is false for a prefix the server user cannot write', async () => {
+      if (process.getuid?.() === 0) return; // root can write anywhere
+      mkdirSync(`${dir}/ro`);
+      chmodSync(`${dir}/ro`, 0o555);
+      expect(await npmGlobalPrefixWritable(fakeNpm(`${dir}/ro`))).toBe(false);
+    });
+
+    it('judges a prefix that does not exist yet by its nearest existing ancestor', async () => {
+      // A user .npmrc with prefix=~/.npm-global before it was created: npm makes it, so do not move it.
+      expect(await npmGlobalPrefixWritable(fakeNpm(`${dir}/not/yet/made`))).toBe(true);
+      if (process.getuid?.() === 0) return;
+      mkdirSync(`${dir}/ro2`);
+      chmodSync(`${dir}/ro2`, 0o555);
+      expect(await npmGlobalPrefixWritable(fakeNpm(`${dir}/ro2/not/yet`))).toBe(false);
+    });
+
+    it('treats a probe failure (npm missing) as writable, and never throws', async () => {
+      expect(await npmGlobalPrefixWritable({ PATH: '/nonexistent' })).toBe(true);
+    });
   });
 });
 

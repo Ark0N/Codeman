@@ -110,6 +110,9 @@ const TITLE_FLASH_INTERVAL_MS = 1500;       // Title flash rate
 const BROWSER_NOTIF_RATE_LIMIT_MS = 3000;   // Rate limit for browser notifications
 const MOBILE_RESIZE_RETRY_MS = 30000;       // Small-viewport resize re-send while a desktop sizing claim is hot
 const AUTO_CLOSE_NOTIFICATION_MS = 8000;    // Auto-close browser notifications
+const DEFAULT_TOAST_DURATION_MS = 3000;     // How long a corner toast stays by default
+const MIN_NOTIFICATION_DURATION_MS = 1000;  // Shortest configurable toast / browser-notification time
+const MAX_NOTIFICATION_DURATION_MS = 300000; // Longest configurable toast / browser-notification time
 const THROTTLE_DELAY_MS = 100;              // General UI throttle delay
 const TERMINAL_CHUNK_SIZE = 32 * 1024;      // 32KB chunks for terminal buffer loading
 const TERMINAL_TAIL_SIZE = 1024 * 1024;     // 1MB tail for initial load (more scrollback on tab switch)
@@ -1017,6 +1020,56 @@ function tabClusterNameSplit(name, label) {
   return match[2].slice(1).toLowerCase() === label.toLowerCase() ? { shown: match[1], hidden: match[2] } : null;
 }
 
+/**
+ * Session-list search: the vertical rail's search box and the sidebar's filter
+ * box. Trimmed, case-insensitive substring; a whitespace-only query is no query.
+ * Lower-cased with toLowerCase(), never toLocaleLowerCase(): under a Turkish or
+ * Azeri browser locale "API" lowers to "apı" and a search for "api" would miss it.
+ * @param {unknown} query
+ * @returns {string} the needle, '' when there is nothing to search for
+ */
+function tabSearchNeedle(query) {
+  return typeof query === 'string' ? query.trim().toLowerCase() : '';
+}
+
+/**
+ * Which rows a search hides. Pure: the caller reads the rows off the list it
+ * rendered and applies the result as classes, so the list itself (grouping,
+ * order, Alt+N badges) is never rebuilt or reordered by a search.
+ *
+ * A row flagged `keep: true` is never hidden, matching or not (the caller keeps
+ * a tab with an alert on screen: a prompt waiting on you is never hidden by a
+ * view filter). It counts toward its section, so its group stays on screen with
+ * it, but not toward `matchCount`.
+ *
+ * @param {Array<{key: unknown, text: string, section?: unknown, keep?: boolean}>} rows
+ *   in list order; `section` is the row's group or case box, null/undefined for none.
+ * @param {unknown} query
+ * @returns {{active: boolean, hidden: Set<unknown>, counts: Map<unknown, number>, matchCount: number}}
+ *   `counts` is the rows left showing per section (kept rows included), every
+ *   section seen, an emptied one as 0, so it can be hidden; `matchCount` is the
+ *   number of rows whose TEXT matched, so it can be 0 above a lone kept row.
+ */
+function filterTabSearchRows(rows, query) {
+  const needle = tabSearchNeedle(query);
+  const hidden = new Set();
+  const counts = new Map();
+  let matchCount = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const hasSection = row.section !== null && row.section !== undefined;
+    if (hasSection && !counts.has(row.section)) counts.set(row.section, 0);
+    const text = typeof row.text === 'string' ? row.text.toLowerCase() : '';
+    const matches = !needle || text.includes(needle);
+    if (!matches && row.keep !== true) {
+      hidden.add(row.key);
+      continue;
+    }
+    if (matches) matchCount++;
+    if (hasSection) counts.set(row.section, counts.get(row.section) + 1);
+  }
+  return { active: needle.length > 0, hidden, counts, matchCount };
+}
+
 // Terminal font stack — the single source for every xterm surface (the main
 // terminal in terminal-ui.js, the log-viewer terminal in panels-ui.js).
 // "Symbols Nerd Font Mono" is a bundled icons-only webfont (fonts/ +
@@ -1298,6 +1351,63 @@ function cleanCopiedSelection(text, options) {
   return lines.join('\n');
 }
 
+// ── Markdown heading anchors ────────────────────────────────────────────────
+// marked emits no `id` on headings, so a rendered document's own `[Install](#installation)` links had
+// nothing to jump to. And with `<base href="/">` a bare `#installation` href points at the dashboard's
+// root, not at the page, so letting the browser follow it navigates the app away. The click delegate
+// (`_bindResponseViewerInteractions`) therefore resolves in-document links itself, with the helpers
+// below. Anchors are `data-md-anchor` attributes, NOT `id`s: a heading titled "Settings" must not claim
+// the id of an element in the app's own DOM, and the lookup is scoped to the rendered document.
+
+/**
+ * GitHub's heading slug: lower-cased, anything that is not a letter, mark, number, `_`, `-` or space
+ * dropped, each space a hyphen (`Why `codeman`? → `why-codeman`, `Über uns` → `über-uns`).
+ */
+function markdownHeadingSlug(text) {
+  return String(text ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}_\- ]/gu, '')
+    .replace(/ /g, '-');
+}
+
+/** Give every h1..h6 under `root` its slug in `data-md-anchor`; a repeat gets `-1`, `-2`, ... as on GitHub. Idempotent. */
+function assignMarkdownHeadingAnchors(root) {
+  const used = new Set();
+  for (const heading of root.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+    const base = markdownHeadingSlug(heading.textContent);
+    let slug = base;
+    for (let n = 1; used.has(slug); n += 1) slug = `${base}-${n}`;
+    used.add(slug);
+    heading.dataset.mdAnchor = slug;
+  }
+}
+
+/**
+ * The element inside `root` that an in-document link (`#installation`, `#Installation`, `#my%20title`)
+ * points at, or null. An empty fragment (`#`) means the top of the document. Headings are matched by
+ * slug, then a heading the author wrote an explicit `<a id="...">`/`id` for, looked up INSIDE `root`
+ * only (never `document.getElementById`, which could find an app element of the same name).
+ */
+function findMarkdownAnchorTarget(root, href) {
+  let fragment = String(href ?? '').replace(/^#/, '');
+  try {
+    fragment = decodeURIComponent(fragment);
+  } catch {
+    /* a malformed escape: use it as written */
+  }
+  if (!fragment) return root;
+  assignMarkdownHeadingAnchors(root);
+  const wanted = [fragment.toLowerCase(), markdownHeadingSlug(fragment)];
+  for (const heading of root.querySelectorAll('[data-md-anchor]')) {
+    if (wanted.includes(heading.dataset.mdAnchor)) return heading;
+  }
+  for (const el of root.querySelectorAll('[id]')) {
+    if (el.id === fragment) return el;
+  }
+  return null;
+}
+
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
@@ -1355,6 +1465,10 @@ if (typeof window !== 'undefined') {
     groupFor: tabTriageGroupFor,
     layout: computeTabTriageLayout,
   };
+  window.CodemanTabSearch = {
+    needle: tabSearchNeedle,
+    filter: filterTabSearchRows,
+  };
   window.CodemanInputLimit = {
     FRAME_MAX_CHARS: INPUT_FRAME_MAX_CHARS,
     PASTE_MAX_CHARS: INPUT_PASTE_MAX_CHARS,
@@ -1366,6 +1480,11 @@ if (typeof window !== 'undefined') {
   };
   window.CodemanCopySelection = {
     clean: cleanCopiedSelection,
+  };
+  window.CodemanMarkdownAnchors = {
+    slug: markdownHeadingSlug,
+    assign: assignMarkdownHeadingAnchors,
+    find: findMarkdownAnchorTarget,
   };
   window.CodemanTerminalFont = {
     DEFAULT_STACK: TERMINAL_FONT_DEFAULT_STACK,
@@ -2083,11 +2202,11 @@ function tileGridCapacity({ width, height }) {
 }
 
 /**
- * The stored grid (`codeman:tile-grid`, ids only) made safe to apply: unknown,
- * deleted, detached and duplicate ids are dropped, the list is capped at
- * TILE_GRID_MAX, `focused` / `zoomed` must name a kept id, and track fractions
- * must be 1 to 3 finite positive numbers. Anything that is not a v1 object
- * (or its JSON) gives null.
+ * The stored grid (`codeman:tile-grid`: session ids and the layout, never
+ * content) made safe to apply: unknown, deleted, detached and duplicate ids
+ * are dropped, the list is capped at TILE_GRID_MAX, `focused` / `zoomed` must
+ * name a kept id, and track fractions must be 1 to 3 finite positive numbers.
+ * Anything that is not a v1 object (or its JSON) gives null.
  *
  * The stored `ids` are the grid's CELLS in reading order, `null` for an empty
  * one (a hole can be any cell). The old packed list (no nulls) reads as cells
@@ -2095,11 +2214,20 @@ function tileGridCapacity({ width, height }) {
  * every list consumer wants) and `cells` keeps the holes: a dropped id (gone,
  * detached, a duplicate, past the cap) becomes `null` there, never a shift.
  *
+ * `freed` names the cells whose session no longer exists (or was popped out
+ * to its own window) since the grid was stored: the ranking fills those first
+ * when the grid comes back (restoreTileGridCells). A hole the user left empty
+ * is not freed. `count` is how many tiles the grid had after the user's own
+ * last change (a session that went away by itself does not lower it), so the
+ * grid comes back to that many when there are sessions to fill it; a value
+ * stored before it existed, or a malformed one, reads as the number of
+ * sessions the stored cells name.
+ *
  * @param {unknown} raw - the parsed value, or the stored JSON string
  * @param {{has(id: string): boolean}|Iterable<string>} liveSessions - ids that exist now
  * @param {{has(id: string): boolean}} [detachedIds] - sessions popped out to their own window
- * @returns {{v: 1, open: boolean, ids: string[], cells: (string|null)[], focused: string|null,
- *   zoomed: string|null, colFr: number[]|null, rowFr: number[]|null}|null}
+ * @returns {{v: 1, open: boolean, ids: string[], cells: (string|null)[], freed: number[], count: number,
+ *   focused: string|null, zoomed: string|null, colFr: number[]|null, rowFr: number[]|null}|null}
  */
 function sanitizeTileGridState(raw, liveSessions, detachedIds) {
   let value = raw;
@@ -2110,11 +2238,16 @@ function sanitizeTileGridState(raw, liveSessions, detachedIds) {
   const live = liveSessions && typeof liveSessions.has === 'function' ? liveSessions : new Set(liveSessions || []);
   const ids = [];
   const cells = [];
+  const freed = [];
+  const named = [];
   for (const id of (Array.isArray(value.ids) ? value.ids : []).slice(0, TILE_LAYOUT_MAX)) {
-    const keep =
-      typeof id === 'string' && id && !ids.includes(id) && live.has(id) && !detachedIds?.has?.(id) &&
-      ids.length < TILE_GRID_MAX;
+    const isId = typeof id === 'string' && id !== '';
+    const present = isId && live.has(id) && !detachedIds?.has?.(id);
+    const keep = present && !ids.includes(id) && ids.length < TILE_GRID_MAX;
     if (keep) ids.push(id);
+    // Its session went away since: the cell is freed for the ranking to fill.
+    if (isId && !present && !named.includes(id)) freed.push(cells.length);
+    if (isId && !named.includes(id)) named.push(id);
     // A malformed entry (not a string, not null) is a hole too.
     cells.push(keep ? id : null);
   }
@@ -2122,16 +2255,69 @@ function sanitizeTileGridState(raw, liveSessions, detachedIds) {
     if (!Array.isArray(fr) || fr.length < 1 || fr.length > 3) return null;
     return fr.every((x) => typeof x === 'number' && Number.isFinite(x) && x > 0) ? fr.slice() : null;
   };
+  const count =
+    Number.isInteger(value.count) && value.count >= 1 && value.count <= TILE_GRID_MAX
+      ? value.count
+      : Math.min(named.length, TILE_GRID_MAX);
   return {
     v: 1,
     open: value.open === true && ids.length > 0,
     ids,
     cells,
+    freed,
+    count,
     focused: ids.includes(value.focused) ? value.focused : (ids[0] ?? null),
     zoomed: ids.includes(value.zoomed) ? value.zoomed : null,
     colFr: fractions(value.colFr),
     rowFr: fractions(value.rowFr),
   };
+}
+
+/**
+ * A stored grid as it comes back (the Tiles button, a page reload): its cells
+ * exactly as stored, holes the user left included, and its focus (or the tile
+ * it had zoomed). Only when it holds fewer tiles than its `count` (sessions
+ * that went away since, or by themselves while it was open) does it fill, from
+ * `ranked` (best first, never a session already in it): the freed cells first,
+ * then the other empty cells, in reading order; more than the cells hold join
+ * after them (the shape grows when the grid lays them out, reformTileCells).
+ * A cell stays empty only when no other session is left to place. Never
+ * trimmed to the window: a grid larger than the window fits shows its focused
+ * tile alone until the window fits it again, and the arrangement stays.
+ *
+ * @param {{cells?: (string|null)[], ids?: string[], freed?: number[], count?: number,
+ *   focused?: string|null, zoomed?: string|null}|null} stored - sanitized (sanitizeTileGridState)
+ * @param {string[]} ranked - the sessions that may fill a cell, best first (rankTileSessions)
+ * @returns {{ids: string[], cells: (string|null)[], focusedId: string}|null} null when none of its sessions survive
+ */
+function restoreTileGridCells(stored, ranked) {
+  const source = Array.isArray(stored?.cells) ? stored.cells : Array.isArray(stored?.ids) ? stored.ids : [];
+  const cells = [];
+  for (const id of source) cells.push(typeof id === 'string' && id && !cells.includes(id) ? id : null);
+  const tiles = cells.filter(Boolean);
+  if (tiles.length === 0) return null;
+  const focusedId =
+    [stored.zoomed, stored.focused].find((id) => typeof id === 'string' && tiles.includes(id)) ?? tiles[0];
+  const target = Math.min(Math.max(tiles.length, Math.floor(Number(stored.count)) || 0), TILE_GRID_MAX);
+  const fillers = [];
+  for (const id of ranked || []) {
+    if (typeof id === 'string' && id && !cells.includes(id) && !fillers.includes(id)) fillers.push(id);
+  }
+  const freed = new Set(Array.isArray(stored.freed) ? stored.freed : []);
+  const empty = [];
+  cells.forEach((id, k) => {
+    if (id === null) empty.push(k);
+  });
+  // Freed cells first, each group in reading order.
+  empty.sort((a, b) => Number(freed.has(b)) - Number(freed.has(a)) || a - b);
+  let count = tiles.length;
+  for (const k of empty) {
+    if (count >= target || fillers.length === 0) break;
+    cells[k] = fillers.shift();
+    count++;
+  }
+  const extra = fillers.slice(0, Math.max(0, target - count));
+  return { ids: [...cells.filter(Boolean), ...extra], cells, focusedId };
 }
 
 /**
@@ -2166,7 +2352,8 @@ function dragTrackFractions(fr, index, deltaPx, totalPx, minPx) {
 
 /**
  * The sessions the Tiles button can open (case c of tileGridOpenSet, and the
- * ones a count fills a grid with), in tab order: live ones only, never a session popped out to
+ * ones a count fills a grid with), in the order given (tab order, or the
+ * ranking): live ones only, never a session popped out to
  * its own window (that window owns its PTY size). A session with no PTY
  * attached IS offered: its tile shows the Attach overlay.
  *
@@ -2180,44 +2367,121 @@ function buildTilePickerSessions(sessions, sessionOrder, detachedIds) {
   for (const id of sessionOrder) {
     if (detachedIds?.has?.(id)) continue;
     const session = sessions.get(id);
-    if (!session) continue;
+    if (!session || result.some((r) => r.id === id)) continue;
     result.push({ id, label: session.name || 'Session' });
   }
   return result;
+}
+
+// Ranking groups (rankTileSessions): working first, then the sessions waiting
+// on the user, then everything else.
+const TILE_RANK_GROUP = { working: 0, needs: 1, waiting: 1 };
+
+/**
+ * The stamp a session is ranked by inside its group. A WORKING session keys
+ * off the pane's last Enter (`lastSubmitAt`) ONLY: a working pane repaints
+ * about once a second, so its last-activity stamp is always "now", and one
+ * that never submitted would otherwise claim the head of the group. 0 means
+ * unknown. Every other state is the home screens' anchor (sessionActivityAnchor:
+ * the last byte the pane printed, i.e. when it went quiet).
+ */
+function tileRankStamp(row) {
+  if (row.state === 'working') return Number(row.lastSubmitAt) || 0;
+  return sessionActivityAnchor(row);
+}
+
+/**
+ * Which open sessions the tile grid shows when nobody said which (the Tiles
+ * button with no stored grid to bring back, and every place the grid fills a
+ * tile on its own: a count picked in its menu, a freed cell), best first
+ * (owner request: "prefer to load in tiles that are working and then the most
+ * recent, so the oldest don't get opened"):
+ *   1. WORKING, the most recently started turn first;
+ *   2. then the ones that NEED INPUT, the red and yellow tab alerts (`needs`: a
+ *      permission or question dialog; `waiting`: a finished turn not seen
+ *      yet), most recent first;
+ *   3. then every other one (idle, done, error), most recently active first.
+ * Inside a group the newest stamp wins (tileRankStamp) and a session with no
+ * stamp (0) sorts last; the final tiebreak is the tab order (`orderIndex`), so
+ * the result never shuffles. The states are the home screens' own
+ * (`_mobileOverviewState()`, mobile-overview.js), as are the stamps; only the
+ * order differs: the home screens put the longest-running turn first, the grid
+ * the most recent.
+ *
+ * Pure. Unit-tested in test/tile-grid-ranking.test.ts.
+ *
+ * @param {Array<{id: string, state: string, lastActivityAt?: number, lastSubmitAt?: number, orderIndex?: number}>} rows
+ * @returns {string[]} the ids, best first, each once
+ */
+function rankTileSessions(rows) {
+  const group = (row) => TILE_RANK_GROUP[row.state] ?? 2;
+  const list = (Array.isArray(rows) ? rows : []).filter((row) => row && typeof row.id === 'string' && row.id);
+  list.sort((a, b) => {
+    const byGroup = group(a) - group(b);
+    if (byGroup !== 0) return byGroup;
+    const atA = tileRankStamp(a);
+    const atB = tileRankStamp(b);
+    if (atA !== atB) {
+      if (!atA) return 1;
+      if (!atB) return -1;
+      return atB - atA;
+    }
+    const orderA = Number.isFinite(a.orderIndex) ? a.orderIndex : Number.MAX_SAFE_INTEGER;
+    const orderB = Number.isFinite(b.orderIndex) ? b.orderIndex : Number.MAX_SAFE_INTEGER;
+    return orderA - orderB;
+  });
+  const ids = [];
+  for (const row of list) if (!ids.includes(row.id)) ids.push(row.id);
+  return ids;
 }
 
 /**
  * What the Tiles button and Ctrl+Shift+G open, at once and without asking
  * (owner decision 8). In order:
  *   a. the grid this tab last had (`stored`, already sanitized: live, not
- *      detached, at most the cap), if any of its sessions survive;
+ *      detached, at most the cap), if any of its sessions survive, exactly
+ *      as it was (restoreTileGridCells: its cells and holes, a cell its
+ *      session freed filled from the ranking);
  *   b. else an open split's two sessions, Pane A focused;
- *   c. else the open sessions in tab order (buildTilePickerSessions: no
- *      detached ones), up to `limit`, the active session always among them and focused
- *      (when it sits past the limit, the first `limit - 1` others come with it).
+ *   c. else the open sessions in `ranked` order (rankTileSessions: working,
+ *      then needing input, then the most recent; tab order when no ranking is
+ *      given), detached ones never, up to `limit`, the active session always
+ *      among them and focused (when it ranks past the limit, the first
+ *      `limit - 1` others come with it).
  * Null when there is nothing to open.
  *
- * @param {{stored?: {ids: string[], focused: string|null, zoomed: string|null}|null,
- *   split?: string[]|null, sessions: Map<string, object>, sessionOrder: string[],
+ * @param {{stored?: {ids: string[], cells?: (string|null)[], freed?: number[], count?: number,
+ *   focused: string|null, zoomed: string|null}|null,
+ *   split?: string[]|null, ranked?: string[]|null, sessions: Map<string, object>, sessionOrder: string[],
  *   detachedIds?: {has(id: string): boolean}, activeId?: string|null, limit: number}} p
- * @returns {{source: 'stored'|'split'|'tabs', ids: string[], focusedId: string|null}|null}
+ * @returns {{source: 'stored'|'split'|'ranked', ids: string[], cells?: (string|null)[],
+ *   focusedId: string|null}|null}
  */
-function tileGridOpenSet({ stored = null, split = null, sessions, sessionOrder, detachedIds, activeId = null, limit }) {
-  if (stored?.ids?.length) {
-    const focus = stored.zoomed || stored.focused;
-    return { source: 'stored', ids: stored.ids.slice(), focusedId: stored.ids.includes(focus) ? focus : stored.ids[0] };
-  }
+function tileGridOpenSet({
+  stored = null,
+  split = null,
+  ranked = null,
+  sessions,
+  sessionOrder,
+  detachedIds,
+  activeId = null,
+  limit,
+}) {
+  const all = buildTilePickerSessions(sessions, Array.isArray(ranked) ? ranked : sessionOrder, detachedIds).map(
+    (c) => c.id
+  );
+  const restored = stored ? restoreTileGridCells(stored, all) : null;
+  if (restored) return { source: 'stored', ...restored };
   const usable = (id) => typeof id === 'string' && sessions.has(id) && !detachedIds?.has?.(id);
   const pair = (split || []).filter(usable);
   if (split && pair.length) return { source: 'split', ids: [...new Set(pair)], focusedId: pair[0] };
   const max = Math.max(1, Math.min(Math.floor(Number(limit) || 0), TILE_GRID_MAX));
-  const all = buildTilePickerSessions(sessions, sessionOrder, detachedIds).map((c) => c.id);
   if (all.length === 0) return null;
   let ids = all.slice(0, max);
   if (all.includes(activeId) && !ids.includes(activeId)) {
     ids = [...all.filter((id) => id !== activeId).slice(0, max - 1), activeId];
   }
-  return { source: 'tabs', ids, focusedId: ids.includes(activeId) ? activeId : ids[0] };
+  return { source: 'ranked', ids, focusedId: ids.includes(activeId) ? activeId : ids[0] };
 }
 
 /**
@@ -2237,8 +2501,9 @@ function sanitizeTileCount(raw) {
  * `base` (what the grid would open, or what an open grid shows, in its order)
  * trimmed or filled to `n` tiles: trimmed from the end, the session to focus
  * (`keepId`) always kept (it takes the last place when it sat past `n`, as in
- * tileGridOpenSet's case c); filled from `all` (the open sessions in tab order)
- * with the ones not in it yet. Fewer sessions than `n` give fewer tiles.
+ * tileGridOpenSet's case c); filled from `all` (the open sessions, best first:
+ * the app passes the ranking, rankTileSessions) with the ones not in it yet.
+ * Fewer sessions than `n` give fewer tiles.
  *
  * @param {string[]} base
  * @param {string[]} all
@@ -2747,6 +3012,8 @@ if (typeof window !== 'undefined') {
     fitTileCells,
     cycleTile,
     tileGridOpenSet,
+    restoreTileGridCells,
+    rankTileSessions,
     sanitizeTileCount,
     tileGridSetForCount,
     tileCellCols,

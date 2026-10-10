@@ -94,7 +94,13 @@ import {
   type DockerMount,
   type DockerSeedCopy,
 } from './docker-hosts.js';
-import { wrapWithNice, SAFE_PATH_PATTERN, resolveLocalShell, loginShellArgs } from './utils/index.js';
+import {
+  wrapWithNice,
+  SAFE_PATH_PATTERN,
+  resolveLocalShell,
+  loginShellArgs,
+  waitForProcessesExit,
+} from './utils/index.js';
 import type {
   TerminalMultiplexer,
   MuxSession,
@@ -144,11 +150,17 @@ const TMUX_CREATION_WAIT_MS = 100;
 const GET_PID_MAX_RETRIES = 5;
 const GET_PID_RETRY_MS = 200;
 
-/** Delay after tmux kill command (200ms) */
+/**
+ * How long killSession gives a pane's children to exit on SIGTERM before it
+ * re-scans and SIGKILLs. A deadline, not a sleep (see utils/process-exit-wait.ts).
+ */
 const TMUX_KILL_WAIT_MS = 200;
 
-/** Delay for graceful shutdown (100ms) */
+/** How long the pane's process group gets to exit on SIGTERM before SIGKILL. Also a deadline. */
 const GRACEFUL_SHUTDOWN_WAIT_MS = 100;
+
+/** How long killSession waits for every process it signalled to be gone before it warns. */
+const KILL_VERIFY_TIMEOUT_MS = 2000;
 
 /** Default stats collection interval (2 seconds) */
 const DEFAULT_STATS_INTERVAL_MS = 2000;
@@ -2351,6 +2363,28 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * {@link getPanePid} without blocking the event loop, for the kill path: a close
+   * must not stall every other session's I/O while tmux answers.
+   */
+  private async getPanePidAsync(muxName: string): Promise<number | null> {
+    if (IS_TEST_MODE) return 99999;
+    if (!isValidMuxName(muxName)) {
+      console.error('[TmuxManager] Invalid session name in getPanePidAsync:', muxName);
+      return null;
+    }
+    try {
+      const { stdout } = await execAsync(`${this.tmux()} display-message -t "${muxName}" -p '#{pane_pid}'`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      });
+      const pid = parseInt(stdout.trim(), 10);
+      return Number.isNaN(pid) ? null : pid;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Check if a tmux session exists.
    */
   muxSessionExists(muxName: string): boolean {
@@ -2604,7 +2638,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     });
   }
 
-  // Check if a process is still alive
+  // Check if a process is still alive. Signal decisions only: an unreaped zombie
+  // counts here, so its process group still gets the SIGKILL below. The WAITS use
+  // waitForProcessesExit(), which counts a zombie as exited.
   private isProcessAlive(pid: number): boolean {
     try {
       process.kill(pid, 0);
@@ -2614,20 +2650,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
   }
 
-  // Verify all PIDs are dead, with retry
+  // Verify all PIDs are dead, returning as soon as they are
   private async verifyProcessesDead(pids: number[], maxWaitMs: number = 1000): Promise<boolean> {
-    const startTime = Date.now();
-    const checkInterval = 100;
-
-    while (Date.now() - startTime < maxWaitMs) {
-      const aliveCount = pids.filter((pid) => this.isProcessAlive(pid)).length;
-      if (aliveCount === 0) {
-        return true;
-      }
-      await new Promise((resolve) => setTimeout(resolve, checkInterval));
-    }
-
-    const stillAlive = pids.filter((pid) => this.isProcessAlive(pid));
+    const stillAlive = await waitForProcessesExit(pids, { timeoutMs: maxWaitMs });
     if (stillAlive.length > 0) {
       console.warn(`[TmuxManager] ${stillAlive.length} processes still alive after kill: ${stillAlive.join(', ')}`);
     }
@@ -2685,7 +2710,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       if (isValidMuxName(session.muxName)) {
         try {
           // Local socket only — detaches the remote session by killing the local ssh pane.
-          execSync(`${this.tmux()} kill-session -t "${session.muxName}" 2>/dev/null`, {
+          await execAsync(`${this.tmux()} kill-session -t "${session.muxName}" 2>/dev/null`, {
             timeout: EXEC_TIMEOUT_MS,
           });
         } catch {
@@ -2702,7 +2727,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     // Get current PID (may have changed)
-    const currentPid = this.getPanePid(session.muxName) || session.pid;
+    const currentPid = (await this.getPanePidAsync(session.muxName)) || session.pid;
 
     console.log(`[TmuxManager] Killing session ${session.muxName} (PID ${currentPid})`);
 
@@ -2724,7 +2749,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         }
       }
 
-      await new Promise((resolve) => setTimeout(resolve, TMUX_KILL_WAIT_MS));
+      // Most children are gone within a few ms; the re-scan below still runs, to
+      // catch anything spawned since the first one.
+      await waitForProcessesExit(childPids, { timeoutMs: TMUX_KILL_WAIT_MS });
 
       childPids = await this.getChildPidsFresh(currentPid);
       for (const childPid of childPids) {
@@ -2742,7 +2769,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (this.isProcessAlive(currentPid)) {
       try {
         process.kill(-currentPid, 'SIGTERM');
-        await new Promise((resolve) => setTimeout(resolve, GRACEFUL_SHUTDOWN_WAIT_MS));
+        await waitForProcessesExit([currentPid], { timeoutMs: GRACEFUL_SHUTDOWN_WAIT_MS });
         if (this.isProcessAlive(currentPid)) {
           process.kill(-currentPid, 'SIGKILL');
         }
@@ -2751,10 +2778,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       }
     }
 
-    // Strategy 3: Kill tmux session by name (guard the name before it reaches the shell)
+    // Strategy 3: Kill tmux session by name (guard the name before it reaches the shell).
+    // Async: tmux takes tens of ms to tear a session down, and execSync held the
+    // whole server for that long on every close.
     if (isValidMuxName(session.muxName)) {
       try {
-        execSync(`${this.tmux()} kill-session -t "${session.muxName}" 2>/dev/null`, {
+        await execAsync(`${this.tmux()} kill-session -t "${session.muxName}" 2>/dev/null`, {
           timeout: EXEC_TIMEOUT_MS,
         });
       } catch {
@@ -2798,7 +2827,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     // Verify all processes are dead
-    const allDead = await this.verifyProcessesDead(allPids, 2000);
+    const allDead = await this.verifyProcessesDead(allPids, KILL_VERIFY_TIMEOUT_MS);
     if (!allDead) {
       console.error(`[TmuxManager] Warning: Some processes may still be alive for session ${session.muxName}`);
     }
