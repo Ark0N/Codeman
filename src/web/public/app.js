@@ -8006,6 +8006,9 @@ class CodemanApp {
     if (this._tabLayoutDrag) this._cancelTabLayoutPointerDrag(container);
     if (e.button !== 0 || e.pointerType === 'touch' || !container.classList.contains('session-tabs--grouped')) return;
     if (this._inlineRenameActive || !this._tabLayoutEditable()) return;
+    // No drag while the rail search narrows the list: a drop is saved for every
+    // device, relative to rows the search is hiding (owner's call on #580).
+    if (this._tabRailSearchActive()) return;
     // Controls keep their own click; only the row body or the header drags.
     if (e.target.closest('.tab-actions, .tab-badge, .tab-layout-group-menu, button, input, [onclick*="stopPropagation"]')) return;
     const header = e.target.closest('[data-tab-group-header]');
@@ -8223,6 +8226,14 @@ class CodemanApp {
       tab.setAttribute('draggable', 'true');
 
       tab.addEventListener('dragstart', (e) => {
+        // No drag while the rail search narrows the list: the drop rewrites the
+        // order every device sees, relative to rows the search is hiding
+        // (owner's call on #580). Refused here rather than by `draggable`,
+        // because a keystroke in the box does not re-render the rows.
+        if (this._tabRailSearchActive()) {
+          e.preventDefault();
+          return;
+        }
         this.draggedTabId = tab.dataset.id;
         tab.classList.add('dragging');
         e.dataTransfer.effectAllowed = 'move';
