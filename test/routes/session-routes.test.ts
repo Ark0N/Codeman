@@ -38,6 +38,11 @@ vi.mock('node:child_process', async (orig) => {
   return { ...actual, execFile };
 });
 vi.mock('../../src/web/heic-jpeg-converter.js', () => ({ convertHeicToJpeg: heicConvert }));
+// A tiny video cap so the streamed path's truncation branch is reachable in-process.
+vi.mock('../../src/config/buffer-limits.js', async (orig) => ({
+  ...(await orig<typeof import('../../src/config/buffer-limits.js')>()),
+  MAX_PASTE_VIDEO_BYTES: 64,
+}));
 
 // In-memory remote store so remote-case tests can inject hosts/cases without real JSON files.
 const remoteStore = vi.hoisted(() => ({
@@ -56,7 +61,7 @@ vi.mock('../../src/remote-hosts.js', async (orig) => {
   };
 });
 
-import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
+import { registerSessionRoutes, _resetPasteRateBuckets } from '../../src/web/routes/session-routes.js';
 import { RemoteWakeRegistry, REMOTE_WAKE_REQUEST_READY_TIMEOUT_MS } from '../../src/remote-wake.js';
 import { resolveTerminalHistoryConfig } from '../../src/config/terminal-history.js';
 
@@ -250,6 +255,10 @@ describe('session-routes', () => {
   // ========== POST /api/sessions/:id/paste-image ==========
 
   describe('POST /api/sessions/:id/paste-image', () => {
+    // Rate buckets are process-global; clear them so one test's uploads cannot
+    // exhaust another's budget (the video bucket is only 3/min).
+    beforeEach(() => _resetPasteRateBuckets());
+
     function imageUploadBody(boundary: string, filename: string, mimetype: string, imageBytes: Buffer): Buffer {
       return Buffer.concat([
         Buffer.from(
@@ -444,6 +453,254 @@ describe('session-routes', () => {
       expect(res.statusCode).toBe(415);
       expect(JSON.parse(res.body).success).toBe(false);
       expect(heicConvert).not.toHaveBeenCalled();
+    });
+
+    // `?kind=video`: the phone Attach button's camera-roll videos. Streamed to
+    // disk under their own cap; without the flag the route stays image-only.
+    const boundary = 'codeman-test-boundary';
+    const movHeaders = {
+      host: 'codeman.test',
+      origin: 'http://codeman.test',
+      'content-type': `multipart/form-data; boundary=${boundary}`,
+    };
+    // size + ftyp + "qt  " brand, as an iPhone writes it, padded past the 12-byte sniff.
+    const qtMov = Buffer.concat([Buffer.from('0000001466747970717420200000000071742020', 'hex'), Buffer.alloc(20)]);
+
+    it('streams a ?kind=video upload to .codeman-uploads under the video extension', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-video-'));
+      harness.ctx._session.workingDir = workDir;
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image?kind=video`,
+        headers: movHeaders,
+        payload: imageUploadBody(boundary, 'IMG_0001.MOV', 'video/quicktime', qtMov),
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.path).toMatch(/\/\.codeman-uploads\/paste-\d+-[a-f0-9]{8}\.mov$/);
+      expect(await readFile(body.data.path)).toEqual(qtMov);
+      await rm(workDir, { recursive: true });
+    });
+
+    it('accepts the registry video containers across their magic families (m4v, webm, ogv)', async () => {
+      // The admitted set is VIDEO_ATTACHMENT_EXTENSIONS (mp4/webm/mov/m4v/ogv); mov is
+      // covered above. These three exercise the three sniff families: ISO BMFF (m4v),
+      // EBML (webm) and Ogg (ogv). Three per session stays inside the 3/min video budget.
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-video-'));
+      harness.ctx._session.workingDir = workDir;
+      const m4v = Buffer.concat([Buffer.from('00000018667479706d703432', 'hex'), Buffer.alloc(16)]); // ftyp mp42
+      const webm = Buffer.concat([Buffer.from('1a45dfa3a3428681', 'hex'), Buffer.alloc(16)]); // EBML
+      const ogv = Buffer.concat([Buffer.from('4f67675300020000', 'hex'), Buffer.alloc(16)]); // "OggS"
+      for (const [name, mime, bytes, ext] of [
+        ['VID_0001.m4v', 'video/x-m4v', m4v, '.m4v'],
+        ['VID_0002.webm', 'video/webm', webm, '.webm'],
+        ['VID_0003.ogv', '', ogv, '.ogv'], // no MIME type: the name's extension carries it
+      ] as const) {
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${harness.ctx._sessionId}/paste-image?kind=video`,
+          headers: movHeaders,
+          payload: imageUploadBody(boundary, name, mime || 'application/octet-stream', bytes),
+        });
+        expect(res.statusCode, name).toBe(200);
+        expect(JSON.parse(res.body).data.filename.endsWith(ext), name).toBe(true);
+      }
+      await rm(workDir, { recursive: true });
+    });
+
+    it('refuses 3gp and mkv, which a phone camera roll does not produce and the viewer cannot play', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-video-'));
+      harness.ctx._session.workingDir = workDir;
+      const threeGp = Buffer.concat([Buffer.from('0000001866747970336770340000000033677034', 'hex'), Buffer.alloc(20)]);
+      const mkv = Buffer.concat([Buffer.from('1a45dfa3a3428681', 'hex'), Buffer.alloc(24)]);
+      for (const [name, mime, bytes] of [
+        ['VID.3gp', 'video/3gpp', threeGp],
+        ['VID.mkv', 'video/x-matroska', mkv],
+      ] as const) {
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${harness.ctx._sessionId}/paste-image?kind=video`,
+          headers: movHeaders,
+          payload: imageUploadBody(boundary, name, mime, bytes),
+        });
+        expect(res.statusCode, name).toBe(400);
+        expect(JSON.parse(res.body).error, name).toMatch(/Unsupported video type/);
+      }
+      await rm(workDir, { recursive: true });
+    });
+
+    it('rejects a video without the flag, so the image path stays image-only', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+        headers: movHeaders,
+        payload: imageUploadBody(boundary, 'IMG_0001.MOV', 'video/quicktime', qtMov),
+      });
+      // The image path falls back to .png for an unknown type and fails its magic check.
+      expect(res.statusCode).toBe(415);
+      expect(JSON.parse(res.body).error).toMatch(/do not match declared type/);
+    });
+
+    it('refuses an image declared under ?kind=video, so nothing rides the video cap through memory', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image?kind=video`,
+        headers: movHeaders,
+        payload: imageUploadBody(boundary, 'a.png', 'image/png', qtMov),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error).toMatch(/Unsupported video type/);
+    });
+
+    it('unlinks a ?kind=video upload whose bytes are not a video container', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-video-'));
+      harness.ctx._session.workingDir = workDir;
+      const png = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(24)]);
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image?kind=video`,
+        headers: movHeaders,
+        payload: imageUploadBody(boundary, 'fake.mov', 'video/quicktime', png),
+      });
+      expect(res.statusCode).toBe(415);
+      expect(await readdir(join(workDir, '.codeman-uploads'))).toEqual(['.gitignore']); // the folder's own ignore file, no upload
+      await rm(workDir, { recursive: true });
+    });
+
+    it('leaves no partial file behind when a ?kind=video transfer ends early', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-video-'));
+      harness.ctx._session.workingDir = workDir;
+      // The body stops mid-part: no closing boundary ever arrives.
+      const cut = imageUploadBody(boundary, 'IMG_0003.MOV', 'video/quicktime', qtMov).subarray(0, -12);
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image?kind=video`,
+        headers: movHeaders,
+        payload: cut,
+      });
+      expect(res.statusCode).toBeGreaterThanOrEqual(400); // "Premature close" out of the write loop
+      expect(await readdir(join(workDir, '.codeman-uploads'))).toEqual(['.gitignore']); // the folder's own ignore file, no upload
+      await rm(workDir, { recursive: true });
+    });
+
+    it('unlinks a ?kind=video upload over the video cap and answers 413', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-video-'));
+      harness.ctx._session.workingDir = workDir;
+      const big = Buffer.concat([qtMov, Buffer.alloc(200)]); // cap is mocked to 64 bytes
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image?kind=video`,
+        headers: movHeaders,
+        payload: imageUploadBody(boundary, 'IMG_0002.MOV', 'video/quicktime', big),
+      });
+      expect(res.statusCode).toBe(413);
+      expect(JSON.parse(res.body).error).toMatch(/too large/);
+      expect(await readdir(join(workDir, '.codeman-uploads'))).toEqual(['.gitignore']); // the folder's own ignore file, no upload
+      await rm(workDir, { recursive: true });
+    });
+
+    it('judges a ?kind=video upload on its header, before the body has landed on disk', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-video-'));
+      harness.ctx._session.workingDir = workDir;
+      // Mislabeled AND over the (64-byte) cap: the header verdict comes first, so the
+      // answer is 415, never the 413 that would mean the whole body was taken in.
+      const big = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(200)]);
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image?kind=video`,
+        headers: movHeaders,
+        payload: imageUploadBody(boundary, 'fake.mov', 'video/quicktime', big),
+      });
+      expect(res.statusCode).toBe(415);
+      expect(await readdir(join(workDir, '.codeman-uploads'))).toEqual(['.gitignore']); // the folder's own ignore file, no upload
+      await rm(workDir, { recursive: true });
+    });
+
+    it('refuses an upload for a remote session before touching disk, video or image', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-video-'));
+      harness.ctx._session.workingDir = workDir;
+      // A remote session's workingDir is the REMOTE path: a file written here is unreadable there.
+      (harness.ctx._session as unknown as { remote: unknown }).remote = { hostId: 'gpu-box' };
+      for (const [url, name, mime, bytes] of [
+        [`/api/sessions/${harness.ctx._sessionId}/paste-image?kind=video`, 'IMG_0001.MOV', 'video/quicktime', qtMov],
+        [
+          `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+          'shot.png',
+          'image/png',
+          Buffer.from('89504e470d0a1a0a00000000', 'hex'),
+        ],
+      ] as const) {
+        const res = await harness.app.inject({
+          method: 'POST',
+          url,
+          headers: movHeaders,
+          payload: imageUploadBody(boundary, name, mime, bytes),
+        });
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.body).error).toMatch(/remote/);
+      }
+      (harness.ctx._session as unknown as { remote: unknown }).remote = undefined;
+      expect(await readdir(workDir)).toEqual([]);
+      await rm(workDir, { recursive: true });
+    });
+
+    it('keeps the image path on its own size cap: a valid image past the video cap is accepted without the flag', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-uploads-'));
+      harness.ctx._session.workingDir = workDir;
+      try {
+        // A real PNG far larger than the mocked 64-byte video cap but well under the
+        // harness's 10MB image cap. If the video path's per-call cap override leaked
+        // onto the image path, @fastify/multipart would truncate this and the magic
+        // check would fail; without ?kind=video it must be accepted whole.
+        const png = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(4096)]);
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+          headers: movHeaders,
+          payload: imageUploadBody(boundary, 'shot.png', 'image/png', png),
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.data.path).toMatch(/\/\.codeman-uploads\/paste-\d+-[a-f0-9]{8}\.png$/);
+        expect(await readFile(body.data.path)).toEqual(png);
+      } finally {
+        await rm(workDir, { recursive: true });
+      }
+    });
+
+    it('caps ?kind=video at 3 per minute per session, far below the image rate, on its own bucket', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-uploads-'));
+      harness.ctx._session.workingDir = workDir;
+      try {
+        for (let i = 0; i < 3; i++) {
+          const ok = await harness.app.inject({
+            method: 'POST',
+            url: `/api/sessions/${harness.ctx._sessionId}/paste-image?kind=video`,
+            headers: movHeaders,
+            payload: imageUploadBody(boundary, `IMG_000${i}.MOV`, 'video/quicktime', qtMov),
+          });
+          expect(ok.statusCode).toBe(200);
+        }
+        const limited = await harness.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${harness.ctx._sessionId}/paste-image?kind=video`,
+          headers: movHeaders,
+          payload: imageUploadBody(boundary, 'IMG_0004.MOV', 'video/quicktime', qtMov),
+        });
+        expect(limited.statusCode).toBe(429);
+        expect(JSON.parse(limited.body).error).toMatch(/3 video uploads\/min/);
+        // The image bucket is independent, so an image still goes through.
+        const png = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(24)]);
+        const img = await harness.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+          headers: movHeaders,
+          payload: imageUploadBody(boundary, 'shot.png', 'image/png', png),
+        });
+        expect(img.statusCode).toBe(200);
+      } finally {
+        await rm(workDir, { recursive: true });
+      }
     });
   });
 

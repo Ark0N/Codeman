@@ -139,6 +139,9 @@ describe('terminal link-provider regexes (shipped source)', () => {
       // paths at all outside /var and /tmp.
       '/Users/arbbot/codeman-cases/report.docx',
       '/mnt/d/captures/demo.mp4',
+      // Camera-roll video uploads the agent echoes back (VIDEO_ATTACHMENT_EXTENSIONS).
+      '/home/a/.codeman-uploads/paste-1-ab.m4v',
+      '/home/a/.codeman-uploads/paste-2-cd.ogv',
       // Longer extension of a family must win over its prefix (tsx over ts).
       '/home/a/src/App.tsx',
     ];

@@ -5996,6 +5996,12 @@ html[data-skin="og"] .welcome-primary:hover {
   display: none;
 }
 
+/* Mobile Attach button (wrapper holds the button and its file input) - hidden on
+   desktop; the phone block in mobile.css shows it */
+.btn-attach-mobile-wrap {
+  display: none;
+}
+
 /* Mobile case settings gear - hidden on desktop */
 .btn-case-settings-mobile {
   display: none;

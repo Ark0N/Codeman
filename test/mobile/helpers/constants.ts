@@ -11,6 +11,10 @@ export const SELECTORS = {
   TOOLBAR_RIGHT: '.toolbar-right',
   SETTINGS_MOBILE: '.btn-settings-mobile',
   CASE_MOBILE: '.btn-case-mobile',
+  ATTACH_MOBILE: '.btn-attach-mobile',
+  // The desktop rule hides the WRAPPER, and assertHidden reads an element's own
+  // computed style (an ancestor's display:none is invisible to it).
+  ATTACH_MOBILE_WRAP: '.btn-attach-mobile-wrap',
 
   // Tabs
   TABS_CONTAINER: '.session-tabs',

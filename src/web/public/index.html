@@ -757,6 +757,21 @@
             </div>
           </div>
           <!-- Mobile-only case button + gear -->
+          <!-- Phone-only Attach (wired in image-input.js): the button opens its own file input,
+               which sits invisibly over the button so iOS anchors the picker popover to it. The
+               Compose dialog is deliberately not involved: it focuses its textarea, which raises
+               the keyboard under the picker sheet. Sits BEFORE the mic so the two share order: 5
+               and source order keeps Attach on the left. -->
+          <span class="btn-attach-mobile-wrap">
+            <button type="button" class="btn-attach-mobile" id="attachBtnMobile" title="Attach" aria-label="Attach">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5"/>
+                <path d="m21 15-5-5L5 21"/>
+              </svg>
+            </button>
+            <input type="file" class="btn-attach-mobile-input" id="attachFileInput" accept="image/*,video/*" multiple tabindex="-1" aria-hidden="true">
+          </span>
           <button class="btn-voice-mobile" id="voiceInputBtnMobile" onclick="VoiceInput.toggle()"
                   title="Voice input" aria-label="Start voice input" aria-pressed="false">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

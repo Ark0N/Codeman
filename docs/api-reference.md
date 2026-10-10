@@ -574,6 +574,20 @@ owned case is fine, its workspace is bind-mounted at the same absolute path; an
 adopted container (`owned: false`) mounts nothing, so its agent can open the file
 only if the container itself exposes that host path.
 
+The optional query flag `?kind=video` selects a second path for a camera-roll
+video: the file streams to disk instead of being buffered, under a far larger
+per-file cap (`MAX_PASTE_VIDEO_BYTES`, 1 GB by default, env
+`CODEMAN_MAX_PASTE_VIDEO_BYTES`), and only video container types are accepted
+(mp4, webm, mov, m4v, ogv, single-sourced from the file viewer's playable set).
+The container is checked from the first bytes as
+the body arrives; a file whose bytes do not match its declared type is unlinked
+and answered 415, one over the cap is unlinked and answered 413, and a transfer
+that dies midway leaves nothing behind. Because one video can be 1 GB,
+`?kind=video` draws on its own rate limit, 3 uploads per minute per (IP, session),
+beside the 30 per minute the image path keeps; without the flag the route is
+byte-identical to the image-only version, same 50 MB image cap and same 30/min
+bucket. The response shape is unchanged (`path`, `filename`).
+
 ## Session lineage (`parentSessionId`)
 
 A create request may name the session that spawned it, which the web UI draws as a
