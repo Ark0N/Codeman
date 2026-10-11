@@ -588,7 +588,7 @@ describe('page-key travel, cap and coalescing', () => {
   });
 });
 
-describe('gesture handling is the primary pane\'s, through the shared pure helper', () => {
+describe("gesture handling is the primary pane's, through the shared pure helper", () => {
   beforeEach(() => {
     FakeFit.proposed = { cols: 80, rows: 36 }; // half a screen: 18 rows a page
   });
@@ -709,6 +709,54 @@ describe('gesture handling is the primary pane\'s, through the shared pure helpe
     expect(tileBytes).toContain(PAGE_UP);
     expect(tileBytes).toContain(PAGE_DOWN);
     expect(tileBytes).toBe(sent.join(''));
+  });
+
+  it('pages slow small ticks and a back-and-forth wobble once, exactly as the primary pane does', async () => {
+    const advance = manualClock();
+    // Five 40 px ticks 250 ms apart (each under the 2-row trackpad size), a pause
+    // longer than the pre-paid debt's second, then a +/-3 px wobble at 16 ms.
+    const steps: Array<[number, number]> = [
+      ...Array.from({ length: 5 }, () => [-40, 250] as [number, number]),
+      [0, 1_200],
+      ...Array.from({ length: 12 }, (_, i) => [i % 2 ? 3 : -3, 16] as [number, number]),
+    ];
+    const events = () => steps.filter(([px]) => px).map(([px]) => wheel(px));
+    const gaps = steps.reduce<number[]>((acc, [px, gap]) => {
+      if (px) acc.push(gap);
+      else acc[acc.length - 1] += gap;
+      return acc;
+    }, []);
+
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'codex' } }), { mode: 'codex' });
+    events().forEach((ev, i) => {
+      mount.fire('wheel', ev);
+      advance(gaps[i]);
+    });
+    const tileBytes = flushed(ws)
+      .map((f) => f.d)
+      .join('');
+    // One page for the slow ticks, one for the wobble's opening event, nothing more.
+    expect(tileBytes).toBe(PAGE_UP + PAGE_UP);
+
+    const primary = makeApp({ other: { mode: 'codex' } }, 'other') as App & {
+      terminal: unknown;
+      _maybePageCliTranscript(ev: unknown, lines: number): boolean;
+      _wheelScrollLinesFloat(ev: unknown): number;
+      _flushWheelSgrQueue(): void;
+    };
+    const sent: string[] = [];
+    primary._sendInputEphemeral = (_id: string, data: string) => sent.push(data);
+    primary.terminal = {
+      rows: 36,
+      modes: { mouseTrackingMode: 'none' },
+      buffer: { active: { type: 'normal', baseY: 0, viewportY: 0 } },
+    };
+    events().forEach((ev, i) => {
+      primary._maybePageCliTranscript(ev, primary._wheelScrollLinesFloat(ev));
+      advance(gaps[i]);
+    });
+    primary._flushWheelSgrQueue();
+    expect(sent.join('')).toBe(tileBytes);
   });
 });
 

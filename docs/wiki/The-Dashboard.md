@@ -223,8 +223,12 @@ Worth knowing:
   `~/.claude/settings.json`), so the wheel scrolls the conversation rather than the terminal.
   Claude's default inline view keeps its history in the terminal and scrolls locally. `Shift+Wheel` is
   always local scrollback. OpenCode's wheel and swipes page its own conversation
-  (PageUp/PageDown); in a grid tile or the split view's second pane the wheel does
-  too. Other CLIs scroll locally.
+  (PageUp/PageDown), and so do newer Codex versions, which draw on the alternate screen
+  and leave the terminal no history of its own (an older Codex that draws inline keeps
+  its history in the terminal and scrolls locally). The first small movement of a
+  gesture pages at once, then one page per half screen of travel; one finger on the
+  screen is one gesture however slowly it moves. In a grid tile or the split view's
+  second pane the wheel pages too. Other CLIs scroll locally.
 - **Selection copy.** `Ctrl+C` copies when text is selected and interrupts when it is not.
   `Ctrl+Shift+C` always copies.
 - **Selecting where the CLI owns the mouse.** `Shift+drag` starts a selection even in a pane

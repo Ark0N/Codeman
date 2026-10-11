@@ -102,6 +102,10 @@
   // 4 rows) accumulates toward half a screen as before; paging at once on it made
   // slow notches, each its own gesture past the gap, page a full screen apiece.
   const PAGE_KEY_IMMEDIATE_MAX_ROWS = 2;
+  // A pre-paid page's debt outlives the gesture gap for this long when the next
+  // event goes the SAME way, so slow small wheel ticks (40 px every 250 ms, a
+  // Firefox 1-line notch) pay it back instead of each pre-paying a page of its own.
+  const PAGE_KEY_DEBT_MS = 1000;
 
   // Wheel delta → scroll lines (fractional), for a terminal `rows` tall. The
   // body of the primary pane's _wheelScrollLinesFloat (see its comment for the
@@ -170,12 +174,21 @@
   //  - a pinch (`ctrlKey`, Chrome's trackpad-pinch wheel) and a mostly
   //    horizontal swipe (both deltas present, |deltaX| > |deltaY|) send nothing
   //    and leave the state alone (the caller still consumes them);
-  //  - after PAGE_KEY_GESTURE_GAP_MS of quiet, or a direction change, a NEW
-  //    gesture starts, and a trackpad-sized opening event (at least
+  //  - a NEW gesture starts on the first event, on a different touch contact
+  //    (`ev.touchId`, set by the touch paths per touchstart and carried by that
+  //    contact's momentum; a wheel event has none, so wheel and touch never
+  //    share a gesture), or, for events outside any contact, after quiet:
+  //    PAGE_KEY_GESTURE_GAP_MS, stretched to PAGE_KEY_DEBT_MS while a pre-paid
+  //    page is still owed in the same direction. One contact is never split by
+  //    time, so a slow drag (one line per 170 ms) is one gesture;
+  //  - a new gesture's trackpad-sized opening event (at least
   //    PAGE_KEY_MIN_START_ROWS, under PAGE_KEY_IMMEDIATE_MAX_ROWS) pages AT ONCE,
   //    pre-paid: the half screen it skipped is owed back by the rest of the
   //    gesture, so the rate stays one page per half screen. A debt left by a
   //    pre-paid page dies with its gesture;
+  //  - a direction change inside a gesture (a reversal within the gap, or
+  //    within the same contact) drops a pre-paid debt and accumulates, never
+  //    pre-paying, so a +/-3 px trackpad wobble cannot page back and forth;
   //  - everything else, a wheel notch included, accumulates through
   //    pageKeysForTravel, carried across notches.
   // Returns { state, keys } with keys '' when nothing is due.
@@ -187,24 +200,37 @@
     if (dx && dy && dx > dy) return { state: prev, keys: '' };
     const perPage = pageKeyRows(rows);
     const dir = lines < 0 ? -1 : 1;
+    const touchId = typeof ev?.touchId === 'number' ? ev.touchId : null;
+    const prevTouchId = typeof prev.touchId === 'number' ? prev.touchId : null;
     let pending = prev.pending || 0;
     let prepaid = !!prev.prepaid;
-    const gestureStart =
-      typeof prev.lastAt !== 'number' || now - prev.lastAt > PAGE_KEY_GESTURE_GAP_MS || dir !== prev.dir;
-    if (gestureStart) {
+    const reversed = dir !== prev.dir;
+    let gestureStart;
+    if (typeof prev.lastAt !== 'number' || touchId !== prevTouchId) {
+      gestureStart = true;
+    } else if (touchId !== null) {
+      gestureStart = false; // the same contact, however long it has been
+    } else {
+      const quiet = now - prev.lastAt;
+      gestureStart = quiet > (prepaid && !reversed ? PAGE_KEY_DEBT_MS : PAGE_KEY_GESTURE_GAP_MS);
+    }
+    if (gestureStart || reversed) {
+      // A pre-paid debt belongs to its gesture and its direction.
       if (prepaid) pending = 0;
       prepaid = false;
+    }
+    if (gestureStart) {
       const size = Math.abs(lines);
       if (size >= PAGE_KEY_MIN_START_ROWS && size < Math.min(perPage, PAGE_KEY_IMMEDIATE_MAX_ROWS)) {
         // Pre-pay one page; the skipped travel is owed back (pending carries the opposite sign).
         return {
-          state: { pending: lines - dir * perPage, lastAt: now, dir, prepaid: true },
+          state: { pending: lines - dir * perPage, lastAt: now, dir, prepaid: true, touchId },
           keys: dir < 0 ? KEY_PAGE_UP : KEY_PAGE_DOWN,
         };
       }
     }
     const step = pageKeysForTravel(pending, lines, rows);
-    return { state: { pending: step.pending, lastAt: now, dir, prepaid }, keys: step.keys };
+    return { state: { pending: step.pending, lastAt: now, dir, prepaid, touchId }, keys: step.keys };
   }
 
   const TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM = 4;
@@ -366,6 +392,7 @@
     PAGE_KEY_GESTURE_GAP_MS,
     PAGE_KEY_MIN_START_ROWS,
     PAGE_KEY_IMMEDIATE_MAX_ROWS,
+    PAGE_KEY_DEBT_MS,
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
     MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR,
     MOBILE_KEYBOARD_DISMISS_TAP_SLOP,
@@ -1119,6 +1146,10 @@ Object.assign(CodemanApp.prototype, {
       let lastTime = 0;
       let scrollFrame = null;
       let isTouching = false;
+      // One id per touch contact (touchstart), carried by its touchmoves AND its
+      // momentum frames, so the page-key fallback treats a whole contact as one
+      // gesture however slowly the finger moves (pageKeysForGesture).
+      let touchContactId = 0;
 
       const scrollLoop = (timestamp) => {
         const dt = lastTime ? (timestamp - lastTime) / 16.67 : 1;
@@ -1132,7 +1163,7 @@ Object.assign(CodemanApp.prototype, {
               // Flick momentum keeps feeding the CLI's transcript from the last
               // touch point; the 40ms coalescer batches the per-frame reports.
               this._forwardScrollToApp(touchLastX, touchLastY, lines);
-            } else if (!this._maybePageCliTranscript({ shiftKey: false }, lines)) {
+            } else if (!this._maybePageCliTranscript({ shiftKey: false, touchId: touchContactId }, lines)) {
               this.terminal.scrollLines(lines);
               this._maybeLoadMoreHistoryOnScroll(lines);
             }
@@ -1205,6 +1236,7 @@ Object.assign(CodemanApp.prototype, {
             velocity = 0;
             pixelAccum = 0;
             isTouching = true;
+            touchContactId++;
             didScroll = false;
             tapStartedWithTerminalFocus = this._isMobileTerminalInputFocused();
             // Classifying scans the whole viewport with translateToString, and
@@ -1309,7 +1341,7 @@ Object.assign(CodemanApp.prototype, {
               if (this._shouldForwardWheelToApp({ shiftKey: false })) {
                 this._logScrollRouting('forward-sgr');
                 this._forwardScrollToApp(touchLastX, touchLastY, lines);
-              } else if (!this._maybePageCliTranscript({ shiftKey: false }, lines)) {
+              } else if (!this._maybePageCliTranscript({ shiftKey: false, touchId: touchContactId }, lines)) {
                 this._logScrollRouting('local-scrollback');
                 this._noteTerminalUserScroll(lines);
                 this.terminal.scrollLines(lines);
@@ -5840,9 +5872,12 @@ Object.assign(CodemanApp.prototype, {
    * travel (19 rows, ~475px on a 38-row pane) meant an ordinary trackpad flick
    * never sent a key at all. That page is pre-paid: the travel it skipped is
    * owed back by the rest of the gesture, so the rate stays one page per
-   * `perPage` rows. A pause (PAGE_KEY_GESTURE_GAP_MS), a direction change or a
-   * tab switch starts a new gesture. A larger opening event is a wheel notch and
-   * accumulates as before, so slow notches still page once per `perPage` rows.
+   * `perPage` rows. A new touch contact (`ev.touchId`), a pause outside a contact
+   * (PAGE_KEY_GESTURE_GAP_MS, or PAGE_KEY_DEBT_MS while a same-direction page is
+   * still owed), a reversal after the gap or a tab switch starts a new gesture;
+   * one contact is never split by time, and a quick reversal never pre-pays. A
+   * larger opening event is a wheel notch and accumulates as before, so slow
+   * notches still page once per `perPage` rows.
    *
    * Consumed WITHOUT paging: a pinch (`ctrlKey`, how Chrome reports a trackpad
    * pinch), a mostly horizontal swipe (both deltas present, |deltaX| > |deltaY|;
@@ -5868,7 +5903,10 @@ Object.assign(CodemanApp.prototype, {
     if (!this._localScrollbackIsHollow()) return false;
     // An open dialog in THIS pane's session (the active one): a page key would
     // move its selector. Consumed, so the buffer does not scroll under it either.
-    if (this.tabAlerts?.get(this.activeSessionId) === 'action') return true;
+    if (this.tabAlerts?.get(this.activeSessionId) === 'action') {
+      this._logScrollRouting('page-keys-dialog-open');
+      return true;
+    }
     // Leftover travel and the gesture in progress belong to the tab they were made on.
     if (this._pageKeySession !== this.activeSessionId) {
       this._pageKeySession = this.activeSessionId;
