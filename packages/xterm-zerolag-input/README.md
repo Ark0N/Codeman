@@ -365,6 +365,7 @@ reconcile(): void;                    // manual pass (no onWriteParsed available
 setPredictWhen(fn | null): void;      // swap the gate at runtime
 refreshFont(): void;                  // after font/theme changes
 get hasPredictions(): boolean;
+get pendingText(): string;             // predicted chars not yet present in the parsed buffer
 get state(): PredictionState;         // { outstanding, confirmedTotal, droppedTotal, anchor }
 ```
 

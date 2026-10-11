@@ -71,6 +71,19 @@ describe('PredictiveEchoAddon', () => {
     expect(addon.state.anchor).toEqual({ row: 0, col: 2 });
   });
 
+  it('exposes only the unconfirmed text for prompt handoff', async () => {
+    addon.predictChar('h');
+    addon.predictChar('i');
+    expect(addon.pendingText).toBe('hi');
+
+    mock.setLine(0, '› h');
+    mock.setCursor(3, 0);
+    mock.fireWriteParsed();
+    await flushMicrotasks();
+
+    expect(addon.pendingText).toBe('i');
+  });
+
   it('re-anchors at the new cursor once outstanding drains to zero', async () => {
     addon.predictChar('h');
     mock.setLine(0, '› h');

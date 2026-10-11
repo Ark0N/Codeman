@@ -167,6 +167,68 @@ describe('mobile prompt composer', () => {
     expect(app._flushedTexts.has('session-1')).toBe(false);
   });
 
+  it('adopts the active Codex prompt from the terminal before opening the composer', () => {
+    const { app, bar, document } = loadComposer();
+    app.sessions.set('session-1', { mode: 'codex' });
+    app._localEchoEnabled = false;
+    app._localEchoOverlay = null;
+    (app as any)._takeCodexComposerDraft = vi.fn(() => 'existing Codex prompt');
+
+    bar.composePrompt();
+
+    expect((app as any)._takeCodexComposerDraft).toHaveBeenCalledWith('session-1');
+    expect(textarea(document).value).toBe('existing Codex prompt');
+    expect((bar as any)._composerDrafts.get('session-1')).toBe('existing Codex prompt');
+  });
+
+  it('keeps the Codex composer and terminal draft synchronized without changing Claude handoff', () => {
+    const { app, bar, document, runTimers } = loadComposer();
+    app.sessions.set('session-1', { mode: 'codex' });
+    app._localEchoEnabled = false;
+    app._localEchoOverlay = null;
+    (app as any)._takeCodexComposerDraft = vi.fn(() => 'existing Codex prompt');
+
+    bar.composePrompt();
+
+    expect(textarea(document).value).toBe('existing Codex prompt');
+    expect(app._sendInputAsync).toHaveBeenNthCalledWith(1, 'session-1', '\x15', { useMux: true });
+    expect(app._sendInputAsync).toHaveBeenNthCalledWith(
+      2,
+      'session-1',
+      '\x1b[200~existing Codex prompt\x1b[201~'
+    );
+
+    app._sendInputAsync.mockClear();
+    const input = textarea(document);
+    input.value = 'revised Codex prompt';
+    input.dispatchEvent(new document.defaultView!.Event('input', { bubbles: true }));
+    expect(app._sendInputAsync).not.toHaveBeenCalled();
+    runTimers();
+    expect(app._sendInputAsync).toHaveBeenNthCalledWith(1, 'session-1', '\x15', { useMux: true });
+    expect(app._sendInputAsync).toHaveBeenNthCalledWith(
+      2,
+      'session-1',
+      '\x1b[200~revised Codex prompt\x1b[201~'
+    );
+
+    app._sendInputAsync.mockClear();
+    (document.querySelector('.paste-cancel') as HTMLButtonElement).click();
+    expect(app._sendInputAsync).toHaveBeenNthCalledWith(1, 'session-1', '\x15', { useMux: true });
+    expect(app._sendInputAsync).toHaveBeenNthCalledWith(
+      2,
+      'session-1',
+      '\x1b[200~revised Codex prompt\x1b[201~'
+    );
+
+    const claude = loadComposer();
+    (claude.app as any)._takeCodexComposerDraft = vi.fn(() => 'wrong Codex draft');
+    claude.localEcho.pendingText = 'Claude terminal text';
+    claude.bar.composePrompt();
+    expect(textarea(claude.document).value).toBe('Claude terminal text');
+    expect((claude.app as any)._takeCodexComposerDraft).not.toHaveBeenCalled();
+    expect(claude.app._sendInputAsync).not.toHaveBeenCalled();
+  });
+
   it('uses Unicode code points when erasing flushed text', () => {
     const { app, bar, document } = loadComposer();
     app._flushedOffsets.set('session-1', 3);
