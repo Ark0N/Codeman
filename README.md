@@ -5,7 +5,7 @@
 <h2 align="center">Mission control for AI coding agents</h2>
 
 <p align="center">
-  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Antigravity &bull; Gemini &bull; Pi &bull; Grok &bull; DeepSeek &bull; OMP &bull; Terminal - One Dashboard &bull; Any Device</em>
+  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Antigravity &bull; Gemini &bull; Pi &bull; Grok &bull; DeepSeek &bull; OMP &bull; Copilot &bull; Terminal - One Dashboard &bull; Any Device</em>
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
   <img src="docs/images/tiles-crt-stats-1600-20261010.gif" alt="Codeman tile grid: six live agents (DeepSeek Harness, Claude Code, Pi, Codex, OpenCode and a shell) powering on and off with the CRT animation, with the live header strip showing CPU, memory and Claude plan usage" width="800">
 </p>
 
-**Codeman** is a self-hosted mission control for AI coding agents. It spawns Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, DeepSeek Harness, or OMP inside persistent tmux sessions, streams the real terminal to any browser, and keeps agents productive after you walk away: it re-prompts on idle, resumes when a usage limit resets, runs scheduled jobs, and shows every background agent working in real time.
+**Codeman** is a self-hosted mission control for AI coding agents. It spawns Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, DeepSeek Harness, OMP, or GitHub Copilot CLI inside persistent tmux sessions, streams the real terminal to any browser, and keeps agents productive after you walk away: it re-prompts on idle, resumes when a usage limit resets, runs scheduled jobs, and shows every background agent working in real time.
 
 Get started in one line (macOS & Linux, Windows via WSL):
 
@@ -42,7 +42,7 @@ codeman web
 
 The installer asks before every system change, and re-running the same line updates in place. Full details: [Quick Start - Installation](#quick-start---installation).
 
-- **One dashboard, nine CLIs** - run [Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, DeepSeek, or OMP](#more-features) per session (plus plain shell), locally, [in Docker](#isolated-docker-sessions), or [over SSH](#remote-ssh-sessions), with your own dashboards open as [web tabs](#more-features) beside them
+- **One dashboard, ten CLIs** - run [Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, DeepSeek, OMP, or GitHub Copilot](#more-features) per session (plus plain shell), locally, [in Docker](#isolated-docker-sessions), or [over SSH](#remote-ssh-sessions), with your own dashboards open as [web tabs](#more-features) beside them
 - **Truly phone-friendly** - a [touch-optimized terminal](#mobile-optimized-web-ui) with instant local echo, QR login, swipe navigation, and push notifications
 - **Runs while you sleep** - [idle detection + respawn cycling](#respawn-controller) and auto-resume when a subscription limit resets, for 24+ hour unattended runs
 - **See your agents think** - [live floating windows](#live-agent-visualization) for every subagent and teammate, with real-time transcripts
@@ -70,7 +70,7 @@ This installs Node.js, tmux and a build toolchain if missing (node-pty ships no 
 - **Re-run to update.** The same one-liner updates a finished install in place: local changes in `~/.codeman/app` are stashed (never discarded), and a running service is restarted and verified. If a first install was interrupted, re-running resumes the full setup instead. `install.sh status` prints the URLs and the QR code again; `install.sh update`, `install.sh tailscale` and `install.sh uninstall` also exist.
 - **Flags for the impatient.** `curl -fsSL https://getcodeman.com/install | bash -s -- --tailscale --service` answers the questions from the command line (`--lan`, `--local`, `--run`, `--no-start`, `--name <n>`, `--port <n>`, `--yes` too). **CI / headless:** without a terminal attached, steps that would change your system abort with instructions instead of running silently; set `CODEMAN_NONINTERACTIVE=1` to approve them for automation.
 
-You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), [Antigravity](https://antigravity.google), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Pi](https://pi.dev), [Grok Build](https://github.com/xai-org/grok-build), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), or [OMP](https://github.com/can1357/oh-my-pi) (any combination works; Gemini CLI is enterprise-only since Google's consumer cutover, and Antigravity is its successor). The installer detects whichever of the nine is present; if none is found, it offers to install any of them from a menu (DeepSeek excepted, since its npm package installs only a launcher with no runnable profile), or you can skip and install one yourself later. After install:
+You'll need at least one AI coding CLI installed — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), [Antigravity](https://antigravity.google), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Pi](https://pi.dev), [Grok Build](https://github.com/xai-org/grok-build), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [OMP](https://github.com/can1357/oh-my-pi), or [GitHub Copilot CLI](https://github.com/github/copilot-cli) (any combination works; Gemini CLI is enterprise-only since Google's consumer cutover, and Antigravity is its successor). The installer detects whichever of the ten is present; if none is found, it offers to install any of them from a menu (DeepSeek excepted, since its npm package installs only a launcher with no runnable profile), or you can skip and install one yourself later. After install:
 
 ```bash
 codeman web
@@ -259,7 +259,7 @@ Click **+ New Session** (or **Quick Start**). A session is one AI CLI running in
 | Field                        | What it does                                                                                                        |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | **Working directory / case** | The folder the agent operates in. A "case" is just a named working dir Codeman remembers. **Add Case** creates one from scratch, links an existing folder, or clones a GitHub repo straight into one (**Clone Repo**). |
-| **CLI / run mode**           | `Claude` (default), `OpenCode`, `Codex`, `Antigravity`, `Gemini`, `Pi`, `Grok`, `DeepSeek`, `OMP`, or `Terminal` (plain shell). |
+| **CLI / run mode**           | `Claude` (default), `OpenCode`, `Codex`, `Antigravity`, `Gemini`, `Pi`, `Grok`, `DeepSeek`, `OMP`, `Copilot`, or `Terminal` (plain shell). |
 | **Model**                    | Per-session model (App Settings → Models → New Claude sessions). A soft default — `/model` still works in-session.                  |
 | **Effort / Ultracode**       | Reasoning effort (`low`–`max`) or `ultracode` for dynamic multi-agent workflows. Switchable anytime with `/effort`. |
 
@@ -463,7 +463,7 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 - **Git status in the bottom bar** — off by default (**App Settings → Header & Panels → Bottom bar → Git status**, per device). A small indicator at the right of the bottom bar shows the active session's repository at a glance: `● 3` uncommitted files, `↑ 2` commits not pushed, `⚠` merge conflicts, `✓` all committed and pushed. Click it for a draggable window listing the staged, not-staged, untracked and conflicted files (grouped under collapsed folders, or as a flat list if you turn that setting off) and the unpushed commits; **click a file to see its diff** (new files as all additions, deleted files as all removals), with **Open file** to jump to the viewer. A folder that holds several projects gets one collapsible section per repository found up to two levels down, all collapsed until you open them. Read-only and offline (Codeman never fetches or changes the repo); not shown for Docker or remote sessions.
 - **Clone a GitHub repo as a case** — paste a repository URL into **Add Case → Clone Repo** and Codeman clones it into `~/codeman-cases/<name>` and registers it as a normal case, ready to run an agent in. It preflights the URL while you type (tells you whether it can be cloned anonymously and offers the repo's real branches and tags for the optional branch/tag field), fills the case name in from the URL, and lets you pick which CLI the Run button should use. Public repositories over `https://`; Codeman never collects or stores credentials
 - **Create a case in a custom folder** — tick **Create in a custom folder** in **Add Case → Create New**, pick a parent folder (Browse included) and a name, and Codeman scaffolds the new case there instead of `~/codeman-cases`. The target must be a new or empty folder; system directories, your home folder itself, credential trees such as `~/.ssh`, and Codeman's own data folder are refused. Admin only in multi-user mode.
-- **Multi-CLI** — run **Claude Code**, **OpenCode**, **Codex**, **Antigravity**, **Gemini**, **Pi**, **Grok**, **DeepSeek Harness**, or **OMP** per session; env-var prefixes auto-gate (`CLAUDE_CODE_*` vs `OPENCODE_*` vs `CODEX_*` vs `ANTIGRAVITY_*` vs `GEMINI_*`/`GOOGLE_*` vs `PI_*` vs `GROK_*`/`XAI_*` vs `DSH_*`/`DEEPSEEK_*` vs `OMP_*`). See [`docs/opencode-integration.md`](docs/opencode-integration.md), [`docs/pi-integration.md`](docs/pi-integration.md), [`docs/grok-integration.md`](docs/grok-integration.md), [`docs/deepseek-integration.md`](docs/deepseek-integration.md) and [`docs/omp-integration.md`](docs/omp-integration.md)
+- **Multi-CLI** — run **Claude Code**, **OpenCode**, **Codex**, **Antigravity**, **Gemini**, **Pi**, **Grok**, **DeepSeek Harness**, **OMP**, or **GitHub Copilot CLI** per session; env-var prefixes auto-gate (`CLAUDE_CODE_*` vs `OPENCODE_*` vs `CODEX_*` vs `ANTIGRAVITY_*` vs `GEMINI_*`/`GOOGLE_*` vs `PI_*` vs `GROK_*`/`XAI_*` vs `DSH_*`/`DEEPSEEK_*` vs `OMP_*` vs `COPILOT_*`). See [`docs/opencode-integration.md`](docs/opencode-integration.md), [`docs/pi-integration.md`](docs/pi-integration.md), [`docs/grok-integration.md`](docs/grok-integration.md), [`docs/deepseek-integration.md`](docs/deepseek-integration.md) [`docs/omp-integration.md`](docs/omp-integration.md) and [`docs/copilot-integration.md`](docs/copilot-integration.md)
 - **Custom model endpoints** _(new in 1.29.0, HTTP API for now)_ — point a session's CLI at any OpenAI-compatible endpoint instead of its native backend: a local llama.cpp, llama-swap, Ollama or vLLM box, or a cloud gateway such as Azure AI Foundry or OpenRouter. Save an endpoint once (`POST /api/model-endpoints`; its models are discovered from `/v1/models`), apply it to a session (`POST /api/sessions/:id/custom-model`), and the CLI restarts in place on that endpoint. Verified live for Claude, OpenCode, Pi, Grok and OMP; Codex, Gemini and DeepSeek have documented gaps, Antigravity has no mechanism. A toolbar picker is the follow-up. See [`docs/custom-model-endpoints.md`](docs/custom-model-endpoints.md)
 - **Web tabs** — open Grafana, Uptime Kuma, a Vite dev server or any dashboard URL as a tab beside your sessions (Run dropdown → **Web / URL** → **Add URL**). Dashboards are proxied through Codeman's own origin, so an `http://` target works from a phone over HTTPS and through the tunnel, single-page apps route on their own paths, and a frame that reloads recovers itself. A `localhost` link an agent prints opens as a web tab automatically. See [`docs/web-tabs.md`](docs/web-tabs.md)
 - **Docker sessions** — run a case inside an isolated, hardened container. One checkbox on **Create New** spins up a container with sensible defaults and starts the agent inside it; multiple sessions share one per-case container, or attach a case to a container you already run; export a container + its workspace to a portable `.tar.gz` to move it to another machine. See [`docs/docker-cases.md`](docs/docker-cases.md)
@@ -479,7 +479,7 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 - **OSC 52 clipboard**: a program in a session that sets the clipboard with OSC 52 (Claude Code's `/copy`, a tmux yank, vim) puts the text on your browser's clipboard, in the main terminal and in every tile. Clipboard read requests are refused, and replaying a buffer never copies
 - **MCP server sync** _(opt-in)_: copies the user-level MCP servers each installed CLI has (Claude, Codex, Gemini, OpenCode, Antigravity, and GitHub Copilot CLI) into the others' own config files. Additive only, a server you switched off is never copied, **Preview** shows the changes first, and the previous file is kept as `.codeman-bak`. App Settings → Agents & CLIs; admin only in multi-user mode
 - **CJK / IME input** — full composition support for Chinese / Japanese / Korean, with Ctrl- and Alt-modified navigation keys passed through to the CLI
-- **Plan usage in the header** — live Claude subscription usage (the 5-hour and weekly windows) from a statusline exporter Codeman hands to `claude` at spawn and never writes into your settings files, plus Codex limits from its own app-server; per device, on for desktops and off for phones
+- **Plan usage in the header** — live Claude subscription usage (the 5-hour and weekly windows) from a statusline exporter Codeman hands to `claude` at spawn and never writes into your settings files, plus Codex limits from its own app-server and GitHub Copilot's monthly premium-request quota (read with the CLI's own sign-in token); per device, on for desktops and off for phones
 - **Prompt-cache readout**: each Claude session shows whether its prompt cache is warm (`cache:until HH:MM`) or cold, in the footer (when you have no statusline of your own) and in Session Options → Respawn, with the cost of a re-cache and a note after a compaction. Display only; it survives a restart
 - **Session list, your way** — the header strip, a left sidebar with a filter box, or a vertical rail whose detailed rows carry created and state stamps and sort by activity; the phone home screen and the desktop home rail use the same order. On the rail, **Search sessions** narrows the list to the tabs that match, across every group, and a tab with an alert stays visible even when its name does not. Named **tab groups** collapse, reorder and take drags; a group's menu has **New session**, and a worker an agent spawns lands right after its parent (**Spawned tabs follow their parent**, off by default, keeps it moving with the parent). **Add to Focus** pins a shortcut to any tab in a section at the top of the rail, and **CLI Logos on Tabs** can be switched off per device
 - **Terminal looks** — seven skins, four of them light, per-device font family and weight (the bundled JetBrains Mono covers weights 100 to 800), and opt-in animations for tabs, agent windows, the terminal pane, connection lines and [tile-grid tiles](#tile-grid), all in App Settings → Animations (with a lab to try them)
@@ -935,7 +935,7 @@ for _ in $(seq 1 10); do
 done
 printf '%s\n' "$TXT"
 
-# 5b. Other modes (shell/opencode/gemini/antigravity/pi/grok/omp) have no transcript:
+# 5b. Other modes (shell/opencode/gemini/antigravity/pi/grok/omp/copilot) have no transcript:
 #     read the terminal. ⚠️ Use terminal?tail=, NOT /output: the latter's textOutput
 #     is empty for every tmux-backed (i.e. every interactive) session. tail counts
 #     BYTES, and what comes back is terminal data, ANSI included.
@@ -1155,7 +1155,7 @@ flowchart TB
         end
 
         subgraph External["External"]
-            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Antigravity / Gemini / Pi / Grok / DeepSeek / OMP</small>"]
+            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Antigravity / Gemini / Pi / Grok / DeepSeek / OMP / GitHub Copilot</small>"]
             BG["Background Agents<br/><small>(Task tool)</small>"]
         end
     end

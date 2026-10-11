@@ -259,7 +259,7 @@ const safeEnvOverridesSchema = z
     },
     {
       message:
-        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_*, GROK_*, XAI_*, DSH_*, DEEPSEEK_*, OMP_* keys and CLAUDE_CONFIG_DIR are allowed.',
+        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_*, GROK_*, XAI_*, DSH_*, DEEPSEEK_*, OMP_*, COPILOT_* keys and CLAUDE_CONFIG_DIR are allowed.',
     }
   );
 

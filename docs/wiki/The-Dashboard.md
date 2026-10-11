@@ -148,7 +148,7 @@ The right side of the header. Almost all of these are off until you enable them 
 | CPU / MEM              | On                 | Server resource use. Drawn as a compact pill by default; see Header Stats Style below. |
 | File Viewer            | On                 | Toggles the file browser panel.                                                  |
 | Settings gear          | Always on          | App Settings.                                                                    |
-| Plan usage chip        | On, desktop only   | Live Claude subscription usage. Claude-only, and needs its telemetry exporter, which the same setting installs. |
+| Plan usage chip        | On, desktop only   | Live Claude subscription usage (needs its telemetry exporter, which the same setting installs), plus a Codex row and a GitHub Copilot row (`mo`: this month's premium requests, with counts and the reset date in the tooltip) when those CLIs are signed in. |
 | Session Manager        | Off                | The full session list, live and historical.                                      |
 | Approvals bell         | Off                | Cross-session queue of prompts waiting on a human. Appears only when the count is above zero. Never shown on phones. |
 | Read My Mind 🧠        | Off                | Predicts your next prompt for this case. Claude-only.                            |

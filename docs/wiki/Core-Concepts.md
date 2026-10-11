@@ -59,7 +59,7 @@ A session carries state the case does not:
 ## Run mode
 
 The **run mode** is which CLI the session runs: `claude`, `opencode`, `codex`, `gemini`,
-`antigravity`, `pi`, `grok`, `deepseek`, `omp`, or `shell`. It is chosen at start and does not change afterwards; to
+`antigravity`, `pi`, `grok`, `deepseek`, `omp`, `copilot`, or `shell`. It is chosen at start and does not change afterwards; to
 switch, start another session.
 
 Claude is the reference mode. Nine of the ten are not Claude, and a number of Codeman
@@ -78,7 +78,7 @@ Where a case runs is **separate from** which CLI it runs. There are three locati
 | **Remote SSH** | A durable tmux server on the remote host, fronted by a local pane running `ssh`. See [Remote SSH Sessions](Remote-SSH-Sessions). |
 
 This matters because it is a common source of confusion: Docker is **not** an eleventh run
-mode. All ten run modes work in all three locations. A case is docker-backed or
+mode. All eleven run modes work in all three locations. A case is docker-backed or
 ssh-backed; a session is claude or codex or shell.
 
 **Web tabs** are the other thing that is not a session. A saved dashboard URL renders as a
@@ -180,7 +180,7 @@ See [Hooks And Integrations](Hooks-And-Integrations).
 | --------------- | ---------------------------------------------------------------------------- |
 | **Case**        | Named working directory.                                                      |
 | **Session**     | One CLI in one tmux session.                                                  |
-| **Run mode**    | Which CLI: claude, opencode, codex, gemini, antigravity, pi, grok, deepseek, omp, shell. |
+| **Run mode**    | Which CLI: claude, opencode, codex, gemini, antigravity, pi, grok, deepseek, omp, copilot, shell. |
 | **Respawn**     | Restarting the CLI on idle to keep an unattended run going.                   |
 | **Ralph loop**  | An autonomous single-session task loop.                                       |
 | **Orchestrator**| A phased plan driven across multiple agents.                                  |
@@ -191,6 +191,6 @@ See [Hooks And Integrations](Hooks-And-Integrations).
 ## Read next
 
 - [The Dashboard](The-Dashboard) - what the UI is showing you.
-- [Agent CLIs](Agent-CLIs) - the ten run modes in detail.
+- [Agent CLIs](Agent-CLIs) - the eleven run modes in detail.
 - [Keeping Agents Running](Keeping-Agents-Running) - respawn, idle detection, usage limits.
 - [`docs/architecture-invariants.md`](https://github.com/Ark0N/Codeman/blob/master/docs/architecture-invariants.md) - the mechanisms behind all of this, for contributors.

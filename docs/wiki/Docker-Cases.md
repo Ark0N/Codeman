@@ -4,7 +4,7 @@ Run a case inside its own container instead of directly on your host: for isolat
 reproducible toolchain, and for the ability to pick the whole environment up and move it to
 another machine.
 
-A docker case is a **location overlay**, not a run mode. All ten run modes work inside a
+A docker case is a **location overlay**, not a run mode. All eleven run modes work inside a
 container. See [Core Concepts](Core-Concepts).
 
 ## One-time setup: the base image
