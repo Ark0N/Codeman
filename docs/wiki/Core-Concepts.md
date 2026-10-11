@@ -135,6 +135,7 @@ Everything Codeman knows lives under `~/.codeman/`:
 | `users.json`                             | Multi-user accounts, mode 0600.                                       |
 | `push-*.json`                            | Web push keys and subscriptions.                                      |
 | `certs/`                                 | Self-signed TLS for `--https`.                                        |
+| `backups/config/`                        | Timestamped copies of the files above that you customized ([Config Backups](Config-Backups)). |
 
 None of it needs root, none of it leaves the machine, and deleting `~/.codeman/` resets
 Codeman to a fresh install without touching your code.

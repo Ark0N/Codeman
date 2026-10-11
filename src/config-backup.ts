@@ -40,6 +40,9 @@ import { isAbsolute, join, resolve, sep } from 'node:path';
  * The files (relative to the data dir) a snapshot holds: what a user configured, not what the server
  * regenerates (session state, logs, the hook secret, docker seeds, caches).
  *
+ * ⚠️ Not tracked: `state.json`. It also holds cron jobs and respawn presets, but it is rewritten with
+ * every session event, so tracking it would make a snapshot per event and bury the real changes.
+ *
  * ⚠️ `.env`, `users.json`, `custom-model-hosts.json` and `push-keys.json` carry credentials or keys.
  * They are already in the data dir with the same permissions; a snapshot folder is 0700 with 0600
  * files, so the default location widens nothing. A custom location is the user's own choice.
@@ -51,6 +54,10 @@ export const CONFIG_BACKUP_FILES = [
   'webhook.json',
   'intents.json',
   'linked-cases.json',
+  'remote-hosts.json',
+  'docker-hosts.json',
+  'docker-cases.json',
+  'webviews.json',
   'push-keys.json',
   'users.json',
   '.env',

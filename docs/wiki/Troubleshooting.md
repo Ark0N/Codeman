@@ -131,6 +131,23 @@ That prompt comes from Claude Code, not Codeman. Codeman's default is to start w
 permission prompts skipped, which is what the security model is built around. If you would
 rather it prompted, change **App Settings → Agents & CLIs → Claude → Startup Mode**.
 
+### My settings were reset, or a CLI I enabled is gone
+
+Something rewrote a file in `~/.codeman/` (a hand edit, a restart that loaded a bad file, a
+test run pointed at the real data directory). If [Config Backups](Config-Backups) was on,
+which is the default, you have copies:
+
+1. Open **Settings → System → Config backups** and pick the newest backup from before the
+   change. The list shows when each was made and what it holds.
+2. **Restore** it, reload the page, and restart Codeman if the response says `clis.json`,
+   `users.json`, `.env` or `push-keys.json` were restored.
+
+Without the UI: the backups are plain folders in `~/.codeman/backups/config/`
+(`cfg-YYYYMMDD-HHMMSS`); copy the file you need back over the one in `~/.codeman/`.
+
+Not covered: `state.json` (cron jobs and respawn presets live there). A backup only exists
+from the moment the feature first ran, so a reset that happened before that cannot be undone.
+
 ### Sessions vanished after a reboot
 
 Expected. tmux does not survive a reboot, so the sessions are gone. Conversations are not:
