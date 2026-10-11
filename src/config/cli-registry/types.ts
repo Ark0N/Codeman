@@ -69,6 +69,14 @@ export type Cond =
  */
 export type QuoteStyle = 'auto' | 'bare' | 'double' | 'single';
 
+/**
+ * Workspace-relative directories an agent CLI scans for project skills. A closed list
+ * rather than a free path: the value decides where the server WRITES, and
+ * `~/.codeman/clis.json` can set it, so it must never be able to name `..` or an
+ * absolute path.
+ */
+export type AgentSkillDir = '.claude/skills' | '.agents/skills';
+
 /** One argv element. */
 export type ArgSpec =
   /** A bare literal word, e.g. the base binary or codex's `resume` subcommand. */
@@ -515,7 +523,20 @@ export interface CliCapabilities {
   ralph: boolean;
   respawn: boolean;
   effort: boolean;
+  /**
+   * Codeman may write its agent skill (`skills/codeman`) into this CLI's workspace and
+   * seed its per-session preamble (behind the synced `agentSkillEnabled` setting,
+   * add-only, marker-owned). Where it lands comes from `agentSkillDir` below.
+   */
   agentSkillInjection: boolean;
+  /**
+   * The workspace-relative directory this CLI scans for project skills, so the skill
+   * lands at `<workspace>/<agentSkillDir>/codeman/SKILL.md` where the CLI discovers it.
+   * Measured per CLI. Absent with `agentSkillInjection: true` means Claude Code's
+   * `.claude/skills`, which is what the boolean meant before this field existed, so a
+   * `~/.codeman/clis.json` written against the old schema keeps its behaviour.
+   */
+  agentSkillDir?: AgentSkillDir;
   statusLineTelemetry: boolean;
   /** Where a model override is delivered. Claude uniquely writes settings.local.json. */
   model: { source: 'flag' | 'claude-settings-file' | 'none'; param?: string };

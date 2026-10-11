@@ -18,7 +18,16 @@ import { dataPath } from './config/instance.js';
 import { readCodemanCredentials } from './codeman-credentials.js';
 import { casePath } from './config/cases-dir.js';
 import { assertValidBasePath } from './config/base-path.js';
-import { installAgentSkillInto, removeAgentSkillFrom, type AgentSkillApplyResult } from './hooks-config.js';
+import {
+  agentSkillDir,
+  agentSkillDirFor,
+  CLAUDE_AGENT_SKILL_DIR,
+  installAgentSkillInto,
+  removeAgentSkillFrom,
+  type AgentSkillApplyResult,
+} from './hooks-config.js';
+import type { AgentSkillDir } from './config/cli-registry/types.js';
+import { getCli, listClis } from './config/cli-registry/registry.js';
 import { registerAgentCommands } from './cli-agent.js';
 import { getSessionManager } from './session-manager.js';
 import { getTaskQueue } from './task-queue.js';
@@ -140,7 +149,8 @@ export function resolveCliCasePath(name: string): string {
 /**
  * Resolve where `skill install` / `skill uninstall` operate. Global is
  * `~/.claude/skills/codeman` (Claude Code's user-scope skill dir, read by every new
- * session); `--case <name>` targets `<case>/.claude/skills/codeman`, resolved through
+ * session); `--case <name>` targets `<case>/<skillDir>/codeman` for the given skills
+ * directory (default: Claude Code's, `<case>/.claude/skills/codeman`), resolved through
  * `resolveCliCasePath()` above. The web server's automatic per-case injection
  * (`agentSkillEnabled`) covers multi-user spaces; this CLI is a local operator tool
  * and stays single-user.
@@ -151,17 +161,18 @@ export function resolveCliCasePath(name: string): string {
  */
 export function resolveSkillTargetPath(options: {
   case?: string;
+  skillDir?: AgentSkillDir;
 }): { target: string; missingCase?: undefined } | { target?: undefined; missingCase: string } {
   if (options.case) {
     const casePath = resolveCliCasePath(options.case);
     if (!existsSync(casePath)) return { missingCase: casePath };
-    return { target: join(casePath, '.claude', 'skills', 'codeman') };
+    return { target: agentSkillDirFor(casePath, options.skillDir ?? CLAUDE_AGENT_SKILL_DIR) };
   }
   return { target: join(homedir(), '.claude', 'skills', 'codeman') };
 }
 
 /** Exit-owning wrapper around `resolveSkillTargetPath()` for the two commands below. */
-function resolveSkillTarget(options: { case?: string }): string {
+function resolveSkillTarget(options: { case?: string; skillDir?: AgentSkillDir }): string {
   const resolved = resolveSkillTargetPath(options);
   if (resolved.missingCase !== undefined) {
     console.error(palette.err(`✗ Case not found: ${resolved.missingCase}`));
@@ -170,8 +181,44 @@ function resolveSkillTarget(options: { case?: string }): string {
   return resolved.target;
 }
 
-/** Print an AgentSkillApplyResult for humans; exit non-zero when nothing was done. */
-function reportSkillResult(result: AgentSkillApplyResult, target: string): void {
+/**
+ * The skills directory `skill install --mode <mode>` writes into, or why it cannot: a
+ * mode the registry gives no skill, or a user-level install for a CLI other than Claude
+ * Code (each CLI keeps its user-level skills somewhere else, and `npx skills add`
+ * already knows every one of those places).
+ */
+export function resolveSkillInstallDir(options: {
+  mode?: string;
+  case?: string;
+}): { skillDir: AgentSkillDir; error?: undefined } | { skillDir?: undefined; error: string } {
+  const mode = options.mode ?? 'claude';
+  const cli = getCli(mode);
+  if (!cli) return { error: `Unknown mode: ${mode}` };
+  const skillDir = agentSkillDir(cli.capabilities);
+  if (!skillDir) return { error: `Mode ${mode} takes no Codeman agent skill` };
+  if (!options.case && skillDir !== CLAUDE_AGENT_SKILL_DIR) {
+    return {
+      error: `A user-level install for ${mode} goes through the skills installer: npx skills add Ark0N/Codeman --skill codeman -g (or pass --case <name>)`,
+    };
+  }
+  return { skillDir };
+}
+
+/**
+ * Every distinct skills directory the registry can inject into, so
+ * `skill uninstall --case` removes whatever any CLI's session left there.
+ */
+export function registryAgentSkillDirs(): AgentSkillDir[] {
+  const dirs = new Set<AgentSkillDir>();
+  for (const cli of listClis()) {
+    const dir = agentSkillDir(cli.capabilities);
+    if (dir) dirs.add(dir);
+  }
+  return [...dirs];
+}
+
+/** An AgentSkillApplyResult in words, and whether it counts as success. */
+function describeSkillResult(result: AgentSkillApplyResult, target: string): { ok: boolean; text: string } {
   const messages: Record<AgentSkillApplyResult, { ok: boolean; text: string }> = {
     installed: { ok: true, text: `Agent skill installed: ${target}` },
     refreshed: { ok: true, text: `Agent skill refreshed (was stale): ${target}` },
@@ -187,7 +234,12 @@ function reportSkillResult(result: AgentSkillApplyResult, target: string): void 
       text: `${target} (or its parent) is a symlink, refusing to write through it.`,
     },
   };
-  const message = messages[result];
+  return messages[result];
+}
+
+/** Print an AgentSkillApplyResult for humans; exit non-zero when nothing was done. */
+function reportSkillResult(result: AgentSkillApplyResult, target: string): void {
+  const message = describeSkillResult(result, target);
   if (message.ok) {
     console.log(palette.ok(`✓ ${message.text}`));
   } else {
@@ -205,9 +257,19 @@ skillCmd
   .description('Install the agent skill globally (~/.claude/skills/codeman) or into one case')
   .option('-g, --global', 'Install into ~/.claude/skills/codeman, picked up by every new session (the default)')
   .option('-c, --case <name>', 'Install into <case>/.claude/skills/codeman instead (linked cases resolve too)')
-  .action(async (options: { global?: boolean; case?: string }) => {
+  .option(
+    '-m, --mode <mode>',
+    'With --case: install where that run mode looks for skills (codex: <case>/.agents/skills/codeman)',
+    'claude'
+  )
+  .action(async (options: { global?: boolean; case?: string; mode?: string }) => {
     try {
-      const target = resolveSkillTarget(options);
+      const resolved = resolveSkillInstallDir(options);
+      if (resolved.error !== undefined) {
+        console.error(palette.err(`✗ ${resolved.error}`));
+        process.exit(1);
+      }
+      const target = resolveSkillTarget({ case: options.case, skillDir: resolved.skillDir });
       reportSkillResult(await installAgentSkillInto(target), target);
     } catch (err) {
       console.error(palette.err(`✗ Failed to install agent skill: ${getErrorMessage(err)}`));
@@ -217,13 +279,35 @@ skillCmd
 
 skillCmd
   .command('uninstall')
-  .description('Remove a Codeman-managed agent skill copy (never touches a user-authored one)')
+  .description('Remove Codeman-managed agent skill copies (never touches a user-authored one)')
   .option('-g, --global', 'Remove from ~/.claude/skills/codeman (the default)')
-  .option('-c, --case <name>', 'Remove from <case>/.claude/skills/codeman instead (linked cases resolve too)')
+  .option(
+    '-c, --case <name>',
+    "Remove every Codeman-managed copy from that case instead, whichever CLI's directory it is in (linked cases resolve too)"
+  )
   .action(async (options: { global?: boolean; case?: string }) => {
     try {
-      const target = resolveSkillTarget(options);
-      reportSkillResult(await removeAgentSkillFrom(target), target);
+      if (!options.case) {
+        const target = resolveSkillTarget(options);
+        reportSkillResult(await removeAgentSkillFrom(target), target);
+        return;
+      }
+      let failed = false;
+      let removedAny = false;
+      for (const skillDir of registryAgentSkillDirs()) {
+        const target = resolveSkillTarget({ case: options.case, skillDir });
+        const result = await removeAgentSkillFrom(target);
+        if (result === 'absent') continue;
+        removedAny = true;
+        const message = describeSkillResult(result, target);
+        if (message.ok) console.log(palette.ok(`✓ ${message.text}`));
+        else {
+          console.error(palette.err(`✗ ${message.text}`));
+          failed = true;
+        }
+      }
+      if (!removedAny) console.log(palette.ok(`✓ No Codeman-managed agent skill in case ${options.case}`));
+      if (failed) process.exit(1);
     } catch (err) {
       console.error(palette.err(`✗ Failed to remove agent skill: ${getErrorMessage(err)}`));
       process.exit(1);

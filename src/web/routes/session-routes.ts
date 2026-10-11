@@ -114,7 +114,7 @@ import { buildAgentCaseMarker, writeAgentCaseMarker } from '../../agent-case-mar
 import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
 import { clampEnvOverridesForOwner } from '../../session-env-clamp.js';
 import { enabledClis, getCli } from '../../config/cli-registry/registry.js';
-import type { NewlineSequence } from '../../config/cli-registry/types.js';
+import type { AgentSkillDir, NewlineSequence } from '../../config/cli-registry/types.js';
 import { resolveCliLaunchError } from '../../utils/cli-launcher.js';
 import { applyLaunchDefaults } from '../launch-defaults.js';
 import { legacyConfigForMode } from '../../session-cli-registry-bridge.js';
@@ -124,6 +124,8 @@ import {
   writeHooksConfig,
   updateCaseModel,
   stripCaseEnvKeys,
+  agentSkillDir,
+  agentSkillDirFor,
   applyAgentSkill,
   refreshUserAgentSkill,
   seedAgentSessionPreamble,
@@ -792,8 +794,8 @@ function abortOnClientHangUp(reply: FastifyReply): AbortController {
  * Injection is best-effort and stays that way: neither a refusal nor a thrown error
  * may fail the create.
  */
-async function injectAgentSkill(casePath: string): Promise<void> {
-  const skillDir = join(casePath, '.claude', 'skills', 'codeman');
+async function injectAgentSkill(casePath: string, dir: AgentSkillDir): Promise<void> {
+  const skillDir = agentSkillDirFor(casePath, dir);
   try {
     // Claude Code loads a same-named USER-LEVEL skill (`~/.claude/skills/codeman`,
     // written once by `codeman skill install`) over the case copy injected below, so a
@@ -802,7 +804,7 @@ async function injectAgentSkill(casePath: string): Promise<void> {
     // current on the same trigger. Refresh-only + marker-guarded; quiet on refusal,
     // since a foreign user copy is the user's own authored skill, not a config error.
     await refreshUserAgentSkill();
-    const result = await applyAgentSkill(casePath, true);
+    const result = await applyAgentSkill(casePath, true, dir);
     if (result === 'foreign') {
       console.warn(
         `[agent-skill] not injected: ${skillDir} exists but is not Codeman-managed (no marker), refusing to touch it. Remove that copy if you want the packaged skill there.`
@@ -1133,13 +1135,6 @@ export function registerSessionRoutes(
     // materializing in ~/.claude/settings.local.json was never asked for.
     if (!remote && body.workingDir && (body.mode ?? 'claude') === 'claude') {
       await applyWorkspaceHooks(workingDir, await ctx.getWorkspaceHooksEnabled());
-      // Agent skill (docs/agent-control-plan.md §2): ADD-ONLY on create, same shared-
-      // .claude rationale as the statusLine above: a create must never remove the
-      // skill from under other live sessions in the repo. Marker-guarded, so a
-      // user's own skills/codeman is never touched.
-      if (await ctx.getAgentSkillEnabled()) {
-        await injectAgentSkill(workingDir);
-      }
     }
 
     // Refuse up front if the requested CLI cannot start, rather than spawning a pane that
@@ -1161,6 +1156,18 @@ export function registerSessionRoutes(
       if (cliLaunchError) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, cliLaunchError);
       }
+    }
+
+    // Agent skill (docs/agent-control-plan.md §2): ADD-ONLY on create, same shared-
+    // workspace rationale as the statusLine above: a create must never remove the
+    // skill from under other live sessions in the repo. Marker-guarded, so a user's
+    // own copy is never touched. Every CLI that takes the skill gets it in the directory
+    // that CLI scans (`capabilities.agentSkillDir`); the same remote and named-workingDir
+    // conditions as the hooks above, and only once the launch pre-flight passed, so a
+    // CLI that cannot start leaves nothing in the workspace.
+    const createSkillDir = agentSkillDir(getCli(body.mode ?? 'claude')?.capabilities);
+    if (!remote && body.workingDir && createSkillDir && (await ctx.getAgentSkillEnabled())) {
+      await injectAgentSkill(workingDir, createSkillDir);
     }
 
     // Pre-validate resumeSessionId: check that the conversation file actually exists
@@ -1274,8 +1281,9 @@ export function registerSessionRoutes(
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
     // Pre-seed the agent skill's preamble cache so its §0 bootstrap is a two-line
-    // loader (see seedAgentSessionPreamble). Local claude sessions only; best-effort.
-    if (getCli(mode)?.capabilities.agentSkillInjection && !remote && (await ctx.getAgentSkillEnabled())) {
+    // loader (see seedAgentSessionPreamble). Local sessions of a CLI that takes the
+    // skill; best-effort.
+    if (agentSkillDir(getCli(mode)?.capabilities) && !remote && (await ctx.getAgentSkillEnabled())) {
       await seedAgentSessionPreamble(session.id).catch((err: unknown) =>
         console.warn(`[agent-skill] preamble seed failed for ${session.id}: ${getErrorMessage(err)}`)
       );
@@ -3870,12 +3878,14 @@ export function registerSessionRoutes(
     }
 
     // Agent skill injection (docs/agent-control-plan.md §2): ADD-ONLY on create,
-    // marker-guarded (a user's own skills/codeman is never touched). Claude mode only
-    // (`.claude/skills/` is a Claude Code surface); skipped for remote cases, whose
-    // casePath lives on another host. Docker cases qualify: hostWorkspacePath is a
-    // real host dir and the skill crosses the bind mount like the rest of `.claude/`.
-    if (!remote && getCli(mode)?.capabilities.agentSkillInjection && (await ctx.getAgentSkillEnabled())) {
-      await injectAgentSkill(resolvedCasePath);
+    // marker-guarded (a user's own copy is never touched). Each CLI that takes the
+    // skill gets it in the directory it scans (`capabilities.agentSkillDir`:
+    // `.claude/skills` for claude, `.agents/skills` for most others); skipped for
+    // remote cases, whose casePath lives on another host. Docker cases qualify:
+    // hostWorkspacePath is a real host dir and the skill crosses the bind mount.
+    const quickStartSkillDir = agentSkillDir(getCli(mode)?.capabilities);
+    if (!remote && quickStartSkillDir && (await ctx.getAgentSkillEnabled())) {
+      await injectAgentSkill(resolvedCasePath, quickStartSkillDir);
     }
 
     // Docker cases: the workspace is a REAL host dir bind-mounted into the container.
@@ -4188,8 +4198,9 @@ export function registerSessionRoutes(
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
     // Pre-seed the agent skill's preamble cache so its §0 bootstrap is a two-line
-    // loader (see seedAgentSessionPreamble). Local claude sessions only; best-effort.
-    if (getCli(mode)?.capabilities.agentSkillInjection && !remote && !docker && (await ctx.getAgentSkillEnabled())) {
+    // loader (see seedAgentSessionPreamble). Local sessions of a CLI that takes the
+    // skill; best-effort.
+    if (agentSkillDir(getCli(mode)?.capabilities) && !remote && !docker && (await ctx.getAgentSkillEnabled())) {
       await seedAgentSessionPreamble(session.id).catch((err: unknown) =>
         console.warn(`[agent-skill] preamble seed failed for ${session.id}: ${getErrorMessage(err)}`)
       );

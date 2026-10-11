@@ -1,11 +1,13 @@
 ---
 name: codeman
 description: >-
-  Drive Codeman, the session manager this agent is running inside, over its HTTP API:
-  list sessions, start worker sessions, send them prompts, block until they finish
-  (wait / wait-output / send-and-wait), read their output, and clean up; where
-  available, message claude workers directly (Claude Code cross-session messaging).
-  Use when asked to orchestrate or parallelize work across Codeman sessions, watch
+  Drive Codeman, the session manager this agent is running inside, over its HTTP API,
+  from any agent CLI (Claude Code, Codex, Gemini CLI, OpenCode, Antigravity, Grok
+  Build, DeepSeek Harness, OMP): list sessions, start worker sessions in any installed
+  CLI, send them prompts, block until they finish (wait / wait-output / send-and-wait),
+  read their output, and clean up; where available, message claude workers directly
+  (Claude Code cross-session messaging). Use when asked to orchestrate or parallelize
+  work across Codeman sessions, get a second opinion from another CLI or model, watch
   another session, or start and manage workers. Only usable inside a Codeman-managed
   session (CODEMAN_MUX=1); refuse to act otherwise.
 ---
@@ -29,16 +31,30 @@ worked multi-worker flows in [reference/recipes.md](reference/recipes.md), endpo
 tables and a symptom gallery in [reference/endpoints.md](reference/endpoints.md), and
 direct messaging to claude workers in [reference/messaging.md](reference/messaging.md).
 
-Workers in **every other mode** never receive this preamble, but they have the same
-environment: tell them *"other sessions: `codeman agent --help`"* — the bundled CLI
-(`ls`, `spawn`, `send`, `wait`, `read`, `interrupt`, `rm`) is the same verbs over the
-same endpoints, with the guards below (no control bytes, no self-delete, no guessed
-URL) enforced in code.
+This skill works the same whichever CLI you are: Codeman puts it where each CLI looks
+for skills (`.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI,
+OpenCode, Antigravity, Grok, DeepSeek and OMP). A **pi** or **shell** worker never gets
+it, but has the same environment: tell it *"other sessions: `codeman agent --help`"*.
+That bundled CLI (`ls`, `spawn`, `send`, `wait`, `read`, `interrupt`, `rm`) is the same
+verbs over the same endpoints, with the guards below (no control bytes, no self-delete,
+no guessed URL) enforced in code, and it is also your own way through when this
+machine has no `jq` for the preamble below.
 
 ## 0. Guard and bootstrap
 
 If `CODEMAN_MUX` is not `1`, **stop and say so**. Do not guess an API URL; a server
 you are not part of is not yours to drive.
+
+Two failures come from your CLI, not from Codeman: name them to the user instead of
+retrying.
+
+- **Every call fails at once with "couldn't connect" or "connection refused".** Your
+  CLI's sandbox blocks network access, even to this machine. Codex's default sandbox
+  does; it needs **Bypass approvals and sandbox** (Codeman App Settings, Codex).
+- **`"${CURL[@]}" -o /dev/null -w '%{http_code}' "$API/api/v1/sessions/$SELF"` prints
+  `404`.** The commands you run do not carry this session's environment: Codex can run them in a shared background
+  process another session started, so `$CODEMAN_SESSION_ID` (and with it `$SELF` and
+  the delete guard) is that session's. Delete nothing; tell the user.
 
 ⚠️ **Your shell state does not survive between tool calls.** Each Bash call starts a
 fresh shell, so `$API`, `$SELF`, the `CURL` array and `delete_session` are all gone by
@@ -47,8 +63,9 @@ the preamble to a file once and source it afterwards, rather than re-pasting a
 hundred-odd lines at the top of every call (a half-re-pasted preamble used to be the
 single most likely way to break a run).
 
-**Codeman seeds the preamble file for you** when it spawns a claude session (server
-1.18.3+), so the bootstrap is usually nothing at all: these are the two lines every
+**Codeman seeds the preamble file for you** when it spawns your session (claude since
+server 1.18.3, the other CLIs since this skill reached them), so the bootstrap is
+usually nothing at all: these are the two lines every
 later call opens with, and your first REAL call performs them anyway:
 
 ```bash
