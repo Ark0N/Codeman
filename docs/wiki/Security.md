@@ -104,6 +104,11 @@ Stated plainly, because a security page that only lists strengths is not useful:
 No telemetry, no analytics, no phone-home. Codeman's only network traffic is between your
 browser and your server. Your agent CLI's traffic is its own, on your account.
 
+The one request Codeman makes on its own is the GitHub Copilot quota read behind the plan usage
+chip's **Copilot** row: every 10 minutes, to `api.github.com` only, with Copilot's own sign-in
+token, only while Copilot CLI is installed and signed in and the plan usage chip is on. The
+token is never logged and redirects are refused; turning the chip off stops it.
+
 Two features send data outward, both off by default and both stated where they appear: voice
 dictation through your Claude login, and the Read My Mind prediction call.
 
