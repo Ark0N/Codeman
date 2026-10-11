@@ -290,7 +290,11 @@ would REPEAT the rows between it and the true one, so a shorter overlap (a lone
 `$` row that happens to match after a spinner row changed) is not trusted.
 When the frame cannot be placed (more output scrolled than the screen held, or
 nothing matches), the join is history over frame, as without the screen read.
-What is left: when the screen repeats a whole block of rows, the frame can be
+That includes an agent TUI mid-turn (Claude Code, codex, opencode): it keeps a
+live region (spinner, composer, footer) pinned to the bottom and inserts new
+rows above it, so the frame is not a shifted copy of the screen and is not
+placed. A plain shell places. What is left: when the screen repeats a whole
+block of rows, the frame can be
 placed at the higher copy, which leaves out the rows between the two copies.
 
 The history, the history size and the screen are ONE tmux command list
@@ -302,7 +306,10 @@ those milliseconds were in neither capture (measured with output streaming: 1-2
 rows per load on a LAN host, every read on a local busy pane). This rests on how
 tmux's command queue behaves, not on a documented guarantee. A random marker row
 (`display-message`) separates the history from the size and the screen, since
-tmux output cannot carry the NUL markers around it. The remote `tail -c` bound
+tmux output cannot carry the NUL markers around it. tmux before 3.2 prints no
+newline after `capture-pane -p` output, so when the history ends inside a
+wrapped line the marker is glued onto that row; the parser accepts the marker
+at the end of a row and re-terminates the history. The remote `tail -c` bound
 applies to that whole output, history first, and is the configured byte cap
 plus 1 MiB for the marker, size and screen, so a cut lands in the history; the
 route trims what it returns to the cap itself.

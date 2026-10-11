@@ -17,7 +17,6 @@ import { tmpdir } from 'node:os';
 import {
   buildRemoteScrollbackCommand,
   buildRemoteScrollbackScript,
-  dropPartialFirstRow,
   fetchRemoteScrollback,
   newScrollbackMarker,
   parseRemoteScrollbackOutput,
@@ -98,15 +97,6 @@ describe('newScrollbackMarker', () => {
   });
 });
 
-describe('dropPartialFirstRow', () => {
-  it('drops the row a tail -c cut landed in, and only then', () => {
-    expect(dropPartialFirstRow('ow 1\nrow 2\n', 11)).toBe('row 2\n');
-    expect(dropPartialFirstRow('row 1\nrow 2\n', 100)).toBe('row 1\nrow 2\n');
-    expect(dropPartialFirstRow('no newline at all', 17)).toBe('');
-    expect(dropPartialFirstRow('row 1\nrow 2\n', 0)).toBe('row 1\nrow 2\n');
-  });
-});
-
 describe('parseRemoteScrollbackOutput', () => {
   const read = (tmuxOutput: string) => `\x00${tmuxOutput}\x00`;
 
@@ -138,6 +128,14 @@ describe('parseRemoteScrollbackOutput', () => {
     });
   });
 
+  it('a history under the byte cap keeps every row', () => {
+    const output = `row 1\nrow 2\n${MARKER}\n7\nscreen\n`;
+    expect(parseRemoteScrollbackOutput(read(output), MARKER, Buffer.byteLength(output) + 1)).toEqual({
+      scrollback: 'row 1\nrow 2\n',
+      screen: 'screen\n',
+    });
+  });
+
   it('a cut that landed exactly on the marker row keeps it', () => {
     const output = `${MARKER}\n3\nscreen\n`;
     expect(parseRemoteScrollbackOutput(read(output), MARKER, Buffer.byteLength(output))).toEqual({
@@ -146,10 +144,31 @@ describe('parseRemoteScrollbackOutput', () => {
     });
   });
 
-  it('finds the marker only as a whole row', () => {
-    const output = `echo ${MARKER}\n${MARKER}\n2\nscreen\n`;
+  it('tmux before 3.2: a marker glued onto an unterminated wrapped row ends that row', () => {
+    // No newline after `capture-pane -p` output before 3.2, and -J leaves the
+    // history's last row unterminated when the screen starts mid-line.
+    const output = `row 1\nfirst half of long row${MARKER}\n31\nsecond half\n$ `;
     expect(parseRemoteScrollbackOutput(read(output), MARKER, 0)).toEqual({
-      scrollback: `echo ${MARKER}\n`,
+      scrollback: 'row 1\nfirst half of long row\n',
+      screen: 'second half\n$ ',
+    });
+  });
+
+  it('tmux before 3.2: a cut history with the glued marker drops only the partial first row', () => {
+    const output = `ow 1\nrow 2${MARKER}\n7\nscreen\n`;
+    expect(parseRemoteScrollbackOutput(read(output), MARKER, Buffer.byteLength(output))).toEqual({
+      scrollback: 'row 2\n',
+      screen: 'screen\n',
+    });
+    // No history: the clamped first visible row the marker is glued to is not kept.
+    expect(parseRemoteScrollbackOutput(read(`$ prompt${MARKER}\n0\n$ prompt\n`), MARKER, 0)).toEqual({
+      scrollback: '',
+      screen: '$ prompt\n',
+    });
+    // The cut landed in the only history row, the one the marker is glued to.
+    const single = `alf of long row${MARKER}\n7\nscreen\n`;
+    expect(parseRemoteScrollbackOutput(read(single), MARKER, Buffer.byteLength(single))).toEqual({
+      scrollback: '',
       screen: 'screen\n',
     });
   });
@@ -178,7 +197,8 @@ describe('the remote script under a real shell', () => {
     callsFile = join(dir, 'calls');
     // Stub tmux: logs its argv (one per line) and runs a `;`-separated command
     // list in order, as tmux does: the history size, the marker it was given,
-    // two history rows, one screen row.
+    // two history rows, one screen row. With PRE32 set it prints like tmux
+    // before 3.2 with the screen starting mid-line: no newline after the history.
     writeFileSync(
       join(dir, 'tmux'),
       [
@@ -189,7 +209,7 @@ describe('the remote script under a real shell', () => {
         '  case " $1 " in',
         '    *" #{history_size} "*) echo 2 ;;',
         `    *" display-message "*) printf '%s\\n' "$2" ;;`,
-        '    *" -E -1 "*) printf "older row\\nnewer row\\n" ;;',
+        '    *" -E -1 "*) if [ -n "$PRE32" ]; then printf "older row\\nfirst half"; else printf "older row\\nnewer row\\n"; fi ;;',
         '    *" capture-pane "*) printf "screen row\\n" ;;',
         '  esac',
         '}',
@@ -231,6 +251,19 @@ describe('the remote script under a real shell', () => {
         "capture-pane|-p|-e|-J|-t|=codeman-it's:|",
       ].join('|;|')
     );
+  });
+
+  it('tmux before 3.2: an unterminated last history row still parses, re-terminated', () => {
+    const script = buildRemoteScrollbackScript('codeman', 'old-host', 500, 0, MARKER);
+    const stdout = execFileSync('/bin/sh', ['-c', script], {
+      encoding: 'utf-8',
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH ?? ''}`, PRE32: '1' },
+    });
+    expect(stdout).toContain(`first half${MARKER}\n`);
+    expect(parseRemoteScrollbackOutput(stdout, MARKER, 0)).toEqual({
+      scrollback: 'older row\nfirst half\n',
+      screen: 'screen row\n',
+    });
   });
 
   it('prints both NULs when tmux fails, so a missing session reads as the script having run', () => {

@@ -732,6 +732,12 @@ function capturedRowText(row: string): string {
  * above it matches. A row that changed between the two reads (a spinner, a
  * clock) fails the true placement; the minimum keeps a lower one from being
  * taken on a row or two that happen to be equal.
+ *
+ * An agent TUI mid-turn (Claude Code, codex, opencode) is not placed: it keeps
+ * a live region (spinner, composer, footer) pinned to the bottom and inserts new
+ * rows above it, so the frame is not a shifted copy of the screen and the
+ * comparison down to the screen's last content row fails. The caller then falls
+ * back to the plain join. A plain shell places.
  */
 export function findFrameInScreen(screenRows: string[], frameRows: string[]): number {
   const screen = screenRows.map(capturedRowText);

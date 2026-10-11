@@ -28,6 +28,8 @@
  * rows). This rests on how tmux's command queue behaves, not on a documented
  * guarantee. tmux output cannot carry the NUL markers, so a random marker line
  * printed by `display-message` separates the history from the size and screen.
+ * tmux before 3.2 prints no newline after `capture-pane -p`, so the marker can be
+ * glued onto an unterminated last history row; the parser accepts it there too.
  *
  * Bounded and fail-soft. Any failure (unreachable host, auth, missing session, odd
  * output) returns null and the caller keeps the local capture, so a remote load is
@@ -156,16 +158,6 @@ export function buildRemoteScrollbackCommand(
   return ['exec', ...buildSshConnectionArgs(remote), remoteSshTarget(remote), shellescape(script)].join(' ');
 }
 
-/**
- * A `tail -c` cut lands mid-row (possibly mid-escape) whenever it bit, so the
- * first, partial row is dropped. Under the bound, the rows are whole.
- */
-export function dropPartialFirstRow(scrollback: string, maxBytes: number): string {
-  if (maxBytes <= 0 || Buffer.byteLength(scrollback, 'utf-8') < maxBytes) return scrollback;
-  const newline = scrollback.indexOf('\n');
-  return newline === -1 ? '' : scrollback.slice(newline + 1);
-}
-
 /** What one round trip read from the remote pane: its scrollback rows, then its screen. */
 export interface RemoteScrollback {
   /** History rows above the screen, oldest first; '' when the pane has none. */
@@ -177,7 +169,9 @@ export interface RemoteScrollback {
 /**
  * The scrollback and screen rows from the script's stdout, or null when the
  * output is not the script's or tmux printed nothing usable (no such session,
- * or a byte cap so small it cut into the screen).
+ * or a byte cap so small it cut into the screen). The marker may end an
+ * unterminated history row (tmux before 3.2); when the output reached
+ * `tailBytes`, the history's partial first row is dropped.
  */
 export function parseRemoteScrollbackOutput(
   stdout: string,
@@ -188,23 +182,33 @@ export function parseRemoteScrollbackOutput(
   if (start === -1) return null;
   const end = stdout.indexOf('\0', start + 1);
   if (end === -1) return null;
-  // The marker is a whole row of its own, after the history's last row.
+  // The marker ends a row, after the history's last row. Usually it is a row of
+  // its own, but tmux before 3.2 prints no newline after `capture-pane -p`, so
+  // when the history ends inside a wrapped line (`-J` leaves it unterminated)
+  // the marker is glued onto that row. It is random per read, so no row the
+  // pane really holds ends with it.
   const markerRow = `${marker}\n`;
   const raw = stdout.slice(start + 1, end);
-  // A cut that landed exactly on the marker row left it whole: there is no
-  // partial history row to drop, and dropping the first row would lose it.
-  const output = raw.startsWith(markerRow) ? raw : dropPartialFirstRow(raw, tailBytes);
-  const at = output.startsWith(markerRow) ? 0 : output.indexOf(`\n${markerRow}`) + 1;
-  if (at === 0 && !output.startsWith(markerRow)) return null;
+  const at = raw.indexOf(markerRow);
+  if (at === -1) return null;
   const sizeStart = at + markerRow.length;
-  const sizeEnd = output.indexOf('\n', sizeStart);
+  const sizeEnd = raw.indexOf('\n', sizeStart);
   if (sizeEnd === -1) return null;
-  const sizeText = output.slice(sizeStart, sizeEnd).trim();
+  const sizeText = raw.slice(sizeStart, sizeEnd).trim();
   if (!/^\d+$/.test(sizeText)) return null;
-  const screen = output.slice(sizeEnd + 1);
+  const screen = raw.slice(sizeEnd + 1);
   // With no history at all, tmux clamps `-E -1` to the first visible row.
   if (Number(sizeText) === 0) return { scrollback: '', screen };
-  return { scrollback: output.slice(0, at), screen };
+  // A tail -c cut lands in the history (the bound leaves room for the rest),
+  // mid-row and possibly mid-escape, so the first, partial row is dropped. A
+  // cut exactly on the marker row leaves no history at all.
+  let scrollback = raw.slice(0, at);
+  if (tailBytes > 0 && Buffer.byteLength(raw, 'utf-8') >= tailBytes) {
+    const newline = scrollback.indexOf('\n');
+    scrollback = newline === -1 ? '' : scrollback.slice(newline + 1);
+  }
+  if (scrollback !== '' && !scrollback.endsWith('\n')) scrollback += '\n';
+  return { scrollback, screen };
 }
 
 /** Runs the ssh command line and resolves its stdout; rejects like `exec` does. */
