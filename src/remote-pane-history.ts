@@ -17,11 +17,12 @@
  *
  * Bounded and fail-soft. Any failure (unreachable host, auth, missing session, odd
  * output) returns null and the caller keeps the local capture, so a remote load is
- * never worse than before. A failure also starts a short per-host back-off, so a
- * host that is asleep costs one timeout, not one per tab switch. The child runs under
- * the shared remote-ssh limiter (`remote-ssh-limiter.ts`) like every other short-lived
- * remote ssh, but gives up on a slot it waited too long for, and the connection
- * options come from `buildSshConnectionArgs()`.
+ * never worse than before. A transport failure also starts a short per-host back-off,
+ * so a host that is asleep costs one timeout, not one per tab switch. The child runs
+ * under the shared remote-ssh limiter (`remote-ssh-limiter.ts`) like every other
+ * short-lived remote ssh, but gives up on a slot it waited too long for (`maxWaitMs`,
+ * enforced in the queue), and the connection options come from
+ * `buildSshConnectionArgs()`.
  *
  * How much history exists is the REMOTE tmux's `history-limit` (2000 lines unless
  * the remote user's tmux.conf raises it); the launch command does not set it.
@@ -30,8 +31,8 @@
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { SessionRemote } from './types/session.js';
-import { buildSshConnectionArgs, remoteSshTarget, shellescape } from './remote-hosts.js';
-import { runWithRemoteSshLimit } from './remote-ssh-limiter.js';
+import { buildSshConnectionArgs, classifyRemoteAliveExit, remoteSshTarget, shellescape } from './remote-hosts.js';
+import { RemoteSshSlotTimeoutError, runWithRemoteSshLimit } from './remote-ssh-limiter.js';
 import { remoteTmuxLocation } from './tmux-manager.js';
 
 const execAsync = promisify(exec);
@@ -129,48 +130,75 @@ export function parseRemoteScrollbackOutput(stdout: string): string | null {
   return stdout.slice(sizeEnd + 1);
 }
 
+/** Runs the ssh command line and resolves its stdout; rejects like `exec` does. */
+export type RemoteScrollbackRunner = (command: string, opts: { timeout: number; maxBuffer: number }) => Promise<string>;
+
+const execRunner: RemoteScrollbackRunner = async (command, opts) =>
+  (await execAsync(command, { encoding: 'utf-8', ...opts })).stdout;
+
 /**
  * Read a remote session's scrollback from the remote tmux, or null to keep the
  * local capture. Never throws.
+ *
+ * Only a TRANSPORT failure backs the host off (ssh's own exit 255, a timeout, a
+ * spawn error, output that is not the script's): those say the host is
+ * unreachable for every session on it. A remote command failing (a session
+ * that is gone: tmux exits 1, or answers nothing between the markers when the
+ * `| tail -c` pipe hides its status) is about this session only, so it returns
+ * null and the next session on that host still tries. Same split as
+ * `classifyRemoteAliveExit()`.
+ *
+ * `run` is a test seam: without it nothing runs under vitest, as in
+ * remote-files.ts / remote-hosts.ts.
  */
 export async function fetchRemoteScrollback(
   remote: SessionRemote,
   sessionId: string,
   historyLines: number,
-  maxBytes: number
+  maxBytes: number,
+  run?: RemoteScrollbackRunner
 ): Promise<string | null> {
-  // No real ssh under test (mirrors remote-files.ts / remote-hosts.ts).
-  if (process.env.VITEST) return null;
-  const queuedAt = Date.now();
+  if (!run && process.env.VITEST) return null;
+  const runner = run ?? execRunner;
   const until = backoffUntil.get(remote.hostId);
   if (until !== undefined) {
-    if (queuedAt < until) return null;
+    if (Date.now() < until) return null;
     backoffUntil.delete(remote.hostId);
   }
   const command = buildRemoteScrollbackCommand(remote, sessionId, historyLines, maxBytes);
   try {
-    const stdout = await runWithRemoteSshLimit(async () => {
-      // The pool was busy past what a load should wait: give the slot back.
-      if (Date.now() - queuedAt > REMOTE_HISTORY_SLOT_WAIT_MS) return null;
-      const result = await execAsync(command, {
-        encoding: 'utf-8',
-        timeout: REMOTE_HISTORY_TIMEOUT_MS,
-        maxBuffer: (maxBytes > 0 ? maxBytes : UNBOUNDED_READ_MAX_BYTES) + REMOTE_HISTORY_SLACK_BYTES,
-      });
-      return result.stdout;
-    });
-    if (stdout === null) return null;
+    const stdout = await runWithRemoteSshLimit(
+      () =>
+        runner(command, {
+          timeout: REMOTE_HISTORY_TIMEOUT_MS,
+          maxBuffer: (maxBytes > 0 ? maxBytes : UNBOUNDED_READ_MAX_BYTES) + REMOTE_HISTORY_SLACK_BYTES,
+        }),
+      // The pool is shared with 20 s file probes; past this the local capture
+      // is the better answer than waiting behind them.
+      { maxWaitMs: REMOTE_HISTORY_SLOT_WAIT_MS }
+    );
     const scrollback = parseRemoteScrollbackOutput(stdout);
     if (scrollback === null) {
-      backoffUntil.set(remote.hostId, Date.now() + REMOTE_HISTORY_BACKOFF_MS);
-      console.warn(`[remote-history] ${remote.label}: unexpected output; using the local capture`);
+      // Both markers arrived, so the script ran on the host and only tmux had
+      // nothing to say: no such session. The `| tail -c` pipe hides tmux's
+      // exit status, so this comes back as exit 0 rather than exit 1, and it
+      // is about this session alone. Output without the markers is not the
+      // script's at all, which says the host is not answering as expected.
+      const ranOnHost = stdout.split('\0').length >= 3;
+      if (!ranOnHost) backoffUntil.set(remote.hostId, Date.now() + REMOTE_HISTORY_BACKOFF_MS);
+      const what = ranOnHost ? 'no such remote tmux session' : 'unexpected output';
+      console.warn(`[remote-history] ${remote.label}: ${what}; using the local capture`);
       return null;
     }
     return dropPartialFirstRow(scrollback, maxBytes);
   } catch (err) {
-    backoffUntil.set(remote.hostId, Date.now() + REMOTE_HISTORY_BACKOFF_MS);
+    // A busy pool says nothing about the host.
+    if (err instanceof RemoteSshSlotTimeoutError) return null;
     const e = err as { killed?: boolean; code?: unknown };
-    const reason = e.killed ? 'timed out' : typeof e.code === 'number' ? `exit ${e.code}` : 'failed';
+    const code = typeof e.code === 'number' ? e.code : null;
+    const transport = classifyRemoteAliveExit(code, e.killed === true) === undefined;
+    if (transport) backoffUntil.set(remote.hostId, Date.now() + REMOTE_HISTORY_BACKOFF_MS);
+    const reason = e.killed ? 'timed out' : code !== null ? `exit ${code}` : 'failed';
     console.warn(`[remote-history] ${remote.label}: remote scrollback read ${reason}; using the local capture`);
     return null;
   }

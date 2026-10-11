@@ -258,10 +258,26 @@ full-screen repaints and keeps a fraction of the scrollback (none after a
 reattach). A full-history load (`GET /api/sessions/:id/terminal?full=1`) of a
 remote session therefore reads the scrollback rows from the REMOTE pane in one
 ssh round trip (`src/remote-pane-history.ts`) and splices them above the local
-visible frame and caret. Bounded (5 s, the shared ssh limiter) and fail-soft:
-any failure keeps the local capture and skips that host for 30 s. How much
-history exists is the remote tmux's own `history-limit`, which the launch
-command does not set (tmux's default is 2000 lines).
+visible frame and caret. Bounded (5 s for the round trip, at most 1.5 s queued
+for a slot in the shared ssh limiter) and fail-soft: any failure keeps the
+local capture, and a transport failure (ssh exit 255, a timeout, output that is
+not the script's) also skips that host for 30 s; a failure of the remote
+command itself (a remote tmux session that is gone) affects that session only.
+How much history exists is the remote tmux's own `history-limit`, which the
+launch command does not set (tmux's default is 2000 lines).
+
+Two seams can drop rows at the join, silently. Neither loses anything that
+loaded before this existed:
+
+- **Rows that scroll during the round trip.** The remote history is read
+  first and the local frame after it, so rows that scrolled off the remote
+  screen in between are in neither (measured: 13 lines lost with a 150 ms
+  round trip and fast output).
+- **A shared remote session with a taller client.** Under `window-size latest`
+  a remote session attached elsewhere is sized by its latest client; when that
+  client is taller than this pane, the rows between this pane's frame and the
+  remote screen's top are in neither the remote history nor the local frame
+  (measured: 20 rows).
 
 ## File access over SSH
 

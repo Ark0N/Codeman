@@ -9,7 +9,7 @@
  * Port: N/A (no HTTP server).
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,7 +20,14 @@ import {
   dropPartialFirstRow,
   fetchRemoteScrollback,
   parseRemoteScrollbackOutput,
+  resetRemoteScrollbackBackoff,
 } from '../src/remote-pane-history.js';
+import {
+  getActiveRemoteSshCount,
+  getQueuedRemoteSshCount,
+  getRemoteSshLimit,
+  runWithRemoteSshLimit,
+} from '../src/remote-ssh-limiter.js';
 import { joinScrollbackAndFrame, remoteTmuxLocation } from '../src/tmux-manager.js';
 import type { SessionRemote } from '../src/types/session.js';
 
@@ -150,7 +157,107 @@ describe('joinScrollbackAndFrame', () => {
 });
 
 describe('fetchRemoteScrollback', () => {
-  it('never opens a connection under test', async () => {
+  const OK = '\x002\n\x00older row\nnewer row\n';
+  const READ = 'older row\nnewer row\n';
+  /** An exec-shaped rejection: `code` is the exit status, `killed` a timeout kill. */
+  const execError = (fields: { code?: number | string; killed?: boolean }) =>
+    Object.assign(new Error('Command failed'), fields);
+
+  beforeEach(() => {
+    resetRemoteScrollbackBackoff();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('never opens a connection under test without an injected runner', async () => {
     expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024)).toBeNull();
+  });
+
+  it('returns the remote rows, running the built command with the round-trip bounds', async () => {
+    const run = vi.fn(async () => OK);
+    expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, run)).toEqual(READ);
+    expect(run).toHaveBeenCalledWith(buildRemoteScrollbackCommand(remote, SESSION_ID, 100, 1024), {
+      timeout: 5000,
+      maxBuffer: 1024 + 64 * 1024,
+    });
+  });
+
+  it('backs the HOST off after a transport failure: ssh exit 255, a timeout, a spawn error, odd output', async () => {
+    const failures: Array<() => Promise<string>> = [
+      async () => Promise.reject(execError({ code: 255 })),
+      async () => Promise.reject(execError({ killed: true, code: null as unknown as number })),
+      async () => Promise.reject(execError({ code: 'ENOENT' })),
+      async () => 'not the script output',
+    ];
+    for (const failure of failures) {
+      resetRemoteScrollbackBackoff();
+      expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, vi.fn(failure))).toBeNull();
+      // Another session on the same host is skipped without a round trip.
+      const next = vi.fn(async () => OK);
+      expect(await fetchRemoteScrollback(remote, 'other-session', 100, 1024, next)).toBeNull();
+      expect(next).not.toHaveBeenCalled();
+    }
+  });
+
+  it('a remote command failure (tmux exit 1: the session is gone) is that session only, no back-off', async () => {
+    const gone = vi.fn(async () => Promise.reject(execError({ code: 1 })));
+    expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, gone)).toBeNull();
+    const next = vi.fn(async () => OK);
+    expect(await fetchRemoteScrollback(remote, 'other-session', 100, 1024, next)).toEqual(READ);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  // Found live against a real host: the `| tail -c` pipe takes tail's exit
+  // status, so a missing session comes back as exit 0 with both markers and
+  // nothing between them. The script ran on the host; only this session is
+  // gone, so the host must not be backed off.
+  it('a missing session hidden behind the tail pipe (exit 0, empty markers) is that session only', async () => {
+    const masked = vi.fn(async () => '\x00\x00');
+    expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, masked)).toBeNull();
+    const next = vi.fn(async () => OK);
+    expect(await fetchRemoteScrollback(remote, 'other-session', 100, 1024, next)).toEqual(READ);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('the back-off ends after 30 s', async () => {
+    vi.useFakeTimers();
+    await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, async () => Promise.reject(execError({ code: 255 })));
+    const next = vi.fn(async () => OK);
+    vi.advanceTimersByTime(29_999);
+    expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, next)).toBeNull();
+    vi.advanceTimersByTime(1);
+    expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, next)).toEqual(READ);
+  });
+
+  it('gives up after 1.5 s queued behind a busy ssh pool: never runs, no slot leaked, no back-off', async () => {
+    vi.useFakeTimers();
+    const gates = Array.from({ length: getRemoteSshLimit() }, () => {
+      let release!: () => void;
+      const promise = new Promise<void>((r) => {
+        release = r;
+      });
+      return { promise, release };
+    });
+    const holders = gates.map((gate) => runWithRemoteSshLimit(() => gate.promise));
+    await Promise.resolve();
+
+    const run = vi.fn(async () => OK);
+    const pending = fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, run);
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(getQueuedRemoteSshCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toBeNull();
+    expect(run).not.toHaveBeenCalled();
+    expect(getQueuedRemoteSshCount()).toBe(0);
+
+    for (const gate of gates) gate.release();
+    await Promise.all(holders);
+    expect(getActiveRemoteSshCount()).toBe(0);
+    // A busy pool said nothing about the host.
+    expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, run)).toEqual(READ);
   });
 });
