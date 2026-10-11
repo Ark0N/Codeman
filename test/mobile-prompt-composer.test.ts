@@ -167,6 +167,20 @@ describe('mobile prompt composer', () => {
     expect(app._flushedTexts.has('session-1')).toBe(false);
   });
 
+  it('adopts the active Codex prompt from the terminal before opening the composer', () => {
+    const { app, bar, document } = loadComposer();
+    app.sessions.set('session-1', { mode: 'codex' });
+    app._localEchoEnabled = false;
+    app._localEchoOverlay = null;
+    (app as any)._takeCodexComposerDraft = vi.fn(() => 'existing Codex prompt');
+
+    bar.composePrompt();
+
+    expect((app as any)._takeCodexComposerDraft).toHaveBeenCalledWith('session-1');
+    expect(textarea(document).value).toBe('existing Codex prompt');
+    expect((bar as any)._composerDrafts.get('session-1')).toBe('existing Codex prompt');
+  });
+
   it('uses Unicode code points when erasing flushed text', () => {
     const { app, bar, document } = loadComposer();
     app._flushedOffsets.set('session-1', 3);

@@ -109,6 +109,10 @@ rules and why each exists:
   predictor active, absent, or throwing.
 - Composer gate: `isCodexComposerRow()` set via `setPredictWhen()` at
   construction (the vendor footer stays package-agnostic).
+- Mobile Compose handoff reads the active Codex prompt from xterm's parsed
+  composer rows and appends `PredictiveEchoAddon.pendingText` for glyphs not
+  echoed yet. It then clears predictions and sends Ctrl+U before the editor
+  opens, so sending the edited draft cannot duplicate the terminal prompt.
 - Second vendor bundle `vendor/xterm-predictive-echo.js` (postinstall + build);
   the zerolag bundle build command is untouched and its output byte-identical.
   Missing/broken bundle = plain 1.12.2 echo (`typeof PredictiveEchoOverlay ===

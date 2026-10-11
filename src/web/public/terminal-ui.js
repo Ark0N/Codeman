@@ -4674,6 +4674,50 @@ Object.assign(CodemanApp.prototype, {
     this.terminal?.focus();
   },
 
+  /** Transfer the visible Codex composer into the mobile Compose dialog. */
+  _takeCodexComposerDraft(sessionId) {
+    if (!sessionId || sessionId !== this.activeSessionId || this.sessions?.get(sessionId)?.mode !== 'codex') return '';
+    const buffer = this.terminal?.buffer?.active;
+    if (!buffer || !Number.isInteger(buffer.cursorY) || !Number.isInteger(buffer.cursorX)) return '';
+
+    const cursorRow = buffer.baseY + buffer.cursorY;
+    const cursorLine = buffer.getLine(cursorRow);
+    if (!cursorLine) return '';
+    const cursorText = cursorLine.translateToString(true);
+    if (!(/^› |^  /.test(cursorText))) return '';
+
+    const rows = [cursorText];
+    for (let row = cursorRow - 1; row >= buffer.baseY; row -= 1) {
+      const text = buffer.getLine(row)?.translateToString(true) || '';
+      if (text.startsWith('› ')) {
+        rows.unshift(text);
+        break;
+      }
+      if (!text.startsWith('  ')) break;
+      rows.unshift(text);
+    }
+    if (!rows[0].startsWith('› ')) return '';
+
+    const pending = this._predictiveEcho?.pendingText || '';
+    if (buffer.cursorX <= 2 && !pending) return '';
+    const currentStart = 2;
+    let currentText = '';
+    if (typeof cursorLine.getCell === 'function') {
+      for (let column = currentStart; column < buffer.cursorX; column += 1) {
+        currentText += cursorLine.getCell(column)?.getChars() || '';
+      }
+    } else {
+      currentText = cursorText.slice(currentStart, buffer.cursorX);
+    }
+    const completedRows = rows.slice(0, -1).map((text) => text.slice(2)).join(' ');
+    const prompt = completedRows + (completedRows ? ' ' : '') + currentText;
+    this._predictiveEcho?.clearPredictions();
+    // Codex owns its editable prompt in the TUI; Ctrl+U clears it after the
+    // text is copied so the dialog can replace it without submitting twice.
+    this._sendInputAsync(sessionId, '\x15', { useMux: true });
+    return (prompt + pending).trimEnd();
+  },
+
   /**
    * Clear only the current editable prompt. This is intentionally distinct
    * from Ctrl+L (clear display) and the agent's destructive `/clear` command.

@@ -169,6 +169,46 @@ describe('mobile filesystem picker actions', () => {
     expect(keyboardSource).toContain('pre.textContent = content');
   });
 
+  it('supports pinch zoom, pan, and explicit zoom controls in image previews', () => {
+    expect(keyboardSource).toContain("entry.previewKind === 'image'");
+    expect(keyboardSource).toContain("listen(image, 'pointerdown'");
+    expect(keyboardSource).toContain("listen(image, 'pointermove'");
+    expect(keyboardSource).toContain("listen(image, 'dblclick'");
+    expect(keyboardSource).toContain('data-zoom="fit"');
+    expect(keyboardSource).toContain('this._previewImageCleanup?.()');
+  });
+
+  it('adopts and clears the current Codex composer including outstanding predictions', () => {
+    const textLine = (text: string) => ({
+      translateToString: () => text,
+      getCell: (column: number) => ({ getChars: () => text[column] || '' }),
+    });
+    const clearPredictions = vi.fn();
+    const sendInputAsync = vi.fn();
+    const app = {
+      activeSessionId: 'session-1',
+      sessions: new Map([['session-1', { mode: 'codex' }]]),
+      terminal: {
+        buffer: {
+          active: {
+            baseY: 0,
+            cursorY: 2,
+            cursorX: 9,
+            getLine: (row: number) => [textLine('› Explain this'), textLine('  project'), textLine('  clearly')][row],
+          },
+        },
+      },
+      _predictiveEcho: { pendingText: '!', clearPredictions },
+      _sendInputAsync: sendInputAsync,
+    };
+
+    const prompt = (terminalHarness.mixin as any)._takeCodexComposerDraft.call(app, 'session-1');
+
+    expect(prompt).toBe('Explain this project clearly!');
+    expect(clearPredictions).toHaveBeenCalledOnce();
+    expect(sendInputAsync).toHaveBeenCalledWith('session-1', '\x15', { useMux: true });
+  });
+
   it('inserts a selected path into the editable local-echo prompt without sending it', () => {
     const appendText = vi.fn();
     const sendInput = vi.fn();

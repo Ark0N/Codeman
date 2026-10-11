@@ -249,6 +249,11 @@ export class PredictiveEchoAddon implements XtermAddon {
     }
   }
 
+  /** Characters painted ahead of Codex's parsed terminal echo. */
+  get pendingText(): string {
+    return this._outstanding.map((record) => record.char).join('');
+  }
+
   /**
    * Pop the newest outstanding prediction (visual only). Returns false when
    * none are outstanding. The consumer forwards \x7f UNCONDITIONALLY either
