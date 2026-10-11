@@ -23,6 +23,7 @@ import type {
 } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import { compileFileQuery } from '../../utils/file-query.js';
+import { describeUnknownPath, probePathKind } from '../../utils/bounded-path-probe.js';
 import { fileStreamManager } from '../../file-stream-manager.js';
 import {
   AUDIO_ATTACHMENT_EXTENSIONS,
@@ -41,6 +42,7 @@ import {
   FolderListingError,
   folderFilePath,
   folderGrants,
+  folderAllowedForUser,
   listFolder,
   validFolderFileName,
 } from '../../folder-listing.js';
@@ -2387,14 +2389,18 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       return;
     }
     try {
-      const listing = await listFolder(id, body.path, { sessionWorkingDir: scope.workingDir, remote: scope.remote });
+      const listing = await listFolder(id, body.path, {
+        sessionWorkingDir: scope.workingDir,
+        remote: scope.remote,
+        user: getAuthUser(req),
+      });
       return { success: true, data: listing };
     } catch (err) {
       if (err instanceof FolderListingError) {
         const code =
           err.statusCode === 404
             ? ApiErrorCode.NOT_FOUND
-            : err.statusCode === 502
+            : err.statusCode >= 500
               ? ApiErrorCode.OPERATION_FAILED
               : ApiErrorCode.INVALID_INPUT;
         reply.code(err.statusCode).send(createErrorResponse(code, err.message));
@@ -2410,7 +2416,9 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
    * One file of a granted folder, guard-checked like an attachment: the name is a
    * bare file name of a supported type, and the joined path goes through the same
    * {@link resolveServableAttachmentPath} (blocklist, workspace confinement, symlink
-   * re-resolution, remote re-probe) an attachment by id does.
+   * re-resolution, remote re-probe) an attachment by id does. The multi-user rule
+   * ({@link folderAllowedForUser}) runs again on the resolved file: a symlink inside
+   * the granted folder must not lead into another user's space.
    */
   async function resolveFolderFile(
     req: FastifyRequest,
@@ -2431,9 +2439,17 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     }
     const filePath = folderFilePath(grant.dir, fileName);
     if (!scope.remote) {
-      try {
-        if (!(await fs.stat(filePath)).isFile()) throw new Error('not a file');
-      } catch {
+      // Bounded, like the folder itself: the grant may point at a mount that has stopped answering since.
+      const kind = await probePathKind(filePath, { pastCap: true });
+      if (kind === 'unknown') {
+        reply
+          .code(503)
+          .send(
+            createErrorResponse(ApiErrorCode.OPERATION_FAILED, describeUnknownPath('File', filePath, { pastCap: true }))
+          );
+        return null;
+      }
+      if (kind !== 'file') {
         reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
         return null;
       }
@@ -2453,6 +2469,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     };
     const servable = await resolveServableAttachmentPath(reply, record, scope);
     if (!servable) return null;
+    if (!folderAllowedForUser(servable.path, getAuthUser(req), scope)) {
+      reply.code(403).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'File is outside your space'));
+      return null;
+    }
     return { scope, servable, name: fileName, extension };
   }
 

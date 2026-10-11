@@ -55,6 +55,14 @@ describe('folder links (findFilePathLinks)', () => {
     expect(folders('/etc/nginx is not a link root')).toEqual([]);
   });
 
+  it('ends a folder path at a colon (PATH lists), and stays linear on colon runs', () => {
+    expect(folders('export PATH=/home/u/bin:/usr/bin')).toEqual(['/home/u/bin']);
+    expect(folders('dirs /mnt/a/frames:/mnt/b/frames')).toEqual(['/mnt/a/frames', '/mnt/b/frames']);
+    const start = Date.now();
+    findFilePathLinks('a:'.repeat(16000) + '//');
+    expect(Date.now() - start).toBeLessThan(100);
+  });
+
   it('keeps the file link where both could match, and orders by position', () => {
     const found = findFilePathLinks('dir /mnt/a/frames then /mnt/a/frames/x.png');
     expect(found.map((f) => [f.path, !!f.folder])).toEqual([
@@ -321,6 +329,65 @@ describe('folder preview paging', () => {
     keyHandlers.forEach((h) => h(esc()));
     expect(elements.folderGridOverlay.classList.contains('visible')).toBe(false);
     expect(app.folderGrid).toBeNull();
+  });
+});
+
+describe('stale loads', () => {
+  const TEXT_LISTING = {
+    ...LISTING,
+    path: '/mnt/raid1/logs',
+    files: [
+      { name: 'a.log', extension: 'log', attachmentType: 'text', size: 1, mtimeMs: 2 },
+      { name: 'b.log', extension: 'log', attachmentType: 'text', size: 1, mtimeMs: 1 },
+    ],
+  };
+  const text = (body: string) => ({ ok: true, status: 200, text: async () => body });
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it("paging past a text file that is still loading never shows its text under the next file's title", async () => {
+    const pending: Record<string, (v: unknown) => void> = {};
+    const { app, elements } = loadApp((url) =>
+      url.endsWith('/folders') ? ok(TEXT_LISTING) : new Promise((r) => (pending[url] = r))
+    );
+    await app.openFolderGrid('/mnt/raid1/logs', 's1');
+    app._renderFilePreviewText = vi.fn();
+    elements.folderGridBody.children[0].onclick?.();
+    elements.filePreviewOverlay.classList.add('visible');
+    app.stepFolderPreview(1);
+    await flush();
+
+    pending['/api/sessions/s1/folders/fld_1/files/b.log/raw'](text('B'));
+    await flush();
+    pending['/api/sessions/s1/folders/fld_1/files/a.log/raw'](text('A'));
+    await flush();
+
+    expect(elements.filePreviewTitle.textContent).toBe('/mnt/raid1/logs/b.log');
+    expect(app.filePreviewContent).toBe('B');
+    expect(app.filePreviewText.filePath).toBe('/mnt/raid1/logs/b.log');
+    expect(app._renderFilePreviewText).toHaveBeenCalledTimes(1);
+  });
+
+  it('two quick folder opens render only the newer one, and a closed grid stays closed', async () => {
+    const pending: Record<string, (v: unknown) => void> = {};
+    const { app, elements } = loadApp((_url, init) => {
+      const path = JSON.parse(init?.body || '{}').path;
+      return new Promise((r) => (pending[path] = r));
+    });
+    const first = app.openFolderGrid('/mnt/raid1/styleframes', 's1');
+    const second = app.openFolderGrid('/mnt/raid1/logs', 's1');
+    pending['/mnt/raid1/logs'](ok(TEXT_LISTING));
+    await second;
+    pending['/mnt/raid1/styleframes'](ok(LISTING));
+    await first;
+    expect(app.folderGrid.path).toBe('/mnt/raid1/logs');
+    expect(elements.folderGridTitle.textContent).toBe('/mnt/raid1/logs');
+
+    const late = app.openFolderGrid('/mnt/raid1/styleframes', 's1');
+    app.closeFolderGrid();
+    pending['/mnt/raid1/styleframes'](ok(LISTING));
+    await late;
+    expect(app.folderGrid).toBeNull();
+    expect(elements.folderGridOverlay.classList.contains('visible')).toBe(false);
   });
 });
 

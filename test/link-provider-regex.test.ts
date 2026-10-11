@@ -56,6 +56,8 @@ const KILLER_LINES = [
   // long URL-ish and path-ish soup for the other patterns
   'https://example.com/' + 'a/'.repeat(1500) + ' ' + '/home/x/'.repeat(400) + '.'.repeat(2000),
   'Bash(' + 'x'.repeat(4000),
+  // a colon run ending in `//`: a folder body that kept `:` rescanned it for `://` from every colon
+  'a:'.repeat(16000) + '//',
 ];
 
 describe('terminal link-provider regexes (shipped source)', () => {

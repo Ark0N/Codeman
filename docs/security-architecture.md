@@ -382,6 +382,11 @@ left out). The grant is an id for a resolved folder; files are served by
 `folderId` + a bare file name only (no `/`, `..` or NUL, supported type), and each
 request re‑runs `resolveServableAttachmentPath` on the joined path, so a file that
 was swapped for a symlink to a blocked target after listing is still refused.
+In multi‑user mode a regular user is held to the filesystem path picker's rule
+(`folderAllowedForUser`): the folder, and again each served file after symlink
+resolution, must sit inside their own `userSpacePath` or the session's
+`workingDir`, else 403. User spaces live inside `homedir()`, so without it one user
+could list and read another's space.
 
 ### SSE log‑tail route — intentional extra read roots
 

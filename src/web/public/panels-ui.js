@@ -4107,6 +4107,12 @@ Object.assign(CodemanApp.prototype, {
 
     if (!overlay || !bodyEl) return;
 
+    // Only the newest load may write: paging ←/→ through a folder starts the next
+    // load while the previous one still awaits its fetch, and its late answer would
+    // put the previous file's text under the next file's title.
+    const load = (this._filePreviewLoad = (this._filePreviewLoad || 0) + 1);
+    const stale = () => load !== this._filePreviewLoad;
+
     // Edit mode: reset any prior editor state whenever a preview (re)loads.
     this._resetFilePreviewEdit();
     // Stop whatever the previous preview was playing. Overwriting innerHTML
@@ -4138,6 +4144,7 @@ Object.assign(CodemanApp.prototype, {
     let externalSize = 0;
     if (!attachmentId && !folderFile && this._isExternalPreviewPath(filePath, sessionId)) {
       const external = await this._registerExternalPreview(filePath, sessionId);
+      if (stale()) return;
       attachmentId = external.attachmentId || null;
       externalError = external.error || '';
       externalSize = external.size || 0;
@@ -4211,6 +4218,7 @@ Object.assign(CodemanApp.prototype, {
           const res = await fetch(`${base}/raw`, { headers: { Range: `bytes=0-${TEXT_PREVIEW_MAX_BYTES - 1}` } });
           if (!res.ok) throw new Error('Failed to load attachment');
           const text = await res.text();
+          if (stale()) return;
           const clippedByBytes = res.status === 206 && text.length >= TEXT_PREVIEW_MAX_BYTES;
           const lines = text.split('\n');
           // Markdown keeps every line the Range read returned: the byte bound is
@@ -4229,6 +4237,7 @@ Object.assign(CodemanApp.prototype, {
             footerEl.textContent = `${footerEl.textContent} (${note})`;
           }
         } catch (err) {
+          if (stale()) return;
           bodyEl.innerHTML = `<div class="binary-message">Error: ${escapeHtml(err.message)}</div>`;
         }
       }
@@ -4261,11 +4270,14 @@ Object.assign(CodemanApp.prototype, {
       try {
         const res = await fetch(`/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}`);
         if (!res.ok) throw new Error('Failed to load image');
-        const blobUrl = URL.createObjectURL(new Blob([await res.text()], { type: 'image/svg+xml' }));
+        const svgText = await res.text();
+        if (stale()) return;
+        const blobUrl = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml' }));
         bodyEl.innerHTML = `<img src="${blobUrl}" alt="${escapeHtml(filePath)}">`;
         const img = bodyEl.querySelector('img');
         if (img) img.onload = () => URL.revokeObjectURL(blobUrl);
       } catch (err) {
+        if (stale()) return;
         bodyEl.innerHTML = `<div class="binary-message">Error: ${escapeHtml(err.message)}</div>`;
       }
       return;
@@ -4281,6 +4293,7 @@ Object.assign(CodemanApp.prototype, {
       if (!res.ok) throw new Error('Failed to load file');
 
       const result = await res.json();
+      if (stale()) return;
       if (!result.success) throw new Error(result.error || 'Failed to load file');
 
       const data = result.data;
@@ -4320,6 +4333,7 @@ Object.assign(CodemanApp.prototype, {
         }
       }
     } catch (err) {
+      if (stale()) return;
       console.error('Failed to preview file:', err);
       bodyEl.innerHTML = `<div class="binary-message">Error: ${escapeHtml(err.message)}</div>`;
     }
@@ -4341,6 +4355,8 @@ Object.assign(CodemanApp.prototype, {
     const body = this.$('folderGridBody');
     if (!overlay || !body) return;
     this._bindFolderGridKeys();
+    // Two quick opens (a chip, then its parent): only the newer one may render.
+    const load = (this._folderGridLoad = (this._folderGridLoad || 0) + 1);
     let result = null;
     let status = 0;
     try {
@@ -4352,9 +4368,11 @@ Object.assign(CodemanApp.prototype, {
       status = res.status;
       result = await res.json().catch(() => null);
     } catch (err) {
+      if (load !== this._folderGridLoad) return;
       this.showToast(`Cannot open folder: ${err.message || err}`, 'error');
       return;
     }
+    if (load !== this._folderGridLoad) return;
     if (!result?.success || !result.data) {
       const reason = result?.error || `HTTP ${status}`;
       if (status === 400 && /not a folder/i.test(reason)) {
@@ -4371,6 +4389,8 @@ Object.assign(CodemanApp.prototype, {
   },
 
   closeFolderGrid() {
+    // A listing still on its way must not reopen the grid that was just closed.
+    this._folderGridLoad = (this._folderGridLoad || 0) + 1;
     this.$('folderGridOverlay')?.classList.remove('visible');
     const body = this.$('folderGridBody');
     // Drop the tiles: lazy <img>s still loading would keep fetching otherwise.

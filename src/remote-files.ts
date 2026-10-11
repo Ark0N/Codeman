@@ -293,7 +293,7 @@ export interface RemoteFolderListing {
 /**
  * List one remote folder in a SINGLE ssh round trip: its canonical path, then every
  * non-hidden subfolder and every regular file (symlinks followed) whose name ends in
- * one of `extensions` (either case), up to `maxEntries`.
+ * one of `extensions` (any case), up to `maxEntries`.
  *
  * Same output discipline as {@link buildRemoteProbeCommand}: a lone NUL first (so rc
  * chatter before it is discarded), then NUL-terminated records — `E|n` (no such
@@ -303,9 +303,9 @@ export interface RemoteFolderListing {
  * hold. A leading `~/` is the remote user's `$HOME`, as in the probe.
  */
 export function buildRemoteFolderListCommand(dir: string, extensions: readonly string[], maxEntries: number): string {
-  const patterns = extensions
-    .flatMap((ext) => [ext.toLowerCase(), ext.toUpperCase()])
-    .map((ext) => `*.${ext}`)
+  // `[pP][nN][gG]`: any case, as the local listing compares lowercased (`shot.Png`).
+  const patterns = [...new Set(extensions.map((ext) => ext.toLowerCase()))]
+    .map((ext) => `*.${ext.replace(/[a-z]/g, (c) => `[${c}${c.toUpperCase()}]`)}`)
     .join('|');
   return [
     `d=${shellescape(dir)}`,

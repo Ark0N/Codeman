@@ -2054,13 +2054,16 @@ function findFilePathLinks(text) {
  * trailing slash (`builds/captures/`). Same boundary in front as the relative
  * file pattern (group 1), the candidate itself is group 2 and goes through
  * {@link folderLinkPath}, which decides whether it reads as a folder at all.
- * File links are found first and win any overlap.
+ * File links are found first and win any overlap. A folder path ends at `:`,
+ * which is also a boundary in front: `PATH=/a/bin:/b/bin` is two candidates, and
+ * the `://` lookahead stops at the next colon instead of rescanning the token from
+ * every one (quadratic on `a:a:a:…//`).
  *
  * ⚠ Like its siblings, never share an instance (`lastIndex`): use
  * {@link findFilePathLinks}.
  */
 const FOLDER_PATH_LINK_PATTERN =
-  /(^|[\s"'`(\[{<>=,:])((?:\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/|~\/|(?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*)/g;
+  /(^|[\s"'`(\[{<>=,:])((?:\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/|~\/|(?![^\s"'`<>|;&()[\]{}=,:\n\x00-\x1f]*:\/\/)[^\s"'`<>|;&()[\]{}=,:\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,:\n\x00-\x1f]*)/g;
 
 /**
  * A {@link FOLDER_PATH_LINK_PATTERN} candidate as a folder link, or null.

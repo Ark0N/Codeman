@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Readable } from 'node:stream';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
@@ -28,6 +29,12 @@ vi.mock('../../src/remote-files.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../../src/utils/bounded-path-probe.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/utils/bounded-path-probe.js')>();
+  return { ...actual, probePathKind: vi.fn(actual.probePathKind) };
+});
+
+import { probePathKind } from '../../src/utils/bounded-path-probe.js';
 import {
   buildRemoteFolderListCommand,
   parseRemoteFolderListOutput,
@@ -36,6 +43,7 @@ import {
   remoteProbePaths,
 } from '../../src/remote-files.js';
 
+const mockedProbePathKind = vi.mocked(probePathKind);
 const mockedListFolder = vi.mocked(remoteListFolder);
 const mockedProbePaths = vi.mocked(remoteProbePaths);
 const mockedCreateReadStream = vi.mocked(remoteCreateReadStream);
@@ -113,6 +121,48 @@ describe('folder grid routes — local folder', () => {
     expect((await grant(dir)).statusCode).toBe(403);
     harness.ctx._session.workingDir = root;
     expect((await grant(dir)).statusCode).toBe(200);
+  });
+
+  it('never reads a refused folder: the guard runs on the resolved folder first', async () => {
+    const readdir = vi.spyOn(fs, 'readdir');
+    try {
+      process.env.CODEMAN_ATTACHMENT_BLOCKED_PATHS = dir;
+      expect((await grant(dir)).statusCode).toBe(403);
+      expect(readdir).not.toHaveBeenCalled();
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it('answers a folder or file that does not respond with 503, never 404, and does not read it', async () => {
+    const readdir = vi.spyOn(fs, 'readdir');
+    try {
+      mockedProbePathKind.mockResolvedValueOnce('unknown');
+      const res = await grant(dir);
+      expect(res.statusCode).toBe(503);
+      expect(JSON.parse(res.body).error).toContain(`Folder is not responding or not readable: ${dir}`);
+      expect(readdir).not.toHaveBeenCalled();
+    } finally {
+      readdir.mockRestore();
+    }
+
+    const { folderId } = JSON.parse((await grant(dir)).body).data;
+    mockedProbePathKind.mockResolvedValueOnce('unknown');
+    const file = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${folderId}/files/old.png/raw`,
+    });
+    expect(file.statusCode).toBe(503);
+    expect(JSON.parse(file.body).error).toContain('File is not responding or not readable');
+  });
+
+  it('does not serve a hidden file by name, as the listing hides it', async () => {
+    const { folderId } = JSON.parse((await grant(dir)).body).data;
+    const res = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${folderId}/files/.hidden.png/raw`,
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it('serves a granted file by name, with ranges', async () => {
@@ -306,6 +356,7 @@ describe('remote folder listing script (real sh)', () => {
     mkdirSync(dir);
     touch(join(dir, "it's a | frame.PNG"), '12345', 1_700_000_000);
     touch(join(dir, 'doc.pdf'), 'pdf', 1_700_000_100);
+    touch(join(dir, 'shot.Png'), 'x', 1_700_000_100);
     touch(join(dir, 'skip.txt'), 'x', 1_700_000_100);
     touch(join(dir, '.hidden.png'), 'x', 1_700_000_100);
     mkdirSync(join(dir, 'sub dir'));
@@ -315,7 +366,8 @@ describe('remote folder listing script (real sh)', () => {
     expect(listing?.dir).toBe(dir);
     expect(listing?.truncated).toBe(false);
     const byName = Object.fromEntries((listing?.entries ?? []).map((e) => [e.name, e]));
-    expect(Object.keys(byName).sort()).toEqual(['doc.pdf', "it's a | frame.PNG", 'sub dir']);
+    // Any case, as the local listing: `shot.Png` too.
+    expect(Object.keys(byName).sort()).toEqual(['doc.pdf', "it's a | frame.PNG", 'shot.Png', 'sub dir']);
     expect(byName["it's a | frame.PNG"]).toMatchObject({ kind: 'file', size: 5, mtimeMs: 1_700_000_000_000 });
     expect(byName['sub dir']).toMatchObject({ kind: 'directory' });
   });
@@ -333,7 +385,7 @@ describe('remote folder listing script (real sh)', () => {
 describe('validFolderFileName', () => {
   it('accepts bare supported names only', () => {
     expect(validFolderFileName('a b.png')).toBe('a b.png');
-    for (const bad of ['', '.', '..', 'a/b.png', 'a\\b.png', 'x.xyz', 'a\0.png', 42]) {
+    for (const bad of ['', '.', '..', '.hidden.png', 'a/b.png', 'a\\b.png', 'x.xyz', 'a\0.png', 42]) {
       expect(validFolderFileName(bad)).toBeNull();
     }
   });
