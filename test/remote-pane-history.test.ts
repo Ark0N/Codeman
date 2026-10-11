@@ -28,7 +28,7 @@ import {
   getRemoteSshLimit,
   runWithRemoteSshLimit,
 } from '../src/remote-ssh-limiter.js';
-import { joinScrollbackAndFrame, remoteTmuxLocation } from '../src/tmux-manager.js';
+import { findFrameInScreen, joinScrollbackAndFrame, remoteTmuxLocation } from '../src/tmux-manager.js';
 import type { SessionRemote } from '../src/types/session.js';
 
 const SESSION_ID = '663e3eae-8da6-4c7f-9231-611eb2840641';
@@ -56,7 +56,7 @@ describe('remoteTmuxLocation', () => {
 });
 
 describe('buildRemoteScrollbackCommand', () => {
-  it('goes through the shared ssh options and reads history rows only', () => {
+  it('goes through the shared ssh options and reads the history rows, then the screen', () => {
     const command = buildRemoteScrollbackCommand(remote, SESSION_ID, 10000, 2048);
     expect(command.startsWith('exec ssh -o BatchMode=yes')).toBe(true);
     expect(command).toContain('-p 2222');
@@ -67,6 +67,8 @@ describe('buildRemoteScrollbackCommand', () => {
     expect(command).toContain('capture-pane -p -e -J -S -10000 -E -1');
     expect(command).toContain('#{history_size}');
     expect(command).toContain('| tail -c 2048');
+    // The screen capture comes after the history and is not under the byte bound.
+    expect(command.indexOf('-E -1')).toBeLessThan(command.lastIndexOf('capture-pane -p -e -J -t'));
   });
 
   it('a byte cap of 0 (unbounded) runs no tail', () => {
@@ -85,18 +87,28 @@ describe('dropPartialFirstRow', () => {
 
 describe('parseRemoteScrollbackOutput', () => {
   it('drops anything printed before the script (login banner, rc-file echo)', () => {
-    expect(parseRemoteScrollbackOutput('Welcome to proxx\n\x0042\n\x00line a\nline b\n')).toBe('line a\nline b\n');
+    expect(
+      parseRemoteScrollbackOutput('Welcome to proxx\n\x0042\n\x00line a\nline b\n\x00screen 1\nscreen 2\n')
+    ).toEqual({
+      scrollback: 'line a\nline b\n',
+      screen: 'screen 1\nscreen 2\n',
+    });
   });
 
   it('an empty history is empty, not the first visible row tmux clamps -E -1 to', () => {
-    expect(parseRemoteScrollbackOutput('\x000\n\x00$ the prompt row\n')).toBe('');
+    expect(parseRemoteScrollbackOutput('\x000\n\x00$ the prompt row\n\x00$ the prompt row\n')).toEqual({
+      scrollback: '',
+      screen: '$ the prompt row\n',
+    });
   });
 
   it('rejects output that is not the script’s', () => {
     expect(parseRemoteScrollbackOutput('')).toBeNull();
     expect(parseRemoteScrollbackOutput('no markers at all')).toBeNull();
     expect(parseRemoteScrollbackOutput('\x0042\n')).toBeNull();
-    expect(parseRemoteScrollbackOutput('\x00not a number\n\x00rows')).toBeNull();
+    // The screen marker is missing: the script stopped after the history.
+    expect(parseRemoteScrollbackOutput('\x0042\n\x00rows\n')).toBeNull();
+    expect(parseRemoteScrollbackOutput('\x00not a number\n\x00rows\x00screen')).toBeNull();
   });
 });
 
@@ -117,7 +129,8 @@ describe('the remote script under a real shell', () => {
         `printf -- '--\\n' >> '${callsFile}'`,
         'case " $* " in',
         '  *" display-message "*) echo 2 ;;',
-        '  *" capture-pane "*) printf "older row\\nnewer row\\n" ;;',
+        '  *" -E -1 "*) printf "older row\\nnewer row\\n" ;;',
+        '  *" capture-pane "*) printf "screen row\\n" ;;',
         'esac',
       ].join('\n')
     );
@@ -134,13 +147,15 @@ describe('the remote script under a real shell', () => {
       encoding: 'utf-8',
       env: { ...process.env, PATH: `${dir}:${process.env.PATH ?? ''}` },
     });
-    // `tail -c 10` kept the newest bytes only: "newer row\n".
-    expect(parseRemoteScrollbackOutput(stdout)).toBe('newer row\n');
+    // `tail -c 10` kept the newest history bytes only: "newer row\n"; the
+    // screen after it is not under that bound.
+    expect(parseRemoteScrollbackOutput(stdout)).toEqual({ scrollback: 'newer row\n', screen: 'screen row\n' });
     const calls = execFileSync('cat', [callsFile], { encoding: 'utf-8' }).split('--\n').filter(Boolean);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     // One argv entry per line: the exact-match target with a quote in it arrived whole.
     expect(calls[0].split('\n').join('|')).toBe("-L|codeman|display-message|-p|-t|=codeman-it's:|#{history_size}|");
     expect(calls[1].split('\n').join('|')).toBe("-L|codeman|capture-pane|-p|-e|-J|-S|-500|-E|-1|-t|=codeman-it's:|");
+    expect(calls[2].split('\n').join('|')).toBe("-L|codeman|capture-pane|-p|-e|-J|-t|=codeman-it's:|");
   });
 });
 
@@ -156,9 +171,90 @@ describe('joinScrollbackAndFrame', () => {
   });
 });
 
+// The remote screen is read right after the remote history, the local frame
+// only once the round trip is back. Rows between the two are on that screen
+// alone, so the screen rows above where the frame overlaps it are kept.
+describe('joinScrollbackAndFrame with the remote screen', () => {
+  const rows = (...r: string[]) => `${r.join('\n')}\n`;
+  const captureRowsOf = (text: string) => text.replace(/\n$/, '').split('\n');
+  const H = rows('h1', 'h2');
+
+  it('nothing moved: the frame IS the screen, so no screen row is added', () => {
+    const screen = rows('s1', 's2', 's3', '$ ', '', '');
+    expect(joinScrollbackAndFrame(H, screen, screen)).toBe(`${H}${screen}`);
+  });
+
+  it('rows that scrolled off during the round trip are kept, once each', () => {
+    const screen = rows('s1', 's2', 's3', 's4', 's5', 's6', 's7', '$ make');
+    // Three more rows of output arrived: s1..s3 scrolled out of the frame.
+    const frame = rows('s4', 's5', 's6', 's7', '$ make', 'out 1', 'out 2', 'out 3');
+    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${H}${rows('s1', 's2', 's3')}${frame}`);
+  });
+
+  it('the top of a remote screen taller than this pane is kept', () => {
+    const screen = rows('t1', 't2', 's1', 's2', 's3', '$ ');
+    const frame = rows('s1', 's2', 's3', '$ ');
+    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${H}${rows('t1', 't2')}${frame}`);
+  });
+
+  it('the last content row may have changed (output in flight) and still matches', () => {
+    const screen = rows('s1', 's2', 's3', 's4', '$ par');
+    const frame = rows('s2', 's3', 's4', '$ partial line done', 'next');
+    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${H}${rows('s1')}${frame}`);
+  });
+
+  it('compares text only: two tmuxes may encode the same attributes differently', () => {
+    const screen = rows('\x1b[38;5;1ms1\x1b[39m', 's2  ', 's3', 's4', '$ ');
+    const frame = rows('s2', '\x1b[1ms3\x1b[0m', 's4', '$ ', 'new');
+    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${H}${rows('\x1b[38;5;1ms1\x1b[39m')}${frame}`);
+  });
+
+  it('no overlap (more scrolled than the screen held) falls back to scrollback over frame', () => {
+    const screen = rows('s1', 's2', '$ ');
+    const frame = rows('x1', 'x2', 'x3');
+    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${H}${frame}`);
+  });
+
+  it('an overlap of blank rows alone is not a match', () => {
+    const screen = rows('s1', '', '', '$ ');
+    const frame = rows('', '', 'other', 'rows');
+    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${H}${frame}`);
+  });
+
+  it('the first (highest) match wins over a block that repeats lower down', () => {
+    const screen = rows('a', 'b', 'a', 'b', '$ ');
+    const frame = rows('a', 'b', 'a', 'b', '$ x');
+    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${H}${frame}`);
+  });
+
+  // A placement too LOW repeats rows, which is worse than the plain join's
+  // loss: a row that changed between the reads (a spinner) fails the true
+  // placement, and a row or two that happen to be equal further down must not
+  // be taken instead.
+  it('does not trust an overlap shorter than three rows, two of them with text', () => {
+    const screen = rows('s1', 'spin |', 's3', '$', 'out', '$ ');
+    const frame = rows('spin /', 's3', '$', 'out', '$ ', 'new');
+    expect(findFrameInScreen(captureRowsOf(screen), captureRowsOf(frame))).toBe(-1);
+    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${H}${frame}`);
+    // Three compared rows but only one with text: not trusted either.
+    expect(findFrameInScreen(['a', 'x', '', '', 'z'], ['x', '', '', 'z', 'q'])).toBe(-1);
+  });
+
+  it('keeps a scrollback that is one blank row, as the plain join did', () => {
+    expect(joinScrollbackAndFrame('\n', 'frame\n')).toBe('\nframe\n');
+  });
+
+  it('places the frame among screen rows with findFrameInScreen', () => {
+    expect(findFrameInScreen(['a', 'b', 'c', 'd', '$'], ['b', 'c', 'd', '$', 'e'])).toBe(1);
+    expect(findFrameInScreen(['a', 'b', 'c', '$'], ['z'])).toBe(-1);
+    expect(findFrameInScreen([], ['a'])).toBe(-1);
+    expect(findFrameInScreen(['only row'], ['only row'])).toBe(-1);
+  });
+});
+
 describe('fetchRemoteScrollback', () => {
-  const OK = '\x002\n\x00older row\nnewer row\n';
-  const READ = 'older row\nnewer row\n';
+  const OK = '\x002\n\x00older row\nnewer row\n\x00screen row\n';
+  const READ = { scrollback: 'older row\nnewer row\n', screen: 'screen row\n' };
   /** An exec-shaped rejection: `code` is the exit status, `killed` a timeout kill. */
   const execError = (fields: { code?: number | string; killed?: boolean }) =>
     Object.assign(new Error('Command failed'), fields);
@@ -182,7 +278,8 @@ describe('fetchRemoteScrollback', () => {
     expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, run)).toEqual(READ);
     expect(run).toHaveBeenCalledWith(buildRemoteScrollbackCommand(remote, SESSION_ID, 100, 1024), {
       timeout: 5000,
-      maxBuffer: 1024 + 64 * 1024,
+      // The byte cap covers the history; the slack covers the screen after it.
+      maxBuffer: 1024 + 1024 * 1024,
     });
   });
 

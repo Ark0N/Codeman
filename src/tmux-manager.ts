@@ -694,14 +694,85 @@ export function normalizeScrollbackEol(buffer: string): string {
   return buffer.replace(/\r?\n/g, '\r\n');
 }
 
+/** `capture-pane -p` text as rows: tmux ends it with one `\n`, and '' has none. */
+function captureRows(text: string): string[] {
+  return text === '' ? [] : text.replace(/\n$/, '').split('\n');
+}
+
+/**
+ * Least overlap that places a frame in a screen: rows compared, and how many
+ * of them hold text. A placement too LOW repeats the rows between the true one
+ * and it, so a short overlap (one `$` or `❯` row, a rule line) is not trusted:
+ * past this, the plain join, which can only lose rows, is the safer answer.
+ */
+const FRAME_MATCH_MIN_ROWS = 3;
+const FRAME_MATCH_MIN_CONTENT_ROWS = 2;
+
+/**
+ * A captured row as plain text: escape sequences (SGR, OSC 8 links) and
+ * trailing blanks dropped. Two tmuxes render the same cell content, but need
+ * not encode its attributes the same way.
+ */
+function capturedRowText(row: string): string {
+  // eslint-disable-next-line no-control-regex
+  return row.replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]/g, '').trimEnd();
+}
+
+/**
+ * Where a later frame of the same pane begins among the rows of an earlier
+ * screen capture, or -1 when that cannot be told.
+ *
+ * The frame's top rows must equal the screen's rows from that index on, as
+ * text. Two rows are left out of the comparison: the screen's trailing blank
+ * rows (output after the screen read fills them in the frame) and its last
+ * content row (output in flight may have finished it since). Every compared
+ * row must match, the overlap must reach FRAME_MATCH_MIN_ROWS rows with
+ * FRAME_MATCH_MIN_CONTENT_ROWS of them non-blank, and the SMALLEST index wins,
+ * so a block that merely repeats further down is only chosen when nothing
+ * above it matches. A row that changed between the two reads (a spinner, a
+ * clock) fails the true placement; the minimum keeps a lower one from being
+ * taken on a row or two that happen to be equal.
+ */
+export function findFrameInScreen(screenRows: string[], frameRows: string[]): number {
+  const screen = screenRows.map(capturedRowText);
+  const frame = frameRows.map(capturedRowText);
+  let lastContent = screen.length - 1;
+  while (lastContent >= 0 && screen[lastContent] === '') lastContent--;
+  for (let start = 0; start < lastContent; start++) {
+    const overlap = Math.min(lastContent - start, frame.length);
+    if (overlap < FRAME_MATCH_MIN_ROWS) break; // only shrinks from here on
+    let matches = true;
+    let contentRows = 0;
+    for (let k = 0; k < overlap && matches; k++) {
+      if (screen[start + k] !== frame[k]) matches = false;
+      else if (frame[k] !== '') contentRows++;
+    }
+    if (matches && contentRows >= FRAME_MATCH_MIN_CONTENT_ROWS) return start;
+  }
+  return -1;
+}
+
 /**
  * Put scrollback rows read elsewhere (`PaneCaptureOptions.scrollbackOverride`)
  * above a visible-frame capture, as one capture in tmux's own shape: rows joined
  * by a bare `\n`. Undefined or empty scrollback leaves the frame as it is.
+ *
+ * `screen` is that other pane's screen, read right after its scrollback. The
+ * frame is captured later, so rows can have scrolled out of it in between, and
+ * a frame showing part of a taller screen starts below that screen's top.
+ * Either way the screen rows above the frame's first row are in neither the
+ * scrollback nor the frame, so they go between the two. When the frame cannot
+ * be placed in the screen ({@link findFrameInScreen}), the join is the plain
+ * scrollback-over-frame one.
  */
-export function joinScrollbackAndFrame(scrollback: string | undefined, frame: string): string {
-  if (!scrollback) return frame;
-  return `${scrollback.replace(/\n$/, '')}\n${frame}`;
+export function joinScrollbackAndFrame(scrollback: string | undefined, frame: string, screen?: string): string {
+  let above = scrollback ? captureRows(scrollback) : [];
+  if (screen) {
+    const screenRows = captureRows(screen);
+    const frameStart = findFrameInScreen(screenRows, captureRows(frame));
+    if (frameStart > 0) above = above.concat(screenRows.slice(0, frameStart));
+  }
+  return above.length > 0 ? `${above.join('\n')}\n${frame}` : frame;
 }
 
 /** Pane geometry and caret position, as `display-message` reports them. */
@@ -3915,7 +3986,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       }
       const rawCapture = joinScrollbackAndFrame(
         scrollbackOverride,
-        execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, execOpts)
+        execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, execOpts),
+        scrollbackOverride !== undefined ? opts?.scrollbackOverrideScreen : undefined
       );
       // Query the cursor BEFORE deciding anything else. On the full-history path
       // it settles both how the capture is trimmed and whether a cursor move is

@@ -11,9 +11,14 @@
  * the local pane is what the live stream keeps drawing into, so its frame and caret
  * position are the ones the browser must end up with.
  *
- * ONE ssh round trip prints the remote pane's `#{history_size}` and its scrollback
- * rows (`capture-pane -S -<N> -E -1`). The size is load-bearing: with no history at
- * all, tmux clamps `-E -1` to the first VISIBLE row and would return it as history.
+ * ONE ssh round trip prints the remote pane's `#{history_size}`, its scrollback
+ * rows (`capture-pane -S -<N> -E -1`) and then its screen. The size is load-bearing:
+ * with no history at all, tmux clamps `-E -1` to the first VISIBLE row and would
+ * return it as history. The screen closes the seam between the two captures: the
+ * local frame is read only after the round trip, so rows that scrolled in between,
+ * and the top of a remote screen taller than the local pane, are on that screen
+ * alone, and the caller keeps the screen rows above where the local frame overlaps
+ * it (`joinScrollbackAndFrame`).
  *
  * Bounded and fail-soft. Any failure (unreachable host, auth, missing session, odd
  * output) returns null and the caller keeps the local capture, so a remote load is
@@ -53,8 +58,12 @@ const REMOTE_HISTORY_SLOT_WAIT_MS = 1_500;
 /** After a failed read, skip that host for this long and use the local capture. */
 const REMOTE_HISTORY_BACKOFF_MS = 30_000;
 
-/** Headroom over the remote `tail -c` bound for the size line and markers. */
-const REMOTE_HISTORY_SLACK_BYTES = 64 * 1024;
+/**
+ * Headroom over the remote `tail -c` bound for the size line, the markers and
+ * the screen capture, which the bound does not cover (a wide, tall screen of
+ * colored rows runs to a few hundred KB).
+ */
+const REMOTE_HISTORY_SLACK_BYTES = 1024 * 1024;
 
 /** Read ceiling when the configured byte cap is 0 (unbounded) and no `tail -c` runs. */
 const UNBOUNDED_READ_MAX_BYTES = 64 * 1024 * 1024;
@@ -86,9 +95,13 @@ export function buildRemoteScrollbackScript(
   // the remote side (`tail -c`) rather than by killing the read at maxBuffer.
   // A cap of 0 means unbounded, as in the route.
   const bound = maxBytes > 0 ? ` | tail -c ${Math.trunc(maxBytes)}` : '';
+  // The screen comes right after the history, in the same round trip: the
+  // local frame is captured only once this returns, so rows that scroll off
+  // in between are on this screen and nowhere else (joinScrollbackAndFrame).
   return (
     `printf '\\0' && ${tmux} display-message -p -t ${target} '#{history_size}' && printf '\\0' && ` +
-    `${tmux} capture-pane -p -e -J -S -${lines} -E -1 -t ${target}${bound}`
+    `${tmux} capture-pane -p -e -J -S -${lines} -E -1 -t ${target}${bound} && printf '\\0' && ` +
+    `${tmux} capture-pane -p -e -J -t ${target}`
   );
 }
 
@@ -115,19 +128,31 @@ export function dropPartialFirstRow(scrollback: string, maxBytes: number): strin
   return newline === -1 ? '' : scrollback.slice(newline + 1);
 }
 
+/** What one round trip read from the remote pane: its scrollback rows, then its screen. */
+export interface RemoteScrollback {
+  /** History rows above the screen, oldest first; '' when the pane has none. */
+  scrollback: string;
+  /** The screen's rows, read right after the scrollback. */
+  screen: string;
+}
+
 /**
- * The scrollback rows from the script's stdout, '' when the pane has no history,
- * or null when the output is not the script's.
+ * The scrollback and screen rows from the script's stdout, or null when the
+ * output is not the script's.
  */
-export function parseRemoteScrollbackOutput(stdout: string): string | null {
+export function parseRemoteScrollbackOutput(stdout: string): RemoteScrollback | null {
   const start = stdout.indexOf('\0');
   if (start === -1) return null;
   const sizeEnd = stdout.indexOf('\0', start + 1);
   if (sizeEnd === -1) return null;
+  const historyEnd = stdout.indexOf('\0', sizeEnd + 1);
+  if (historyEnd === -1) return null;
   const sizeText = stdout.slice(start + 1, sizeEnd).trim();
   if (!/^\d+$/.test(sizeText)) return null;
-  if (Number(sizeText) === 0) return '';
-  return stdout.slice(sizeEnd + 1);
+  const screen = stdout.slice(historyEnd + 1);
+  // With no history at all, tmux clamps `-E -1` to the first visible row.
+  if (Number(sizeText) === 0) return { scrollback: '', screen };
+  return { scrollback: stdout.slice(sizeEnd + 1, historyEnd), screen };
 }
 
 /** Runs the ssh command line and resolves its stdout; rejects like `exec` does. */
@@ -157,7 +182,7 @@ export async function fetchRemoteScrollback(
   historyLines: number,
   maxBytes: number,
   run?: RemoteScrollbackRunner
-): Promise<string | null> {
+): Promise<RemoteScrollback | null> {
   if (!run && process.env.VITEST) return null;
   const runner = run ?? execRunner;
   const until = backoffUntil.get(remote.hostId);
@@ -177,8 +202,8 @@ export async function fetchRemoteScrollback(
       // is the better answer than waiting behind them.
       { maxWaitMs: REMOTE_HISTORY_SLOT_WAIT_MS }
     );
-    const scrollback = parseRemoteScrollbackOutput(stdout);
-    if (scrollback === null) {
+    const parsed = parseRemoteScrollbackOutput(stdout);
+    if (parsed === null) {
       // Both markers arrived, so the script ran on the host and only tmux had
       // nothing to say: no such session. The `| tail -c` pipe hides tmux's
       // exit status, so this comes back as exit 0 rather than exit 1, and it
@@ -190,7 +215,7 @@ export async function fetchRemoteScrollback(
       console.warn(`[remote-history] ${remote.label}: ${what}; using the local capture`);
       return null;
     }
-    return dropPartialFirstRow(scrollback, maxBytes);
+    return { scrollback: dropPartialFirstRow(parsed.scrollback, maxBytes), screen: parsed.screen };
   } catch (err) {
     // A busy pool says nothing about the host.
     if (err instanceof RemoteSshSlotTimeoutError) return null;

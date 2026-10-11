@@ -266,18 +266,34 @@ command itself (a remote tmux session that is gone) affects that session only.
 How much history exists is the remote tmux's own `history-limit`, which the
 launch command does not set (tmux's default is 2000 lines).
 
-Two seams can drop rows at the join, silently. Neither loses anything that
-loaded before this existed:
+The same round trip also reads the remote SCREEN, right after the history,
+because two seams would otherwise drop rows at the join:
 
-- **Rows that scroll during the round trip.** The remote history is read
-  first and the local frame after it, so rows that scrolled off the remote
-  screen in between are in neither (measured: 13 lines lost with a 150 ms
-  round trip and fast output).
+- **Rows that scroll during the round trip.** The local frame is captured only
+  once the round trip is back, so rows that scrolled off the screen in between
+  are in neither the remote history nor the local frame (measured before this
+  read existed: 13 lines lost with a 150 ms round trip and fast output).
 - **A shared remote session with a taller client.** Under `window-size latest`
   a remote session attached elsewhere is sized by its latest client; when that
-  client is taller than this pane, the rows between this pane's frame and the
-  remote screen's top are in neither the remote history nor the local frame
-  (measured: 20 rows).
+  client is taller than this pane, the rows above this pane's frame are only
+  on the remote screen (measured before: 20 rows).
+
+Both are rows of the remote screen above where the local frame begins, so the
+load keeps them between the history and the frame (`joinScrollbackAndFrame`,
+`findFrameInScreen` in `src/tmux-manager.ts`). The frame is placed by matching
+its top rows against the screen as text (escape sequences and trailing blanks
+ignored, since the two tmuxes need not encode attributes alike); the screen's
+trailing blank rows and its last content row, which output in flight can still
+change, are left out of the match, the overlap must be at least three rows
+with two of them non-blank, and the highest match wins. A placement too low
+would REPEAT the rows between it and the true one, so a shorter overlap (a lone
+`$` row that happens to match after a spinner row changed) is not trusted.
+When the frame cannot be placed (more output scrolled than the screen held, or
+nothing matches), the join is history over frame, as without the screen read. What is left: the history and screen captures are two
+tmux commands, so a row that scrolls between them (milliseconds apart, not the
+round trip) is in neither, and when the screen repeats a whole block of rows
+the frame can be placed at the higher copy, which leaves out the rows between
+the two copies.
 
 ## File access over SSH
 

@@ -1161,7 +1161,10 @@ describe('session-routes', () => {
         return captureSpy.mock.calls[0]?.[1];
       };
 
-      remoteScrollback.mockResolvedValueOnce('remote line 1\nremote line 2\n');
+      remoteScrollback.mockResolvedValueOnce({
+        scrollback: 'remote line 1\nremote line 2\n',
+        screen: 'remote screen\n',
+      });
       const opts = await load('full=1&lines=500');
       expect(remoteScrollback).toHaveBeenCalledWith(remote, harness.ctx._sessionId, 500, expect.any(Number));
       expect(opts).toEqual(
@@ -1169,6 +1172,7 @@ describe('session-routes', () => {
           fullHistory: true,
           historyLimitLines: 500,
           scrollbackOverride: 'remote line 1\nremote line 2\n',
+          scrollbackOverrideScreen: 'remote screen\n',
         })
       );
 
