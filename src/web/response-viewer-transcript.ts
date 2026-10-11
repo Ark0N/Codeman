@@ -11,7 +11,49 @@ export interface ResponseViewerTranscriptBlock {
 // Keep in lockstep with isExternalCliMode() in src/session.ts. Importing it here
 // would drag node-pty and the whole session layer into this pure module, so the
 // list is duplicated and test/response-viewer-transcript.test.ts pins the parity.
-const EXTERNAL_CLI_MODES = new Set(['codex', 'gemini', 'opencode', 'antigravity', 'pi', 'grok', 'deepseek']);
+const EXTERNAL_CLI_MODES = new Set(['codex', 'gemini', 'opencode', 'antigravity', 'pi', 'grok', 'deepseek', 'copilot']);
+
+/**
+ * A pane that is not Codex-shaped (`›` prompt, `•` bullets) describes its own dialect as data, so
+ * a new CLI adds a row here instead of another branch in the Codex-oriented loop below.
+ */
+interface PaneDialect {
+  /** Group 1 is the prompt text. A bare composer glyph with nothing after it must NOT match. */
+  prompt: RegExp;
+  /** A right-aligned timestamp the TUI appends to a submitted prompt. */
+  promptTrailer?: RegExp;
+  /** The glyph that opens an answer. */
+  responseBullet: RegExp;
+  /** Chrome that can sit between turns: banner notes, the cwd/credits row, the footer, spinners. */
+  status: RegExp[];
+  /** Rows that carry nothing (the empty composer), dropped and treated as a block boundary. */
+  ignore: RegExp[];
+  /** Furniture drawn at the end of a row (a scrollbar gutter), removed before anything else reads it. */
+  lineTrailer?: RegExp;
+}
+
+const PANE_DIALECTS: Record<string, PaneDialect> = {
+  // GitHub Copilot CLI, measured on 1.0.95 inside tmux: ` ❯ <prompt>   HH:MM`, then ` ● <answer>`
+  // with 3-space continuation lines, a cwd + `Session: N AIC used` row, the composer between two
+  // rules, and a `← open sidebar · … · / commands · ? help` footer. Tool-call rows are not
+  // modelled: they open with the same bullet and read as part of the answer.
+  copilot: {
+    prompt: /^\s*❯\s+(\S.*)$/,
+    promptTrailer: /\s{2,}\d{1,2}:\d{2}\s*$/,
+    responseBullet: /^\s*●\s+/,
+    status: [
+      /^\s*(?:!|●)\s+(?:Tip:|MCP Servers?\b|Model\b)/,
+      /^\s*!\s+/,
+      /\bSession: .*(?:AIC used|credits unavailable)/,
+      /^\s*←\s+open sidebar/,
+      /\/ commands · \? help/,
+      /^\s*[◉◎]\s+Working\b/,
+    ],
+    ignore: [/^\s*❯\s*$/],
+    // The right-hand scrollbar gutter, `┃` on a row (or alone on a blank one).
+    lineTrailer: /\s*[┃▐]\s*$/,
+  },
+};
 
 function isPromptLine(line: string): boolean {
   return /^\s*›\s*/.test(line);
@@ -265,6 +307,80 @@ export function isExternalCliTranscriptMode(mode: string | null | undefined): bo
   return EXTERNAL_CLI_MODES.has(String(mode || ''));
 }
 
+/**
+ * Whether this mode's pane is a repainting full-screen TUI whose output stream is absolute cursor
+ * moves rather than lines. The segmenter needs the SCREEN for those (tmux capture-pane), because
+ * stripping the escapes from the stream concatenates every row into one run of text.
+ */
+export function transcriptNeedsScreenCapture(mode: string | null | undefined): boolean {
+  return Object.prototype.hasOwnProperty.call(PANE_DIALECTS, String(mode || ''));
+}
+
+/**
+ * Segment a pane that has its own dialect. Everything before the first prompt is the banner (or a
+ * trust dialog) and is dropped, so a session that has not been asked anything answers "nothing
+ * yet" rather than serving its logo as a reply.
+ */
+function parseDialectTranscript(cleaned: string, dialect: PaneDialect): ResponseViewerTranscriptBlock[] {
+  const blocks: ResponseViewerTranscriptBlock[] = [];
+  let kind: ResponseViewerTranscriptKind | null = null;
+  let current: string[] = [];
+  let sawPrompt = false;
+
+  const flush = () => {
+    if (sawPrompt) pushBlock(blocks, kind, current);
+    kind = null;
+    current = [];
+  };
+
+  for (const rawLine of cleaned.split('\n')) {
+    const line = dialect.lineTrailer ? rawLine.replace(dialect.lineTrailer, '') : rawLine;
+    if (isDividerOnlyLine(line)) {
+      flush();
+      continue;
+    }
+    if (dialect.ignore.some((re) => re.test(line))) {
+      flush();
+      continue;
+    }
+    const prompt = dialect.prompt.exec(line);
+    if (prompt) {
+      flush();
+      sawPrompt = true;
+      kind = 'prompt';
+      current = [dialect.promptTrailer ? prompt[1].replace(dialect.promptTrailer, '').trim() : prompt[1].trim()];
+      continue;
+    }
+    if (!sawPrompt) continue;
+    if (dialect.status.some((re) => re.test(line))) {
+      if (kind !== 'status') flush();
+      kind = 'status';
+      current.push(line.trim());
+      continue;
+    }
+    // A wrapped warning or tip: indented under its status row.
+    if (kind === 'status' && /^\s{3,}\S/.test(line)) {
+      current.push(line.trim());
+      continue;
+    }
+    if (!line.trim()) {
+      if (kind) current.push('');
+      continue;
+    }
+    const bullet = dialect.responseBullet.exec(line);
+    if (bullet) {
+      flush();
+      kind = 'response';
+      current = [line.slice(bullet[0].length)];
+      continue;
+    }
+    if (!kind) kind = 'response';
+    current.push(line);
+  }
+  flush();
+  return blocks.filter((block) => block.text.trim().length > 0);
+}
+
 export function parseExternalCliTranscript(
   buffer: string,
   mode: string | null | undefined
@@ -274,6 +390,9 @@ export function parseExternalCliTranscript(
 
   const cleaned = cleanTerminalTranscript(buffer);
   if (!cleaned) return [];
+
+  const dialect = PANE_DIALECTS[resolvedMode];
+  if (dialect) return parseDialectTranscript(cleaned, dialect);
 
   const lines = trimLeadingStartup(cleaned.split('\n'));
   const blocks: ResponseViewerTranscriptBlock[] = [];

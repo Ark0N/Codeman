@@ -460,3 +460,73 @@ Here is the assistant answer at column zero.
     });
   });
 });
+
+describe('GitHub Copilot pane dialect', () => {
+  // Captured from a real Copilot 1.0.95 pane inside tmux (a throwaway COPILOT_HOME, a local
+  // OpenAI-compatible endpoint): banner, two turns, status rows, composer between rules, footer.
+  const rule = '─'.repeat(100);
+  const pane = [
+    '  ╭─╮╭─╮',
+    '  ╰─╯╰─╯  Copilot v1.0.95 uses AI.',
+    '  █ ▘▝ █  Check for mistakes.',
+    '   ▔▔▔▔',
+    ' ! Model "mock" is not in the built-in catalog. Using defaults for: prompt tokens',
+    '   (COPILOT_PROVIDER_MAX_PROMPT_TOKENS), output tokens (COPILOT_PROVIDER_MAX_OUTPUT_TOKENS). Run  copilot help',
+    '   providers  for configuration details.',
+    ' ● Tip: /theme',
+    '   └ View or set color mode',
+    ' ❯ multi please                                                                                         11:16',
+    ' ● First line of the answer.                                                                         ┃',
+    '                                                                                                      ┃',
+    '   Second paragraph with bold text.                                                                   ┃',
+    '                                                                                                      ┃',
+    '   • bullet one                                                                                       ┃',
+    '   • bullet two                                                                                       ┃',
+    ' ❯ WORKDONE followed by _4711                                                                          11:17',
+    ' ● WORKDONE_4711',
+    ' ● MCP Servers reloaded: 1 server connected',
+    ' /tmp/work/.../scratch-2                                                  Session: credits unavailable',
+    rule,
+    '❯',
+    rule,
+    ' ← open sidebar · Interactive · Manual Approval · / commands · ? help · tab next tab           mock',
+  ].join('\n');
+
+  it('is a transcript mode', () => {
+    expect(isExternalCliTranscriptMode('copilot')).toBe(true);
+  });
+
+  it('returns the last answer, with no banner, status rows, composer or footer in it', () => {
+    const blocks = parseExternalCliTranscript(pane, 'copilot');
+    expect(getLastTranscriptResponse(blocks)).toBe('WORKDONE_4711');
+  });
+
+  it('keeps a multi-paragraph answer whole and strips the prompt timestamp', () => {
+    const blocks = parseExternalCliTranscript(pane, 'copilot');
+    const prompts = blocks.filter((b) => b.kind === 'prompt').map((b) => b.text);
+    expect(prompts).toEqual(['multi please', 'WORKDONE followed by _4711']);
+    const first = blocks.find((b) => b.kind === 'response')!;
+    expect(first.text).toContain('First line of the answer.');
+    expect(first.text).toContain('Second paragraph with bold text.');
+    expect(first.text).toContain('• bullet two');
+    expect(first.text).not.toMatch(/Session:|open sidebar|Tip:/);
+    // The scrollbar gutter Copilot draws at the right edge of every row never reaches the text.
+    expect(first.text).not.toContain('┃');
+  });
+
+  it('answers nothing for a session that has only drawn its banner or a trust dialog', () => {
+    const banner = pane.split('\n').slice(0, 9).join('\n');
+    expect(getLastTranscriptResponse(parseExternalCliTranscript(banner, 'copilot'))).toBe('');
+    const trust = [
+      '│ Do you trust the files in this folder?',
+      '│ ❯ 1. Yes',
+      '│   2. Yes, and remember this folder for future sessions',
+    ].join('\n');
+    expect(getLastTranscriptResponse(parseExternalCliTranscript(trust, 'copilot'))).toBe('');
+  });
+
+  it('does not take the empty composer glyph for a prompt', () => {
+    const blocks = parseExternalCliTranscript(pane, 'copilot');
+    expect(blocks.some((b) => b.kind === 'prompt' && b.text === '')).toBe(false);
+  });
+});
