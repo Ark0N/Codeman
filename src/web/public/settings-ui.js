@@ -551,6 +551,12 @@ Object.assign(CodemanApp.prototype, {
     this._mcpSyncSavedOn = settings.mcpSyncEnabled === true;
     document.getElementById('appSettingsMcpSync').checked = this._mcpSyncSavedOn;
     this.applyMcpSyncVisibility();
+    // Config backups: absent means ON, 20 copies, 30 days.
+    document.getElementById('appSettingsConfigBackup').checked = settings.configBackupEnabled !== false;
+    document.getElementById('appSettingsConfigBackupDir').value = settings.configBackupDir || '';
+    document.getElementById('appSettingsConfigBackupKeepCount').value = settings.configBackupKeepCount ?? 20;
+    document.getElementById('appSettingsConfigBackupKeepDays').value = settings.configBackupKeepDays ?? 30;
+    this.loadConfigBackups();
     this._applyDoctorAdminGate();
     this.loadWebhook();
     // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
@@ -1365,6 +1371,73 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /** Preview (apply=false) or run (apply=true) the MCP server sync across enabled CLIs. */
+  // ── Config backups ──────────────────────────────────────────────────────────
+  // Server-side files, so these read the SAVED settings: a folder or retention edit applies after Save.
+
+  /** Fill the backup list, and show the default folder as the input's placeholder. */
+  async loadConfigBackups() {
+    const out = this.$('configBackupList');
+    if (!out) return;
+    const res = await this._api('/api/config-backups');
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      out.textContent = body?.error || 'Backups are not available here (admin only in multi-user mode).';
+      return;
+    }
+    const data = body.data;
+    const dirInput = this.$('appSettingsConfigBackupDir') || document.getElementById('appSettingsConfigBackupDir');
+    if (dirInput && data.defaultDir) dirInput.placeholder = `default: ${data.defaultDir}`;
+    if (!data.backups.length) {
+      out.innerHTML = `No backups yet in <code>${escapeHtml(data.dir)}</code>.`;
+      return;
+    }
+    const kb = (n) => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`);
+    const rows = data.backups.map((b) => {
+      const when = new Date(b.createdAt).toLocaleString();
+      const names = b.files.map((f) => escapeHtml(f.name)).join(', ');
+      return `<li><b>${escapeHtml(when)}</b> <span class="set-row-desc">(${escapeHtml(b.reason)}, ${kb(b.bytes)})</span>
+        <button class="btn-toolbar btn-sm" onclick="app.restoreConfigBackup('${escapeHtml(b.id)}')">Restore</button>
+        <div class="set-row-desc">${names}</div></li>`;
+    });
+    out.innerHTML = `<div>${data.backups.length} backup${data.backups.length === 1 ? '' : 's'} in <code>${escapeHtml(data.dir)}</code></div><ul>${rows.join('')}</ul>`;
+  },
+
+  async backupConfigNow() {
+    const btn = this.$('configBackupNowBtn');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await this._apiPost('/api/config-backups', {});
+      let body = null;
+      try { body = res ? await res.json() : null; } catch { /* fall through */ }
+      if (!res || !res.ok || !body || body.success === false) {
+        this.showToast(body?.error || 'Backup failed', 'error');
+      } else if (body.data.status === 'empty') {
+        this.showToast('Nothing to back up yet', 'warning');
+      } else {
+        this.showToast(`Backed up ${body.data.files} file${body.data.files === 1 ? '' : 's'}`, 'success');
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+      this.loadConfigBackups();
+    }
+  },
+
+  async restoreConfigBackup(id) {
+    if (!confirm('Restore this backup? Its files replace the current ones (a copy of the current files is made first). Some files only take effect after a restart.')) return;
+    const res = await this._apiPost(`/api/config-backups/${encodeURIComponent(id)}/restore`, {});
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      this.showToast(body?.error || 'Restore failed', 'error');
+      return;
+    }
+    const d = body.data;
+    const restart = d.restartRequired?.length ? ` Restart Codeman to apply: ${d.restartRequired.join(', ')}.` : '';
+    this.showToast(`Restored ${d.restored.length} file${d.restored.length === 1 ? '' : 's'}. Reload this page to see settings.${restart}`, 'success');
+    this.loadConfigBackups();
+  },
+
   async mcpSync(apply) {
     const out = this.$('mcpSyncResult');
     const show = (html, hint = '') => {
@@ -2737,6 +2810,10 @@ Object.assign(CodemanApp.prototype, {
       customModelEndpointsEnabled: document.getElementById('appSettingsCustomModelEndpoints').checked,
       cliManagementEnabled: document.getElementById('appSettingsCliManagement').checked,
       mcpSyncEnabled: document.getElementById('appSettingsMcpSync').checked,
+      configBackupEnabled: document.getElementById('appSettingsConfigBackup').checked,
+      configBackupDir: document.getElementById('appSettingsConfigBackupDir').value.trim(),
+      configBackupKeepCount: Math.min(500, Math.max(1, parseInt(document.getElementById('appSettingsConfigBackupKeepCount').value, 10) || 20)),
+      configBackupKeepDays: Math.min(3650, Math.max(0, parseInt(document.getElementById('appSettingsConfigBackupKeepDays').value, 10) || 0)),
       readMyMindEnabled: document.getElementById('appSettingsReadMyMind').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,

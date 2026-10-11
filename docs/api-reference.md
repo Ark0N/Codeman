@@ -1152,6 +1152,20 @@ Result (`data`):
 
 The result carries server **names** only, never `env` values, `headers` or file content. Each changed file keeps its previous content as `<file>.codeman-bak` (overwritten by each sync); a file that receives servers carrying `env` or `headers` is left mode `0600`.
 
+## Config backups
+
+Timestamped snapshots of the files that hold what a user has customized (`src/config-backup.ts`). On by default; a snapshot is taken at startup and whenever the tracked files' content changes (checked every 5 minutes), so there is one entry per real change. All three routes are admin only in multi-user mode (`403`), because the files include credentials. Responses carry file names and sizes, never content.
+
+Tracked files (a fixed list, relative to the data dir): `settings.json`, `clis.json`, `custom-model-hosts.json`, `webhook.json`, `intents.json`, `linked-cases.json`, `push-keys.json`, `users.json`, `.env`. Session state, logs, the hook secret and caches are not.
+
+Settings (synced, in `settings.json`): `configBackupEnabled` (absent = on), `configBackupDir` (absolute path, `~` expanded; empty = `<data dir>/backups/config`), `configBackupKeepCount` (1–500, default 20), `configBackupKeepDays` (0–3650, default 30; `0` = no age limit). Retention only ever deletes snapshot folders Codeman made there, and never the newest one. Each snapshot is a `0700` folder of `0600` files plus a `manifest.json` with SHA-256 digests.
+
+| Method | Path                                | Body | Notes                                                                                                                                                                        |
+| ------ | ----------------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/api/config-backups`               | none | `settings` in effect, `dir`, `defaultDir`, `tracked[]` and `backups[]` (`id`, `createdAt`, `reason`, `appVersion`, `files[]`, `bytes`), newest first.                           |
+| `POST` | `/api/config-backups`               | none | Snapshot now, even if nothing changed (`reason: manual`), then apply retention. `status` is `created` or `empty` (nothing tracked exists yet).                                |
+| `POST` | `/api/config-backups/:id/restore`   | none | Put a snapshot's files back, atomically, after a `pre-restore` snapshot of the current ones. `404` unknown id; `409 CONFLICT` if a file fails its checksum (nothing changed). `restartRequired[]` names files the running server only reloads on restart. |
+
 ## Webhook notifications
 
 Posts the Web Push events to ntfy, Slack, Discord or a generic JSON URL (Settings → Notifications). Off by default. The webhook URL is a bearer secret (anyone holding a Slack/Discord URL can post as it), so it lives in `~/.codeman/webhook.json` (0600), is **never returned**, and is kept out of `settings.json`. All three routes answer `403` for a non-admin in multi-user mode.

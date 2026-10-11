@@ -1522,6 +1522,18 @@ export const SettingsUpdateSchema = z
      */
     mcpSyncEnabled: z.boolean().optional(),
     /**
+     * Config backups (src/config-backup.ts): timestamped snapshots of the customized config files,
+     * taken at startup and whenever their content changes. SYNCED. Absent means ON (the feature
+     * protects against an event nobody schedules); the folder defaults to `<data dir>/backups/config`.
+     */
+    configBackupEnabled: z.boolean().optional(),
+    /** Absolute folder (a leading `~` is expanded); empty or absent = the default folder. */
+    configBackupDir: z.string().max(1024).optional(),
+    /** Keep at most this many snapshots. */
+    configBackupKeepCount: z.number().int().min(1).max(500).optional(),
+    /** Also drop snapshots older than this many days; 0 = no age limit. */
+    configBackupKeepDays: z.number().int().min(0).max(3650).optional(),
+    /**
      * Read My Mind predictor model override. Empty/absent = the AI-checker
      * default (opus: prediction quality is the product and it runs only on an
      * explicit press). Shell-safety is validated again at spawn time.

@@ -173,6 +173,9 @@ curl -s "$API/api/subagents" | jq                  # background agents
 curl -s "$API/api/search?q=deploy" | jq            # cross-session search
 curl -s "$API/api/mcp-sync" | jq                    # preview MCP server sync (opt-in: 403 until mcpSyncEnabled is on)
 curl -s -X POST "$API/api/mcp-sync" | jq             # apply it: add missing servers to each CLI config, never edit/remove
+curl -s "$API/api/config-backups" | jq              # config snapshots: folder, retention, list (admin only in multi-user mode)
+curl -s -X POST "$API/api/config-backups" | jq      # back up the customized config files now
+curl -s -X POST "$API/api/config-backups/cfg-20261011-120000/restore" | jq   # put a snapshot back (after a pre-restore copy)
 
 # with ID set to a session id:
 curl -s "$API/api/sessions/$ID/last-response" | jq -r '.data.text'   # last answer, from the transcript (claude, codex, deepseek)
