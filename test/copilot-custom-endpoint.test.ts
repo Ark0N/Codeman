@@ -23,3 +23,24 @@ describe('GitHub Copilot custom endpoint (BYOK)', () => {
     }
   });
 });
+
+describe('GitHub Copilot environment and sync declarations', () => {
+  it('admits only its own COPILOT_ namespace, never the shared GitHub token names', () => {
+    // The env allowlist is one global list with no mode context, so a foreign key here would be
+    // settable on every session. COPILOT_GITHUB_TOKEN is already reachable through the prefix.
+    expect(copilot.env.allowedPrefixes).toEqual(['COPILOT_']);
+    expect(copilot.env.allowedKeys).toEqual([]);
+  });
+
+  it('declares its own MCP config so Settings does not list it as unsupported', () => {
+    expect(copilot.capabilities.mcpConfig).toEqual({
+      path: '.copilot/mcp-config.json',
+      format: 'copilot-json',
+      relocation: { envVar: 'COPILOT_HOME', path: 'mcp-config.json' },
+    });
+  });
+
+  it('seeds no credentials into a Docker case', () => {
+    expect(copilot.overlays?.credStore).toBeUndefined();
+  });
+});

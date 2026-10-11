@@ -1684,13 +1684,15 @@ const COPILOT: CliEntry = {
   // `--yolo` (allow every tool, path and URL) is opt-in through `allowAll`, which the Run button
   // sends like the other agent CLIs' bypass switches; an absent config spawns a bare `copilot`
   // in its own Manual Approval mode. `--model` and `--resume=<id>` are Copilot's own flags
-  // (`copilot --help`, 1.0.94). `--resume` takes an id, id prefix or session NAME, so the id
-  // pattern below is what keeps a name or a path out of it.
+  // (`copilot --help`, 1.0.94). `--resume` takes an id, id prefix or session NAME and its value
+  // is optional, so the token must be a single plain word that cannot start with `-`: a value
+  // like `--yolo` would otherwise be parsed as its own flag and get around the `allowAll` clamp.
   launch: {
     params: {
       allowAll: { type: 'bool' },
       model: { type: 'token', pattern: 'model' },
-      resumeId: { type: 'token', pattern: 'id-dotted' },
+      // `path-segment`, not `id-dotted`: the leading alphanumeric keeps a flag-shaped value out.
+      resumeId: { type: 'token', pattern: 'path-segment' },
       continueSession: { type: 'bool' },
       // The tab's name, so the CLI's own session list reads the same as the tab.
       sessionName: { type: 'engine', source: 'sessionName' },
@@ -1736,12 +1738,14 @@ const COPILOT: CliEntry = {
   env: {
     exports: [{ name: 'COLORTERM', value: 'truecolor' }],
     unset: ['NO_COLOR'],
-    // Sign-in is the CLI's own (`copilot login`, kept under ~/.copilot); a token in the
-    // environment (COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN) is what a headless host uses.
+    // Sign-in is the CLI's own (`copilot login`, kept under ~/.copilot). A headless host sets
+    // COPILOT_GITHUB_TOKEN, which the COPILOT_ prefix already admits. GH_TOKEN / GITHUB_TOKEN are
+    // deliberately NOT allowlisted: the env allowlist is one global list with no mode context, so
+    // admitting them would make them settable on every session (see allowedEnvPrefixes()).
     tmuxSetenvKeys: [],
     dockerExecEnvNames: [],
     allowedPrefixes: ['COPILOT_'],
-    allowedKeys: ['GH_TOKEN', 'GITHUB_TOKEN'],
+    allowedKeys: [],
   },
   capabilities: {
     ...agentDefaults(),
@@ -1763,6 +1767,13 @@ const COPILOT: CliEntry = {
     modelDetect: {
       screenLine: String.raw`(?:tab next tab|\? help|esc edit prompt|github-mcp-server) {3,}([A-Za-z0-9][\w.:/@ -]{1,60}?) *(?:\n|$)`,
       screenLines: 2,
+    },
+    // `copilot mcp add` writes `~/.copilot/mcp-config.json`; COPILOT_HOME replaces ~/.copilot
+    // (checked: `COPILOT_HOME=<dir> copilot mcp list` reads <dir>).
+    mcpConfig: {
+      path: '.copilot/mcp-config.json',
+      format: 'copilot-json',
+      relocation: { envVar: 'COPILOT_HOME', path: 'mcp-config.json' },
     },
     // COPILOT_HOME can restate permissions and COPILOT_ALLOW_ALL turns every one on; both
     // already match the COPILOT_ allowedPrefix, so a non-granted multi-user owner must not
@@ -1794,7 +1805,9 @@ const COPILOT: CliEntry = {
     },
   },
   overlays: {
-    credStore: { rel: '.copilot', seedFiles: ['config.json', 'mcp-config.json'] },
+    // No credStore: Docker seeding is CRED_STORES in docker-hosts.ts, which has no `.copilot` row,
+    // and the sign-in token sits in plain text in config.json on a host without a keyring, so it
+    // is not copied into a container by default. Sign in inside the container instead.
   },
 };
 

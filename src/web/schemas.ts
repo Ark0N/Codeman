@@ -448,12 +448,13 @@ const CopilotConfigSchema = z
       .optional(),
     allowAll: z.boolean().optional(),
     continueSession: z.boolean().optional(),
-    // Ids only: --resume also matches session NAMES (arbitrary user strings), which this
-    // regex deliberately cannot express.
+    // A single plain word with a leading alphanumeric: --resume also matches session NAMES, so
+    // `my-feature` is accepted, but a value like `--yolo` must not be, because --resume's value is
+    // optional and the next token would be read as its own flag (bypassing the allowAll clamp).
     resumeSessionId: z
       .string()
       .max(100)
-      .regex(/^[a-zA-Z0-9._-]+$/)
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/)
       .optional(),
   })
   .optional();

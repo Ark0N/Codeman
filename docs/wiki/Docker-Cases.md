@@ -118,6 +118,10 @@ invisible from the host (`pi -c` and `grok -c` inside a docker case see only tha
 container's history). OMP's `sessions/` is the exception and is shared read-write, because
 Codeman reads it host-side for history and resume.
 
+GitHub Copilot CLI is not seeded: on a host without a keyring its sign-in token sits in plain
+text in `~/.copilot/config.json`, and there is no Docker credential row for it. Sign in inside
+the container (`copilot login`), or set `COPILOT_GITHUB_TOKEN` for the session.
+
 **Git hosts.** The agent image can also include the GitHub CLI (`gh`) and the Azure CLI (`az`,
 with the `azure-devops` extension), off by default, and its git then uses them as credential
 helpers for github.com and Azure DevOps. When the matching switch is on, their sign-ins are

@@ -361,6 +361,17 @@ describe('copilot', () => {
     expect(cp({ resumeSessionId: 'my session; rm -rf /' })).toBe('copilot');
   });
 
+  // `--resume`'s value is optional, so `--resume --yolo` would make `--yolo` its own flag and get
+  // around the allowAll clamp. A resume value must start with an alphanumeric.
+  it('drops a resume value that would be read as a flag', () => {
+    for (const resumeSessionId of ['--yolo', '-n', '--allow-all-tools', '.', '..', '.hidden']) {
+      expect(cp({ resumeSessionId })).toBe('copilot');
+    }
+    expect(cp({ allowAll: false, resumeSessionId: '--yolo' })).toBe('copilot');
+    // A plain word is still passed through (a session NAME also resumes).
+    expect(cp({ resumeSessionId: 'my-feature' })).toBe('copilot --resume my-feature');
+  });
+
   it('never puts a credential on the command line', () => {
     const cmd = cp({ allowAll: true, model: 'auto' }) ?? '';
     expect(cmd).not.toContain('token');
