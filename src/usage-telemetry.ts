@@ -40,12 +40,20 @@ export interface UsageWindow {
   usedPercentage: number;
   /** Epoch MILLISECONDS when the window resets (statusline reports seconds). */
   resetAt: number;
+  /**
+   * Absolute counts, for a window measured in requests rather than as a bare percent (Copilot's
+   * monthly premium-request quota). Absent for the Claude and Codex windows.
+   */
+  used?: number;
+  limit?: number;
 }
 
 /** Normalized telemetry Codeman broadcasts to the UI. */
 export interface StatusTelemetry {
   fiveHour?: UsageWindow;
   sevenDay?: UsageWindow;
+  /** A calendar-month quota (GitHub Copilot's premium requests); not a rolling 5h/7d window. */
+  monthly?: UsageWindow;
   /** Context-window percent used, 0–100 (bonus field from the same payload). */
   contextUsedPercentage?: number;
   /** Session cost in USD (bonus field). */
@@ -197,6 +205,49 @@ export function parseCodexRateLimitsResponse(value: unknown): StatusTelemetry | 
 }
 
 /**
+ * Normalize GitHub Copilot's quota snapshot (`GET /copilot_internal/user`) into the chip's monthly
+ * window. Only `premium_interactions` is a metered quota: `chat` and `completions` report
+ * `unlimited: true` on every plan seen, and an unlimited premium quota has nothing to meter, so it
+ * yields null and the chip shows no Copilot row rather than a bar stuck at 0%.
+ */
+export function parseCopilotQuotaResponse(value: unknown): StatusTelemetry | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as {
+    quota_snapshots?: {
+      premium_interactions?: {
+        entitlement?: unknown;
+        remaining?: unknown;
+        percent_remaining?: unknown;
+        unlimited?: unknown;
+      };
+    };
+    quota_reset_date_utc?: unknown;
+    quota_reset_date?: unknown;
+  };
+  const snap = raw.quota_snapshots?.premium_interactions;
+  if (!snap || typeof snap !== 'object' || snap.unlimited === true) return null;
+
+  const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+  const limit = finite(snap.entitlement) && snap.entitlement > 0 ? snap.entitlement : undefined;
+  let usedPct: number | null = null;
+  if (finite(snap.percent_remaining)) usedPct = 100 - snap.percent_remaining;
+  else if (limit !== undefined && finite(snap.remaining)) usedPct = (1 - snap.remaining / limit) * 100;
+  if (usedPct === null) return null;
+
+  const resetRaw = typeof raw.quota_reset_date_utc === 'string' ? raw.quota_reset_date_utc : raw.quota_reset_date;
+  const parsedReset = typeof resetRaw === 'string' ? Date.parse(resetRaw) : NaN;
+  const monthly: UsageWindow = {
+    usedPercentage: clampPct(usedPct),
+    resetAt: Number.isFinite(parsedReset) && parsedReset > 0 ? parsedReset : 0,
+  };
+  if (limit !== undefined && finite(snap.remaining)) {
+    monthly.limit = limit;
+    monthly.used = Math.max(0, Math.round(limit - snap.remaining));
+  }
+  return { monthly };
+}
+
+/**
  * Current-session status for the in-terminal statusline footer. This is the
  * "status of the current session" the user sees in Claude's footer — distinct
  * from the account-wide plan limits, which live ONLY in the Codeman header chip.
@@ -286,10 +337,13 @@ export function formatSessionStatusText(s: SessionStatus | null, now: number = D
  * localStorage write + identical chip re-render each time.
  */
 export function telemetrySignature(t: StatusTelemetry): string {
-  return JSON.stringify([
+  const parts: Array<number | null> = [
     t.fiveHour ? Math.round(t.fiveHour.usedPercentage) : null,
     t.fiveHour?.resetAt ?? null,
     t.sevenDay ? Math.round(t.sevenDay.usedPercentage) : null,
     t.sevenDay?.resetAt ?? null,
-  ]);
+  ];
+  // Appended only when present, so the Claude and Codex signatures are byte-identical to before.
+  if (t.monthly) parts.push(t.monthly.used ?? Math.round(t.monthly.usedPercentage), t.monthly.resetAt);
+  return JSON.stringify(parts);
 }

@@ -3617,19 +3617,27 @@ class CodemanApp {
     };
     // The provider label only earns its space when there is more than one
     // provider to tell apart: a machine with Claude alone shows bare windows.
-    const hasWindows = (usage) => pct(usage?.fiveHour) !== null || pct(usage?.sevenDay) !== null;
-    const labelled = hasWindows(data) && hasWindows(data.codex);
+    const hasWindows = (usage) =>
+      pct(usage?.fiveHour) !== null || pct(usage?.sevenDay) !== null || pct(usage?.monthly) !== null;
+    const labelled = [data, data.codex, data.copilot].filter(hasWindows).length > 1;
     const row = (provider, usage, idle) => {
       // hasWindows() gates the row, so a placeholder can only ever appear
       // ALONGSIDE a real reading — a provider reporting nothing still renders
       // nothing, never a row of em dashes.
       if (!hasWindows(usage)) return '';
-      const windows = [seg('5h', pct(usage?.fiveHour), idle), seg('7d', pct(usage?.sevenDay), idle)].filter(Boolean);
+      // `mo` is Copilot's calendar-month premium-request quota; it is the only window that provider has.
+      const windows = [
+        seg('5h', pct(usage?.fiveHour), idle),
+        seg('7d', pct(usage?.sevenDay), idle),
+        seg('mo', pct(usage?.monthly), false),
+      ].filter(Boolean);
       if (!windows.length) return '';
       const label = labelled ? `<span class="pu-provider">${provider}</span>` : '';
       return `<span class="pu-row">${label}<span class="pu-windows">${windows.join('<span class="pu-sep">·</span>')}</span></span>`;
     };
-    const rows = [row('Claude', data, true), row('Codex', data.codex, false)].filter(Boolean);
+    const rows = [row('Claude', data, true), row('Codex', data.codex, false), row('Copilot', data.copilot, false)].filter(
+      Boolean
+    );
     chip.innerHTML = rows.length ? rows.join('') : '—';
     const resetStr = (w) => (w && w.resetAt ? new Date(w.resetAt).toLocaleString() : '—');
     const details = (provider, usage, idle) => {
@@ -3639,10 +3647,20 @@ class CodemanApp {
       if (five !== null) lines.push(`5-hour limit: ${five}% used (resets ${resetStr(usage.fiveHour)})`);
       else if (idle && seven !== null) lines.push('5-hour limit: no active session window');
       if (seven !== null) lines.push(`Weekly limit: ${seven}% used (resets ${resetStr(usage.sevenDay)})`);
+      const month = pct(usage?.monthly);
+      if (month !== null) {
+        // Counts are coerced finite numbers, so interpolating them stays XSS-safe like the rest.
+        const m = usage.monthly;
+        const counts =
+          Number.isFinite(m.used) && Number.isFinite(m.limit) ? `${Math.round(m.used)} of ${Math.round(m.limit)} requests, ` : '';
+        lines.push(`Premium requests this month: ${month}% used (${counts}resets ${resetStr(m)})`);
+      }
       return lines.length ? `${provider} plan usage\n${lines.join('\n')}` : '';
     };
     chip.title =
-      [details('Claude', data, true), details('Codex', data.codex, false)].filter(Boolean).join('\n\n') ||
+      [details('Claude', data, true), details('Codex', data.codex, false), details('Copilot', data.copilot, false)]
+        .filter(Boolean)
+        .join('\n\n') ||
       'Plan usage limits';
   }
 

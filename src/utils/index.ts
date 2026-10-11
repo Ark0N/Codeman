@@ -75,6 +75,7 @@ export {
   getCopilotNotFoundMessage,
   getCopilotCliVersion,
 } from './copilot-cli-resolver.js';
+export { readCopilotPlanUsage, resolveCopilotToken } from './copilot-plan-usage.js';
 export {
   boundedPathExists,
   describeUnknownPath,

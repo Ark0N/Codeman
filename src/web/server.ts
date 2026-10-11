@@ -96,7 +96,12 @@ import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator } from '../plan-orchestrator.js';
 import { OrchestratorLoop } from '../orchestrator-loop.js';
 import { getLifecycleLog } from '../session-lifecycle-log.js';
-import { applyWorkspaceHooks, pruneAgentSessionPreambles, removeAgentSessionPreamble } from '../hooks-config.js';
+import {
+  applyWorkspaceHooks,
+  pruneAgentSessionPreambles,
+  readPlanUsageTelemetryEnabled,
+  removeAgentSessionPreamble,
+} from '../hooks-config.js';
 import { PushSubscriptionStore } from '../push-store.js';
 import webpush from 'web-push';
 import { SseStreamManager } from './sse-stream-manager.js';
@@ -162,9 +167,11 @@ import { MAX_PASTE_IMAGE_BYTES } from '../config/buffer-limits.js';
 import { resolveTerminalHistoryConfig } from '../config/terminal-history.js';
 import { SseEvent } from './sse-events.js';
 import { MAX_ROUTE_PARAM_LENGTH } from './route-helpers.js';
-import { getLatestPlanUsage, setLatestCodexPlanUsage } from './plan-usage-latest.js';
+import { getLatestPlanUsage, setLatestCodexPlanUsage, setLatestCopilotPlanUsage } from './plan-usage-latest.js';
 import { telemetrySignature } from '../usage-telemetry.js';
 import { readCodexPlanUsage, resolveCodexBinaryPath } from '../utils/codex-cli-resolver.js';
+import { isCopilotAvailable } from '../utils/copilot-cli-resolver.js';
+import { readCopilotPlanUsage, resolveCopilotToken } from '../utils/copilot-plan-usage.js';
 import type { ScheduledRun } from './ports/index.js';
 import {
   registerAuthMiddleware,
@@ -229,6 +236,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // while capping growth of `sseClientsById` and blocking pathological inputs.
 const SSE_CLIENT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const CODEX_USAGE_POLL_INTERVAL_MS = 5 * 60_000;
+// Copilot's quota is read over the network from GitHub, and a monthly figure moves slowly.
+const COPILOT_USAGE_POLL_INTERVAL_MS = 10 * 60_000;
 const CUSTOM_MODEL_REDISCOVER_INTERVAL_MS = 5 * 60_000;
 // Much shorter than the model-LIST refresh above on purpose: this catches an actual
 // eviction (a session's model no longer loaded, silently swapped out by another
@@ -354,6 +363,8 @@ export class WebServer extends EventEmitter {
   private lastRecordedTokens: Map<string, { input: number; output: number }> = new Map();
   private codexUsageRefreshInFlight = false;
   private lastCodexUsageSignature: string | null = null;
+  private copilotUsageRefreshInFlight = false;
+  private lastCopilotUsageSignature: string | null = null;
   // Server startup time for respawn grace period calculation
   private readonly serverStartTime: number = Date.now();
   // Pending respawn start timers (for cleanup on shutdown)
@@ -2900,6 +2911,32 @@ export class WebServer extends EventEmitter {
     }
   }
 
+  /**
+   * Copilot's monthly premium-request quota for the shared plan-usage chip. Host-scoped and read-only
+   * like the Codex poll, and additionally: only when the Copilot CLI is installed AND a sign-in token
+   * exists (nothing is sent to GitHub otherwise), and only while plan-usage display is on, so turning
+   * the chip off also stops the outbound request.
+   */
+  private async refreshCopilotPlanUsage(): Promise<void> {
+    if (this.copilotUsageRefreshInFlight) return;
+    this.copilotUsageRefreshInFlight = true;
+    try {
+      let usage = null;
+      if (isCopilotAvailable() && (await readPlanUsageTelemetryEnabled())) {
+        const token = resolveCopilotToken();
+        usage = token ? await readCopilotPlanUsage({ token }) : null;
+      }
+      const signature = usage ? telemetrySignature(usage) : '';
+      if (signature === this.lastCopilotUsageSignature) return;
+      this.lastCopilotUsageSignature = signature;
+      const snapshot = setLatestCopilotPlanUsage(usage);
+      this.cachedLightState = null;
+      this.broadcast(SseEvent.SessionStatusTelemetry, snapshot);
+    } finally {
+      this.copilotUsageRefreshInFlight = false;
+    }
+  }
+
   async start(): Promise<void> {
     // Multi-user first boot: create the initial admin from CODEMAN_USERNAME/PASSWORD
     // if there are no users yet, else refuse to start (there would be no way in).
@@ -3073,6 +3110,10 @@ export class WebServer extends EventEmitter {
       void this.refreshCodexPlanUsage();
       this.cleanup.setInterval(() => void this.refreshCodexPlanUsage(), CODEX_USAGE_POLL_INTERVAL_MS, {
         description: 'Codex plan-usage refresh',
+      });
+      void this.refreshCopilotPlanUsage();
+      this.cleanup.setInterval(() => void this.refreshCopilotPlanUsage(), COPILOT_USAGE_POLL_INTERVAL_MS, {
+        description: 'Copilot plan-usage refresh',
       });
     }
 
