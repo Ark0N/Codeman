@@ -1757,6 +1757,11 @@ const COPILOT: CliEntry = {
     // `_shouldForwardWheelToApp` forwards it as SGR reports while the CLI is tracking.
     altScreen: 'strip-mux-and-mouse',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // What `codeman agent spawn` waits for. The composer's footer hint, NOT the `❯` glyph: the
+    // folder-trust dialog draws `❯ 1. Yes` for its selected row, so the glyph would call a worker
+    // ready while it is still asking for trust (measured on 1.0.95: the dialog's footer reads
+    // `↑/↓ to navigate`, the composer's `/ commands · ? help`).
+    composerReadyMark: '/ commands · ? help',
     // The composer row is a `❯` between two rules, and the submitted prompt is echoed as
     // ` ❯ <text>  <time>` above it. While a turn runs the footer's left end reads
     // `◉ Working esc edit prompt` (the dot alternates `◉` and `◎`); at rest it reads
