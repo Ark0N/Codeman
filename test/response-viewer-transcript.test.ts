@@ -529,4 +529,71 @@ describe('GitHub Copilot pane dialect', () => {
     const blocks = parseExternalCliTranscript(pane, 'copilot');
     expect(blocks.some((b) => b.kind === 'prompt' && b.text === '')).toBe(false);
   });
+
+  // The pane is all there is to read, so a long answer scrolls the prompt row (and the banner) off
+  // the top. That must read as the tail of the answer, not as "nothing yet".
+  describe('an answer taller than the pane', () => {
+    const rule = '─'.repeat(100);
+    const tail = (n: number) =>
+      Array.from({ length: n }, (_, i) => `   line ${String(i + 1).padStart(3, '0')} of the long answer`);
+    const footer = [
+      ' /tmp/work/.../scratch-2                                                  Session: 0 AIC used',
+      rule,
+      '❯',
+      rule,
+      ' ← open sidebar · Interactive · Manual Approval · / commands · ? help · tab next tab           mock',
+    ];
+
+    it('returns the visible rows when the prompt row has scrolled off', () => {
+      const screen = [...tail(35), ...footer].join('\n');
+      const text = getLastTranscriptResponse(parseExternalCliTranscript(screen, 'copilot'));
+      expect(text).toContain('line 001 of the long answer');
+      expect(text).toContain('line 035 of the long answer');
+      expect(text).not.toMatch(/Session:|open sidebar|commands/);
+    });
+
+    it('still reads the tail when the answer has a leading bullet row on screen', () => {
+      const screen = [' ● the answer begins here', ...tail(20), ...footer].join('\n');
+      const text = getLastTranscriptResponse(parseExternalCliTranscript(screen, 'copilot'));
+      expect(text).toContain('the answer begins here');
+      expect(text).toContain('line 020 of the long answer');
+    });
+
+    it('is not fooled by text typed in the composer under the answer', () => {
+      const typed = [
+        ...tail(30),
+        ' /tmp/work/.../scratch-2        Session: 0 AIC used',
+        rule,
+        '❯ half a thought',
+        rule,
+        footer[4],
+      ];
+      const text = getLastTranscriptResponse(parseExternalCliTranscript(typed.join('\n'), 'copilot'));
+      expect(text).toContain('line 030 of the long answer');
+      expect(text).not.toContain('half a thought');
+    });
+
+    it('still answers nothing while the banner or a trust dialog is on screen', () => {
+      const banner = [
+        '  ╭─╮╭─╮',
+        '  ╰─╯╰─╯  Copilot v1.0.95 uses AI.',
+        ' ! Model "mock" is not in the built-in catalog.',
+        ' /tmp/work  Session: 0 AIC used',
+        rule,
+        '❯',
+        rule,
+        footer[4],
+      ].join('\n');
+      expect(getLastTranscriptResponse(parseExternalCliTranscript(banner, 'copilot'))).toBe('');
+    });
+
+    it('prefers the prompt row when it is on screen', () => {
+      const screen = [
+        ' ❯ do the thing                                                     11:16',
+        ' ● short answer',
+        ...footer,
+      ].join('\n');
+      expect(getLastTranscriptResponse(parseExternalCliTranscript(screen, 'copilot'))).toBe('short answer');
+    });
+  });
 });

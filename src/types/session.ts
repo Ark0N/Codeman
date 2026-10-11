@@ -546,7 +546,10 @@ export interface CopilotConfig {
   allowAll?: boolean;
   /** Resume the most recent session (--continue). Skipped when resumeSessionId is set. */
   continueSession?: boolean;
-  /** Resume a specific session by ID (--resume=<id>). Ids only, never names. */
+  /**
+   * Resume a specific session (--resume <value>): an id, id prefix or session name, as ONE plain word
+   * starting with a letter or digit (a leading `-` would make the value its own flag).
+   */
   resumeSessionId?: string;
 }
 

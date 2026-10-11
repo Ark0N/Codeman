@@ -486,9 +486,9 @@ describe('capability shapes', () => {
   });
 
   it('declares transcriptPageKeys for exactly the CLIs measured to page on PageUp/PageDown', () => {
-    // claude (repaint mode), codex and opencode (both on the alternate screen) were
+    // claude (repaint mode), codex, opencode and copilot (all on the alternate screen) were
     // measured paging their own transcript on PageUp/PageDown; no other stock entry has been.
     const paging = STOCK_CLIS.filter((e) => e.capabilities.transcriptPageKeys === true).map((e) => e.id as string);
-    expect(paging.sort()).toEqual(['claude', 'codex', 'opencode']);
+    expect(paging.sort()).toEqual(['claude', 'codex', 'copilot', 'opencode']);
   });
 });

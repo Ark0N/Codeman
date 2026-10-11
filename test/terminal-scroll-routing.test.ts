@@ -303,6 +303,31 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
     expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~'.repeat(3) }]);
   });
 
+  it('pages a Copilot pane when the tracking flag is stale, so the wheel never goes dead', () => {
+    // Copilot pages its own transcript on PageUp/PageDown (three PageUp moved lines 109-140 to
+    // 010-042 against a 140-line answer in tmux, and PageDown returned). While it tracks the mouse
+    // the wheel is forwarded as SGR reports; with the flag stale (a server restart) this is the
+    // gesture's fallback, on an alternate-screen TUI whose local buffer is one screen.
+    const { app, sent } = hollowApp({ mode: 'copilot', cliMouseTracking: false });
+
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(true);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
+
+    app._maybePageCliTranscript({ shiftKey: false }, 18);
+    app._flushWheelSgrQueue();
+    expect(sent[1]).toEqual({ id: 'sess-1', data: '\x1b[6~' });
+  });
+
+  it('does not page a Copilot pane that has real local scrollback', () => {
+    const { app, sent } = hollowApp({ mode: 'copilot' });
+    app.terminal.buffer.active.baseY = 200;
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(false);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([]);
+  });
+
   it('pages an OpenCode pane too, whose TUI never fills the local buffer', () => {
     // OpenCode's TUI runs on the ALTERNATE SCREEN (measured on 1.18.31: tmux
     // `alternate_on=1`, `history_size=0`), so the browser's normal buffer stays at

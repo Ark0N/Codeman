@@ -283,10 +283,10 @@ Copilot's own Manual Approval mode. Model, permission mode and the rest are also
 inside its TUI.
 
 **Options and resume.** The model picked in the Run menu goes as `--model`. A session from
-Past Sessions resumes with `--resume <id>`, and a respawn continues with `--continue`. The
-tab's name is passed as `--name`, so Copilot's own session list reads like your tabs;
-Copilot refuses `--name` together with `--resume`/`--continue`, so a resumed session simply
-keeps the name it had.
+Past Sessions continues with `--continue`, which resumes the most recent Copilot conversation
+in that directory. A tab name you set yourself is passed as `--name`, so Copilot's own session
+list reads like that tab (an automatic `w1-myapp` name is not pinned); Copilot refuses `--name`
+together with `--resume`/`--continue`, so a continued session keeps the name it had.
 
 **Your own endpoint.** With [custom model endpoints](Custom-Model-Endpoints) on, a saved
 endpoint appears in the Run menu for Copilot. It is launched with Copilot's BYOK variables
@@ -306,8 +306,8 @@ swipe on a phone, scroll Copilot's own transcript; Shift+wheel scrolls Codeman's
 premium requests used. The tooltip shows the counts (for example `1215 of 5000 requests`) and
 the reset date. It is read from GitHub's `copilot_internal/user` endpoint with Copilot's own
 token, every 10 minutes, only while Copilot is installed and signed in and the chip is on. That
-endpoint is not part of GitHub's documented API: if it fails or your plan is unlimited, the row
-is simply absent.
+endpoint is not part of GitHub's documented API: if it fails, or your plan has no premium
+quota (Free) or an unlimited one, the row is simply absent.
 
 **MCP servers.** [MCP server sync](Settings-Reference) includes Copilot's
 `~/.copilot/mcp-config.json` (relocated by `COPILOT_HOME`), as a target and a source.

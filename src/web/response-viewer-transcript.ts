@@ -30,6 +30,12 @@ interface PaneDialect {
   ignore: RegExp[];
   /** Furniture drawn at the end of a row (a scrollbar gutter), removed before anything else reads it. */
   lineTrailer?: RegExp;
+  /**
+   * Text that is on screen only before the first prompt has scrolled the screen: the banner, a
+   * trust dialog. Its presence is how "nothing has been asked yet" is told apart from "the prompt
+   * row has scrolled off the top".
+   */
+  startup: RegExp[];
 }
 
 const PANE_DIALECTS: Record<string, PaneDialect> = {
@@ -52,6 +58,7 @@ const PANE_DIALECTS: Record<string, PaneDialect> = {
     ignore: [/^\s*❯\s*$/],
     // The right-hand scrollbar gutter, `┃` on a row (or alone on a blank one).
     lineTrailer: /\s*[┃▐]\s*$/,
+    startup: [/Copilot v\d+\.\d+\.\d+ uses AI/, /Confirm folder trust/, /Do you trust the files in this folder/],
   },
 };
 
@@ -320,12 +327,23 @@ export function transcriptNeedsScreenCapture(mode: string | null | undefined): b
  * Segment a pane that has its own dialect. Everything before the first prompt is the banner (or a
  * trust dialog) and is dropped, so a session that has not been asked anything answers "nothing
  * yet" rather than serving its logo as a reply.
+ *
+ * The screen is all there is to read, so a long answer scrolls the prompt row off the top. When no
+ * prompt row is on screen AND no startup text is either, the session has already been asked
+ * something: the rows above the composer are the tail of the last answer, not "nothing yet".
  */
 function parseDialectTranscript(cleaned: string, dialect: PaneDialect): ResponseViewerTranscriptBlock[] {
   const blocks: ResponseViewerTranscriptBlock[] = [];
   let kind: ResponseViewerTranscriptKind | null = null;
   let current: string[] = [];
-  let sawPrompt = false;
+  const rows = cleaned.split('\n').map((row) => (dialect.lineTrailer ? row.replace(dialect.lineTrailer, '') : row));
+  // The composer sits between two rules and holds whatever is typed but not sent. That is not a
+  // prompt row: otherwise typing under a tall answer would make the answer's tail read as banner.
+  const isComposerRow = (i: number) =>
+    i > 0 && i < rows.length - 1 && isDividerOnlyLine(rows[i - 1] ?? '') && isDividerOnlyLine(rows[i + 1] ?? '');
+  const hasPrompt = rows.some((row, i) => dialect.prompt.test(row) && !isComposerRow(i));
+  const startupVisible = rows.some((row) => dialect.startup.some((re) => re.test(row)));
+  let sawPrompt = !hasPrompt && !startupVisible;
 
   const flush = () => {
     if (sawPrompt) pushBlock(blocks, kind, current);
@@ -333,13 +351,8 @@ function parseDialectTranscript(cleaned: string, dialect: PaneDialect): Response
     current = [];
   };
 
-  for (const rawLine of cleaned.split('\n')) {
-    const line = dialect.lineTrailer ? rawLine.replace(dialect.lineTrailer, '') : rawLine;
-    if (isDividerOnlyLine(line)) {
-      flush();
-      continue;
-    }
-    if (dialect.ignore.some((re) => re.test(line))) {
+  for (const [index, line] of rows.entries()) {
+    if (isDividerOnlyLine(line) || isComposerRow(index) || dialect.ignore.some((re) => re.test(line))) {
       flush();
       continue;
     }

@@ -1655,7 +1655,8 @@ const OMP: CliEntry = {
 // GitHub Copilot CLI (`copilot`, github/copilot-cli, npm @github/copilot). Measured on a live
 // 1.0.94 pane inside tmux (capture-pane through real turns, a shell tool call and /model,
 // 2026-10-09). It is an ALTERNATE-SCREEN TUI with mouse tracking on (tmux `alternate_on=1`,
-// `mouse_any_flag=1`, `history_size=0`), so it joins grok in the tmux-attach-time strip only.
+// `mouse_any_flag=1`, `history_size=0`), so like opencode its mouse DECSETs are stripped
+// (`altScreen: 'strip-mux-and-mouse'` below): a drag selects locally and the wheel is forwarded.
 // Keystrokes sent with `tmux send-keys` reach its composer and a shell tool call completes
 // inside tmux, which github/copilot-cli#4180 (a driven PTY ignoring input) and #4223 (a shell
 // command never reported done under tmux) say they do not on 1.0.70 to 1.0.74: neither
@@ -1756,6 +1757,10 @@ const COPILOT: CliEntry = {
     // (`cliMouseTracking`). Same shape and reason as opencode. The wheel keeps working because
     // `_shouldForwardWheelToApp` forwards it as SGR reports while the CLI is tracking.
     altScreen: 'strip-mux-and-mouse',
+    // Pages its own transcript on PageUp/PageDown (1.0.95, measured in tmux: three PageUp moved
+    // lines 109-140 to 010-042 and PageDown returned). This is the fallback when the
+    // wheel-forward flag is stale after a server restart, so the wheel and a swipe never go dead.
+    transcriptPageKeys: true,
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
     // What `codeman agent spawn` waits for. The composer's footer hint, NOT the `❯` glyph: the
     // folder-trust dialog draws `❯ 1. Yes` for its selected row, so the glyph would call a worker

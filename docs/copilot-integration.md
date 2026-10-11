@@ -50,9 +50,9 @@ Codeman never logs Copilot in or stores its credentials.
 | Run button | `copilot --yolo` (allow every tool, path and URL), like the other CLIs' bypass switches, so an unattended session never stops on an approval. |
 | Permission clamp | `allowAll` is a `privilegedParam`. A multi-user owner without the bypass grant has it forced back to `false`; an absent config is never materialized (a bare `copilot` is already safe). `COPILOT_HOME`, `COPILOT_ALLOW_ALL`, `COPILOT_PROVIDER_*` and `COPILOT_MODEL` are privileged env keys. |
 | Model | `--model <id>` from the Run menu / Session Options. |
-| Resume | `--resume <id>` from Past Sessions. The id (or name) must be one plain word starting with a letter or digit: `--resume`'s value is optional, so `--resume --yolo` would otherwise make `--yolo` its own flag and bypass the clamp. |
-| Continue | `--continue` on a respawn of a session that has none to resume. |
-| Name | The tab's name is passed as `--name <tab name>`, so Copilot's own session list reads like your tabs. Copilot refuses `--name` with `--resume`/`--continue`, so it is dropped there and a resumed session keeps its original name. |
+| Resume | `--resume <value>`, sent only by an API caller that sets `copilotConfig.resumeSessionId` (Past Sessions does not). The value (an id, an id prefix or a session name) must be one plain word starting with a letter or digit: `--resume`'s value is optional, so `--resume --yolo` would otherwise make `--yolo` its own flag and bypass the clamp. |
+| Continue | `--continue`, from **Past Sessions**: it resumes the most recent conversation Copilot has for that directory. Nothing sets it on a respawn. Skipped when a resume value is set. |
+| Name | A tab name **you set yourself** is passed as `--name <tab name>`, so Copilot's own session list reads like that tab. An automatic name (`w1-myapp`, or an auto-named title) is not pinned. Copilot refuses `--name` with `--resume`/`--continue`, so it is dropped there and a continued session keeps the name it had. |
 | Working / idle | The footer. A turn shows `◉ Working esc edit prompt` (the dot alternates `◉`/`◎`); the composer is the `❯` between two rules. A tool waiting for approval replaces the composer and reads as idle. |
 | Model detection | The right-hand field of the footer's last row, at rest and mid-turn. |
 | Status probe | `GET /api/copilot/status`, plus an entry in the CLI-installed probes and `codeman doctor`. |
@@ -92,7 +92,8 @@ decision, the same one OpenCode needed:
   `_shouldForwardWheelToApp` forwards it by hand as SGR reports while Copilot is tracking the
   mouse; a phone swipe goes through the same gate. Shift+wheel scrolls Codeman's local
   history. If the tracking flag is stale after a server restart, the gesture falls back to
-  PageUp/PageDown rather than going dead.
+  PageUp/PageDown rather than going dead (Copilot pages its own transcript on those keys: three
+  PageUp moved a 140-line answer from lines 109-140 to 010-042).
 - **Keys.** Keystrokes from `tmux send-keys` and `POST /api/sessions/:id/input` reach the
   composer; Shift+Enter inserts a newline; shell tool calls complete inside tmux
   (github/copilot-cli#4180 and #4223 report both failing on 1.0.70 to 1.0.74; neither
@@ -127,7 +128,8 @@ quota. The tooltip adds the counts and the reset date.
 
 - **Source.** `GET https://api.github.com/copilot_internal/user` →
   `quota_snapshots.premium_interactions` (`entitlement`, `remaining`, `percent_remaining`;
-  `quota_reset_date_utc`). `chat` and `completions` report `unlimited: true` and are ignored. It
+  `quota_reset_date_utc`). `chat` and `completions` are `unlimited` on the paid plans and metered
+  (200 and 2000) on Free; the chip shows neither. It
   is the quota the editors show, but it is **not part of GitHub's documented REST API**.
 - **When.** Every 10 minutes from the host, read-only, only while the CLI is installed, a
   token resolves and plan-usage display is on (turning the chip off stops the request).
@@ -135,7 +137,8 @@ quota. The tooltip adds the counts and the reset date.
   `authTokens` entry in `<COPILOT_HOME or ~/.copilot>/config.json` (github.com sign-ins only).
   It is sent only to api.github.com over HTTPS with redirects refused, and is never logged or
   put in an error.
-- **Failure.** Offline, 401, a changed shape or an unlimited plan all yield no row. Overage
+- **Failure.** Offline, 401, a changed shape, an unlimited quota or a premium quota of zero (a
+  Free account answers `entitlement: 0`, `has_quota: false`) all yield no row. Overage
   is clamped to 100% in the bar and the real count is kept.
 
 `copilot billing` exists only inside the TUI, so there is no CLI route to the same number.
