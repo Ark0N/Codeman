@@ -123,9 +123,14 @@ const TERMINAL_TAIL_SIZE = 1024 * 1024;     // 1MB tail for initial load (more s
 // scrolls its top row into scrollback, so one line shows up dozens of times.
 // `lines=` bounds the synchronous capture-pane (~8 ms per 1000 lines measured,
 // so ~0.1 s here); the server reports a cut as 'tail', and scroll-to-top pulls
-// the older lines as before.
+// the older lines as before. `alt=recording`: a pane in the alternate screen (a
+// nested tmux, as in remote SSH and Docker cases, but also vim or less while
+// open) gains no tmux history, so the server loads it the old way, visible
+// frame over the tailed byte recording.
+// A grid tile appends its own `lines=` to SHELL_LOAD_BASE_QUERY.
 const SHELL_LOAD_HISTORY_LINES = 10000;
-const SHELL_LOAD_QUERY = `full=1&tail=${TERMINAL_TAIL_SIZE}&lines=${SHELL_LOAD_HISTORY_LINES}`;
+const SHELL_LOAD_BASE_QUERY = `full=1&tail=${TERMINAL_TAIL_SIZE}&alt=recording`;
+const SHELL_LOAD_QUERY = `${SHELL_LOAD_BASE_QUERY}&lines=${SHELL_LOAD_HISTORY_LINES}`;
 const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
 const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
 const TUI_REDRAW_SETTLE_MS = 400;           // Grace for a TUI to redraw after a real resize, before fetching its buffer
@@ -1885,7 +1890,8 @@ function formatHistoryBytes(bytes) {
  *   - exhausted:   a full pull was refused as a downgrade, so this is all there is
  *
  * @param {{truncated?: boolean, reason?: string|null, source?: string|null,
- *          fullSize?: number, retainedBytes?: number, exhausted?: boolean}} state
+ *          fullSize?: number, retainedBytes?: number, exhausted?: boolean,
+ *          historyLinesCut?: boolean}} state
  * @returns {{visible: boolean, message: string, canLoadMore: boolean}}
  */
 function computeHistoryTruncationNotice(state = {}) {
@@ -1914,8 +1920,11 @@ function computeHistoryTruncationNotice(state = {}) {
   }
   // A `lines=`-bounded capture is cut by tmux before any bytes are counted, so
   // its fullSize is the window itself and the remainder's size is unknown:
-  // say that more exists without inventing an amount.
-  const remainder = dropped > 0 ? `${formatHistoryBytes(dropped)} more` : 'Earlier output';
+  // say that more exists without inventing an amount. That holds even when
+  // `tail` also cut bytes off the window (`dropped`), since tmux still holds
+  // more beyond it (`historyLinesCut`, set by the server).
+  const remainder =
+    dropped > 0 && !state.historyLinesCut ? `${formatHistoryBytes(dropped)} more` : 'Earlier output';
   return {
     visible: true,
     message: `Showing the most recent ${shown} of this session. ${remainder} may still be retained.`,

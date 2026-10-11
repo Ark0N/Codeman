@@ -771,9 +771,14 @@
           if (this._destroyed) return;
           const shell = this.sessionMode === 'shell';
           // A shell loads tmux's rendered history, bounded (SHELL_LOAD_QUERY,
-          // constants.js), never the raw byte recording.
+          // constants.js), never the raw byte recording; a grid tile bounds it
+          // by its own scrollback instead.
           let query = shell ? SHELL_LOAD_QUERY : 'full=1';
-          if (this.boundedLoad && !shell) query = `full=1&tail=${TERMINAL_TAIL_SIZE}${this._historyLinesQuery()}`;
+          if (this.boundedLoad) {
+            query = shell
+              ? `${SHELL_LOAD_BASE_QUERY}${this._historyLinesQuery()}`
+              : `full=1&tail=${TERMINAL_TAIL_SIZE}${this._historyLinesQuery()}`;
+          }
           this._loadAbort = controller;
           armDeadline(global.CodemanFetchDeadline?.terminalFetchDeadlineMs?.({ full: !shell }) ?? 45000);
           let payload;

@@ -211,6 +211,13 @@ export interface PaneCaptureOptions {
    * behind in the multiplexer, which the caller must report as recoverable.
    */
   capturedHistorySize?: number;
+  /**
+   * Filled in by the implementation with whether the pane was in the alternate
+   * screen at capture time, when it can tell. tmux keeps no history for such a
+   * pane (a nested tmux client puts it there), so a full-history capture of it
+   * holds one screen plus whatever the pane held before.
+   */
+  capturedAlternateOn?: boolean;
 }
 
 /**

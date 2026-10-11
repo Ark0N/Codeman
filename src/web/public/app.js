@@ -8880,6 +8880,8 @@ class CodemanApp {
       source: payload.source ?? null,
       fullSize: payload.fullSize ?? 0,
       retainedBytes: payload.retainedBytes ?? 0,
+      // tmux holds lines beyond a `lines=` window, so fullSize undercounts.
+      historyLinesCut: !!payload.historyLinesCut,
       // Set once a full-history pull has been refused as a downgrade: the
       // browser holds more than the server can return, so there is no more.
       exhausted: !!payload.exhausted,

@@ -90,6 +90,25 @@ describe('computeHistoryTruncationNotice (issue #258)', () => {
     expect(notice.message).not.toMatch(/\d+ (B|KB) more/);
   });
 
+  it('names no amount when tail also cut bytes off a window tmux cut by lines', () => {
+    // The window was over 1 MiB: `dropped` counts only the bytes tail cut off
+    // it, while tmux still holds more beyond the window, so that number would
+    // understate what is left.
+    const state = {
+      truncated: true,
+      reason: 'tail',
+      source: 'mux-full-history',
+      fullSize: 3 * 1024 * 1024,
+      retainedBytes: 1024 * 1024,
+    };
+    const windowOnly = computeHistoryTruncationNotice({ ...state, historyLinesCut: true });
+    expect(windowOnly.canLoadMore).toBe(true);
+    expect(windowOnly.message).toContain('Earlier output may still be retained');
+    expect(windowOnly.message).not.toMatch(/\d+(\.\d+)? (B|KB|MB) more/);
+    // Without a lines cut the byte remainder IS all that is left, and is named.
+    expect(computeHistoryTruncationNotice(state).message).toContain('2.0 MB more may still be retained');
+  });
+
   it('promises nothing more once the FULL capture itself hit the ceiling', () => {
     // This is the case the old boolean could not express: a full-history pull
     // that was still capped means tmux has already given everything it has.

@@ -190,8 +190,26 @@ describe('queryPaneCursor history depth', () => {
     }
   });
 
-  it('asks tmux for the history depth in the same display-message as the cursor', () => {
+  it('reads tmux alternate_on as an optional sixth field', () => {
+    expect(queryPaneCursor(() => '4 22 133 24 29 1\n')).toEqual({
+      cols: 133,
+      rows: 24,
+      cursorX: 4,
+      cursorY: 22,
+      historySize: 29,
+      alternateOn: true,
+    });
+    expect(queryPaneCursor(() => '4 22 133 24 29 0')?.alternateOn).toBe(false);
+    for (const raw of ['4 22 133 24 29', '4 22 133 24 29 2', '4 22 133 24 29 x']) {
+      expect(
+        queryPaneCursor(() => raw),
+        raw
+      ).not.toHaveProperty('alternateOn');
+    }
+  });
+
+  it('asks tmux for the history depth and alternate screen in the same display-message as the cursor', () => {
     const source = readFileSync(resolve(import.meta.dirname, '../src/tmux-manager.ts'), 'utf8');
-    expect(source).toContain("'#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size}'");
+    expect(source).toContain("'#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size} #{alternate_on}'");
   });
 });

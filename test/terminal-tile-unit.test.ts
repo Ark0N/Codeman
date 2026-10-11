@@ -25,7 +25,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const TERMINAL_CHUNK_SIZE = 32 * 1024;
 const TERMINAL_TAIL_SIZE = 1024 * 1024;
 // constants.js: a shell loads tmux's rendered history, bounded, never the raw byte recording.
-const SHELL_LOAD_QUERY = `full=1&tail=${TERMINAL_TAIL_SIZE}&lines=10000`;
+const SHELL_LOAD_BASE_QUERY = `full=1&tail=${TERMINAL_TAIL_SIZE}&alt=recording`;
+const SHELL_LOAD_QUERY = `${SHELL_LOAD_BASE_QUERY}&lines=10000`;
 /** The pane's `performance.now()`, so frame arrival vs. capture time is set by hand, not raced. */
 let clock = 0;
 
@@ -110,6 +111,7 @@ function loadTerminalTile() {
     // The constants.js globals the module reads at call time.
     TERMINAL_CHUNK_SIZE,
     TERMINAL_TAIL_SIZE,
+    SHELL_LOAD_BASE_QUERY,
     SHELL_LOAD_QUERY,
   });
   // The module's tail patches CodemanApp.prototype; nothing on it runs here.
@@ -276,10 +278,7 @@ describe('TerminalTile server-refresh single-flight', () => {
     pane._refreshBuffer();
     await settle();
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      `/api/sessions/s1/terminal?full=1&tail=${1024 * 1024}&lines=10000`,
-      expect.anything()
-    );
+    expect(fetchMock).toHaveBeenCalledWith(`/api/sessions/s1/terminal?${SHELL_LOAD_QUERY}`, expect.anything());
   });
 
   it('refreshes arriving mid-fetch neither reset nor fetch again, and run ONCE after the replay lands', async () => {

@@ -159,7 +159,9 @@ describe('terminal flush budget', () => {
     const first = app._onSessionNeedsRefresh({ id: 'session-1' });
     const duplicate = app._onSessionNeedsRefresh({ id: 'session-1' });
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock).toHaveBeenCalledWith('/api/sessions/session-1/terminal?full=1&tail=1048576&lines=10000');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/sessions/session-1/terminal?full=1&tail=1048576&alt=recording&lines=10000'
+    );
 
     releaseFetch();
     await Promise.all([first, duplicate]);
@@ -184,7 +186,7 @@ describe('terminal flush budget', () => {
     await app._onSessionClearTerminal({ id: 'agent-1' });
 
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
-      '/api/sessions/shell-1/terminal?full=1&tail=1048576&lines=10000',
+      '/api/sessions/shell-1/terminal?full=1&tail=1048576&alt=recording&lines=10000',
       '/api/sessions/agent-1/terminal',
     ]);
   });

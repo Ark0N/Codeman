@@ -543,15 +543,17 @@ client that opens many concurrent waits against one session will still hit the c
 
 What a session's terminal shows, for a client to replay: `data.terminalBuffer`,
 with `source` (`mux-visible`, `mux-full-history` or `history`), `truncated`,
-`truncationReason`, `fullSize`, and `captureCols`/`captureRows` when the pane's
-geometry was read. The capture runs synchronous tmux calls on the server; the
+`truncationReason`, `fullSize`, `historyLinesCut` (a `lines=` bound left older
+lines in tmux, so the remainder is more than `fullSize - retainedBytes`), and
+`captureCols`/`captureRows` when the pane's geometry was read. The capture runs synchronous tmux calls on the server; the
 `Server-Timing` header reports `capture`, `prepare` and `total`.
 
 | Query | Meaning |
 |---|---|
 | `full=1` | tmux's scrollback, not only the visible frame (`source: 'mux-full-history'`), ending with a relative cursor move back to the pane's caret. |
 | `tail=<bytes>` | Keep the newest `<bytes>` of the result (`truncationReason: 'tail'` when it cut). |
-| `lines=<n>` | With `full=1` only: read at most `<n>` lines of tmux history above the visible frame. An integer of at least 1, clamped to the configured history limit; absent or malformed, the whole limit (100,000 lines by default), as before. When the bound left older lines in tmux (its `history_size` is deeper), `truncated` is true with `truncationReason: 'tail'`; a byte cap still reports `'capped'`. Without it a full capture reads all of that history before `tail` cuts it, so a client that keeps a fixed number of lines (the tile grid sends its xterm's scrollback plus its rows) should send it. |
+| `lines=<n>` | With `full=1` only: read at most `<n>` lines of tmux history above the visible frame. An integer of at least 1, clamped to the configured history limit; absent or malformed, the whole limit (100,000 lines by default), as before. When a bound below the configured limit left older lines in tmux (its `history_size` is deeper), `truncated` is true with `truncationReason: 'tail'`; a byte cap still reports `'capped'`. Without it a full capture reads all of that history before `tail` cuts it, so a client that keeps a fixed number of lines (the tile grid sends its xterm's scrollback plus its rows) should send it. |
+| `alt=recording` | With `full=1` only: if the pane is in the alternate screen (a nested tmux, where tmux keeps no history, or any full-screen app such as vim or less while it is open), answer with the visible frame over the byte recording instead (`source: 'mux-visible'`, `tail` applied as without `full=1`). Shells' automatic loads send it. |
 
 ## The `codeman agent` CLI (client over these endpoints)
 

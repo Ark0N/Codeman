@@ -3080,10 +3080,12 @@ export function registerSessionRoutes(
   // Query params:
   //   tail=<bytes> - Only return last N bytes (faster initial load)
   //   full=1       - Explicitly request the entire tmux scrollback (COD-47)
+  //   alt=recording - With full=1: if the pane is in the alternate screen, load
+  //                  the visible frame over the byte recording instead
   app.get('/api/sessions/:id/terminal', async (req, reply) => {
     const routeStartedAt = performance.now();
     const { id } = req.params as { id: string };
-    const query = req.query as { tail?: string; full?: string; lines?: string };
+    const query = req.query as { tail?: string; full?: string; lines?: string; alt?: string };
     const session = findSessionOrFail(ctx, id, req);
 
     // `full=1` is the EXPLICIT full-history signal (COD-47): capture the ENTIRE
@@ -3091,7 +3093,7 @@ export function registerSessionRoutes(
     // Requests WITHOUT it — shell selection/tab switches (`tail=`) and legacy
     // no-param callers — keep the fast visible-frame capture.
     const tailBytes = query.tail ? parseInt(query.tail, 10) : 0;
-    const isFullReload = query.full === '1' || query.full === 'true';
+    let isFullReload = query.full === '1' || query.full === 'true';
     const { tmuxHistoryLimit, terminalBufferMaxBytes } = await ctx.getTerminalHistoryConfig();
 
     // Prepend the live tmux pane buffer so tab-switch replay shows the current
@@ -3109,17 +3111,32 @@ export function registerSessionRoutes(
     // for. See PaneCaptureOptions.capturedGeometry.
     // `lines` bounds only the history a FULL capture reads; the visible-frame
     // path reads no history and is untouched by it.
-    const captureOpts: PaneCaptureOptions = isFullReload
+    let captureOpts: PaneCaptureOptions = isFullReload
       ? {
           fullHistory: true,
           historyLimitLines: captureHistoryLines(query.lines, tmuxHistoryLimit),
           maxCaptureBytes: terminalBufferMaxBytes,
         }
       : {};
-    const liveMuxBuffer =
+    const capture = (opts: PaneCaptureOptions): string | null =>
       muxName && typeof ctx.mux.captureActivePaneBuffer === 'function'
-        ? ctx.mux.captureActivePaneBuffer(muxName, captureOpts)
+        ? ctx.mux.captureActivePaneBuffer(muxName, opts)
         : null;
+    let liveMuxBuffer = capture(captureOpts);
+    // tmux adds no history while a pane is in the alternate screen, and a
+    // nested tmux client (a remote SSH or Docker case, or `tmux` run by hand
+    // in a shell) holds its pane there for good, so the full capture above is
+    // one screen plus whatever came before. The byte recording still carries
+    // the scrollback, so a caller that opts in (a shell's automatic load,
+    // `alt=recording`) gets the old visible-frame load over it, tailed, rather
+    // than losing everything above the screen. `alternate_on` cannot tell a
+    // nested tmux from vim or less, so those take this path too while open:
+    // the load the shell had before tmux-rendered loads existed.
+    if (isFullReload && query.alt === 'recording' && captureOpts.capturedAlternateOn === true) {
+      isFullReload = false;
+      captureOpts = {};
+      liveMuxBuffer = capture(captureOpts);
+    }
     const captureFinishedAt = performance.now();
     const hasLiveMuxBuffer = liveMuxBuffer !== null && liveMuxBuffer.length > 0;
     const source: 'history' | 'mux-visible' | 'mux-full-history' = hasLiveMuxBuffer
@@ -3164,13 +3181,23 @@ export function registerSessionRoutes(
     // tmux: an intentional partial read, so 'tail', and a later pull with a
     // deeper (or no) bound recovers them. Without this a bounded window looks
     // like the whole history to the client. The byte cap below still wins.
+    // Only a bound the CLIENT set and below the configured ceiling counts:
+    // without `lines=` the bound is the ceiling itself, and on tmux before 3.7
+    // a live pane can hold more than a lowered ceiling, which no request can
+    // read, so calling that a recoverable cut would offer a button that can
+    // never return more.
+    // `historyLinesCut` tells the client this happened, apart from any byte
+    // cut below: `fullSize` counts only what tmux returned, so the bytes a
+    // later `tail` cut are not all that is left, and the client must not name
+    // them as the remainder.
     const capturedHistorySize = captureOpts.capturedHistorySize;
-    if (
+    const historyLinesCut =
       isFullCapture &&
       captureOpts.historyLimitLines !== undefined &&
+      captureOpts.historyLimitLines < tmuxHistoryLimit &&
       capturedHistorySize !== undefined &&
-      capturedHistorySize > captureOpts.historyLimitLines
-    ) {
+      capturedHistorySize > captureOpts.historyLimitLines;
+    if (historyLinesCut) {
       truncated = true;
       truncationReason = 'tail';
     }
@@ -3263,6 +3290,9 @@ export function registerSessionRoutes(
       fullSize,
       truncated,
       truncationReason,
+      // The `lines=` bound left older lines in tmux (see above): the remainder
+      // is more than `fullSize - retainedBytes`, by an amount unknown here.
+      historyLinesCut,
       // `retainedBytes` is what this response actually carries; `fullSize` is
       // what existed before the cut. The gap is what the indicator reports.
       retainedBytes: cleanBuffer.length,
