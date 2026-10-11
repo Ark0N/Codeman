@@ -111,8 +111,10 @@ rules and why each exists:
   construction (the vendor footer stays package-agnostic).
 - Mobile Compose handoff reads the active Codex prompt from xterm's parsed
   composer rows and appends `PredictiveEchoAddon.pendingText` for glyphs not
-  echoed yet. It then clears predictions and sends Ctrl+U before the editor
-  opens, so sending the edited draft cannot duplicate the terminal prompt.
+  echoed yet. The Codex-only editor path then keeps the textarea and TUI prompt
+  synchronized with a debounced Ctrl+U + bracketed-paste replacement; Send
+  queues Enter after that replacement. Claude and other buffered-local-echo
+  sessions retain their existing handoff behavior.
 - Second vendor bundle `vendor/xterm-predictive-echo.js` (postinstall + build);
   the zerolag bundle build command is untouched and its output byte-identical.
   Missing/broken bundle = plain 1.12.2 echo (`typeof PredictiveEchoOverlay ===
