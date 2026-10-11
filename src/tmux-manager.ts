@@ -59,7 +59,7 @@ import {
   type SessionDocker,
   type DockerCommandMode,
   type PaneExit,
-  type StatusLineTelemetry,
+  type StatusLineExporter,
 } from './types.js';
 import { getCli } from './config/cli-registry/registry.js';
 import { missingCliMessage, resolveCliBinDir } from './utils/cli-resolver.js';
@@ -2046,14 +2046,14 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * only (remote/docker have their own separate command builders). Resolving still runs
    * with collection off, because it also self-heals: it strips any legacy disk-written
    * exporter from an older Codeman build the first time a session starts in that
-   * workspace again. `state` lands on the mux record so the Status row and keep-warm can
+   * workspace again. `state` lands on the mux record so the Status row can
    * say why no cache report will come, instead of "not reported yet" forever.
    */
   private async _resolveStatusLine(
     mode: SessionMode,
     workingDir: string,
     remoteOrDocker: boolean
-  ): Promise<{ command?: string; state?: StatusLineTelemetry }> {
+  ): Promise<{ command?: string; state?: StatusLineExporter }> {
     if (!getCli(mode)?.capabilities.statusLineTelemetry) return {};
     if (remoteOrDocker) return { state: 'remote' };
     const enabled = await readPlanUsageTelemetryEnabled();

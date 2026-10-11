@@ -100,7 +100,7 @@ describe('buildSpawnCommand statusLineCommand (claude mode)', () => {
 });
 
 // Why a launch does or does not carry the exporter. Recorded on the mux record and
-// published as `statusLineTelemetry`, so the Status row and keep-warm can say why no
+// published as `statusLineExporter`, so the Status row can say why no
 // cache report will come instead of "not reported yet" forever.
 describe('TmuxManager statusLine classification', () => {
   type Resolve = (

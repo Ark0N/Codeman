@@ -747,10 +747,12 @@ export interface PromptCacheStatus {
   /** Claude Code's diagnosis of the last miss, e.g. `ttl_expired_1h` or `tools_changed`. */
   lastMissCauses?: string[];
   /**
-   * Epoch MS when Codeman first saw Claude Code's own idle compaction for the current prefix
-   * (`recacheTokensIfCold` null while `expectedRebuilds` rose). Derived in `Session.setPromptCache`,
-   * not reported by the statusline, so it is never set by `parsePromptCache`. Lets the readout say
-   * "compacted at HH:MM"; it is never an alert (CC's idle compaction is benign).
+   * Epoch MS when Codeman saw the context compacted (`/compact`, Claude Code's own idle
+   * compaction, or a clearing of old tool results): the first warm report whose
+   * `recacheTokensIfCold` is null after one that carried it. Carried while the null window holds,
+   * dropped at the next request. Derived in `Session.setPromptCache`, not reported by the
+   * statusline, so it is never set by `parsePromptCache`. Lets the readout say "Context compacted
+   * at HH:MM"; it is never an alert.
    */
   compactedAt?: number;
 }
@@ -765,7 +767,7 @@ export interface PromptCacheStatus {
  *   statusLine (or could not be read), and Codeman never replaces one there.
  * - `remote`: remote and Docker launches never carry the exporter.
  */
-export type StatusLineTelemetry = 'injected' | 'collection-off' | 'workspace-statusline' | 'remote';
+export type StatusLineExporter = 'injected' | 'collection-off' | 'workspace-statusline' | 'remote';
 
 export interface SessionState {
   /** Unique session identifier */
@@ -826,8 +828,8 @@ export interface SessionState {
    * `expiresAt` has passed reads as cold rather than as a stale warm.
    */
   promptCache?: PromptCacheStatus;
-  /** Why a cache report will or will not arrive (see `StatusLineTelemetry`); absent when unknown. */
-  statusLineTelemetry?: StatusLineTelemetry;
+  /** Why a cache report will or will not arrive (see `StatusLineExporter`); absent when unknown. */
+  statusLineExporter?: StatusLineExporter;
   /** Pinned to the top of the session manager list (COD-139) */
   pinned?: boolean;
   /** When the session was pinned (epoch ms) — orders the pinned group, most-recent-first */

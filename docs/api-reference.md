@@ -645,7 +645,7 @@ change-only `session:promptCache` event (`{ sessionId, ...promptCache }`):
 | `expectedRebuilds`    | Cache rebuilds that followed a compaction or a clearing of old tool results.                               |
 | `hitRatio`            | Cache read tokens as a fraction of all input tokens this session, 0 to 1.                                  |
 | `lastMissCauses`      | Claude Code's diagnosis of the last miss (e.g. `ttl_expired_1h`, `tools_changed`); untrusted text.         |
-| `compactedAt`         | Epoch MILLISECONDS when Codeman first saw Claude Code's own idle compaction of the current prefix (derived, not reported). |
+| `compactedAt`         | Epoch MILLISECONDS when the context was compacted or its old tool results cleared: the first warm report without `recacheTokensIfCold` after one that had it. Derived, not reported; dropped at the next request. |
 
 The whole object is absent until the first report, and restored after a server restart
 (so the readout is not blank until the pane's next render) rather than recomputed; a value
@@ -653,6 +653,12 @@ whose `expiresAt` has passed reads as cold. The statusline re-runs when a warm c
 `expiresAt`, so the cold flip arrives on its own. A post-`/clear` conversation switch drops
 it. Shown in Session Options → Respawn and, for sessions without a statusline of their own,
 as a `cache:until HH:MM` / `cache:cold` group in the terminal footer.
+
+Beside it, `statusLineExporter` says whether this launch carries the statusline exporter
+that sends the report, decided when the pane starts: `injected` (it does), `collection-off`
+(Plan Usage was off at launch), `workspace-statusline` (the workspace's
+`.claude/settings.local.json` sets its own `statusLine`, which Codeman never replaces) or
+`remote` (remote and Docker sessions). Absent when unknown.
 
 ## Approvals Inbox
 

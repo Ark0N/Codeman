@@ -71,6 +71,8 @@ export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: Session
     const promptCache = parsePromptCache(payload);
     if (promptCache && session?.setPromptCache(promptCache)) {
       ctx.broadcast(SessionPromptCache, { sessionId, ...session.promptCache });
+      // Persisted on change, like a model change, so a crash restores the latest report.
+      ctx.persistSessionState(session);
     }
 
     // Plan-usage limits (account-wide) → broadcast to the header chip, when

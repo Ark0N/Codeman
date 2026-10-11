@@ -1,13 +1,15 @@
 /**
  * Session.setPromptCache's compaction detection and the restore of the last report.
  *
- * The statusline never reports WHEN Claude Code's own idle compaction happened, so the
- * session stamps it: `recacheTokensIfCold` null (the transient post-compaction window the
- * CC statusline docs describe) while `expectedRebuilds` rose above the last report. The
- * stamp drives the "compacted at HH:MM" readout; it is never an alert. A rise is only a rise
- * against a KNOWN prior counter, so a first high report never invents one. The last report is
- * restored through the constructor (keeping an old compaction stamp, never re-stamping at
- * restart time), and a conversation switch drops it.
+ * The statusline never reports WHEN the context was compacted, so the session stamps it.
+ * Claude Code's tracker (2.1.294-2.1.296) opens a window at a compaction or a tool-result
+ * clearing in which `recacheTokensIfCold` reads null, and closes it on the next request,
+ * which is also the one that counts as an expected rebuild. So `expectedRebuilds` never rises
+ * inside the window, and the stamp fires on ENTERING it: a warm null report after one that
+ * carried a value. It is carried through idle re-reports, dropped at the next request, and a
+ * first report already inside the window never invents one. The fixtures follow that real
+ * order. The last report is restored through the constructor (keeping an old stamp, never
+ * re-stamping at restart time), and a conversation switch drops it.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Session } from '../src/session.js';
@@ -20,78 +22,50 @@ function claudeSession(extra: Record<string, unknown> = {}): Session {
 describe('Session.setPromptCache compaction detection', () => {
   afterEach(() => vi.useRealTimers());
 
-  it('stamps compactedAt only when recache went null and expected_rebuilds rose', () => {
+  it('stamps when /compact finishes, keeps the stamp through idle re-reports, drops it at the next request', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-06T22:05:00Z'));
     const s = claudeSession();
+    const expiresAt = Date.now() + 3600_000;
 
-    // A normal warm report establishes the rebuild baseline (known 0): recache known, no
-    // compaction yet. Claude reports expected_rebuilds from the first response, so a real
-    // baseline always carries it.
-    s.setPromptCache({
-      warm: true,
-      ttl: '1h',
-      expiresAt: Date.now() + 3600_000,
-      expectedRebuilds: 0,
-      recacheTokensIfCold: 50000,
-    });
+    // 1. Warm, 500k at stake.
+    s.setPromptCache({ warm: true, ttl: '1h', expiresAt, expectedRebuilds: 0, recacheTokensIfCold: 500000 });
     expect(s.promptCache?.compactedAt).toBeUndefined();
 
-    // Claude Code compacts: recache goes null (absent after parsing), expected_rebuilds rises,
-    // the prefix stays warm. This is the one transition that stamps.
+    // 2. `/compact` finishes: recache null (absent after parsing), expected_rebuilds unchanged.
     vi.setSystemTime(new Date('2026-10-06T22:31:00Z'));
-    s.setPromptCache({ warm: true, ttl: '1h', expiresAt: Date.now() + 3600_000, expectedRebuilds: 1 });
+    s.setPromptCache({ warm: true, ttl: '1h', expiresAt, expectedRebuilds: 0 });
     expect(s.promptCache?.compactedAt).toBe(Date.parse('2026-10-06T22:31:00Z'));
-  });
 
-  it('carries the stamp forward through the transient window, drops it once a real request re-caches', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-10-06T22:30:00Z'));
-    const s = claudeSession();
-    // Baseline (known rebuild count) then the compaction, so the rise is against a known prior.
-    s.setPromptCache({ warm: true, expiresAt: Date.now() + 3600_000, expectedRebuilds: 0, recacheTokensIfCold: 70000 });
-    vi.setSystemTime(new Date('2026-10-06T22:31:00Z'));
-    s.setPromptCache({ warm: true, expiresAt: Date.now() + 3600_000, expectedRebuilds: 1 });
-    const stampedAt = s.promptCache?.compactedAt;
-    expect(stampedAt).toBe(Date.parse('2026-10-06T22:31:00Z'));
-
-    // A later idle report, still no request since the compaction: same rebuild count, recache
-    // still null. The stamp is kept (not re-stamped), so the clock in the readout does not move.
+    // An idle re-report inside the same window: the stamp is carried, not re-stamped.
     vi.setSystemTime(new Date('2026-10-06T22:45:00Z'));
-    s.setPromptCache({ warm: true, expiresAt: Date.now() + 3600_000, expectedRebuilds: 1 });
-    expect(s.promptCache?.compactedAt).toBe(stampedAt);
+    s.setPromptCache({ warm: true, ttl: '1h', expiresAt, expectedRebuilds: 0 });
+    expect(s.promptCache?.compactedAt).toBe(Date.parse('2026-10-06T22:31:00Z'));
 
-    // The next real request records the rewritten size (recache non-null): the window is over.
-    s.setPromptCache({ warm: true, expiresAt: Date.now() + 3600_000, expectedRebuilds: 1, recacheTokensIfCold: 42000 });
+    // 3. The next request closes the window: expected_rebuilds 1, recache 40k.
+    s.setPromptCache({ warm: true, ttl: '1h', expiresAt, expectedRebuilds: 1, recacheTokensIfCold: 40000 });
     expect(s.promptCache?.compactedAt).toBeUndefined();
   });
 
-  it('never stamps a plain miss (recache present) or an unchanged rebuild count', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-10-06T22:31:00Z'));
+  it('never stamps a first report that is already inside the window', () => {
+    // The first report Codeman sees (a restart mid-window) has no prior value to leave.
     const s = claudeSession();
-    // expected_rebuilds rose but recache is present: the transient window was already missed.
+    s.setPromptCache({ warm: true, expiresAt: Date.now() + 3600_000, expectedRebuilds: 4 });
+    expect(s.promptCache?.compactedAt).toBeUndefined();
+    // Nor does a later report in the same window: the stamp needs a known value before it.
+    s.setPromptCache({ warm: true, expiresAt: Date.now() + 3600_000, expectedRebuilds: 4 });
+    expect(s.promptCache?.compactedAt).toBeUndefined();
+  });
+
+  it('never stamps a cold report or a report that still carries the stake', () => {
+    const s = claudeSession();
+    s.setPromptCache({ warm: true, expiresAt: Date.now() + 3600_000, recacheTokensIfCold: 60000 });
+    // Cold with no stake: an expired cache, not a compaction.
+    s.setPromptCache({ warm: false, expectedRebuilds: 0 });
+    expect(s.promptCache?.compactedAt).toBeUndefined();
+    // A rebuild count that rose with the stake present is the request after a window, not one.
     s.setPromptCache({ warm: true, expiresAt: Date.now() + 3600_000, expectedRebuilds: 2, recacheTokensIfCold: 60000 });
     expect(s.promptCache?.compactedAt).toBeUndefined();
-    // recache null but the rebuild count did not rise: not a fresh compaction.
-    s.setPromptCache({ warm: true, expiresAt: Date.now() + 3600_000, expectedRebuilds: 2 });
-    expect(s.promptCache?.compactedAt).toBeUndefined();
-  });
-
-  it('never invents a stamp without a KNOWN prior rebuild count (a rise needs two known reports)', () => {
-    // The very first report Codeman sees already carries a high count with recache null (a
-    // restart mid-session). Treating an absent prior as 0 would fabricate "compacted now".
-    const s1 = claudeSession();
-    s1.setPromptCache({ warm: true, expiresAt: Date.now() + 3600_000, expectedRebuilds: 4 });
-    expect(s1.promptCache?.compactedAt).toBeUndefined();
-
-    // `4 -> omitted -> 4`: a report that drops the counter clears the known prior, so the next
-    // report carrying 4 again is not a provable rise.
-    const s2 = claudeSession();
-    s2.setPromptCache({ warm: true, expiresAt: Date.now() + 3600_000, expectedRebuilds: 4, recacheTokensIfCold: 10 });
-    s2.setPromptCache({ warm: true, expiresAt: Date.now() + 3600_000 }); // counter omitted
-    s2.setPromptCache({ warm: true, expiresAt: Date.now() + 3600_000, expectedRebuilds: 4 });
-    expect(s2.promptCache?.compactedAt).toBeUndefined();
   });
 
   it('reports changed only when the stored object differs', () => {
@@ -120,9 +94,9 @@ describe('prompt-cache report survives a restart', () => {
   });
 
   it('restores a post-compaction value WITHOUT re-stamping it at restart time', () => {
-    // A direct restore, not a setPromptCache call: an already-compacted report (recache absent,
-    // expectedRebuilds > 0, an OLD compactedAt) must keep its original timestamp through
-    // construction, never be re-stamped with "now" as a fresh compaction.
+    // A direct restore, not a setPromptCache call: a report from inside the window (recache
+    // absent, an OLD compactedAt) must keep its original timestamp through construction,
+    // never be re-stamped with "now" as a fresh compaction.
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-06T23:59:00Z'));
     const oldStamp = Date.parse('2026-10-06T22:31:00Z');

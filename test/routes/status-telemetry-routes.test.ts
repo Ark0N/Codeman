@@ -215,9 +215,9 @@ describe('POST /api/status-telemetry: the session model (displayModel)', () => {
   it('broadcasts the STORED prompt-cache object, so a compaction stamp reaches the live readout', async () => {
     const session = realSession('claude', 'claude-compact');
     const expiresAtS = Math.floor(Date.now() / 1000) + 3600;
-    // A normal warm report (rebuild baseline 0), then Claude Code's idle compaction: recache
-    // goes null (absent), expected_rebuilds rises above the known baseline, still warm. The
-    // session stamps compactedAt in setPromptCache.
+    // The order Claude Code really reports in: a warm report with 500k at stake, then
+    // `/compact` finishes (recache null, expected_rebuilds unchanged), and the session stamps
+    // compactedAt in setPromptCache on entering that window.
     await post({
       sessionId: 'claude-compact',
       data: {
@@ -232,7 +232,7 @@ describe('POST /api/status-telemetry: the session model (displayModel)', () => {
     });
     await post({
       sessionId: 'claude-compact',
-      data: { prompt_cache: { warm: true, ttl: '1h', expires_at: expiresAtS, expected_rebuilds: 1 } },
+      data: { prompt_cache: { warm: true, ttl: '1h', expires_at: expiresAtS, expected_rebuilds: 0 } },
     });
     expect(typeof session.toState().promptCache?.compactedAt).toBe('number');
     // The broadcast must carry the stored object, not just the freshly parsed one, or the
@@ -242,5 +242,15 @@ describe('POST /api/status-telemetry: the session model (displayModel)', () => {
       .at(-1)?.[1];
     expect(last).toMatchObject({ sessionId: 'claude-compact', warm: true });
     expect(typeof last?.compactedAt).toBe('number');
+  });
+
+  it('persists a changed prompt-cache report, and only a changed one', async () => {
+    const session = realSession('claude', 'claude-persist');
+    const data = { prompt_cache: { warm: true, ttl: '1h', expires_at: Math.floor(Date.now() / 1000) + 3600 } };
+    await post({ sessionId: 'claude-persist', data });
+    expect(h.ctx.persistSessionState).toHaveBeenCalledWith(session);
+    h.ctx.persistSessionState.mockClear();
+    await post({ sessionId: 'claude-persist', data });
+    expect(h.ctx.persistSessionState).not.toHaveBeenCalled();
   });
 });

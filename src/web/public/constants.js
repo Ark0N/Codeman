@@ -709,14 +709,12 @@ function computeConnectionLossUi(input) {
   };
 }
 
-// SSE staleness policy: is this stream a zombie?
-//
 // Session Options → Respawn → "Prompt cache": one sentence of the main
 // conversation's cache state as Claude Code reports it on the statusline
 // (`session.promptCache`, v2.1.251+). A clock time rather than a countdown
 // because the row refreshes on SSE, not on a timer, and a countdown would sit
 // stale between turns. Pure: no DOM, `now` is passed in. `statusLine` is the
-// session's `statusLineTelemetry`: a launch without the exporter never reports, so
+// session's `statusLineExporter`: a launch without the exporter never reports, so
 // it says why instead of "not reported yet" forever.
 const PROMPT_CACHE_NOT_COLLECTED = {
   'collection-off':
@@ -738,18 +736,20 @@ function formatPromptCacheStatus(cache, now, statusLine) {
   if (cache.warm && Number.isFinite(cache.expiresAt) && cache.expiresAt > now) {
     const ttl = cache.ttl ? ` (${cache.ttl} cache)` : '';
     parts.push(`Warm until ${clock(cache.expiresAt)}${ttl}.`);
-    if (tokens) parts.push(`About ${tokens} tokens would be re-read if it goes cold.`);
+    if (tokens) parts.push(`About ${tokens} tokens would be re-cached if it goes cold.`);
   } else {
-    parts.push(tokens ? `Cold. The next turn re-reads about ${tokens} tokens at the cache-write rate.` : 'Cold.');
+    parts.push(tokens ? `Cold. The next turn re-caches about ${tokens} tokens.` : 'Cold.');
   }
-  // Claude Code's own idle compaction kept the prefix warm but smaller, so there is no
-  // re-read stake to show; naming when it happened explains the shrink. Never an alert.
-  if (Number.isFinite(cache.compactedAt)) parts.push(`Compacted at ${clock(cache.compactedAt)}.`);
+  // A compaction or a tool-result clearing leaves no re-cache stake to show until the next
+  // request; naming when it happened explains the gap. Never an alert.
+  if (Number.isFinite(cache.compactedAt)) parts.push(`Context compacted at ${clock(cache.compactedAt)}.`);
   if (Number.isFinite(cache.hitRatio)) parts.push(`${Math.round(cache.hitRatio * 100)}% cache hit rate.`);
   if (cache.lastMissCauses && cache.lastMissCauses.length) parts.push(`Last miss: ${cache.lastMissCauses.join(', ')}.`);
   return parts.join(' ');
 }
 
+// SSE staleness policy: is this stream a zombie?
+//
 // An EventSource that stops delivering does not always error. A proxy that
 // idle-closed the connection, a laptop resumed from sleep, a tailnet
 // reconnect: `onerror` never fires, the header dot stays green, and every

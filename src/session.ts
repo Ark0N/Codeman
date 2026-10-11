@@ -1443,28 +1443,21 @@ export class Session extends EventEmitter {
 
   /**
    * Replace the prompt-cache report; true when it differs from the previous one. Stamps
-   * `compactedAt` when this report shows Claude Code's own idle compaction of the current
-   * prefix: `recacheTokensIfCold` is null (the transient post-compaction window the docs
-   * describe) while `expectedRebuilds` rose above the last report. The stamp is carried
-   * forward while that window holds, so the readout can say "compacted at HH:MM"; it is
-   * never an alert. A tool-result clearing bumps `expectedRebuilds` the same way, which the
-   * readout wording tolerates.
+   * `compactedAt` when this report ENTERS the window in which Claude Code reads
+   * `recacheTokensIfCold` as null: a compaction (`/compact` or its own idle compaction) or
+   * a clearing of old tool results opened it, and the previous report still had a known
+   * value. Claude Code closes the window on the next request (that request is the one that
+   * counts as an expected rebuild), so `expectedRebuilds` never rises inside it and is not
+   * read here. The stamp is carried while the window holds and dropped once it closes; a
+   * first report already inside the window gets none. It is never an alert.
    */
   setPromptCache(status: PromptCacheStatus): boolean {
     const prev = this._promptCache;
-    const inPostCompactWindow = status.recacheTokensIfCold == null && status.warm;
+    const inWindow = status.warm && status.recacheTokensIfCold == null;
     let compactedAt: number | undefined;
-    // A rise is only a rise against a KNOWN prior counter. Treating an absent prior as 0
-    // would invent a compaction out of the first report that already carries a high count
-    // (a restart mid-session, or `4 -> omitted -> 4`), so both counters must be present.
-    if (
-      inPostCompactWindow &&
-      prev?.expectedRebuilds != null &&
-      status.expectedRebuilds != null &&
-      status.expectedRebuilds > prev.expectedRebuilds
-    ) {
+    if (inWindow && prev?.recacheTokensIfCold != null) {
       compactedAt = Date.now();
-    } else if (prev?.compactedAt != null && inPostCompactWindow && status.expectedRebuilds === prev.expectedRebuilds) {
+    } else if (inWindow && prev?.compactedAt != null) {
       compactedAt = prev.compactedAt;
     }
     // A NEW object when a stamp applies, never a mutation of the caller's parsed report: the
@@ -1956,7 +1949,7 @@ export class Session extends EventEmitter {
       autoResumeEnabled: this._autoOps.autoResumeEnabled,
       autoResumeAt: this._autoOps.autoResumeAt ?? undefined,
       promptCache: this._promptCache ?? undefined,
-      statusLineTelemetry: this._muxSession?.statusLine,
+      statusLineExporter: this._muxSession?.statusLine,
       imageWatcherEnabled: this._imageWatcherEnabled,
       pinned: this._pinned || undefined,
       pinnedAt: this._pinned ? (this._pinnedAt ?? undefined) : undefined,

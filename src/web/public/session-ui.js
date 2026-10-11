@@ -2795,7 +2795,7 @@ Object.assign(CodemanApp.prototype, {
     const el = document.getElementById('promptCacheStatus');
     if (!el || this.editingSessionId !== sessionId) return;
     const session = this.sessions.get(sessionId);
-    el.textContent = window.CodemanPromptCache.format(session?.promptCache, Date.now(), session?.statusLineTelemetry);
+    el.textContent = window.CodemanPromptCache.format(session?.promptCache, Date.now(), session?.statusLineExporter);
   },
 
   _onSessionPromptCache(data) {

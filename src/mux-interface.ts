@@ -25,7 +25,7 @@ import type {
   SessionRemote,
   SessionDocker,
   PaneExit,
-  StatusLineTelemetry,
+  StatusLineExporter,
 } from './types.js';
 
 /**
@@ -59,7 +59,7 @@ export interface MuxSession {
   /** Whether Ralph / Todo tracking is enabled */
   ralphEnabled?: boolean;
   /** Whether the current launch carries the statusLine exporter; set on every create and respawn. */
-  statusLine?: StatusLineTelemetry;
+  statusLine?: StatusLineExporter;
   /**
    * This record was rebuilt from the tmux socket rather than from Codeman's own
    * bookkeeping, so everything on it but the name and the pid is a guess. Its
