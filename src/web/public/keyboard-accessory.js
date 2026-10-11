@@ -784,6 +784,7 @@ const KeyboardAccessoryBar = {
   // so persistence would need the same treatment as the 0600 intent store.
   _composerDrafts: new Map(),
   _composerUploads: new Map(),
+  _codexComposerSyncTimers: new Map(),
   _composerOverlay: null,
   // Longest prompt Send accepts: the input frame limit minus both markers.
   _composerMaxLength: COMPOSER_INPUT_FRAME_LIMIT - COMPOSER_PASTE_START.length - COMPOSER_PASTE_END.length,
@@ -1313,6 +1314,34 @@ const KeyboardAccessoryBar = {
     return flushedText + pending;
   },
 
+  _isCodexComposerSession(sessionId) {
+    return app.sessions?.get(sessionId)?.mode === 'codex';
+  },
+
+  _syncCodexComposerDraft(sessionId, text) {
+    const timer = this._codexComposerSyncTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    this._codexComposerSyncTimers.delete(sessionId);
+    if (!this._isCodexComposerSession(sessionId) || typeof app._sendInputAsync !== 'function') return false;
+
+    const pasteText = text.replace(/\r?\n/g, '\r');
+    if (pasteText.length > this._composerMaxLength) return false;
+    app._predictiveEcho?.clearPredictions();
+    app._sendInputAsync(sessionId, '\x15', { useMux: true });
+    if (pasteText) app._sendInputAsync(sessionId, `${COMPOSER_PASTE_START}${pasteText}${COMPOSER_PASTE_END}`);
+    return true;
+  },
+
+  _scheduleCodexComposerSync(sessionId, text) {
+    if (!this._isCodexComposerSession(sessionId)) return;
+    const timer = this._codexComposerSyncTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    this._codexComposerSyncTimers.set(
+      sessionId,
+      setTimeout(() => this._syncCodexComposerDraft(sessionId, text), 100)
+    );
+  },
+
   /** Insert text at the textarea selection, adding one separating space when
    *  an attachment path would otherwise run into neighboring prompt text. */
   _insertComposerText(textarea, text) {
@@ -1343,6 +1372,11 @@ const KeyboardAccessoryBar = {
       app.showToast?.(`Prompt is too long to send (maximum ${this._composerMaxLength.toLocaleString()} characters)`, 'error');
       return false;
     }
+    if (this._isCodexComposerSession(sessionId)) {
+      if (!this._syncCodexComposerDraft(sessionId, text)) return false;
+      setTimeout(() => app._sendInputAsync(sessionId, '\r', { useMux: true }), 120);
+      return true;
+    }
     app._sendInputAsync(sessionId, `${COMPOSER_PASTE_START}${pasteText}${COMPOSER_PASTE_END}`);
     setTimeout(() => app._sendInputAsync(sessionId, '\r', { useMux: true }), 120);
     return true;
@@ -1350,6 +1384,9 @@ const KeyboardAccessoryBar = {
 
   /** Forget a draft when its target session no longer exists. */
   discardComposerDraft(sessionId) {
+    const timer = this._codexComposerSyncTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    this._codexComposerSyncTimers.delete(sessionId);
     this._composerDrafts.delete(sessionId);
     this._composerUploads.delete(sessionId);
     this._syncComposerDraftIndicator();
@@ -1370,7 +1407,7 @@ const KeyboardAccessoryBar = {
     const sessionId = app.activeSessionId;
     const pending = this._takePendingLocalEcho(sessionId);
     const saved = this._composerDrafts.get(sessionId) || '';
-    const initial = saved + pending;
+    const initial = this._isCodexComposerSession(sessionId) ? pending || saved : saved + pending;
 
     this._composerOverlay?._closeComposer?.({ restoreFocus: false });
     const overlay = document.createElement('div');
@@ -1411,6 +1448,7 @@ const KeyboardAccessoryBar = {
     const focusTrap = new FocusTrap(overlay);
     textarea.value = initial;
     if (initial) this._composerDrafts.set(sessionId, initial);
+    if (this._isCodexComposerSession(sessionId)) this._syncCodexComposerDraft(sessionId, initial);
     this._syncComposerDraftIndicator();
     const initialUploads = this._composerUploads.get(sessionId) || 0;
     imageButton.disabled = initialUploads > 0;
@@ -1422,8 +1460,15 @@ const KeyboardAccessoryBar = {
       else this._composerDrafts.delete(sessionId);
       this._syncComposerDraftIndicator();
     };
-    const close = ({ focusTerminal = false, preserveDraft = true, restoreFocus = true } = {}) => {
+    const close = ({ focusTerminal = false, preserveDraft = true, restoreFocus = true, syncCodex = true } = {}) => {
       if (preserveDraft) saveDraft();
+      if (syncCodex && this._isCodexComposerSession(sessionId)) {
+        this._syncCodexComposerDraft(sessionId, textarea.value);
+      } else {
+        const timer = this._codexComposerSyncTimers.get(sessionId);
+        if (timer) clearTimeout(timer);
+        this._codexComposerSyncTimers.delete(sessionId);
+      }
       focusTrap.deactivate({ restoreFocus });
       overlay.remove();
       if (this._composerOverlay === overlay) this._composerOverlay = null;
@@ -1438,7 +1483,7 @@ const KeyboardAccessoryBar = {
       app._echoPassthroughSessions?.delete(sessionId);
       this._composerDrafts.delete(sessionId);
       this._syncComposerDraftIndicator();
-      close({ preserveDraft: false });
+      close({ preserveDraft: false, syncCodex: false });
     };
     const handleImages = async (files) => {
       const images = Array.from(files || []).filter((file) => file.type.startsWith('image/'));
@@ -1484,7 +1529,10 @@ const KeyboardAccessoryBar = {
       }
     };
 
-    textarea.addEventListener('input', saveDraft);
+    textarea.addEventListener('input', () => {
+      saveDraft();
+      this._scheduleCodexComposerSync(sessionId, textarea.value);
+    });
     textarea.addEventListener('paste', (event) => {
       const items = event.clipboardData?.items;
       if (!items) return;
