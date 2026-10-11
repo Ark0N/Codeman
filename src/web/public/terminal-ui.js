@@ -230,6 +230,10 @@
       }
     }
     const step = pageKeysForTravel(pending, lines, rows);
+    // A debt carries the sign opposite to its direction; once the travel reaches
+    // or crosses zero it is repaid, and what is left is plain travel (so the
+    // one-second debt lifetime no longer applies).
+    if (prepaid && step.pending * dir >= 0) prepaid = false;
     return { state: { pending: step.pending, lastAt: now, dir, prepaid, touchId }, keys: step.keys };
   }
 

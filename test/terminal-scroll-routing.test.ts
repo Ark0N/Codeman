@@ -557,6 +557,56 @@ describe('page-key gestures across slow touch drags, slow wheel ticks and jitter
     expect(p.keys()).toBe(UP + DOWN);
   });
 
+  it('ends the one-second debt lifetime once the debt is repaid, exactly or overpaid', () => {
+    // 38 rows: 19 a page. The opening -1 pre-pays and owes 18; 18 more lines at
+    // 32 ms repay it EXACTLY. Nothing is owed any more, so the 150 ms gap applies
+    // again and a -1 300 ms later is a new gesture that pages at once.
+    const exact = pane();
+    for (let i = 0; i < 19; i++) {
+      exact.app._maybePageCliTranscript({ shiftKey: false }, -1);
+      exact.advance(32);
+    }
+    expect(exact.keys()).toBe(UP);
+    expect(exact.app._pageKeyGesture).toMatchObject({ pending: 0, prepaid: false });
+    exact.advance(300 - 32);
+    exact.app._maybePageCliTranscript({ shiftKey: false }, -1);
+    expect(exact.keys()).toBe(UP + UP);
+
+    // Overpaid: 19 lines after the opening one leave 1 row of plain travel.
+    const over = pane();
+    for (let i = 0; i < 20; i++) {
+      over.app._maybePageCliTranscript({ shiftKey: false }, -1);
+      over.advance(32);
+    }
+    expect(over.keys()).toBe(UP);
+    expect(over.app._pageKeyGesture).toMatchObject({ pending: -1, prepaid: false });
+    over.advance(300 - 32);
+    over.app._maybePageCliTranscript({ shiftKey: false }, -1);
+    expect(over.keys()).toBe(UP + UP);
+
+    // One line short of repaid: still owed, so 300 ms later is the same gesture.
+    const owed = pane();
+    for (let i = 0; i < 18; i++) {
+      owed.app._maybePageCliTranscript({ shiftKey: false }, -1);
+      owed.advance(32);
+    }
+    expect(owed.app._pageKeyGesture).toMatchObject({ pending: 1, prepaid: true });
+    owed.advance(300 - 32);
+    owed.app._maybePageCliTranscript({ shiftKey: false }, -1);
+    expect(owed.keys()).toBe(UP);
+  });
+
+  it('keeps a touch contact one gesture after its debt is repaid', () => {
+    const p = pane();
+    for (let i = 0; i < 19; i++) {
+      p.app._maybePageCliTranscript({ shiftKey: false, touchId: 5 }, -1);
+      p.advance(32);
+    }
+    p.advance(2_000); // the finger rests, still down
+    p.app._maybePageCliTranscript({ shiftKey: false, touchId: 5 }, -1);
+    expect(p.keys()).toBe(UP); // accumulates; no fresh pre-pay inside the contact
+  });
+
   it('logs a wheel the dialog check consumed', () => {
     const p = pane();
     p.app.tabAlerts = new Map([['sess-1', 'action']]);
@@ -681,7 +731,7 @@ describe('the paging gates asked for another pane (a TerminalTile)', () => {
       [-1, {}],
       [-10, {}],
       [-30, {}],
-      [20, {}], // a reversal inside the gap pages by travel, not at once
+      [25, {}], // a reversal inside the gap pages by travel (net of the -5 plain travel left), not at once
       [-5, { ctrlKey: true }],
       [-5, { deltaX: 400, deltaY: -125 }],
       [-1000, {}],
