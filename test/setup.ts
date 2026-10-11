@@ -121,7 +121,9 @@ afterAll(async () => {
   if (originalPlaywrightBrowsersPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
   else process.env.PLAYWRIGHT_BROWSERS_PATH = originalPlaywrightBrowsersPath;
 
-  rmSync(testHome, { recursive: true, force: true });
+  // maxRetries: a straggling writer (a server persisting on shutdown) can recreate a file between
+  // rmSync's readdir and rmdir, which fails the whole file with ENOTEMPTY after every test passed.
+  rmSync(testHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 // afterAll never fires for a fully-skipped test file (no tests execute), which
