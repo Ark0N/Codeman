@@ -53,7 +53,9 @@ something other than the checked-out HEAD, or when the tree has uncommitted chan
 checks would read. Skip it once with `CODEMAN_SKIP_PREPUSH=1 git push`; a
 `pre-push` hook of your own is never overwritten.
 
-`npm test` runs the same suite CI runs, so a green run locally means a green run there. It
+`npm test` runs the same suite CI runs, so a green run locally means a green run there. A bare
+`npx vitest run` resolves the same isolated config (a root `vitest.config.ts`), so it never
+touches your real `~/.codeman`; it did before that file existed. `npm test` also
 leaves out three suites that cannot pass on an arbitrary machine, each with its own command:
 `npm run test:browser` (Playwright, Chromium and a live server), `npm run test:mobile` (the
 same plus environment-specific screenshot baselines) and `npm run test:perf` (wall-clock

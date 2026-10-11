@@ -331,7 +331,7 @@ npm run test:all       # literally everything; fails ~87 tests on a clean master
 
 ⚠️ **A file filter must match the runner.** `npm test -- test/mobile/keyboard.test.ts` matches nothing and exits GREEN having run zero tests, because the gate's config excludes that path — an excluded file needs its own runner (`npm run test:mobile -- <file>`, `npm run test:browser -- <file>`, `npm run test:perf -- <file>`). Vitest treats "no files matched a filter" as success, so read the file count, not just the colour.
 
-Raw `npx vitest` skips the config (and with it `setup.ts`); always use `npm test --` or pass `--config`.
+A raw `npx vitest` used to find no config, so `setup.ts` never ran and the suite wrote fixtures into the REAL `~/.codeman` (a `clis.json` with a test entry, `users.json`, `webhook.json`, `.env`, settings values: it looks exactly like "my settings were reset"). The root `vitest.config.ts` now re-exports `config/vitest.ci.config.ts`, so a bare run is isolated too, and `test/test-env-isolation.test.ts` pins that. Still prefer `npm test --`, and pass `--config config/vitest.config.ts` (or the browser/mobile/perf configs) deliberately for the suites the gate leaves out.
 
 **Config**: Vitest with `globals: true`, `fileParallelism: false`. Timeout 30s, teardown 60s. `config/vitest.config.ts` is the everything-config behind `test:all`; `config/vitest.ci.config.ts` is the gate and derives its excludes from `config/test-suites.ts`, which is also what `vitest.browser.config.ts` and `vitest.perf.config.ts` derive their includes from — so the exclusions and the runners cannot drift apart. Keep shared options in sync across them.
 
