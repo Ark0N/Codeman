@@ -996,6 +996,24 @@ const ANTIGRAVITY: CliEntry = {
     ...AGENTS_DIR_SKILL,
     altScreen: 'strip-mux-only',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // Measured on a live `agy` 1.3.3 pane (capture-pane every second through a prose turn
+    // and a shell-call turn, plus the raw PTY stream, 2026-10-11). A running turn animates
+    // `⣯  Generating...` (the label also reads `Working...` and `Loading...`) one row above
+    // the composer, and the footer's left end reads `esc to cancel`; at rest the footer
+    // reads `? for shortcuts` and nothing else on screen matches. A shell call replaces the
+    // composer with a `Run this command?` list, the spinner stops, and the pane goes
+    // silent, so it reads as idle (waiting on the user), like gemini.
+    // ⚠️ The frames are the 8-dot braille set (`⣯ ⡿ ⣻ ⣾ ⣷ ⣟ ⢿ ⣽`), none of which is in
+    // SPINNER_PATTERN's Claude set, and this entry used to declare nothing, so no frame
+    // ever marked an antigravity tab working and it never showed the activity spinner.
+    // The composer's `>` is no arming mark: the submitted prompt is echoed as `> <text>`
+    // too. The footer hint is drawn only at rest, and the turn's last repaint carries it.
+    // The schema caps a glyph at 8 characters, so this is the head of `? for shortcuts`. It also
+    // keeps the submit verifier inert (no row starts with it and holds prompt text).
+    workDetect: {
+      promptGlyph: '? for sh',
+      workingLine: String.raw`[⠀-⣿]  [A-Z][A-Za-z ]{2,30}(?:\.\.\.|…)`,
+    },
     // Like codex: an ABSENT config already defaults safe (no bypass flag), so only a
     // SENT config needs the flag forced off — nothing is materialized.
     privilegedParams: [{ param: 'dangerouslySkipPermissions', clampTo: false }],
