@@ -5852,6 +5852,12 @@ Object.assign(CodemanApp.prototype, {
     if (mode && mode !== 'none') return false;
     const session = this.sessions?.get(target.sessionId || this.activeSessionId);
     const sessionMode = session?.mode || 'claude';
+    // GitHub Copilot CLI scrolls its own transcript on SGR wheel reports (checked with xterm
+    // encoding them natively). Its mouse DECSETs are stripped server-side so a drag selects
+    // locally (strip-mux-and-mouse), which also means xterm no longer encodes the wheel: send the
+    // same reports by hand, but only while the CLI is actually tracking the mouse. Not gated on a
+    // version; a stale-false flag falls through to the PageUp/PageDown fallback like claude's.
+    if (sessionMode === 'copilot') return session?.cliMouseTracking === true;
     if (sessionMode !== 'claude') return false;
     if (!this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
     // Only while Claude is actually listening for the mouse. In its default

@@ -1749,7 +1749,13 @@ const COPILOT: CliEntry = {
   },
   capabilities: {
     ...agentDefaults(),
-    altScreen: 'strip-mux-only',
+    // A full-screen TUI that turns mouse tracking on itself (measured on 1.0.94: alt screen,
+    // mouse reporting on). Kept, xterm reports a plain drag to the TUI instead of selecting, so
+    // Auto Copy and "mark text, copy on select" silently do nothing; stripped, a drag is a local
+    // selection and clicks still reach the CLI through the browser's hand-encoded tap
+    // (`cliMouseTracking`). Same shape and reason as opencode. The wheel keeps working because
+    // `_shouldForwardWheelToApp` forwards it as SGR reports while the CLI is tracking.
+    altScreen: 'strip-mux-and-mouse',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
     // The composer row is a `❯` between two rules, and the submitted prompt is echoed as
     // ` ❯ <text>  <time>` above it. While a turn runs the footer's left end reads

@@ -707,6 +707,29 @@ describe('pageKeysForGesture, the pure gesture rules both panes share', () => {
   });
 });
 
+describe('GitHub Copilot wheel forwarding', () => {
+  // Copilot's mouse DECSETs are stripped so a drag selects locally, which stops xterm from
+  // encoding the wheel for it; the gate must therefore forward by hand, but only while tracking.
+  it('forwards the wheel while the CLI tracks the mouse, with no version gate', () => {
+    const { app } = hollowApp({ mode: 'copilot', cliMouseTracking: true });
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
+  });
+
+  it('keeps Shift+wheel on local scrollback and falls back to paging when not tracking', () => {
+    const tracking = hollowApp({ mode: 'copilot', cliMouseTracking: true });
+    expect(tracking.app._shouldForwardWheelToApp({ shiftKey: true })).toBe(false);
+    const idle = hollowApp({ mode: 'copilot', cliMouseTracking: false });
+    expect(idle.app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+  });
+
+  it('does not change what other non-claude modes do', () => {
+    for (const mode of ['codex', 'opencode', 'grok', 'gemini']) {
+      const { app } = hollowApp({ mode, cliMouseTracking: true });
+      expect(app._shouldForwardWheelToApp({ shiftKey: false }), mode).toBe(false);
+    }
+  });
+});
+
 describe('the paging gates asked for another pane (a TerminalTile)', () => {
   it('exports the paging math, and the primary pane runs on it', () => {
     const { app, sent, windowRef } = hollowApp();
