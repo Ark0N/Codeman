@@ -121,9 +121,20 @@ afterAll(async () => {
   if (originalPlaywrightBrowsersPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
   else process.env.PLAYWRIGHT_BROWSERS_PATH = originalPlaywrightBrowsersPath;
 
-  // maxRetries: a straggling writer (a server persisting on shutdown) can recreate a file between
-  // rmSync's readdir and rmdir, which fails the whole file with ENOTEMPTY after every test passed.
-  rmSync(testHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  // A straggling writer can recreate files between rmSync's readdir and rmdir and fail the whole file
+  // with ENOTEMPTY after every test has passed. The usual culprit is a real agent CLI on a developer
+  // machine (the `claude` a test's code path probes or spawns) flushing its own `~/.claude.json` and
+  // `~/.claude/backups/` into the temp HOME a moment after the test ends; CI has no such CLI. Keep
+  // removing until it goes quiet, and if it never does, leave the temp dir to the `exit` backstop
+  // below: a leaked temp folder must not fail a test file that passed.
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      rmSync(testHome, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      break;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
 });
 
 // afterAll never fires for a fully-skipped test file (no tests execute), which
