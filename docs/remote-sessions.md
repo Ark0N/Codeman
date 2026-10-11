@@ -266,8 +266,8 @@ command itself (a remote tmux session that is gone) affects that session only.
 How much history exists is the remote tmux's own `history-limit`, which the
 launch command does not set (tmux's default is 2000 lines).
 
-The same round trip also reads the remote SCREEN, right after the history,
-because two seams would otherwise drop rows at the join:
+The same round trip also reads the remote SCREEN, in the same tmux command list
+as the history, because two seams would otherwise drop rows at the join:
 
 - **Rows that scroll during the round trip.** The local frame is captured only
   once the round trip is back, so rows that scrolled off the screen in between
@@ -289,11 +289,23 @@ with two of them non-blank, and the highest match wins. A placement too low
 would REPEAT the rows between it and the true one, so a shorter overlap (a lone
 `$` row that happens to match after a spinner row changed) is not trusted.
 When the frame cannot be placed (more output scrolled than the screen held, or
-nothing matches), the join is history over frame, as without the screen read. What is left: the history and screen captures are two
-tmux commands, so a row that scrolls between them (milliseconds apart, not the
-round trip) is in neither, and when the screen repeats a whole block of rows
-the frame can be placed at the higher copy, which leaves out the rows between
-the two copies.
+nothing matches), the join is history over frame, as without the screen read.
+What is left: when the screen repeats a whole block of rows, the frame can be
+placed at the higher copy, which leaves out the rows between the two copies.
+
+The history, the history size and the screen are ONE tmux command list
+(`capture-pane … \; display-message … \; capture-pane …`), not separate `tmux`
+runs. tmux runs a client's command list back to back without reading pane
+output in between, so the screen begins exactly where the history ends. As
+separate runs the shell kept writing between them and the rows that scrolled in
+those milliseconds were in neither capture (measured with output streaming: 1-2
+rows per load on a LAN host, every read on a local busy pane). This rests on how
+tmux's command queue behaves, not on a documented guarantee. A random marker row
+(`display-message`) separates the history from the size and the screen, since
+tmux output cannot carry the NUL markers around it. The remote `tail -c` bound
+applies to that whole output, history first, and is the configured byte cap
+plus 1 MiB for the marker, size and screen, so a cut lands in the history; the
+route trims what it returns to the cap itself.
 
 ## File access over SSH
 

@@ -19,7 +19,9 @@ import {
   buildRemoteScrollbackScript,
   dropPartialFirstRow,
   fetchRemoteScrollback,
+  newScrollbackMarker,
   parseRemoteScrollbackOutput,
+  remoteTailBytes,
   resetRemoteScrollbackBackoff,
 } from '../src/remote-pane-history.js';
 import {
@@ -55,9 +57,11 @@ describe('remoteTmuxLocation', () => {
   });
 });
 
+const MARKER = 'codeman-history-0123456789abcdef';
+
 describe('buildRemoteScrollbackCommand', () => {
   it('goes through the shared ssh options and reads the history rows, then the screen', () => {
-    const command = buildRemoteScrollbackCommand(remote, SESSION_ID, 10000, 2048);
+    const command = buildRemoteScrollbackCommand(remote, SESSION_ID, 10000, 2048, MARKER);
     expect(command.startsWith('exec ssh -o BatchMode=yes')).toBe(true);
     expect(command).toContain('-p 2222');
     expect(command).toContain('tim@proxx.lan');
@@ -66,13 +70,31 @@ describe('buildRemoteScrollbackCommand', () => {
     expect(command).toContain('codeman-ssh-663e3eae');
     expect(command).toContain('capture-pane -p -e -J -S -10000 -E -1');
     expect(command).toContain('#{history_size}');
+    expect(command).toContain(MARKER);
     expect(command).toContain('| tail -c 2048');
-    // The screen capture comes after the history and is not under the byte bound.
     expect(command.indexOf('-E -1')).toBeLessThan(command.lastIndexOf('capture-pane -p -e -J -t'));
   });
 
   it('a byte cap of 0 (unbounded) runs no tail', () => {
-    expect(buildRemoteScrollbackCommand(remote, SESSION_ID, 10000, 0)).not.toContain('tail -c');
+    expect(buildRemoteScrollbackCommand(remote, SESSION_ID, 10000, 0, MARKER)).not.toContain('tail -c');
+  });
+});
+
+describe('remoteTailBytes', () => {
+  it('adds room for the marker, size and screen to the cap, so a cut lands in the history', () => {
+    expect(remoteTailBytes(2048)).toBe(2048 + 1024 * 1024);
+  });
+
+  it('keeps 0 (unbounded) unbounded', () => {
+    expect(remoteTailBytes(0)).toBe(0);
+  });
+});
+
+describe('newScrollbackMarker', () => {
+  it('is a fresh marker of a fixed shape on every read', () => {
+    const a = newScrollbackMarker();
+    expect(a).toMatch(/^codeman-history-[0-9a-f]{16}$/);
+    expect(newScrollbackMarker()).not.toBe(a);
   });
 });
 
@@ -86,9 +108,15 @@ describe('dropPartialFirstRow', () => {
 });
 
 describe('parseRemoteScrollbackOutput', () => {
+  const read = (tmuxOutput: string) => `\x00${tmuxOutput}\x00`;
+
   it('drops anything printed before the script (login banner, rc-file echo)', () => {
     expect(
-      parseRemoteScrollbackOutput('Welcome to proxx\n\x0042\n\x00line a\nline b\n\x00screen 1\nscreen 2\n')
+      parseRemoteScrollbackOutput(
+        `Welcome to proxx\n${read(`line a\nline b\n${MARKER}\n42\nscreen 1\nscreen 2\n`)}`,
+        MARKER,
+        0
+      )
     ).toEqual({
       scrollback: 'line a\nline b\n',
       screen: 'screen 1\nscreen 2\n',
@@ -96,19 +124,48 @@ describe('parseRemoteScrollbackOutput', () => {
   });
 
   it('an empty history is empty, not the first visible row tmux clamps -E -1 to', () => {
-    expect(parseRemoteScrollbackOutput('\x000\n\x00$ the prompt row\n\x00$ the prompt row\n')).toEqual({
+    expect(parseRemoteScrollbackOutput(read(`$ the prompt row\n${MARKER}\n0\n$ the prompt row\n`), MARKER, 0)).toEqual({
       scrollback: '',
       screen: '$ the prompt row\n',
     });
   });
 
-  it('rejects output that is not the script’s', () => {
-    expect(parseRemoteScrollbackOutput('')).toBeNull();
-    expect(parseRemoteScrollbackOutput('no markers at all')).toBeNull();
-    expect(parseRemoteScrollbackOutput('\x0042\n')).toBeNull();
-    // The screen marker is missing: the script stopped after the history.
-    expect(parseRemoteScrollbackOutput('\x0042\n\x00rows\n')).toBeNull();
-    expect(parseRemoteScrollbackOutput('\x00not a number\n\x00rows\x00screen')).toBeNull();
+  it('a history the byte cap cut loses its partial first row, and the screen is kept whole', () => {
+    const output = `ow 1\nrow 2\n${MARKER}\n7\nscreen\n`;
+    expect(parseRemoteScrollbackOutput(read(output), MARKER, Buffer.byteLength(output))).toEqual({
+      scrollback: 'row 2\n',
+      screen: 'screen\n',
+    });
+  });
+
+  it('a cut that landed exactly on the marker row keeps it', () => {
+    const output = `${MARKER}\n3\nscreen\n`;
+    expect(parseRemoteScrollbackOutput(read(output), MARKER, Buffer.byteLength(output))).toEqual({
+      scrollback: '',
+      screen: 'screen\n',
+    });
+  });
+
+  it('finds the marker only as a whole row', () => {
+    const output = `echo ${MARKER}\n${MARKER}\n2\nscreen\n`;
+    expect(parseRemoteScrollbackOutput(read(output), MARKER, 0)).toEqual({
+      scrollback: `echo ${MARKER}\n`,
+      screen: 'screen\n',
+    });
+  });
+
+  it('rejects output that is not the script’s, or tmux output with nothing usable', () => {
+    expect(parseRemoteScrollbackOutput('', MARKER, 0)).toBeNull();
+    expect(parseRemoteScrollbackOutput('no markers at all', MARKER, 0)).toBeNull();
+    // The closing NUL is missing: the connection dropped mid-read.
+    expect(parseRemoteScrollbackOutput(`\x00rows\n${MARKER}\n2\nscreen\n`, MARKER, 0)).toBeNull();
+    // Both NULs, nothing between: tmux found no such session.
+    expect(parseRemoteScrollbackOutput('\x00\x00', MARKER, 0)).toBeNull();
+    // Another read's marker.
+    expect(
+      parseRemoteScrollbackOutput(read('rows\ncodeman-history-ffffffffffffffff\n2\nscreen\n'), MARKER, 0)
+    ).toBeNull();
+    expect(parseRemoteScrollbackOutput(read(`rows\n${MARKER}\nnot a number\nscreen\n`), MARKER, 0)).toBeNull();
   });
 });
 
@@ -119,19 +176,27 @@ describe('the remote script under a real shell', () => {
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), 'remote-scrollback-'));
     callsFile = join(dir, 'calls');
-    // Stub tmux: logs its argv (one per line), answers display-message with a
-    // history size and capture-pane with two rows.
+    // Stub tmux: logs its argv (one per line) and runs a `;`-separated command
+    // list in order, as tmux does: the history size, the marker it was given,
+    // two history rows, one screen row.
     writeFileSync(
       join(dir, 'tmux'),
       [
         '#!/bin/sh',
         `for a in "$@"; do printf '%s\\n' "$a"; done >> '${callsFile}'`,
         `printf -- '--\\n' >> '${callsFile}'`,
-        'case " $* " in',
-        '  *" display-message "*) echo 2 ;;',
-        '  *" -E -1 "*) printf "older row\\nnewer row\\n" ;;',
-        '  *" capture-pane "*) printf "screen row\\n" ;;',
-        'esac',
+        'run() {',
+        '  case " $1 " in',
+        '    *" #{history_size} "*) echo 2 ;;',
+        `    *" display-message "*) printf '%s\\n' "$2" ;;`,
+        '    *" -E -1 "*) printf "older row\\nnewer row\\n" ;;',
+        '    *" capture-pane "*) printf "screen row\\n" ;;',
+        '  esac',
+        '}',
+        "cmd=''; last=''",
+        `for a in "$@" ';'; do`,
+        `  if [ "$a" = ';' ]; then run "$cmd" "$last"; cmd=''; else cmd="$cmd $a"; last="$a"; fi`,
+        'done',
       ].join('\n')
     );
     chmodSync(join(dir, 'tmux'), 0o755);
@@ -141,21 +206,47 @@ describe('the remote script under a real shell', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('prints the markers and rows the parser expects, with the target as one argument', () => {
-    const script = buildRemoteScrollbackScript('codeman', "codeman-it's", 500, 10);
+  it('prints the markers and rows the parser expects, from ONE tmux command list', () => {
+    // A bound that keeps "row\nnewer row\n" of the history: the cut lands in
+    // "older row", which the parser then drops.
+    const bound = Buffer.byteLength(`row\nnewer row\n${MARKER}\n2\nscreen row\n`);
+    const script = buildRemoteScrollbackScript('codeman', "codeman-it's", 500, bound, MARKER);
     const stdout = execFileSync('/bin/sh', ['-c', script], {
       encoding: 'utf-8',
       env: { ...process.env, PATH: `${dir}:${process.env.PATH ?? ''}` },
     });
-    // `tail -c 10` kept the newest history bytes only: "newer row\n"; the
-    // screen after it is not under that bound.
-    expect(parseRemoteScrollbackOutput(stdout)).toEqual({ scrollback: 'newer row\n', screen: 'screen row\n' });
+    expect(parseRemoteScrollbackOutput(stdout, MARKER, bound)).toEqual({
+      scrollback: 'newer row\n',
+      screen: 'screen row\n',
+    });
     const calls = execFileSync('cat', [callsFile], { encoding: 'utf-8' }).split('--\n').filter(Boolean);
-    expect(calls).toHaveLength(3);
+    // One tmux run: separate runs would let the pane scroll between the reads.
+    expect(calls).toHaveLength(1);
     // One argv entry per line: the exact-match target with a quote in it arrived whole.
-    expect(calls[0].split('\n').join('|')).toBe("-L|codeman|display-message|-p|-t|=codeman-it's:|#{history_size}|");
-    expect(calls[1].split('\n').join('|')).toBe("-L|codeman|capture-pane|-p|-e|-J|-S|-500|-E|-1|-t|=codeman-it's:|");
-    expect(calls[2].split('\n').join('|')).toBe("-L|codeman|capture-pane|-p|-e|-J|-t|=codeman-it's:|");
+    expect(calls[0].split('\n').join('|')).toBe(
+      [
+        "-L|codeman|capture-pane|-p|-e|-J|-S|-500|-E|-1|-t|=codeman-it's:",
+        `display-message|-p|-t|=codeman-it's:|${MARKER}`,
+        "display-message|-p|-t|=codeman-it's:|#{history_size}",
+        "capture-pane|-p|-e|-J|-t|=codeman-it's:|",
+      ].join('|;|')
+    );
+  });
+
+  it('prints both NULs when tmux fails, so a missing session reads as the script having run', () => {
+    const failing = mkdtempSync(join(tmpdir(), 'remote-scrollback-fail-'));
+    try {
+      writeFileSync(join(failing, 'tmux'), '#!/bin/sh\necho "can\'t find session" >&2\nexit 1\n');
+      chmodSync(join(failing, 'tmux'), 0o755);
+      const stdout = execFileSync('/bin/sh', ['-c', buildRemoteScrollbackScript('codeman', 'gone', 500, 0, MARKER)], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env: { ...process.env, PATH: `${failing}:${process.env.PATH ?? ''}` },
+      });
+      expect(stdout).toBe('\x00\x00');
+    } finally {
+      rmSync(failing, { recursive: true, force: true });
+    }
   });
 });
 
@@ -253,7 +344,10 @@ describe('joinScrollbackAndFrame with the remote screen', () => {
 });
 
 describe('fetchRemoteScrollback', () => {
-  const OK = '\x002\n\x00older row\nnewer row\n\x00screen row\n';
+  /** The marker a read put in its command line. */
+  const markerIn = (command: string) => /codeman-history-[0-9a-f]{16}/.exec(command)?.[0] ?? 'no-marker';
+  /** A successful read's stdout, answering with the marker the command carries. */
+  const OK = async (command: string) => `\x00older row\nnewer row\n${markerIn(command)}\n2\nscreen row\n\x00`;
   const READ = { scrollback: 'older row\nnewer row\n', screen: 'screen row\n' };
   /** An exec-shaped rejection: `code` is the exit status, `killed` a timeout kill. */
   const execError = (fields: { code?: number | string; killed?: boolean }) =>
@@ -274,12 +368,15 @@ describe('fetchRemoteScrollback', () => {
   });
 
   it('returns the remote rows, running the built command with the round-trip bounds', async () => {
-    const run = vi.fn(async () => OK);
+    const run = vi.fn(OK);
     expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, run)).toEqual(READ);
-    expect(run).toHaveBeenCalledWith(buildRemoteScrollbackCommand(remote, SESSION_ID, 100, 1024), {
+    const marker = markerIn(run.mock.calls[0][0]);
+    const tailBytes = 1024 + 1024 * 1024;
+    expect(run).toHaveBeenCalledWith(buildRemoteScrollbackCommand(remote, SESSION_ID, 100, tailBytes, marker), {
       timeout: 5000,
-      // The byte cap covers the history; the slack covers the screen after it.
-      maxBuffer: 1024 + 1024 * 1024,
+      // The tail bound covers the whole tmux output; the slack covers the NULs
+      // and anything printed before the script.
+      maxBuffer: tailBytes + 64 * 1024,
     });
   });
 
@@ -294,7 +391,7 @@ describe('fetchRemoteScrollback', () => {
       resetRemoteScrollbackBackoff();
       expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, vi.fn(failure))).toBeNull();
       // Another session on the same host is skipped without a round trip.
-      const next = vi.fn(async () => OK);
+      const next = vi.fn(OK);
       expect(await fetchRemoteScrollback(remote, 'other-session', 100, 1024, next)).toBeNull();
       expect(next).not.toHaveBeenCalled();
     }
@@ -303,19 +400,19 @@ describe('fetchRemoteScrollback', () => {
   it('a remote command failure (tmux exit 1: the session is gone) is that session only, no back-off', async () => {
     const gone = vi.fn(async () => Promise.reject(execError({ code: 1 })));
     expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, gone)).toBeNull();
-    const next = vi.fn(async () => OK);
+    const next = vi.fn(OK);
     expect(await fetchRemoteScrollback(remote, 'other-session', 100, 1024, next)).toEqual(READ);
     expect(next).toHaveBeenCalledOnce();
   });
 
-  // Found live against a real host: the `| tail -c` pipe takes tail's exit
-  // status, so a missing session comes back as exit 0 with both markers and
+  // Found live against a real host: a missing session comes back as exit 0
+  // (the script's closing `printf` hides tmux's status) with both NULs and
   // nothing between them. The script ran on the host; only this session is
   // gone, so the host must not be backed off.
-  it('a missing session hidden behind the tail pipe (exit 0, empty markers) is that session only', async () => {
+  it('a missing session hidden behind the closing printf (exit 0, empty NULs) is that session only', async () => {
     const masked = vi.fn(async () => '\x00\x00');
     expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, masked)).toBeNull();
-    const next = vi.fn(async () => OK);
+    const next = vi.fn(OK);
     expect(await fetchRemoteScrollback(remote, 'other-session', 100, 1024, next)).toEqual(READ);
     expect(next).toHaveBeenCalledOnce();
   });
@@ -323,7 +420,7 @@ describe('fetchRemoteScrollback', () => {
   it('the back-off ends after 30 s', async () => {
     vi.useFakeTimers();
     await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, async () => Promise.reject(execError({ code: 255 })));
-    const next = vi.fn(async () => OK);
+    const next = vi.fn(OK);
     vi.advanceTimersByTime(29_999);
     expect(await fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, next)).toBeNull();
     vi.advanceTimersByTime(1);
@@ -342,7 +439,7 @@ describe('fetchRemoteScrollback', () => {
     const holders = gates.map((gate) => runWithRemoteSshLimit(() => gate.promise));
     await Promise.resolve();
 
-    const run = vi.fn(async () => OK);
+    const run = vi.fn(OK);
     const pending = fetchRemoteScrollback(remote, SESSION_ID, 100, 1024, run);
     await vi.advanceTimersByTimeAsync(1499);
     expect(getQueuedRemoteSshCount()).toBe(1);
