@@ -8,6 +8,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
+import { MAX_ROUTE_PARAM_LENGTH } from '../../src/web/route-helpers.js';
 
 export interface RouteTestHarness {
   app: FastifyInstance;
@@ -30,7 +31,7 @@ export async function createRouteTestHarness(
   registerFn: (app: FastifyInstance, ctx: any) => void,
   ctxOptions?: { sessionId?: string; authUser?: { username: string; role: 'admin' | 'user' } }
 ): Promise<RouteTestHarness> {
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, routerOptions: { maxParamLength: MAX_ROUTE_PARAM_LENGTH } });
 
   // Register cookie plugin — some routes access req.cookies
   await app.register(fastifyCookie);

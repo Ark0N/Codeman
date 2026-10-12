@@ -10,7 +10,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Readable } from 'node:stream';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import fs from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -225,6 +235,91 @@ describe('folder grid routes — local folder', () => {
     expect(res.statusCode).toBe(403);
   });
 
+  // The attachment gate (`registerExternalAttachment`) judges the file a symlink
+  // RESOLVES to: its extension must be a supported one and it must be a regular
+  // file. The folder routes only looked at the requested name, so a name that
+  // passed (`shot.png`) could serve anything it pointed at.
+  describe('the resolved target is held to the attachment gate', () => {
+    const files = (folderId: string, name: string, leaf: 'raw' | 'preview' | 'thumbnail' = 'raw') =>
+      harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${sessionId}/folders/${folderId}/files/${encodeURIComponent(name)}/${leaf}`,
+      });
+
+    it('refuses a supported-looking name whose target has an unsupported extension', async () => {
+      writeFileSync(join(root, 'secret.bin'), 'secret');
+      symlinkSync(join(root, 'secret.bin'), join(dir, 'shot.png'));
+      const { folderId } = JSON.parse((await grant(dir)).body).data;
+      for (const leaf of ['raw', 'preview', 'thumbnail'] as const) {
+        const res = await files(folderId, 'shot.png', leaf);
+        expect(res.statusCode, leaf).toBe(400);
+        expect(res.body, leaf).not.toContain('secret');
+      }
+    });
+
+    it('refuses a name whose target has no extension at all', async () => {
+      writeFileSync(join(root, 'history'), 'private history');
+      symlinkSync(join(root, 'history'), join(dir, 'notes.txt'));
+      const { folderId } = JSON.parse((await grant(dir)).body).data;
+      const res = await files(folderId, 'notes.txt');
+      expect(res.statusCode).toBe(400);
+      expect(res.body).not.toContain('private history');
+    });
+
+    it('refuses a device node behind a supported name', async () => {
+      // /dev/null, not /dev/zero: the same class (character device, no
+      // extension), but it ends the stream instead of filling the test's memory
+      // should the guard ever be missing.
+      symlinkSync('/dev/null', join(dir, 'zero.txt'));
+      const { folderId } = JSON.parse((await grant(dir)).body).data;
+      const res = await files(folderId, 'zero.txt');
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('refuses a FIFO without opening it', async () => {
+      const fifo = join(dir, 'pipe.txt');
+      execFileSync('mkfifo', [fifo]);
+      // Hold both ends open from here: if the route ever did open it, the open
+      // returns at once and the read blocks, which the race below reports as a
+      // hang instead of leaving a libuv worker parked on a writer that never comes.
+      const fd = openSync(fifo, 'r+');
+      try {
+        const { folderId } = JSON.parse((await grant(dir)).body).data;
+        const outcome = await Promise.race([
+          files(folderId, 'pipe.txt').then((res) => res.statusCode),
+          new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 2000)),
+        ]);
+        expect(outcome).toBe(400);
+      } finally {
+        closeSync(fd);
+      }
+    });
+
+    it('still serves a symlink whose target is a supported regular file', async () => {
+      writeFileSync(join(root, 'real.png'), 'real-png');
+      symlinkSync(join(root, 'real.png'), join(dir, 'alias.png'));
+      const { folderId } = JSON.parse((await grant(dir)).body).data;
+      const res = await files(folderId, 'alias.png');
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe('real-png');
+    });
+  });
+
+  it('serves a file whose name is longer than the 100-character default of a route parameter', async () => {
+    // The listing shows it (names go up to 255), so the raw/preview/thumbnail
+    // routes have to be able to take it back.
+    const longName = `${'n'.repeat(146)}.png`;
+    expect(longName.length).toBe(150);
+    touch(join(dir, longName), 'long-png', 1_700_000_300);
+    const { folderId } = JSON.parse((await grant(dir)).body).data;
+    const res = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${folderId}/files/${longName}/raw`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('long-png');
+  });
+
   it('404s an unknown folder id and another session’s grant', async () => {
     const res = await harness.app.inject({
       method: 'GET',
@@ -314,6 +409,41 @@ describe('folder grid routes — remote (SSH) case', () => {
     expect(thumb.statusCode).toBe(400);
   });
 
+  describe('the resolved remote target is held to the attachment gate', () => {
+    async function rawOf(name: string) {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/folders`,
+        payload: { path: '~/styleframes' },
+      });
+      const { folderId } = JSON.parse(res.body).data;
+      return harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${sessionId}/folders/${folderId}/files/${name}/raw`,
+      });
+    }
+
+    it('refuses a name whose remote symlink resolves to an unsupported extension', async () => {
+      mockedProbePaths.mockResolvedValue([
+        { realPath: '/mnt/raid/secret.bin', kind: 'file', size: 6, mtimeMs: 1000 },
+        { realPath: REMOTE_DIR, kind: 'directory', size: 0, mtimeMs: 0 },
+      ]);
+      const res = await rawOf('a.png');
+      expect(res.statusCode).toBe(400);
+      expect(mockedCreateReadStream).not.toHaveBeenCalled();
+    });
+
+    it('refuses a name that resolves to something that is not a regular file', async () => {
+      mockedProbePaths.mockResolvedValue([
+        { realPath: '/mnt/raid/styleframes/a.png', kind: 'other', size: 0, mtimeMs: 0 },
+        { realPath: REMOTE_DIR, kind: 'directory', size: 0, mtimeMs: 0 },
+      ]);
+      const res = await rawOf('a.png');
+      expect(res.statusCode).toBe(400);
+      expect(mockedCreateReadStream).not.toHaveBeenCalled();
+    });
+  });
+
   it('answers 400 "Not a folder" for a remote file, so the client falls back to the preview', async () => {
     mockedListFolder.mockResolvedValue('not-a-folder');
     const res = await harness.app.inject({
@@ -387,6 +517,20 @@ describe('validFolderFileName', () => {
     expect(validFolderFileName('a b.png')).toBe('a b.png');
     for (const bad of ['', '.', '..', '.hidden.png', 'a/b.png', 'a\\b.png', 'x.xyz', 'a\0.png', 42]) {
       expect(validFolderFileName(bad)).toBeNull();
+    }
+  });
+});
+
+describe('server wiring', () => {
+  // The route harness builds its own Fastify instance, so a test through it
+  // cannot notice the real server losing the option. Same style as the other
+  // wiring guards: read the source, not a comment.
+  it('gives the real server the same route-parameter limit the folder routes are tested with', () => {
+    const source = readFileSync(join(__dirname, '../../src/web/server.ts'), 'utf-8');
+    const instances = source.match(/Fastify\(\{[^}]*\}[^)]*\)/g) ?? [];
+    expect(instances.length).toBeGreaterThanOrEqual(2);
+    for (const instance of instances) {
+      expect(instance).toContain('maxParamLength: MAX_ROUTE_PARAM_LENGTH');
     }
   });
 });

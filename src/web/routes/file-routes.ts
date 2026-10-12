@@ -2469,6 +2469,24 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     };
     const servable = await resolveServableAttachmentPath(reply, record, scope);
     if (!servable) return null;
+    // The requested NAME only opens the door; registration judges the file a
+    // symlink resolves to (supported extension, regular file) and so does this.
+    // Without it `shot.png -> ../secret.bin` is served, and a FIFO or a device
+    // behind a supported name parks a worker on an open that never returns.
+    if (!isSupportedAttachmentExtension(extname(servable.path))) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Unsupported attachment type'));
+      return null;
+    }
+    const isRegularFile = scope.remote
+      ? servable.probe?.kind === 'file'
+      : await fs.stat(servable.path).then(
+          (stat) => stat.isFile(),
+          () => false
+        );
+    if (!isRegularFile) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Attachment path is not a file'));
+      return null;
+    }
     if (!folderAllowedForUser(servable.path, getAuthUser(req), scope)) {
       reply.code(403).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'File is outside your space'));
       return null;
