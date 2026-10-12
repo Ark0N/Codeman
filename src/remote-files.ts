@@ -307,7 +307,7 @@ export function buildRemoteFolderListCommand(dir: string, extensions: readonly s
   const patterns = [...new Set(extensions.map((ext) => ext.toLowerCase()))]
     .map((ext) => `*.${ext.replace(/[a-z]/g, (c) => `[${c}${c.toUpperCase()}]`)}`)
     .join('|');
-  return [
+  const script = [
     `d=${shellescape(dir)}`,
     "case $d in '~/'*) d=$HOME/${d#??} ;; esac",
     "printf '\\0'",
@@ -327,6 +327,12 @@ export function buildRemoteFolderListCommand(dir: string, extensions: readonly s
     '  printf \'f|%s|%s|%s\\0\' "${sm% *}" "${sm#* }" "$b"',
     'done',
   ].join('\n');
+  // ⚠️ sshd runs the command in the remote user's LOGIN shell, rc aliases included.
+  // On Hufflepuff `cd` is an alias that echoes the new directory (`$(cd -P "$d" &&
+  // pwd -P)` came back as two lines, then zsh aborted on the glob: "no matches found:
+  // /x\n/x/*"), so no folder listing worked over ssh. An explicit `sh` reads no rc
+  // file — the same wrapper the transcript read uses.
+  return `sh -c ${shellescape(script)}`;
 }
 
 /**

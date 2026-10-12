@@ -542,6 +542,26 @@ describe('remote folder listing script (real sh)', () => {
     expect(byName['sub dir']).toMatchObject({ kind: 'directory' });
   });
 
+  it('is not thrown off by a login shell whose `cd` prints the directory (Hufflepuff: alias cd=folderprompt)', () => {
+    // sshd hands the command to the remote user's LOGIN shell. There `cd` is an
+    // alias that echoes the new directory, so `r=$(cd -P "$d" && pwd -P)` captured
+    // the path twice and the listing failed ("zsh: no matches found: /x\n/x/*").
+    // The script has to run under an explicit `sh`, which reads no rc file.
+    const dir = join(root, 'frames');
+    mkdirSync(dir);
+    touch(join(dir, 'a.png'), 'x', 1_700_000_000);
+    const stdout = execFileSync(
+      'bash',
+      ['-c', `cd() { builtin cd "$@" && pwd; }; ${buildRemoteFolderListCommand(dir, ['png'], 100)}`],
+      { encoding: 'utf8', env: { ...process.env, HOME: root } }
+    );
+    const listing = parseRemoteFolderListOutput(stdout);
+    expect(listing).not.toBeNull();
+    expect(listing).not.toBe('not-a-folder');
+    expect((listing as { dir: string }).dir).toBe(dir);
+    expect((listing as { entries: { name: string }[] }).entries.map((e) => e.name)).toEqual(['a.png']);
+  });
+
   it('caps entries; tells a missing folder (null) from a file', () => {
     for (let i = 0; i < 5; i++) touch(join(root, `f${i}.png`), 'x', 1_700_000_000);
     const capped = run(root, 3);
