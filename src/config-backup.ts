@@ -154,6 +154,42 @@ export function resolveConfigBackupDir(settings: ConfigBackupSettings, dataDir: 
 
 const sha256 = (data: Buffer | string): string => createHash('sha256').update(data).digest('hex');
 
+/**
+ * Keys a tracked file rewrites on its own schedule, with no change to anything the user set, so
+ * they must not make a snapshot look different. `custom-model-hosts.json` carries a
+ * `lastDiscoveredAt` per host that the model-discovery poll refreshes every 5 minutes: before this,
+ * the change check never matched and the snapshot folder filled with copies that differed by one
+ * timestamp, evicting every older snapshot within about 100 minutes at the default keep count.
+ * The snapshot itself still stores the file exactly as it was, and restore still verifies against
+ * the file's own digest; only the "has anything changed?" comparison looks through these keys.
+ */
+const VOLATILE_KEYS: Readonly<Record<string, readonly string[]>> = {
+  'custom-model-hosts.json': ['lastDiscoveredAt'],
+};
+
+function withoutKeys(value: unknown, drop: ReadonlySet<string>): unknown {
+  if (Array.isArray(value)) return value.map((v) => withoutKeys(v, drop));
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (!drop.has(k)) out[k] = withoutKeys(v, drop);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** Digest used only to decide whether two states are the same: the file's own, minus its volatile keys. */
+function changeDigest(name: string, data: Buffer, rawSha: string): string {
+  const volatile = VOLATILE_KEYS[name];
+  if (!volatile) return rawSha;
+  try {
+    return sha256(JSON.stringify(withoutKeys(JSON.parse(data.toString('utf8')), new Set(volatile))));
+  } catch {
+    return rawSha; // not JSON (or unreadable as such): compare the bytes, as for any other file
+  }
+}
+
 function stamp(now: number): string {
   const d = new Date(now);
   const p = (n: number, w = 2) => String(n).padStart(w, '0');
@@ -216,20 +252,21 @@ export interface CreateConfigBackupOptions {
 /** Snapshot the tracked files that exist, unless the latest snapshot already holds exactly this state. */
 export function createConfigBackup(opts: CreateConfigBackupOptions): ConfigBackupResult {
   const now = opts.now ?? Date.now();
-  const present: Array<{ name: string; data: Buffer; sha: string }> = [];
+  const present: Array<{ name: string; data: Buffer; sha: string; change: string }> = [];
   for (const name of CONFIG_BACKUP_FILES) {
     try {
       const path = join(opts.dataDir, name);
       if (!statSync(path).isFile()) continue;
       const data = readFileSync(path);
-      present.push({ name, data, sha: sha256(data) });
+      const sha = sha256(data);
+      present.push({ name, data, sha, change: changeDigest(name, data, sha) });
     } catch {
       /* absent or unreadable: simply not part of this snapshot */
     }
   }
   if (present.length === 0) return { status: 'empty' };
 
-  const hash = sha256(present.map((f) => `${f.name}\0${f.sha}`).join('\n'));
+  const hash = sha256(present.map((f) => `${f.name}\0${f.change}`).join('\n'));
   const existing = listConfigBackups(opts.backupDir);
   if (!opts.force && existing[0]) {
     const latest = readManifest(opts.backupDir, existing[0].id);

@@ -124,6 +124,35 @@ describe('createConfigBackup', () => {
     expect(listConfigBackups(backups)).toHaveLength(2);
   });
 
+  it('does not count a self-refreshed discovery timestamp as a change', () => {
+    const hosts = (stamp: string, model = 'm1') =>
+      JSON.stringify({ hosts: [{ id: 'h', models: [{ id: model }], lastDiscoveredAt: stamp }] });
+    put('custom-model-hosts.json', hosts('2026-10-12T08:44:22.026Z'));
+    const first = createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 });
+
+    // The 5-minute discovery poll rewrites only the timestamp: still the same state.
+    put('custom-model-hosts.json', hosts('2026-10-12T08:49:22.025Z'));
+    const again = createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 + 1000 });
+    expect(again).toEqual({ status: 'unchanged', id: (first as { id: string }).id });
+    expect(listConfigBackups(backups)).toHaveLength(1);
+
+    // A real edit next to a refreshed timestamp is still a change, stored exactly as written.
+    const edited = hosts('2026-10-12T08:54:22.025Z', 'm2');
+    put('custom-model-hosts.json', edited);
+    const third = createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 + 2000 });
+    expect(third.status).toBe('created');
+    expect(readFileSync(join(backups, (third as { id: string }).id, 'custom-model-hosts.json'), 'utf8')).toBe(edited);
+  });
+
+  it('compares a tracked file that is not valid JSON by its bytes', () => {
+    put('custom-model-hosts.json', 'not json lastDiscoveredAt 1');
+    createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 });
+    put('custom-model-hosts.json', 'not json lastDiscoveredAt 2');
+    expect(createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 + 1000 }).status).toBe(
+      'created'
+    );
+  });
+
   it('force makes a snapshot even when unchanged, and two in one second get distinct ids', () => {
     put('settings.json', '{}');
     createConfigBackup({ dataDir: data, backupDir: backups, reason: 'a', now: T0 });

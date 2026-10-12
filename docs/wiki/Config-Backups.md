@@ -37,6 +37,10 @@ cron jobs.
 - **Whenever the content changes.** The files are read and hashed every five minutes; a new
   backup is written only if the set differs from the latest backup. An idle server writes
   nothing, and the history is one entry per real change rather than one per timer tick.
+  A field a file refreshes by itself is not a change: `custom-model-hosts.json` carries a
+  `lastDiscoveredAt` per host that the model-discovery poll rewrites every five minutes, and
+  the comparison looks through it (the snapshot still stores the file exactly as written).
+  Without that, every tick looked like an edit and 20 copies covered only about 100 minutes.
 - **On demand**, with **Back up now** (always writes one, even if nothing changed).
 - **Before a restore**, as a `pre-restore` safety copy of the files about to be replaced.
 
