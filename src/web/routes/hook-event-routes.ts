@@ -14,6 +14,7 @@ import { sanitizeHookData, parseBody } from '../route-helpers.js';
 import { persistDockerCaseClaudeSessionId } from '../../docker-hosts.js';
 import { getDataDir } from '../../config/instance.js';
 import { sessionWaits, hooksAvailableForMode, sessionHookOptions } from '../session-wait-registry.js';
+import { getCli } from '../../config/cli-registry/registry.js';
 import { approvalInbox, type ApprovalKind } from '../approval-inbox.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
 
@@ -200,6 +201,10 @@ export function registerHookEventRoutes(
           toolSummary: typeof toolSummary === 'string' ? toolSummary : undefined,
           message: typeof safeData.message === 'string' ? safeData.message : undefined,
           cwd: typeof safeData.cwd === 'string' ? safeData.cwd : undefined,
+          // Supervised-hook CLIs (DeepSeek Harness): dialog keystrokes are unverifiable,
+          // so the item is an alert — answer in the terminal. Capability-gated, not by
+          // mode id, so a future supervised CLI inherits the same shape.
+          answerInTerminal: getCli(session.mode)?.capabilities.hooks === 'supervised',
           // What the pane says is still running in the background. An idle prompt from a
           // session that is watching its own work opens acknowledged, so it never arms an
           // alert nobody can answer; notePrompt() carries the whole reasoning.
@@ -244,7 +249,9 @@ export function registerHookEventRoutes(
         sessionId,
         sessionName,
         ...safeData,
-        ...(approvalId && session?.mode !== 'deepseek' && { approvalId }),
+        // Supervised-hook CLIs answer in the terminal: omit approvalId so push
+        // cannot offer Approve/Deny that the answer route would refuse.
+        ...(approvalId && session && getCli(session.mode)?.capabilities.hooks !== 'supervised' && { approvalId }),
       });
     }
 

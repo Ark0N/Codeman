@@ -85,6 +85,13 @@ export interface ApprovalItem {
    * answer endpoint accepts; absent → only approve('1')/deny(Esc) are allowed.
    */
   options?: ApprovalOption[];
+  /**
+   * When true the dialog belongs to a third-party TUI whose keystrokes Codeman
+   * cannot verify (today: DeepSeek Harness / `hooks: 'supervised'`). The item
+   * is an ALERT only: the answer route refuses keystrokes, push omits Approve/
+   * Deny actions, and the UI offers "Open session" instead of answer buttons.
+   */
+  answerInTerminal?: boolean;
 }
 
 export interface ApprovalResolvedInfo {
@@ -108,6 +115,11 @@ interface NotePromptArgs {
    * opens ALREADY acknowledged: see `notePrompt()`.
    */
   watching?: string | null;
+  /**
+   * Alert-only item: answer in the terminal, not via Approve/Deny. See
+   * `ApprovalItem.answerInTerminal`.
+   */
+  answerInTerminal?: boolean;
   /** Returns the raw (ANSI-bearing) pane frame, or null when unavailable. */
   capture?: () => string | null;
 }
@@ -261,6 +273,7 @@ export class ApprovalInbox {
       toolSummary: args.toolSummary,
       message: args.message,
       cwd: args.cwd,
+      ...(args.answerInTerminal ? { answerInTerminal: true } : {}),
     };
     if (args.kind === 'idle' && args.watching) {
       item.acknowledgedAt = item.createdAt;

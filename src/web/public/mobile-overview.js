@@ -794,7 +794,7 @@ Object.assign(CodemanApp.prototype, {
       const wrap = document.createElement('div');
       wrap.className = 'mobile-overview-row-wrap';
       wrap.appendChild(item);
-      wrap.appendChild(this._buildMobileOverviewApprovalStrip(approval));
+      wrap.appendChild(this._buildMobileOverviewApprovalStrip(approval, row));
       return wrap;
     }
 
@@ -949,7 +949,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /** Compact answer buttons for a NEEDS YOU row: parsed options, else Approve/Deny. */
-  _buildMobileOverviewApprovalStrip(approval) {
+  _buildMobileOverviewApprovalStrip(approval, row) {
     const strip = document.createElement('div');
     strip.className = 'mobile-overview-approval-strip';
     strip.setAttribute('data-i18n-skip', '');
@@ -964,6 +964,15 @@ Object.assign(CodemanApp.prototype, {
       });
       strip.appendChild(btn);
     };
+    // Alert-only (DeepSeek Harness / supervised hooks): open the session instead
+    // of Approve/Deny that the answer route would refuse.
+    if (approval.answerInTerminal) {
+      addBtn('Answer in terminal', 'primary', () => {
+        if (typeof this.selectSession === 'function') this.selectSession(approval.sessionId);
+        else if (typeof this.openApprovalSession === 'function') this.openApprovalSession(approval.id);
+      });
+      return strip;
+    }
     if (approval.options && approval.options.length) {
       for (const o of approval.options) {
         const label = o.label.length > 24 ? o.label.slice(0, 24) + '…' : o.label;
