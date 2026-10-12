@@ -243,6 +243,9 @@
 
       this.fitAddon = new FitAddon.FitAddon();
       this.terminal.loadAddon(this.fitAddon);
+      // OSC 52 clipboard writes from this pane's PTY, gated on THIS pane's
+      // buffer load so a replay never re-copies (terminal-ui.js).
+      global.app?._installOsc52Clipboard?.(this.terminal, () => this._bufferLoading);
       this.terminal.open(this.mountEl);
       this.fitAddon.fit();
 

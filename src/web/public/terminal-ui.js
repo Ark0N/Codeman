@@ -612,6 +612,8 @@ Object.assign(CodemanApp.prototype, {
       }
     }
 
+    this._installOsc52Clipboard(this.terminal);
+
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
     this._initMobileImePreview();
@@ -4921,6 +4923,34 @@ Object.assign(CodemanApp.prototype, {
     const mode = this.sessions?.get(sessionId ?? this.activeSessionId)?.mode;
     const columns = mode ? byMode[mode] : 0;
     return Number.isInteger(columns) && columns > 0 ? columns : 0;
+  },
+
+  // OSC 52 (`ESC ] 52 ; <sel> ; <base64> BEL`) is how programs inside the PTY —
+  // Claude Code's /copy, tmux yanks with set-clipboard on, vim — set the
+  // clipboard. The server has no display, so this is the only route to the
+  // browser's clipboard. Writes only: a `?` query (clipboard read) is ignored,
+  // and so is anything arriving during a buffer replay, which would otherwise
+  // re-copy every old OSC 52 on each tab switch or reconnect. `isReplaying`
+  // lets a TerminalTile (split Pane B, tile grid) supply its own load flag.
+  _installOsc52Clipboard(terminal, isReplaying = () => this._isLoadingBuffer) {
+    terminal.parser?.registerOscHandler?.(52, (data) => {
+      const sep = data.indexOf(';');
+      const payload = sep >= 0 ? data.slice(sep + 1) : data;
+      if (!payload || payload === '?' || isReplaying()) return true;
+      let text;
+      try {
+        const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+        text = new TextDecoder().decode(bytes);
+      } catch {
+        return true;
+      }
+      if (!text) return true;
+      this._copyText(text).then((ok) => {
+        if (ok) this.showToast(`Copied to clipboard (${text.length} chars)`, 'success');
+        else this._showClipboardFallback?.(text);
+      });
+      return true;
+    });
   },
 
   // Copy the current terminal selection. Goes through _copyText (Clipboard API,
