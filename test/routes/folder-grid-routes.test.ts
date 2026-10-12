@@ -320,6 +320,46 @@ describe('folder grid routes — local folder', () => {
     expect(res.body).toBe('long-png');
   });
 
+  // A Docker case is a LOCAL session for the file routes, but its `~` is the
+  // container's home: a separate, seeded directory. `~/x.png` printed inside the
+  // container used to open the HOST's `~/x.png`.
+  describe('~/ in a Docker case', () => {
+    beforeEach(() => {
+      (harness.ctx._session as { docker?: unknown }).docker = {
+        hostId: 'local',
+        label: 'local',
+        engine: 'docker',
+        image: 'codeman-sandbox',
+        containerName: 'codeman-case-test',
+        hostWorkspacePath: root,
+        containerWorkdir: root,
+        network: 'bridge',
+      };
+    });
+
+    it('refuses a ~/ folder, and still lists an absolute one', async () => {
+      const home = await grant('~/renders');
+      expect(home.statusCode).toBe(400);
+      expect(JSON.parse(home.body).error).toMatch(/docker/i);
+      expect((await grant(dir)).statusCode).toBe(200);
+    });
+
+    it('refuses a ~/ attachment, and still registers an absolute one', async () => {
+      const post = (path: string) =>
+        harness.app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/attachments`, payload: { path } });
+      const home = await post('~/renders/old.png');
+      expect(home.statusCode).toBe(400);
+      expect(JSON.parse(home.body).error).toMatch(/docker/i);
+      expect((await post(join(dir, 'old.png'))).statusCode).toBe(200);
+    });
+  });
+
+  it('keeps resolving ~/ for a session that is not in a Docker case', async () => {
+    // The contrast: only the Docker case is turned away, `~/` itself still works.
+    const res = await grant('~/this-folder-does-not-exist-codeman-test');
+    expect(res.statusCode).toBe(404);
+  });
+
   it('404s an unknown folder id and another session’s grant', async () => {
     const res = await harness.app.inject({
       method: 'GET',

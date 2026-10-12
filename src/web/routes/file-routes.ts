@@ -564,7 +564,19 @@ function getKnownSessionWorkingDir(
 interface SessionFileScope {
   workingDir: string;
   remote?: SessionRemote;
+  /** The session runs inside a Docker case: a local session for these routes, but `~` is the container's. */
+  docker?: boolean;
 }
+
+/**
+ * A Docker case is a LOCAL session for the file routes (the workspace is a
+ * bind mount, so its paths are host paths), but `~` inside the container is the
+ * container's own seeded home, not this host's. Expanding `~/x.png` against the
+ * host's home would open a different file than the one the agent printed, so
+ * the form is refused instead of guessed.
+ */
+const DOCKER_HOME_PATH_ERROR =
+  'A ~/ path inside a Docker case is the container home, which this server cannot read; use the absolute path';
 
 /**
  * The file-access scope of a session, live or persisted — the `workingDir`-only
@@ -583,12 +595,12 @@ function getKnownSessionFileScope(
   const user = getAuthUser(req);
   const liveSession = ctx.sessions.get(sessionId);
   if (liveSession && canAccessOwned(user, liveSession.owner)) {
-    return { workingDir: liveSession.workingDir, remote: liveSession.remote };
+    return { workingDir: liveSession.workingDir, remote: liveSession.remote, docker: !!liveSession.docker };
   }
 
   const stored = ctx.store.getSession(sessionId);
   if (stored && canAccessOwned(user, (stored as { owner?: string }).owner)) {
-    return { workingDir: stored.workingDir, remote: stored.remote };
+    return { workingDir: stored.workingDir, remote: stored.remote, docker: !!stored.docker };
   }
 
   reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${sessionId} not found`));
@@ -2187,6 +2199,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing attachment path'));
       return;
     }
+    if (session.docker && body.path.startsWith('~/')) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, DOCKER_HOME_PATH_ERROR));
+      return;
+    }
 
     try {
       // A remote case registers a path that lives on the REMOTE host: the guard and
@@ -2386,6 +2402,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     const body = (req.body || {}) as { path?: unknown };
     if (!body.path || typeof body.path !== 'string') {
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing folder path'));
+      return;
+    }
+    if (scope.docker && body.path.startsWith('~/')) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, DOCKER_HOME_PATH_ERROR));
       return;
     }
     try {
