@@ -153,6 +153,49 @@ describe('terminalPathLine', () => {
     expect(terminalPathLine(buffer(['see /tmp/a/b.png', 'c/d.png']), 0, 80)).toMatchObject({ endRow: 0 });
     expect(terminalPathLine(buffer(['/home/joe/dir/', '/home/x.png']), 0, 80)).toMatchObject({ endRow: 0 });
   });
+
+  // `git ls-files`, `find` and `ls -R` print one path per row. An extensionless
+  // entry (a directory, `Dockerfile`, `.gitignore`) followed by an entry that is
+  // equal or shorter looked exactly like a path broken short of the edge, and the
+  // two were glued: `src/components` + `src/index.ts` linked `src/componentssrc/index.ts`
+  // and the real `src/index.ts` link was gone (Ark0N, PR #604, round 2).
+  describe('a listing is never glued into one path', () => {
+    const LISTING = [
+      'src/components',
+      'src/index.ts',
+      'src/lib',
+      './index.ts',
+      '../docs/README.md',
+      'packages/gesture-control/.gitignore',
+      'packages/gesture-control/README.md',
+      'packages/gesture-control/package.json',
+      'data/runs/a.jsonl',
+      'data/runs/b.jsonl',
+      'data/runs/c.jsonl',
+      'data/runs/d.json',
+    ];
+
+    it('keeps every row its own line', () => {
+      const buf = buffer(LISTING, 120);
+      LISTING.forEach((entry, row) => {
+        const line = terminalPathLine(buf, row, 120)!;
+        expect([line.startRow, line.endRow], entry).toEqual([row, row]);
+        expect(line.text, entry).toBe(entry);
+      });
+    });
+
+    it('links the entry that used to be swallowed', () => {
+      const buf = buffer(LISTING, 120);
+      expect(paths(terminalPathLine(buf, 1, 120)!.text)).toEqual(['src/index.ts']);
+    });
+
+    it('still glues a path whose next row opens on a different directory (a real wrap)', () => {
+      // The control: `…/captures/2` + `026-10-10/…` has a `/` in its head too.
+      const line = terminalPathLine(buffer(BROKEN), 0, 80)!;
+      expect([line.startRow, line.endRow]).toEqual([0, 1]);
+      expect(paths(line.text)).toEqual([BROKEN_PATH]);
+    });
+  });
 });
 
 type Link = {

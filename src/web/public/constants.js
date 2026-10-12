@@ -2217,6 +2217,10 @@ const FILE_LINK_ROOT_GROUP = /^\(\\\/\(\?:([^()]*)\)/.exec(FILE_PATH_LINK_PATTER
 const PATH_TOKEN_ENDS_WITH_EXTENSION = new RegExp(`\\.${FILE_LINK_EXTENSION_GROUP}$`);
 const PATH_TOKEN_HAS_EXTENSION = new RegExp(`\\.${FILE_LINK_EXTENSION_GROUP}\\b`);
 const PATH_TOKEN_STARTS_NEW_PATH = new RegExp(`^(?:~\\/|\\/(?:${FILE_LINK_ROOT_GROUP})\\/)`);
+/** A relative head that names its own location (`./a`, `../a`) is an entry of its own. */
+const PATH_TOKEN_STARTS_EXPLICIT_RELATIVE = /^\.{1,2}\//;
+/** First directory of a path, a leading `/` or `./` ignored: `src` for `src/a.ts` and `/src/a.ts`. */
+const pathFirstSegment = (path) => path.replace(/^(?:\.?\/)+/, '').split('/')[0];
 
 /**
  * Whether the line `nextText` carries on a file path `prevText` broke off.
@@ -2226,15 +2230,20 @@ const PATH_TOKEN_STARTS_NEW_PATH = new RegExp(`^(?:~\\/|\\/(?:${FILE_LINK_ROOT_G
  * spanning three or more lines; only worth keeping once a later line ends it),
  * and `null` otherwise. The broken-off token must already look like a path in
  * progress: it contains a `/`, ends on a path character and does not yet end
- * on an extension. A next line that opens a NEW rooted path (`/home/…`, `~/…`)
- * is never glued on.
+ * on an extension. A next line that opens a NEW path is never glued on: a rooted
+ * one (`/home/…`, `~/…`), `./…`/`../…`, or a relative one that opens on the same
+ * top directory the broken token did (the next entry of a listing).
  */
 function pathContinuation(prevText, nextText) {
   const tail = /[^\s"'<>|;&]+$/.exec(String(prevText || '').replace(/\s+$/, ''))?.[0] || '';
   if (!tail.includes('/') || !/[\w\-.~+@%/]$/.test(tail) || PATH_TOKEN_ENDS_WITH_EXTENSION.test(tail)) return null;
   const next = String(nextText || '').replace(/^\s+/, '');
   const head = /^[^\s"'<>|;&]+/.exec(next)?.[0] || '';
-  if (!head || PATH_TOKEN_STARTS_NEW_PATH.test(head)) return null;
+  if (!head || PATH_TOKEN_STARTS_NEW_PATH.test(head) || PATH_TOKEN_STARTS_EXPLICIT_RELATIVE.test(head)) return null;
+  // A listing (`git ls-files`, `find`, `ls -R`) puts one path per row, so `src/components`
+  // followed by `src/index.ts` is two entries, not one path broken after `src/components`.
+  // A wrapped path continues INSIDE a name: its next row does not open on the same top directory.
+  if (head.includes('/') && pathFirstSegment(head) === pathFirstSegment(tail)) return null;
   if (PATH_TOKEN_HAS_EXTENSION.test(head)) return 'join';
   return head === next.replace(/\s+$/, '') ? 'chain' : null;
 }
