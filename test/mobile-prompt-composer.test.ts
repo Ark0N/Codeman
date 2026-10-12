@@ -502,6 +502,19 @@ describe('mobile shell Paste', () => {
     expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '\x1b[200~ls\rpwd\x1b[201~');
   });
 
+  it('uploads a picked image to the shell it was opened for after a tab switch', () => {
+    const { app, document } = openShellPaste();
+    app.activeSessionId = 'session-2';
+    const fileInput = document.querySelector('.paste-overlay .paste-file-input') as HTMLInputElement;
+    const image = new document.defaultView!.File(['image'], 'shot.png', { type: 'image/png' });
+    Object.defineProperty(fileInput, 'files', { configurable: true, value: [image] });
+
+    fileInput.dispatchEvent(new document.defaultView!.Event('change', { bubbles: true }));
+
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([image], { sessionId: 'session-1' });
+    expect(document.querySelector('.paste-overlay')).toBeNull();
+  });
+
   it('sends nothing for an empty paste', () => {
     const { app, document, send, runTimers } = openShellPaste();
 

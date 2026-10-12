@@ -636,12 +636,13 @@ function applyOneShotCtrl(data) {
   return { data, consumed: true };
 }
 
-// The composer's Send goes out as ONE bracketed-paste frame on the WebSocket
-// input path, and ws-routes.ts drops a frame longer than MAX_INPUT_LENGTH
-// (config/terminal-limits.ts: 64 KiB, compared in UTF-16 code units) WITHOUT
-// an ACK, which would wedge the durable input queue. So the prompt budget is
-// that limit minus the two markers, derived here once so the refusal in
-// _sendComposedPrompt() and the toast that names the maximum cannot drift.
+// The composer's Send, and the shell Paste dialog's, goes out as ONE
+// bracketed-paste frame on the WebSocket input path, and ws-routes.ts drops a
+// frame longer than MAX_INPUT_LENGTH (config/terminal-limits.ts: 64 KiB,
+// compared in UTF-16 code units) WITHOUT an ACK, which would wedge the durable
+// input queue. So the budget is that limit minus the two markers, derived here
+// once so the refusal in _sendBracketedPaste() and the toast that names the
+// maximum cannot drift.
 const COMPOSER_INPUT_FRAME_LIMIT = 64 * 1024;
 const COMPOSER_PASTE_START = '\x1b[200~';
 const COMPOSER_PASTE_END = '\x1b[201~';
@@ -664,7 +665,7 @@ const KeyboardAccessoryBar = {
   _composerDrafts: new Map(),
   _composerUploads: new Map(),
   _composerOverlay: null,
-  // Longest prompt Send accepts: the input frame limit minus both markers.
+  // Longest prompt or shell paste Send accepts: the input frame limit minus both markers.
   _composerMaxLength: COMPOSER_INPUT_FRAME_LIMIT - COMPOSER_PASTE_START.length - COMPOSER_PASTE_END.length,
 
   /** HTML for simple mode: arrows, commands, Compose, Esc, dismiss */
@@ -1205,11 +1206,12 @@ const KeyboardAccessoryBar = {
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
   },
 
-  /** Deliver one complete prompt as an explicit bracketed paste. xterm loses
-   *  its DECSET 2004 mirror after terminal replay, even though the CLI still
-   *  expects bracketed input, so build the byte-identical sequence directly on
-   *  the durable session-bound path. Enter stays a separate delayed write
-   *  because Codex drops keys sharing a PTY read with a bracketed paste. */
+  /** Deliver one complete prompt as an explicit bracketed paste
+   *  (_sendBracketedPaste()), then Enter. xterm loses its DECSET 2004 mirror
+   *  after terminal replay, even though the CLI still expects bracketed input,
+   *  so the frame is built directly rather than through terminal.paste().
+   *  Enter stays a separate delayed write because Codex drops keys sharing a
+   *  PTY read with a bracketed paste. */
   _sendComposedPrompt(sessionId, text) {
     if (!this._sendBracketedPaste(sessionId, text, 'Prompt')) return false;
     setTimeout(() => app._sendInputAsync(sessionId, '\r', { useMux: true }), 120);
@@ -1444,7 +1446,9 @@ const KeyboardAccessoryBar = {
     // Only shell sessions reach this overlay (agent bars get Compose instead),
     // so the text lands at the prompt as one bracketed paste and is NOT run:
     // sent raw, every newline was an Enter and each line ran on its own as it
-    // arrived. The user reviews the block and presses Enter themselves.
+    // arrived. The user reviews the block and presses Enter themselves. A shell
+    // that never enabled bracketed paste (dash, bash before 5.1) gets the
+    // markers stripped by tmux, so there every line but the last still runs.
     const sendText = () => {
       const text = textarea.value;
       if (!text) {
@@ -1461,7 +1465,8 @@ const KeyboardAccessoryBar = {
       const images = Array.from(files || []).filter((f) => f.type.startsWith('image/'));
       if (images.length === 0) return false;
       close();
-      if (typeof app._uploadAndInsertImages === 'function') app._uploadAndInsertImages(images);
+      // Upload to, and insert into, the shell this overlay was opened for.
+      if (typeof app._uploadAndInsertImages === 'function') app._uploadAndInsertImages(images, { sessionId });
       return true;
     };
 
