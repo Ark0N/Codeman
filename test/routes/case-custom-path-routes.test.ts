@@ -24,12 +24,12 @@ import { basename, join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerCaseRoutes } from '../../src/web/routes/case-routes.js';
 import { dataPath } from '../../src/config/instance.js';
-import { safeRmHomeTree } from '../mocks/index.js';
+import { isSandboxedHome, safeRmHomeTree } from '../mocks/index.js';
 
 const LINKED = () => dataPath('linked-cases.json');
 const CASES_DIR = () => join(homedir(), 'codeman-cases');
 /** test/setup.ts's temp HOME (its prefix is pinned by test/test-env-isolation.test.ts). */
-const sandboxed = () => basename(homedir()).startsWith('codeman-vitest-');
+const sandboxed = () => isSandboxedHome();
 let workDir = '';
 const work = () => workDir;
 const linked = (): Record<string, string> => (existsSync(LINKED()) ? JSON.parse(readFileSync(LINKED(), 'utf8')) : {});
