@@ -3004,7 +3004,9 @@ Object.assign(CodemanApp.prototype, {
    */
   _onTileAdoptedElsewhere(sessionId) {
     const recent = this._lastTileDrag;
-    const dragging = this._tileTearOff?.id === sessionId;
+    // A header drag counts even without a tear-off (Detach Tiles off here): the
+    // other window can take the tile before this drag ends.
+    const dragging = this._tileTearOff?.id === sessionId || this._draggedTileId === sessionId;
     const pending = this._tileTearOffPending?.id === sessionId;
     const justEnded = recent?.id === sessionId && Date.now() - recent.at < TILE_ADOPT_WINDOW_MS;
     if (!dragging && !pending && !justEnded) return false;

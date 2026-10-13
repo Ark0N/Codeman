@@ -316,6 +316,16 @@ describe('another window docking the tile this one dragged', () => {
     expect(localStore.get('codeman:tile-grid')).toBe(docked);
   });
 
+  it('a claim that lands mid-drag lets the tile go, with no tear-off here (Detach Tiles off)', () => {
+    // The tile's id rides every header drag, so a window with Detach Tiles on can
+    // dock it while this one has the setting off; its claim can beat the dragend.
+    const app = openGrid(FOUR, { detach: false });
+    startDrag('s-b');
+    expect(app._tileTearOff ?? null).toBeNull();
+    app._onWindowMessage({ type: 'tile-adopted', id: 's-b', by: 'c-there' });
+    expect(app._tileGrid.ids).toEqual(['s-a', 's-c', 's-d']);
+  });
+
   it('a claim for a tile this window did not drag, or one it dragged long ago, is ignored', () => {
     const app = openGrid(FOUR);
     app._onWindowMessage({ type: 'tile-adopted', id: 's-b', by: 'c-there' });
