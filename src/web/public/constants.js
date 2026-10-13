@@ -1564,6 +1564,14 @@ function scheduleBackground(fn) {
 // but server-sent terminal buffers may still contain markers from Claude CLI.
 const DEC_SYNC_STRIP_RE = /\x1b\[\?2026[hl]/g;
 
+// OSC 52 clipboard writes stripping — a replay re-feeds the raw byte history, and
+// xterm parses it after chunkedTerminalWrite has already released the load
+// gate, so an OSC 52 left in would re-copy old text on every tab switch.
+const OSC52_STRIP_RE = /\x1b\]52;[^\x07\x1b]*(?:\x07|\x1b\\)/g;
+// The same OSC 52 text arriving again within this window is one copy delivered
+// several ways (direct, tmux load-buffer -w, tmux set-clipboard forwarding).
+const OSC52_DEDUPE_MS = 1000;
+
 // Built-in respawn configuration presets
 const BUILTIN_RESPAWN_PRESETS = [
   {
