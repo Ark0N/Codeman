@@ -302,6 +302,8 @@ All in `~/.codeman/`: `state.json` (sessions, settings, respawn, orchestrator, c
 
 **Generated top-level dirs** (all gitignored — don't edit or commit): `dist/` (esbuild output), `out/`, `coverage/`, `test-results/`, `tmp/`, `screenshots-echo-diag/`. The committed gesture bundle (`src/web/public/gesture/gesture-codeman.js`) IS tracked, but its runtime wasm/model assets (`src/web/public/gesture/wasm/`, `*.task`) are fetched and gitignored.
 
+**Videos and GIFs**: only GIFs a public page embeds are tracked (`docs/images/`), and `.gitignore` blocks `*.mp4`/`*.webm`/`*.mov`/`*.gif` everywhere else. Masters, promo cuts, drafts and captures live in the local, gitignored media library `pr/media/` (guide `pr/media/README.md`, generated `INVENTORY.md` via `node pr/media/inventory.mjs`); never leave a render in `tmp/` or `out/`. A GIF leaving `docs/images/` needs a hotlink check first (articles embed raw `master` URLs). → `docs/media-assets.md`
+
 ## Testing
 
 **`npm test` is the gate and is safe to run bare** — it runs `config/vitest.ci.config.ts`, exactly what CI runs, so local green means CI green.
