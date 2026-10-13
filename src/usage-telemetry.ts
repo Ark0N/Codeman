@@ -15,6 +15,13 @@
  * Only those two windows exist (no Opus-weekly field). `rate_limits` is absent
  * before the first API response and for non-subscriber auth — both yield null.
  *
+ * Since Claude Code v2.1.251 the same blob carries a `prompt_cache` object for the
+ * main conversation (`warm`, `ttl`, `expires_at`, `recache_tokens_if_cold`,
+ * `misses`, `last_miss_cause`, ...). `parsePromptCache` normalizes the subset
+ * Codeman reads, and the footer shows it as `cache:until HH:MM` while warm and
+ * `cache:cold` otherwise. Claude re-runs the statusline when `expires_at` passes,
+ * so the footer flips to cold on its own.
+ *
  * The Codex parser consumes the read-only `account/rateLimits/read` app-server
  * response and selects only the main `codex` bucket, excluding model-specific
  * buckets. All functions are pure for testability. See
@@ -22,6 +29,10 @@
  *
  * @module usage-telemetry
  */
+
+import type { PromptCacheStatus } from './types/index.js';
+
+export type { PromptCacheStatus };
 
 /** A single normalized plan-usage window. */
 export interface UsageWindow {
@@ -52,6 +63,24 @@ export interface RawStatuslinePayload {
   context_window?: { used_percentage?: number; total_input_tokens?: number; total_output_tokens?: number };
   cost?: { total_cost_usd?: number };
   model?: { display_name?: string };
+  /** Main-conversation prompt-cache statistics (Claude Code v2.1.251+); absent before the first API response. */
+  prompt_cache?: RawPromptCache | null;
+}
+
+/** Raw `prompt_cache` object as Claude emits it (the subset Codeman reads; every field null-tolerant). */
+export interface RawPromptCache {
+  warm?: boolean | null;
+  ttl?: string | null;
+  /** Epoch SECONDS when the cached prefix goes cold; null once the last response reported no cache tokens. */
+  expires_at?: number | null;
+  /** Null right after a compaction or tool-result clearing, until the next request records the rewritten size. */
+  recache_tokens_if_cold?: number | null;
+  misses?: number | null;
+  /** Cache rebuilds that followed a compaction or a clearing of old tool results (the compaction signal). */
+  expected_rebuilds?: number | null;
+  /** Cache read tokens as a fraction of all input tokens this session, 0-1; null while those counts are all zero. */
+  hit_ratio?: number | null;
+  last_miss_cause?: { causes?: unknown } | null;
 }
 
 interface RawCodexRateLimitWindow {
@@ -107,6 +136,43 @@ export function parseStatusTelemetry(data: RawStatuslinePayload | undefined): St
   return t;
 }
 
+/**
+ * Normalize the statusline's `prompt_cache` object. Null when the payload has none
+ * (pre-first-response, or a Claude Code older than v2.1.251) or when `warm` is not
+ * a boolean, so the caller can treat the cache state as unknown rather than cold.
+ */
+export function parsePromptCache(data: RawStatuslinePayload | undefined): PromptCacheStatus | null {
+  const pc = data?.prompt_cache;
+  if (!pc || typeof pc.warm !== 'boolean') return null;
+  const s: PromptCacheStatus = { warm: pc.warm };
+  if (pc.ttl === '5m' || pc.ttl === '1h') s.ttl = pc.ttl;
+  if (typeof pc.expires_at === 'number' && Number.isFinite(pc.expires_at) && pc.expires_at > 0) {
+    // Validate the CONVERTED ms, not just the seconds: a huge seconds value overflows to
+    // Infinity or lands outside the Date range after *1000, which renders "cache:until
+    // NaN:NaN". 8.64e15 is the max absolute epoch ms a Date can represent.
+    const ms = Math.round(pc.expires_at * 1000);
+    if (Number.isFinite(ms) && Math.abs(ms) <= 8.64e15) s.expiresAt = ms;
+  }
+  if (typeof pc.recache_tokens_if_cold === 'number' && Number.isFinite(pc.recache_tokens_if_cold)) {
+    s.recacheTokensIfCold = Math.max(0, Math.round(pc.recache_tokens_if_cold));
+  }
+  if (typeof pc.misses === 'number' && Number.isFinite(pc.misses)) {
+    s.misses = Math.max(0, Math.round(pc.misses));
+  }
+  if (typeof pc.expected_rebuilds === 'number' && Number.isFinite(pc.expected_rebuilds)) {
+    s.expectedRebuilds = Math.max(0, Math.round(pc.expected_rebuilds));
+  }
+  if (typeof pc.hit_ratio === 'number' && Number.isFinite(pc.hit_ratio)) {
+    s.hitRatio = Math.min(1, Math.max(0, pc.hit_ratio));
+  }
+  const causes = pc.last_miss_cause?.causes;
+  if (Array.isArray(causes)) {
+    const names = causes.filter((c): c is string => typeof c === 'string' && c.length > 0).map((c) => c.slice(0, 60));
+    if (names.length) s.lastMissCauses = names;
+  }
+  return s;
+}
+
 /** Normalize the main Codex app-server bucket into the chip's two known windows. */
 export function parseCodexRateLimitsResponse(value: unknown): StatusTelemetry | null {
   if (!value || typeof value !== 'object') return null;
@@ -140,6 +206,8 @@ export interface SessionStatus {
   inputTokens?: number;
   outputTokens?: number;
   contextUsedPercentage?: number;
+  /** Prompt-cache state of the main conversation, when the statusline reports it. */
+  cache?: PromptCacheStatus;
 }
 
 /** Group a non-negative integer with thousands separators: 562411 → "562,411". */
@@ -166,19 +234,34 @@ export function parseSessionStatus(data: RawStatuslinePayload | undefined): Sess
   if (typeof cw?.used_percentage === 'number') {
     s.contextUsedPercentage = clampPct(cw.used_percentage);
   }
+  const cache = parsePromptCache(data);
+  if (cache) s.cache = cache;
   return Object.keys(s).length ? s : null;
 }
 
 /**
- * Format the in-terminal statusline footer: the CURRENT SESSION's status —
- * `Opus 4.8 (1M context)  in:562,411 out:1,188  ctx:56%` — NOT the plan limits,
- * which live in the Codeman header chip. Claude requires a statusLine command to
- * emit the rate_limits JSON at all, so this is what that command prints back
- * when it has no statusline of the user's own to wrap. With nothing to show it
- * returns '' rather than a brand word: a bare `codeman` on the statusline is
- * the symptom discussion #405 opened with.
+ * `cache:until 19:00` (server-local clock) while the prefix is warm, `cache:cold`
+ * once Claude reports it cold or the render happened past `expires_at`. A clock
+ * time rather than a countdown because the footer only re-renders on statusline
+ * triggers, so a countdown would sit stale on screen between turns.
  */
-export function formatSessionStatusText(s: SessionStatus | null): string {
+function formatCacheGroup(c: PromptCacheStatus, now: number): string {
+  if (!c.warm || c.expiresAt == null || c.expiresAt <= now) return 'cache:cold';
+  const d = new Date(c.expiresAt);
+  return `cache:until ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/**
+ * Format the in-terminal statusline footer: the CURRENT SESSION's status —
+ * `Opus 4.8 (1M context)  in:562,411 out:1,188  ctx:56%  cache:until 19:00` — NOT
+ * the plan limits, which live in the Codeman header chip. Claude requires a
+ * statusLine command to emit the rate_limits JSON at all, so this is what that
+ * command prints back when it has no statusline of the user's own to wrap. With
+ * nothing to show it returns '' rather than a brand word: a bare `codeman` on the
+ * statusline is the symptom discussion #405 opened with. `now` is injectable so
+ * the cache group is testable.
+ */
+export function formatSessionStatusText(s: SessionStatus | null, now: number = Date.now()): string {
   if (!s) return '';
   const groups: string[] = [];
   if (s.modelDisplayName) groups.push(s.modelDisplayName);
@@ -187,6 +270,7 @@ export function formatSessionStatusText(s: SessionStatus | null): string {
   if (s.outputTokens != null) tok.push(`out:${withCommas(s.outputTokens)}`);
   if (tok.length) groups.push(tok.join(' '));
   if (s.contextUsedPercentage != null) groups.push(`ctx:${Math.round(clampPct(s.contextUsedPercentage))}%`);
+  if (s.cache) groups.push(formatCacheGroup(s.cache, now));
   return groups.length ? groups.join('  ') : '';
 }
 
