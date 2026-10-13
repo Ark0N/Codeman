@@ -327,7 +327,8 @@ Object.assign(CodemanApp.prototype, {
     const settings = this.loadAppSettingsFromStorage();
     const actions = [
       { label: 'Session options', run: () => this.openSessionOptions(sessionId) },
-      // Group placement (vertical rail with a tab layout only; [] elsewhere).
+      // Focus and group placement (vertical rail with a tab layout only; [] elsewhere).
+      ...(this._tabRefFocusActions?.({ kind: 'session', id: sessionId }) || []),
       ...(this._tabRefMoveActions?.({ kind: 'session', id: sessionId }) || []),
       ...((this.tabDetachButtonEnabled?.(settings) ?? settings.showTabDetachButton) ||
       this.detachedSessions?.has(sessionId)
