@@ -2579,6 +2579,13 @@ Object.assign(CodemanApp.prototype, {
     _pathEl.textContent = session.workingDir || '';
     _pathEl.title = session.workingDir || '';
     document.getElementById('modalSessionPathCopy').disabled = !session.workingDir;
+    // A remote session's workingDir is the REMOTE path; a docker session's is the
+    // host bind-mount source the container sees.
+    document.getElementById('modalSessionPathDesc').textContent = session.remote
+      ? "Where this session's CLI runs, on the remote host it reaches over SSH, not on this machine."
+      : session.docker
+        ? "On the machine hosting Codeman, mounted into the Docker container this session's CLI runs in."
+        : "Where this session's CLI runs, on the machine hosting Codeman.";
 
     // Initialize color picker with current session color
     const currentColor = session.color || 'default';
