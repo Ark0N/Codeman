@@ -64,6 +64,17 @@ describe('html-view routes', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  it('validates the body', async () => {
+    const post = (payload: unknown) =>
+      harness.app.inject({ method: 'POST', url: `/api/sessions/${sid}/html-view`, payload: payload as object });
+    for (const payload of [{}, { path: '' }, { path: 42 }, { path: 'a\nb.html' }, { path: 'index.html', extra: 1 }]) {
+      const res = await post(payload);
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+      expect(JSON.parse(res.body).success).toBe(false);
+    }
+    expect(JSON.parse((await post({})).body).error).toBe('Missing path parameter');
+  });
+
   it('refuses non-HTML files and missing files', async () => {
     expect((await open(join(workspace, 'data.json'))).statusCode).toBe(400);
     expect((await open(join(workspace, 'missing.html'))).statusCode).toBe(404);

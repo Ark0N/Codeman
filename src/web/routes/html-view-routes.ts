@@ -32,7 +32,8 @@ import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from '
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { isBlockedAttachmentPath, isUnderTree, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
 import { HTML_VIEW_PREFIX, htmlViewCapabilities } from '../../html-view-capabilities.js';
-import { CASES_DIR, findSessionOrFail, ownerFor, validateSessionFilePath } from '../route-helpers.js';
+import { CASES_DIR, findSessionOrFail, ownerFor, parseBody, validateSessionFilePath } from '../route-helpers.js';
+import { HtmlViewOpenSchema } from '../schemas.js';
 import { getUserSpacesDir } from '../../config/multiuser.js';
 import { exceedsDownloadLimit } from '../../config/buffer-limits.js';
 import type { SessionPort } from '../ports/index.js';
@@ -133,12 +134,7 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
   app.post('/api/sessions/:id/html-view', async (req, reply) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id, req);
-    const body = (req.body || {}) as { path?: string };
-
-    if (!body.path || typeof body.path !== 'string') {
-      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter'));
-      return;
-    }
+    const body = parseBody(HtmlViewOpenSchema, req.body ?? {});
     if (session.remote) {
       reply
         .code(400)

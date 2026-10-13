@@ -128,6 +128,24 @@ export const FileWriteSchema = z
   .strict();
 
 /**
+ * Body validation for `POST /api/sessions/:id/html-view` (render a local HTML file
+ * as a sandboxed page). `path` is absolute or relative to the session workspace;
+ * the extension, containment, guard and broad-root checks are the route's
+ * (html-view-routes.ts), after parsing.
+ */
+export const HtmlViewOpenSchema = z
+  .object({
+    path: z
+      .string({ error: 'Missing path parameter' })
+      .min(1, 'Missing path parameter')
+      .max(4096)
+      .refine((p) => !p.includes('\0') && !p.includes('\n') && !p.includes('\r'), {
+        message: 'Invalid path',
+      }),
+  })
+  .strict();
+
+/**
  * The run-mode ids the API currently accepts: every ENABLED registry entry.
  *
  * Exported so anything needing the authoritative list derives it from here rather than
