@@ -40,7 +40,7 @@
 import { promises as fs } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { parse as parseToml, TomlError } from 'smol-toml';
 import type { McpConfigFormat } from './config/cli-registry/types.js';
 import type { McpSyncResult, McpSyncTargetResult } from './types/mcp-sync.js';
@@ -66,6 +66,8 @@ export interface McpSyncTarget {
   label: string;
   /** Home-relative default location of the config file. */
   path: string;
+  /** Home-relative fallback file read when `path` is absent (never written). */
+  altPath?: string;
   format: McpFormat;
   /** The env var the CLI reads to move the file, and the path under it (`mcpConfig.relocation`). */
   relocation?: { envVar: string; path: string };
@@ -197,11 +199,12 @@ function toClaude(s: McpServer): Record<string, unknown> {
 function fromGemini(raw: unknown): McpServer | null {
   if (!isRecord(raw)) return null;
   // `httpUrl` is the legacy streamable-http key; `url` + `type` is what `gemini mcp add` writes
-  // today, and a bare `url` with no type is the legacy SSE form.
+  // today. A bare `url` with no type used to be the legacy SSE form, but gemini-cli v0.63.0 tries
+  // it as streamable HTTP first (and logs `httpUrl` as deprecated), so map it to 'http'.
   if (typeof raw.httpUrl === 'string')
     return clean({ transport: 'http', url: raw.httpUrl, headers: strMap(raw.headers) });
   if (typeof raw.url === 'string') {
-    return clean({ transport: raw.type === 'http' ? 'http' : 'sse', url: raw.url, headers: strMap(raw.headers) });
+    return clean({ transport: raw.type === 'sse' ? 'sse' : 'http', url: raw.url, headers: strMap(raw.headers) });
   }
   if (typeof raw.command === 'string') {
     return clean({
@@ -255,7 +258,7 @@ function toAntigravity(s: McpServer): Record<string, unknown> | null {
 
 function fromOpencode(raw: unknown): McpServer | null {
   if (!isRecord(raw)) return null;
-  const disabled = raw.enabled === false;
+  const disabled = raw.enabled === false || raw.disabled === true;
   if (raw.type === 'remote' && typeof raw.url === 'string') {
     return clean({ transport: 'http', url: raw.url, headers: strMap(raw.headers), disabled });
   }
@@ -311,6 +314,8 @@ function toCopilot(s: McpServer): Record<string, unknown> {
 interface JsonDialect {
   /** Key holding the server table. */
   key: string;
+  /** Servers also read from under `key.nestedKey` (OpenCode V2 nests them under `mcp.servers`). */
+  nestedKey?: string;
   from(raw: unknown): McpServer | null;
   to(s: McpServer): Record<string, unknown> | null;
   /** Top-level keys to seed when creating the file from nothing. */
@@ -334,6 +339,7 @@ const JSON_DIALECTS: Record<Exclude<McpFormat, 'codex-toml'>, JsonDialect> = {
   },
   'opencode-json': {
     key: 'mcp',
+    nestedKey: 'servers',
     from: fromOpencode,
     to: toOpencode,
     seed: { $schema: 'https://opencode.ai/config.json' },
@@ -405,7 +411,17 @@ function mcpTable(format: McpFormat, text: string | null): Record<string, unknow
   const table = doc[dialect.key];
   if (table === undefined) return dict<unknown>();
   if (!isRecord(table)) throw new McpConfigError(`"${dialect.key}" is not an object`);
-  return table;
+  if (!dialect.nestedKey) return table;
+  const nested = table[dialect.nestedKey];
+  if (nested === undefined) return table;
+  if (!isRecord(nested)) throw new McpConfigError(`"${dialect.key}.${dialect.nestedKey}" is not an object`);
+  // Merge the nested (V2) table with the direct (V1) one. V1 entries win on a name collision so
+  // the write path — which appends to `doc[key]` and leaves the nested table in place — reads back
+  // identically.
+  const merged = dict<unknown>();
+  for (const k of safeKeys(nested)) merged[k] = nested[k];
+  for (const k of safeKeys(table)) if (k !== dialect.nestedKey) merged[k] = table[k];
+  return merged;
 }
 
 /** Parse a config file's text (null = file absent). Throws if it cannot be read safely. */
@@ -594,6 +610,29 @@ function resolveFile(
 }
 
 /**
+ * The alternate config file for a target (`McpSyncTarget.altPath`), honouring the same relocation
+ * as the primary file: the alt lives in the same directory, so the relocated path is the primary's
+ * directory plus the alt filename. Like the primary, it is only ever read, never written.
+ */
+function resolveAltFile(
+  t: McpSyncTarget,
+  altPath: string,
+  home: string,
+  env: Record<string, string | undefined>
+): { file: string; skip?: string } {
+  const rel = t.relocation;
+  const dir = rel ? env[rel.envVar] : undefined;
+  if (!rel || dir === undefined || dir === '') return { file: join(home, altPath) };
+  if (!isAbsolute(dir)) {
+    return {
+      file: `$${rel.envVar}/…`,
+      skip: `${rel.envVar} is set to a relative path, so the alt file cannot be located safely`,
+    };
+  }
+  return { file: join(dir, dirname(rel.path), basename(altPath)) };
+}
+
+/**
  * Mark the servers a CLI keeps switched off in a companion file (`JsonDialect.disabledIn`) as
  * disabled, so they are not copied. If that file cannot be read as intended the target is
  * reported unreadable rather than guessing: a guess could switch a server on everywhere.
@@ -667,6 +706,15 @@ async function run(targets: McpSyncTarget[], opts: McpSyncOptions, unsupported: 
   for (const s of state) {
     if (s.res.status !== 'ok') continue;
     try {
+      // A config kept under an alternate name (OpenCode's opencode.jsonc) is read when the primary
+      // file is absent, so its servers are synced rather than silently treated as "not installed".
+      if (s.t.altPath && !(await exists(s.file))) {
+        const alt = resolveAltFile(s.t, s.t.altPath, home, env);
+        if (!alt.skip && (await exists(alt.file))) {
+          s.file = alt.file;
+          s.res.file = alt.file;
+        }
+      }
       if (!s.t.installed && !(await exists(s.file))) {
         s.res.status = 'absent';
         continue;
