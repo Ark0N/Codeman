@@ -147,6 +147,36 @@ describe('dialect parsing', () => {
     expect(o.direct).toEqual({ transport: 'http', url: 'https://direct' });
   });
 
+  it('reads `mcp.servers` as a V1 server named "servers" when it carries a V1 type, as OpenCode does', () => {
+    const o = parseServers(
+      'opencode-json',
+      JSON.stringify({
+        mcp: { servers: { type: 'local', command: ['npx', 'srv'] }, other: { type: 'remote', url: 'https://o' } },
+      })
+    );
+    expect(Object.keys(o).sort()).toEqual(['other', 'servers']);
+    expect(o.servers).toEqual({ transport: 'stdio', command: 'npx', args: ['srv'] });
+  });
+
+  it('writes a server named "servers" into OpenCode, and it reads back as one', () => {
+    const out = addServers('opencode-json', JSON.stringify({ mcp: {} }), {
+      servers: { transport: 'stdio', command: 'npx', args: ['srv'] },
+      fs: { transport: 'stdio', command: 'npx', args: ['fs'] },
+    });
+    const back = parseServers('opencode-json', out);
+    expect(Object.keys(back).sort()).toEqual(['fs', 'servers']);
+  });
+
+  it('lets the native V2 entry win a name collision, like OpenCode', () => {
+    const o = parseServers(
+      'opencode-json',
+      JSON.stringify({
+        mcp: { dup: { type: 'remote', url: 'https://v1' }, servers: { dup: { type: 'remote', url: 'https://v2' } } },
+      })
+    );
+    expect(o.dup).toEqual({ transport: 'http', url: 'https://v2' });
+  });
+
   it('throws on unparseable files so they are never written', () => {
     expect(() => parseServers('opencode-json', '{ // jsonc\n}')).toThrow();
     expect(() => parseServers('codex-toml', '[mcp_servers.a]\ncommand="x"\n[mcp_servers.a]\ncommand="y"\n')).toThrow();

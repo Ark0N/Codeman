@@ -413,14 +413,14 @@ function mcpTable(format: McpFormat, text: string | null): Record<string, unknow
   if (!isRecord(table)) throw new McpConfigError(`"${dialect.key}" is not an object`);
   if (!dialect.nestedKey) return table;
   const nested = table[dialect.nestedKey];
-  if (nested === undefined) return table;
+  // OpenCode reads `mcp.servers` as a V1 server named "servers" when it carries a V1 `type`.
+  if (nested === undefined || (isRecord(nested) && (nested.type === 'local' || nested.type === 'remote'))) return table;
   if (!isRecord(nested)) throw new McpConfigError(`"${dialect.key}.${dialect.nestedKey}" is not an object`);
-  // Merge the nested (V2) table with the direct (V1) one. V1 entries win on a name collision so
-  // the write path — which appends to `doc[key]` and leaves the nested table in place — reads back
-  // identically.
+  // Merge the direct (V1) table with the nested (V2) one. Like OpenCode, the native V2 entry wins a
+  // name collision; sync never writes a name already defined, so this does not affect the read-back.
   const merged = dict<unknown>();
-  for (const k of safeKeys(nested)) merged[k] = nested[k];
   for (const k of safeKeys(table)) if (k !== dialect.nestedKey) merged[k] = table[k];
+  for (const k of safeKeys(nested)) merged[k] = nested[k];
   return merged;
 }
 
