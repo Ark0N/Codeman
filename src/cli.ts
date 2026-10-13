@@ -29,6 +29,7 @@ import {
 import type { AgentSkillDir } from './config/cli-registry/types.js';
 import { getCli, listClis } from './config/cli-registry/registry.js';
 import { registerAgentCommands } from './cli-agent.js';
+import { resolveMcpConfig, runMcpStdio } from './mcp-server.js';
 import { getSessionManager } from './session-manager.js';
 import { getTaskQueue } from './task-queue.js';
 import { getRalphLoop } from './ralph-loop.js';
@@ -323,6 +324,25 @@ skillCmd
 // ============ Agent Commands (session-to-session, any CLI mode) ============
 
 registerAgentCommands(program);
+
+// ============ MCP server (any MCP client drives Codeman) ============
+
+program
+  .command('mcp')
+  .description(
+    'Run a Model Context Protocol server on stdio, so MCP clients (Claude Code, Claude Desktop, Codex, Gemini CLI, Cursor, ...) can start, prompt, wait on, read and delete Codeman sessions'
+  )
+  .option('--url <url>', 'Codeman server URL (default: $CODEMAN_API_URL; never guessed)')
+  .option(
+    '--allow-any-session',
+    'Let the tools prompt, interrupt and delete sessions this server did not start (default: only its own)'
+  )
+  .action(async (options: { url?: string; allowAnySession?: boolean }) => {
+    await runMcpStdio(
+      resolveMcpConfig({ url: options.url, allowAnySession: options.allowAnySession, version: pkg.version })
+    );
+    process.exit(0);
+  });
 
 // ============ Session Commands ============
 

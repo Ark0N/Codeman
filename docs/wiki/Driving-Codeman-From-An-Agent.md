@@ -98,6 +98,51 @@ codeman agent rm "$SID"                                   # any session except t
 - **Exit codes** are the same for every verb: `0` done, `1` error, `2` timeout, `3` the
   worker exited, `4` refused. `--json` prints the response's `data`.
 
+## The MCP server
+
+`codeman mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP
+client (Claude Code, Claude Desktop, Codex, Gemini CLI, Cursor) can drive Codeman, from
+inside a Codeman session or from an assistant on your desktop. It is a client of the same
+HTTP API, with seven tools: `list_sessions`, `start_session`, `send_prompt`,
+`wait_for_session`, `read_output`, `interrupt_session` and `delete_session`.
+
+```bash
+# Claude Code
+claude mcp add codeman -e CODEMAN_API_URL=https://127.0.0.1:3000 -- codeman mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "codeman": {
+      "command": "codeman",
+      "args": ["mcp"],
+      "env": { "CODEMAN_API_URL": "https://127.0.0.1:3000" }
+    }
+  }
+}
+```
+
+```toml
+# Codex (~/.codex/config.toml): raise the 60 s default tool timeout for long waits
+[mcp_servers.codeman]
+command = "codeman"
+args = ["mcp"]
+env = { CODEMAN_API_URL = "https://127.0.0.1:3000" }
+tool_timeout_sec = 120
+```
+
+The JSON form is what Claude Desktop, Cursor and Gemini CLI take. Add `CODEMAN_PASSWORD` to
+`env` when the server has a password.
+
+- **It never guesses a server.** Without `CODEMAN_API_URL` (or `--url`) every call says how
+  to configure it.
+- **Only its own sessions.** Prompting, interrupting and deleting are limited to sessions it
+  started; listing, reading and waiting work on everything. `codeman mcp
+  --allow-any-session` lifts that, for an assistant that should drive your existing tabs.
+- **Waits are short by default** (45 s, at most 600 s), so they fit a client's tool
+  timeout. A `timed_out` answer means call again.
+
 ## The manual path
 
 The same operations as raw HTTP, for a CI bot, a shell script, or an agent without skill

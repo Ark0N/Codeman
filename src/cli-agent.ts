@@ -253,20 +253,21 @@ export interface RequestOptions {
   headers?: Record<string, string>;
   /** Socket timeout; long-polls pass their own timeout plus headroom. */
   timeoutMs?: number;
+  /** Aborts the request (an MCP client cancelling a long wait); the promise rejects. */
+  signal?: AbortSignal;
 }
 
 export type ApiRequest = (ctx: AgentContext, options: RequestOptions) => Promise<ApiResponse>;
 
 /** Every request carries these; they are ignored on endpoints that do not read them. */
 export function baseHeaders(ctx: AgentContext): Record<string, string> {
-  const headers: Record<string, string> = {
-    Accept: 'application/json',
-    // Tags sessions this caller spawns as its children (lineage in the web UI).
-    // Cosmetic, never fails a call. NOT X-Codeman-Agent-Origin: that one marks a case
-    // directory as deletable agent scratch, so it rides only the spawn request that
-    // may create one (see agentSpawn), never anything else.
-    'X-Codeman-Parent-Session': ctx.selfId,
-  };
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  // Tags sessions this caller spawns as its children (lineage in the web UI).
+  // Cosmetic, never fails a call. NOT X-Codeman-Agent-Origin: that one marks a case
+  // directory as deletable agent scratch, so it rides only the spawn request that
+  // may create one (see agentSpawn), never anything else. Absent for a caller outside
+  // any session (`codeman mcp` launched by a desktop MCP client), which has no self.
+  if (ctx.selfId) headers['X-Codeman-Parent-Session'] = ctx.selfId;
   const authorization = ctx.auth ? basicAuthHeader(ctx.auth) : undefined;
   if (authorization) headers.Authorization = authorization;
   return headers;
@@ -296,6 +297,7 @@ export const httpRequest: ApiRequest = (ctx, options) => {
         rejectUnauthorized: false,
         headers,
         timeout: options.timeoutMs ?? 30_000,
+        signal: options.signal,
       },
       (res) => {
         const chunks: Buffer[] = [];
