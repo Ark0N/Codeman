@@ -302,6 +302,9 @@ export const httpRequest: ApiRequest = (ctx, options) => {
       (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        // A connection dropped mid-body emits 'error' and never 'end'; without this the
+        // promise never settles (and a long-lived `codeman mcp` never answers the call).
+        res.on('error', reject);
         res.on('end', () => {
           const text = Buffer.concat(chunks).toString('utf-8');
           let json: ApiEnvelope | undefined;

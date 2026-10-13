@@ -660,6 +660,13 @@ describe('httpRequest', () => {
           res.writeHead(401, { 'Content-Type': 'text/plain' }).end('Unauthorized');
           return;
         }
+        if (req.url?.startsWith('/reset')) {
+          // Headers and half a body, then the connection drops (a restart mid-answer).
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.write('{"success":true,"data":');
+          setTimeout(() => req.socket.destroy(), 50);
+          return;
+        }
         res
           .writeHead(200, { 'Content-Type': 'application/json' })
           .end(JSON.stringify({ success: true, data: { echo: true } }));
@@ -700,6 +707,10 @@ describe('httpRequest', () => {
     expect(JSON.parse(last.body)).toEqual({ input: 'hi\r', seq: 1 });
     expect(last.headers['content-type']).toBe('application/json');
     expect(last.headers.authorization).toBeUndefined();
+  });
+
+  it('rejects, rather than hanging, when the connection drops mid-body', async () => {
+    await expect(httpRequest(ctx({ apiUrl }), { method: 'GET', path: '/reset', timeoutMs: 5000 })).rejects.toThrow();
   });
 
   it('keeps a plain-text body when the answer is not JSON', async () => {
