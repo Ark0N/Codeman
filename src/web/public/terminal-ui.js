@@ -5915,9 +5915,10 @@ Object.assign(CodemanApp.prototype, {
    *
    * Twin: TerminalTile._maybePageCliTranscript (terminal-tile.js) pages a tile
    * through the same gates and the same pageKeysForGesture, with its own state
-   * and its OWN session's dialog check; keep the two in step. The tile adds one gate this pane cannot need, viewport at the
-   * bottom: hollow here means baseY 0, so this viewport is always there, while a
-   * tile is hollow with its own discounted rows still above the screen.
+   * and its OWN session's dialog check; keep the two in step. The tile adds one
+   * gate this pane cannot need, viewport at the bottom: hollow here means baseY 0,
+   * so this viewport is always there, while a tile is hollow with its own
+   * discounted rows still above the screen.
    */
   _maybePageCliTranscript(ev, lines) {
     if (!lines || ev?.shiftKey || !this.activeSessionId) return false;
