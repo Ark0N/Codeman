@@ -2095,7 +2095,7 @@ function previewsInFileViewer(filePath) {
  * {@link findFilePathLinks}.
  */
 const RELATIVE_FILE_PATH_LINK_PATTERN =
-  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html|toml|ini|sql|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|mp4|webm|mov|mp3|wav))\b/g;
+  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html|toml|ini|sql|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
 
 /** The `(?:log|txt|…)` extension group, read off the rooted pattern so it cannot drift. */
 const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LINK_PATTERN.source)[1];
