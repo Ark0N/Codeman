@@ -1,5 +1,56 @@
 # aicodeman
 
+## 1.41.1
+
+### Patch Changes
+
+- ### Thanks
+  - @timkjr for four PRs: shells that reload from tmux's rendered history instead of replaying old full-screen repaints (#601), the full scrollback of a remote SSH session read from the remote tmux (#602) with no rows lost at the join (#609), and a phone shell Paste that inserts a multi-line block instead of running it line by line (#600).
+  - @aakhter for three PRs: Codex panes that page their transcript with the wheel and touch (#527, fixes #508), new and spawned tabs that land in tab groups (#528), and a Focus section of shortcuts at the top of the vertical rail (#582).
+  - @JDProfresh for three PRs: Claude Code's prompt-cache state per session (#607, step 1 of #554), the phone Attach button with camera-roll video uploads (#606, part two of #553), and an upload that no longer stalls the server on a dead network mount (#605).
+  - @Randalix for clickable `~/`, relative and hard-wrapped file paths plus a folder grid for browsing a whole folder of renders (#604, closes #603).
+  - @opticon454 for three PRs: a Working folder row with a Copy button in Session Options (#593), tab colour, pin and image watcher surviving a restart (#591), and Link Existing saying why it refused a case (#590).
+  - @ideaCompany, a first-time contributor, for rendering local HTML files as real pages in the File Viewer (#547), and for the careful security write-up behind it.
+  - @zomby1, a first-time contributor, for OSC 52 clipboard support (#611).
+  - @Hugo-DDT, a first-time contributor, for two PRs: MCP server sync reading Gemini's bare `url`, OpenCode's V2 layout and `opencode.jsonc` (#599, fixes #586), and DeepSeek permission prompts that no longer offer Approve/Deny buttons that cannot work (#610, from #598).
+
+  **HTML files open as pages, and markdown opens rendered from the terminal (#547).** Click an `.html` path an agent printed (a test report, a coverage page, a dashboard) and the File Viewer now shows it as a real page, with its own scripts, styles, images and data files from its folder, instead of raw source. A **Page** pill switches to the source and its Edit button. The page runs in a sandbox with an opaque origin: it cannot read Codeman's cookies, use Codeman's API or read files outside its own folder. Network access is open, so a dashboard that loads Chart.js or fonts from a CDN works as it would opened from disk. Broad folders (`/`, home, `/tmp`, a drive's mount point) are refused, so put a report in a folder of its own. And a `.md` or `.markdown` path clicked in the terminal now opens the rendered markdown viewer everywhere (main terminal, tiles, split pane, touch), instead of the live log viewer that showed "streaming"; the MD pill still gives the source. Logs, `.txt`, `.json` and code keep the live log viewer.
+
+  **`codeman mcp`: drive Codeman from any MCP client (#615).** A stdio Model Context Protocol server with seven tools (list, start, send, wait, read, interrupt, delete), so Claude Code, Codex, Gemini CLI, Cursor or Claude Desktop can start worker sessions in any installed agent CLI, prompt them, wait for them and read what they did. It is a client of the existing HTTP API with the same guards as `codeman agent`: it refuses control characters in input, never acts on the session it runs in, and by default only touches sessions it started. Setup lines for Claude Code, JSON clients and Codex are in the README and the wiki page "Driving Codeman From An Agent".
+
+  **The codeman skill for every agent CLI (#613).** With **Codeman Agent Skill** on (App Settings > Agents & CLIs > All agent CLIs, still off by default), Codex, Gemini CLI, OpenCode, Antigravity, Grok Build, DeepSeek Harness and OMP sessions now get the same `codeman` skill Claude Code had, in `.agents/skills/codeman`, so an agent in any mode knows how to start and manage worker sessions. `codeman skill install --mode <cli>` installs it by hand.
+
+  **Tiles: move them by hand, or tear one off into its own window (#584).** With the camera gesture overlay on, pinch a tile and carry it onto another tile to swap them, onto an empty cell to move it, or carry a tab onto the grid to add it. With the new **Detach Tiles** setting (App Settings > Appearance, off by default), drag a tile's header out of the window and it pops out into its own window; drop it on another Codeman window's tiles and it moves there. Known limits: all Codeman windows in one browser share one saved tile layout, a drag between two browser profiles is not seen by the source window, and a drag-out held for more than a few seconds can be blocked as a pop-up.
+
+  **Focus section on the vertical rail (#582).** "Add to Focus" in a row's menu (or right-click a web tab) pins a shortcut to that tab in a small collapsible section at the top of the rail. The tab itself stays where it is.
+
+  **Tabs land in groups (#528).** A tab group's menu has **New session**, which starts a session straight into that group. A session an agent spawns lands right after its parent; App Settings > Appearance > Tabs > **Spawned tabs follow their parent** (off by default) keeps it moving with the parent.
+
+  **Folder grid and more clickable paths (#604).** Paths written as `~/...`, relative to the session folder, or broken across terminal lines are now clickable in the terminal and the Response Viewer, and folders are too: a folder opens a grid of its files (renders, screenshots, reports) that you can page through with the arrow keys.
+
+  **Phone Attach button and videos (#606).** On a phone the toolbar has an Attach button that opens the system file sheet directly, without raising the keyboard, and camera-roll videos (mp4, mov, webm, up to 1 GB) upload into `.codeman-uploads/` like images.
+
+  **OSC 52 clipboard (#611).** A program in a session that sets the clipboard with OSC 52 (Claude Code's `/copy`, a tmux yank, vim) now puts the text on your browser's clipboard, in the main terminal and in every tile. Read requests are refused, and a replayed buffer never copies.
+
+  **Prompt-cache readout (#607).** Claude sessions show whether their prompt cache is warm (`cache:until HH:MM`) or cold in the footer and in Session Options > Respawn, restored after a restart, with a reason when a launch will never report it. Display only, nothing changes behaviour.
+
+  **Faster tab switches to fullscreen Claude (#588, #583).** Switching back to a fullscreen Claude tab now loads only its current screen (a few KB) instead of replaying a 1 MB tail of old redraws (about 1.3 to 1.7 s saved per switch). The "Showing the most recent 1.0 MB" bar now appears only when there really is older history and you scroll to the top looking for it, gives a line count, and stays closed once you close it.
+
+  **Fixes.**
+  - **Shells reload cleanly (#601).** A shell tab, tile or split pane reloads from tmux's rendered history, so a prompt no longer appears four or five times and lines no longer go missing after a resize or a full-screen program.
+  - **Remote SSH sessions keep their scrollback (#602, #609).** Loading a remote session's full history reads it from the remote tmux in one bounded ssh round trip, where the local pane kept only a fraction (48 of 279 lines in one measurement, none after a reattach).
+  - **Codex pages with the wheel and touch (#527).** A Codex pane on its alternate screen pages its transcript with PageUp/PageDown from the first wheel notch or swipe, in the main terminal and in tiles, and never pages into an open permission dialog.
+  - **openpyxl spreadsheets preview (#612).** An `.xlsx` written by openpyxl with a cell comment, a table or a chart now opens in the File Viewer instead of failing.
+  - **Phone shell Paste (#600).** A multi-line paste in a shell is inserted as one bracketed paste and waits for Enter, instead of running each line as it arrives.
+  - **Restart keeps tab colour, pin and image watcher (#591).**
+  - **Session Options shows the working folder (#593)**, with a Copy button and a label that says when the folder is on a remote host or mounted into a Docker container.
+  - **Link Existing says why (#590)**, for example "Invalid case name format", instead of "Invalid request body".
+  - **Uploads on a dead mount (#605).** A prompt upload into a workspace on a network mount that stopped answering is refused at once instead of tying up a server thread.
+  - **MCP server sync (#599).** Gemini servers with a bare `url` sync as HTTP, OpenCode's V2 `mcp.servers` layout and `opencode.jsonc` are read.
+  - **DeepSeek approvals (#610).** DeepSeek Harness permission prompts show "Answer in the terminal" in the Approvals Inbox, the phone NEEDS YOU strip and push notifications, instead of Approve/Deny buttons the server always refused.
+
+  **Fixes applied while landing.** Remote SSH and Docker tabs keep their scrollback on a tab switch (they were about to lose it with #588). No colour bleed where remote history meets the live screen (#602, #609). A bare `~` in a Docker case no longer lists the host's home folder, and shell prompts (`user@host:~/proj$`) no longer turn into broken folder links (#604). Spawned sibling tabs keep their creation order (#528). An OSC 52 copy over plain HTTP gives keyboard focus back to the terminal (#611). A refused video upload answers instead of hanging, and the zh-CN "Attach" label of the tile grid is back (#606). The Working folder row fits on phones, with zh-CN text (#593). OpenCode sync no longer stalls on a server named `servers` (#599). Moving a tile to another window no longer overwrites that window's saved layout (#584). HTML pages: a `~/` link to an `.html` file renders as a page instead of falling back to source, `/tmp` is refused even when `TMPDIR` points elsewhere, symlinks cannot get around the hidden-file and file-type rules, workspace confinement is re-checked on every request, media in a page can seek, and the service worker never caches a page (#547). Codex users of `codeman mcp`: the config now forwards the session id, so its self-protection works (#615).
+
 ## 1.41.0
 
 ### Minor Changes
