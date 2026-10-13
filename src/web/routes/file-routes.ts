@@ -1499,65 +1499,83 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       const matches: FileTreeNode[] = [];
       const maxMatches = 1000;
 
-      const searchDirectory = async (dirPath: string, currentDepth: number): Promise<void> => {
-        if (currentDepth > maxDepth || totalFiles + totalDirectories > maxFiles || matches.length >= maxMatches) {
-          truncated = true;
-          return;
-        }
+      interface SearchDirectoryCursor {
+        dirPath: string;
+        depth: number;
+        entries?: import('node:fs').Dirent[];
+        index: number;
+      }
 
-        let entries: import('node:fs').Dirent[];
-        try {
-          entries = await fs.readdir(dirPath, { withFileTypes: true });
-        } catch {
-          // Can't read directory (permission denied, etc.)
-          return;
-        }
-        entries.sort((a, b) => {
-          if (a.isDirectory() && !b.isDirectory()) return -1;
-          if (!a.isDirectory() && b.isDirectory()) return 1;
-          return a.name.localeCompare(b.name);
-        });
+      const queue: SearchDirectoryCursor[] = [{ dirPath: workingDir, depth: 1, index: 0 }];
+      while (queue.length > 0 && totalFiles + totalDirectories < maxFiles && matches.length < maxMatches) {
+        // Give each discovered directory a slice before returning to a large sibling.
+        const directoriesInRound = queue.length;
+        const nodesPerDirectory = Math.max(
+          1,
+          Math.floor((maxFiles - totalFiles - totalDirectories) / directoriesInRound)
+        );
 
-        for (const entry of entries) {
-          if (totalFiles + totalDirectories > maxFiles || matches.length >= maxMatches) {
+        for (let directoryIndex = 0; directoryIndex < directoriesInRound; directoryIndex++) {
+          const cursor = queue.shift();
+          if (!cursor) break;
+          if (cursor.depth > maxDepth) {
             truncated = true;
-            break;
+            continue;
           }
-          if (!includeHidden && entry.name.startsWith('.')) continue;
-          if (entry.isDirectory() && excludeDirs.has(entry.name)) continue;
-
-          const fullPath = join(dirPath, entry.name);
-          const relativePath = relative(workingDir, fullPath);
-
-          if (entry.isDirectory()) {
-            totalDirectories++;
-            if (matcher(entry.name, relativePath)) {
-              matches.push({ name: entry.name, path: relativePath, type: 'directory' });
-            }
-            // Always recurse, even when this directory does not match.
-            await searchDirectory(fullPath, currentDepth + 1);
-          } else {
-            totalFiles++;
-            if (matcher(entry.name, relativePath)) {
-              let size: number | undefined;
-              try {
-                size = (await fs.stat(fullPath)).size;
-              } catch {
-                // Skip size if we can't stat the match.
-              }
-              matches.push({
-                name: entry.name,
-                path: relativePath,
-                type: 'file',
-                size,
-                extension: entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined,
+          if (!cursor.entries) {
+            try {
+              cursor.entries = await fs.readdir(cursor.dirPath, { withFileTypes: true });
+              cursor.entries.sort((a, b) => {
+                if (a.isDirectory() && !b.isDirectory()) return -1;
+                if (!a.isDirectory() && b.isDirectory()) return 1;
+                return a.name.localeCompare(b.name);
               });
+            } catch {
+              // Can't read directory (permission denied, etc.).
+              continue;
             }
           }
-        }
-      };
 
-      await searchDirectory(workingDir, 1);
+          const endIndex = Math.min(cursor.index + nodesPerDirectory, cursor.entries.length);
+          while (cursor.index < endIndex && totalFiles + totalDirectories < maxFiles && matches.length < maxMatches) {
+            const entry = cursor.entries[cursor.index++];
+            if (!includeHidden && entry.name.startsWith('.')) continue;
+            if (entry.isDirectory() && excludeDirs.has(entry.name)) continue;
+
+            const fullPath = join(cursor.dirPath, entry.name);
+            const relativePath = relative(workingDir, fullPath);
+
+            if (entry.isDirectory()) {
+              totalDirectories++;
+              if (matcher(entry.name, relativePath)) {
+                matches.push({ name: entry.name, path: relativePath, type: 'directory' });
+              }
+              // Queue siblings together so one large subtree cannot starve later branches.
+              queue.push({ dirPath: fullPath, depth: cursor.depth + 1, index: 0 });
+            } else {
+              totalFiles++;
+              if (matcher(entry.name, relativePath)) {
+                let size: number | undefined;
+                try {
+                  size = (await fs.stat(fullPath)).size;
+                } catch {
+                  // Skip size if we can't stat the match.
+                }
+                matches.push({
+                  name: entry.name,
+                  path: relativePath,
+                  type: 'file',
+                  size,
+                  extension: entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined,
+                });
+              }
+            }
+          }
+          if (cursor.index < cursor.entries.length) queue.push(cursor);
+          if (matches.length >= maxMatches) break;
+        }
+      }
+      if (queue.length > 0) truncated = true;
 
       return {
         success: true,
@@ -1575,47 +1593,62 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       };
     }
 
-    const scanDirectory = async (dirPath: string, currentDepth: number): Promise<FileTreeNode[]> => {
-      if (currentDepth > maxDepth || totalFiles + totalDirectories > maxFiles) {
-        truncated = true;
-        return [];
-      }
+    interface TreeDirectoryCursor {
+      dirPath: string;
+      depth: number;
+      nodes: FileTreeNode[];
+      entries?: import('node:fs').Dirent[];
+      index: number;
+    }
 
-      try {
-        const entries = await fs.readdir(dirPath, { withFileTypes: true });
-        const nodes: FileTreeNode[] = [];
+    const tree: FileTreeNode[] = [];
+    const queue: TreeDirectoryCursor[] = [{ dirPath: workingDir, depth: 1, nodes: tree, index: 0 }];
+    while (queue.length > 0 && totalFiles + totalDirectories < maxFiles) {
+      const directoriesInRound = queue.length;
+      const nodesPerDirectory = Math.max(
+        1,
+        Math.floor((maxFiles - totalFiles - totalDirectories) / directoriesInRound)
+      );
 
-        // Sort: directories first, then alphabetically
-        entries.sort((a, b) => {
-          if (a.isDirectory() && !b.isDirectory()) return -1;
-          if (!a.isDirectory() && b.isDirectory()) return 1;
-          return a.name.localeCompare(b.name);
-        });
-
-        for (const entry of entries) {
-          if (totalFiles + totalDirectories > maxFiles) {
-            truncated = true;
-            break;
+      for (let directoryIndex = 0; directoryIndex < directoriesInRound; directoryIndex++) {
+        const cursor = queue.shift();
+        if (!cursor) break;
+        if (cursor.depth > maxDepth) {
+          truncated = true;
+          continue;
+        }
+        if (!cursor.entries) {
+          try {
+            cursor.entries = await fs.readdir(cursor.dirPath, { withFileTypes: true });
+            cursor.entries.sort((a, b) => {
+              if (a.isDirectory() && !b.isDirectory()) return -1;
+              if (!a.isDirectory() && b.isDirectory()) return 1;
+              return a.name.localeCompare(b.name);
+            });
+          } catch {
+            // Can't read directory (permission denied, etc.).
+            continue;
           }
+        }
 
-          // Skip hidden files unless requested
+        const endIndex = Math.min(cursor.index + nodesPerDirectory, cursor.entries.length);
+        while (cursor.index < endIndex && totalFiles + totalDirectories < maxFiles) {
+          const entry = cursor.entries[cursor.index++];
           if (!includeHidden && entry.name.startsWith('.')) continue;
-
-          // Skip excluded directories
           if (entry.isDirectory() && excludeDirs.has(entry.name)) continue;
 
-          const fullPath = join(dirPath, entry.name);
+          const fullPath = join(cursor.dirPath, entry.name);
           const relativePath = fullPath.slice(workingDir.length + 1);
-
           if (entry.isDirectory()) {
             totalDirectories++;
-            const children = await scanDirectory(fullPath, currentDepth + 1);
-            nodes.push({
+            const node: FileTreeNode = {
               name: entry.name,
               path: relativePath,
               type: 'directory',
-              children,
-            });
+              children: [],
+            };
+            cursor.nodes.push(node);
+            queue.push({ dirPath: fullPath, depth: cursor.depth + 1, nodes: node.children!, index: 0 });
           } else {
             totalFiles++;
             const ext = entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined;
@@ -1624,26 +1657,15 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
               const stat = await fs.stat(fullPath);
               size = stat.size;
             } catch {
-              // Skip if can't stat
+              // Skip if can't stat.
             }
-            nodes.push({
-              name: entry.name,
-              path: relativePath,
-              type: 'file',
-              size,
-              extension: ext,
-            });
+            cursor.nodes.push({ name: entry.name, path: relativePath, type: 'file', size, extension: ext });
           }
         }
-
-        return nodes;
-      } catch {
-        // Can't read directory (permission denied, etc.)
-        return [];
+        if (cursor.index < cursor.entries.length) queue.push(cursor);
       }
-    };
-
-    const tree = await scanDirectory(workingDir, 1);
+    }
+    if (queue.length > 0) truncated = true;
 
     return {
       success: true,
