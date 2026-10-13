@@ -266,18 +266,53 @@ command itself (a remote tmux session that is gone) affects that session only.
 How much history exists is the remote tmux's own `history-limit`, which the
 launch command does not set (tmux's default is 2000 lines).
 
-Two seams can drop rows at the join, silently. Neither loses anything that
-loaded before this existed:
+The same round trip also reads the remote SCREEN, in the same tmux command list
+as the history, because two seams would otherwise drop rows at the join:
 
-- **Rows that scroll during the round trip.** The remote history is read
-  first and the local frame after it, so rows that scrolled off the remote
-  screen in between are in neither (measured: 13 lines lost with a 150 ms
-  round trip and fast output).
+- **Rows that scroll during the round trip.** The local frame is captured only
+  once the round trip is back, so rows that scrolled off the screen in between
+  are in neither the remote history nor the local frame (measured before this
+  read existed: 13 lines lost with a 150 ms round trip and fast output).
 - **A shared remote session with a taller client.** Under `window-size latest`
   a remote session attached elsewhere is sized by its latest client; when that
-  client is taller than this pane, the rows between this pane's frame and the
-  remote screen's top are in neither the remote history nor the local frame
-  (measured: 20 rows).
+  client is taller than this pane, the rows above this pane's frame are only
+  on the remote screen (measured before: 20 rows).
+
+Both are rows of the remote screen above where the local frame begins, so the
+load keeps them between the history and the frame (`joinScrollbackAndFrame`,
+`findFrameInScreen` in `src/tmux-manager.ts`). The frame is placed by matching
+its top rows against the screen as text (escape sequences and trailing blanks
+ignored, since the two tmuxes need not encode attributes alike); the screen's
+trailing blank rows and its last content row, which output in flight can still
+change, are left out of the match, the overlap must be at least three rows
+with two of them non-blank, and the highest match wins. A placement too low
+would REPEAT the rows between it and the true one, so a shorter overlap (a lone
+`$` row that happens to match after a spinner row changed) is not trusted.
+When the frame cannot be placed (more output scrolled than the screen held, or
+nothing matches), the join is history over frame, as without the screen read.
+That includes an agent TUI mid-turn (Claude Code, codex, opencode): it keeps a
+live region (spinner, composer, footer) pinned to the bottom and inserts new
+rows above it, so the frame is not a shifted copy of the screen and is not
+placed. A plain shell places. What is left: when the screen repeats a whole
+block of rows, the frame can be
+placed at the higher copy, which leaves out the rows between the two copies.
+
+The history, the history size and the screen are ONE tmux command list
+(`capture-pane … \; display-message … \; capture-pane …`), not separate `tmux`
+runs. tmux runs a client's command list back to back without reading pane
+output in between, so the screen begins exactly where the history ends. As
+separate runs the shell kept writing between them and the rows that scrolled in
+those milliseconds were in neither capture (measured with output streaming: 1-2
+rows per load on a LAN host, every read on a local busy pane). This rests on how
+tmux's command queue behaves, not on a documented guarantee. A random marker row
+(`display-message`) separates the history from the size and the screen, since
+tmux output cannot carry the NUL markers around it. tmux before 3.2 prints no
+newline after `capture-pane -p` output, so when the history ends inside a
+wrapped line the marker is glued onto that row; the parser accepts the marker
+at the end of a row and re-terminates the history. The remote `tail -c` bound
+applies to that whole output, history first, and is the configured byte cap
+plus 1 MiB for the marker, size and screen, so a cut lands in the history; the
+route trims what it returns to the cap itself.
 
 ## File access over SSH
 

@@ -3138,7 +3138,10 @@ export function registerSessionRoutes(
         captureOpts.historyLimitLines,
         terminalBufferMaxBytes
       );
-      if (remoteScrollback !== null) captureOpts.scrollbackOverride = remoteScrollback;
+      if (remoteScrollback !== null) {
+        captureOpts.scrollbackOverride = remoteScrollback.scrollback;
+        captureOpts.scrollbackOverrideScreen = remoteScrollback.screen;
+      }
     }
     const capture = (opts: PaneCaptureOptions): string | null =>
       muxName && typeof ctx.mux.captureActivePaneBuffer === 'function'

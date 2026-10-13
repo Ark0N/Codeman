@@ -197,6 +197,14 @@ export interface PaneCaptureOptions {
    */
   scrollbackOverride?: string;
   /**
+   * With `scrollbackOverride`: the screen rows of the pane that history came
+   * from, read right after it. The frame this pane captures later can have
+   * scrolled past some of them, or show only part of a taller screen, so the
+   * rows above where the frame's top overlaps them are kept between the
+   * scrollback and the frame (`joinScrollbackAndFrame`).
+   */
+  scrollbackOverrideScreen?: string;
+  /**
    * Byte cap the consumer will keep from the capture. Sizes the child-process
    * stdout buffer (with slack) so multi-MB scrollback dumps aren't killed by
    * the 1MB execSync default (ENOBUFS).
