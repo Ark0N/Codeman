@@ -106,7 +106,15 @@ was never what kept anything secret; the path guard is. Types outside the list (
 
 An `.html` file opens as a rendered page by default, with its relative CSS, scripts, images and
 data files. The page is served from a separate `/html-view/...` address in a sandbox with no
-origin of its own, so its scripts can never read Codeman's page, cookies or API. The **Page**
+origin of its own, so its scripts can never read Codeman's page, cookies or API.
+
+By the project owner's decision, a rendered page has the same network access as a file you open
+from disk in your browser. It **can** load scripts, styles, fonts, images and media from
+anywhere on the internet (a dashboard that pulls Chart.js from a CDN works), send requests to
+any host, and read the files in its own folder. It **cannot** act as Codeman: it has no access
+to Codeman's page, cookies or API, and no access to any folder other than its own. Since a page
+can send what it can read to any host, open HTML only from sources you trust, as you would on
+your own desktop. The **Page**
 pill in the viewer header switches to the source view (where **Edit** works as for any text
 file), and the viewer falls back to source on its own when a page cannot be rendered: a remote
 (SSH) case, an HTML file inside a hidden folder, or one sitting directly in a broad folder such

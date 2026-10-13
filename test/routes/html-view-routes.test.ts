@@ -7,11 +7,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import Fastify from 'fastify';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
-import { isBroadHtmlViewRoot, registerHtmlViewRoutes } from '../../src/web/routes/html-view-routes.js';
+import { HTML_VIEW_CSP, isBroadHtmlViewRoot, registerHtmlViewRoutes } from '../../src/web/routes/html-view-routes.js';
+import { registerSecurityHeaders } from '../../src/web/middleware/auth.js';
 import { capabilityFromHtmlViewPath, htmlViewCapabilities } from '../../src/html-view-capabilities.js';
 
 describe('html-view routes', () => {
@@ -92,6 +94,39 @@ describe('html-view routes', () => {
     expect(csp).toMatch(/^sandbox /);
     expect(csp).not.toContain('allow-same-origin');
     expect(res.body).toBe('<h1>hi</h1>');
+  });
+
+  it("serves exactly the sandbox CSP with open network, replacing Codeman's own policy (owner decision)", async () => {
+    // Owner decision 2026-10-13 (#547): a rendered page reaches the network like a
+    // file opened from disk, so the policy is the `sandbox` directive alone. Built
+    // with Codeman's own security headers registered first, as in production, to
+    // prove their `default-src 'self'` policy does not survive onto the page.
+    const app = Fastify({ logger: false });
+    registerSecurityHeaders(app, false);
+    registerHtmlViewRoutes(app, harness.ctx as unknown as Parameters<typeof registerHtmlViewRoutes>[1]);
+    await app.ready();
+    try {
+      const cap = htmlViewCapabilities.mint(realpathSync(workspace));
+      for (const file of ['index.html', 'data.json']) {
+        const res = await app.inject({ method: 'GET', url: `/html-view/${cap}/${file}` });
+        expect(res.statusCode, file).toBe(200);
+        const csp = res.headers['content-security-policy'];
+        // One header, this exact value.
+        expect(csp, file).toBe(HTML_VIEW_CSP);
+        expect(HTML_VIEW_CSP).toBe('sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads');
+        const directives = String(csp)
+          .split(';')
+          .map((d) => d.trim().split(/\s+/)[0])
+          .filter(Boolean);
+        // Sandboxed, never same-origin...
+        expect(directives).toEqual(['sandbox']);
+        expect(String(csp)).not.toContain('allow-same-origin');
+        // ...and no fetch directive anywhere: the network is not restricted.
+        expect(String(csp)).not.toMatch(/-src\b/);
+      }
+    } finally {
+      await app.close();
+    }
   });
 
   it('answers Range requests, so a page can seek its own media', async () => {

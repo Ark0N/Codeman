@@ -12,6 +12,7 @@
  * opened as a top-level tab: it can run its own scripts but cannot read the Codeman
  * document, its cookies or its API. That is what makes rendering safe at all; see
  * html-view-capabilities.ts for why the route authenticates on a capability.
+ * Network access is deliberately OPEN (owner decision, see {@link HTML_VIEW_CSP}).
  *
  * Path policy: the HTML file itself is admitted like the file preview admits a file
  * (inside the session workspace, or outside it under the attachment guard), and the
@@ -76,10 +77,23 @@ const ASSET_TYPES: Record<string, string> = {
 };
 
 /**
- * The sandbox every response is served under. No `allow-same-origin`: that one
- * token is the difference between "a page" and "a page that can drive Codeman".
+ * The whole Content-Security-Policy every response is served under: the `sandbox`
+ * directive and nothing else. It REPLACES Codeman's own policy (`default-src 'self'`
+ * and the rest, set earlier by registerSecurityHeaders). No `allow-same-origin`:
+ * that one token is the difference between "a page" and "a page that can drive
+ * Codeman".
+ *
+ * ⚠️ Network access is OPEN, by the owner's decision (2026-10-13, #547): a rendered
+ * page behaves like a file opened from disk in a browser, so there is deliberately
+ * no fetch directive (`default-src`, `script-src`, `connect-src`, ...). It loads
+ * scripts, styles, fonts, images and media from anywhere (an agent's dashboard
+ * pulling Chart.js from a CDN) and may fetch, XHR, open WebSockets, send beacons and
+ * post forms anywhere. What confines it is the opaque origin (no Codeman cookies, no
+ * Codeman API) and the capability serving only its own folder. Do not add a fetch
+ * directive, or `allow-same-origin`, without the owner. test/routes/html-view-routes.test.ts
+ * pins the exact value.
  */
-const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads';
+export const HTML_VIEW_CSP = 'sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads';
 
 function extensionOf(path: string): string {
   return extname(path).toLowerCase().replace(/^\./, '');
@@ -254,7 +268,7 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
     const stat = await fs.stat(resolvedPath).catch(() => null);
     if (!stat?.isFile() || exceedsDownloadLimit(stat.size)) return notFound();
 
-    reply.header('Content-Security-Policy', SANDBOX_CSP);
+    reply.header('Content-Security-Policy', HTML_VIEW_CSP);
     reply.header('Content-Type', contentType);
     reply.header('Cache-Control', 'no-store');
     reply.header('Referrer-Policy', 'no-referrer');

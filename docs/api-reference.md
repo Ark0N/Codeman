@@ -610,8 +610,9 @@ csv, md, svg and common image, font, wasm, audio, video and PDF types), never
 outside the folder, never a blocked tree, and, for a folder outside the workspace,
 not while `attachmentConfineToWorkspace` is on. Every response carries
 `Content-Security-Policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads`
-(never `allow-same-origin`, so the page cannot read Codeman's document, cookies or
-API, even opened as a top-level tab), `Cache-Control: no-store`,
+as its whole policy (never `allow-same-origin`, so the page cannot read Codeman's
+document, cookies or API, even opened as a top-level tab; and no fetch directive, so
+by the owner's decision the page may load from and send requests to any host), `Cache-Control: no-store`,
 `Referrer-Policy: no-referrer` and `Access-Control-Allow-Origin: *`. A `Range`
 request is answered with `206` + `Content-Range` (`416` past the end), like
 `file-raw`. Every refusal is a plain-text `404 Not found`; with a password set, an
