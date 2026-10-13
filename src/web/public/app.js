@@ -9394,7 +9394,10 @@ class CodemanApp {
       // response re-reports the count, so a pane that starts keeping history
       // (claude switched to its inline view) goes back to the tail on the next
       // switch.
-      const paneKeepsNoHistory = this._paneHistoryLines?.get(sessionId) === 0;
+      // A remote (ssh) or Docker session's local pane hosts a nested tmux client in the
+      // alternate screen, so it reports 0 while its byte tail is real scrollback.
+      const paneKeepsNoHistory =
+        !session?.remote && !session?.docker && this._paneHistoryLines?.get(sessionId) === 0;
       const useFullHistory =
         session?.mode !== 'shell' && (paneKeepsNoHistory || !this._fullHistoryLoaded.has(sessionId));
       if (useFullHistory) this._fullHistoryLoaded.add(sessionId);

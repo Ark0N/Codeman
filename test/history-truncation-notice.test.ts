@@ -194,7 +194,7 @@ describe('the in-terminal truncation line is gone (static guard)', () => {
     expect(app).toContain(
       "session?.mode !== 'shell' && (paneKeepsNoHistory || !this._fullHistoryLoaded.has(sessionId))"
     );
-    expect(app).toContain('const paneKeepsNoHistory = this._paneHistoryLines?.get(sessionId) === 0;');
+    expect(app).toContain('!session?.remote && !session?.docker && this._paneHistoryLines?.get(sessionId) === 0;');
     expect(app).toContain("!restoredSnapshot && session?.mode !== 'shell'");
     expect(app).toContain('`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`');
     // Every terminal capture now goes through _fetchTerminalCapture, which adds
