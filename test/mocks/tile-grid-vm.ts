@@ -213,6 +213,8 @@ export const bySelector = new Map<string, FakeEl>();
 export const body = new FakeEl();
 /** The context's `fetch`; a test sets what it answers. */
 export const fetchSpy = vi.fn(async (..._args: unknown[]) => ({ ok: true, json: async () => ({}) }));
+/** What `document.elementFromPoint` answers (the gesture overlay's hit test); a test sets it. */
+export const pointHits: { at: ((x: number, y: number) => FakeEl | null) | null } = { at: null };
 /** `document.addEventListener`, so a test can find a listener the app installed. */
 export const documentAddEventListener = vi.fn();
 export const documentRemoveEventListener = vi.fn();
@@ -280,6 +282,7 @@ const context = vm.createContext({
       return focusedEl;
     },
     getElementById: (id: string) => (id === 'tileGrid' ? section : (bySelector.get(`#${id}`) ?? null)),
+    elementFromPoint: (x: number, y: number) => pointHits.at?.(x, y) ?? null,
     body,
     querySelector: (sel: string) =>
       bySelector.get(sel) ?? (sel === '.main' ? main : sel === '.terminal-wrap' ? wrap : null),
@@ -389,4 +392,5 @@ export function resetGridHarness() {
   main.appendChild(section);
   bySelector.clear();
   body.children = [];
+  pointHits.at = null;
 }
