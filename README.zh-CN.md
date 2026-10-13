@@ -64,12 +64,13 @@ codeman web
 curl -fsSL https://getcodeman.com/install | bash
 ```
 
-该脚本会在缺失时自动安装 Node.js、tmux 和一套构建工具链（node-pty 没有 Linux 预编译包，需要从源码编译），把 Codeman 克隆到 `~/.codeman/app` 并完成构建。几点须知：
+该脚本会在缺失时自动安装 Node.js、tmux 和一套构建工具链（node-pty 没有 Linux 预编译包，需要从源码编译），把 Codeman 克隆到 `~/.codeman/app` 并完成构建。它会先看看机器上已有什么，最多问三个问题，然后无人值守地完成所有工作，最后给出访问 URL 和一个供手机扫描的二维码。几点须知：
 
-- **先询问，后改动。** 所有系统级改动（安装软件包、下载 AI CLI）都会先征求确认；结束时的菜单可选择：直接在本终端运行、安装为后台服务（systemd/launchd，开机自启），或暂不启动。不选就不会有任何后台进程。
-- **怎么访问，由你决定。** 安装器提供三种到达仪表盘的方式：**Tailscale**（环回绑定，由 `tailscale serve` 代理，得到带真实证书的 `https://<机器名>.<tailnet>.ts.net`，用你的 tailnet 当登录，无需密码）、**局域网内任意设备**（`0.0.0.0`，会提示设置一个强烈推荐的密码），或**仅本机**（`127.0.0.1`，最安全）。绑定网络却跳过密码需要显式确认，并以醒目警告收尾。高亮的默认项反映机器上已有的状态（已在用 Tailscale 时默认 Tailscale，重跑时沿用现有绑定），直接回车绝不会引入新软件。手动运行的 `codeman web` 仍默认仅环回。
-- **重跑即更新。** 再次运行同一条命令即可原地更新已完成的安装：`~/.codeman/app` 中的本地改动会被 stash（绝不丢弃），运行中的服务会自动重启并校验。若首次安装中途失败，重跑会继续完成完整的安装流程。也可以使用 `install.sh update` 与 `install.sh uninstall`。
-- **CI / 无终端环境：** 没有终端时，涉及系统改动的步骤会带着说明中止，而不是静默执行；在自动化场景设置 `CODEMAN_NONINTERACTIVE=1` 即可批准这些步骤。
+- **三个问题，全部在开头问完。** 仪表盘怎么访问、（可选）这台机器在你的 tailnet 里叫什么，以及是否把 Codeman 作为后台服务运行（systemd/launchd，开机自启；直接回车即为「是」）。所有需要你出面的事，包括对所有缺失软件包的一次性同意、一次 sudo 密码和 Tailscale 登录，都在构建之前完成，所以编译期间你可以走开。
+- **怎么访问，由你决定。** 安装器提供三种到达仪表盘的方式：**Tailscale**（环回绑定，由 `tailscale serve` 代理，得到带真实证书的 `https://<机器名>.<tailnet>.ts.net`，用你的 tailnet 当登录，无需密码）、**局域网内任意设备**（`0.0.0.0`，会提示设置一个强烈推荐的密码），或**仅本机**（`127.0.0.1`，最安全）。绑定网络却跳过密码需要显式确认，并以醒目警告收尾。高亮的默认项反映机器上已有的状态（已在用 Tailscale 时默认 Tailscale，重跑时沿用现有绑定），直接回车绝不会引入新软件。如果你节点上的 `:443` 已被别的应用占用，Codeman 会改用 `https://<机器名>.<tailnet>.ts.net/codeman` 或第二个端口，而不是把它替换掉。手动运行的 `codeman web` 仍默认仅环回。
+- **名字由你来定。** 默认情况下，URL 用的是这台机器在 tailnet 里现有的名字。第二个问题答「是」会把机器改名为 `codeman-<hostname>`（这也会改掉它在 SSH 里的名字，所以默认是「否」）；之后也可以用 `install.sh name` 来改。
+- **重跑即更新。** 再次运行同一条命令即可原地更新已完成的安装：`~/.codeman/app` 中的本地改动会被 stash（绝不丢弃），运行中的服务会自动重启并校验。若首次安装中途失败，重跑会继续完成完整的安装流程。`install.sh status` 会再次打印 URL 和二维码；另外还有 `install.sh update`、`install.sh tailscale` 和 `install.sh uninstall`。
+- **给急性子的参数。** `curl -fsSL https://getcodeman.com/install | bash -s -- --tailscale --service` 直接在命令行上回答这些问题（还有 `--lan`、`--local`、`--run`、`--no-start`、`--name <n>`、`--port <n>`、`--yes`）。**CI / 无终端环境：** 没有终端时，涉及系统改动的步骤会带着说明中止，而不是静默执行；在自动化场景设置 `CODEMAN_NONINTERACTIVE=1` 即可批准这些步骤。
 
 你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli)、[Antigravity](https://antigravity.google)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Pi](https://pi.dev)、[Grok Build](https://github.com/xai-org/grok-build)、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 或 [OMP](https://github.com/can1357/oh-my-pi)（任意组合均可；自 Google 面向消费者停售后，Gemini CLI 仅限企业版，Antigravity 是其继任者）。安装器会自动检测这九个中已安装的任意一个；若一个都没有，会给出一个菜单让你安装其中任意一个（DeepSeek 除外，它的 npm 包只装一个启动器，没有可运行的 profile），也可以选择跳过、稍后自行安装。安装完成后：
 
@@ -224,7 +225,7 @@ codeman web --https
 # 在手机上打开：https://<你的IP>:3000
 ```
 
-> `localhost` 走纯 HTTP 即可。从其他设备访问时请使用 `--https`，或使用 [Tailscale](https://tailscale.com/)（推荐）：安装器可以替你配好（在网络访问提示处选择 **Tailscale**，或在已有安装上运行 `bash ~/.codeman/app/install.sh tailscale`）。这样你会得到带真实证书的 `https://<你的机器>.<tailnet>.ts.net`：只对你的 tailnet 可见、无需密码，手机上的 PWA 安装和推送通知也都能用。
+> `localhost` 走纯 HTTP 即可。从其他设备访问时请使用 `--https`，或使用 [Tailscale](https://tailscale.com/)（推荐）：安装器可以替你配好（在网络访问提示处选择 **Tailscale**，或在已有安装上运行 `bash ~/.codeman/app/install.sh tailscale`）。这样你会得到带真实证书的 `https://<你的机器>.<tailnet>.ts.net`：只对你的 tailnet 可见、无需密码，手机上的 PWA 安装和推送通知也都能用。安装器最后会给出这个 URL 和一个可扫描的二维码，之后随时可以用 `bash ~/.codeman/app/install.sh status` 再次打印。
 
 ### 安全的二维码认证
 
@@ -459,8 +460,11 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 ## 更多特性
 
 - **后台守护进程与服务安装** —— `codeman web -d` 以脱离终端的方式运行服务器，带 pid 文件、`~/.codeman/web.log` 和经过校验的启动（它会轮询到服务器应答为止，所以端口冲突绝不会被当成成功）；`codeman service install` 写入一个 systemd 用户单元（Linux）或 LaunchAgent（macOS），并把你 shell 的 PATH 一并写进去，这样 nvm 或 Homebrew 装的 `node`、`tmux` 和 `claude` 才真的找得到。机密永远不会写进单元文件
+- **设置里的诊断**：**App Settings → System → Diagnostics → Run checks** 会在服务器上运行 `codeman doctor`，列出 Node、tmux、每个智能体 CLI 以及可选的 Office 工具，附带版本、路径和安装提示。除了 `PATH`，它还会查找每个 CLI 惯常的安装目录（`~/.local/bin`、`~/.npm-global/bin` 之类），所以即使服务只拿到一个最小的 `PATH`，大多数安装也能被找到。多用户模式下仅管理员可用
 - **自更新** —— systemd/launchd 管理下的 git-clone 安装可在 **App Settings → System → Updates** 中原地更新：它会检测最新发行版，自动暂存（stash）脏工作树，并在服务重启期间流式展示构建进度（npm 安装会被报告为不可更新）
+- **底栏里的 Git 状态**：默认关闭（**App Settings → Header & Panels → Bottom bar → Git status**，按设备生效）。底栏右侧的一个小指示器让你一眼看清当前会话所在仓库的状态：`● 3` 表示未提交的文件，`↑ 2` 表示未推送的提交，`⚠` 表示合并冲突，`✓` 表示全部已提交并推送。点击它会打开一个可拖动的窗口，列出已暂存、未暂存、未跟踪和有冲突的文件（按折叠的文件夹分组，关掉该设置则显示为平铺列表）以及未推送的提交；**点击文件即可查看它的 diff**（新文件全部显示为新增，已删除的文件全部显示为删除），**Open file** 可直接跳到查看器。一个包含多个项目的文件夹，会为向下两层内找到的每个仓库各给一个可折叠分区，打开之前全部折叠。只读且离线（Codeman 绝不 fetch，也绝不改动仓库）；Docker 和远程会话不显示
 - **把 GitHub 仓库克隆成 case** —— 在 **Add Case → Clone Repo** 里粘贴一个仓库 URL，Codeman 会把它克隆到 `~/codeman-cases/<name>` 并注册为普通 case，随时可以跑智能体。输入时它会预检 URL（告诉你能否匿名克隆，并为可选的分支/标签字段提供仓库真实的分支与标签），从 URL 里填好 case 名，还让你选 Run 按钮该用哪个 CLI。支持 `https://` 的公开仓库；Codeman 绝不收集或保存凭据
+- **在自定义文件夹里创建 case**：在 **Add Case → Create New** 里勾选 **Create in a custom folder**，选一个父文件夹（可用 Browse 浏览）和一个名字，Codeman 就会在那里而不是 `~/codeman-cases` 里搭建新 case。目标必须是一个新的或空的文件夹；系统目录、你的主目录本身、`~/.ssh` 这类凭据目录，以及 Codeman 自己的数据目录都会被拒绝。多用户模式下仅管理员可用
 - **多 CLI** —— 每个会话可选 **Claude Code**、**OpenCode**、**Codex**、**Antigravity**、**Gemini**、**Pi**、**Grok**、**DeepSeek Harness** 或 **OMP**；环境变量前缀自动隔离（`CLAUDE_CODE_*`、`OPENCODE_*`、`CODEX_*`、`ANTIGRAVITY_*`、`GEMINI_*`/`GOOGLE_*`、`PI_*`、`GROK_*`/`XAI_*`、`DSH_*`/`DEEPSEEK_*` 与 `OMP_*`）。详见 [`docs/opencode-integration.md`](docs/opencode-integration.md)、[`docs/pi-integration.md`](docs/pi-integration.md)、[`docs/grok-integration.md`](docs/grok-integration.md)、[`docs/deepseek-integration.md`](docs/deepseek-integration.md) 与 [`docs/omp-integration.md`](docs/omp-integration.md)
 - **自定义模型端点**（1.29.0 新增，目前仅 HTTP API）—— 让某个会话的 CLI 指向任意 OpenAI 兼容端点，而不是它自己的官方后端：本地的 llama.cpp、llama-swap、Ollama 或 vLLM 机器，也可以是 Azure AI Foundry、OpenRouter 这类云端网关。端点只需保存一次（`POST /api/model-endpoints`，模型列表从它的 `/v1/models` 自动发现），再应用到会话（`POST /api/sessions/:id/custom-model`），CLI 就会在原地重启并接上该端点。Claude、OpenCode、Pi、Grok 与 OMP 已实测通过；Codex、Gemini 与 DeepSeek 存在已记录的缺口，Antigravity 没有可用机制。工具栏选择器是下一步。详见 [`docs/custom-model-endpoints.md`](docs/custom-model-endpoints.md)
 - **Web 标签页** —— 把 Grafana、Uptime Kuma、一个 Vite 开发服务器或任何仪表盘 URL 作为标签页打开在会话旁边（Run 下拉菜单 → **Web / URL** → **Add URL**）。仪表盘通过 Codeman 自己的源代理，因此 `http://` 目标在手机上走 HTTPS 也能用、走隧道也能用；单页应用能在自己的路径上正常路由，页面自己重载后也能自行恢复。智能体打印出的 `localhost` 链接会自动以 Web 标签页打开。详见 [`docs/web-tabs.md`](docs/web-tabs.md)
@@ -495,7 +499,7 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 - **默认加固** —— 非 root、`--cap-drop ALL`、`no-new-privileges`、PID/内存上限，绝不使用 `--privileged` 或 docker socket；**密封（sealed）** 配置（不注入主机凭据、关闭网络）只需一个开关。
 - **无感认证、凭据隔离** —— 主机上的 Claude / Codex / Antigravity / Gemini / OpenCode / Pi / Grok / OMP 登录在容器内开箱即用：凭据在启动时以只读种子方式复制注入，onboarding/信任提示已预先答复，不会弹出登录向导。容器保留自己的副本，绝不回写主机的凭据存储；跨边界共享的只有对话转录，导出文件也绝不包含机密。
 - **挂到你已经在跑的容器上** —— 在 Docker 面板勾选 **Attach to an existing container**，就能把 case 链接到一个现成容器，而不是新建一个。Codeman 只 `exec` 进去，绝不启动、停止、重启或删除它；一个被接管的容器可以在不同目录下支撑多个 case，**复制一个已有 case** 会用同一容器上的兄弟 case 预填表单。多用户模式下仅管理员可用，因为容器的挂载属于启动它的人。
-- **迁移到另一台机器** —— 把容器的完整环境（工具链 + 工作区）导出为可移植的 `.tar.gz`，在另一台机器上导入到新案例即可继续。
+- **迁移到另一台机器** —— 把容器的完整环境（工具链 + 工作区）导出为可移植的 `.tar.gz`，在另一台机器上用 `docker load` 载入，再导入到一个新案例即可继续。
 - **持久耐用** —— Codeman 重启后重连会回到同一个存活的智能体；容器停止/重启后则从绑定挂载的转录恢复对话。
 
 前置条件：只需 Docker（或 Podman）。智能体基础镜像会在首次使用时自动构建，构建进度实时显示在 UI 中（也可用 `node scripts/build-agent-image.mjs` 预构建）。完整指南：[`docs/docker-cases.md`](docs/docker-cases.md)。
@@ -665,7 +669,7 @@ Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 
 
 ### 网络与访问
 
-- **默认仅环回** —— 绑定 `127.0.0.1`，仅可从本机访问，因此「无密码」默认配置开箱即安全。在未设置 `CODEMAN_PASSWORD` 的情况下绑定非环回主机会*启动但打印一条醒目警告*，并给出三个具体修复方案（设置密码、环回 + 一个带认证的隧道，或用 `--allow-unauthenticated-network` 显式确认）
+- **默认仅环回** —— 服务器程序本身绑定 `127.0.0.1`，仅可从本机访问，因此「无密码」默认配置开箱即安全（引导式安装器会询问网络访问方式，并替你配置绑定和密码）。在未设置 `CODEMAN_PASSWORD` 的情况下绑定非环回主机会*启动但打印一条醒目警告*，并给出三个具体修复方案（设置密码、环回 + 一个带认证的隧道，或用 `--allow-unauthenticated-network` 显式确认）
 - **可选认证，真实会话** —— 通过 `CODEMAN_USERNAME`（默认 `admin`）/ `CODEMAN_PASSWORD` 的 HTTP Basic 认证。成功后签发一个不透明的 256 位 `codeman_session` cookie（`randomBytes(32)`）—— 服务端校验，而非客户端签名，因此无法离线伪造（24h TTL、自动延长、设备上下文审计日志）
 - **按 IP 速率限制** —— 失败 10 次 → `429` 并带 `Retry-After`（15 分钟衰减）。即便攻击者在同一 IP 上猛攻，有效 cookie 或正确密码也能*立即*恢复 —— 这很重要，因为所有隧道流量共享同一个环回 IP。二维码认证有自己独立的限制器
 - **可配置的权限模式**：`--dangerously-skip-permissions` 只是默认值。**App Settings → Agents & CLIs → Claude → Startup Mode** 可以把新会话切换为 Anthropic 的分类器护栏 `auto` 模式（低打扰，需要 Claude Code 2.1.207+）、`normal` 提示模式，或一份显式的允许工具列表。多用户模式下，未获授权的用户会被强制为 `auto`，shell 会话与跳过权限需要按用户显式授权
