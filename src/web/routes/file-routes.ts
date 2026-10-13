@@ -23,6 +23,7 @@ import type {
 } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import { compileFileQuery } from '../../utils/file-query.js';
+import { describeUnknownPath, probePathKind } from '../../utils/bounded-path-probe.js';
 import { fileStreamManager } from '../../file-stream-manager.js';
 import {
   AUDIO_ATTACHMENT_EXTENSIONS,
@@ -30,12 +31,21 @@ import {
   attachmentRecordToEvent,
   attachmentRegistry,
   buildFileThumbnailRoute,
+  getAttachmentType,
   isSupportedAttachmentExtension,
   registerExternalAttachment,
   TEXT_ATTACHMENT_EXTENSIONS,
   VIDEO_ATTACHMENT_EXTENSIONS,
   type AttachmentRecord,
 } from '../../attachment-registry.js';
+import {
+  FolderListingError,
+  folderFilePath,
+  folderGrants,
+  folderAllowedForUser,
+  listFolder,
+  validFolderFileName,
+} from '../../folder-listing.js';
 import { generateFirstPageThumbnail } from '../../document-thumbnailer.js';
 import { getOfficePreviewPdfPath, getPreviewPdfDownloadName } from '../../document-preview-cache.js';
 import { sanitizeAttachmentHistoryItem } from '../../session-attachment-history.js';
@@ -427,6 +437,40 @@ async function resolveServableRemoteAttachment(
 }
 
 /**
+ * Stream a guard-checked file ({@link resolveServableAttachmentPath}) — the body of
+ * the attachment raw route, shared with the folder-grid file route.
+ *
+ * A remote file streams over ssh exactly like file-raw, with the same 200/206/416
+ * contract, and its size comes from the guard's own re-probe — so serving a remote
+ * file needs no stat the local branch would not also need.
+ */
+async function serveServableRaw(
+  reply: FastifyReply,
+  servable: ServableAttachment,
+  remote: SessionRemote | undefined,
+  fileName: string,
+  extension: string,
+  query: { download?: string; preview?: string; range?: string }
+): Promise<void> {
+  try {
+    const target: FileTarget =
+      servable.probe && remote
+        ? { kind: 'remote', resolvedPath: servable.path, relativePath: '', remote, probe: servable.probe }
+        : { kind: 'local', resolvedPath: servable.path, relativePath: '' };
+    const size = servable.probe ? servable.probe.size : (await fs.stat(servable.path)).size;
+    if (exceedsXlsxPreviewLimit(extension, query, size)) {
+      sendXlsxPreviewTooLarge(reply, size);
+      return;
+    }
+    await serveRawFile(reply, target, size, fileName, extension, query.download === 'true', query.range);
+  } catch (err) {
+    reply
+      .code(err instanceof RemoteFileAccessError ? 502 : 500)
+      .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
+  }
+}
+
+/**
  * Convert a DOCX/PPTX to a single-PDF preview (LibreOffice when available) and
  * stream it inline. PDF/PNG and text formats don't need conversion — callers
  * redirect those to the raw route instead.
@@ -520,7 +564,19 @@ function getKnownSessionWorkingDir(
 interface SessionFileScope {
   workingDir: string;
   remote?: SessionRemote;
+  /** The session runs inside a Docker case: a local session for these routes, but `~` is the container's. */
+  docker?: boolean;
 }
+
+/**
+ * A Docker case is a LOCAL session for the file routes (the workspace is a
+ * bind mount, so its paths are host paths), but `~` inside the container is the
+ * container's own seeded home, not this host's. Expanding `~/x.png` against the
+ * host's home would open a different file than the one the agent printed, so
+ * the form is refused instead of guessed.
+ */
+const DOCKER_HOME_PATH_ERROR =
+  'A ~/ path inside a Docker case is the container home, which this server cannot read; use the absolute path';
 
 /**
  * The file-access scope of a session, live or persisted — the `workingDir`-only
@@ -539,12 +595,12 @@ function getKnownSessionFileScope(
   const user = getAuthUser(req);
   const liveSession = ctx.sessions.get(sessionId);
   if (liveSession && canAccessOwned(user, liveSession.owner)) {
-    return { workingDir: liveSession.workingDir, remote: liveSession.remote };
+    return { workingDir: liveSession.workingDir, remote: liveSession.remote, docker: !!liveSession.docker };
   }
 
   const stored = ctx.store.getSession(sessionId);
   if (stored && canAccessOwned(user, (stored as { owner?: string }).owner)) {
-    return { workingDir: stored.workingDir, remote: stored.remote };
+    return { workingDir: stored.workingDir, remote: stored.remote, docker: !!stored.docker };
   }
 
   reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, `Session ${sessionId} not found`));
@@ -2143,6 +2199,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing attachment path'));
       return;
     }
+    if (session.docker && body.path.startsWith('~/')) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, DOCKER_HOME_PATH_ERROR));
+      return;
+    }
 
     try {
       // A remote case registers a path that lives on the REMOTE host: the guard and
@@ -2263,34 +2323,11 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     });
     if (!servable) return;
 
-    try {
-      // A remote record streams over ssh exactly like file-raw, with the same
-      // 200/206/416 contract, and its size comes from the guard's own re-probe — so
-      // serving a remote attachment needs no stat the local branch would not also need.
-      const remote = session.remote;
-      const target: FileTarget =
-        servable.probe && remote
-          ? { kind: 'remote', resolvedPath: servable.path, relativePath: '', remote, probe: servable.probe }
-          : { kind: 'local', resolvedPath: servable.path, relativePath: '' };
-      const size = servable.probe ? servable.probe.size : (await fs.stat(servable.path)).size;
-      if (exceedsXlsxPreviewLimit(record.extension, { preview, download }, size)) {
-        sendXlsxPreviewTooLarge(reply, size);
-        return;
-      }
-      await serveRawFile(
-        reply,
-        target,
-        size,
-        record.fileName,
-        record.extension,
-        download === 'true',
-        req.headers.range
-      );
-    } catch (err) {
-      reply
-        .code(err instanceof RemoteFileAccessError ? 502 : 500)
-        .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
-    }
+    await serveServableRaw(reply, servable, session.remote, record.fileName, record.extension, {
+      download,
+      preview,
+      range: req.headers.range,
+    });
   });
 
   // Serve a converted PDF preview of a registered attachment by id. Office docs
@@ -2352,6 +2389,181 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     }
 
     await serveThumbnail(reply, servable.path, record.extension);
+  });
+
+  // ===== Folder grid =====
+  // Grant + list a folder (absolute or `~/` on the session's host) for the preview
+  // grid. Same guard as a single external attachment; the grid then fetches files by
+  // `folderId + name`, so no browser request carries a path. See folder-listing.ts.
+  app.post('/api/sessions/:id/folders', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const scope = getKnownSessionFileScope(ctx, id, reply, req);
+    if (!scope) return;
+    const body = (req.body || {}) as { path?: unknown };
+    if (!body.path || typeof body.path !== 'string') {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing folder path'));
+      return;
+    }
+    if (scope.docker && body.path.startsWith('~/')) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, DOCKER_HOME_PATH_ERROR));
+      return;
+    }
+    try {
+      const listing = await listFolder(id, body.path, {
+        sessionWorkingDir: scope.workingDir,
+        remote: scope.remote,
+        user: getAuthUser(req),
+      });
+      return { success: true, data: listing };
+    } catch (err) {
+      if (err instanceof FolderListingError) {
+        const code =
+          err.statusCode === 404
+            ? ApiErrorCode.NOT_FOUND
+            : err.statusCode >= 500
+              ? ApiErrorCode.OPERATION_FAILED
+              : ApiErrorCode.INVALID_INPUT;
+        reply.code(err.statusCode).send(createErrorResponse(code, err.message));
+        return;
+      }
+      return reply
+        .code(500)
+        .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to list folder: ${getErrorMessage(err)}`));
+    }
+  });
+
+  /**
+   * One file of a granted folder, guard-checked like an attachment: the name is a
+   * bare file name of a supported type, and the joined path goes through the same
+   * {@link resolveServableAttachmentPath} (blocklist, workspace confinement, symlink
+   * re-resolution, remote re-probe) an attachment by id does. The multi-user rule
+   * ({@link folderAllowedForUser}) runs again on the resolved file: a symlink inside
+   * the granted folder must not lead into another user's space.
+   */
+  async function resolveFolderFile(
+    req: FastifyRequest,
+    reply: FastifyReply
+  ): Promise<{ scope: SessionFileScope; servable: ServableAttachment; name: string; extension: string } | null> {
+    const { id, folderId, name } = req.params as { id: string; folderId: string; name: string };
+    const scope = getKnownSessionFileScope(ctx, id, reply, req);
+    if (!scope) return null;
+    const grant = folderGrants.get(id, folderId);
+    if (!grant) {
+      reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Folder not found'));
+      return null;
+    }
+    const fileName = validFolderFileName(name);
+    if (!fileName) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid file name'));
+      return null;
+    }
+    const filePath = folderFilePath(grant.dir, fileName);
+    if (!scope.remote) {
+      // Bounded, like the folder itself: the grant may point at a mount that has stopped answering since.
+      const kind = await probePathKind(filePath, { pastCap: true });
+      if (kind === 'unknown') {
+        reply
+          .code(503)
+          .send(
+            createErrorResponse(ApiErrorCode.OPERATION_FAILED, describeUnknownPath('File', filePath, { pastCap: true }))
+          );
+        return null;
+      }
+      if (kind !== 'file') {
+        reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
+        return null;
+      }
+    }
+    const extension = extname(fileName).toLowerCase().replace(/^\./, '');
+    const record: AttachmentRecord = {
+      attachmentId: '',
+      sessionId: id,
+      filePath,
+      fileName,
+      extension,
+      attachmentType: getAttachmentType(extension),
+      size: 0,
+      mtimeMs: 0,
+      timestamp: 0,
+      source: 'external',
+    };
+    const servable = await resolveServableAttachmentPath(reply, record, scope);
+    if (!servable) return null;
+    // The requested NAME only opens the door; registration judges the file a
+    // symlink resolves to (supported extension, regular file) and so does this.
+    // Without it `shot.png -> ../secret.bin` is served, and a FIFO or a device
+    // behind a supported name parks a worker on an open that never returns.
+    if (!isSupportedAttachmentExtension(extname(servable.path))) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Unsupported attachment type'));
+      return null;
+    }
+    const isRegularFile = scope.remote
+      ? servable.probe?.kind === 'file'
+      : await fs.stat(servable.path).then(
+          (stat) => stat.isFile(),
+          () => false
+        );
+    if (!isRegularFile) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Attachment path is not a file'));
+      return null;
+    }
+    if (!folderAllowedForUser(servable.path, getAuthUser(req), scope)) {
+      reply.code(403).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'File is outside your space'));
+      return null;
+    }
+    return { scope, servable, name: fileName, extension };
+  }
+
+  app.get('/api/sessions/:id/folders/:folderId/files/:name/raw', async (req, reply) => {
+    const file = await resolveFolderFile(req, reply);
+    if (!file) return;
+    const { download, preview } = req.query as { download?: string; preview?: string };
+    await serveServableRaw(reply, file.servable, file.scope.remote, file.name, file.extension, {
+      download,
+      preview,
+      range: req.headers.range,
+    });
+  });
+
+  app.get('/api/sessions/:id/folders/:folderId/files/:name/preview', async (req, reply) => {
+    const file = await resolveFolderFile(req, reply);
+    if (!file) return;
+    if (file.extension !== 'docx' && file.extension !== 'pptx') {
+      const { id, folderId } = req.params as { id: string; folderId: string };
+      reply.redirect(
+        `/api/sessions/${encodeURIComponent(id)}/folders/${encodeURIComponent(folderId)}/files/${encodeURIComponent(file.name)}/raw`
+      );
+      return;
+    }
+    if (file.servable.probe) {
+      reply
+        .code(400)
+        .send(
+          createErrorResponse(
+            ApiErrorCode.INVALID_INPUT,
+            'Office document preview is not available for files in a remote (SSH) case'
+          )
+        );
+      return;
+    }
+    await serveConvertedPreview(reply, file.servable.path, file.name, file.extension);
+  });
+
+  app.get('/api/sessions/:id/folders/:folderId/files/:name/thumbnail', async (req, reply) => {
+    const file = await resolveFolderFile(req, reply);
+    if (!file) return;
+    if (file.servable.probe) {
+      reply
+        .code(400)
+        .send(
+          createErrorResponse(
+            ApiErrorCode.INVALID_INPUT,
+            'Thumbnails are not available for files in a remote (SSH) case'
+          )
+        );
+      return;
+    }
+    await serveThumbnail(reply, file.servable.path, file.extension);
   });
 
   // Serve converted document previews for a workspace-relative path. DOCX/PPTX

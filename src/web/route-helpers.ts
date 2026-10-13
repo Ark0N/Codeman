@@ -17,6 +17,15 @@ import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.j
 import { SseEvent } from './sse-events.js';
 import type { SessionPort } from './ports/session-port.js';
 import type { EventPort } from './ports/event-port.js';
+
+/**
+ * Longest path PARAMETER the router accepts (Fastify's default is 100). A file
+ * name goes up to 255 characters and arrives percent-encoded, so the folder
+ * grid's `…/files/:name/raw` answered 404 "Route not found" for a name the
+ * listing happily showed. Raw length, not decoded: 255 four-byte characters are
+ * 3060 characters of `%XX`.
+ */
+export const MAX_ROUTE_PARAM_LENGTH = 4096;
 import type { AuthSessionRecord } from './ports/auth-port.js';
 import type { StaleExpirationMap } from '../utils/index.js';
 import { dataPath } from '../config/instance.js';

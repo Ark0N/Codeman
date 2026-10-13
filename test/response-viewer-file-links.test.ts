@@ -111,10 +111,24 @@ describe('response viewer file-path linkifier', () => {
   });
 
   it('leaves text with no path untouched', () => {
-    const root = linkify('<p>Ratio 3/4 on 2026/08/16, see src/app.ts</p>');
+    const root = linkify('<p>Ratio 3/4 on 2026/08/16, see the app</p>');
 
     expect(paths(root)).toHaveLength(0);
-    expect(root.textContent).toBe('Ratio 3/4 on 2026/08/16, see src/app.ts');
+    expect(root.textContent).toBe('Ratio 3/4 on 2026/08/16, see the app');
+  });
+
+  it('links ~/ and relative paths too, the same forms the terminal links', () => {
+    const root = linkify(
+      '<p>Attached <code>~/repos/x/garage.png</code>, wrote builds/captures/a.png (see src/app.ts)</p>'
+    );
+
+    expect(paths(root).map((a) => a.getAttribute('data-path'))).toEqual([
+      '~/repos/x/garage.png',
+      'builds/captures/a.png',
+      'src/app.ts',
+    ]);
+    expect(root.textContent).toBe('Attached ~/repos/x/garage.png, wrote builds/captures/a.png (see src/app.ts)');
+    expect(paths(root).every((a) => a.getAttribute('data-linkified') === '1')).toBe(true);
   });
 
   it('never linkifies /etc paths — the server blocks the whole tree, so the link could only 403', () => {
@@ -145,6 +159,12 @@ describe('response viewer file-path linkifier', () => {
     // either leaves inert paths (no linkify) or dead links (no handler).
     expect(APP_SOURCE).toContain('this._linkifyFilePaths(renderedText)');
     expect(APP_SOURCE).toMatch(/closest\('a\.rv-path'\)/);
-    expect(APP_SOURCE).toMatch(/openFilePreview\(filePath, pathLink\.dataset\.sessionId \|\| this\.activeSessionId\)/);
+    expect(APP_SOURCE).toMatch(/const sessionId = pathLink\.dataset\.sessionId \|\| this\.activeSessionId;/);
+    // Only the linkifier's own links are resolved; a markdown document's rebased
+    // links keep the path the rebase computed.
+    expect(APP_SOURCE).toMatch(
+      /pathLink\.dataset\.linkified \? this\._resolveLinkedFilePath\?\.\(filePath, sessionId\) : filePath/
+    );
+    expect(APP_SOURCE).toMatch(/openFilePreview\(target \|\| filePath, sessionId\)/);
   });
 });

@@ -308,7 +308,7 @@ describe('callers consult the hook first', () => {
 
   it('response viewer links route through the hook and keep the file-path handler first', () => {
     const bind = APP_JS.indexOf('_bindResponseViewerInteractions(body) {');
-    const section = APP_JS.slice(bind, bind + 2500);
+    const section = APP_JS.slice(bind, bind + 3500);
     const pathHandler = section.indexOf("closest('a.rv-path')");
     const urlHandler = section.indexOf("closest('a[href]')");
     expect(pathHandler).toBeGreaterThan(-1);
