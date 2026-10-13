@@ -699,7 +699,14 @@
         if (!state || state.state === 'dangling' || state.state === 'cycle') editError('no parent to follow');
         if (state.state !== 'manual') return layout;
         const targetKey = refKey(op.ref);
-        const clear = (ref) => (refKey(ref) === targetKey ? { kind: ref.kind, id: ref.id } : ref);
+        // Drop the placement only: a Focus pin stays (the whole layout is PUT,
+        // so a field left off here would be erased on save).
+        const clear = (ref) => {
+          if (refKey(ref) !== targetKey) return ref;
+          const copy = copyRef(ref);
+          delete copy.placement;
+          return copy;
+        };
         for (const group of layout.groups) group.refs = group.refs.map(clear);
         layout.ungrouped = layout.ungrouped.map(clear);
         const childKeys = new Set();

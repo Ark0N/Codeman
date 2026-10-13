@@ -23,7 +23,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 const PUBLIC = join(process.cwd(), 'src/web/public');
 const read = (name: string) => readFileSync(join(PUBLIC, name), 'utf8');
 
-type Ref = { kind: 'session' | 'webview'; id: string; placement?: 'manual' };
+type Ref = { kind: 'session' | 'webview'; id: string; placement?: 'manual'; focus?: true };
 type Layout = {
   version: number;
   updatedAt: string;
@@ -131,6 +131,15 @@ describe('child sessions: follow and hand placement', () => {
     ]);
     expect(next.groups[0].refs.find((ref: Ref) => ref.id === 'moved').placement).toBeUndefined();
     expect(next.groups[1].refs).toEqual([]);
+  });
+
+  it('Follow parent again keeps a Focus pin: the whole layout is PUT, so a dropped field is erased', () => {
+    const pinned = lineage();
+    pinned.groups[1].refs[0] = { kind: 'session', id: 'moved', placement: 'manual', focus: true };
+    const next = h.applyOperation(pinned, { type: 'followParent', ref: s('moved'), parents });
+    const moved = next.groups[0].refs.find((ref: Ref) => ref.id === 'moved');
+    expect(moved.placement).toBeUndefined();
+    expect(moved.focus).toBe(true);
   });
 
   it('refuses to follow a parent that is gone or loops, and leaves a following child as it is', () => {
@@ -1078,8 +1087,10 @@ describe('child session placement in the row menu', () => {
     installFetch();
     const app = following(makeApp(lineageLayout()));
     openMenu(app, 's1');
+    // 'Add to Focus' is #582's Focus section, offered on every row.
     expect(menuLabels()).toEqual([
       'Session options',
+      'Add to Focus',
       'Move down',
       'Move to "Later"',
       'Move to Ungrouped',
