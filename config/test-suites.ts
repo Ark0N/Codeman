@@ -47,6 +47,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/mobile-ime-preview.browser.test.ts',
   'test/run-mode-menu-scroll.browser.test.ts',
   'test/markdown-anchor-links.browser.test.ts',
+  'test/fullscreen-tab-switch-capture.browser.test.ts',
 ];
 
 /**

@@ -188,7 +188,13 @@ describe('the in-terminal truncation line is gone (static guard)', () => {
 
   it('loads a bounded shell tail first and keeps unbounded full history user-triggered', () => {
     const app = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
-    expect(app).toContain("session?.mode !== 'shell' && !this._fullHistoryLoaded.has(sessionId)");
+    // A shell never takes the full capture on a tab switch. A TUI takes it on its
+    // first select per page, and on every select while its pane keeps no tmux
+    // scrollback (behaviour pinned in fullscreen-tab-switch-capture.browser.test.ts).
+    expect(app).toContain(
+      "session?.mode !== 'shell' && (paneKeepsNoHistory || !this._fullHistoryLoaded.has(sessionId))"
+    );
+    expect(app).toContain('const paneKeepsNoHistory = this._paneHistoryLines?.get(sessionId) === 0;');
     expect(app).toContain("!restoredSnapshot && session?.mode !== 'shell'");
     expect(app).toContain('`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`');
     // Every terminal capture now goes through _fetchTerminalCapture, which adds
