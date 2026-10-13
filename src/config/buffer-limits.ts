@@ -113,6 +113,16 @@ export const FILE_PEEK_BYTES = 8 * 1024 - 1; // 8KB (inclusive end offset)
  */
 export const MAX_PASTE_IMAGE_BYTES = parseInt(process.env.CODEMAN_MAX_PASTE_IMAGE_BYTES || '') || 50 * 1024 * 1024; // 50MB
 
+/**
+ * Maximum size (bytes) of a single video uploaded via POST
+ * /api/sessions/:id/paste-image?kind=video (the phone toolbar's Attach button
+ * offers the camera roll's videos beside its photos). Videos stream to disk
+ * rather than through memory, so this is a disk-fill sanity bound, not a memory
+ * bound: a minute of 4K60 from an iPhone is about 400MB, so the image cap would
+ * refuse most clips. Override: CODEMAN_MAX_PASTE_VIDEO_BYTES (bytes)
+ */
+export const MAX_PASTE_VIDEO_BYTES = parseInt(process.env.CODEMAN_MAX_PASTE_VIDEO_BYTES || '') || 1024 * 1024 * 1024; // 1GB
+
 // ============================================================================
 // File Download Limits
 // ============================================================================

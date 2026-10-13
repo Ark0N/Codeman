@@ -1247,7 +1247,11 @@ const KeyboardAccessoryBar = {
     const sessionId = app.activeSessionId;
     const pending = this._takePendingLocalEcho(sessionId);
     const saved = this._composerDrafts.get(sessionId) || '';
-    const initial = saved + pending;
+    // A parked draft and text typed (or attached) on the prompt since are two
+    // separate pieces of prose; one space keeps the draft's last word off the
+    // prompt's first, unless either side already supplies the gap.
+    const needsGap = saved && pending && !/\s$/.test(saved) && !/^\s/.test(pending);
+    const initial = needsGap ? `${saved} ${pending}` : saved + pending;
 
     this._composerOverlay?._closeComposer?.({ restoreFocus: false });
     const overlay = document.createElement('div');
@@ -1269,7 +1273,7 @@ const KeyboardAccessoryBar = {
           <button type="button" class="paste-cancel">Cancel</button>
           <button type="button" class="paste-send">Send</button>
         </div>
-        <input type="file" class="paste-file-input" accept="image/*" multiple hidden>
+        <input type="file" class="paste-file-input" accept="image/*,video/*" multiple hidden>
       </div>
     `;
 
@@ -1285,6 +1289,10 @@ const KeyboardAccessoryBar = {
     const fileInput = overlay.querySelector('.paste-file-input');
     const imageButton = overlay.querySelector('.paste-image');
     const sendButton = overlay.querySelector('.paste-send');
+    // Disabled alongside Send while an upload runs: this button deletes the draft
+    // and closes the overlay, and the upload would then land its paths in a FRESH
+    // draft, which the next open would prepend to the handed-back text.
+    const terminalButton = overlay.querySelector('.prompt-composer-terminal');
     const focusTrap = new FocusTrap(overlay);
     textarea.value = initial;
     if (initial) this._composerDrafts.set(sessionId, initial);
@@ -1292,6 +1300,7 @@ const KeyboardAccessoryBar = {
     const initialUploads = this._composerUploads.get(sessionId) || 0;
     imageButton.disabled = initialUploads > 0;
     sendButton.disabled = initialUploads > 0;
+    terminalButton.disabled = initialUploads > 0;
     if (initialUploads > 0) imageButton.textContent = 'Uploading…';
 
     const saveDraft = () => {
@@ -1318,7 +1327,7 @@ const KeyboardAccessoryBar = {
       close({ preserveDraft: false });
     };
     const handleImages = async (files) => {
-      const images = Array.from(files || []).filter((file) => file.type.startsWith('image/'));
+      const images = Array.from(files || []).filter((file) => app._promptAttachKind(file));
       if (images.length === 0 || typeof app._uploadAndInsertImages !== 'function') return;
       saveDraft();
       this._composerUploads.set(sessionId, (this._composerUploads.get(sessionId) || 0) + 1);
@@ -1335,6 +1344,8 @@ const KeyboardAccessoryBar = {
           currentImageButton.textContent = count > 0 ? 'Uploading…' : '🖼 Image';
         }
         if (currentSendButton) currentSendButton.disabled = count > 0;
+        const currentTerminalButton = currentOverlay?.querySelector('.prompt-composer-terminal');
+        if (currentTerminalButton) currentTerminalButton.disabled = count > 0;
       };
       syncUploadUi();
       try {
@@ -1366,9 +1377,8 @@ const KeyboardAccessoryBar = {
       const items = event.clipboardData?.items;
       if (!items) return;
       const images = Array.from(items)
-        .filter((item) => item.type.startsWith('image/'))
         .map((item) => item.getAsFile())
-        .filter(Boolean);
+        .filter((file) => file && app._promptAttachKind(file));
       if (images.length > 0) {
         event.preventDefault();
         void handleImages(images);
@@ -1382,7 +1392,55 @@ const KeyboardAccessoryBar = {
     });
     imageButton.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', () => void handleImages(fileInput.files));
-    overlay.querySelector('.prompt-composer-terminal').addEventListener('click', () => close({ focusTerminal: true }));
+    overlay.querySelector('.prompt-composer-terminal').addEventListener('click', () => {
+      // Hand the text BACK to the terminal prompt so both surfaces hold the same
+      // prompt, the mirror of the adoption composePrompt() does on open. Only a
+      // single-line draft can make the trip: the prompt transport is single-line
+      // and strips embedded newlines, so a multi-line draft would arrive mangled
+      // and instead stays parked as a draft (the dot on the Compose key shows it).
+      const text = textarea.value;
+      if (!text || text.includes('\n')) {
+        close({ focusTerminal: true });
+        return;
+      }
+      // Refuse an oversized draft BEFORE it is deleted, or the text is gone from
+      // both surfaces. Same cap as Send: the overlay branch lays the whole text out
+      // as DOM lines on every repaint, so the transport's larger paste cap is not
+      // the bound that matters here.
+      if (text.length > this._composerMaxLength) {
+        app.showToast?.(`Prompt is too long to send (maximum ${this._composerMaxLength.toLocaleString()} characters)`, 'error');
+        return;
+      }
+      // Cleared, never kept: the text now lives on the prompt, and a surviving
+      // draft would be prepended to it the next time the composer opens.
+      this._composerDrafts.delete(sessionId);
+      close({ focusTerminal: true, preserveDraft: false });
+      if (
+        app._localEchoEnabled &&
+        app._localEchoOverlay &&
+        app.activeSessionId === sessionId &&
+        !app._tilesOwnTerminal?.() &&
+        !app._echoPassthroughSessions?.has(sessionId)
+      ) {
+        // Buffer echo: the prompt is the overlay, so the text goes there unsent.
+        // Passthrough is excluded deliberately: such a session skips the overlay
+        // branch on Enter, so text parked there would never be submitted. The tile
+        // grid is excluded for the same reason _attachFromToolbar is: the main
+        // terminal is parked and hidden then, and a tile's Enter cannot flush its
+        // overlay, so the text goes to the PTY below instead of stranding there.
+        app._localEchoOverlay.appendText(text);
+      } else {
+        // Write-through echo (codex) or no local echo at all: there is no buffer
+        // to park text in, because the prompt the user sees IS the CLI's own
+        // composer on the PTY. Checking for the overlay alone left this branch
+        // doing nothing on codex, so the button looked dead there. That composer
+        // may already hold text the open adopted nothing of, so lead with a
+        // separator rather than fuse onto its last word (harmless when empty).
+        app._predictiveEcho?.clearPredictions();
+        app._sendInputAsync(sessionId, ` ${text}`);
+      }
+      this._syncComposerDraftIndicator();
+    });
     overlay.querySelector('.paste-cancel').addEventListener('click', () => close());
     sendButton.addEventListener('click', send);
     overlay.addEventListener('click', (event) => {
@@ -1399,7 +1457,7 @@ const KeyboardAccessoryBar = {
    *  Handles three input paths from one dialog:
    *   - Text: long-press the textarea → Paste → Send (unchanged).
    *   - Image (picker): the "Image" button opens a native file picker
-   *     (accept=image/* → camera / photo library / files), the most reliable
+   *     (accept=image/*,video/* → camera / photo library / files), the most reliable
    *     way to attach a photo on mobile.
    *   - Image (paste): if the browser exposes image blobs on the textarea's
    *     paste event, we intercept them and upload directly. Support is spotty
@@ -1414,13 +1472,13 @@ const KeyboardAccessoryBar = {
     overlay.className = 'paste-overlay';
     overlay.innerHTML = `
       <div class="paste-dialog">
-        <textarea class="paste-textarea" placeholder="Long-press to paste text — or tap 🖼 to attach an image"></textarea>
+        <textarea class="paste-textarea" placeholder="Long-press to paste text — or tap 🖼 to attach a photo or video"></textarea>
         <div class="paste-actions">
           <button class="paste-image">🖼 Image</button>
           <button class="paste-cancel">Cancel</button>
           <button class="paste-send">Send</button>
         </div>
-        <input type="file" class="paste-file-input" accept="image/*" multiple hidden>
+        <input type="file" class="paste-file-input" accept="image/*,video/*" multiple hidden>
       </div>
     `;
 
@@ -1438,10 +1496,10 @@ const KeyboardAccessoryBar = {
       }
     };
 
-    // Filter to images, close the dialog, and hand off to the shared
+    // Filter to images and videos, close the dialog, and hand off to the shared
     // upload+insert pipeline. Returns true if any image was handled.
     const handleImages = (files) => {
-      const images = Array.from(files || []).filter((f) => f.type.startsWith('image/'));
+      const images = Array.from(files || []).filter((f) => app._promptAttachKind(f));
       if (images.length === 0) return false;
       close();
       if (typeof app._uploadAndInsertImages === 'function') app._uploadAndInsertImages(images);
@@ -1458,10 +1516,8 @@ const KeyboardAccessoryBar = {
       if (!items) return;
       const imageFiles = [];
       for (let i = 0; i < items.length; i++) {
-        if (items[i].type.startsWith('image/')) {
-          const blob = items[i].getAsFile();
-          if (blob) imageFiles.push(blob);
-        }
+        const blob = items[i].getAsFile();
+        if (blob && app._promptAttachKind(blob)) imageFiles.push(blob);
       }
       if (imageFiles.length > 0) {
         e.preventDefault();

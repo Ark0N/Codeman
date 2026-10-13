@@ -7,9 +7,10 @@
  * of Codeman. Now the grid section itself takes every file drag (bubble
  * phase): anywhere over it (a tile, an empty cell, a divider, its padding)
  * dragover and drop are cancelled, so the page never navigates, and a drop on
- * a tile uploads its images to THAT tile's session, the same upload and the
- * same "Only image files" toast as the single view. Tab and tile drags are
- * the targets' own (_acceptTabDrops, capture phase) and stay untouched.
+ * a tile uploads its files to THAT tile's session, through the same classifier
+ * (_promptAttachKind: images, videos and documents) and the same "Unsupported
+ * file type" toast as the single view. Tab and tile drags are the targets' own
+ * (_acceptTabDrops, capture phase) and stay untouched.
  *
  * Real code via the shared vm harness (test/mocks/tile-grid-vm.ts). Port: N/A.
  */
@@ -31,6 +32,10 @@ function fileEvent(target: FakeEl, files: Array<{ type: string; name?: string }>
 function gridApp(ids = IDS): GridApp {
   const app = makeGridApp(ids);
   app._uploadAndInsertImages = vi.fn();
+  // The single view's classifier, by MIME then by the name's extension (image-input.js).
+  (app as unknown as { _promptAttachKind: (f: { type: string; name?: string }) => string | null })._promptAttachKind = (
+    f
+  ) => (/^(image|video)\//.test(f.type) ? 'image' : /\.(pdf|docx|md)$/i.test(f.name || '') ? 'document' : null);
   app.openTileGrid(ids, { focusedId: 's-a' });
   return app;
 }
@@ -61,19 +66,21 @@ describe('a file dropped on a tile', () => {
     expect(app.activeSessionId).toBe('s-a');
   });
 
-  it('only the images of a mixed drop are uploaded', () => {
+  it('only the files the classifier admits are uploaded: a document and a video count, an unnamed text part does not', () => {
     const app = gridApp();
-    section.dispatch('drop', fileEvent(tileEl('s-c'), [{ type: 'text/plain' }, PNG]));
-    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([PNG], { sessionId: 's-c' });
+    const pdf = { type: 'application/pdf', name: 'Q3 report.pdf' };
+    const mov = { type: 'video/quicktime', name: 'IMG_0001.MOV' };
+    section.dispatch('drop', fileEvent(tileEl('s-c'), [{ type: 'text/plain' }, PNG, pdf, mov]));
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([PNG, pdf, mov], { sessionId: 's-c' });
   });
 
-  it('a drop with no image says so, as the single view does, and uploads nothing', () => {
+  it('a drop with nothing the classifier admits says so, as the single view does, and uploads nothing', () => {
     const app = gridApp();
-    const drop = fileEvent(tileEl('s-b'), [{ type: 'application/pdf' }]);
+    const drop = fileEvent(tileEl('s-b'), [{ type: 'application/x-sh', name: 'run.sh' }]);
     section.dispatch('drop', drop);
     expect(drop.preventDefault).toHaveBeenCalled();
     expect(app._uploadAndInsertImages).not.toHaveBeenCalled();
-    expect(app.showToast).toHaveBeenCalledWith('Only image files are supported', 'error');
+    expect(app.showToast).toHaveBeenCalledWith('Unsupported file type', 'error');
   });
 });
 

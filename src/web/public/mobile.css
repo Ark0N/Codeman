@@ -614,7 +614,9 @@ html.mobile-init .file-browser-panel {
 
   /* Mobile voice input button in toolbar — initially hidden via inline style,
      shown by VoiceInput._showButtons() clearing the inline display */
-  .btn-voice-mobile {
+  /* The Attach button shares the mic's box; its toolbar slot is on its wrapper below. */
+  .btn-voice-mobile,
+  .btn-attach-mobile {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -626,15 +628,48 @@ html.mobile-init .file-browser-panel {
     color: #93c5fd;
     cursor: pointer;
     flex-shrink: 0;
-    order: 5; /* Between Run Shell and settings gear */
   }
 
-  .btn-voice-mobile svg {
+  /* Toolbar slot for both, between Run Shell and the settings gear. Attach's
+     WRAPPER takes it (the button inside is not a toolbar flex item), and at an
+     equal order source order keeps Attach on the left of the mic. */
+  .btn-voice-mobile,
+  .btn-attach-mobile-wrap {
+    order: 5;
+  }
+
+  /* Relative box for the invisible file input that sits over the button and TAKES
+     THE TAPS (see initImageInput): a native tap on the input is the only thing that
+     opens the picker while the keyboard is up, and iOS anchors the picker popover to
+     the input's own frame. overflow: hidden is load-bearing: WebKit does not clip a
+     file input, so its "Choose Files" content (~115px in this 26px box) spilled out
+     invisibly over the mic and took its taps. Chromium clips it, so only iOS showed it. */
+  .btn-attach-mobile-wrap {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+
+  .btn-attach-mobile-input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+  }
+
+  .btn-voice-mobile svg,
+  .btn-attach-mobile svg {
     width: 13px;
     height: 13px;
   }
 
-  .btn-voice-mobile:active {
+  .btn-voice-mobile:active,
+  .btn-attach-mobile:active,
+  /* The input above the button swallows the press, so the wrapper is what goes
+     :active. Without this the only phone button with no press feedback is Attach. */
+  .btn-attach-mobile-wrap:active .btn-attach-mobile {
     background: #2a3a5f;
   }
 
@@ -3245,13 +3280,22 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
    both stylesheets and repainted the armed modifier back to a resting button on
    all four light skins. Excluding the state here fixes phone and tablet at once;
    adding a class to the armed rules would only have moved the tie. */
-html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-voice-mobile, .btn-settings-mobile, .btn-toolbar.btn-shell, .accessory-btn:not(.armed)) {
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-voice-mobile, .btn-attach-mobile, .btn-settings-mobile, .btn-toolbar.btn-shell, .accessory-btn:not(.armed)) {
   background: var(--control-bg);
   border-color: var(--control-border);
   color: var(--text-dim);
 }
 
-html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-voice-mobile:active, .btn-settings-mobile:active, .btn-toolbar.btn-shell:hover, .btn-toolbar.btn-shell:active, .accessory-btn:active) {
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-voice-mobile:active, .btn-attach-mobile:active, .btn-settings-mobile:active, .btn-toolbar.btn-shell:hover, .btn-toolbar.btn-shell:active, .accessory-btn:active) {
+  background: var(--control-bg-hover);
+  border-color: var(--control-border-hover);
+  color: var(--text);
+}
+
+/* Attach's press feedback comes from its wrapper (the file input over the button
+   takes the press). Kept out of the :is() list above on purpose: a descendant
+   selector there would raise that list's specificity for every button in it. */
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) .btn-attach-mobile-wrap:active .btn-attach-mobile {
   background: var(--control-bg-hover);
   border-color: var(--control-border-hover);
   color: var(--text);

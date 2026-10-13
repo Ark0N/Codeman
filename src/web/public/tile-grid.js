@@ -324,12 +324,14 @@ Object.assign(CodemanApp.prototype, {
       const sessionId = tileAt(e.target);
       const files = Array.from(e.dataTransfer?.files || []);
       if (!sessionId || files.length === 0) return;
-      const images = files.filter((f) => String(f?.type || '').startsWith('image/'));
-      if (images.length === 0) {
-        this.showToast?.('Only image files are supported', 'error');
+      // The one classifier every pick and drop filter reads (image-input.js):
+      // MIME first, then the name's extension, so documents and videos count too.
+      const media = files.filter((f) => this._promptAttachKind?.(f));
+      if (media.length === 0) {
+        this.showToast?.('Unsupported file type', 'error');
         return;
       }
-      this._uploadAndInsertImages?.(images, { sessionId });
+      this._uploadAndInsertImages?.(media, { sessionId });
     });
   },
 
