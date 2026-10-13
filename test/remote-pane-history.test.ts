@@ -146,8 +146,15 @@ describe('the remote script under a real shell', () => {
 
 describe('joinScrollbackAndFrame', () => {
   it('puts the scrollback rows above the frame in tmux’s own row shape', () => {
-    expect(joinScrollbackAndFrame('old 1\nold 2\n', 'frame 1\nframe 2\n')).toBe('old 1\nold 2\nframe 1\nframe 2\n');
-    expect(joinScrollbackAndFrame('old 1', 'frame 1')).toBe('old 1\nframe 1');
+    expect(joinScrollbackAndFrame('old 1\nold 2\n', 'frame 1\nframe 2\n')).toBe(
+      'old 1\nold 2\x1b[0m\nframe 1\nframe 2\n'
+    );
+    expect(joinScrollbackAndFrame('old 1', 'frame 1')).toBe('old 1\x1b[0m\nframe 1');
+  });
+
+  it('resets SGR at the seam, so the last history row cannot bleed into the frame', () => {
+    // A remote history row that ends with a background still set (a diff row).
+    expect(joinScrollbackAndFrame('\x1b[41mRED ROW\n', 'plain\n')).toBe('\x1b[41mRED ROW\x1b[0m\nplain\n');
   });
 
   it('no scrollback leaves the frame alone', () => {

@@ -701,7 +701,9 @@ export function normalizeScrollbackEol(buffer: string): string {
  */
 export function joinScrollbackAndFrame(scrollback: string | undefined, frame: string): string {
   if (!scrollback) return frame;
-  return `${scrollback.replace(/\n$/, '')}\n${frame}`;
+  // Two separate captures: tmux encodes the frame relative to the DEFAULT
+  // state, so the scrollback's last row must not leave its attributes active.
+  return `${scrollback.replace(/\n$/, '')}\x1b[0m\n${frame}`;
 }
 
 /** Pane geometry and caret position, as `display-message` reports them. */
