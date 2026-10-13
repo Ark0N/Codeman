@@ -24,7 +24,6 @@ const TEXT_PREVIEW_MAX_LINES = 500;
 // cap: a rendered README cut mid-way reads as the whole document.
 const MARKDOWN_PREVIEW_MAX_LINES = 10000;
 const MARKDOWN_EXTS = new Set(['md', 'markdown']);
-const HTML_PAGE_EXTS = new Set(['html', 'htm']);
 // File Viewer text-view prefs: per-device, in their own localStorage keys for
 // the same reason as FILE_BROWSER_SHOW_HIDDEN_KEY (the app-settings object is
 // rebuilt from the settings modal on save, so a key toggled from the viewer
@@ -4126,7 +4125,7 @@ Object.assign(CodemanApp.prototype, {
     // The Page pill switches to the source view below (with its Edit button), and
     // a refused mint (remote case, broad folder, hidden directory) falls through
     // to that source view on its own.
-    if (!attachmentId && HTML_PAGE_EXTS.has(ext) && this._filePreviewPref('htmlRendered')) {
+    if (!attachmentId && rendersAsPage(filePath) && this._filePreviewPref('htmlRendered')) {
       const pageUrl = await this._mintHtmlViewUrl(filePath, sessionId);
       if (pageUrl) {
         footerEl.textContent = 'HTML';
@@ -4615,7 +4614,7 @@ Object.assign(CodemanApp.prototype, {
     const htmlSource =
       view === 'text' &&
       !this.filePreviewPageRefused &&
-      HTML_PAGE_EXTS.has(text?.ext || '') &&
+      rendersAsPage(text?.filePath) &&
       (!text.attachmentId || text.filePath.startsWith('/'));
     set('filePreviewPageBtn', view === 'page' || htmlSource, view === 'page');
     set('filePreviewLinesBtn', view === 'text', this._filePreviewPref('lineNumbers'));
@@ -4642,7 +4641,7 @@ Object.assign(CodemanApp.prototype, {
     const target = this.filePreviewPage || this.filePreviewText;
     if (!target) return;
     this._setFilePreviewPref('htmlRendered', !this._filePreviewPref('htmlRendered'));
-    this.openFilePreview(target.filePath, target.sessionId);
+    return this.openFilePreview(target.filePath, target.sessionId);
   },
 
   toggleFilePreviewMd() {

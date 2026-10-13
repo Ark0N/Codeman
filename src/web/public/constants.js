@@ -1976,6 +1976,21 @@ function previewsInFileViewer(filePath) {
   return FILE_PREVIEW_EXTENSIONS.has(ext);
 }
 
+/**
+ * Extensions the file preview renders as a PAGE, from the sandboxed
+ * `/html-view/<cap>/` route (src/web/routes/html-view-routes.ts, whose
+ * HTML_VIEW_EXTENSIONS this mirrors; test/file-preview-html-page.test.ts pins
+ * the two equal). The terminal sends a click on one to the preview, never to
+ * the log viewer, and the preview renders it with a Page pill back to source.
+ */
+const HTML_PAGE_EXTENSIONS = new Set(['html', 'htm']);
+
+/** Whether a path names a file the preview renders as a page ({@link HTML_PAGE_EXTENSIONS}). */
+function rendersAsPage(filePath) {
+  const ext = String(filePath || '').split('.').pop().toLowerCase();
+  return HTML_PAGE_EXTENSIONS.has(ext);
+}
+
 
 /**
  * The LOGICAL line a terminal row belongs to — the rows it spans, its text as one
@@ -2992,7 +3007,13 @@ function describeSessionHarness(session, catalog) {
 if (typeof window !== 'undefined') {
   window.CodemanSessionHarness = { describeSessionHarness, SESSION_MODEL_MAX_CHARS };
   window.CodemanHistoryFormat = { formatHistoryBytes, computeHistoryTruncationNotice, computeRewriteScrollLine };
-  window.CodemanFilePaths = { absoluteFilePathPattern, previewsInFileViewer, FILE_PREVIEW_EXTENSIONS };
+  window.CodemanFilePaths = {
+    absoluteFilePathPattern,
+    previewsInFileViewer,
+    FILE_PREVIEW_EXTENSIONS,
+    rendersAsPage,
+    HTML_PAGE_EXTENSIONS,
+  };
   window.CodemanTerminalLines = { terminalLogicalLine };
   window.CodemanUrlSession = { sessionIdFromFragment };
   window.CodemanSplitPane = {

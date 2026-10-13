@@ -2091,7 +2091,7 @@ Object.assign(CodemanApp.prototype, {
               const sessionId = getSessionId();
               // An HTML file renders as a page in the preview, never as source
               // in the log viewer.
-              if (previewsInFileViewer(text) || /\.html?$/i.test(text) || self._isExternalPreviewPath(text, sessionId)) {
+              if (previewsInFileViewer(text) || rendersAsPage(text) || self._isExternalPreviewPath(text, sessionId)) {
                 self.openFilePreview(text, sessionId);
                 return;
               }
