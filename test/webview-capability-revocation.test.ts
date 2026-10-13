@@ -9,7 +9,9 @@
  * The rendered-HTML capabilities (`htmlViewCapabilities`) are pinned at the same sites.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dataPath } from '../src/config/instance.js';
 import { WebviewCapabilityStore, webviewCapabilities } from '../src/webview-capabilities.js';
 import { HtmlViewCapabilityStore, htmlViewCapabilities } from '../src/html-view-capabilities.js';
 import { createRouteTestHarness, type RouteTestHarness } from './routes/_route-test-utils.js';
@@ -157,6 +159,16 @@ describe('admin routes (multi-user)', () => {
     expect(htmlViewCapabilities.resolve(bossPage)).toBeDefined();
     webviewCapabilities.revokeWebview('wv-boss-forced');
     htmlViewCapabilities.revokeOwner('boss');
+
+    // The audit line counts both kinds of capability it retired.
+    await vi.waitFor(() => {
+      const entries = readFileSync(dataPath('admin-audit.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const logout = entries.filter((e) => e.action === 'user.logout' && e.target === 'PEON').pop();
+      expect(logout?.detail).toMatchObject({ revokedWebviews: 1, revokedHtmlViews: 1 });
+    });
   });
 
   it('deleting a user revokes whatever that user had open', async () => {

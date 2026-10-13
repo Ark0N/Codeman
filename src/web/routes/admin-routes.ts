@@ -184,8 +184,8 @@ export function registerAdminRoutes(app: FastifyInstance, ctx: SessionPort & Aut
     // Web-tab proxy capabilities are a second credential the cookie purge does not
     // touch; a forced logout that left them alive would not be a logout.
     const revokedWebviews = webviewCapabilities.revokeOwner(normalizeUsername(username));
-    htmlViewCapabilities.revokeOwner(normalizeUsername(username));
-    audit(req, 'user.logout', username, { revoked, revokedWebviews });
+    const revokedHtmlViews = htmlViewCapabilities.revokeOwner(normalizeUsername(username));
+    audit(req, 'user.logout', username, { revoked, revokedWebviews, revokedHtmlViews });
     return { success: true, data: { revoked } };
   });
 
