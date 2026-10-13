@@ -2404,7 +2404,8 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing folder path'));
       return;
     }
-    if (scope.docker && body.path.startsWith('~/')) {
+    // A bare `~` expands to this host's home too, not the container's.
+    if (scope.docker && (body.path === '~' || body.path.startsWith('~/'))) {
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, DOCKER_HOME_PATH_ERROR));
       return;
     }

@@ -341,6 +341,8 @@ describe('folder grid routes — local folder', () => {
       const home = await grant('~/renders');
       expect(home.statusCode).toBe(400);
       expect(JSON.parse(home.body).error).toMatch(/docker/i);
+      // A bare `~` is this host's home as much as `~/` is.
+      expect((await grant('~')).statusCode).toBe(400);
       expect((await grant(dir)).statusCode).toBe(200);
     });
 
