@@ -87,9 +87,10 @@ File paths in a session are links. That works in two places:
   render as underlined monospace links.
 
 Clicking one opens it in the preview: images and PDFs render, video and audio play with a
-working scrub bar, documents convert, text shows inline and Markdown renders. The exception is
-a text or Markdown file inside the workspace clicked in the terminal: that opens in the tail
-viewer instead, which follows a file that is still being written.
+working scrub bar, documents convert, text shows inline, Markdown renders and HTML opens as a
+page. The exception is a plain text file (a log, `.txt`, `.json`, code) inside the workspace
+clicked in the terminal: that opens in the tail viewer instead, which follows a file that is
+still being written. A Markdown file always opens rendered, wherever you click it.
 
 Paths **outside** the session's workspace work too, which matters because that is where most
 of an agent's output lands: a screenshot in `/tmp`, a capture in its own scratchpad, a file in
