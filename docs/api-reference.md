@@ -544,8 +544,8 @@ client that opens many concurrent waits against one session will still hit the c
 What a session's terminal shows, for a client to replay: `data.terminalBuffer`,
 with `source` (`mux-visible`, `mux-full-history` or `history`), `truncated`,
 `truncationReason`, `fullSize`, and `captureCols`/`captureRows` when the pane's
-geometry was read. `paneHistoryLines` (present whenever the body is a pane capture)
-is the number of scrollback rows tmux holds above the visible frame, which is the
+geometry was read. `paneHistoryLines` (present when the body is a pane capture whose
+geometry was read, like `captureCols`/`captureRows`) is the number of scrollback rows tmux holds above the visible frame, which is the
 most a `full=1` request can add. `truncated` describes the byte stream instead: for a
 pane with `paneHistoryLines: 0` (a fullscreen CLI in the alternate screen) the bytes a
 `tail` cut dropped are earlier repaints that no request returns. The capture runs
