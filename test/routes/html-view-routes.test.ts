@@ -78,6 +78,9 @@ describe('html-view routes', () => {
   it('refuses non-HTML files and missing files', async () => {
     expect((await open(join(workspace, 'data.json'))).statusCode).toBe(400);
     expect((await open(join(workspace, 'missing.html'))).statusCode).toBe(404);
+    // An .html name that links to something else is judged by its target.
+    symlinkSync(join(workspace, 'data.json'), join(workspace, 'data.html'));
+    expect((await open(join(workspace, 'data.html'))).statusCode).toBe(400);
   });
 
   it('serves the page sandboxed, never same-origin', async () => {

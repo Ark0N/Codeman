@@ -175,6 +175,12 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
       reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
       return;
     }
+    // The page URL names the RESOLVED file, so it has to be HTML too: a
+    // `report.html -> notes.txt` link would otherwise mint a page for a text file.
+    if (!HTML_VIEW_EXTENSIONS.has(extensionOf(resolvedPath))) {
+      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an HTML file'));
+      return;
+    }
 
     // The serving route never descends into a dot segment below the capability
     // root; the HTML file's own path gets the same rule, or `.cache/r.html` would
