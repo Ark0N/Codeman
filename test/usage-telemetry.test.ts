@@ -172,7 +172,7 @@ describe('parsePromptCache', () => {
     // Out-of-range or non-finite values are clamped or dropped, never stored as-is.
     expect(parsePromptCache({ prompt_cache: { warm: true, hit_ratio: 1.5 } })).toEqual({ warm: true, hitRatio: 1 });
     expect(parsePromptCache({ prompt_cache: { warm: true, hit_ratio: -0.2 } })).toEqual({ warm: true, hitRatio: 0 });
-    // expected_rebuilds is rounded and floored at 0 (it indexes the compaction rise).
+    // expected_rebuilds is rounded and floored at 0.
     expect(parsePromptCache({ prompt_cache: { warm: true, expected_rebuilds: 2.9 } })).toEqual({
       warm: true,
       expectedRebuilds: 3,

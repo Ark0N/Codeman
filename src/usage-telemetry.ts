@@ -76,7 +76,7 @@ export interface RawPromptCache {
   /** Null right after a compaction or tool-result clearing, until the next request records the rewritten size. */
   recache_tokens_if_cold?: number | null;
   misses?: number | null;
-  /** Cache rebuilds that followed a compaction or a clearing of old tool results (the compaction signal). */
+  /** Cache rebuilds that followed a compaction or a clearing of old tool results (counted at the request after one; not read for the compaction stamp). */
   expected_rebuilds?: number | null;
   /** Cache read tokens as a fraction of all input tokens this session, 0-1; null while those counts are all zero. */
   hit_ratio?: number | null;
