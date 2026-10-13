@@ -677,7 +677,6 @@
     // placeholder and label are looked up by the module at build time, since
     // the DOM translator skips <textarea> subtrees.
     'Compose prompt': '撰写提示词',
-    Attach: '添加附件',
     'Open a session to attach a file': '请先打开一个会话再添加附件',
     'Only image or video files are supported': '仅支持图片或视频文件',
     'Compose prompt, draft saved': '撰写提示词，草稿已保存',

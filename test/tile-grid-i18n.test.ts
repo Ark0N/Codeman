@@ -357,6 +357,11 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
     expect(bad).toEqual([]);
   });
 
+  it("the tile's Attach button keeps its meaning (one ZH_CN key: a later duplicate would win)", () => {
+    // The phone toolbar's Attach button shares the English word; 附加 fits both.
+    expect(zh.api.t('Attach')).toBe('附加');
+  });
+
   it('the harness logo keeps harness and model names as they are and translates the rest', () => {
     // Not vacuous: every form the logo's tooltip takes was seen.
     expect([...harnessLabels.keys()]).toEqual(
