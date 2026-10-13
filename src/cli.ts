@@ -298,6 +298,12 @@ skillCmd
         const target = resolveSkillTarget({ case: options.case, skillDir });
         const result = await removeAgentSkillFrom(target);
         if (result === 'absent') continue;
+        if (result === 'symlink') {
+          // A shared-skills layout (`.agents/skills -> ../.claude/skills`) is deliberate:
+          // skip it rather than fail the whole sweep.
+          console.log(palette.warn(`- Skipped ${target}: it (or its parent) is a symlink, so it was not touched`));
+          continue;
+        }
         removedAny = true;
         const message = describeSkillResult(result, target);
         if (message.ok) console.log(palette.ok(`✓ ${message.text}`));
