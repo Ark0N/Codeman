@@ -191,6 +191,21 @@ describe('html-view routes', () => {
     expect((await open(join(root, '.hidden', 'r.html'))).statusCode).toBe(403);
   });
 
+  it('renders a page in a workspace that itself lives under a hidden folder', async () => {
+    const hiddenWorkspace = join(root, '.local', 'src', 'app');
+    mkdirSync(join(hiddenWorkspace, 'report'), { recursive: true });
+    writeFileSync(join(hiddenWorkspace, 'report', 'index.html'), '<p>r</p>');
+    mkdirSync(join(hiddenWorkspace, '.cache'));
+    writeFileSync(join(hiddenWorkspace, '.cache', 'r.html'), '<p>r</p>');
+    (harness.ctx.sessions.get(sid) as { workingDir: string }).workingDir = hiddenWorkspace;
+
+    const res = await open(join(hiddenWorkspace, 'report', 'index.html'));
+    expect(res.statusCode).toBe(200);
+    expect((await harness.app.inject({ method: 'GET', url: JSON.parse(res.body).data.url })).statusCode).toBe(200);
+    // A hidden directory BELOW the workspace root is still refused.
+    expect((await open(join(hiddenWorkspace, '.cache', 'r.html'))).statusCode).toBe(403);
+  });
+
   it('treats the filesystem root, home and the temp dir as too broad to serve', () => {
     expect(isBroadHtmlViewRoot('/')).toBe(true);
     expect(isBroadHtmlViewRoot(homedir())).toBe(true);

@@ -182,8 +182,12 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
 
     // The serving route never descends into a dot segment below the capability
     // root; the HTML file's own path gets the same rule, or `.cache/r.html` would
-    // mint a capability over a hidden directory and serve its `token.json`.
-    if (resolvedPath.split(sep).some((segment) => segment.startsWith('.'))) {
+    // mint a capability over a hidden directory and serve its `token.json`. Inside
+    // the workspace the rule covers the part below the workspace root, which is
+    // all the page's tree can reach, so a workspace that itself lives under a
+    // hidden folder (`~/.local/src/app`) can still render its pages.
+    const checkedPath = inWorkspace ? inWorkspace.relativePath : resolvedPath;
+    if (checkedPath.split(sep).some((segment) => segment.startsWith('.'))) {
       reply
         .code(403)
         .send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'HTML files in hidden directories cannot be rendered'));
