@@ -3012,8 +3012,16 @@ Object.assign(CodemanApp.prototype, {
     this._lastTileDrag = null;
     const grid = this._tileGrid;
     if (!grid?.has(sessionId)) return false;
-    if (grid.ids.length > 1) return this.removeTile(sessionId, { focus: false });
-    this.closeTileGrid({ keepStored: false, reselect: false });
+    // One stored grid per browser, and the window that docked the tile has
+    // just written it: this window losing the tile is no change of the
+    // user's to remember over that one (nor to forget it).
+    this._tilePersistHold = true;
+    try {
+      if (grid.ids.length > 1) return this.removeTile(sessionId, { focus: false });
+      this.closeTileGrid({ keepStored: true, reselect: false });
+    } finally {
+      this._tilePersistHold = false;
+    }
     this.activeSessionId = null;
     try {
       localStorage.removeItem('codeman-active-session');

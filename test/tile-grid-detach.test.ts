@@ -42,6 +42,7 @@ import {
   FakeTile,
   documentAddEventListener,
   documentRemoveEventListener,
+  localStore,
   makeGridApp,
   pointHits,
   resetGridHarness,
@@ -279,6 +280,40 @@ describe('another window docking the tile this one dragged', () => {
     expect(app.activeSessionId).toBeNull();
     expect(app.showWelcome).toHaveBeenCalled();
     expect(app.terminal.clear).toHaveBeenCalled();
+  });
+
+  // One stored grid per browser: the window that docked the tile wrote it a
+  // moment before this one hears the claim. Losing the tile here is not a
+  // layout of this window's to store over that one, nor a reason to forget it.
+  const docked = JSON.stringify({
+    v: 1,
+    open: true,
+    ids: ['s-x', 's-b'],
+    count: 2,
+    focused: 's-b',
+    zoomed: null,
+    colFr: [1, 1],
+    rowFr: [1],
+  });
+
+  it("the stored grid stays the docking window's when this one keeps other tiles", () => {
+    const app = openGrid(FOUR);
+    startDrag('s-b');
+    endDrag('s-b', { clientX: -50, clientY: 300 }, 'move');
+    localStore.set('codeman:tile-grid', docked);
+    app._onWindowMessage({ type: 'tile-adopted', id: 's-b', by: 'c-there' });
+    expect(app._tileGrid.ids).toEqual(['s-a', 's-c', 's-d']);
+    expect(localStore.get('codeman:tile-grid')).toBe(docked);
+  });
+
+  it("the stored grid stays the docking window's when this one's last tile leaves", () => {
+    const app = openGrid(['s-b']);
+    startDrag('s-b');
+    endDrag('s-b', { clientX: -50, clientY: 300 }, 'move');
+    localStore.set('codeman:tile-grid', docked);
+    app._onWindowMessage({ type: 'tile-adopted', id: 's-b', by: 'c-there' });
+    expect(app._tileGrid.open).toBe(false);
+    expect(localStore.get('codeman:tile-grid')).toBe(docked);
   });
 
   it('a claim for a tile this window did not drag, or one it dragged long ago, is ignored', () => {
