@@ -658,7 +658,7 @@ Matching semantics: a query containing `/` matches the relative path, otherwise 
 
 ### Raw file bodies: streamed and range-aware
 
-**Raw file bodies are streamed and range-aware**: `file-raw`, the attachments `/raw` route and `GET /api/download` always advertise `Accept-Ranges: bytes` and answer a `Range` header with `206` + `Content-Range` (single-range only; parser is pure + unit-tested in `src/web/http-range.ts`, a malformed spec is ignored → 200 while an out-of-bounds one is a 416).
+**Raw file bodies are streamed and range-aware**: `file-raw`, the attachments `/raw` route, `GET /api/download` and the rendered-HTML route `GET /html-view/<cap>/...` (so a rendered page's own `<video>`/`<audio>` can seek) always advertise `Accept-Ranges: bytes` and answer a `Range` header with `206` + `Content-Range` (single-range only; parser is pure + unit-tested in `src/web/http-range.ts`, a malformed spec is ignored → 200 while an out-of-bounds one is a 416).
 
 ⚠️ **The size cap on all three is a sanity bound, not memory protection** (`MAX_FILE_DOWNLOAD_BYTES` in `config/buffer-limits.ts`, default 2GB, env `CODEMAN_MAX_DOWNLOAD_BYTES`, `0` = unlimited): the bodies stream, so size costs a read stream and not RSS (measured: a 600MB download moved peak RSS by ~37MB). Its predecessor was a hardcoded 50MB whose comment still said "prevent memory exhaustion" long after the `readFile()` it described was replaced by `sendFileBody()`, so all it did was refuse legitimate downloads of build artifacts, videos and archives. `/api/download` was the last route that really did buffer the whole file, and now shares `sendFileBody()` with the other two.
 

@@ -25,7 +25,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
-import { createReadStream, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
@@ -34,6 +34,7 @@ import { isBlockedAttachmentPath, isUnderTree, loadAttachmentGuardConfig } from 
 import { HTML_VIEW_PREFIX, htmlViewCapabilities } from '../../html-view-capabilities.js';
 import { CASES_DIR, findSessionOrFail, ownerFor, parseBody, validateSessionFilePath } from '../route-helpers.js';
 import { HtmlViewOpenSchema } from '../schemas.js';
+import { localFileSource, sendFileBody } from './file-routes.js';
 import { getUserSpacesDir } from '../../config/multiuser.js';
 import { exceedsDownloadLimit } from '../../config/buffer-limits.js';
 import type { SessionPort } from '../ports/index.js';
@@ -254,7 +255,6 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
 
     reply.header('Content-Security-Policy', SANDBOX_CSP);
     reply.header('Content-Type', contentType);
-    reply.header('Content-Length', String(stat.size));
     reply.header('Cache-Control', 'no-store');
     reply.header('Referrer-Policy', 'no-referrer');
     // The sandboxed page is opaque-origin, so even its fetch() of a sibling
@@ -262,6 +262,10 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
     // enough, and widens nothing: these bytes are already readable by anyone
     // holding the capability URL.
     reply.header('Access-Control-Allow-Origin', '*');
-    return reply.send(createReadStream(resolvedPath));
+    // The file routes' body sender: Content-Length, and `Range` answered with 206
+    // (or 416), so a page's own <video>/<audio> can seek. It hijacks the reply, and
+    // carries every header set above across to it.
+    sendFileBody(reply, stat.size, req.headers.range, localFileSource(resolvedPath));
+    return reply;
   });
 }

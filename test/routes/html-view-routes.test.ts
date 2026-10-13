@@ -94,6 +94,28 @@ describe('html-view routes', () => {
     expect(res.body).toBe('<h1>hi</h1>');
   });
 
+  it('answers Range requests, so a page can seek its own media', async () => {
+    writeFileSync(join(workspace, 'clip.mp4'), '0123456789');
+    const base = (await openUrl()).replace(/index\.html$/, '');
+    const full = await harness.app.inject({ method: 'GET', url: `${base}clip.mp4` });
+    expect(full.statusCode).toBe(200);
+    expect(full.headers['accept-ranges']).toBe('bytes');
+    expect(full.headers['content-length']).toBe('10');
+
+    const part = await harness.app.inject({ method: 'GET', url: `${base}clip.mp4`, headers: { range: 'bytes=2-5' } });
+    expect(part.statusCode).toBe(206);
+    expect(part.headers['content-range']).toBe('bytes 2-5/10');
+    expect(part.body).toBe('2345');
+    // Every header the route sets survives the hijacked body sender.
+    expect(part.headers['content-type']).toBe('video/mp4');
+    expect(String(part.headers['content-security-policy'])).toMatch(/^sandbox /);
+    expect(part.headers['access-control-allow-origin']).toBe('*');
+    expect(part.headers['cache-control']).toBe('no-store');
+
+    const beyond = await harness.app.inject({ method: 'GET', url: `${base}clip.mp4`, headers: { range: 'bytes=50-' } });
+    expect(beyond.statusCode).toBe(416);
+  });
+
   it('serves sibling assets, including subdirectories', async () => {
     const base = (await openUrl()).replace(/index\.html$/, '');
     expect((await harness.app.inject({ method: 'GET', url: `${base}assets/app.css` })).statusCode).toBe(200);

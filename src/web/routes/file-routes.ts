@@ -200,8 +200,8 @@ interface FileBodySource {
   cleanup?: () => void;
 }
 
-/** Byte source for a LOCAL file (the historical, only path). */
-function localFileSource(resolvedPath: string) {
+/** Byte source for a LOCAL file (the historical, only path). Shared with html-view-routes.ts. */
+export function localFileSource(resolvedPath: string) {
   return (range?: { start: number; end: number }): FileBodySource => ({
     content: createReadStream(resolvedPath, range ? { start: range.start, end: range.end } : undefined),
   });
@@ -221,8 +221,11 @@ function localFileSource(resolvedPath: string) {
  * `open` supplies the bytes for the (optional) range, which is what lets a remote
  * case reuse this instead of re-implementing the 206/416 contract: same headers,
  * same status codes, whether the file sits on this host or behind an ssh pipe.
+ *
+ * Exported for the rendered-HTML route (html-view-routes.ts), so a page's own
+ * `<video>`/`<audio>` can seek as well.
  */
-function sendFileBody(
+export function sendFileBody(
   reply: FastifyReply,
   size: number,
   rangeHeader: string | string[] | undefined,
