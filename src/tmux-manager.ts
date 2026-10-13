@@ -737,7 +737,9 @@ function capturedRowText(row: string): string {
  * a live region (spinner, composer, footer) pinned to the bottom and inserts new
  * rows above it, so the frame is not a shifted copy of the screen and the
  * comparison down to the screen's last content row fails. The caller then falls
- * back to the plain join. A plain shell places.
+ * back to the plain join. A plain shell places, unless the frame starts on the
+ * second half of a wrapped line: -J holds that line as one screen row, so it
+ * matches nothing and the plain join applies too.
  */
 export function findFrameInScreen(screenRows: string[], frameRows: string[]): number {
   const screen = screenRows.map(capturedRowText);

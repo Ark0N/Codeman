@@ -293,9 +293,11 @@ nothing matches), the join is history over frame, as without the screen read.
 That includes an agent TUI mid-turn (Claude Code, codex, opencode): it keeps a
 live region (spinner, composer, footer) pinned to the bottom and inserts new
 rows above it, so the frame is not a shifted copy of the screen and is not
-placed. A plain shell places. What is left: when the screen repeats a whole
-block of rows, the frame can be
-placed at the higher copy, which leaves out the rows between the two copies.
+placed. A plain shell places, unless the frame's top row is the second half
+of a wrapped line (the screen holds that line as one joined row, so nothing
+matches and the join is history over frame). What is left: when the screen
+repeats a whole block of rows, the frame can be placed at the higher copy,
+which leaves out the rows between the two copies.
 
 The history, the history size and the screen are ONE tmux command list
 (`capture-pane … \; display-message … \; capture-pane …`), not separate `tmux`
