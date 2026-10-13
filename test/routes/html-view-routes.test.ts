@@ -153,6 +153,26 @@ describe('html-view routes', () => {
       expect((await open(join(outsideDir, 'report.html'))).statusCode).toBe(403);
     });
 
+    it('stops serving an out-of-workspace page once confinement is switched on', async () => {
+      const res = await open(join(outsideDir, 'report.html'));
+      expect(res.statusCode).toBe(200);
+      const url = JSON.parse(res.body).data.url as string;
+      expect((await harness.app.inject({ method: 'GET', url })).statusCode).toBe(200);
+      const inside = await openUrl();
+
+      process.env.CODEMAN_ATTACHMENT_CONFINE = '1';
+      expect((await harness.app.inject({ method: 'GET', url })).statusCode).toBe(404);
+      // A page minted from inside the workspace is not affected.
+      expect((await harness.app.inject({ method: 'GET', url: inside })).statusCode).toBe(200);
+    });
+
+    it('never reuses an in-workspace capability for the same folder minted from outside', () => {
+      const inside = htmlViewCapabilities.mint(outsideDir, undefined, false);
+      const outside = htmlViewCapabilities.mint(outsideDir, undefined, true);
+      expect(outside).not.toBe(inside);
+      expect(htmlViewCapabilities.resolve(outside)?.outsideWorkspace).toBe(true);
+    });
+
     it('refuses every out-of-workspace page when attachments are confined to the workspace', async () => {
       process.env.CODEMAN_ATTACHMENT_CONFINE = '1';
       expect((await open(join(outsideDir, 'report.html'))).statusCode).toBe(403);

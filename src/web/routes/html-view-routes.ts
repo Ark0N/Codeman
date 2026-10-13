@@ -201,7 +201,7 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
       return;
     }
 
-    const cap = htmlViewCapabilities.mint(dirname(resolvedPath), ownerFor(req));
+    const cap = htmlViewCapabilities.mint(dirname(resolvedPath), ownerFor(req), !inWorkspace);
     return {
       success: true,
       data: { url: `${HTML_VIEW_PREFIX}/${cap}/${encodeURIComponent(basename(resolvedPath))}` },
@@ -238,6 +238,10 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
     if (!contentType) return notFound();
     const guard = await loadAttachmentGuardConfig();
     if (isBlockedAttachmentPath(resolvedPath, guard.blockedTrees)) return notFound();
+    // Re-checked per request, like the attachment serve path (file-routes.ts): a
+    // page minted from outside the workspace before an admin switched confinement
+    // on stops serving once it is on, instead of living out its capability.
+    if (record.outsideWorkspace && guard.confineToWorkspace) return notFound();
 
     const stat = await fs.stat(resolvedPath).catch(() => null);
     if (!stat?.isFile() || exceedsDownloadLimit(stat.size)) return notFound();

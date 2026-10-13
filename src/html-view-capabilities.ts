@@ -31,6 +31,12 @@ export interface HtmlViewCapabilityRecord {
   rootDir: string;
   /** Username that minted it (multi-user); undefined in single-user mode. */
   owner?: string;
+  /**
+   * Whether the directory lies outside the minting session's workspace (admitted
+   * under the attachment guard). Recorded so the serving route can refuse it the
+   * moment workspace confinement is switched on, as the attachment routes do.
+   */
+  outsideWorkspace: boolean;
   createdAt: number;
 }
 
@@ -44,15 +50,17 @@ export class HtmlViewCapabilityStore {
       ttlMs,
       refreshOnGet: true,
       onExpire: (token, record) => {
-        const key = rootKey(record.rootDir, record.owner);
+        const key = rootKey(record.rootDir, record.owner, record.outsideWorkspace);
         if (this.byRoot.get(key) === token) this.byRoot.delete(key);
       },
     });
   }
 
   /** Mint (or reuse) a capability for a directory. Returns the token. */
-  mint(rootDir: string, owner?: string): string {
-    const key = rootKey(rootDir, owner);
+  mint(rootDir: string, owner?: string, outsideWorkspace = false): string {
+    // The flag is part of the key: an out-of-workspace mint must never reuse a
+    // capability recorded as in-workspace, which confinement would not stop.
+    const key = rootKey(rootDir, owner, outsideWorkspace);
     const existing = this.byRoot.get(key);
     if (existing && this.capabilities.get(existing)) return existing;
     if (existing) this.byRoot.delete(key);
@@ -60,7 +68,7 @@ export class HtmlViewCapabilityStore {
     if (this.capabilities.size >= MAX_WEBVIEW_CAPABILITIES) this.capabilities.cleanup();
 
     const token = randomBytes(24).toString('base64url');
-    this.capabilities.set(token, { rootDir, owner, createdAt: Date.now() });
+    this.capabilities.set(token, { rootDir, owner, outsideWorkspace, createdAt: Date.now() });
     this.byRoot.set(key, token);
     return token;
   }
@@ -95,8 +103,8 @@ export class HtmlViewCapabilityStore {
   }
 }
 
-function rootKey(rootDir: string, owner: string | undefined): string {
-  return `${owner ?? ''}\0${rootDir}`;
+function rootKey(rootDir: string, owner: string | undefined, outsideWorkspace: boolean): string {
+  return `${owner ?? ''}\0${outsideWorkspace ? 'out' : 'in'}\0${rootDir}`;
 }
 
 /** The capability token in an `/html-view/<cap>/...` path, or null. */
