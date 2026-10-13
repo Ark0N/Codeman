@@ -488,6 +488,9 @@
   // preview shows none of these parts. Lookups are own-property only, so a Target
   // or rId such as `__proto__` cannot resolve through Object.prototype.
   const REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/';
+  const REL_COMMENTS = `${REL_TYPE}comments`;
+  const REL_VML_DRAWING = `${REL_TYPE}vmlDrawing`;
+  const REL_TABLE = `${REL_TYPE}table`;
   const EXCELJS_DRAWING_TARGET = /\/drawings\/([a-zA-Z0-9]+)[.][a-zA-Z]{3,4}$/;
 
   function ownValue(map, key) {
@@ -529,27 +532,37 @@
       for (const key of Object.keys(model.tables)) if (!isObject(model.tables[key])) delete model.tables[key];
     }
     const worksheetRels = isObject(model.worksheetRels) ? model.worksheetRels : {};
+    // Worksheets can share a sheetNo (ExcelJS's worksheet pattern is unanchored),
+    // and then they share one rels list: filter and index each list ONCE, or a
+    // long list costs once per worksheet.
+    const relsBySheetNo = new Map();
     for (const worksheet of Array.isArray(model.worksheets) ? model.worksheets : []) {
       if (!isObject(worksheet)) continue;
-      const list = ownValue(worksheetRels, String(worksheet.sheetNo));
-      const rels = Array.isArray(list) ? list : [];
-      const kept = rels.filter((rel) => {
-        if (!isObject(rel)) return false;
-        if (rel.Type === `${REL_TYPE}comments`) return resolveTarget(rel, model.comments, isObject);
-        if (rel.Type === `${REL_TYPE}vmlDrawing`) {
-          return resolveTarget(rel, model.vmlDrawings, (vml) => isObject(vml) && Array.isArray(vml.comments));
-        }
-        if (rel.Type === `${REL_TYPE}table`) return resolveTarget(rel, model.tables, isObject);
-        return true;
-      });
-      if (Array.isArray(list)) worksheetRels[String(worksheet.sheetNo)] = kept;
-      const byId = new Map(kept.map((rel) => [rel.Id, rel]));
+      const sheetNo = String(worksheet.sheetNo);
+      let byId = relsBySheetNo.get(sheetNo);
+      if (!byId) {
+        const list = ownValue(worksheetRels, sheetNo);
+        const rels = Array.isArray(list) ? list : [];
+        const kept = rels.filter((rel) => {
+          if (!isObject(rel)) return false;
+          if (rel.Type === REL_COMMENTS) return resolveTarget(rel, model.comments, isObject);
+          if (rel.Type === REL_VML_DRAWING) {
+            return resolveTarget(rel, model.vmlDrawings, (vml) => isObject(vml) && Array.isArray(vml.comments));
+          }
+          if (rel.Type === REL_TABLE) return resolveTarget(rel, model.tables, isObject);
+          return true;
+        });
+        if (Array.isArray(list)) worksheetRels[sheetNo] = kept;
+        byId = new Map();
+        for (const rel of kept) byId.set(rel.Id, rel);
+        relsBySheetNo.set(sheetNo, byId);
+      }
       // `<tablePart r:id>`, `<drawing r:id>` and `<hyperlink r:id>` are followed
       // through the rels unchecked, so each must name a rel that is still there.
       if (Array.isArray(worksheet.tables)) {
         worksheet.tables = worksheet.tables.filter((part) => {
           const rel = isObject(part) ? byId.get(part.rId) : undefined;
-          return Boolean(rel) && rel.Type === `${REL_TYPE}table`;
+          return Boolean(rel) && rel.Type === REL_TABLE;
         });
       }
       if (isObject(worksheet.drawing)) {
