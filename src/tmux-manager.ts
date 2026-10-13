@@ -776,7 +776,12 @@ export function joinScrollbackAndFrame(scrollback: string | undefined, frame: st
   if (screen) {
     const screenRows = captureRows(screen);
     const frameStart = findFrameInScreen(screenRows, captureRows(frame));
-    if (frameStart > 0) above = above.concat(screenRows.slice(0, frameStart));
+    if (frameStart > 0) {
+      // The remote screen is a capture of its own too, encoded from the default
+      // state: the history's last row must not leave its attributes active.
+      if (above.length > 0) above[above.length - 1] += '\x1b[0m';
+      above = above.concat(screenRows.slice(0, frameStart));
+    }
   }
   // Separate captures: tmux encodes the frame relative to the DEFAULT state, so
   // the rows above it must not leave their attributes active.

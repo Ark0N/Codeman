@@ -321,25 +321,27 @@ describe('joinScrollbackAndFrame with the remote screen', () => {
     const screen = rows('s1', 's2', 's3', 's4', 's5', 's6', 's7', '$ make');
     // Three more rows of output arrived: s1..s3 scrolled out of the frame.
     const frame = rows('s4', 's5', 's6', 's7', '$ make', 'out 1', 'out 2', 'out 3');
-    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${reset(`${H}${rows('s1', 's2', 's3')}`)}${frame}`);
+    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${reset(H)}${reset(rows('s1', 's2', 's3'))}${frame}`);
   });
 
   it('the top of a remote screen taller than this pane is kept', () => {
     const screen = rows('t1', 't2', 's1', 's2', 's3', '$ ');
     const frame = rows('s1', 's2', 's3', '$ ');
-    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${reset(`${H}${rows('t1', 't2')}`)}${frame}`);
+    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${reset(H)}${reset(rows('t1', 't2'))}${frame}`);
   });
 
   it('the last content row may have changed (output in flight) and still matches', () => {
     const screen = rows('s1', 's2', 's3', 's4', '$ par');
     const frame = rows('s2', 's3', 's4', '$ partial line done', 'next');
-    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${reset(`${H}${rows('s1')}`)}${frame}`);
+    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${reset(H)}${reset(rows('s1'))}${frame}`);
   });
 
   it('compares text only: two tmuxes may encode the same attributes differently', () => {
     const screen = rows('\x1b[38;5;1ms1\x1b[39m', 's2  ', 's3', 's4', '$ ');
     const frame = rows('s2', '\x1b[1ms3\x1b[0m', 's4', '$ ', 'new');
-    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${reset(`${H}${rows('\x1b[38;5;1ms1\x1b[39m')}`)}${frame}`);
+    expect(joinScrollbackAndFrame(H, frame, screen)).toBe(
+      `${reset(H)}${reset(rows('\x1b[38;5;1ms1\x1b[39m'))}${frame}`
+    );
   });
 
   it('no overlap (more scrolled than the screen held) falls back to scrollback over frame', () => {
@@ -371,6 +373,16 @@ describe('joinScrollbackAndFrame with the remote screen', () => {
     expect(joinScrollbackAndFrame(H, frame, screen)).toBe(`${reset(H)}${frame}`);
     // Three compared rows but only one with text: not trusted either.
     expect(findFrameInScreen(['a', 'x', '', '', 'z'], ['x', '', '', 'z', 'q'])).toBe(-1);
+  });
+
+  it('resets SGR where the history meets the screen rows kept above the frame', () => {
+    // Two captures in the remote command list: the history's last row ends with a
+    // background set, and the screen rows are encoded from the default state.
+    const screen = rows('s1', 's2', 's3', 's4', '$ ');
+    const frame = rows('s2', 's3', 's4', '$ ', 'new');
+    expect(joinScrollbackAndFrame('old\n\x1b[41mRED\n', frame, screen)).toBe(
+      `old\n\x1b[41mRED\x1b[0m\n${reset(rows('s1'))}${frame}`
+    );
   });
 
   it('keeps a scrollback that is one blank row, as the plain join did', () => {
