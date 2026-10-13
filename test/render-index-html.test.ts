@@ -159,6 +159,23 @@ describe('WebServer.renderIndexHtml', () => {
     expect(map.shell).toBeUndefined();
   });
 
+  it('injects the transcript page-key modes, in a /session/:id window too', async () => {
+    // Read off the transcriptPageKeys capability. A solo window scrolls a terminal
+    // like the main page does, so it needs the list as much as the gutter map.
+    for (const solo of [undefined, 'sess-123']) {
+      const { server } = makeServer();
+      const html = await render(server, solo);
+      const match = html.match(/window\.__codemanTranscriptPageKeys=(\[[^<]*\]);/);
+      expect(match).not.toBeNull();
+      const modes = JSON.parse(match![1]) as string[];
+      expect(modes).toContain('claude');
+      expect(modes).toContain('codex');
+      expect(modes).toContain('opencode');
+      expect(modes).not.toContain('shell');
+      expect(modes).not.toContain('gemini');
+    }
+  });
+
   it('escapes the solo id so it cannot break out of the inline <script>', async () => {
     const { server } = makeServer({});
     const html = await render(server, 'a</script><b>');

@@ -19,18 +19,30 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
+import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
 
-function loadTerminalUiHarness() {
+/**
+ * The run modes whose CLI can page its own transcript with PageUp/PageDown, read
+ * off the shipped registry exactly as the server builds `__codemanTranscriptPageKeys`,
+ * so these tests break if a stock entry loses (or quietly gains) the capability.
+ */
+const PAGE_KEY_MODES = STOCK_CLIS.filter((e) => e.capabilities.transcriptPageKeys === true).map((e) => e.id);
+
+function loadTerminalUiHarness(
+  windowGlobals: Record<string, unknown> = { __codemanTranscriptPageKeys: PAGE_KEY_MODES }
+) {
   const CodemanApp = function CodemanApp(this: any) {};
   const logs: string[] = [];
   // terminal-ui.js hangs CodemanTerminalInput off window; tests read it there.
-  const windowRef: Record<string, any> = {};
+  const windowRef: Record<string, any> = { ...windowGlobals };
+  // Mutable so a test can move time (gesture gaps); defaults to a frozen clock.
+  const clock = { now: () => 1_000 };
   const context = vm.createContext({
     window: windowRef,
     CodemanApp,
     console: { warn: vi.fn(), log: (msg: string) => logs.push(msg) },
     _crashDiag: { log: vi.fn() },
-    performance: { now: () => 1_000 },
+    performance: clock,
     requestAnimationFrame: (_fn: () => void) => 1,
     setTimeout: (_fn: () => void) => 1,
     Blob: function Blob() {},
@@ -45,12 +57,12 @@ function loadTerminalUiHarness() {
 
   const code = readFileSync(resolve(import.meta.dirname, '../src/web/public/terminal-ui.js'), 'utf8');
   vm.runInContext(code, context, { filename: 'terminal-ui.js' });
-  return { app: new (CodemanApp as any)(), logs, windowRef };
+  return { app: new (CodemanApp as any)(), logs, windowRef, clock };
 }
 
 /** A session whose local buffer holds exactly one screen (baseY 0) — a hollow pane. */
 function hollowApp(overrides: { mode?: string; cliVersion?: string; rows?: number; cliMouseTracking?: boolean } = {}) {
-  const { app, logs, windowRef } = loadTerminalUiHarness();
+  const { app, logs, windowRef, clock } = loadTerminalUiHarness();
   const sent: Array<{ id: string; data: string }> = [];
   app.activeSessionId = 'sess-1';
   app.sessions = new Map([
@@ -70,7 +82,7 @@ function hollowApp(overrides: { mode?: string; cliVersion?: string; rows?: numbe
     modes: { mouseTrackingMode: 'none' },
     buffer: { active: { type: 'normal', viewportY: 0, baseY: 0, length: 36 } },
   };
-  return { app, sent, logs, windowRef };
+  return { app, sent, logs, windowRef, clock };
 }
 
 describe('full-history re-pull downgrade guard (issue #205 round 2)', () => {
@@ -157,16 +169,129 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
     expect(sent[1]).toEqual({ id: 'sess-1', data: '\x1b[6~' });
   });
 
-  it('accumulates sub-page travel instead of dropping or over-sending it', () => {
+  it('answers the first event of a gesture at once and owes the travel back', () => {
     const { app, sent } = hollowApp();
 
-    expect(app._maybePageCliTranscript({ shiftKey: false }, -10)).toBe(true); // consumed…
-    app._flushWheelSgrQueue();
-    expect(sent).toEqual([]); // …but below the threshold, so nothing sent yet
-
-    app._maybePageCliTranscript({ shiftKey: false }, -8); // -18 total → one page
+    // A trackpad flick opens with a small delta and stays far short of half a
+    // screen (18 rows here). It used to send nothing at all, so a session that
+    // always lands here looked dead.
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -1)).toBe(true);
     app._flushWheelSgrQueue();
     expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
+
+    // The pre-paid page is owed back: the rest of this page's travel sends nothing…
+    app._maybePageCliTranscript({ shiftKey: false }, -17);
+    app._flushWheelSgrQueue();
+    expect(sent).toHaveLength(1);
+
+    // …and the next page arrives after a further half screen, so the rate is unchanged.
+    app._maybePageCliTranscript({ shiftKey: false }, -17);
+    app._flushWheelSgrQueue();
+    expect(sent).toHaveLength(1);
+    app._maybePageCliTranscript({ shiftKey: false }, -1);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([
+      { id: 'sess-1', data: '\x1b[5~' },
+      { id: 'sess-1', data: '\x1b[5~' },
+    ]);
+  });
+
+  it('starts a new gesture after a pause or a direction change', () => {
+    const { app, sent, clock } = hollowApp();
+    let now = 1_000;
+    clock.now = () => now;
+
+    app._maybePageCliTranscript({ shiftKey: false }, -1); // first event: one PageUp
+    app._maybePageCliTranscript({ shiftKey: false }, 1); // reversal inside the gap: accumulates, no page
+    now += 200;
+    app._maybePageCliTranscript({ shiftKey: false }, -1); // a reversal after the gap: a PageUp at once
+    now += 1_100;
+    app._maybePageCliTranscript({ shiftKey: false }, 1); // after a pause: a PageDown at once
+    app._maybePageCliTranscript({ shiftKey: false }, 0.05); // sub-row jitter in the same gesture: nothing
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~\x1b[5~\x1b[6~' }]);
+  });
+
+  it('lets wheel notches accumulate instead of paging a full screen on each one', () => {
+    // A 100 px notch is 4 rows. Only a trackpad-sized opening event (under 2 rows)
+    // pages at once; a notch adds up toward half a screen as it always did, so
+    // slow notches (each one its own gesture by the 150 ms gap) still page once
+    // per 18 rows here, not once per notch.
+    for (const gapMs of [250, 40]) {
+      const { app, sent, clock } = hollowApp();
+      let now = 1_000;
+      clock.now = () => now;
+      for (let i = 0; i < 5; i++) {
+        expect(app._maybePageCliTranscript({ shiftKey: false, deltaY: -100 }, -4)).toBe(true);
+        now += gapMs;
+      }
+      app._flushWheelSgrQueue();
+      expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
+    }
+  });
+
+  it('consumes a mostly horizontal swipe without paging', () => {
+    const { app, sent } = hollowApp();
+
+    // A sideways trackpad swipe carries a little vertical drift (3 px is 0.12 rows,
+    // above the jitter floor). It must not page the transcript.
+    for (let i = 0; i < 6; i++) {
+      expect(app._maybePageCliTranscript({ shiftKey: false, deltaX: 60, deltaY: 3 }, 0.12)).toBe(true);
+    }
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([]);
+
+    // A mostly vertical swipe with some sideways drift still pages.
+    app._maybePageCliTranscript({ shiftKey: false, deltaX: 3, deltaY: -25 }, -1);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
+  });
+
+  it('consumes a trackpad pinch without paging', () => {
+    const { app, sent } = hollowApp();
+
+    // Chrome reports a pinch as wheel events with ctrlKey set.
+    for (let i = 0; i < 4; i++) {
+      expect(app._maybePageCliTranscript({ shiftKey: false, ctrlKey: true, deltaY: 4 }, 0.16)).toBe(true);
+    }
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([]);
+  });
+
+  it('does not page while the session is showing a dialog', () => {
+    const { app, sent } = hollowApp();
+    // 'action' is set while a permission_prompt or elicitation_dialog is pending
+    // (updateTabAlertFromHooks in app.js). Page keys must not reach that selector.
+    app.tabAlerts = new Map([['sess-1', 'action']]);
+
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -1)).toBe(true);
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -40)).toBe(true);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([]);
+
+    // Once the dialog is answered (an idle alert, or none) paging resumes.
+    app.tabAlerts.set('sess-1', 'idle');
+    app._maybePageCliTranscript({ shiftKey: false }, 1);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[6~' }]);
+  });
+
+  it("reads the ACTIVE session's dialog, not some other tab's", () => {
+    const { app, sent } = hollowApp();
+    // A tile or a background tab with a pending prompt does not block this pane.
+    app.tabAlerts = new Map([['tile-1', 'action']]);
+
+    app._maybePageCliTranscript({ shiftKey: false }, -1);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
+  });
+
+  it('does not page on sub-row jitter that opens a gesture', () => {
+    const { app, sent } = hollowApp();
+
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -0.05)).toBe(true);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([]);
   });
 
   it('caps the keys one gesture batch can emit', () => {
@@ -207,12 +332,12 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
     expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(false);
     app.terminal.buffer.active.baseY = 0;
 
-    // Modes with real terminal scrollback keep their existing behavior (shell/pi
-    // own tmux history through the alt-screen strip; codex/gemini/antigravity/…
-    // page-key behaviour is unverified — docs/scrollback-fix-plan.md).
+    // Modes whose CLI does not declare transcriptPageKeys keep their existing
+    // behavior (shell/pi own tmux history through the alt-screen strip;
+    // gemini/antigravity/… page-key behaviour is unverified — docs/scrollback-fix-plan.md).
     app.sessions = new Map([['sess-1', { mode: 'shell' }]]);
     expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(false);
-    app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'gemini' }]]);
     expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(false);
     app.sessions = new Map([['sess-1', { mode: 'antigravity' }]]);
     expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(false);
@@ -221,6 +346,47 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
     app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
     app.terminal.buffer.active.type = 'alternate';
     expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(false);
+  });
+
+  it('pages a Codex transcript only while its local scrollback is empty', () => {
+    // Codex is never sent SGR wheel reports (it ignores them); this is the
+    // separate PageUp/PageDown fallback, which codex does honour.
+    const { app, sent } = hollowApp();
+    app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
+
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(true);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
+
+    app.terminal.buffer.active.baseY = 40;
+    expect(app._maybePageCliTranscript({ shiftKey: false }, 18)).toBe(false);
+    expect(app._maybePageCliTranscript({ shiftKey: true }, 18)).toBe(false);
+  });
+
+  it('reads the paging modes from the injected capability map, never an id list of its own', () => {
+    // No map (a page rendered without it) means no mode pages, the same fail-safe
+    // direction the transcript-gutter map takes.
+    const bare = loadTerminalUiHarness({}).app;
+    bare.activeSessionId = 'sess-1';
+    bare.sessions = new Map([['sess-1', { mode: 'claude' }]]);
+    bare.terminal = { rows: 36, buffer: { active: { type: 'normal', baseY: 0 } } };
+    expect(bare._localScrollbackIsHollow()).toBe(false);
+
+    // A mode the map names pages even if no stock entry has that id.
+    const custom = loadTerminalUiHarness({ __codemanTranscriptPageKeys: ['my-cli'] }).app;
+    custom.activeSessionId = 'sess-1';
+    custom.sessions = new Map([['sess-1', { mode: 'my-cli' }]]);
+    custom.terminal = { rows: 36, buffer: { active: { type: 'normal', baseY: 0 } } };
+    expect(custom._localScrollbackIsHollow()).toBe(true);
+
+    const source = readFileSync(resolve(import.meta.dirname, '../src/web/public/terminal-ui.js'), 'utf8');
+    const helper = source.slice(
+      source.indexOf('  _localScrollbackIsHollow(target = {}) {'),
+      source.indexOf('  _maybePageCliTranscript(ev, lines) {')
+    );
+    expect(helper).toContain('window.__codemanTranscriptPageKeys');
+    expect(helper).not.toMatch(/=== '(?:claude|codex)'|!== '(?:claude|codex)'/);
   });
 
   it('rescues the local-scrollback opt-out footgun instead of silently dying', () => {
@@ -240,12 +406,17 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
   it('drops travel accumulated on another tab', () => {
     const { app, sent } = hollowApp();
 
-    app._maybePageCliTranscript({ shiftKey: false }, -17); // just short of a page
+    app._maybePageCliTranscript({ shiftKey: false }, -1); // first event pages sess-1 at once
+    app._maybePageCliTranscript({ shiftKey: false }, -34); // just short of sess-1's second page
+    app._flushWheelSgrQueue();
     app.activeSessionId = 'sess-2';
     app.sessions.set('sess-2', { mode: 'claude' });
-    app._maybePageCliTranscript({ shiftKey: false }, -1); // must not complete sess-1's page
+    app._maybePageCliTranscript({ shiftKey: false }, -1); // a NEW gesture on sess-2, never sess-1's page
     app._flushWheelSgrQueue();
-    expect(sent).toEqual([]);
+    expect(sent).toEqual([
+      { id: 'sess-1', data: '\x1b[5~' },
+      { id: 'sess-2', data: '\x1b[5~' },
+    ]);
   });
 
   it('is reachable from both the wheel and the touch paths', () => {
@@ -253,14 +424,292 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
     // Wheel: after the forwarding gate, before the local smooth scroll.
     expect(source).toContain('if (this._maybePageCliTranscript(ev, lines)) return;');
     // Touch: touchmove and the momentum loop both fall through to it.
-    expect(source.match(/else if \(!this\._maybePageCliTranscript\(\{ shiftKey: false \}, lines\)\)/g)).toHaveLength(2);
+    expect(
+      source.match(
+        /else if \(!this\._maybePageCliTranscript\(\{ shiftKey: false, touchId: touchContactId \}, lines\)\)/g
+      )
+    ).toHaveLength(2);
+    // ...and every contact gets its own id at touchstart, so a contact is one gesture.
+    expect(source).toContain('touchContactId++;');
+  });
+});
+
+describe('page-key gestures across slow touch drags, slow wheel ticks and jitter (#527 review)', () => {
+  const UP = '\x1b[5~';
+  const DOWN = '\x1b[6~';
+
+  /** A hollow 38-row pane (19 rows a page) on a hand-moved clock, with every key sent. */
+  function pane(mode = 'codex') {
+    const h = hollowApp({ mode, rows: 38 });
+    let now = 10_000;
+    h.clock.now = () => now;
+    const keys = () => {
+      h.app._flushWheelSgrQueue();
+      return h.sent.map((s) => s.data).join('');
+    };
+    return { ...h, keys, advance: (ms: number) => (now += ms) };
+  }
+  const count = (keys: string, key: string) => keys.split(key).length - 1;
+
+  it('keeps one touch contact one gesture, however slowly the finger moves', () => {
+    const p = pane();
+    // touchmove calls once per whole cell, so a slow drag arrives as single lines
+    // 170 ms apart, each past the 150 ms gesture gap. It sent one PageUp per line.
+    for (let i = 0; i < 12; i++) {
+      expect(p.app._maybePageCliTranscript({ shiftKey: false, touchId: 1 }, -1)).toBe(true);
+      p.advance(170);
+    }
+    expect(p.keys()).toBe(UP);
+
+    // A new contact is a new gesture: its first line pages at once.
+    p.app._maybePageCliTranscript({ shiftKey: false, touchId: 2 }, -1);
+    expect(p.keys()).toBe(UP + UP);
+  });
+
+  it('pages a slow 40-line drag twice, and keeps momentum in the same gesture', () => {
+    const p = pane();
+    for (let i = 0; i < 40; i++) {
+      p.app._maybePageCliTranscript({ shiftKey: false, touchId: 7 }, -1);
+      p.advance(170);
+    }
+    // 1 at once, then 18 owed back, then 19 more: two pages by line 38.
+    expect(count(p.keys(), UP)).toBe(2);
+
+    // Momentum frames after the finger lifts carry the same contact: they
+    // continue the drag's travel instead of opening a gesture of their own.
+    for (let i = 0; i < 10; i++) {
+      p.app._maybePageCliTranscript({ shiftKey: false, touchId: 7 }, -1);
+      p.advance(16);
+    }
+    expect(count(p.keys(), UP)).toBe(2);
+  });
+
+  it('never splits a contact on a pause, but does not carry its debt into the next contact', () => {
+    const p = pane();
+    p.app._maybePageCliTranscript({ shiftKey: false, touchId: 3 }, -1); // pages, owes 18
+    p.advance(5_000); // the finger rests, still down
+    p.app._maybePageCliTranscript({ shiftKey: false, touchId: 3 }, -1);
+    expect(p.keys()).toBe(UP);
+    p.advance(10);
+    p.app._maybePageCliTranscript({ shiftKey: false, touchId: 4 }, -1); // a new contact pages at once
+    expect(p.keys()).toBe(UP + UP);
+  });
+
+  it('pages slow small wheel ticks once per half screen, not once per tick', () => {
+    // Five 40 px ticks 250 ms apart (1.6 rows each, under the 2-row trackpad
+    // size) used to page once per tick. The first one still pages at once.
+    const p = pane();
+    for (let i = 0; i < 5; i++) {
+      p.app._maybePageCliTranscript({ shiftKey: false, deltaY: -40, deltaMode: 0 }, -1.6);
+      p.advance(250);
+    }
+    expect(p.keys()).toBe(UP);
+
+    // Firefox reports a notch as 1 line (deltaMode 1): the same.
+    const f = pane();
+    for (let i = 0; i < 5; i++) {
+      f.app._maybePageCliTranscript({ shiftKey: false, deltaY: -1, deltaMode: 1 }, -1);
+      f.advance(250);
+    }
+    expect(f.keys()).toBe(UP);
+  });
+
+  it('lets a pre-paid debt lapse after a second of quiet, so the next tick pages at once again', () => {
+    const p = pane();
+    p.app._maybePageCliTranscript({ shiftKey: false, deltaY: -40 }, -1.6);
+    p.advance(900);
+    p.app._maybePageCliTranscript({ shiftKey: false, deltaY: -40 }, -1.6); // inside the second: owed
+    expect(p.keys()).toBe(UP);
+    p.advance(1_100);
+    p.app._maybePageCliTranscript({ shiftKey: false, deltaY: -40 }, -1.6); // debt lapsed: pages
+    expect(p.keys()).toBe(UP + UP);
+  });
+
+  it('does not page back and forth on a +/-3 px trackpad wobble', () => {
+    const p = pane();
+    for (let i = 0; i < 20; i++) {
+      const dy = i % 2 ? 3 : -3;
+      p.app._maybePageCliTranscript({ shiftKey: false, deltaY: dy }, dy / 25);
+      p.advance(16);
+    }
+    // The opening event is a fresh gesture and pages; no reversal inside the
+    // gap pre-pays, so the wobble sends nothing after it.
+    expect(p.keys()).toBe(UP);
+  });
+
+  it('still pages a deliberate reversal at once after a pause', () => {
+    const p = pane();
+    p.app._maybePageCliTranscript({ shiftKey: false, deltaY: -25 }, -1);
+    p.advance(200);
+    p.app._maybePageCliTranscript({ shiftKey: false, deltaY: 25 }, 1);
+    expect(p.keys()).toBe(UP + DOWN);
+  });
+
+  it('does not let a reversal inherit the other direction’s debt', () => {
+    const p = pane();
+    p.app._maybePageCliTranscript({ shiftKey: false, deltaY: -25 }, -1); // UP, owes 18 upward
+    p.advance(16);
+    // Downward travel just short of a page: the upward debt must not count toward it.
+    p.app._maybePageCliTranscript({ shiftKey: false, deltaY: 25 * 18 }, 18);
+    expect(p.keys()).toBe(UP);
+    p.advance(16);
+    p.app._maybePageCliTranscript({ shiftKey: false, deltaY: 25 }, 1);
+    expect(p.keys()).toBe(UP + DOWN);
+  });
+
+  it('ends the one-second debt lifetime once the debt is repaid, exactly or overpaid', () => {
+    // 38 rows: 19 a page. The opening -1 pre-pays and owes 18; 18 more lines at
+    // 32 ms repay it EXACTLY. Nothing is owed any more, so the 150 ms gap applies
+    // again and a -1 300 ms later is a new gesture that pages at once.
+    const exact = pane();
+    for (let i = 0; i < 19; i++) {
+      exact.app._maybePageCliTranscript({ shiftKey: false }, -1);
+      exact.advance(32);
+    }
+    expect(exact.keys()).toBe(UP);
+    expect(exact.app._pageKeyGesture).toMatchObject({ pending: 0, prepaid: false });
+    exact.advance(300 - 32);
+    exact.app._maybePageCliTranscript({ shiftKey: false }, -1);
+    expect(exact.keys()).toBe(UP + UP);
+
+    // Overpaid: 19 lines after the opening one leave 1 row of plain travel.
+    const over = pane();
+    for (let i = 0; i < 20; i++) {
+      over.app._maybePageCliTranscript({ shiftKey: false }, -1);
+      over.advance(32);
+    }
+    expect(over.keys()).toBe(UP);
+    expect(over.app._pageKeyGesture).toMatchObject({ pending: -1, prepaid: false });
+    over.advance(300 - 32);
+    over.app._maybePageCliTranscript({ shiftKey: false }, -1);
+    expect(over.keys()).toBe(UP + UP);
+
+    // One line short of repaid: still owed, so 300 ms later is the same gesture.
+    const owed = pane();
+    for (let i = 0; i < 18; i++) {
+      owed.app._maybePageCliTranscript({ shiftKey: false }, -1);
+      owed.advance(32);
+    }
+    expect(owed.app._pageKeyGesture).toMatchObject({ pending: 1, prepaid: true });
+    owed.advance(300 - 32);
+    owed.app._maybePageCliTranscript({ shiftKey: false }, -1);
+    expect(owed.keys()).toBe(UP);
+  });
+
+  it('keeps a touch contact one gesture after its debt is repaid', () => {
+    const p = pane();
+    for (let i = 0; i < 19; i++) {
+      p.app._maybePageCliTranscript({ shiftKey: false, touchId: 5 }, -1);
+      p.advance(32);
+    }
+    p.advance(2_000); // the finger rests, still down
+    p.app._maybePageCliTranscript({ shiftKey: false, touchId: 5 }, -1);
+    expect(p.keys()).toBe(UP); // accumulates; no fresh pre-pay inside the contact
+  });
+
+  it('logs a wheel the dialog check consumed', () => {
+    const p = pane();
+    p.app.tabAlerts = new Map([['sess-1', 'action']]);
+    expect(p.app._maybePageCliTranscript({ shiftKey: false }, -1)).toBe(true);
+    expect(p.keys()).toBe('');
+    expect(p.logs.some((line) => line.includes('[scroll] sess-1 → page-keys-dialog-open'))).toBe(true);
+  });
+});
+
+describe('pageKeysForGesture, the pure gesture rules both panes share', () => {
+  const UP = '\x1b[5~';
+  const DOWN = '\x1b[6~';
+  const helper = () => loadTerminalUiHarness().windowRef.CodemanTerminalInput.pageKeysForGesture;
+  type Step = { state: unknown; keys: string };
+  /** Runs [lines, msSinceStart, extra] events through the helper; returns every step. */
+  function run(events: Array<[number, number, Record<string, unknown>?]>, rows = 36) {
+    const pageKeysForGesture = helper();
+    let state: unknown = null;
+    return events.map(([lines, at, extra]) => {
+      const step: Step = pageKeysForGesture(state, { shiftKey: false, ...extra }, lines, rows, 10_000 + at);
+      state = step.state;
+      return step;
+    });
+  }
+
+  it('pages a trackpad-sized opening event at once and owes the half screen back', () => {
+    const steps = run([
+      [-1, 0],
+      [-16, 10],
+      [-18, 20],
+      [-1, 30],
+    ]);
+    expect(steps.map((s) => s.keys)).toEqual([UP, '', '', UP]);
+  });
+
+  it('accumulates a notch-sized opening event, and carries plain travel across notches', () => {
+    // Five 4-row notches 400 ms apart: each is a new gesture, none pages alone.
+    const steps = run([
+      [-4, 0],
+      [-4, 400],
+      [-4, 800],
+      [-4, 1200],
+      [-4, 1600],
+    ]);
+    expect(steps.map((s) => s.keys).join('')).toBe(UP);
+  });
+
+  it('keeps a same-direction pre-paid debt for PAGE_KEY_DEBT_MS, then drops it with its gesture', () => {
+    const { PAGE_KEY_DEBT_MS } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
+    expect(PAGE_KEY_DEBT_MS).toBe(1000);
+    // A tick 500 ms later, past the 150 ms gap, pays the debt back instead of
+    // pre-paying a second page; a flick after a second of quiet pages at once.
+    const steps = run([
+      [-1, 0],
+      [-1, 500],
+      [-1, 1600],
+    ]);
+    expect(steps.map((s) => s.keys)).toEqual([UP, '', UP]);
+  });
+
+  it('pre-pays a reversal only after the gap, and ignores sub-row jitter', () => {
+    const steps = run([
+      [-1, 0],
+      [1, 10], // reversal inside the gap: accumulates, no page
+      [-1, 20], // and back: still nothing
+      [1, 300], // a reversal after the gap is a new gesture: pages at once
+      [0.05, 310],
+      [-0.05, 1500],
+    ]);
+    expect(steps.map((s) => s.keys)).toEqual([UP, '', '', DOWN, '', '']);
+  });
+
+  it('treats one touch contact as one gesture, and a new contact as a new one', () => {
+    const steps = run([
+      [-1, 0, { touchId: 1 }],
+      [-1, 5_000, { touchId: 1 }], // same contact, any pause: owed
+      [1, 5_010, { touchId: 1 }], // a reversal within the contact never pre-pays
+      [-1, 5_020, { touchId: 2 }], // a new contact pages at once
+      [-1, 5_030], // a wheel event is not that contact: a new gesture
+    ]);
+    expect(steps.map((s) => s.keys)).toEqual([UP, '', '', UP, UP]);
+  });
+
+  it('sends nothing for a pinch or a mostly horizontal swipe, and leaves the state as it was', () => {
+    const pageKeysForGesture = helper();
+    const state = { pending: -7, lastAt: 9_990, dir: -1, prepaid: false };
+    const pinch = pageKeysForGesture(state, { ctrlKey: true, deltaY: -900 }, -36, 36, 10_000);
+    const swipe = pageKeysForGesture(state, { deltaX: -1000, deltaY: -900 }, -36, 36, 10_000);
+    expect(pinch).toEqual({ state, keys: '' });
+    expect(swipe).toEqual({ state, keys: '' });
+    // A mostly VERTICAL swipe with some sideways drift still pages.
+    expect(pageKeysForGesture(state, { deltaX: -100, deltaY: -900 }, -36, 36, 10_000).keys).toBe(UP.repeat(2));
+  });
+
+  it('caps a fling at PAGE_KEY_MAX_PER_BATCH keys', () => {
+    expect(run([[-1000, 0]])[0].keys).toBe(UP.repeat(3));
   });
 });
 
 describe('the paging gates asked for another pane (a TerminalTile)', () => {
   it('exports the paging math, and the primary pane runs on it', () => {
     const { app, sent, windowRef } = hollowApp();
-    const { wheelDeltaLines, pageKeysForTravel } = windowRef.CodemanTerminalInput;
+    const { wheelDeltaLines, pageKeysForTravel, pageKeysForGesture } = windowRef.CodemanTerminalInput;
 
     expect(wheelDeltaLines({ deltaY: -50, deltaMode: 0 }, 36)).toBe(-2); // pixels, 25 a line
     expect(wheelDeltaLines({ deltaY: 3, deltaMode: 1 }, 36)).toBe(3); // lines (Firefox)
@@ -274,17 +723,31 @@ describe('the paging gates asked for another pane (a TerminalTile)', () => {
     // The primary pane's own methods agree with them.
     const ev = { deltaY: -250, deltaMode: 2 };
     expect(app._wheelScrollLinesFloat(ev)).toBe(wheelDeltaLines(ev, 36));
-    let pending = 0;
+    let state: unknown = null;
     let expected = '';
-    for (const lines of [-10, -10, 30, -1000, 7]) {
-      const step = pageKeysForTravel(pending, lines, 36);
-      pending = step.pending;
+    // Mixed: a trackpad opening, a notch-sized opening, a reversal, a pinch and
+    // a sideways swipe, all under a frozen clock (one gesture per direction).
+    const steps: Array<[number, Record<string, unknown>]> = [
+      [-1, {}],
+      [-10, {}],
+      [-30, {}],
+      [25, {}], // a reversal inside the gap pages by travel (net of the -5 plain travel left), not at once
+      [-5, { ctrlKey: true }],
+      [-5, { deltaX: 400, deltaY: -125 }],
+      [-1000, {}],
+      [-7, {}],
+    ];
+    for (const [lines, extra] of steps) {
+      const event = { shiftKey: false, ...extra };
+      const step = pageKeysForGesture(state, event, lines, 36, 1_000);
+      state = step.state;
       expected += step.keys;
-      app._maybePageCliTranscript({ shiftKey: false }, lines);
+      app._maybePageCliTranscript(event, lines);
     }
     app._flushWheelSgrQueue();
-    expect(app._pageKeyPending).toBe(pending);
-    expect(expected).not.toBe('');
+    expect(app._pageKeyGesture).toEqual(state);
+    expect(expected).toContain('\x1b[5~');
+    expect(expected).toContain('\x1b[6~');
     expect(sent).toEqual([{ id: 'sess-1', data: expected }]);
   });
 
@@ -304,7 +767,7 @@ describe('the paging gates asked for another pane (a TerminalTile)', () => {
     tileBuffer.type = 'alternate';
     expect(app._localScrollbackIsHollow({ sessionId: 'tile-1', terminal: tileTerminal, localRows: 0 })).toBe(false);
     tileBuffer.type = 'normal';
-    app.sessions.set('tile-1', { mode: 'codex' });
+    app.sessions.set('tile-1', { mode: 'gemini' });
     expect(app._localScrollbackIsHollow({ sessionId: 'tile-1', terminal: tileTerminal, localRows: 0 })).toBe(false);
   });
 
