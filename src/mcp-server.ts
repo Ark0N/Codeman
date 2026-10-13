@@ -624,13 +624,28 @@ export function createToolRunner(deps: ToolRunnerDeps) {
       let note = 'Ready for send_prompt.';
       const mark = composerReadyMark(mode);
       if (waitReady && mark) {
-        const { wait } = await waitCall(
-          data.sessionId,
-          { match: mark, from: 'buffer' },
-          'wait-output',
-          timeoutMs,
-          signal
-        );
+        let wait: WaitResult | undefined;
+        try {
+          ({ wait } = await waitCall(
+            data.sessionId,
+            { match: mark, from: 'buffer' },
+            'wait-output',
+            timeoutMs,
+            signal
+          ));
+        } catch (err) {
+          // The worker is already running: a failed readiness CALL (429, a network blip)
+          // must still hand the model its id, or it cannot prompt or delete it.
+          if (!(err instanceof ToolError)) throw err;
+          return structuredResult({
+            session_id: data.sessionId,
+            mode,
+            case: data.caseName ?? caseName,
+            case_path: data.casePath ?? '',
+            ready: null,
+            note: `Started, but the readiness check failed (${err.message}): read_output with source terminal before send_prompt.`,
+          });
+        }
         const outcome = waitOutcome(wait);
         if (outcome === 'exited' || outcome === 'ended') {
           ready = false;

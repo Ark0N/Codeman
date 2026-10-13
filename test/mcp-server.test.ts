@@ -366,6 +366,20 @@ describe('the tools', () => {
     expect(result.structured).toMatchObject({ session_id: MINE, ready: true });
   });
 
+  it('start_session still returns the session id when only the readiness call fails', async () => {
+    const busy = fakeCodeman(undefined, {
+      'GET /api/v1/sessions/*': () => ({
+        status: 429,
+        json: { success: false, error: 'too many waiters', errorCode: 'WAIT_CAPACITY' },
+        text: '',
+      }),
+    });
+    const result = await runner(config(), busy).tools.run('start_session', { case: 'review-2', mode: 'claude' });
+    expect(result.isError).toBeFalsy();
+    expect(result.structured).toMatchObject({ session_id: MINE, ready: null });
+    expect(String(result.structured?.note)).toContain('readiness check failed');
+  });
+
   it('send_prompt refuses a newline or control byte before any request', async () => {
     const { tools, calls } = runner(config());
     for (const text of ['line one\nline two', 'esc \u001b[A', 'tab\there']) {
