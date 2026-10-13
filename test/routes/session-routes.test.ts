@@ -1349,6 +1349,28 @@ describe('session-routes', () => {
         }
       });
 
+      it("keeps a remote session's spliced remote scrollback, and falls back only when that read failed", async () => {
+        // The remote session's local pane hosts the remote tmux client, so it is
+        // always in the alternate screen; the history comes from the remote tmux.
+        const spy = install(true);
+        const session = harness.ctx._session as unknown as { remote?: unknown };
+        session.remote = { hostId: 'h1', label: 'proxx', host: 'proxx.lan', username: 'tim', remotePath: '/home/tim' };
+        try {
+          remoteScrollback.mockResolvedValueOnce('remote line 1\n');
+          const spliced = await load(`full=1&tail=${1024 * 1024}&alt=recording&lines=10000`);
+          expect(spy).toHaveBeenCalledTimes(1);
+          expect(spliced.source).toBe('mux-full-history');
+
+          spy.mockClear();
+          remoteScrollback.mockResolvedValueOnce(null);
+          const fallback = await load(`full=1&tail=${1024 * 1024}&alt=recording&lines=10000`);
+          expect(spy).toHaveBeenCalledTimes(2);
+          expect(fallback.source).toBe('mux-visible');
+        } finally {
+          session.remote = undefined;
+        }
+      });
+
       it('keeps the full capture without the opt-in (agents, Load full history, scroll pulls)', async () => {
         const spy = install(true);
         const data = await load(`full=1&tail=${1024 * 1024}&lines=10000`);

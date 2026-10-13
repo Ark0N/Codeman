@@ -3153,8 +3153,16 @@ export function registerSessionRoutes(
     // `alt=recording`) gets the old visible-frame load over it, tailed, rather
     // than losing everything above the screen. `alternate_on` cannot tell a
     // nested tmux from vim or less, so those take this path too while open:
-    // the load the shell had before tmux-rendered loads existed.
-    if (isFullReload && query.alt === 'recording' && captureOpts.capturedAlternateOn === true) {
+    // the load the shell had before tmux-rendered loads existed. Not when the
+    // history came from the remote tmux (`scrollbackOverride`): a remote pane is
+    // in the alternate screen only because it hosts that tmux's client, and
+    // the fallback would throw the remote scrollback away.
+    if (
+      isFullReload &&
+      query.alt === 'recording' &&
+      captureOpts.scrollbackOverride === undefined &&
+      captureOpts.capturedAlternateOn === true
+    ) {
       isFullReload = false;
       captureOpts = {};
       liveMuxBuffer = capture(captureOpts);
