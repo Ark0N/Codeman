@@ -2747,8 +2747,7 @@ export class WebServer extends EventEmitter {
       // strips their action buttons — buttons without an id can never answer.
       approvalId: approvalsEnabled && typeof data.approvalId === 'string' ? data.approvalId : undefined,
       urgency: template.urgency,
-      actions:
-        approvalsEnabled && typeof data.approvalId === 'string' ? template.actions : undefined,
+      actions: approvalsEnabled && typeof data.approvalId === 'string' ? template.actions : undefined,
     });
 
     for (const sub of subscriptions) {
