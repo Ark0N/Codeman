@@ -712,6 +712,16 @@
     'Session Color': '会话颜色',
     'Working Directory': '工作目录',
     'Set working directory': '设置工作目录',
+    // Session Options > Session > Working folder (session-ui.js openSessionOptions).
+    'Working folder': '工作目录',
+    "Where this session's CLI runs, on the machine hosting Codeman.":
+      '此会话的 CLI 运行所在的目录，位于运行{name}的机器上。',
+    "Where this session's CLI runs, on the remote host it reaches over SSH, not on this machine.":
+      '此会话的 CLI 运行所在的目录，位于通过 SSH 连接的远程主机上，而不是本机。',
+    "On the machine hosting Codeman, mounted into the Docker container this session's CLI runs in.":
+      '位于运行{name}的机器上，并挂载到此会话 CLI 运行所在的 Docker 容器中。',
+    'Path copied': '路径已复制',
+    'Copy failed': '复制失败',
     'Resume Conversation': '继续对话',
     'Close Session': '关闭会话',
     'Choose how to close': '选择关闭方式',
