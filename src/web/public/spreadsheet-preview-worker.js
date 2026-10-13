@@ -171,6 +171,17 @@ async function loadWorkbook(bytes) {
   // defineProperty throws if a future ExcelJS renames `_definedNames`, rather
   // than silently expanding again.
   Object.defineProperty(nextWorkbook._definedNames, 'model', { configurable: true, get: () => [], set: () => {} });
+  // ExcelJS follows a worksheet's comment, VML, table and drawing links
+  // unchecked, and openpyxl spells them so the lookup finds nothing: one comment,
+  // table or chart failed the whole preview. `load()` calls `this.reconcile()`
+  // once on the parsed model; repair the model first (core.repairExcelJsModel).
+  // Throws if a future ExcelJS renames reconcile, rather than failing again.
+  const reconcile = nextWorkbook.xlsx.reconcile;
+  if (typeof reconcile !== 'function') throw new Error('ExcelJS reconcile is unavailable');
+  nextWorkbook.xlsx.reconcile = function reconcileRepaired(model, options) {
+    core.repairExcelJsModel(model);
+    return reconcile.call(this, model, options);
+  };
   // ExcelJS expands every address of a `<dataValidation sqref>` into its own
   // object (a whole-column dropdown is a million), and the preview never shows
   // validations, so they are not parsed at all. `maxRows` is a per-sheet
