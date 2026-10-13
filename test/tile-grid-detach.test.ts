@@ -387,6 +387,14 @@ describe('a tile from another window dropped here', () => {
     expect(app._tileGrid.ids).toContain('s-other');
   });
 
+  it("asks the session's pop-out to close even when this window did not know of one", () => {
+    // Popped out from another dashboard: this window's detachedSessions never had it.
+    const app = openGrid(THREE);
+    tileEl('s-c').dispatch('drop', foreign('s-other'));
+    expect(app._tileGrid.ids).toContain('s-other');
+    expect(app._postWindowMessage).toHaveBeenCalledWith({ type: 'close-request', id: 's-other' });
+  });
+
   it('an id this page does not know docks nowhere', () => {
     const app = openGrid(THREE);
     tileEl('s-b').dispatch('drop', foreign('s-gone'));

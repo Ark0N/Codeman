@@ -2980,7 +2980,10 @@ Object.assign(CodemanApp.prototype, {
     place(sessionId);
     if (!grid.has(sessionId)) return false;
     (this._tileDockedAt ||= new Map()).set(sessionId, Date.now());
-    if (poppedOut) this._postWindowMessage?.({ type: 'close-request', id: sessionId });
+    // Asked unconditionally: a pop-out this window never heard of (opened from
+    // another dashboard) closes too. Dashboards ignore it; only that id's
+    // pop-out reacts.
+    this._postWindowMessage?.({ type: 'close-request', id: sessionId });
     this._postWindowMessage?.({ type: 'tile-adopted', id: sessionId, by: this._wsTabNonce });
     return true;
   },
