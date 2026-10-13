@@ -6,6 +6,7 @@ export { registerPushRoutes } from './push-routes.js';
 export { registerTeamRoutes } from './team-routes.js';
 export { registerMuxRoutes } from './mux-routes.js';
 export { registerFileRoutes } from './file-routes.js';
+export { registerHtmlViewRoutes } from './html-view-routes.js';
 export { registerScheduledRoutes } from './scheduled-routes.js';
 export { registerCronRoutes } from './cron-routes.js';
 export { registerSystemRoutes } from './system-routes.js';

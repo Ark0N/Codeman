@@ -2089,7 +2089,9 @@ Object.assign(CodemanApp.prototype, {
               // reads those through the guarded attachment routes, so external
               // paths route there and the two surfaces agree.
               const sessionId = getSessionId();
-              if (previewsInFileViewer(text) || self._isExternalPreviewPath(text, sessionId)) {
+              // An HTML file renders as a page in the preview, never as source
+              // in the log viewer.
+              if (previewsInFileViewer(text) || /\.html?$/i.test(text) || self._isExternalPreviewPath(text, sessionId)) {
                 self.openFilePreview(text, sessionId);
                 return;
               }
