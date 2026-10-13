@@ -66,7 +66,10 @@ export interface McpSyncTarget {
   label: string;
   /** Home-relative default location of the config file. */
   path: string;
-  /** Home-relative fallback file read when `path` is absent (never written). */
+  /**
+   * Home-relative fallback file used when `path` is absent: read, and written in place when it
+   * parses (a JSONC file with comments fails the parse and is never written).
+   */
   altPath?: string;
   format: McpFormat;
   /** The env var the CLI reads to move the file, and the path under it (`mcpConfig.relocation`). */
@@ -612,7 +615,8 @@ function resolveFile(
 /**
  * The alternate config file for a target (`McpSyncTarget.altPath`), honouring the same relocation
  * as the primary file: the alt lives in the same directory, so the relocated path is the primary's
- * directory plus the alt filename. Like the primary, it is only ever read, never written.
+ * directory plus the alt filename. Once chosen it is read and written exactly like the primary; a
+ * JSONC file with comments fails the parse guard and is never written.
  */
 function resolveAltFile(
   t: McpSyncTarget,
