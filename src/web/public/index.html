@@ -1442,13 +1442,13 @@
                       <input type="text" id="modalSessionName" class="set-input" maxlength="128" placeholder="Auto (directory name)" onblur="app.saveSessionName()">
                     </div>
                   </div>
-                  <div class="set-row">
+                  <div class="set-row set-row-block">
                     <div class="set-row-text">
                       <span class="set-row-label">Working folder</span>
-                      <span class="set-row-desc">Where this session's CLI runs, on the machine hosting Codeman.</span>
+                      <span class="set-row-desc" id="modalSessionPathDesc">Where this session's CLI runs, on the machine hosting Codeman.</span>
                     </div>
                     <div class="set-row-actions">
-                      <code id="modalSessionPath" class="set-static mono" style="word-break: break-all; user-select: all;"></code>
+                      <code id="modalSessionPath" class="set-static mono" style="flex: 1; min-width: 0; word-break: break-all; user-select: all;"></code>
                       <button type="button" class="btn-toolbar btn-sm" id="modalSessionPathCopy" onclick="app.copySessionPath()">Copy</button>
                     </div>
                   </div>
