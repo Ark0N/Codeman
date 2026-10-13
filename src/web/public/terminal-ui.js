@@ -3681,6 +3681,9 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
     if (lines === 0 || this.terminal?.buffer?.active?.viewportY !== 0) return;
+    // An earlier frame of this gesture already started the pull; its own
+    // completion reveals the notice, so do not flash the pre-pull state now.
+    if (this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
     const sessionId = this.activeSessionId;
     Promise.resolve(this._maybeRefetchFullHistory?.())
       .catch(() => {})

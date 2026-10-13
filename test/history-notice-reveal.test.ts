@@ -184,6 +184,32 @@ describe('partial-history notice: lazy reveal', () => {
     expect(loadButton(bar)?.textContent).toBe('Load full history');
   });
 
+  it('a later frame of the same gesture does not flash the pre-pull state while the pull runs', async () => {
+    const { app, bar, buffer } = makeApp();
+    app._setHistoryTruncation('s1', TAIL);
+    // Like the real pull: it marks itself in flight and returns at once to every later caller.
+    const pull = { release: () => {} };
+    app._maybeRefetchFullHistory.mockImplementation(() => {
+      if (app._fullHistoryRepullInFlight) return Promise.resolve();
+      app._fullHistoryRepullInFlight = true;
+      return new Promise<void>((res) => {
+        pull.release = () => {
+          app._fullHistoryRepullInFlight = false;
+          res();
+        };
+      });
+    });
+    buffer.viewportY = 0;
+    app._maybeLoadMoreHistoryOnScroll(-500);
+    app._maybeLoadMoreHistoryOnScroll(-1); // the next animation frame, still at row 0
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(bar.hidden).toBe(true);
+
+    pull.release();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(bar.hidden).toBe(false);
+  });
+
   it('shows what the pull left: nothing, when the pull brought everything back', async () => {
     const { app, bar, buffer } = makeApp();
     app._setHistoryTruncation('s1', TAIL);
