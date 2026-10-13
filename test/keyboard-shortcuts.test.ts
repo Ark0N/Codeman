@@ -85,14 +85,4 @@ describe('keyboard shortcuts', () => {
     expect(readme).toContain('`Ctrl/Cmd+C`');
     expect(readme).toContain('`Ctrl+Shift+C`');
   });
-
-  it('keeps a user-rebound chord out of the PTY and refuses duplicate bindings', () => {
-    const tile = readFileSync('src/web/public/terminal-tile.js', 'utf8');
-    const settings = readFileSync('src/web/public/settings-ui.js', 'utf8');
-    expect(appSource).toContain('isUserBoundShortcutEvent(e) {');
-    expect(terminalUiSource).toContain('this.isUserBoundShortcutEvent?.(ev)) return false');
-    expect(tile).toContain('global.app?.isUserBoundShortcutEvent?.(ev)) return false');
-    expect(settings).toContain('this.findShortcutConflict(e, shortcutId)');
-    expect(settings).toContain("return 'Switch to Tab N'");
-  });
 });

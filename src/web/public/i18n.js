@@ -1141,7 +1141,7 @@
     'Previous / Next Session': '上一个 / 下一个会话',
     'Next Session': '下一个会话',
     'Previous Session': '上一个会话',
-    'Next Session (alternate)': '下一个会话(备用)',
+    'Next Session (alternate)': '下一个会话（备用）',
     'Switch to Tab N': '切换到第 N 个标签页',
     'Move Active Tab Left': '向左移动当前标签页',
     'Move Active Tab Right': '向右移动当前标签页',
