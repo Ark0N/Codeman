@@ -652,6 +652,17 @@ describe('mobile shell Paste', () => {
     expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '\x1b[200~echo one\recho two\x1b[201~');
   });
 
+  it('drops paste markers inside the text, so a pasted ESC[201~ cannot end the bracket early', () => {
+    const { app, input, send } = openShellPaste();
+    // A pastejacking page can put the end marker on the clipboard: everything
+    // after it would be typed as keys, and its CR would run a command.
+    input.value = 'echo safe\x1b[201~\nrm -rf ~/x\x1b[200~';
+
+    send.click();
+
+    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '\x1b[200~echo safe\rrm -rf ~/x\x1b[201~');
+  });
+
   it('refuses a paste longer than one input frame and keeps the text for trimming', () => {
     const { app, bar, document, input, send } = openShellPaste();
     input.value = 'x'.repeat(bar._composerMaxLength + 1);

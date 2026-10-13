@@ -1227,7 +1227,9 @@ const KeyboardAccessoryBar = {
     app._predictiveEcho?.clearPredictions();
     // Match xterm's prepareTextForTerminal(): CR keeps embedded newlines inside
     // the single-line input transport and is what terminal.paste() emitted.
-    const pasteText = text.replace(/\r?\n/g, '\r');
+    // Paste markers inside the text are dropped first: a clipboard carrying
+    // `ESC[201~` would end the bracket early and run the rest without Enter.
+    const pasteText = text.replace(/\x1b\[20[01]~/g, '').replace(/\r?\n/g, '\r');
     if (pasteText.length > this._composerMaxLength) {
       app.showToast?.(`${label} is too long to send (maximum ${this._composerMaxLength.toLocaleString()} characters)`, 'error');
       return false;
