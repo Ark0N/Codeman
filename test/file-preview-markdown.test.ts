@@ -19,8 +19,10 @@
  *  4. Lines/Wrap flip classes on the <pre> and persist, and the text the <pre>
  *     holds is byte-identical to the file; every toggle is hidden for an image
  *     and while editing.
- *  5. `FILE_PREVIEW_EXTENSIONS` gained avif/ico and still has no `md`
- *     (in-workspace text keeps the tail viewer, see architecture-invariants).
+ *  5. `FILE_PREVIEW_EXTENSIONS` gained avif/ico, and `md`/`markdown` (owner
+ *     decision 2026-10-13: a markdown path clicked in the terminal opens this
+ *     rendered view, not the streaming log viewer), while other in-workspace
+ *     text keeps the tail viewer (see architecture-invariants).
  *  6. A preview opened by attachment id under a bare file name has no
  *     directory to resolve against, so its relative images degrade to alt text
  *     and its relative links to plain text instead of landing on the workspace
@@ -464,10 +466,13 @@ describe('file viewer markdown line breaks', () => {
 });
 
 describe('FILE_PREVIEW_EXTENSIONS', () => {
-  it('routes avif and ico paths to the viewer and leaves .md with the tail viewer', () => {
+  it('routes avif, ico and markdown paths to the viewer and leaves other text with the tail viewer', () => {
     const { exts } = loadApp();
     expect(exts.has('avif')).toBe(true);
     expect(exts.has('ico')).toBe(true);
-    expect(exts.has('md')).toBe(false);
+    // Markdown is a document to read rendered, not a log to follow.
+    expect(exts.has('md')).toBe(true);
+    expect(exts.has('markdown')).toBe(true);
+    for (const text of ['log', 'txt', 'json', 'ts', 'yaml', 'csv']) expect(exts.has(text), text).toBe(false);
   });
 });

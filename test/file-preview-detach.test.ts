@@ -40,6 +40,8 @@ function loadApp() {
     escapeHtml: (s: string) => String(s),
     // Reverse-proxy route builder from constants.js (not loaded here); identity at root.
     CodemanBase: { base: '', url: (p: string) => p },
+    // Also from constants.js: no file in this suite renders as an HTML page.
+    rendersAsPage: () => false,
     document: { getElementById: () => null, addEventListener: vi.fn() },
     window: windowStub,
     setTimeout,

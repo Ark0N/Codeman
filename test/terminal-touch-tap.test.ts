@@ -1018,6 +1018,48 @@ describe('terminal link tap', () => {
     expect(app.openLogViewerWindow).toHaveBeenCalledWith('/var/log/app.log', 'sess-1');
   });
 
+  it('opens a tapped markdown or HTML path in the preview, and other text in the log viewer', () => {
+    // In-workspace paths (_isExternalPreviewPath is false here): markdown renders as a
+    // document and HTML as a page in the preview; other text keeps the live tail.
+    for (const path of ['/home/u/ws/notes.md', '/home/u/ws/README.markdown', '/home/u/ws/report/index.html']) {
+      const line = `wrote ${path} just now`;
+      const { app } = linkHarness([line, '', '❯ ']);
+      expect(app._handleMobileTerminalTap(at(line.indexOf('/home')), false, 'content'), path).toBe('link');
+      expect(app.openFilePreview, path).toHaveBeenCalledWith(path, 'sess-1');
+      expect(app.openLogViewerWindow, path).not.toHaveBeenCalled();
+    }
+    for (const path of ['/home/u/ws/run.log', '/home/u/ws/notes.txt', '/home/u/ws/data.json']) {
+      const line = `wrote ${path} just now`;
+      const { app } = linkHarness([line, '', '❯ ']);
+      expect(app._handleMobileTerminalTap(at(line.indexOf('/home')), false, 'content'), path).toBe('link');
+      expect(app.openLogViewerWindow, path).toHaveBeenCalledWith(path, 'sess-1');
+      expect(app.openFilePreview, path).not.toHaveBeenCalled();
+    }
+  });
+
+  it("routes a path clicked in a tile or split pane the same way, against that pane's session", () => {
+    // TerminalTile registers the SAME provider with its own terminal and session
+    // (terminal-tile.js), so a grid tile and the split's Pane B route like the main pane.
+    const { app } = linkHarness(['', '', '❯ ']);
+    const tileTerminal = createTerminalGrid(['see /home/u/ws/notes.md and /home/u/ws/run.log', '', '❯ '], 2);
+    let provider: any;
+    tileTerminal.registerLinkProvider = vi.fn((p: unknown) => {
+      provider = p;
+    });
+    app.registerFilePathLinkProvider({ terminal: tileTerminal, getSessionId: () => 'tile-2', setHovered: vi.fn() });
+
+    let links: any[] = [];
+    provider.provideLinks(1, (found: any[]) => {
+      links = found || [];
+    });
+    const byText = (text: string) => links.find((l) => l.text === text);
+    byText('/home/u/ws/notes.md').activate({}, '/home/u/ws/notes.md');
+    byText('/home/u/ws/run.log').activate({}, '/home/u/ws/run.log');
+
+    expect(app.openFilePreview).toHaveBeenCalledWith('/home/u/ws/notes.md', 'tile-2');
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/home/u/ws/run.log', 'tile-2');
+  });
+
   it('activates a link in scrollback, where the tap sends no report at all', () => {
     // A scrolled-up tap deliberately reports nothing (it would land on whatever row now
     // occupies the cell), but reading old output and tapping a URL in it is the common case.

@@ -164,6 +164,8 @@ function loadApp(fetchImpl: (url: string, init?: { body?: string }) => unknown) 
     escapeHtml: (s: string) => String(s),
     CodemanBase: { base: '', url: (p: string) => p },
     resolveLinkedFilePath,
+    // Also from constants.js: no file in this suite renders as an HTML page.
+    rendersAsPage: () => false,
     document: {
       getElementById: () => null,
       createElement: (t: string) => el(t),

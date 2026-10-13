@@ -30,10 +30,11 @@ const MARKDOWN_EXTS = new Set(['md', 'markdown']);
 // would be dropped on the next save).
 const FILE_PREVIEW_PREF_KEYS = {
   mdRendered: 'codeman:filePreviewMdRendered',
+  htmlRendered: 'codeman:filePreviewHtmlRendered',
   lineNumbers: 'codeman:filePreviewLineNumbers',
   wrap: 'codeman:filePreviewWrap',
 };
-const FILE_PREVIEW_PREF_DEFAULTS = { mdRendered: true, lineNumbers: false, wrap: true };
+const FILE_PREVIEW_PREF_DEFAULTS = { mdRendered: true, htmlRendered: true, lineNumbers: false, wrap: true };
 const AWAY_DIGEST_SECTIONS = [
   ['needsAttention', 'Needs Attention'],
   ['completed', 'Completed'],
@@ -4126,6 +4127,8 @@ Object.assign(CodemanApp.prototype, {
     // Same for the text-view toggles: they act on the text this load has not
     // fetched yet, and an image or PDF has nothing for them to toggle.
     this.filePreviewText = null;
+    this.filePreviewPage = null;
+    this.filePreviewPageRefused = false;
     this._updateFilePreviewToolbar('none');
 
     // Show overlay with loading state
@@ -4135,6 +4138,27 @@ Object.assign(CodemanApp.prototype, {
     footerEl.textContent = '';
 
     const ext = (filePath.split('.').pop() || '').toLowerCase();
+
+    // HTML renders as a page: the server mints a sandboxed /html-view URL for the
+    // file's directory (html-view-routes.ts), so relative CSS, scripts and images
+    // resolve, and the page runs in an opaque origin that cannot reach Codeman.
+    // The Page pill switches to the source view below (with its Edit button), and
+    // a refused mint (remote case, broad folder, hidden directory) falls through
+    // to that source view on its own.
+    if (!attachmentId && rendersAsPage(filePath) && this._filePreviewPref('htmlRendered')) {
+      const pageUrl = await this._mintHtmlViewUrl(filePath, sessionId);
+      if (pageUrl) {
+        footerEl.textContent = 'HTML';
+        this.filePreviewPage = { filePath, sessionId };
+        this.filePreviewDetachUrl = pageUrl;
+        if (detachBtn) detachBtn.hidden = false;
+        bodyEl.innerHTML = `<iframe src="${escapeHtml(pageUrl)}" title="${escapeHtml(filePath)}" sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"></iframe>`;
+        this._updateFilePreviewToolbar('page');
+        return;
+      }
+      // The pill would only retry a page the server just refused.
+      this.filePreviewPageRefused = true;
+    }
 
     // Out-of-workspace path: mint an attachment id up front. Every branch below
     // talks to a workspace-confined route, so without this the image/PDF ones
@@ -4857,8 +4881,9 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Show the toggles that apply to the current view: MD for a markdown file in
-   * either view, Lines/Wrap for the plain-text view only; `'none'` (loading,
-   * image, media, PDF, edit mode) hides all three.
+   * either view, Page for an HTML file in either view (`'page'` = rendered),
+   * Lines/Wrap for the plain-text view only; `'none'` (loading, image, media,
+   * PDF, edit mode) hides them all.
    */
   _updateFilePreviewToolbar(view) {
     const set = (id, shown, pressed) => {
@@ -4869,8 +4894,40 @@ Object.assign(CodemanApp.prototype, {
     };
     const isMarkdown = view !== 'none' && MARKDOWN_EXTS.has(this.filePreviewText?.ext || '');
     set('filePreviewMdBtn', isMarkdown, view === 'markdown');
+    // Page: shown on a rendered HTML page, and on its source view when that view
+    // can be re-rendered (a bare attachment-card name has no path to mint from).
+    const text = this.filePreviewText;
+    const htmlSource =
+      view === 'text' &&
+      !this.filePreviewPageRefused &&
+      rendersAsPage(text?.filePath) &&
+      (!text.attachmentId || text.filePath.startsWith('/'));
+    set('filePreviewPageBtn', view === 'page' || htmlSource, view === 'page');
     set('filePreviewLinesBtn', view === 'text', this._filePreviewPref('lineNumbers'));
     set('filePreviewWrapBtn', view === 'text', this._filePreviewPref('wrap'));
+  },
+
+  /** Mint the sandboxed page URL for an HTML file; null when the server refuses. */
+  async _mintHtmlViewUrl(filePath, sessionId) {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/html-view`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath }),
+      });
+      const result = await res.json().catch(() => ({}));
+      return res.ok && result.success ? CodemanBase.url(result.data.url) : null;
+    } catch {
+      return null;
+    }
+  },
+
+  /** Page pill: flip between the rendered page and the source view of an HTML file. */
+  toggleFilePreviewPage() {
+    const target = this.filePreviewPage || this.filePreviewText;
+    if (!target) return;
+    this._setFilePreviewPref('htmlRendered', !this._filePreviewPref('htmlRendered'));
+    return this.openFilePreview(target.filePath, target.sessionId);
   },
 
   toggleFilePreviewMd() {

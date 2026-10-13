@@ -2224,7 +2224,13 @@ Object.assign(CodemanApp.prototype, {
                 self.openFolderGrid(target, sessionId);
                 return;
               }
-              if (previewsInFileViewer(target) || self._isExternalPreviewPath(target, sessionId)) {
+              // An HTML file renders as a page in the preview, never as source
+              // in the log viewer (markdown is in FILE_PREVIEW_EXTENSIONS).
+              if (
+                previewsInFileViewer(target) ||
+                rendersAsPage(target) ||
+                self._isExternalPreviewPath(target, sessionId)
+              ) {
                 self.openFilePreview(target, sessionId);
                 return;
               }

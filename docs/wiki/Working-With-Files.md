@@ -87,9 +87,10 @@ File paths in a session are links. That works in two places:
   render as underlined monospace links.
 
 Clicking one opens it in the preview: images and PDFs render, video and audio play with a
-working scrub bar, documents convert, text shows inline and Markdown renders. The exception is
-a text or Markdown file inside the workspace clicked in the terminal: that opens in the tail
-viewer instead, which follows a file that is still being written.
+working scrub bar, documents convert, text shows inline, Markdown renders and HTML opens as a
+page. The exception is a plain text file (a log, `.txt`, `.json`, code) inside the workspace
+clicked in the terminal: that opens in the tail viewer instead, which follows a file that is
+still being written. A Markdown file always opens rendered, wherever you click it.
 
 Paths **outside** the session's workspace work too, which matters because that is where most
 of an agent's output lands: a screenshot in `/tmp`, a capture in its own scratchpad, a file in
@@ -101,8 +102,24 @@ Outside the workspace the allowlist is images, video, audio, PDF, Office documen
 files, where "text" is the same list the viewer will let you edit: code, config, logs, csv,
 markdown. The reasoning is that a session can already `cat` any of those, so the file suffix
 was never what kept anything secret; the path guard is. Types outside the list (`.svg`,
-`.bmp`) say so rather than failing silently, and `.html` previews as source rather than being
-rendered, so nothing served this way can execute in the page.
+`.bmp`) say so rather than failing silently.
+
+An `.html` file opens as a rendered page by default, with its relative CSS, scripts, images and
+data files. The page is served from a separate `/html-view/...` address in a sandbox with no
+origin of its own, so its scripts can never read Codeman's page, cookies or API.
+
+By the project owner's decision, a rendered page has the same network access as a file you open
+from disk in your browser. It **can** load scripts, styles, fonts, images and media from
+anywhere on the internet (a dashboard that pulls Chart.js from a CDN works), send requests to
+any host, and read the files in its own folder. It **cannot** act as Codeman: it has no access
+to Codeman's page, cookies or API, and no access to any folder other than its own. Since a page
+can send what it can read to any host, open HTML only from sources you trust, as you would on
+your own desktop. The **Page**
+pill in the viewer header switches to the source view (where **Edit** works as for any text
+file), and the viewer falls back to source on its own when a page cannot be rendered: a remote
+(SSH) case, an HTML file inside a hidden folder, or one sitting directly in a broad folder such
+as your home folder or `/tmp` (the page may read the files in its own folder tree, so move it
+into a folder of its own). The raw file routes still serve HTML as a download only.
 
 Text previews are capped at the first 500 lines, fetched as a partial read, so clicking a
 one-gigabyte log does not try to paint one.

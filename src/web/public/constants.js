@@ -2047,7 +2047,7 @@ function computeRewriteScrollLine(input) {
  * a `/g` regex, so {@link absoluteFilePathPattern} mints a fresh one per call.
  */
 const FILE_PATH_LINK_PATTERN =
-  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html|toml|ini|sql|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
+  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|sql|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
 
 /** A fresh, zero-state instance of {@link FILE_PATH_LINK_PATTERN}. */
 function absoluteFilePathPattern() {
@@ -2059,13 +2059,18 @@ function absoluteFilePathPattern() {
  * points at goes to the tail/log viewer, which is the right home for a growing
  * text file and the wrong one for bytes (tailing a PNG shows binary noise).
  *
+ * Markdown is here too (owner decision 2026-10-13): an agent's `.md` is a
+ * document to read, so the preview renders it (its MD pill gives the source)
+ * instead of the log viewer streaming it as raw text. Other text (.log, .txt,
+ * .json, code) keeps the log viewer, which follows a file still being written.
+ *
  * The media entries mirror VIDEO_ATTACHMENT_EXTENSIONS/AUDIO_ATTACHMENT_EXTENSIONS
  * (src/attachment-registry.ts, the single source) — they diverged once and an
  * in-workspace `.m4a` opened as binary noise in the log viewer while the same
  * file in /tmp played fine. test/media-extension-parity.test.ts pins the sync.
  */
 const FILE_PREVIEW_EXTENSIONS = new Set(
-  ('png jpg jpeg gif webp avif bmp ico svg pdf docx pptx xlsx mp4 webm mov m4v ogv mp3 wav ogg oga m4a aac flac opus').split(' ')
+  ('png jpg jpeg gif webp avif bmp ico svg pdf docx pptx xlsx mp4 webm mov m4v ogv mp3 wav ogg oga m4a aac flac opus md markdown').split(' ')
 );
 
 /** Whether a path's extension is one {@link FILE_PREVIEW_EXTENSIONS} covers. */
@@ -2095,7 +2100,7 @@ function previewsInFileViewer(filePath) {
  * {@link findFilePathLinks}.
  */
 const RELATIVE_FILE_PATH_LINK_PATTERN =
-  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html|toml|ini|sql|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
+  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|sql|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
 
 /** The `(?:log|txt|…)` extension group, read off the rooted pattern so it cannot drift. */
 const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LINK_PATTERN.source)[1];
@@ -2206,6 +2211,21 @@ function resolveLinkedFilePath(filePath, workingDir) {
     else parts.push(part);
   }
   return `/${parts.join('/')}`;
+}
+
+/**
+ * Extensions the file preview renders as a PAGE, from the sandboxed
+ * `/html-view/<cap>/` route (src/web/routes/html-view-routes.ts, whose
+ * HTML_VIEW_EXTENSIONS this mirrors; test/file-preview-html-page.test.ts pins
+ * the two equal). The terminal sends a click on one to the preview, never to
+ * the log viewer, and the preview renders it with a Page pill back to source.
+ */
+const HTML_PAGE_EXTENSIONS = new Set(['html', 'htm']);
+
+/** Whether a path names a file the preview renders as a page ({@link HTML_PAGE_EXTENSIONS}). */
+function rendersAsPage(filePath) {
+  const ext = String(filePath || '').split('.').pop().toLowerCase();
+  return HTML_PAGE_EXTENSIONS.has(ext);
 }
 
 
@@ -3358,6 +3378,8 @@ if (typeof window !== 'undefined') {
     resolveLinkedFilePath,
     previewsInFileViewer,
     FILE_PREVIEW_EXTENSIONS,
+    rendersAsPage,
+    HTML_PAGE_EXTENSIONS,
   };
   window.CodemanTerminalLines = { terminalLogicalLine, terminalPathLine };
   window.CodemanUrlSession = { sessionIdFromFragment };
