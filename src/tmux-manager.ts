@@ -700,6 +700,12 @@ interface PaneCursorGeometry {
   rows: number;
   cursorX: number;
   cursorY: number;
+  /**
+   * `#{history_size}`: rows tmux holds ABOVE the visible frame, i.e. what a
+   * full-history capture can add. Absent when the query did not return it.
+   * Optional and validated on its own, so a bad value never voids the caret.
+   */
+  historyLines?: number;
 }
 
 /**
@@ -716,7 +722,7 @@ export function queryPaneCursor(run: () => string): PaneCursorGeometry | null {
     console.error('[TmuxManager] Failed to query pane cursor after capture:', cursorErr);
     return null;
   }
-  const [cursorX, cursorY, cols, rows] = raw.split(/\s+/).map((value) => parseInt(value, 10));
+  const [cursorX, cursorY, cols, rows, historyLines] = raw.split(/\s+/).map((value) => parseInt(value, 10));
   if (
     !Number.isFinite(cursorX) ||
     !Number.isFinite(cursorY) ||
@@ -729,7 +735,9 @@ export function queryPaneCursor(run: () => string): PaneCursorGeometry | null {
   ) {
     return null;
   }
-  return { cols, rows, cursorX, cursorY };
+  const geometry: PaneCursorGeometry = { cols, rows, cursorX, cursorY };
+  if (Number.isFinite(historyLines) && historyLines >= 0) geometry.historyLines = historyLines;
+  return geometry;
 }
 
 /** SGR attributes, which is all `capture-pane -e` emits. */
@@ -3890,7 +3898,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // to keep when a move follows to put the caret back above them.
       const geometry = queryPaneCursor(() =>
         execSync(
-          `${this.tmux()} display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height}'`,
+          `${this.tmux()} display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size}'`,
           { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
         )
       );
@@ -3902,6 +3910,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // geometry is reported there for diagnosis rather than for repair. Only
       // the caller can see both sizes, so hand it this one.
       if (opts && geometry) opts.capturedGeometry = { cols: geometry.cols, rows: geometry.rows };
+      // Same query, no extra tmux call: how much scrollback a full-history pull
+      // could return. A pane in the alternate screen (fullscreen claude) holds
+      // none, and the partial-history notice must not promise it.
+      if (opts && geometry?.historyLines !== undefined) opts.capturedHistoryLines = geometry.historyLines;
 
       if (fullHistory) {
         // Without geometry there is no cursor move, so fall back to the old trim.

@@ -45,6 +45,11 @@ describe('formatHistoryBytes', () => {
     expect(formatHistoryBytes(3 * 1024 * 1024)).toBe('3.0 MB');
   });
 
+  it('never prints "1024 KB" for a tail cut back to a line boundary just under 1 MiB', () => {
+    expect(formatHistoryBytes(1048351)).toBe('1.0 MB');
+    expect(formatHistoryBytes(1023 * 1024)).toBe('1023 KB');
+  });
+
   it('survives junk input rather than printing NaN into the UI', () => {
     expect(formatHistoryBytes(-5)).toBe('less than 1 KB');
     expect(formatHistoryBytes(NaN as unknown as number)).toBe('less than 1 KB');
@@ -111,6 +116,65 @@ describe('computeHistoryTruncationNotice (issue #258)', () => {
     const recoverable = { truncated: true, reason: 'tail', source: 'history', fullSize: 900, retainedBytes: 100 };
     expect(computeHistoryTruncationNotice(recoverable).canLoadMore).toBe(true);
     expect(computeHistoryTruncationNotice({ ...recoverable, exhausted: true }).canLoadMore).toBe(false);
+  });
+});
+
+describe('computeHistoryTruncationNotice: what a pull can really return (paneHistoryLines)', () => {
+  const { computeHistoryTruncationNotice } = loadHelpers();
+  // The tab-switch tail of a fullscreen claude pane, as measured on prod: the
+  // server cut a 5.8 MB byte stream to 1 MB, and tmux held 0 scrollback rows.
+  const fullscreenTail = {
+    truncated: true,
+    reason: 'tail',
+    source: 'mux-visible',
+    fullSize: 6158853,
+    retainedBytes: 1048351,
+  };
+
+  it('says nothing for a pane that keeps no scrollback, however much the byte stream lost', () => {
+    // The dropped bytes were old repaints of one frame, and `full=1` returns
+    // only the visible frame for such a pane, so the button could only ever end
+    // in the downgrade refusal. That is the banner that showed on every switch.
+    const notice = computeHistoryTruncationNotice({ ...fullscreenTail, paneHistoryLines: 0 });
+    expect(notice).toEqual({ visible: false, message: '', canLoadMore: false });
+  });
+
+  it('stays silent for such a pane in the exhausted and at-ceiling states too', () => {
+    expect(computeHistoryTruncationNotice({ ...fullscreenTail, paneHistoryLines: 0, exhausted: true }).visible).toBe(
+      false
+    );
+    expect(
+      computeHistoryTruncationNotice({
+        ...fullscreenTail,
+        source: 'mux-full-history',
+        reason: 'capped',
+        paneHistoryLines: 0,
+      }).visible
+    ).toBe(false);
+  });
+
+  it('names the scrollback lines a pull can load instead of the byte gap', () => {
+    const notice = computeHistoryTruncationNotice({ ...fullscreenTail, source: 'history', paneHistoryLines: 48210 });
+    expect(notice.visible).toBe(true);
+    expect(notice.canLoadMore).toBe(true);
+    expect(notice.message).toBe(
+      'Showing the most recent 1.0 MB of this session. 48,210 lines of scrollback are retained.'
+    );
+    expect(notice.message).not.toContain('4.9 MB');
+  });
+
+  it('uses the singular for one line', () => {
+    const notice = computeHistoryTruncationNotice({ ...fullscreenTail, paneHistoryLines: 1 });
+    expect(notice.message).toContain('1 line of scrollback is retained.');
+  });
+
+  it('keeps the byte wording when the server did not report the pane (older server, byte-history fallback)', () => {
+    for (const paneHistoryLines of [undefined, null, NaN]) {
+      const notice = computeHistoryTruncationNotice({ ...fullscreenTail, paneHistoryLines });
+      expect(notice.visible).toBe(true);
+      expect(notice.canLoadMore).toBe(true);
+      expect(notice.message).toContain('more may still be retained');
+    }
   });
 });
 
