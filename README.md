@@ -46,6 +46,7 @@ The installer asks before every system change, and re-running the same line upda
 - **Truly phone-friendly** - a [touch-optimized terminal](#mobile-optimized-web-ui) with instant local echo, QR login, swipe navigation, and push notifications
 - **Runs while you sleep** - [idle detection + respawn cycling](#respawn-controller) and auto-resume when a subscription limit resets, for 24+ hour unattended runs
 - **See your agents think** - [live floating windows](#live-agent-visualization) for every subagent and teammate, with real-time transcripts
+- **Agents can drive it too** - the [codeman skill](#the-agent-skill-start-here) (for every agent CLI), [`codeman agent`](#codeman-agent--session-to-session-verbs-in-every-cli-mode) and an [MCP server](#mcp-server-codeman-mcp-drive-codeman-from-any-mcp-client) let one agent start workers in any CLI, prompt them, wait for them and collect their answers
 - **Nothing gets lost** - tmux persistence across restarts and network drops, exactly-once input delivery, full-scrollback replay
 - **Self-hosted and private** - loopback-only by default, MIT licensed, no telemetry, runs entirely on your machine
 
@@ -212,6 +213,8 @@ The most responsive AI coding agent experience on any phone. Full xterm.js termi
 
 - **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard; destructive commands require a double-press to confirm, so you never fire one by accident; on Codex sessions the bar also shows `⇧←` / `⇧→` (Shift+Left / Shift+Right: edit the last queued message / return through the prompt stack)
 - **Dedicated Enter button** — replays the keypress through the terminal, so text buffered by local echo is flushed first rather than stranded
+- **Attach button**: the picture icon beside the mic opens the system photo and file sheet without raising the keyboard. Photos and camera-roll videos (mp4, mov, webm, up to 1 GB) upload into the session's folder and their path lands on your prompt, unsent
+- **Paste in a shell**: a multi-line paste goes in as one block and waits for your Enter, instead of running line by line as it arrives
 - **Swipe navigation & smart keyboard handling** — swipe left/right to switch sessions; toolbar and terminal shift up when the keyboard opens (`visualViewport` API)
 - **Built for phones** — safe-area insets for notch and home indicator, 44px touch targets, bottom-sheet case picker, native momentum scrolling; on a folding phone (iPhone Duo) dialogs stay clear of the hinge, and opening or closing the device is never mistaken for the keyboard
 
@@ -264,18 +267,18 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 
 ### 3. Read the dashboard
 
-- **Tabs (top)** — one per session. `Alt+1`-`9` to jump, `Ctrl+Tab` for next, drag to reorder (tab order syncs across your devices). Prefer a list? **App Settings → Appearance → Tabs** moves it into a left sidebar with a filter box (`Alt+B` collapses it) or a vertical rail whose rows sort by activity: blocked on you first, then longest running, then most recently quiet.
+- **Tabs (top)** — one per session. `Alt+1`-`9` to jump, `Ctrl+Tab` for next, drag to reorder (tab order syncs across your devices). Prefer a list? **App Settings → Appearance → Tabs** moves it into a left sidebar with a filter box (`Alt+B` collapses it) or a vertical rail whose rows sort by activity: blocked on you first, then longest running, then most recently quiet. The rail also has a **Search sessions** box, named **tab groups** (a group's menu starts a **New session** straight into it), and a **Focus** section of shortcuts to the tabs you keep coming back to.
 - **Terminal (center)** — a real `xterm.js` terminal; full TUIs render correctly. Type directly and press **Enter** to send. `Shift+Enter` inserts a newline.
 - **Side panels** — Respawn, Orchestrator, Cron, Subagents, Settings (toggled from the toolbar).
 
 ### 4. Talk to the agent
 
 - **Type prompts** straight into the terminal — input is delivered exactly-once even across reconnects (a dropped link never loses or double-sends a prompt).
-- **Paste or drag-and-drop images** directly into the session.
+- **Paste, drop or attach images and videos** directly into the session. They are saved in a hidden `.codeman-uploads/` folder in the workspace (it ignores itself in git and is swept after 7 days), and the file's path lands on your prompt, unsent.
 - **Voice input** — `Ctrl+Shift+V` (Deepgram Nova-3, or this machine's Claude Code login with no API key; auto-silence stop).
-- **Attachments** — register external files/docs and preview Office/PDF inline; any file path an agent prints is clickable, in the terminal and in the chat view.
+- **Attachments** — register external files/docs and preview Office/PDF inline; any file path an agent prints is clickable, in the terminal and in the chat view, including `~/` and relative paths and paths broken across lines. An `.html` report opens as a real page, Markdown opens rendered, and a folder opens as a grid of its files.
 - **When it needs you** — the tab turns yellow (waiting for input) or red (a question is blocking). The **Approvals Inbox** _(opt-in)_ queues every pending prompt across sessions, answerable from the header bell or the phone home screen, and 🧠 **Read My Mind** _(opt-in)_ drafts your next prompt from the case's goals and recent work.
-- **Copy what you see** — `Shift+drag` selects text even while the CLI owns the mouse, right-click copies it, and Auto Copy _(opt-in)_ copies a selection the moment you release it.
+- **Copy what you see** — `Shift+drag` selects text even while the CLI owns the mouse, right-click copies it, and Auto Copy _(opt-in)_ copies a selection the moment you release it. A program that copies with OSC 52 (Claude Code's `/copy`, a tmux yank, vim) puts the text on your browser's clipboard too.
 
 ### 5. Make it autonomous
 
@@ -294,7 +297,7 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 
 ### 7. Operate & maintain
 
-- **App Settings** — model, effort, permission startup mode, theme/skin, terminal font family and weight, entrance animations, notifications, display toggles, per-CLI options, a synced custom display name, and per-device English/Simplified Chinese UI language.
+- **App Settings** — model, effort, permission startup mode, theme/skin, terminal font family and weight, entrance and tile animations (their own **Animations** section), notifications (with adjustable toast and browser-notification display times), display toggles, per-CLI options, a synced custom display name, and per-device English/Simplified Chinese UI language. **Apply** saves without closing Settings.
 - **Run it in the background** — `codeman web -d` detaches from your shell (`--status`, `--stop`); `codeman service install` makes it a systemd user unit / macOS LaunchAgent that survives reboots. Both verify the server actually answers before reporting success, and both refuse to start a second server on one data dir. See [Keep it running in the background](#quick-start---installation).
 - **Self-update** — git-clone installs update in place from **App Settings → System → Updates**.
 - **Deploy your own changes** — see [Development](#development).
@@ -387,7 +390,14 @@ Run **20 parallel sessions** with full visibility — real-time xterm.js termina
   <img src="docs/images/tile-grid-20261009.gif" alt="Tile grid: the Tiles button opens six live sessions side by side (DeepSeek Harness, Claude Code, Codex, a shell, OpenCode and Pi), and a second click returns to a single session" width="800">
 </p>
 
-Watch and drive up to **six sessions side by side** in one window. Click **Tiles** in the header (or press `Ctrl+Shift+G`) and your sessions open as a grid of live terminals: every tile takes your keystrokes and shows its agent's logo, model and state in its header. Right-click **Tiles** to choose 2, 4 or 6 tiles, and drag a tile by its header to move it. Click **Tiles** again to return to a single session; the grid is remembered for next time. Desktop only (a window about 1180px wide or more). Full guide: [Tile Grid](docs/wiki/Tile-Grid.md).
+Watch and drive up to **six sessions side by side** in one window. Click **Tiles** in the header (or press `Ctrl+Shift+G`) and your sessions open as a grid of live terminals: every tile takes your keystrokes and shows its agent's logo, model and state in its header. Right-click **Tiles** to choose 2, 4 or 6 tiles, and drag a tile by its header to move it. Click **Tiles** again to return to a single session. Desktop only (a window about 1180px wide or more). Full guide: [Tile Grid](docs/wiki/Tile-Grid.md).
+
+- **Opens what matters**: with no grid arranged yet, it fills the tiles with the sessions that are working first, then the ones waiting on you, then the most recently used, and always includes the one you are on.
+- **Keeps your layout**: once you arrange a grid (which session sits where, empty cells, tile count, divider sizes, the focused and zoomed tile), the Tiles button brings it back exactly, and so does a page reload while it was open.
+- **Tile animations** _(opt-in)_: **App Settings → Animations → Tile Animations** makes the grid open with a show: **CRT** (each tile switches on as a hot line, as in the GIF at the top), **Fly from tab**, **Deal**, **Beam down**, **Cascade**, **Pop** or **Soft**. Nothing moves under reduced motion.
+- **Scrolls like the main terminal**: the mouse wheel scrolls a fullscreen Claude conversation inside its tile, a Codex tile pages its transcript, and `Shift+wheel` scrolls the tile's local history.
+- **Detach Tiles** _(beta, opt-in)_: with **App Settings → Appearance → Detach Tiles** on, drag a tile's header out of the browser and it pops out into its own window; drop it on another Codeman window's tiles and it moves there.
+- **Hands-free**: with the [gesture overlay](#more-features) on, pinch a tile and carry it onto another tile to swap them, onto an empty cell to move it, or carry a tab onto the grid to add it.
 
 ### Persistent Sessions
 
@@ -464,10 +474,15 @@ PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xt
 - **Gesture control** _(opt-in)_ — a MediaPipe hand-tracking overlay to grab/drag session windows and pinch buttons, hands-free. Enable with `CODEMAN_GESTURE=1` + App Settings → Terminal & Input
 - **Multi-monitor span** _(macOS)_ — one click opens a browser window maximized across all displays, so floating agent/gesture panels can cross the physical seam
 - **File Viewer button** _(opt-in)_ — a header button that toggles the built-in file browser panel with one tap; enable under App Settings → Header & Panels → Header buttons
+- **HTML reports open as pages**: click an `.html` path an agent printed (a test report, a coverage page, a dashboard) and the File Viewer shows it as a real page, with the scripts, styles, images and data files from its folder; the **Page** pill switches to the source and its Edit button. The page runs sandboxed with an opaque origin, so it cannot read Codeman's cookies, call Codeman's API or read files outside its own folder. Network access stays open, so a dashboard that loads Chart.js or fonts from a CDN works as it would from disk. Broad folders (`/`, your home, `/tmp`) are refused, so give a report a folder of its own. A `.md` path clicked in the terminal opens rendered too
+- **Clickable paths and the folder grid**: paths written as `~/…`, relative to the session folder, or broken across terminal lines are clickable in the terminal and the Response Viewer, and so are folders: a folder opens a grid of its files (renders, screenshots, reports) that you page through with the arrow keys
+- **OSC 52 clipboard**: a program in a session that sets the clipboard with OSC 52 (Claude Code's `/copy`, a tmux yank, vim) puts the text on your browser's clipboard, in the main terminal and in every tile. Clipboard read requests are refused, and replaying a buffer never copies
+- **MCP server sync** _(opt-in)_: copies the user-level MCP servers each installed CLI has (Claude, Codex, Gemini, OpenCode, Antigravity, and GitHub Copilot CLI) into the others' own config files. Additive only, a server you switched off is never copied, **Preview** shows the changes first, and the previous file is kept as `.codeman-bak`. App Settings → Agents & CLIs; admin only in multi-user mode
 - **CJK / IME input** — full composition support for Chinese / Japanese / Korean, with Ctrl- and Alt-modified navigation keys passed through to the CLI
 - **Plan usage in the header** — live Claude subscription usage (the 5-hour and weekly windows) from a statusline exporter Codeman hands to `claude` at spawn and never writes into your settings files, plus Codex limits from its own app-server; per device, on for desktops and off for phones
-- **Session list, your way** — the header strip, a left sidebar with a filter box, or a vertical rail whose detailed rows carry created and state stamps and sort by activity; the phone home screen and the desktop home rail use the same order
-- **Terminal looks** — seven skins, four of them light, per-device font family and weight (the bundled JetBrains Mono covers weights 100 to 800), and opt-in entrance animations for tabs, agent windows, the terminal pane and connection lines
+- **Prompt-cache readout**: each Claude session shows whether its prompt cache is warm (`cache:until HH:MM`) or cold, in the footer (when you have no statusline of your own) and in Session Options → Respawn, with the cost of a re-cache and a note after a compaction. Display only; it survives a restart
+- **Session list, your way** — the header strip, a left sidebar with a filter box, or a vertical rail whose detailed rows carry created and state stamps and sort by activity; the phone home screen and the desktop home rail use the same order. On the rail, **Search sessions** narrows the list to the tabs that match, across every group, and a tab with an alert stays visible even when its name does not. Named **tab groups** collapse, reorder and take drags; a group's menu has **New session**, and a worker an agent spawns lands right after its parent (**Spawned tabs follow their parent**, off by default, keeps it moving with the parent). **Add to Focus** pins a shortcut to any tab in a section at the top of the rail, and **CLI Logos on Tabs** can be switched off per device
+- **Terminal looks** — seven skins, four of them light, per-device font family and weight (the bundled JetBrains Mono covers weights 100 to 800), and opt-in animations for tabs, agent windows, the terminal pane, connection lines and [tile-grid tiles](#tile-grid), all in App Settings → Animations (with a lab to try them)
 - **OS notifications & hostname-aware titles** — desktop alerts and tab titles are prefixed `codeman:<host>` so multi-host setups stay unambiguous
 
 ---
@@ -499,6 +514,7 @@ Point a case at another machine and run the agent **there**, over SSH, with the 
 - **Shared sessions**: several clients can attach the same remote session at different window sizes without clamping each other; discovery shows a "shared" badge with the client count.
 - **Injection-safe**: every ssh command line flows through a single shell-escaping builder, and host/path/identity fields are schema-guarded.
 - **Files too**: previews, downloads and text reads in a remote case go over the same ssh connection (one `realpath` + `stat` probe, then a streamed `cat`, `Range` seeking included), so a clicked path opens the file on the machine the agent is on. Nothing is copied to the Codeman host; editing and Office previews answer a clear 400 instead of a misleading 404.
+- **Full scrollback**: loading a remote session's history reads it from the remote tmux in one bounded ssh round trip, so a session keeps its whole scrollback after a reattach or a tab switch, with no rows lost where the history meets the live screen.
 
 Set it up under **New Case → Remote** (host, user, identity file, optional jump host). Full design: [`docs/remote-sessions.md`](docs/remote-sessions.md).
 
@@ -669,7 +685,7 @@ These run for **every** request — before auth, even on the default no-password
 ### Input, files & headers
 
 - **Schema-validated inputs** — every API body is checked with Zod v4 schemas; a `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `ANTIGRAVITY_*` / `GEMINI_*` / `GOOGLE_*` / `PI_*` / `GROK_*` / `XAI_*` / `DSH_*` / `DEEPSEEK_*` / `OMP_*` env-prefix allowlist gates which settings each CLI can receive, and the keys that could redirect a CLI's traffic (base URLs, config homes) are clamped for non-admin users
-- **Path containment** — file routes `realpath` before boundary checks (no TOCTOU); `..`, absolute paths, and symlinks resolving outside the working dir are rejected. Caps: 10 MB text preview / 2 GB raw & download (`CODEMAN_MAX_DOWNLOAD_BYTES`; bodies stream and answer `Range` requests, so the cap is a sanity bound rather than memory protection); `/api/download` blocklists sensitive paths (`.env`, `*credentials*`, `~/.ssh/`, `.aws/credentials`). SVG/HTML is served `octet-stream` + `nosniff` + attachment so it downloads rather than executes
+- **Path containment** — file routes `realpath` before boundary checks (no TOCTOU); `..`, absolute paths, and symlinks resolving outside the working dir are rejected. Caps: 10 MB text preview / 2 GB raw & download (`CODEMAN_MAX_DOWNLOAD_BYTES`; bodies stream and answer `Range` requests, so the cap is a sanity bound rather than memory protection); `/api/download` blocklists sensitive paths (`.env`, `*credentials*`, `~/.ssh/`, `.aws/credentials`). SVG/HTML is served `octet-stream` + `nosniff` + attachment so it downloads rather than executes. The one place HTML renders is the File Viewer's page view: a separate `/html-view/<capability>/` address scoped to the file's own folder, served under `Content-Security-Policy: sandbox` without `allow-same-origin`, so the page has an opaque origin and can never read Codeman's cookies or drive its API; hidden folders and broad roots (`/`, home, `/tmp`) are refused, and the capabilities are revoked on logout
 - **Security headers** — `Content-Security-Policy` (`default-src 'self'`, every exception enumerated), `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, HSTS over HTTPS, and CORS reflected **only** for `localhost` / `127.0.0.1` / `::1`
 
 ### Supply chain & isolation
@@ -703,7 +719,7 @@ The web UI remains the primary surface; see **[docs/tui.md](docs/tui.md)** for t
 
 | Shortcut                        | Action                                                        |
 | ------------------------------- | ------------------------------------------------------------- |
-| `Ctrl/Cmd+W`                    | Kill active session                                           |
+| `Ctrl+W`                        | Not a Codeman shortcut: it reaches the terminal (delete the previous word). **Close Session** has no default key and can be bound in App Settings → Shortcuts |
 | `Ctrl/Cmd/Option+K`             | Find open session or start a new one                          |
 | `Ctrl/Cmd+Tab`                  | Next session                                                  |
 | `Alt/Option+[` / `Alt/Option+]` | Previous / next session                                       |
@@ -716,6 +732,10 @@ The web UI remains the primary surface; see **[docs/tui.md](docs/tui.md)** for t
 | `Ctrl/Cmd+L`                    | Clear terminal                                                |
 | `Ctrl+Shift+R`                  | Restore terminal size                                         |
 | `Ctrl+Shift+V`                  | Toggle voice input                                            |
+| `Ctrl+Shift+G`                  | Open or close the tile grid                                   |
+| `Alt+Shift+Arrows`              | Focus the tile to the left, right, above or below             |
+| `Ctrl+Shift+Arrows`             | Move the focused tile one place (into an empty cell, or swap) |
+| `Alt+Shift+Enter`               | Zoom the focused tile, or restore the grid                    |
 | `Ctrl/Cmd +` / `-`              | Font size                                                     |
 | `Ctrl/Cmd+?`                    | Keyboard help                                                 |
 | `Shift+Enter`                   | Insert newline (sent to terminal)                             |
