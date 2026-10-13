@@ -102,6 +102,7 @@ every session or only the active tab.
 | Pop-out Button on Tabs | Adds the detach control to tabs, with a per-tab override.                                  |
 | Spawn Lineage Lines    | Lines from each tab to the sessions it spawned; the selected tab's family is drawn thicker. Desktop only, on by default. |
 | Auto-name Sessions     | Titles a new tab after its first prompt, keeping the case prefix (`w3-myapp: fix the login redirect`). Synced, off by default. See [The Dashboard](The-Dashboard#automatic-session-names). |
+| Spawned Tabs Follow Their Parent | A session started by another one (an agent's worker, a `parentSessionId` spawn) follows its parent's tab into its group and moves with it until you move it by hand; the row menu then says where it sits and offers *Follow parent again*. Off, it starts right after its parent and stays put. Decided when the tab is created, so flipping it leaves existing tabs alone. Synced, off by default. |
 | Overview Home Screen   | The phone home screen. On by default.                                                      |
 
 ### Animations

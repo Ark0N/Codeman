@@ -336,6 +336,18 @@ Object.assign(CodemanApp.prototype, {
       { label: 'Close session', className: 'danger', run: () => this.requestCloseSession(sessionId) },
     ];
     for (const action of actions) {
+      // A note (a child session's placement) is plain text, not a menu item: it
+      // takes no focus and no arrow stop, and describes the menu instead.
+      if (action.note) {
+        const note = document.createElement('div');
+        note.className = 'tab-rail-action-menu-note';
+        note.setAttribute('role', 'none');
+        note.id = 'tabRailActionMenuNote';
+        note.textContent = action.label;
+        menu.setAttribute('aria-describedby', note.id);
+        menu.appendChild(note);
+        continue;
+      }
       const button = document.createElement('button');
       button.type = 'button';
       button.setAttribute('role', 'menuitem');

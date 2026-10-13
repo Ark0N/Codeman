@@ -83,6 +83,86 @@ describe('applyLegacySessionRank', () => {
     expect(normalizeTabLayout(result, facts)).toEqual(result);
   });
 
+  it('leaves every placement alone when the requested order is the current order', () => {
+    const input = layout({
+      groups: [
+        {
+          id: 'family',
+          name: 'Family',
+          refs: [session('parent'), session('child'), session('grandchild'), session('other')],
+        },
+      ],
+      ungrouped: [session('loose', 'manual')],
+    });
+    const facts = [
+      metadata('parent', { order: 0 }),
+      metadata('child', { order: 1, parentSessionId: 'parent' }),
+      metadata('grandchild', { order: 2, parentSessionId: 'child' }),
+      metadata('other', { order: 3 }),
+      metadata('loose', { order: 4, parentSessionId: 'parent' }),
+    ];
+
+    const result = applyLegacySessionRank(input, ['parent', 'child', 'grandchild', 'other', 'loose'], facts);
+
+    expect(result.groups[0].refs).toEqual(input.groups[0].refs);
+    expect(result.ungrouped).toEqual([session('loose', 'manual')]);
+  });
+
+  it('keeps a child following when the reorder keeps it in its parent block', () => {
+    const input = layout({
+      ungrouped: [session('x'), session('parent'), session('c1'), session('c2'), webview('w'), session('y')],
+    });
+    const facts = [
+      metadata('x', { order: 0 }),
+      metadata('parent', { order: 1 }),
+      metadata('c1', { order: 2, parentSessionId: 'parent' }),
+      metadata('c2', { order: 3, parentSessionId: 'parent' }),
+      metadata('y', { order: 4 }),
+    ];
+
+    // The whole family moves ahead of x, and its two children swap places.
+    const result = applyLegacySessionRank(input, ['parent', 'c2', 'c1', 'x', 'y'], facts);
+
+    expect(result.ungrouped).toEqual([
+      session('parent'),
+      session('c2'),
+      session('c1'),
+      session('x'),
+      webview('w'),
+      session('y'),
+    ]);
+  });
+
+  it('does not read a web tab left between a parent and its child as a split', () => {
+    const input = layout({ ungrouped: [session('x'), webview('w'), session('parent'), session('child')] });
+    const facts = [
+      metadata('x', { order: 0 }),
+      metadata('parent', { order: 1 }),
+      metadata('child', { order: 2, parentSessionId: 'parent' }),
+    ];
+
+    const result = applyLegacySessionRank(input, ['parent', 'child', 'x'], facts);
+
+    expect(result.ungrouped).toEqual([session('parent'), session('child'), webview('w'), session('x')]);
+  });
+
+  it('pins only the child the requested order splits from its parent block', () => {
+    const input = layout({
+      ungrouped: [session('parent'), session('c1'), session('c2'), session('x')],
+    });
+    const facts = [
+      metadata('parent', { order: 0 }),
+      metadata('c1', { order: 1, parentSessionId: 'parent' }),
+      metadata('c2', { order: 2, parentSessionId: 'parent' }),
+      metadata('x', { order: 3 }),
+    ];
+
+    const result = applyLegacySessionRank(input, ['parent', 'c1', 'x', 'c2'], facts);
+
+    expect(result.ungrouped).toEqual([session('parent'), session('c1'), session('x'), session('c2', 'manual')]);
+    expect(normalizeTabLayout(result, facts)).toEqual(result);
+  });
+
   it('keeps a ranked child manual in its group when normalization materializes its missing parent', () => {
     const input = layout({
       groups: [{ id: 'child-group', name: 'Child', refs: [session('child')] }],

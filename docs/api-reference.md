@@ -671,6 +671,17 @@ that sends the report, decided when the pane starts: `injected` (it does), `coll
 `.claude/settings.local.json` sets its own `statusLine`, which Codeman never replaces) or
 `remote` (remote and Docker sessions). Absent when unknown.
 
+## Placing a new session in a tab group (`tabGroupId`)
+
+`POST /api/v1/sessions` and `POST /api/v1/quick-start` accept an optional
+`tabGroupId` (1 to 100 characters): the id of a group in the caller's tab layout
+(`GET /api/v1/tab-layout`). The session is created as usual and placed at the end
+of that group in the same layout write; the response then also carries the
+committed layout as `tabLayout`. An id the caller's layout does not contain (a
+deleted group, another user's group) is ignored and the session lands where it
+otherwise would, never a `400`. A malformed value (`null`, an empty string, a
+non-string) is a `400 INVALID_INPUT`. Requests without the field are unchanged.
+
 ## Approvals Inbox
 
 Cross-session queue of prompts waiting on a human (permission dialogs,

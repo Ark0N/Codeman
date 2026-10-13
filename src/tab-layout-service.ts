@@ -11,7 +11,9 @@ import { applyLegacySessionRank, recomposeGlobalSessionOrder } from './tab-layou
 import {
   flattenOwnerSessionOrder,
   materializeOrphans,
+  moveRef,
   normalizeTabLayout,
+  setManualPlacement,
   TabLayoutValidationError,
   validateTabLayout,
   type TabLayout,
@@ -42,6 +44,12 @@ interface TabLayoutServiceDeps {
   readWebviews(): Promise<readonly TabLayoutWebviewRecord[]>;
   broadcast(event: string, data: unknown): void;
   broadcastSessionOrder(change: SessionOrderProjectionChange): void;
+  /**
+   * The synced `spawnedTabsFollowParent` setting, read at every creation. Off (or
+   * absent), a spawned session lands after its parent once and is hand-placed
+   * from then on; on, it keeps following its parent until moved by hand.
+   */
+  childrenFollowParent?(): boolean | Promise<boolean>;
   now?: () => string;
 }
 
@@ -66,6 +74,18 @@ export interface RemovedTabLayoutSession {
   id: string;
   owner?: string;
 }
+
+/** Where a newly created session asked to be placed. Advisory: an unknown group is ignored. */
+export interface SessionPlacementHint {
+  tabGroupId?: string;
+}
+
+/**
+ * Adds the created session to the live map. Runs INSIDE the owner lock, so no
+ * other layout mutation can observe (and commit) the session first; the returned
+ * function undoes it when the layout write fails.
+ */
+export type RegisterCreatedSession = () => void | (() => void);
 
 interface PreparedOwnerLayout {
   current: TabLayout | null;
@@ -96,6 +116,42 @@ const refKey = (ref: Pick<TabRef, 'kind' | 'id'>): string => `${ref.kind}\u0000$
 const sameLayout = (a: TabLayout, b: TabLayout): boolean => JSON.stringify(a) === JSON.stringify(b);
 const sameOrder = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && a.every((id, index) => id === b[index]);
+
+/**
+ * Hand-place a just-created child where normalization put it (right after its
+ * parent), so it stops following. A session that does not follow anything is
+ * left alone.
+ */
+function pinCreatedChild(layout: TabLayout, sessionId: string, metadata: readonly TabRefMetadata[]): TabLayout {
+  const item = metadata.find((fact) => fact.kind === 'session' && fact.id === sessionId);
+  const parentId = item?.parentSessionId;
+  if (!item?.ownerValid || !parentId) return layout;
+  const refs = [...layout.groups.flatMap((group) => group.refs), ...layout.ungrouped];
+  const ref = refs.find((candidate) => candidate.kind === 'session' && candidate.id === sessionId);
+  const parentStored = refs.some((candidate) => candidate.kind === 'session' && candidate.id === parentId);
+  const parentValid = metadata.some((fact) => fact.kind === 'session' && fact.id === parentId && fact.ownerValid);
+  if (!ref || ref.placement === 'manual' || !parentStored || !parentValid) return layout;
+  return setManualPlacement(layout, ref, true);
+}
+
+/** Move a just-created session to the end of `groupId`, or leave the layout alone. */
+function placeCreatedSession(
+  layout: TabLayout,
+  sessionId: string,
+  groupId: string,
+  metadata: readonly TabRefMetadata[]
+): TabLayout {
+  const group = layout.groups.find((candidate) => candidate.id === groupId);
+  if (!group) return layout;
+  const index = group.refs.filter((ref) => ref.kind !== 'session' || ref.id !== sessionId).length;
+  try {
+    return moveRef(layout, { kind: 'session', id: sessionId }, { groupId, index }, metadata);
+  } catch (error) {
+    // Not an owner-valid ref of this layout: the hint does not apply.
+    if (error instanceof TabLayoutValidationError) return layout;
+    throw error;
+  }
+}
 
 export class TabLayoutService {
   private restorationState: 'pending' | 'complete' | 'failed' | 'skipped' = 'pending';
@@ -320,9 +376,13 @@ export class TabLayoutService {
     };
   }
 
-  private async getUnlocked(owner: string): Promise<TabLayout> {
+  private async getUnlocked(
+    owner: string,
+    adjust?: (layout: TabLayout, metadata: readonly TabRefMetadata[]) => TabLayout
+  ): Promise<TabLayout> {
     const prepared = await this.prepareUnlocked(owner);
-    if (!prepared.needsReconciliationCommit) {
+    const next = adjust ? adjust(prepared.authoritative, prepared.metadata) : prepared.authoritative;
+    if (!prepared.needsReconciliationCommit && sameLayout(next, prepared.authoritative)) {
       const publication = {
         owner,
         previous: prepared.current,
@@ -335,7 +395,7 @@ export class TabLayoutService {
       return prepared.authoritative;
     }
     const base = prepared.current ?? { ...prepared.authoritative, version: -1 };
-    return this.commit(owner, base, prepared.authoritative, prepared.metadata);
+    return this.commit(owner, base, next, prepared.metadata, prepared.current);
   }
 
   async get(owner: string): Promise<TabLayout> {
@@ -442,9 +502,46 @@ export class TabLayoutService {
     }
   }
 
-  /** Reconcile one completed session creation into one versioned mutation. */
-  async sessionCreated(owner: string): Promise<TabLayout> {
-    return this.get(owner);
+  /**
+   * Reconcile one completed session creation into one versioned mutation.
+   *
+   * `placement.tabGroupId` puts the new session at the end of that group in the
+   * same write. The group is looked up in THIS owner's layout only, so a group id
+   * from another owner (or one deleted meanwhile) is simply not found and the
+   * session keeps its normal placement: after its parent when it has one,
+   * otherwise at the end of Ungrouped. An explicit group is a hand placement, so
+   * a child session placed this way is marked `manual` and stops following.
+   *
+   * Whether a child placed by its lineage KEEPS following is the synced
+   * `spawnedTabsFollowParent` setting, read here at creation: off (the default),
+   * the child lands after its parent once and is marked `manual` in the same
+   * write; on, it follows its parent until moved by hand. Flipping the setting
+   * later leaves existing tabs as they are.
+   */
+  async sessionCreated(
+    owner: string,
+    sessionId?: string,
+    placement: SessionPlacementHint = {},
+    register?: RegisterCreatedSession
+  ): Promise<TabLayout> {
+    return this.withOwner(owner, async () => {
+      const follow = sessionId ? (await this.deps.childrenFollowParent?.()) === true : true;
+      const rollback = register?.();
+      try {
+        const groupId = placement.tabGroupId;
+        const adjust =
+          sessionId && (groupId || !follow)
+            ? (layout: TabLayout, metadata: readonly TabRefMetadata[]) => {
+                const placed = groupId ? placeCreatedSession(layout, sessionId, groupId, metadata) : layout;
+                return follow ? placed : pinCreatedChild(placed, sessionId, metadata);
+              }
+            : undefined;
+        return await this.getUnlocked(owner, adjust);
+      } catch (error) {
+        if (typeof rollback === 'function') rollback();
+        throw error;
+      }
+    });
   }
 
   /** Reconcile one completed saved-webview creation into one versioned mutation. */
