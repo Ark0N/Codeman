@@ -1566,8 +1566,9 @@ const DEC_SYNC_STRIP_RE = /\x1b\[\?2026[hl]/g;
 
 // OSC 52 clipboard writes stripping — a replay re-feeds the raw byte history, and
 // xterm parses it after chunkedTerminalWrite has already released the load
-// gate, so an OSC 52 left in would re-copy old text on every tab switch.
-const OSC52_STRIP_RE = /\x1b\]52;[^\x07\x1b]*(?:\x07|\x1b\\)/g;
+// gate, so an OSC 52 left in would re-copy old text on every tab switch. The
+// 8-bit C1 forms (OSC \x9d, ST \x9c) too: xterm.js still parses those.
+const OSC52_STRIP_RE = /(?:\x1b\]|\x9d)52;[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)/g;
 // The same OSC 52 text arriving again within this window is one copy delivered
 // several ways (direct, tmux load-buffer -w, tmux set-clipboard forwarding).
 const OSC52_DEDUPE_MS = 1000;

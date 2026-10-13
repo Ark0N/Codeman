@@ -208,6 +208,8 @@ describe('main-terminal replay over a real xterm', () => {
     const re = (context.globalThis as { __re: RegExp }).__re;
     const input = `a\x1b]52;c;${b64('x')}\x07b\x1b]52;;${b64('y')}\x1b\\c\x1b]0;title\x07d`;
     expect(input.replace(re, '')).toBe('abc\x1b]0;title\x07d');
+    // The 8-bit C1 forms (OSC \x9d, ST \x9c), which xterm.js also parses.
+    expect(`a\x9d52;c;${b64('x')}\x9cb\x1b]52;c;${b64('y')}\x9cc`.replace(re, '')).toBe('abc');
   });
 
   it('still copies a live OSC 52 written after the replay', async () => {
