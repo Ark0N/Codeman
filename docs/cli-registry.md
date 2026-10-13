@@ -128,6 +128,18 @@ sure its row is one the agent cannot write.
 
 `test/cli-capability-predicates.test.ts` asserts that no two of the three are equivalent across the catalog, so collapsing them fails the build rather than a user's session.
 
+### Where the agent skill lands
+
+`agentSkillInjection` says a CLI's sessions get the agent skill (`skills/codeman`) and its per-session preamble when the synced `agentSkillEnabled` setting is on; `agentSkillDir` says which workspace directory the CLI scans for skills, read through `agentSkillDir()` (hooks-config.ts), so no call site branches on a CLI id. Absent with the boolean on means `.claude/skills`, which is what the boolean meant before the field existed.
+
+| CLI | Skill directory |
+| --- | --- |
+| claude | `.claude/skills/codeman` |
+| codex, gemini, opencode, antigravity, grok, deepseek, omp | `.agents/skills/codeman` |
+| pi, shell | none |
+
+Measured 2026-10-11 against the installed builds or their source: every CLI in the middle row scans `<workspace>/.agents/skills/` (gemini only in its cwd, dsh only at the git root, else cwd), and Claude Code does not read it, so a case shared with a claude session lists the skill once there (opencode, grok and omp read both directories and see the same skill twice, identical, under one name). ⚠️ pi is left out on purpose: any project-level `.agents/skills` or `.pi/skills` makes pi ask "Trust project folder?" at startup, which would stall a spawned worker on a dialog; it reads the user-level `~/.agents/skills` without the prompt (`npx skills add Ark0N/Codeman --skill codeman -g`). A codex, gemini or other session's copy in a case that pi sessions also use triggers that prompt once for the human there. ⚠️ `agentSkillDir` is a closed enum (`AGENT_SKILL_DIRS`, schema.ts), never a free path: `clis.json` can set it and it decides where the server writes. ⚠️ Two codex traps the skill names rather than fixes: codex's default sandbox blocks network even to loopback (the skill needs **Bypass approvals and sandbox**), and codex 0.162 runs tool commands through a shared `app-server` daemon whose environment (`CODEMAN_SESSION_ID`, `CODEMAN_API_URL`) is that of the session that started it.
+
 ## The newline chord
 
 `capabilities.newline` (`'line-feed'` | `'esc-enter'`, absent = line feed) is the byte sequence the `send-key` route types into the pane for Shift+Enter. A line feed (`0x0a`, also Ctrl+Enter) is what Claude Code's Ink input reads as "insert a newline"; `esc-enter` (`ESC CR`, the Option/Alt+Enter chord) is there for a composer that ignores a bare line feed. No stock CLI declares it today: the bytes are typed by tmux on the server, so the browser's OS cannot change what a CLI reads, and Codex 0.147.0 was checked to take a line feed (a Shift+Enter that submits is the keypress leak fixed in #520, not a byte problem). A user `clis.json` can set it for a CLI that needs it. It is an enum rather than a byte string on purpose: config never carries bytes that get typed into a pane. Settings → Terminal & Input → **Key tester** prints what a browser reports for keydown/keypress/keyup, to see whether a device is sending what you think.

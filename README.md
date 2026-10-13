@@ -733,7 +733,7 @@ For AI agents and automation that control Codeman without a browser: an agent th
 
 ### The agent skill (start here)
 
-Everything in this section also ships as a **Claude Code skill** in [`skills/codeman`](skills/codeman/SKILL.md). Install it once and you never paste API docs into a prompt again. You ask for what you want in plain English, and the agent already sitting inside a Codeman session loads the recipes and drives the API itself.
+Everything in this section also ships as an **agent skill**, [`skills/codeman`](skills/codeman/SKILL.md), in the `SKILL.md` format Claude Code, Codex, Gemini CLI, OpenCode, Grok, OMP and most other agent CLIs read. Install it once and you never paste API docs into a prompt again. You ask for what you want in plain English, and the agent already sitting inside a Codeman session loads the recipes and drives the API itself.
 
 <p align="center">
   <a href="docs/images/codeman-skill-crt-20261010.png"><img src="docs/images/codeman-skill-crt-20261010.gif" alt="A real codeman skill run: one short prompt typed into Claude Code, the tile grid powering on, then a DeepSeek Harness worker on a local qwen model and a Claude Code worker powering on as new tiles, with lineage lines from the lead to both" width="900"></a>
@@ -743,13 +743,13 @@ Everything in this section also ships as a **Claude Code skill** in [`skills/cod
 
 | How            | Command                                                    | Scope                                                                                      |
 | -------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Skills CLI     | `npx skills add Ark0N/Codeman --skill codeman -g`          | Global, works for any skills-aware agent                                                   |
+| Skills CLI     | `npx skills add Ark0N/Codeman --skill codeman -g`          | Global, for any skills-aware agent ([skills.sh](https://skills.sh)); the way to give it to pi |
 | Claude Code plugin | `/plugin marketplace add Ark0N/Codeman` then `/plugin install codeman@codeman` | Global, through Claude Code's plugin manager; `/plugin update codeman` follows releases. Pick this OR a `codeman skill install`, not both: a Claude Code with both lists the skill twice (`codeman` and `codeman:codeman`) |
 | Bundled CLI    | `codeman skill install`                                    | Global (`~/.claude/skills/codeman`), for npm installs that never cloned the repo            |
-| Bundled CLI    | `codeman skill install --case <name>`                      | One case only                                                                              |
-| Web UI         | App Settings → Agents & CLIs → Claude → **Agent Skill**    | Auto-injects into each case on Claude session create (`agentSkillEnabled`, SYNCED, default off) |
+| Bundled CLI    | `codeman skill install --case <name> [--mode <mode>]`      | One case only; `--mode codex` (or any other run mode) writes it where that CLI looks for skills |
+| Web UI         | App Settings → Agents & CLIs → All agent CLIs → **Codeman Agent Skill** | Auto-injects into each case on session create, where that session's CLI looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI, OpenCode, Antigravity, Grok, DeepSeek and OMP; not pi, whose project skills trigger a trust prompt (`agentSkillEnabled`, SYNCED, default off) |
 
-`codeman skill uninstall [--case <name>]` reverses the CLI installs, and never touches a `skills/codeman` you wrote yourself.
+`codeman skill uninstall [--case <name>]` reverses the CLI installs (with `--case`, every Codeman-managed copy in that case, whichever CLI's directory it sits in), and never touches a `skills/codeman` you wrote yourself.
 
 #### Step 2: ask for things
 
@@ -802,7 +802,7 @@ Every recipe in there was verified against a live server, and the comments recor
 - **It self-gates.** Outside a Codeman session (`CODEMAN_MUX` unset) the skill refuses to act and does not guess an API URL, so a global install costs an unrelated Claude Code session nothing.
 - **It is deliberately conservative.** Unprompted, it may only spawn sessions, prompt them, and delete ones **it created in that same conversation, by exact id**, through a fail-closed guard that refuses to delete the agent's own session. Deleting a case (which erases a real directory of your code), bulk kills, respawn/ralph/cron/orchestrator changes and settings writes all require you to ask, naming the target.
 
-⚠️ Turning `agentSkillEnabled` back off **does not remove already-injected copies** (a create-time sweep would yank the skill out from under other live sessions sharing that `.claude/` dir). Remove them per case with `codeman skill uninstall --case <name>`.
+⚠️ Turning `agentSkillEnabled` back off **does not remove already-injected copies** (a create-time sweep would yank the skill out from under other live sessions sharing that workspace). Remove them per case with `codeman skill uninstall --case <name>`.
 
 ---
 
@@ -946,7 +946,7 @@ codeman tui 3                            #      attach to session 3 of that list
 
 ### `codeman agent` — session-to-session verbs in every CLI mode
 
-The skill above is claude-shaped (Codeman seeds its preamble for claude sessions only). An `opencode`, `codex`, `pi` or `gemini` agent has the same environment (`CODEMAN_MUX=1`, `CODEMAN_SESSION_ID`, `CODEMAN_API_URL` are exported into every pane) but nothing that teaches it the verbs — so `codeman agent` packages them as commands. It is a thin client over the endpoints listed under [API](#api): no new route, no new transport, auth and ownership unchanged. One line in a case's `AGENTS.md` is enough: *"other sessions: `codeman agent --help`"*.
+The skill above drives the API with `curl` and `jq` from a preamble Codeman seeds per session. Where it does not reach (a `pi` or `shell` session, a machine without `jq`), the same environment is still there (`CODEMAN_MUX=1`, `CODEMAN_SESSION_ID`, `CODEMAN_API_URL` are exported into every pane), so `codeman agent` packages the same verbs as commands. It is a thin client over the endpoints listed under [API](#api): no new route, no new transport, auth and ownership unchanged. One line in a case's `AGENTS.md` is enough: *"other sessions: `codeman agent --help`"*.
 
 ```bash
 codeman agent ls                                          # sessions; * marks this one

@@ -163,9 +163,10 @@ respawn, Ralph, the orchestrator, search, and admin. Each route module carries a
 If the caller is an agent running _inside_ a Codeman session, install the packaged
 agent skill instead of teaching it these calls by hand: `skills/codeman` in the repo
 (`npx skills add Ark0N/Codeman --skill codeman -g`, or `codeman skill install
-[--case <name>]`, or the synced `agentSkillEnabled` App Setting for automatic
-per-case injection on Claude session create). The skill carries the guard, the
-safety rules, and verified wait/orchestration recipes.
+[--case <name>] [--mode <mode>]`, or the synced `agentSkillEnabled` App Setting for
+automatic per-case injection on session create, into the directory each CLI scans for
+skills). The skill carries the guard, the safety rules, and verified
+wait/orchestration recipes.
 
 The common ones:
 

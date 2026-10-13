@@ -36,6 +36,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { HookEventType } from './types.js';
+import type { AgentSkillDir, CliCapabilities } from './config/cli-registry/types.js';
 import { HOOK_TIMEOUT_SECONDS } from './config/auth-config.js';
 import { dataPath } from './config/instance.js';
 import { readJsonConfig, SETTINGS_PATH } from './web/route-helpers.js';
@@ -1228,8 +1229,8 @@ interface AgentSkillFile {
  */
 async function readAgentSkillSource(): Promise<AgentSkillFile[]> {
   const src = agentSkillSourceDir();
-  const skill = await readFile(join(src, 'SKILL.md'), 'utf-8');
-  const files: AgentSkillFile[] = [{ relPath: 'SKILL.md', content: `${skill.trimEnd()}\n\n${AGENT_SKILL_MARKER}\n` }];
+  const skillMd = await readFile(join(src, 'SKILL.md'), 'utf-8');
+  const files: AgentSkillFile[] = [{ relPath: 'SKILL.md', content: `${skillMd.trimEnd()}\n\n${AGENT_SKILL_MARKER}\n` }];
   let referenceNames: string[] = [];
   try {
     referenceNames = (await readdir(join(src, 'reference'))).filter((name) => name.endsWith('.md')).sort();
@@ -1285,7 +1286,8 @@ export type AgentSkillApplyResult =
 
 /**
  * Install or refresh the Codeman agent skill into `skillDir` (a `.../codeman`
- * directory, e.g. `<case>/.claude/skills/codeman` or `~/.claude/skills/codeman`).
+ * directory, e.g. `<case>/.claude/skills/codeman`, `~/.claude/skills/codeman` or
+ * `<case>/.agents/skills/codeman`).
  *
  * Refuses two shapes rather than writing through them:
  * - a SYMLINK at the skill dir or its `skills/` parent: this repo's own dogfooding
@@ -1336,16 +1338,20 @@ export async function installAgentSkillInto(skillDir: string): Promise<AgentSkil
 }
 
 /**
- * Seed a claude session's agent preamble file (`$XDG_CACHE_HOME/codeman-agent-<id>.sh`,
+ * Seed a session's agent preamble file (`$XDG_CACHE_HOME/codeman-agent-<id>.sh`,
  * default `~/.cache/`) from the packaged `skills/codeman/preamble.sh`, so the agent
  * skill's §0 bootstrap collapses to a two-line loader instead of a ~150-line block the
  * model has to type out (measured live: that paste alone cost a spawn run ~47 s of
  * generation time). The path formula must match the skill's
  * `${XDG_CACHE_HOME:-$HOME/.cache}` exactly; sessions inherit the server's env, so
  * reading the server's own XDG_CACHE_HOME keeps the two in agreement (`||` mirrors the
- * shell's `:-`, treating empty as unset). Callers gate to LOCAL claude sessions (a
- * remote or in-container HOME is not this filesystem) and treat it as best-effort: the
- * skill's §0 fallback block self-heals a missing or stale file.
+ * shell's `:-`, treating empty as unset). Callers gate to LOCAL sessions whose CLI gets
+ * the skill (`agentSkillDir()` non-null, any CLI: the preamble is bash + curl + jq, nothing
+ * claude-specific; a remote or in-container HOME is not this filesystem) and treat it as
+ * best-effort: the skill's §0 fallback block self-heals a missing or stale file. Codex
+ * caveat: codex 0.162 runs tool commands in a shared app-server daemon whose
+ * `CODEMAN_SESSION_ID` is the starting session's, so its loader looks for that session's
+ * file and its self id is wrong; the skill tells the agent how to notice.
  */
 export async function seedAgentSessionPreamble(sessionId: string): Promise<void> {
   const content = await readFile(join(agentSkillSourceDir(), 'preamble.sh'), 'utf-8');
@@ -1478,31 +1484,59 @@ export async function removeAgentSkillFrom(skillDir: string): Promise<AgentSkill
     }
     await rmdir(join(skillDir, 'reference')).catch(() => {}); // fails when non-empty, fine
     await rmdir(skillDir).catch(() => {});
-    await rmdir(dirname(skillDir)).catch(() => {}); // prune `.claude/skills` if now empty
+    await rmdir(dirname(skillDir)).catch(() => {}); // prune `.claude/skills` (or the CLI's own dir) if now empty
     return 'removed';
   });
 }
 
 /**
- * Add or remove the Codeman agent skill in `<case>/.claude/skills/codeman`,
- * mirroring `applyStatusLineConfig`'s shape. Gated by the synced `agentSkillEnabled`
- * app setting (default OFF); callers gate on Claude mode, since the skill is discovered
- * via `.claude/skills/`, which only Claude Code reads.
+ * Claude Code's project skills directory, and the meaning `agentSkillInjection: true`
+ * had before `capabilities.agentSkillDir` existed.
+ */
+export const CLAUDE_AGENT_SKILL_DIR: AgentSkillDir = '.claude/skills';
+
+/**
+ * The workspace-relative skills directory this CLI scans, i.e. where its sessions get
+ * the skill, or `null` when they get none. Pure registry data, so no call site
+ * branches on a CLI id.
+ */
+export function agentSkillDir(
+  capabilities: Pick<CliCapabilities, 'agentSkillInjection' | 'agentSkillDir'> | undefined
+): AgentSkillDir | null {
+  if (!capabilities?.agentSkillInjection) return null;
+  return capabilities.agentSkillDir ?? CLAUDE_AGENT_SKILL_DIR;
+}
+
+/** `<casePath>/<dir>/codeman`, the directory the skill's SKILL.md lives in. */
+export function agentSkillDirFor(casePath: string, dir: AgentSkillDir): string {
+  return join(casePath, dir, 'codeman');
+}
+
+/**
+ * Add or remove the Codeman agent skill in `<case>/<dir>/codeman`, where `dir` is the
+ * skills directory the session's CLI scans (default: Claude Code's `.claude/skills`;
+ * callers resolve it with `agentSkillDir()`), mirroring `applyStatusLineConfig`'s
+ * shape. Gated by the synced `agentSkillEnabled` app setting (default OFF).
  *
  * Call-site policy is ADD-ONLY on session create (callers pass `enabled: true` or
- * skip the call), for the statusLine reason: sessions in a repo share one `.claude/`
- * dir, so a single create while the setting is off must not yank the skill out from
+ * skip the call), for the statusLine reason: sessions in a repo share one workspace,
+ * so a single create while the setting is off must not yank the skill out from
  * under other live sessions.
  *
  * ⚠️ Consequence: turning `agentSkillEnabled` OFF sweeps nothing. There is deliberately
  * no server-side toggle-off sweep (it would have to walk every case, including ones
- * with live sessions, and would hit exactly the shared-`.claude/` hazard above), so
+ * with live sessions, and would hit exactly the shared-workspace hazard above), so
  * already-injected copies stay on disk until removed per case with
- * `codeman skill uninstall --case <name>`. The `enabled: false` branch here backs that
- * CLI and the tests; it has no server call site. Keep the README's Agent Skill note in
- * sync if this ever changes.
+ * `codeman skill uninstall --case <name>`, which removes the Codeman-managed copy from
+ * every skills directory the registry could have written. The `enabled: false` branch
+ * here backs that CLI and the tests; it has no server call site. Keep the README's
+ * Agent Skill note in sync if this ever changes.
  */
-export async function applyAgentSkill(casePath: string, enabled: boolean): Promise<AgentSkillApplyResult> {
-  const skillDir = join(casePath, '.claude', 'skills', 'codeman');
+export async function applyAgentSkill(
+  casePath: string,
+  enabled: boolean,
+  dir: AgentSkillDir = CLAUDE_AGENT_SKILL_DIR
+): Promise<AgentSkillApplyResult> {
+  const skillDir = agentSkillDirFor(casePath, dir);
   return enabled ? installAgentSkillInto(skillDir) : removeAgentSkillFrom(skillDir);
 }

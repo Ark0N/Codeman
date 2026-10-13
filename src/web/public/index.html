@@ -2597,6 +2597,19 @@
                 </div>
               </div>
 
+              <div class="set-group" id="agentSkillGroup">
+                <div class="set-group-head"><h4>All agent CLIs</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="agent skill codeman api workers codex gemini opencode pi grok deepseek omp antigravity">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Codeman Agent Skill</span>
+                      <span class="set-row-desc">Write Codeman's agent skill into each new session's folder, where that CLI looks for skills, so the agent in it can start workers in any installed CLI, send them prompts and wait for results. Every CLI except Pi and a plain shell.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsAgentSkill"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+
               <div class="set-group">
                 <div class="set-group-head"><h4>Claude</h4><span class="set-scope">synced</span></div>
                 <div class="set-group-body">
@@ -2632,13 +2645,6 @@
                       <span class="set-row-desc">Experimental multi-agent teams for all new Claude sessions.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsAgentTeams"><span class="slider"></span></label>
-                  </div>
-                  <div class="set-row" data-search="agent skill codeman api workers">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Codeman Agent Skill</span>
-                      <span class="set-row-desc">Let new sessions start workers, send prompts and wait for results over the API.</span>
-                    </div>
-                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsAgentSkill"><span class="slider"></span></label>
                   </div>
                   <div class="set-row" data-search="workspace hooks alerts approvals notifications settings.local.json">
                     <div class="set-row-text">
