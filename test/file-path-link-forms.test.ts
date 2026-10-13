@@ -90,6 +90,11 @@ describe('findFilePathLinks', () => {
     expect(paths('see src/a.ts:120.')).toEqual(['src/a.ts']);
   });
 
+  it("keeps a shell prompt's trailing `$` or `#` out of the folder it links", () => {
+    expect(paths('arkon@tnode:~/default/claudeman$ ls')).toEqual(['~/default/claudeman']);
+    expect(paths('root@c:/workspace/app# ls')).toEqual(['/workspace/app']);
+  });
+
   it('still finds rooted absolute paths, and never a relative path inside one', () => {
     expect(paths('sign-off from /mnt/raid1/x/refs/look_montage.png.')).toEqual(['/mnt/raid1/x/refs/look_montage.png']);
     // Unknown root: not linked at all (no `nix/store/…` cut out of it).

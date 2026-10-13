@@ -2163,7 +2163,9 @@ const FOLDER_PATH_LINK_PATTERN =
  * without a slash at the end is prose, not a folder.
  */
 function folderLinkPath(candidate) {
-  const path = String(candidate || '').replace(/[.,:;!?'"]+$/, '');
+  // `$` and `#` too: a shell prompt (`user@host:~/proj$ `, `root@c:/app# `) ends
+  // its cwd with one. A folder whose name really ends in one links one short.
+  const path = String(candidate || '').replace(/[.,:;!?'"$#]+$/, '');
   if (!path || path === '~/' || /^\/[^/]+\/$/.test(path)) return null;
   if (path.endsWith('/')) return /[^/.]/.test(path) ? path : null;
   if (!path.startsWith('/') && !path.startsWith('~/')) return null;
