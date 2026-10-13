@@ -165,6 +165,7 @@ import {
   toAttachedSessionRemote,
   toSessionRemote,
 } from '../../remote-hosts.js';
+import { fetchRemoteScrollback } from '../../remote-pane-history.js';
 import {
   checkDockerAvailable,
   checkDockerConfigDrift,
@@ -3126,6 +3127,19 @@ export function registerSessionRoutes(
           maxCaptureBytes: terminalBufferMaxBytes,
         }
       : {};
+    // A remote session's local pane only sees the remote tmux client's repaints,
+    // so its own scrollback is a fraction of the real one: read that from the
+    // remote tmux and splice it above the local frame. Null (host unreachable,
+    // no remote session, back-off) keeps the local capture as before.
+    if (isFullReload && session.remote && muxName && captureOpts.historyLimitLines !== undefined) {
+      const remoteScrollback = await fetchRemoteScrollback(
+        session.remote,
+        session.id,
+        captureOpts.historyLimitLines,
+        terminalBufferMaxBytes
+      );
+      if (remoteScrollback !== null) captureOpts.scrollbackOverride = remoteScrollback;
+    }
     const capture = (opts: PaneCaptureOptions): string | null =>
       muxName && typeof ctx.mux.captureActivePaneBuffer === 'function'
         ? ctx.mux.captureActivePaneBuffer(muxName, opts)

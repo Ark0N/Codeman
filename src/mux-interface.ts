@@ -190,6 +190,13 @@ export interface PaneCaptureOptions {
   /** Bound the full-history capture to this many scrollback lines (`-S -<N>`). */
   historyLimitLines?: number;
   /**
+   * Full-history only: scrollback rows read from somewhere other than this pane
+   * (raw `capture-pane -p -e -J` text, oldest first). The pane then contributes
+   * only its visible frame and caret, and its own history is not read. A remote
+   * session's real history lives in the REMOTE tmux (`remote-pane-history.ts`).
+   */
+  scrollbackOverride?: string;
+  /**
    * Byte cap the consumer will keep from the capture. Sizes the child-process
    * stdout buffer (with slack) so multi-MB scrollback dumps aren't killed by
    * the 1MB execSync default (ENOBUFS).

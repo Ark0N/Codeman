@@ -36,6 +36,14 @@ describe('tmux full-history pane capture (COD-47)', () => {
     expect(source).toContain('capture-pane -p -e -J -S -${historyLines}');
   });
 
+  it('a full capture with a scrollbackOverride (remote history) reads the visible frame only (-J -S 0)', () => {
+    // The remote tmux supplied the history; reading local history too would
+    // splice two histories above one frame.
+    expect(methodBody).toContain('scrollbackOverride !== undefined');
+    expect(methodBody).toContain("'capture-pane -p -e -J -S 0'");
+    expect(methodBody).toContain('joinScrollbackAndFrame(');
+  });
+
   it('full-history exec sets an explicit maxBuffer (default 1MB would ENOBUFS multi-MB dumps)', () => {
     expect(methodBody).toContain('maxBuffer');
     expect(methodBody).toContain('FULL_HISTORY_CAPTURE_SLACK_BYTES');

@@ -1,7 +1,9 @@
 /**
  * @fileoverview Global concurrency limiter for the short-lived `ssh` children that
  * remote-case file access spawns (`src/remote-files.ts`: the realpath+stat probe and
- * the buffered text read).
+ * the buffered text read). A remote session's full-history load reads its scrollback
+ * from the remote tmux through the same pool (`src/remote-pane-history.ts`), with a
+ * bounded wait (`maxWaitMs`) because it has the local capture to fall back on.
  *
  * Two paths can fan those out without a human behind each one:
  *
@@ -60,12 +62,35 @@ export function getRemoteSshLimit(): number {
   return MAX_CONCURRENT_REMOTE_SSH;
 }
 
-function acquire(): Promise<void> {
+/** Thrown by {@link runWithRemoteSshLimit} when `maxWaitMs` passed before a slot freed up. */
+export class RemoteSshSlotTimeoutError extends Error {
+  constructor(maxWaitMs: number) {
+    super(`No remote ssh slot within ${maxWaitMs} ms`);
+    this.name = 'RemoteSshSlotTimeoutError';
+  }
+}
+
+function acquire(maxWaitMs?: number): Promise<void> {
   if (active < MAX_CONCURRENT_REMOTE_SSH) {
     active++;
     return Promise.resolve();
   }
-  return new Promise<void>((resolve) => waiters.push(resolve));
+  if (maxWaitMs === undefined) return new Promise<void>((resolve) => waiters.push(resolve));
+  return new Promise<void>((resolve, reject) => {
+    const waiter = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    // A timed-out waiter leaves the queue and is never handed a slot, so it
+    // owns nothing to give back: `active` is untouched on this path.
+    const timer = setTimeout(() => {
+      const index = waiters.indexOf(waiter);
+      if (index === -1) return; // already handed a slot by release()
+      waiters.splice(index, 1);
+      reject(new RemoteSshSlotTimeoutError(maxWaitMs));
+    }, maxWaitMs);
+    waiters.push(waiter);
+  });
 }
 
 function release(): void {
@@ -78,9 +103,14 @@ function release(): void {
   }
 }
 
-/** Run `task` once an ssh slot is free, releasing the slot afterward. */
-export async function runWithRemoteSshLimit<T>(task: () => Promise<T>): Promise<T> {
-  await acquire();
+/**
+ * Run `task` once an ssh slot is free, releasing the slot afterward. With
+ * `maxWaitMs`, give up instead (rejecting with {@link RemoteSshSlotTimeoutError},
+ * `task` never runs) when no slot frees up in time: for a caller that has a
+ * cheaper answer than waiting behind the queue.
+ */
+export async function runWithRemoteSshLimit<T>(task: () => Promise<T>, opts: { maxWaitMs?: number } = {}): Promise<T> {
+  await acquire(opts.maxWaitMs);
   try {
     return await task();
   } finally {
