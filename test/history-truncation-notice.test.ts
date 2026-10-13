@@ -80,6 +80,40 @@ describe('computeHistoryTruncationNotice (issue #258)', () => {
     expect(notice.message).toContain('more may still be retained');
   });
 
+  it('names no amount when tmux cut the window by lines before any bytes were counted', () => {
+    // A shell's `lines=`-bounded load: the server knows tmux holds more, but the
+    // window IS the whole payload, so fullSize equals what was kept.
+    const notice = computeHistoryTruncationNotice({
+      truncated: true,
+      reason: 'tail',
+      source: 'mux-full-history',
+      fullSize: 800 * 1024,
+      retainedBytes: 800 * 1024,
+    });
+    expect(notice.canLoadMore).toBe(true);
+    expect(notice.message).toContain('Earlier output may still be retained');
+    expect(notice.message).not.toMatch(/\d+ (B|KB) more/);
+  });
+
+  it('names no amount when tail also cut bytes off a window tmux cut by lines', () => {
+    // The window was over 1 MiB: `dropped` counts only the bytes tail cut off
+    // it, while tmux still holds more beyond the window, so that number would
+    // understate what is left.
+    const state = {
+      truncated: true,
+      reason: 'tail',
+      source: 'mux-full-history',
+      fullSize: 3 * 1024 * 1024,
+      retainedBytes: 1024 * 1024,
+    };
+    const windowOnly = computeHistoryTruncationNotice({ ...state, historyLinesCut: true });
+    expect(windowOnly.canLoadMore).toBe(true);
+    expect(windowOnly.message).toContain('Earlier output may still be retained');
+    expect(windowOnly.message).not.toMatch(/\d+(\.\d+)? (B|KB|MB) more/);
+    // Without a lines cut the byte remainder IS all that is left, and is named.
+    expect(computeHistoryTruncationNotice(state).message).toContain('2.0 MB more may still be retained');
+  });
+
   it('promises nothing more once the FULL capture itself hit the ceiling', () => {
     // This is the case the old boolean could not express: a full-history pull
     // that was still capped means tmux has already given everything it has.
@@ -191,10 +225,13 @@ describe('the in-terminal truncation line is gone (static guard)', () => {
     // A shell never takes the full capture on a tab switch. A TUI takes it on its
     // first select per page, and on every select while its pane keeps no tmux
     // scrollback (behaviour pinned in fullscreen-tab-switch-capture.browser.test.ts).
+    expect(app).toContain("const shellSession = session?.mode === 'shell';");
     expect(app).toContain(
-      "session?.mode !== 'shell' && (paneKeepsNoHistory || !this._fullHistoryLoaded.has(sessionId))"
+      'const useFullHistory = !shellSession && (paneKeepsNoHistory || !this._fullHistoryLoaded.has(sessionId));'
     );
     expect(app).toContain('!session?.remote && !session?.docker && this._paneHistoryLines?.get(sessionId) === 0;');
+    // The shell's bounded load is tmux's rendered history, never the byte recording.
+    expect(app).toContain('`/api/sessions/${sessionId}/terminal?${SHELL_LOAD_QUERY}`');
     expect(app).toContain("!restoredSnapshot && session?.mode !== 'shell'");
     expect(app).toContain('`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`');
     // Every terminal capture now goes through _fetchTerminalCapture, which adds

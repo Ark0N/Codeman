@@ -210,9 +210,18 @@ export interface PaneCaptureOptions {
    * same query as the geometry. 0 means a full-history capture can return
    * nothing beyond the visible frame: a pane in the alternate screen (a
    * fullscreen CLI that keeps its transcript itself) never accumulates any.
-   * Absent when the pane could not be queried.
+   * A full-history capture bounded by `historyLimitLines` below this depth
+   * left older lines behind in the multiplexer, which the caller must report
+   * as recoverable. Absent when the pane could not be queried.
    */
   capturedHistoryLines?: number;
+  /**
+   * Filled in by the implementation with whether the pane was in the alternate
+   * screen at capture time, when it can tell. tmux keeps no history for such a
+   * pane (a nested tmux client puts it there), so a full-history capture of it
+   * holds one screen plus whatever the pane held before.
+   */
+  capturedAlternateOn?: boolean;
 }
 
 /**

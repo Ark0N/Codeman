@@ -116,6 +116,21 @@ const MAX_NOTIFICATION_DURATION_MS = 300000; // Longest configurable toast / bro
 const THROTTLE_DELAY_MS = 100;              // General UI throttle delay
 const TERMINAL_CHUNK_SIZE = 32 * 1024;      // 32KB chunks for terminal buffer loading
 const TERMINAL_TAIL_SIZE = 1024 * 1024;     // 1MB tail for initial load (more scrollback on tab switch)
+// A shell's automatic loads (tab select, drop recovery, a tile's load) read
+// tmux's RENDERED history, never the raw byte recording: that recording holds
+// full-screen repaints (an ssh'd tmux, less, a TUI) drawn for the pane size of
+// the moment, and replayed into a terminal of another height each repaint
+// scrolls its top row into scrollback, so one line shows up dozens of times.
+// `lines=` bounds the synchronous capture-pane (~8 ms per 1000 lines measured,
+// so ~0.1 s here); the server reports a cut as 'tail', and scroll-to-top pulls
+// the older lines as before. `alt=recording`: a pane in the alternate screen (a
+// nested tmux, as in remote SSH and Docker cases, but also vim or less while
+// open) gains no tmux history, so the server loads it the old way, visible
+// frame over the tailed byte recording.
+// A grid tile appends its own `lines=` to SHELL_LOAD_BASE_QUERY.
+const SHELL_LOAD_HISTORY_LINES = 10000;
+const SHELL_LOAD_BASE_QUERY = `full=1&tail=${TERMINAL_TAIL_SIZE}&alt=recording`;
+const SHELL_LOAD_QUERY = `${SHELL_LOAD_BASE_QUERY}&lines=${SHELL_LOAD_HISTORY_LINES}`;
 const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
 const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
 const TUI_REDRAW_SETTLE_MS = 400;           // Grace for a TUI to redraw after a real resize, before fetching its buffer
@@ -1888,7 +1903,7 @@ function formatHistoryBytes(bytes) {
  *
  * @param {{truncated?: boolean, reason?: string|null, source?: string|null,
  *          fullSize?: number, retainedBytes?: number, exhausted?: boolean,
- *          paneHistoryLines?: number|null}} state
+ *          paneHistoryLines?: number|null, historyLinesCut?: boolean}} state
  * @returns {{visible: boolean, message: string, canLoadMore: boolean}}
  */
 function computeHistoryTruncationNotice(state = {}) {
@@ -1922,10 +1937,17 @@ function computeHistoryTruncationNotice(state = {}) {
   }
   // Name what a pull can actually return when the server said: the byte gap
   // counts repaints and redraw bloat, and overstates it many times over.
+  // Without that count, a `lines=`-bounded capture is cut by tmux before any
+  // bytes are counted, so its fullSize is the window itself and the remainder's
+  // size is unknown: say that more exists without inventing an amount. That
+  // holds even when `tail` also cut bytes off the window (`dropped`), since tmux
+  // still holds more beyond it (`historyLinesCut`, set by the server).
+  const remainder =
+    dropped > 0 && !state.historyLinesCut ? `${formatHistoryBytes(dropped)} more` : 'Earlier output';
   const more =
     historyLines !== null
       ? `${historyLines.toLocaleString('en-US')} ${historyLines === 1 ? 'line of scrollback is' : 'lines of scrollback are'} retained.`
-      : `${formatHistoryBytes(dropped)} more may still be retained.`;
+      : `${remainder} may still be retained.`;
   return {
     visible: true,
     message: `Showing the most recent ${shown} of this session. ${more}`,

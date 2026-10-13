@@ -160,7 +160,9 @@ describe('the capture reports how much scrollback tmux holds (#{history_size})',
 
   it('reads it from the one cursor query the capture already makes', () => {
     // No extra tmux call: every capture is a synchronous exec on the server.
-    expect(methodBody).toContain("'#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size}'");
+    expect(methodBody).toContain(
+      "'#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size} #{alternate_on}'"
+    );
     expect(methodBody.match(/display-message/g)).toHaveLength(1);
     expect(methodBody).toContain('opts.capturedHistoryLines = geometry.historyLines');
   });
@@ -211,5 +213,47 @@ describe('why a capture has to report its height', () => {
     expect(Math.max(...addressed)).toBe(50);
     // A 30-row terminal cannot honour 20 of those addresses.
     expect(addressed.filter((row) => row > 30)).toHaveLength(20);
+  });
+});
+
+describe('queryPaneCursor history depth', () => {
+  it('reads tmux history_size as an optional fifth field', () => {
+    expect(queryPaneCursor(() => '4 22 133 24 25000\n')).toEqual({
+      cols: 133,
+      rows: 24,
+      cursorX: 4,
+      cursorY: 22,
+      historyLines: 25000,
+    });
+  });
+
+  it('keeps the geometry and omits the depth when the fifth field is missing or invalid', () => {
+    for (const raw of ['4 22 133 24', '4 22 133 24 abc', '4 22 133 24 -1']) {
+      const geometry = queryPaneCursor(() => raw);
+      expect(geometry, raw).toEqual({ cols: 133, rows: 24, cursorX: 4, cursorY: 22 });
+    }
+  });
+
+  it('reads tmux alternate_on as an optional sixth field', () => {
+    expect(queryPaneCursor(() => '4 22 133 24 29 1\n')).toEqual({
+      cols: 133,
+      rows: 24,
+      cursorX: 4,
+      cursorY: 22,
+      historyLines: 29,
+      alternateOn: true,
+    });
+    expect(queryPaneCursor(() => '4 22 133 24 29 0')?.alternateOn).toBe(false);
+    for (const raw of ['4 22 133 24 29', '4 22 133 24 29 2', '4 22 133 24 29 x']) {
+      expect(
+        queryPaneCursor(() => raw),
+        raw
+      ).not.toHaveProperty('alternateOn');
+    }
+  });
+
+  it('asks tmux for the history depth and alternate screen in the same display-message as the cursor', () => {
+    const source = readFileSync(resolve(import.meta.dirname, '../src/tmux-manager.ts'), 'utf8');
+    expect(source).toContain("'#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size} #{alternate_on}'");
   });
 });

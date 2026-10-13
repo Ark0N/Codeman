@@ -706,13 +706,18 @@ interface PaneCursorGeometry {
    * Optional and validated on its own, so a bad value never voids the caret.
    */
   historyLines?: number;
+  /** Whether the pane is in the alternate screen (`#{alternate_on}`), when tmux reported it. */
+  alternateOn?: boolean;
 }
 
 /**
  * Read the pane's cursor and size, or null when tmux cannot say.
  *
- * Every field is validated together: a caller that gets a value back can place
- * a caret with it, and one that gets null must not try.
+ * The four geometry fields are validated together: a caller that gets a value
+ * back can place a caret with it, and one that gets null must not try. The
+ * optional fifth and sixth fields, the history depth and the alternate-screen
+ * flag, are only informational, so a bad one is dropped rather than
+ * discarding a good caret.
  */
 export function queryPaneCursor(run: () => string): PaneCursorGeometry | null {
   let raw: string;
@@ -722,7 +727,9 @@ export function queryPaneCursor(run: () => string): PaneCursorGeometry | null {
     console.error('[TmuxManager] Failed to query pane cursor after capture:', cursorErr);
     return null;
   }
-  const [cursorX, cursorY, cols, rows, historyLines] = raw.split(/\s+/).map((value) => parseInt(value, 10));
+  const [cursorX, cursorY, cols, rows, historyLines, alternateOn] = raw
+    .split(/\s+/)
+    .map((value) => parseInt(value, 10));
   if (
     !Number.isFinite(cursorX) ||
     !Number.isFinite(cursorY) ||
@@ -737,6 +744,7 @@ export function queryPaneCursor(run: () => string): PaneCursorGeometry | null {
   }
   const geometry: PaneCursorGeometry = { cols, rows, cursorX, cursorY };
   if (Number.isFinite(historyLines) && historyLines >= 0) geometry.historyLines = historyLines;
+  if (alternateOn === 0 || alternateOn === 1) geometry.alternateOn = alternateOn === 1;
   return geometry;
 }
 
@@ -3898,7 +3906,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // to keep when a move follows to put the caret back above them.
       const geometry = queryPaneCursor(() =>
         execSync(
-          `${this.tmux()} display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size}'`,
+          `${this.tmux()} display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size} #{alternate_on}'`,
           { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
         )
       );
@@ -3912,8 +3920,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       if (opts && geometry) opts.capturedGeometry = { cols: geometry.cols, rows: geometry.rows };
       // Same query, no extra tmux call: how much scrollback a full-history pull
       // could return. A pane in the alternate screen (fullscreen claude) holds
-      // none, and the partial-history notice must not promise it.
+      // none, and the partial-history notice must not promise it. A caller that
+      // bounded the capture with `historyLimitLines` also reads it to tell
+      // whether the bound cut anything.
       if (opts && geometry?.historyLines !== undefined) opts.capturedHistoryLines = geometry.historyLines;
+      // A pane in the alternate screen keeps no history (a nested tmux client
+      // holds it there), so its capture is one screen however deep it reads.
+      if (opts && geometry?.alternateOn !== undefined) opts.capturedAlternateOn = geometry.alternateOn;
 
       if (fullHistory) {
         // Without geometry there is no cursor move, so fall back to the old trim.
