@@ -48,7 +48,7 @@
  *    Android tablet, or a large foldable unfolded in landscape, reaches.
  *
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js
- * @dependency constants.js (window.CodemanTerminalFont, window.CodemanFetchDeadline, DEFAULT_SCROLLBACK, TERMINAL_TAIL_SIZE, SHELL_LOAD_QUERY, TERMINAL_CHUNK_SIZE)
+ * @dependency constants.js (window.CodemanTerminalFont, window.CodemanFetchDeadline, DEFAULT_SCROLLBACK, TERMINAL_TAIL_SIZE, SHELL_LOAD_BASE_QUERY, SHELL_LOAD_QUERY, TERMINAL_CHUNK_SIZE)
  * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight, CodemanTerminalInput.shouldSuppressTerminalQueryResponse/isTerminalFocusOrMouseReport/wheelDeltaLines/wheelDeltaWholeLines/sgrWheelReports/pageKeysForTravel, app._shouldForwardWheelToApp/_localScrollbackIsHollow/_terminalViewportAtBottom/_clientPointToCell/_handleDesktopTerminalClick)
  * @dependency terminal-keycode229-recovery.js (window.CodemanKeyCode229Recovery, optional: absent, xterm's own textarea handling stands)
  * @loadorder 7.4 of 16, loaded after terminal-ui.js and before terminal-split.js

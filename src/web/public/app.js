@@ -9744,8 +9744,9 @@ class CodemanApp {
         //
         // UNREACHABLE as written, and kept for the invariant rather than the
         // branch. A `useFullHistory` pass sends `full=1`, and the route answers
-        // `full=1` with `mux-full-history` or `history`, never `mux-visible`
-        // (see the source ladder in session-routes.ts), so the gate above
+        // a `full=1` pass without `alt=recording` (every `useFullHistory` pass;
+        // only shell loads send it) with `mux-full-history` or `history`, never
+        // `mux-visible` (see the source ladder in session-routes.ts), so the gate above
         // already rules out every pass that consumed the flag. Do not read this
         // line as evidence that a page load retries: it does not, and the test
         // suite pins that it does not.
