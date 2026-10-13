@@ -455,6 +455,56 @@ describe('approval routes', () => {
   });
 });
 
+
+describe('approval routes: supervised-hook (DeepSeek) alert-only items', () => {
+  let harness: RouteTestHarness;
+  let session: MockSession;
+
+  beforeEach(async () => {
+    harness = await createEnvelopeHarness();
+    session = harness.ctx.sessions.get(SESSION_ID)!;
+    session.mode = 'deepseek';
+    session.terminalBuffer = 'some dsh dialog frame';
+  });
+
+  afterEach(async () => {
+    for (const item of approvalInbox.listPending()) {
+      approvalInbox.resolveForSession(item.sessionId, 'dismissed');
+    }
+    approvalInbox.onPending = approvalInbox.onUpdated = approvalInbox.onResolved = undefined;
+    await harness.app.close();
+  });
+
+  it('creates an answerInTerminal inbox item and omits approvalId from push', async () => {
+    await postHook(harness, 'permission_prompt', { tool_name: 'Bash' });
+    const approvals = await listApprovals(harness);
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      sessionId: SESSION_ID,
+      kind: 'permission',
+      answerInTerminal: true,
+    });
+    const push = harness.ctx.sendPushNotifications.mock.calls.find((c) => c[0] === 'hook:permission_prompt');
+    expect(push?.[1]).toBeDefined();
+    expect(push?.[1]).not.toHaveProperty('approvalId');
+  });
+
+  it('refuses Approve/Deny with a terminal-only error', async () => {
+    await postHook(harness, 'permission_prompt', {});
+    const [item] = await listApprovals(harness);
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/approvals/${item.id}/answer`,
+      payload: { action: 'approve' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/answered in the terminal/i);
+    expect(session.writeBuffer).toEqual([]);
+    // Item stays pending — it is an alert, not a failed answer.
+    expect(await listApprovals(harness)).toHaveLength(1);
+  });
+});
+
 describe('approval routes: multi-user scoping', () => {
   const saved: Record<string, string | undefined> = {};
 

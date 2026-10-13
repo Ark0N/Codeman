@@ -2771,9 +2771,13 @@ export class WebServer extends EventEmitter {
       // Approvals Inbox item id: lets sw.js answer an Approve/Deny action
       // click directly (POST /api/approvals/:id/answer) with no tab open.
       // Gated on the opt-in setting together with the action buttons.
+      // Approve/Deny only when we also have an approvalId to answer with.
+      // Supervised-hook CLIs (DeepSeek) omit approvalId upstream so this also
+      // strips their action buttons — buttons without an id can never answer.
       approvalId: approvalsEnabled && typeof data.approvalId === 'string' ? data.approvalId : undefined,
       urgency: template.urgency,
-      actions: approvalsEnabled ? template.actions : undefined,
+      actions:
+        approvalsEnabled && typeof data.approvalId === 'string' ? template.actions : undefined,
     });
 
     for (const sub of subscriptions) {

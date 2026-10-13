@@ -219,6 +219,27 @@ describe('push payload Approvals Inbox gating', () => {
     expect(payload.approvalId).toBe('s-gate:1');
   });
 
+
+  it('ships no Approve/Deny actions when the inbox is on but approvalId is absent', async () => {
+    // Supervised-hook CLIs omit approvalId upstream so buttons cannot answer.
+    const server = makeServerWithHost('gate-no-id');
+    setSettings(server, { approvalsInboxEnabled: true });
+    await (
+      server as unknown as {
+        sendPushNotifications: (e: string, d: Record<string, unknown>) => Promise<void>;
+      }
+    ).sendPushNotifications('hook:permission_prompt', {
+      sessionId: 's-gate',
+      sessionName: 'sess',
+      tool_name: 'Bash',
+      // deliberately no approvalId
+    });
+    const payload = lastPayload() as ApprovalAwarePayload;
+    expect(payload.actions).toBeUndefined();
+    expect(payload.approvalId).toBeUndefined();
+    expect(payload.title).toBe('Permission Required');
+  });
+
   it('an explicit false behaves like the default (only true enables)', async () => {
     const server = makeServerWithHost('gate-false');
     setSettings(server, { approvalsInboxEnabled: false });
