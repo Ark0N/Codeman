@@ -3353,8 +3353,11 @@ export function registerSessionRoutes(
       // pull can add. `truncated` measures the BYTE stream, and for a pane that
       // keeps no scrollback (a fullscreen CLI in the alternate screen) the bytes
       // a tail cut drops are old repaints that no request can bring back, so a
-      // client must not offer to load them. Absent when the pane was not read.
-      paneHistoryLines: hasLiveMuxBuffer ? captureOpts.capturedHistoryLines : undefined,
+      // client must not offer to load them. Absent when the pane was not read,
+      // and for a remote session: its local pane hosts the remote tmux client in
+      // the alternate screen, so it always reports 0, while a `full=1` load reads
+      // the real scrollback from the remote tmux (`fetchRemoteScrollback`).
+      paneHistoryLines: hasLiveMuxBuffer && !session.remote ? captureOpts.capturedHistoryLines : undefined,
     };
   });
 

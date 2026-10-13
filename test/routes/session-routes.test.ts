@@ -1062,6 +1062,31 @@ describe('session-routes', () => {
       expect(body.data.paneHistoryLines).toBe(0);
     });
 
+    it("omits paneHistoryLines for a remote session, whose local pane's 0 is not the remote history", async () => {
+      // The local pane hosts the remote tmux client in the alternate screen, so it
+      // reports 0, while full=1 reads the real scrollback from the remote tmux.
+      const session = harness.ctx._session as unknown as { remote?: unknown };
+      session.remote = { hostId: 'h1', label: 'proxx', host: 'proxx.lan', username: 'tim', remotePath: '/home/tim' };
+      harness.ctx._session.terminalBuffer = 'x'.repeat(4096);
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        (_name: string, opts?: { capturedHistoryLines?: number }) => {
+          if (opts) opts.capturedHistoryLines = 0;
+          return 'visible frame';
+        }
+      );
+      try {
+        const res = await harness.app.inject({
+          method: 'GET',
+          url: `/api/sessions/${harness.ctx._sessionId}/terminal?tail=1024`,
+        });
+        const body = JSON.parse(res.body);
+        expect(body.data.truncated).toBe(true);
+        expect(body.data.paneHistoryLines).toBeUndefined();
+      } finally {
+        session.remote = undefined;
+      }
+    });
+
     it('omits paneHistoryLines when the body is the byte history, not a capture', async () => {
       harness.ctx._session.terminalBuffer = 'byte history only';
       (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
