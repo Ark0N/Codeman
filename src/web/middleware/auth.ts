@@ -188,10 +188,12 @@ function hasValidWebviewCapability(req: FastifyRequest, basePath = ''): boolean 
  * Whether a request is a GET for a rendered HTML file (`/html-view/<cap>/...`) with
  * a live capability. Same reasoning as the web-tab proxy: the page is sandboxed into
  * an opaque origin, so its asset requests carry no session cookie. Read-only by
- * construction (safe methods only), and the Host allowlist still applies.
+ * construction (safe methods only), and the Host allowlist still applies. OPTIONS
+ * is the page's CORS preflight, which registerSecurityHeaders answers itself and
+ * never hands to a route.
  */
 function hasValidHtmlViewCapability(req: FastifyRequest): boolean {
-  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') return false;
   const cap = capabilityFromHtmlViewPath((req.url ?? '').split('?')[0]);
   return !!cap && htmlViewCapabilities.resolve(cap) !== undefined;
 }
@@ -731,6 +733,16 @@ export function registerSecurityHeaders(app: FastifyInstance, https: boolean, ba
     // are not CORS-checked). Falling through lets the proxy route reply with the
     // right headers.
     if (req.method === 'OPTIONS' && !hasValidWebviewCapability(req, basePath)) {
+      // A rendered HTML page (`/html-view/<cap>/...`) is opaque-origin for the same
+      // reason, so a fetch() of its own `data.json` with a non-safelisted header
+      // preflights with `Origin: null`. Answer it here, read-only: the route serves
+      // GET and HEAD only, and no credentials are involved (`*` is valid for both).
+      if (hasValidHtmlViewCapability(req)) {
+        reply.header('Access-Control-Allow-Origin', '*');
+        reply.header('Access-Control-Allow-Methods', 'GET, HEAD');
+        reply.header('Access-Control-Allow-Headers', '*');
+        reply.header('Access-Control-Max-Age', '600');
+      }
       reply.code(204).send();
       done();
       return;

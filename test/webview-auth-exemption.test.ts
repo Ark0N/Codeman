@@ -336,6 +336,25 @@ describe('the html-view exemption', () => {
     }
   });
 
+  it("answers the page's CORS preflight, read-only, and nothing else", async () => {
+    const preflight = (url: string) =>
+      app.inject({
+        method: 'OPTIONS',
+        url,
+        headers: { origin: 'null', 'access-control-request-method': 'GET', 'access-control-request-headers': 'x-req' },
+      });
+    const res = await preflight(`/html-view/${htmlCapability}/data.json`);
+    expect(res.statusCode).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe('*');
+    expect(res.headers['access-control-allow-methods']).toBe('GET, HEAD');
+    expect(res.headers['access-control-allow-headers']).toBe('*');
+    expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+    // An unknown or revoked capability is not a preflight anyone answers.
+    expect((await preflight('/html-view/AAAAAAAAAAAAAAAAAAAAAAAA/data.json')).statusCode).toBe(401);
+    htmlViewCapabilities.revokeOwner(undefined);
+    expect((await preflight(`/html-view/${htmlCapability}/data.json`)).statusCode).toBe(401);
+  });
+
   it('never exempts a write on the capability path', async () => {
     for (const method of ['POST', 'PUT'] as const) {
       const res = await app.inject({ method, url: `/html-view/${htmlCapability}/index.html`, payload: {} });
