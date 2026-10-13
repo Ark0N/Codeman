@@ -5104,7 +5104,15 @@ Object.assign(CodemanApp.prototype, {
       const now = Date.now();
       if (this._lastOsc52?.text === text && now - this._lastOsc52.at < OSC52_DEDUPE_MS) return true;
       this._lastOsc52 = { text, at: now };
+      // _copyText's execCommand fallback (plain HTTP, or a refused Clipboard API
+      // write) focuses a temporary textarea; hand focus back as Auto Copy does.
+      const focusedBefore = document.activeElement;
       this._copyText(text).then((ok) => {
+        if (focusedBefore && focusedBefore !== document.activeElement && focusedBefore.isConnected) {
+          try {
+            focusedBefore.focus();
+          } catch {}
+        }
         if (ok) this.showToast(`Copied to clipboard (${text.length} chars)`, 'success');
         else if (document.hasFocus?.()) this._showClipboardFallback?.(text);
       });

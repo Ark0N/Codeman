@@ -29,11 +29,17 @@ const read = (rel: string) => readFileSync(resolve(import.meta.dirname, '..', re
 
 function loadHarness(copyResult = true, focused = true) {
   const CodemanApp = function CodemanApp(this: unknown) {};
+  const document: Record<string, unknown> = {
+    getElementById: () => null,
+    querySelector: () => null,
+    hasFocus: () => focused,
+    activeElement: null,
+  };
   const context = vm.createContext({
     CodemanApp,
     window: {},
     globalThis: {},
-    document: { getElementById: () => null, querySelector: () => null, hasFocus: () => focused },
+    document,
     console,
     MobileDetection: { isTouchDevice: () => false, getDeviceType: () => 'desktop' },
     Object,
@@ -64,7 +70,7 @@ function loadHarness(copyResult = true, focused = true) {
   const terminal = {
     parser: { registerOscHandler: (id: number, fn: (data: string) => boolean) => handlers.set(id, fn) },
   };
-  return { app, terminal, handlers, copied, fallbacks, toasts };
+  return { app, terminal, handlers, copied, fallbacks, toasts, document };
 }
 
 const b64 = (text: string) => Buffer.from(text, 'utf8').toString('base64');
@@ -118,6 +124,23 @@ describe('OSC 52 clipboard handler', () => {
     await flush();
     expect(h.fallbacks).toEqual(['blocked']);
     expect(h.toasts).toEqual([]);
+  });
+
+  it('hands focus back when the copy fallback took it (plain HTTP, a refused write)', async () => {
+    const h = loadHarness();
+    let focusCalls = 0;
+    const terminalTextarea = { isConnected: true, focus: () => focusCalls++ };
+    h.document.activeElement = terminalTextarea;
+    // _copyText's execCommand fallback selects a temporary textarea, then removes
+    // it, which leaves focus on <body>.
+    h.app._copyText = async () => {
+      h.document.activeElement = { tagName: 'BODY' };
+      return true;
+    };
+    h.app._installOsc52Clipboard(h.terminal);
+    h.handlers.get(52)!(`c;${b64('copied')}`);
+    await flush();
+    expect(focusCalls).toBe(1);
   });
 
   it('copies one Claude Code copy once, though it arrives three times', async () => {
