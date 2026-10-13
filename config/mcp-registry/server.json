@@ -1,0 +1,43 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Ark0N/codeman",
+  "title": "Codeman",
+  "description": "Start, prompt and read AI coding agent sessions (Claude Code, Codex, Gemini CLI and more) in Codeman",
+  "version": "1.41.0",
+  "websiteUrl": "https://getcodeman.com",
+  "repository": {
+    "url": "https://github.com/Ark0N/Codeman",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "aicodeman",
+      "version": "1.41.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "CODEMAN_API_URL",
+          "description": "Where your Codeman server runs, for example https://127.0.0.1:3000. Never guessed.",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "CODEMAN_PASSWORD",
+          "description": "Codeman's HTTP Basic password, when the server has one.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

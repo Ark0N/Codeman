@@ -962,6 +962,55 @@ codeman agent rm "$SID"                                   # any session except t
 
 Rules the commands enforce rather than document: they refuse outside a Codeman session and never guess a URL; `send` transmits printable text plus Enter only (a control byte such as `Ctrl+C` is `app_exit` in opencode — ESC exists solely as `interrupt`, which never appends Enter); `rm` refuses an empty id, an unprovable self id and a prefix match in either direction. Ids may be the 8-character prefixes `ls` prints (resolved through the list; an ambiguous prefix refuses, anything shorter than 8 characters refuses on every verb). A prompt that starts with `-` goes after `--` (`send "$SID" -- "- fix the bug"`). The echo of the prompt you sent is output too: a `--match` marker that appears verbatim in the prompt matches at once, before the worker has done anything, so the prompt asks for it in halves. A remote session whose host is asleep answers a fire-and-forget `send` with `buffered` (Codeman wakes the host and types the prompt once the pane is back) or `dropped` (over the wake buffer's cap, nothing will be typed: exit `1`). Exit codes: `0` delivered/matched/signal, `1` error, `2` timeout, `3` the worker exited or the wait ended without an answer (`delivered:false`, `ended:true`), `4` refused. `spawn` prints the id alone on stdout (prose goes to stderr), so `SID=$(…)` captures exactly the id. `--json` prints the envelope's `data` for every verb. `--until stop` on a mode without hook signals is the server's 400, passed through — the marker path (`--match`) is the answer there, exactly as for the skill.
 
+### MCP server (`codeman mcp`): drive Codeman from any MCP client
+
+`codeman mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server on stdio, so any MCP client (Claude Code, Claude Desktop, Codex, Gemini CLI, Cursor, ...) can start Codeman sessions in any installed agent CLI, prompt them, wait for them, read their answers and clean up, from inside Codeman or from outside it. Like `codeman agent`, it is a client of the HTTP API: no new route, auth and ownership unchanged.
+
+```bash
+# Claude Code
+claude mcp add codeman -e CODEMAN_API_URL=https://127.0.0.1:3000 -- codeman mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "codeman": {
+      "command": "codeman",
+      "args": ["mcp"],
+      "env": { "CODEMAN_API_URL": "https://127.0.0.1:3000" }
+    }
+  }
+}
+```
+
+```toml
+# Codex (~/.codex/config.toml): raise the 60 s default tool timeout for long waits
+[mcp_servers.codeman]
+command = "codeman"
+args = ["mcp"]
+env = { CODEMAN_API_URL = "https://127.0.0.1:3000" }
+tool_timeout_sec = 120
+```
+
+The JSON form is what Claude Desktop, Cursor and Gemini CLI take. Add `"CODEMAN_PASSWORD"` to `env` when the server has a password (or let it read the data dir's `.env`). Without the `codeman` command on PATH (a git checkout run without the installer), use `node /path/to/Codeman/dist/index.js mcp`.
+
+| Tool | Does |
+| ---- | ---- |
+| `list_sessions` | Every session you can see, with its run mode, status, folder, and whether these tools may prompt it |
+| `start_session` | A new worker in a case (a fresh scratch folder, or an existing case) in any installed CLI; waits until it can take a prompt |
+| `send_prompt` | Types a one-line prompt and presses Enter; optionally waits for the end of the turn |
+| `wait_for_session` | Waits for a signal (`stop`, `blocked`, `idle`, `working`, `exit`) or a literal marker in the output |
+| `read_output` | The last answer, the whole conversation, or the last bytes of the terminal |
+| `interrupt_session` | One Escape: stops the current turn, keeps the conversation |
+| `delete_session` | Closes a worker (its case folder stays) |
+
+Rules the server enforces rather than documents:
+
+- **It never guesses a server.** The URL comes from `CODEMAN_API_URL` or `--url`; without one it still starts and lists its tools, and every call says how to configure it.
+- **Only its own sessions.** Prompting, interrupting and deleting are limited to sessions this server started (and, run inside a Codeman session, that session's own workers). Listing, reading and waiting work on everything. `codeman mcp --allow-any-session` lifts the limit, for a user who wants an assistant to drive their existing tabs. It never acts on the session it runs in.
+- **Waits fit the client.** A wait defaults to 45 s (Codex cuts MCP tools off at 60 s by default) and is capped at 600 s; `timed_out` / `still_working` means call again.
+- **Both protocol eras.** It answers the 2026-07-28 revision (per-request `_meta`, `server/discover`) and the `initialize` handshake of 2024-11-05 to 2025-11-25.
+
 ### Hooks (events flowing _back_ to Codeman)
 
 Codeman registers Claude Code hooks that `POST /api/hook-event` (`permission_prompt`, `idle_prompt`, `stop`, `task_completed`, …) so the dashboard reacts in real time. This endpoint is auth-exempt on loopback but, under a managed tunnel, requires the `X-Codeman-Hook-Secret` header (read it from `$CODEMAN_HOOK_SECRET_FILE`). You normally don't call this by hand — Codeman wires it up — but it's how the autonomy layers "see" what the agent is doing.
