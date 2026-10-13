@@ -411,6 +411,16 @@ describe('the tools', () => {
     expect(result.structured).toMatchObject({ outcome: 'not_delivered' });
   });
 
+  it('input seq stays strictly increasing within one millisecond, across send_prompt and interrupt_session', async () => {
+    // The runner's clock is frozen at 1: the server drops a repeated seq while still answering 200.
+    const { tools, calls } = runner(config({ allowAnySession: true }));
+    await tools.run('send_prompt', { session_id: USERS, text: 'one', wait: false });
+    await tools.run('send_prompt', { session_id: USERS, text: 'two', wait: false });
+    await tools.run('interrupt_session', { session_id: USERS });
+    const seqs = calls.filter((c) => c.path.endsWith('/input')).map((c) => c.body?.seq);
+    expect(seqs).toEqual([1, 2, 3]);
+  });
+
   it('wait_for_session needs exactly one of until and match, and passes a marker literally', async () => {
     const { tools, calls } = runner(config());
     expect((await tools.run('wait_for_session', { session_id: USERS })).isError).toBe(true);

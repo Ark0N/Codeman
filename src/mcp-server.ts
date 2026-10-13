@@ -391,7 +391,7 @@ export interface ToolRunnerDeps {
   request: ApiRequest;
   /** Ids of sessions this process started: the default allowlist for prompting and deleting. */
   started: Set<string>;
-  /** Exactly-once tag for this process's input (`seq` is the clock). */
+  /** Exactly-once tag for this process's input (`seq` is the clock, kept strictly increasing). */
   clientId: string;
   now?: () => number;
 }
@@ -470,6 +470,11 @@ function readEnum<T extends string>(args: Record<string, unknown>, key: string, 
 
 export function createToolRunner(deps: ToolRunnerDeps) {
   const { config } = deps;
+  // The server drops any seq at or below the last one it saw for this clientId (and
+  // still answers 200), so two inputs in one millisecond, or a clock stepped back,
+  // must not reuse a seq: keep it strictly increasing for the life of the process.
+  let lastSeq = 0;
+  const nextSeq = (): number => (lastSeq = Math.max(lastSeq + 1, (deps.now ?? Date.now)()));
 
   function context(): AgentContext {
     if (!config.apiUrl) {
@@ -664,7 +669,7 @@ export function createToolRunner(deps: ToolRunnerDeps) {
       const body = buildSendBody(text, {
         enter: true,
         clientId: deps.clientId,
-        seq: (deps.now ?? Date.now)(),
+        seq: nextSeq(),
         wait: wait ? true : undefined,
         waitTimeout: wait ? timeoutMs : undefined,
       });
@@ -788,7 +793,7 @@ export function createToolRunner(deps: ToolRunnerDeps) {
         {
           method: 'POST',
           path: `/api/v1/sessions/${encodeURIComponent(row.id)}/input`,
-          body: buildInterruptBody(deps.clientId, (deps.now ?? Date.now)()),
+          body: buildInterruptBody(deps.clientId, nextSeq()),
         },
         signal
       );
