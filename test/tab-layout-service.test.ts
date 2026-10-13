@@ -1438,6 +1438,25 @@ describe('TabLayoutService grouped session creation', () => {
     expect(moved.layout.ungrouped.map((ref) => ref.id)).toEqual(['b', 'a']);
   });
 
+  it('with the follow setting off, children spawned one after another keep creation order', async () => {
+    const h = createHarness({ layouts: { alice: grouped() }, live: facts() });
+    let layout = grouped();
+    for (const [index, id] of ['c1', 'c2', 'c3'].entries()) {
+      layout = await h.service.sessionCreated(
+        'alice',
+        id,
+        {},
+        register(h, { id, owner: 'alice', createdAt: 3 + index, parentSessionId: 'a' })
+      );
+    }
+    expect(layout.groups[0].refs).toEqual([
+      { kind: 'session', id: 'a' },
+      { kind: 'session', id: 'c1', placement: 'manual' },
+      { kind: 'session', id: 'c2', placement: 'manual' },
+      { kind: 'session', id: 'c3', placement: 'manual' },
+    ]);
+  });
+
   it('reads the follow setting fresh at every creation', async () => {
     const h = createHarness({ layouts: { alice: grouped() }, live: facts() });
     const setting = vi.fn<() => boolean>().mockReturnValueOnce(true).mockReturnValueOnce(false);

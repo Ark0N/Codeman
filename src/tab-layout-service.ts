@@ -131,7 +131,31 @@ function pinCreatedChild(layout: TabLayout, sessionId: string, metadata: readonl
   const parentStored = refs.some((candidate) => candidate.kind === 'session' && candidate.id === parentId);
   const parentValid = metadata.some((fact) => fact.kind === 'session' && fact.id === parentId && fact.ownerValid);
   if (!ref || ref.placement === 'manual' || !parentStored || !parentValid) return layout;
-  return setManualPlacement(layout, ref, true);
+  const pinned = setManualPlacement(layout, ref, true);
+  // Normalization put the child right after its parent's FOLLOWING block, i.e.
+  // ahead of the siblings pinned before it. Step past those (and their
+  // descendants) so a fan-out keeps creation order.
+  const parentOf = new Map<string, string>();
+  for (const fact of metadata) {
+    if (fact.kind === 'session' && fact.ownerValid && fact.parentSessionId) parentOf.set(fact.id, fact.parentSessionId);
+  }
+  const descendsFromParent = (id: string): boolean => {
+    let current = parentOf.get(id);
+    for (let hops = 0; current !== undefined && hops <= parentOf.size; hops++) {
+      if (current === parentId) return true;
+      current = parentOf.get(current);
+    }
+    return false;
+  };
+  const isChild = (candidate: TabRef): boolean => candidate.kind === 'session' && candidate.id === sessionId;
+  const group = pinned.groups.find((candidate) => candidate.refs.some(isChild));
+  const container = group ? group.refs : pinned.ungrouped;
+  const from = container.findIndex(isChild);
+  let to = from;
+  while (to + 1 < container.length && container[to + 1].kind === 'session' && descendsFromParent(container[to + 1].id))
+    to++;
+  if (to === from) return pinned;
+  return moveRef(pinned, { kind: 'session', id: sessionId }, { groupId: group?.id ?? null, index: to }, metadata);
 }
 
 /** Move a just-created session to the end of `groupId`, or leave the layout alone. */
