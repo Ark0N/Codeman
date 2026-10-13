@@ -239,7 +239,8 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
     // dot and extension rules have to hold for where a link LANDS as well: a
     // `cfg.json -> .git/config` inside the page's folder passes both on its own name.
     if (!isUnderTree(resolvedPath, record.rootDir)) return notFound();
-    if (relative(record.rootDir, resolvedPath).split(sep).some((s) => s.startsWith('.'))) return notFound();
+    const landed = relative(record.rootDir, resolvedPath).split(sep);
+    if (landed.some((s) => s.startsWith('.'))) return notFound();
     // Typed by what the bytes are, the resolved name.
     const contentType = ASSET_TYPES[extensionOf(resolvedPath)];
     if (!contentType) return notFound();
