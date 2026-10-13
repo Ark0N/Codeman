@@ -5,7 +5,7 @@
  *
  * @mixin Extends CodemanApp.prototype via Object.assign
  * @dependency app.js (CodemanApp class, this.terminal, this.fitAddon, this.sessions)
- * @dependency constants.js (DEC_SYNC_STRIP_RE, TIMING constants)
+ * @dependency constants.js (DEC_SYNC_STRIP_RE, OSC52_STRIP_RE, OSC52_DEDUPE_MS, TIMING constants)
  * @dependency mobile-handlers.js (MobileDetection)
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js, vendor/xterm-addon-webgl.js
  * @dependency vendor/xterm-zerolag-input.js (LocalEchoOverlay)
@@ -4458,8 +4458,9 @@ Object.assign(CodemanApp.prototype, {
       }
 
       // Strip any DEC 2026 markers that might be in the buffer
-      // (from historical SSE data that was stored with markers)
-      const cleanBuffer = buffer.replace(DEC_SYNC_STRIP_RE, '');
+      // (from historical SSE data that was stored with markers), and every
+      // OSC 52 clipboard write: a replay must never copy (see OSC52_STRIP_RE).
+      const cleanBuffer = buffer.replace(DEC_SYNC_STRIP_RE, '').replace(OSC52_STRIP_RE, '');
 
       // For small buffers, write directly — single-frame render is fast enough
       if (cleanBuffer.length <= chunkSize) {
@@ -4926,12 +4927,18 @@ Object.assign(CodemanApp.prototype, {
   },
 
   // OSC 52 (`ESC ] 52 ; <sel> ; <base64> BEL`) is how programs inside the PTY —
-  // Claude Code's /copy, tmux yanks with set-clipboard on, vim — set the
-  // clipboard. The server has no display, so this is the only route to the
-  // browser's clipboard. Writes only: a `?` query (clipboard read) is ignored,
-  // and so is anything arriving during a buffer replay, which would otherwise
-  // re-copy every old OSC 52 on each tab switch or reconnect. `isReplaying`
-  // lets a TerminalTile (split Pane B, tile grid) supply its own load flag.
+  // Claude Code's /copy, tmux yanks, vim — set the clipboard. The server has no
+  // display, so this is the only route to the browser's clipboard. Writes only:
+  // a `?` query (clipboard read) is ignored. A replay must never copy: the main
+  // terminal's replays strip OSC 52 in chunkedTerminalWrite (xterm parses after
+  // _isLoadingBuffer is already cleared, so that flag alone cannot hold), and a
+  // TerminalTile passes `isReplaying`, its own load flag, which does hold there.
+  // Every tab watching the session gets the sequence, so only the focused one
+  // opens the manual-copy dialog when the browser refuses the write.
+  // One copy usually arrives several times: Claude Code writes OSC 52 itself and
+  // through `tmux load-buffer -w`, and tmux forwards it with set-clipboard on,
+  // so the same text lands up to three times within a few ms. Identical text
+  // inside OSC52_DEDUPE_MS is that one copy, not a new one.
   _installOsc52Clipboard(terminal, isReplaying = () => this._isLoadingBuffer) {
     terminal.parser?.registerOscHandler?.(52, (data) => {
       const sep = data.indexOf(';');
@@ -4945,9 +4952,12 @@ Object.assign(CodemanApp.prototype, {
         return true;
       }
       if (!text) return true;
+      const now = Date.now();
+      if (this._lastOsc52?.text === text && now - this._lastOsc52.at < OSC52_DEDUPE_MS) return true;
+      this._lastOsc52 = { text, at: now };
       this._copyText(text).then((ok) => {
         if (ok) this.showToast(`Copied to clipboard (${text.length} chars)`, 'success');
-        else this._showClipboardFallback?.(text);
+        else if (document.hasFocus?.()) this._showClipboardFallback?.(text);
       });
       return true;
     });
