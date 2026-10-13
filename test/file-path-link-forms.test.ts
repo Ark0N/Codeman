@@ -284,6 +284,44 @@ describe('terminal link provider', () => {
     expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/build/neon_getaway-mgr-hebel/logs/run.log', 's1');
   });
 
+  it('routes .md/.markdown and .html/.htm in every link form to the preview, other text to the log viewer', () => {
+    // The rendered markdown viewer and the HTML page view (rendersAsPage) apply to
+    // `~/`, relative and hard-wrapped links exactly as to rooted ones.
+    const WS = '/mnt/build/neon_getaway-mgr-hebel';
+    const cases: Array<[string[], number, string, 'preview' | 'log']> = [
+      [['wrote ~/notes/plan.md'], 1, '~/notes/plan.md', 'preview'],
+      [['wrote ~/site/index.html'], 1, '~/site/index.html', 'preview'],
+      [['wrote docs/README.markdown'], 1, `${WS}/docs/README.markdown`, 'preview'],
+      [['wrote report/index.htm'], 1, `${WS}/report/index.htm`, 'preview'],
+      [['wrote ./notes/plan.md'], 1, `${WS}/notes/plan.md`, 'preview'],
+      [['wrote out/data.json'], 1, `${WS}/out/data.json`, 'log'],
+      [
+        ['  ⎿  WROTE /mnt/build/neon_getaway-mgr-hebel/builds/reports/2', '     026-10-10/summary.md done', ''],
+        2,
+        `${WS}/builds/reports/2026-10-10/summary.md`,
+        'preview',
+      ],
+      [
+        ['  ⎿  WROTE /mnt/build/neon_getaway-mgr-hebel/builds/reports/2', '     026-10-10/page.html done', ''],
+        2,
+        `${WS}/builds/reports/2026-10-10/page.html`,
+        'preview',
+      ],
+    ];
+    for (const [lines, row, expected, where] of cases) {
+      const { app, links } = linksOn(lines, row);
+      expect(links.length, expected).toBe(1);
+      links[0].activate({}, links[0].text);
+      if (where === 'preview') {
+        expect(app.openFilePreview, expected).toHaveBeenCalledWith(expected, 's1');
+        expect(app.openLogViewerWindow, expected).not.toHaveBeenCalled();
+      } else {
+        expect(app.openLogViewerWindow, expected).toHaveBeenCalledWith(expected, 's1');
+        expect(app.openFilePreview, expected).not.toHaveBeenCalled();
+      }
+    }
+  });
+
   it('never adds a path link overlapping a URL link', () => {
     const { links } = linksOn(['see https://x.io/view?img=shots/a.png now'], 1);
     expect(links.map((l) => l.text)).toEqual(['https://x.io/view?img=shots/a.png']);
