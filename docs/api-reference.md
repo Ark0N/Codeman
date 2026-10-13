@@ -43,8 +43,9 @@ payload return `{ "success": true, "data": {} }`.
 
 > Non-JSON endpoints are exempt from the envelope: `GET /api/sessions/:id/file-raw`,
 > `GET /api/sessions/:id/tail-file` (SSE), `GET /api/download`,
-> `GET /api/screenshots/:name`, `GET /q/:code` (QR redirect), and the
-> `GET /ws/sessions/:id/terminal` WebSocket upgrade.
+> `GET /api/screenshots/:name`, `GET /q/:code` (QR redirect),
+> `GET /html-view/:cap/*` (a [rendered HTML file](#rendered-html-files) and its
+> assets), and the `GET /ws/sessions/:id/terminal` WebSocket upgrade.
 >
 > **Deprecated:** `POST /api/screenshots`, `GET /api/screenshots` and
 > `GET /api/screenshots/:name` keep working but log a one-time warning on first
@@ -573,6 +574,48 @@ Codeman host under a path the remote agent cannot read. A Docker session of an
 owned case is fine, its workspace is bind-mounted at the same absolute path; an
 adopted container (`owned: false`) mounts nothing, so its agent can open the file
 only if the container itself exposes that host path.
+
+## Rendered HTML files
+
+An `.html`/`.htm` file renders as a page in a sandbox, in two steps
+(`src/web/routes/html-view-routes.ts`).
+
+**`POST /api/v1/sessions/:id/html-view`** with `{ "path": "<file>" }` (absolute, or
+relative to the session's workspace; a non-empty string of at most 4096 characters
+without NUL or line breaks, and no other keys) answers `data: { url }`, a
+`/html-view/<cap>/<file>` URL. The capability grants GET access to the files under
+that file's own folder, so a page's relative CSS, scripts, images and data files
+resolve. It is held in memory only (a restart invalidates it), has a rolling TTL
+(`CODEMAN_WEBVIEW_CAPABILITY_TTL_MS`, default 12 h), is reused for the same folder,
+and is revoked on logout, admin logout and user deletion. Refusals:
+
+- `400`: an invalid body, a remote (SSH) session, or a file that is not HTML (the
+  symlink-resolved name counts too);
+- `404`: no such file;
+- `403`: a file outside the workspace that the attachment guard blocks (a blocked
+  tree, or `attachmentConfineToWorkspace` on), a file in a hidden directory (inside
+  the workspace, one below the workspace root), or a file directly in a folder too
+  broad to serve recursively: `/`, the home folder, `/tmp`, `/var/tmp`, `$TMPDIR`,
+  the cases and user-space roots, a drive's mount point (`/mnt/d`), or any folder
+  above one of those (`/home`, `/Users`).
+
+**`GET /html-view/:cap/*`** serves the page and its assets. It needs no cookie: the
+capability in the path is the credential, because the page runs in an opaque origin
+that never sends one. It is not under `/api`, so it has no `/api/v1` alias and no
+envelope. `GET` and `HEAD` only; a CORS preflight on a live capability is answered
+with `Access-Control-Allow-Methods: GET, HEAD`. What it serves: files under the
+capability's folder whose path (requested and symlink-resolved) has no dot segment
+and whose extension is on an asset allowlist (html, css, js/mjs, json, map, txt,
+csv, md, svg and common image, font, wasm, audio, video and PDF types), never
+outside the folder, never a blocked tree, and, for a folder outside the workspace,
+not while `attachmentConfineToWorkspace` is on. Every response carries
+`Content-Security-Policy: sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads`
+(never `allow-same-origin`, so the page cannot read Codeman's document, cookies or
+API, even opened as a top-level tab), `Cache-Control: no-store`,
+`Referrer-Policy: no-referrer` and `Access-Control-Allow-Origin: *`. A `Range`
+request is answered with `206` + `Content-Range` (`416` past the end), like
+`file-raw`. Every refusal is a plain-text `404 Not found`; with a password set, an
+unknown or revoked capability is the auth hook's `401` instead.
 
 ## Session lineage (`parentSessionId`)
 
