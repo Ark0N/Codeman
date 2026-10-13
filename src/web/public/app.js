@@ -8161,10 +8161,11 @@ class CodemanApp {
     menu.remove();
     if (!restoreFocus) return;
     // The trigger may have been re-rendered while the menu was open; find the
-    // live tree item by identity.
+    // live tree item by identity. A flat-rail row (a web tab's menu opens there
+    // too, from ContextMenu or Shift+F10) is a `.session-tab` with role=tab.
     const rail = this.$('sessionTabs');
     const item =
-      (trigger?.isConnected && (trigger.closest('[role="treeitem"]') || trigger.closest('.tab-focus-item'))) ||
+      (trigger?.isConnected && trigger.closest('[role="treeitem"], .tab-focus-item, .session-tab')) ||
       [...(rail?.querySelectorAll('[role="treeitem"]') || [])].find((el) => this._tabTreeIdentity(el) === identity);
     item?.focus();
   }
