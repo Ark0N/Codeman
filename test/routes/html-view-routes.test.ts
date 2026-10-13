@@ -66,6 +66,24 @@ describe('html-view routes', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  it('expands a ~/ path against this host home, as the attachment route does', async () => {
+    // test/setup.ts points HOME at a temp dir, so this never touches the real home.
+    // The terminal passes a `~/` link through unchanged; only the server knows the home.
+    const site = join(homedir(), 'html-view-tilde', 'site');
+    mkdirSync(site, { recursive: true });
+    writeFileSync(join(site, 'page.html'), '<h1>home</h1>');
+    try {
+      const res = await open('~/html-view-tilde/site/page.html');
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).data.url).toMatch(/^\/html-view\/[A-Za-z0-9_-]{16,}\/page\.html$/);
+      // A Docker case's `~` is the container's home, never this host's.
+      (harness.ctx.sessions.get(sid) as { docker?: unknown }).docker = { caseName: 'c' };
+      expect((await open('~/html-view-tilde/site/page.html')).statusCode).toBe(400);
+    } finally {
+      rmSync(join(homedir(), 'html-view-tilde'), { recursive: true, force: true });
+    }
+  });
+
   it('validates the body', async () => {
     const post = (payload: unknown) =>
       harness.app.inject({ method: 'POST', url: `/api/sessions/${sid}/html-view`, payload: payload as object });

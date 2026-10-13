@@ -580,7 +580,7 @@ interface SessionFileScope {
  * host's home would open a different file than the one the agent printed, so
  * the form is refused instead of guessed.
  */
-const DOCKER_HOME_PATH_ERROR =
+export const DOCKER_HOME_PATH_ERROR =
   'A ~/ path inside a Docker case is the container home, which this server cannot read; use the absolute path';
 
 /**

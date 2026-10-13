@@ -29,13 +29,13 @@ import type { FastifyInstance } from 'fastify';
 import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { isBlockedAttachmentPath, isUnderTree, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
 import { HTML_VIEW_PREFIX, htmlViewCapabilities } from '../../html-view-capabilities.js';
 import { CASES_DIR, findSessionOrFail, ownerFor, parseBody, validateSessionFilePath } from '../route-helpers.js';
 import { HtmlViewOpenSchema } from '../schemas.js';
-import { localFileSource, sendFileBody } from './file-routes.js';
+import { DOCKER_HOME_PATH_ERROR, localFileSource, sendFileBody } from './file-routes.js';
 import { getUserSpacesDir } from '../../config/multiuser.js';
 import { exceedsDownloadLimit } from '../../config/buffer-limits.js';
 import type { SessionPort } from '../ports/index.js';
@@ -160,20 +160,31 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
       reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not an HTML file'));
       return;
     }
+    // A `~/` link (the terminal passes a home-relative path through, since only
+    // the server knows the home) is this host's home, as the attachment route
+    // expands it. A Docker case's `~` is the container's, so it is refused there.
+    let requestedPath = body.path;
+    if (requestedPath.startsWith('~/')) {
+      if (session.docker) {
+        reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, DOCKER_HOME_PATH_ERROR));
+        return;
+      }
+      requestedPath = join(homedir(), requestedPath.slice(2));
+    }
 
     // Inside the workspace: the same check every file route uses. Outside it: the
     // attachment guard, exactly as an external file preview is admitted.
     let resolvedPath: string;
-    const inWorkspace = validateSessionFilePath(session.workingDir, body.path);
+    const inWorkspace = validateSessionFilePath(session.workingDir, requestedPath);
     if (inWorkspace) {
       resolvedPath = inWorkspace.resolvedPath;
     } else {
-      if (!isAbsolute(body.path)) {
+      if (!isAbsolute(requestedPath)) {
         reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
         return;
       }
       try {
-        resolvedPath = await fs.realpath(body.path);
+        resolvedPath = await fs.realpath(requestedPath);
       } catch {
         reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
         return;

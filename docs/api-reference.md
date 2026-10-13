@@ -605,8 +605,9 @@ bucket. The response shape is unchanged (`path`, `filename`).
 An `.html`/`.htm` file renders as a page in a sandbox, in two steps
 (`src/web/routes/html-view-routes.ts`).
 
-**`POST /api/v1/sessions/:id/html-view`** with `{ "path": "<file>" }` (absolute, or
-relative to the session's workspace; a non-empty string of at most 4096 characters
+**`POST /api/v1/sessions/:id/html-view`** with `{ "path": "<file>" }` (absolute,
+relative to the session's workspace, or `~/` for this host's home, which a Docker
+case refuses with `400` since its `~` is the container's; a non-empty string of at most 4096 characters
 without NUL or line breaks, and no other keys) answers `data: { url }`, a
 `/html-view/<cap>/<file>` URL. The capability grants GET access to the files under
 that file's own folder, so a page's relative CSS, scripts, images and data files
