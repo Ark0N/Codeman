@@ -28,7 +28,7 @@ import type { FastifyInstance } from 'fastify';
 import { createReadStream, realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, extname, isAbsolute, resolve, sep } from 'node:path';
+import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { isBlockedAttachmentPath, isUnderTree, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
 import { HTML_VIEW_PREFIX, htmlViewCapabilities } from '../../html-view-capabilities.js';
@@ -162,7 +162,7 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
         return;
       }
       try {
-        resolvedPath = realpathSync(body.path);
+        resolvedPath = await fs.realpath(body.path);
       } catch {
         reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
         return;
@@ -215,22 +215,27 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
     if (!record) return notFound();
 
     // Fastify has already percent-decoded the wildcard. Hidden files and
-    // directories are never served, whatever their extension.
+    // directories are never served, whatever their extension. This is the cheap
+    // reject on the requested name; the same two rules run again on the resolved
+    // path below.
     const segments = (rest || '').split('/').filter(Boolean);
     if (segments.length === 0 || segments.some((s) => s.startsWith('.'))) return notFound();
-
-    const ext = extensionOf(segments[segments.length - 1]);
-    const contentType = ASSET_TYPES[ext];
-    if (!contentType) return notFound();
+    if (!ASSET_TYPES[extensionOf(segments[segments.length - 1])]) return notFound();
 
     let resolvedPath: string;
     try {
-      resolvedPath = realpathSync(resolve(record.rootDir, segments.join(sep)));
+      resolvedPath = await fs.realpath(resolve(record.rootDir, segments.join(sep)));
     } catch {
       return notFound();
     }
-    // Symlinks are resolved above, so this is the real containment check.
+    // Symlinks are resolved above, so this is the real containment check, and the
+    // dot and extension rules have to hold for where a link LANDS as well: a
+    // `cfg.json -> .git/config` inside the page's folder passes both on its own name.
     if (!isUnderTree(resolvedPath, record.rootDir)) return notFound();
+    if (relative(record.rootDir, resolvedPath).split(sep).some((s) => s.startsWith('.'))) return notFound();
+    // Typed by what the bytes are, the resolved name.
+    const contentType = ASSET_TYPES[extensionOf(resolvedPath)];
+    if (!contentType) return notFound();
     const guard = await loadAttachmentGuardConfig();
     if (isBlockedAttachmentPath(resolvedPath, guard.blockedTrees)) return notFound();
 

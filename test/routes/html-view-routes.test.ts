@@ -94,6 +94,21 @@ describe('html-view routes', () => {
     }
   });
 
+  it('applies the dot and extension rules to where a symlink lands, not only to its name', async () => {
+    mkdirSync(join(workspace, '.git'));
+    writeFileSync(join(workspace, '.git', 'config'), '[remote "origin"]');
+    symlinkSync(join(workspace, '.git', 'config'), join(workspace, 'cfg.json'));
+    symlinkSync(join(workspace, 'notes.sh'), join(workspace, 'notes.css'));
+    // A link that stays inside the folder and lands on an asset still works.
+    symlinkSync(join(workspace, 'data.json'), join(workspace, 'latest.json'));
+    const base = (await openUrl()).replace(/index\.html$/, '');
+    expect((await harness.app.inject({ method: 'GET', url: `${base}cfg.json` })).statusCode).toBe(404);
+    expect((await harness.app.inject({ method: 'GET', url: `${base}notes.css` })).statusCode).toBe(404);
+    const ok = await harness.app.inject({ method: 'GET', url: `${base}latest.json` });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.headers['content-type']).toContain('application/json');
+  });
+
   it('refuses an unknown or revoked capability', async () => {
     const url = await openUrl();
     expect(
