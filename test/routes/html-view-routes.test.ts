@@ -163,6 +163,32 @@ describe('html-view routes', () => {
     expect(isBroadHtmlViewRoot(workspace)).toBe(false);
   });
 
+  it('treats /tmp, /var/tmp and every directory above a broad root as broad, whatever TMPDIR says', async () => {
+    // macOS sets TMPDIR to a per-user /var/folders dir in every terminal, which
+    // os.tmpdir() returns, so the literal shared temp dirs must not depend on it.
+    const savedTmpdir = process.env.TMPDIR;
+    process.env.TMPDIR = join(root, 'private-tmp');
+    mkdirSync(process.env.TMPDIR);
+    const page = join('/tmp', `html-view-broad-literal-${process.pid}.html`);
+    writeFileSync(page, '<p>broad</p>');
+    try {
+      expect(tmpdir()).toBe(process.env.TMPDIR);
+      expect(isBroadHtmlViewRoot('/tmp')).toBe(true);
+      expect(isBroadHtmlViewRoot('/var/tmp')).toBe(true);
+      expect((await open(page)).statusCode).toBe(403);
+    } finally {
+      rmSync(page, { force: true });
+      if (savedTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = savedTmpdir;
+    }
+    // Above the home directory (`/home`, `/Users`): serving it would serve home too.
+    expect(isBroadHtmlViewRoot(join(homedir(), '..'))).toBe(true);
+    // A drive's mount point and the mount parent itself.
+    expect(isBroadHtmlViewRoot('/mnt')).toBe(true);
+    expect(isBroadHtmlViewRoot('/mnt/d')).toBe(true);
+    expect(isBroadHtmlViewRoot('/mnt/d/projects/report')).toBe(false);
+  });
+
   it('refuses a page sitting directly in the temp dir', async () => {
     const page = join(tmpdir(), `html-view-broad-${process.pid}.html`);
     writeFileSync(page, '<p>broad</p>');

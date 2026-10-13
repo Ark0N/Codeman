@@ -19,8 +19,9 @@
  * by the same blocklist plus an asset-extension allowlist and a no-dotfile rule, so
  * a page cannot use its own directory to pull a `.env` out through the browser.
  * Because that tree is served recursively, minting is refused for an HTML file in a
- * hidden directory or directly in a broad root (`/`, home, the temp dir, the cases
- * and user-space roots), see {@link isBroadHtmlViewRoot}.
+ * hidden directory or directly in a broad root (`/`, home, `/tmp`, `/var/tmp` and
+ * `$TMPDIR`, the cases and user-space roots, a drive's mount point) or in a
+ * directory above one, see {@link isBroadHtmlViewRoot}.
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -92,17 +93,37 @@ function canonical(path: string): string {
 }
 
 /**
+ * The shared temp dirs, named literally: `os.tmpdir()` is `$TMPDIR` whenever that
+ * is set, and macOS sets it in every terminal session (`/var/folders/.../T`), so
+ * a server started from one would otherwise never see `/tmp` as broad.
+ */
+const SHARED_TEMP_DIRS = ['/tmp', '/var/tmp'];
+
+/**
+ * Where drives are mounted. A page at a drive's root (WSL's `/mnt/d/report.html`)
+ * would be handed the whole drive, so the mount parent and each mount point in it
+ * count as broad.
+ */
+const MOUNT_PARENTS = ['/mnt', '/media', '/Volumes'];
+
+/**
  * Whether a directory is too broad to hand to a page as its asset root. The
  * capability serves the HTML file's directory RECURSIVELY to the page's own
  * scripts, so `/tmp/report.html` would expose every other session's scratch
  * output under `/tmp`, and `~/report.html` the home tree. Refuse those roots
- * (and the cases / user-space roots, which hold every workspace) outright.
+ * (and the cases / user-space roots, which hold every workspace) outright, and
+ * any directory ABOVE one of them (`/home`, `/Users`, macOS's `/private`), since
+ * serving it recursively serves the root below it too.
  */
 export function isBroadHtmlViewRoot(dir: string): boolean {
   const target = canonical(dir);
   const userSpaces = canonical(getUserSpacesDir());
-  const broad = [sep, homedir(), tmpdir(), CASES_DIR, userSpaces].map(canonical);
-  if (broad.includes(target)) return true;
+  // canonical() also maps the literal temp dirs to macOS's `/private/tmp` and `/private/var/tmp`.
+  const broad = [sep, homedir(), tmpdir(), ...SHARED_TEMP_DIRS, CASES_DIR, userSpaces].map(canonical);
+  if (broad.some((root) => isUnderTree(root, target))) return true;
+  for (const parent of MOUNT_PARENTS.map(canonical)) {
+    if (target === parent || dirname(target) === parent) return true;
+  }
   // A user's own space (`<spaces>/<user>`) and its cases dir hold every workspace of that user.
   if (dirname(target) === userSpaces) return true;
   return basename(target) === 'cases' && dirname(dirname(target)) === userSpaces;
