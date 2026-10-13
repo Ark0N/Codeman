@@ -435,7 +435,7 @@ describe('TerminalTile server-refresh single-flight', () => {
 
 describe('TerminalTile refresh order: fetch, then the in-stream reset, then the held frames', () => {
   // The primary pane's order (_onSessionNeedsRefresh / _resetTerminalForReplay,
-  // CLAUDE.md "Terminal resilience"). The refresh used to wipe the pane with a
+  // src/web/CLAUDE.md "Terminal resilience"). The refresh used to wipe the pane with a
   // synchronous xterm clear() before its fetch and wrote live frames straight
   // through the fetch and the replay: queued bytes fused into the snapshot, the
   // capture started at the old cursor column, and a failed fetch left it blank.

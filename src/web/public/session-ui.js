@@ -1116,7 +1116,7 @@ Object.assign(CodemanApp.prototype, {
    *
    * Routes through run() itself, via a temporary `_runMode` swap, rather than a
    * parallel dispatch table: that is what gives this the same in-flight lock
-   * every other Run click gets (CLAUDE.md, Run launch synchronization — the lock
+   * every other Run click gets (src/web/CLAUDE.md, Run launch synchronization — the lock
    * exists so a double click cannot create duplicate sessions with the same
    * `w<n>-<case>` name, and it guards the OTHER direction too: without it, the
    * main Run button could start a second concurrent launch while this one was

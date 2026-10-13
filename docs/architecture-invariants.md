@@ -2,7 +2,7 @@
 
 Implementation detail extracted from `CLAUDE.md` so that file stays small enough to load into every session cheaply. Most sections are the original paragraphs, verbatim, including the version history and PR references that explain *why* each rule exists; newer ones are written here first and summarized back into `CLAUDE.md` as a short rule plus a pointer.
 
-`CLAUDE.md` keeps the short form of each rule plus a pointer to the section here. Read the pointer first; come here when you need the mechanism, the file names, or the history behind a constraint.
+`CLAUDE.md` keeps the short form of each rule plus a pointer to the section here; for the frontend (`src/web/public/`) that short form lives in `src/web/CLAUDE.md`, which the root file points to. Read the pointer first; come here when you need the mechanism, the file names, or the history behind a constraint.
 
 ---
 

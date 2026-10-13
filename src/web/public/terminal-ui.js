@@ -5750,7 +5750,7 @@ Object.assign(CodemanApp.prototype, {
   // pane; either of the first two left out means the primary pane's.
   // `ephemeral: true` sends it through _sendInputEphemeral instead of the
   // persisted exactly-once queue: a TerminalTile's mouse reports never enter
-  // that queue (CLAUDE.md, Split-pane sessions), or a reload would replay one
+  // that queue (src/web/CLAUDE.md, Split-pane sessions), or a reload would replay one
   // onto a later screen. Left out, the report stays on _sendInputAsync, as the
   // primary pane always sent it.
   _sendSyntheticSgrTap(clientX, clientY, target = {}) {

@@ -745,7 +745,7 @@ describe('Custom Model Endpoint Profiles: applying a picked entry', () => {
   });
 
   it('routes through run() itself, so the Run in-flight lock actually engages', async () => {
-    // CLAUDE.md, Run launch synchronization: the lock exists so a double click
+    // src/web/CLAUDE.md, Run launch synchronization: the lock exists so a double click
     // cannot create duplicate sessions. A hardcoded dispatch table bypassing
     // run() would never set _runInFlight, which is what this pins.
     const { app } = bootApp({});
