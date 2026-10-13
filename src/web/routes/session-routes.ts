@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { finished } from 'node:stream/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import {
@@ -5482,6 +5483,7 @@ export function registerSessionRoutes(
       const videoMime = (part.mimetype || '').toLowerCase().match(/^video\/(mp4|quicktime|x-m4v|webm|ogg)$/);
       if (videoMime) ext = VIDEO_MIME_EXT[videoMime[1]] ?? ext;
       if (!ext) {
+        await finished(part.file.resume()).catch(() => {});
         reply.code(400);
         return createErrorResponse(
           ApiErrorCode.INVALID_INPUT,
@@ -5490,6 +5492,7 @@ export function registerSessionRoutes(
       }
       const imageDir = await ensureUploadDir(session.workingDir);
       if (!imageDir) {
+        await finished(part.file.resume()).catch(() => {});
         reply.code(403);
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, `${UPLOADS_DIR} is not a regular directory`);
       }
