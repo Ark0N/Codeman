@@ -204,7 +204,7 @@ trailing carriage return:
 
 | Mode    | Mechanism                                                       | Use when                                         |
 | ------- | --------------------------------------------------------------- | ------------------------------------------------ |
-| `typed` | `session.writeViaMux()` — the text as a tmux bracketed paste + Enter | Default; like a human pasting the prompt and pressing Enter. |
+| `typed` | `session.writeViaMux()` — the text as a tmux bracketed paste + Enter (a single character is typed, so a dialog answer selects) | Default; like a human pasting the prompt and pressing Enter. |
 | `paste` | `session.write()` — writes directly to the PTY/mux              | Bulk paste-style delivery.                       |
 
 > ⚠️ **Single-line only — enforced.** Like all programmatic input in Codeman,
