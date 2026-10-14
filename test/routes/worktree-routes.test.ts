@@ -182,6 +182,26 @@ describe('worktree routes: happy path', () => {
     expect(readFileSync(join(wtPath, 'wip.txt'), 'utf-8')).toBe('work');
   });
 
+  it('removes a worktree whose folder was deleted by hand and frees its name', async () => {
+    await create({ name: 'gone' });
+    const wtPath = join(repo, '.claude', 'worktrees', 'gone');
+    await rm(wtPath, { recursive: true, force: true });
+    const row = (await list()).json().data.worktrees.find((w: { name?: string }) => w.name === 'gone');
+    expect(row).toMatchObject({ managed: true, prunable: true });
+    // A session cannot start in it.
+    const qs = await h.app.inject({
+      method: 'POST',
+      url: '/api/quick-start',
+      payload: { caseName: 'wtcase', mode: 'shell', worktree: 'gone' },
+    });
+    expect(qs.statusCode).toBe(404);
+    const res = await remove('gone', '?deleteBranch=true');
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.removed).toMatchObject({ name: 'gone', branchDeleted: true });
+    expect(git(repo, 'worktree', 'list')).not.toContain('gone');
+    expect((await create({ name: 'gone' })).statusCode).toBe(201);
+  });
+
   it('lets a POST /api/sessions create path use the worktree as workingDir', async () => {
     await create({ name: 'viasessions' });
     const wtPath = join(repo, '.claude', 'worktrees', 'viasessions');

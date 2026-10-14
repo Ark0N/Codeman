@@ -118,6 +118,7 @@ describe('the git worktree UI in zh-CN', () => {
       'Start a session in this worktree',
       'Remove…',
       'git worktree remove refuses while the worktree has uncommitted or untracked files. Codeman never forces it.',
+      'Its folder is gone. Removing it clears the record git keeps of it, so the name can be used again.',
       'Also delete its branch (git branch -d keeps a branch that is not merged)',
       'Remove worktree',
       'Cancel',

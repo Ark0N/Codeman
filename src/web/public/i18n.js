@@ -297,6 +297,8 @@
     'Remove…': '移除…',
     'git worktree remove refuses while the worktree has uncommitted or untracked files. Codeman never forces it.':
       '工作树中有未提交或未跟踪的文件时，git worktree remove 会拒绝执行。{name} 从不强制移除。',
+    'Its folder is gone. Removing it clears the record git keeps of it, so the name can be used again.':
+      '它的文件夹已不存在。移除它会清除 git 保存的记录，这个名称便可再次使用。',
     'Remove worktree': '移除工作树',
     'Kill & remove worktree': '终止并移除工作树',
     'git refuses while the worktree has uncommitted or untracked files; nothing is forced':

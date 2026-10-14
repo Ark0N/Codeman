@@ -13,6 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
+import { JSDOM } from 'jsdom';
 import { describe, expect, it, vi } from 'vitest';
 
 const SESSION_UI = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
@@ -147,6 +148,35 @@ describe('launching in a worktree', () => {
     await app._launchInWorktree(WT, 'codex');
     expect(seen).toEqual([{ mode: 'codex', options: { count: 1, worktree: WT } }]);
     expect(app._runMode).toBe('claude');
+  });
+
+  it('a worktree whose folder is gone offers Remove but not Open, with a note saying what Remove does', () => {
+    const dom = new JSDOM('<!doctype html><body></body>');
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: dom.window.document,
+      console,
+      setTimeout,
+    });
+    vm.runInContext(SESSION_UI, context, { filename: 'session-ui.js' });
+    const app = new (CodemanApp as any)();
+    app._shortenHomePath = (p: string) => p;
+    const row = (wt: Record<string, unknown>) =>
+      app._buildWorktreeRow({ branch: 'worktree-x', path: '/r/.claude/worktrees/x', name: 'x', ...wt });
+    const buttons = (el: HTMLElement) => [...el.querySelectorAll('button')].map((b) => b.textContent);
+
+    expect(buttons(row({ managed: true, prunable: false }))).toEqual(['Open', 'Remove…']);
+    expect(buttons(row({ managed: true, prunable: true }))).toEqual(['Remove…']);
+    expect(buttons(row({ managed: false, prunable: true }))).toEqual([]);
+
+    app._worktreeRemoveConfirm = 'x';
+    const missingNote = row({ managed: true, prunable: true }).querySelector('.worktree-remove-note')!.textContent;
+    expect(missingNote).toContain('folder is gone');
+    const liveNote = row({ managed: true, prunable: false }).querySelector('.worktree-remove-note')!.textContent;
+    expect(liveNote).toContain('never forces');
+    dom.window.close();
   });
 
   it('closing offers worktree removal only for a session in a managed worktree', () => {

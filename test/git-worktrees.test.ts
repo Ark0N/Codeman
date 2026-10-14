@@ -380,4 +380,50 @@ describe('git worktrees on a real repository', () => {
     expect(r).toMatchObject({ ok: false, code: 'CONFLICT' });
     if (!r.ok) expect(r.message).toContain('agent busy');
   });
+
+  it('removes a worktree whose folder was deleted by hand, so its name can be used again', async () => {
+    const made = await createCaseWorktree(repo, { name: 'gone' });
+    if (!made.ok) throw new Error(made.message);
+    rmSync(made.worktree.path, { recursive: true, force: true });
+    const listed = await listCaseWorktrees(repo);
+    expect(listed.ok && listed.worktrees.find((w) => w.name === 'gone')).toMatchObject({
+      managed: true,
+      prunable: true,
+    });
+    // A session never starts in it; only removal accepts a missing folder.
+    expect(await resolveManagedWorktree(repo, 'gone')).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    // Before the fix this was NOT_FOUND, and both ways of reusing the name failed.
+    const r = await removeCaseWorktree(repo, { name: 'gone', deleteBranch: true, isInUse: () => false });
+    expect(r).toMatchObject({ ok: true, removed: { name: 'gone', branch: 'worktree-gone', branchDeleted: true } });
+    expect(git(repoDir, 'worktree', 'list', '--porcelain')).not.toContain('gone');
+    expect((await createCaseWorktree(repo, { name: 'gone' })).ok).toBe(true);
+  });
+
+  it('refuses a missing worktree that a live session still names, or that is locked', async () => {
+    const made = await createCaseWorktree(repo, { name: 'held' });
+    if (!made.ok) throw new Error(made.message);
+    git(repoDir, 'worktree', 'lock', '--reason', 'on a removable disk', made.worktree.path);
+    rmSync(made.worktree.path, { recursive: true, force: true });
+    expect(await removeCaseWorktree(repo, { name: 'held', isInUse: () => true })).toMatchObject({
+      ok: false,
+      code: 'CONFLICT',
+    });
+    const locked = await removeCaseWorktree(repo, { name: 'held', isInUse: () => false });
+    expect(locked).toMatchObject({ ok: false, code: 'CONFLICT' });
+    if (!locked.ok) expect(locked.message).toContain('removable disk');
+  });
+
+  it('never follows a symlink on the way to a missing worktree', async () => {
+    const made = await createCaseWorktree(repo, { name: 'via' });
+    if (!made.ok) throw new Error(made.message);
+    // The whole worktrees folder replaced by a link to somewhere else.
+    const elsewhere = join(dir, 'elsewhere');
+    mkdirSync(elsewhere);
+    rmSync(join(repoDir, '.claude', 'worktrees'), { recursive: true, force: true });
+    symlinkSync(elsewhere, join(repoDir, '.claude', 'worktrees'));
+    expect(await removeCaseWorktree(repo, { name: 'via', isInUse: () => false })).toMatchObject({
+      ok: false,
+      code: 'INVALID_INPUT',
+    });
+  });
 });

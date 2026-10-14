@@ -53,6 +53,9 @@ work first, then remove again. A worktree a live session still runs in is refuse
 commits are not merged yet. The worktree is still removed, and the message says the branch was
 kept.
 
+If a worktree's folder was deleted by hand, its row says **missing** and offers only
+**Remove…**: that clears the record git keeps of it, so the name can be used for a new worktree.
+
 ## What is not supported
 
 - **Docker cases and remote (SSH) cases.** A container can write to its workspace, and creating

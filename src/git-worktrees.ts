@@ -594,36 +594,58 @@ async function prepareWorktreesDir(repoRoot: string): Promise<{ ok: true; dir: s
  * The managed worktree `name` of `repo` as it is on disk now: every component a real directory
  * (no symlinks), the real path the expected one, and git listing it as a worktree of this
  * repository. Used by removal and by starting a session in it.
+ *
+ * `allowMissing` (removal only, never a session start) also accepts a worktree whose folder is
+ * GONE (deleted by hand, or by an agent) while git still lists it, as prunable, at exactly the
+ * managed path: no component on the way may be a symlink or a file, and `missing` says so.
+ * Without it such a worktree was a dead end: it could not be removed, and its name could not be
+ * used again (the branch exists, then git refuses "a missing but already registered worktree").
  */
 export async function resolveManagedWorktree(
   repo: CaseRepository,
   name: string,
-  opts: WorktreeOptions = {}
-): Promise<{ ok: true; path: string; worktree: CaseWorktree } | WorktreeFailure> {
+  opts: WorktreeOptions & { allowMissing?: boolean } = {}
+): Promise<{ ok: true; path: string; worktree: CaseWorktree; missing: boolean } | WorktreeFailure> {
   const nameError = worktreeNameError(name);
   if (nameError) return fail('INVALID_INPUT', nameError);
   const target = managedWorktreePath(repo.repoRoot, name);
   let cur = repo.repoRoot;
+  let missing = false;
   for (const segment of [...WORKTREES_DIR_SEGMENTS, name]) {
     cur = join(cur, segment);
     const state = await lstatState(cur);
-    if (state === 'absent') return fail('NOT_FOUND', `No worktree named "${name}" in this case.`);
+    if (state === 'absent') {
+      if (!opts.allowMissing) return fail('NOT_FOUND', `No worktree named "${name}" in this case.`);
+      // Nothing below an absent folder exists, so nothing below it can redirect anything.
+      missing = true;
+      break;
+    }
     if (state === 'symlink') {
       return fail('INVALID_INPUT', `${cur} is a symlink. Codeman only manages worktrees that are real directories.`);
     }
     if (state === 'other') return fail('INVALID_INPUT', `${cur} is not a directory.`);
   }
-  if ((await realOr(target)) !== target) {
+  if (!missing && (await realOr(target)) !== target) {
     return fail('INVALID_INPUT', `${target} does not resolve to itself; refusing to use it.`);
   }
   const listed = await listCaseWorktrees(repo, opts);
   if (!listed.ok) return listed;
   for (const wt of listed.worktrees) {
     if (wt.main) continue;
+    if (missing) {
+      // Lexical only: the folder is gone, so there is no real path to compare. git never calls a
+      // LOCKED worktree prunable (prune skips it), so a locked one is taken too, and the caller's
+      // lock check then refuses it with git's lock reason.
+      if (wt.path === target && (wt.prunable || wt.locked)) {
+        return { ok: true, path: target, worktree: { ...wt, managed: true, name }, missing: true };
+      }
+      continue;
+    }
     if (wt.path === target || (await realOr(wt.path)) === target) {
-      return { ok: true, path: target, worktree: { ...wt, managed: true, name } };
+      return { ok: true, path: target, worktree: { ...wt, managed: true, name }, missing: false };
     }
   }
+  if (missing) return fail('NOT_FOUND', `No worktree named "${name}" in this case.`);
   return fail(
     'NOT_FOUND',
     `${target} is not a registered git worktree of this repository (a leftover folder, or one git no longer knows about).`
@@ -835,7 +857,9 @@ export async function removeCaseWorktree(
 ): Promise<{ ok: true; removed: RemovedWorktree } | WorktreeFailure> {
   const git = opts.git ?? runWorktreeGit;
   return withRepoLock(repo.repoRoot, async () => {
-    const found = await resolveManagedWorktree(repo, req.name, opts);
+    // A worktree whose folder is gone is removable too: `git worktree remove` then only drops
+    // git's record of it (measured on git 2.43: exit 0, nothing on disk touched).
+    const found = await resolveManagedWorktree(repo, req.name, { ...opts, allowMissing: true });
     if (!found.ok) return found;
     if (await req.isInUse(found.path)) {
       return fail(

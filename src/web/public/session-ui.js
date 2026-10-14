@@ -5229,21 +5229,26 @@ Object.assign(CodemanApp.prototype, {
       badge(`${wt.sessionCount} session${wt.sessionCount === 1 ? '' : 's'}`, 'worktree-badge-live');
     }
 
-    if (wt.managed && !wt.prunable) {
+    if (wt.managed) {
       const actions = document.createElement('span');
       actions.className = 'worktree-row-actions';
-      const open = document.createElement('button');
-      open.type = 'button';
-      open.className = 'wt-btn wt-btn-sm';
-      open.textContent = 'Open';
-      open.title = 'Start a session in this worktree';
-      open.addEventListener('click', () => void this.openWorktreeSession(wt.name));
+      // A worktree whose folder is gone (`prunable`) cannot host a session, but Remove still
+      // clears git's record of it, which is what frees its name for a new worktree.
+      if (!wt.prunable) {
+        const open = document.createElement('button');
+        open.type = 'button';
+        open.className = 'wt-btn wt-btn-sm';
+        open.textContent = 'Open';
+        open.title = 'Start a session in this worktree';
+        open.addEventListener('click', () => void this.openWorktreeSession(wt.name));
+        actions.appendChild(open);
+      }
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'wt-btn wt-btn-sm wt-btn-danger';
       remove.textContent = 'Remove…';
       remove.addEventListener('click', () => this.confirmWorktreeRemoval(wt.name));
-      actions.append(open, remove);
+      actions.appendChild(remove);
       head.appendChild(actions);
     }
     row.appendChild(head);
@@ -5266,8 +5271,9 @@ Object.assign(CodemanApp.prototype, {
     box.className = 'worktree-remove-confirm';
     const note = document.createElement('p');
     note.className = 'worktree-remove-note';
-    note.textContent =
-      'git worktree remove refuses while the worktree has uncommitted or untracked files. Codeman never forces it.';
+    note.textContent = wt.prunable
+      ? 'Its folder is gone. Removing it clears the record git keeps of it, so the name can be used again.'
+      : 'git worktree remove refuses while the worktree has uncommitted or untracked files. Codeman never forces it.';
     box.appendChild(note);
 
     let checkbox = null;
