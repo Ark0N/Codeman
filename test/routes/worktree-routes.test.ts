@@ -311,6 +311,42 @@ describe('worktree routes: refusals', () => {
   });
 });
 
+describe('worktree routes: a case reached through a symlink', () => {
+  // A linked case's folder can be a symlink (a repository on another disk, macOS's /tmp), and
+  // POST /api/sessions stores `workingDir` as it was spelled. The worktree list and the removal
+  // guard compare paths lexically, so a session spelled through the link has to be mapped onto
+  // the repository's real path first, or it is invisible to both.
+  it('counts and protects a session whose folder names the worktree through the case link', async () => {
+    const link = join(CASES_DIR, 'repo-link');
+    symlinkSync(repo, link);
+    await mkdir(getDataDir(), { recursive: true });
+    await writeFile(join(getDataDir(), 'linked-cases.json'), JSON.stringify({ linkedviasym: link }));
+    const made = await create({ name: 'sym' }, 'linkedviasym');
+    expect(made.statusCode).toBe(201);
+    const real = join(repo, '.claude', 'worktrees', 'sym');
+    expect(made.json().data.worktree.path).toBe(real);
+
+    // The same worktree, spelled through the link.
+    const spelled = join(link, '.claude', 'worktrees', 'sym');
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workingDir: spelled, mode: 'shell', name: 's1-sym' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.session.workingDir).toBe(spelled);
+
+    const busy = await remove('sym', '', 'linkedviasym');
+    expect(busy.statusCode).toBe(409);
+    expect(busy.json().error).toContain('live session');
+    expect(existsSync(real)).toBe(true);
+
+    const row = (await list('linkedviasym')).json().data.worktrees.find((w: { name?: string }) => w.name === 'sym');
+    expect(row).toMatchObject({ managed: true, sessionCount: 1 });
+    expect(row.sessions).toEqual([{ id: res.json().data.session.id, name: 's1-sym' }]);
+  });
+});
+
 describe('worktree routes: multi-user ownership', () => {
   it('resolves a non-admin’s own case space only, never a linked case or another user’s case', async () => {
     process.env.CODEMAN_MULTIUSER = '1';

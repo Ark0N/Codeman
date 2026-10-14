@@ -37,6 +37,7 @@ import {
   managedWorktreesDir,
   removeCaseWorktree,
   resolveCaseRepository,
+  respellUnder,
   worktreeNameError,
   type CaseRepository,
   type CaseWorktree,
@@ -151,12 +152,22 @@ async function resolveLocalCaseFolder(
   return { ok: true, casePath };
 }
 
-/** Live local sessions, with the folder each runs in. Remote sessions have no local folder. */
-function liveLocalSessions(ctx: SessionPort): Array<{ id: string; name: string; owner?: string; dir: string }> {
+/**
+ * Live local sessions, with the folder each runs in as the case's repository spells it
+ * (`respellUnder`: a folder named through the case's own path, which can run through a symlink,
+ * is moved onto the repository's real top level, where git lists the worktrees). Remote sessions
+ * have no local folder.
+ */
+function liveLocalSessions(
+  ctx: SessionPort,
+  casePath: string,
+  repoRoot: string
+): Array<{ id: string; name: string; owner?: string; dir: string }> {
   const out: Array<{ id: string; name: string; owner?: string; dir: string }> = [];
   for (const session of ctx.sessions.values()) {
     if (session.remote || !session.workingDir || !session.workingDir.startsWith('/')) continue;
-    out.push({ id: session.id, name: session.name, owner: session.owner, dir: session.workingDir });
+    const dir = respellUnder(session.workingDir, casePath, repoRoot);
+    out.push({ id: session.id, name: session.name, owner: session.owner, dir });
   }
   return out;
 }
@@ -168,12 +179,15 @@ export function registerWorktreeRoutes(
 ): void {
   const dockerWorkspaces = deps.dockerWorkspaces ?? defaultDockerWorkspaces;
 
-  /** Case folder → its repository, or the refusal already rendered. */
+  /**
+   * Case folder → its repository, or the refusal already rendered. `casePath` is the folder as
+   * the case resolves it (possibly through a symlink); `repo.repoRoot` is its real path.
+   */
   async function caseRepository(
     req: FastifyRequest,
     reply: FastifyReply,
     name: string
-  ): Promise<{ ok: true; repo: CaseRepository } | { ok: false; fail: Fail }> {
+  ): Promise<{ ok: true; repo: CaseRepository; casePath: string } | { ok: false; fail: Fail }> {
     const folder = await resolveLocalCaseFolder(req, name);
     if (!folder.ok) return { ok: false, fail: failWith(reply, folder.code, folder.message) };
     const repo = await resolveCaseRepository(folder.casePath, {
@@ -181,14 +195,14 @@ export function registerWorktreeRoutes(
       dockerWorkspaces: await dockerWorkspaces(),
     });
     if (!repo.ok) return { ok: false, fail: failFrom(reply, repo) };
-    return { ok: true, repo: repo.repo };
+    return { ok: true, repo: repo.repo, casePath: folder.casePath };
   }
 
   app.get('/api/cases/:name/worktrees', async (req, reply): Promise<ApiResponse<CaseWorktreeList>> => {
     const { name } = req.params as { name: string };
     const resolved = await caseRepository(req, reply, name);
     if (!resolved.ok) return resolved.fail;
-    const { repo } = resolved;
+    const { repo, casePath } = resolved;
     const listed = await listCaseWorktrees(repo, { git: deps.git });
     if (!listed.ok) return failFrom(reply, listed);
 
@@ -196,7 +210,7 @@ export function registerWorktreeRoutes(
     // managed worktree is not also counted against the main checkout that contains it.
     const user = getAuthUser(req);
     const rows: CaseWorktreeInfo[] = listed.worktrees.map((wt) => ({ ...wt, sessionCount: 0, sessions: [] }));
-    for (const session of liveLocalSessions(ctx)) {
+    for (const session of liveLocalSessions(ctx, casePath, repo.repoRoot)) {
       let best: CaseWorktreeInfo | undefined;
       for (const row of rows) {
         if (!isPathWithin(session.dir, row.path)) continue;
@@ -247,7 +261,8 @@ export function registerWorktreeRoutes(
           deleteBranch: query.deleteBranch === 'true' || query.deleteBranch === '1',
           // Any owner's session blocks: removing the folder under a running agent is the damage
           // this refusal exists to prevent, whoever started it.
-          isInUse: (path) => liveLocalSessions(ctx).some((s) => isPathWithin(s.dir, path)),
+          isInUse: (path) =>
+            liveLocalSessions(ctx, resolved.casePath, resolved.repo.repoRoot).some((s) => isPathWithin(s.dir, path)),
         },
         { git: deps.git }
       );

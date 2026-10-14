@@ -173,6 +173,21 @@ export function isPathWithin(child: string, root: string): boolean {
   return c === r || c.startsWith(r === sep ? r : r + sep);
 }
 
+/**
+ * `path` as the repository spells it: a path under `alias` (the case folder as its case resolves
+ * it, which can run through a symlink) moved under `root` (the repository's real top level), else
+ * `path` unchanged. Lexical, so it costs no filesystem call per session. Sessions keep the
+ * `workingDir` they were created with, while the worktree paths git lists are real, so without
+ * this a session spelled through the case's link counted for no worktree and did not block its
+ * removal.
+ */
+export function respellUnder(path: string, alias: string, root: string): string {
+  const p = resolve(path);
+  const a = resolve(alias);
+  if (a === resolve(root) || !isPathWithin(p, a)) return p;
+  return join(root, p.slice(a.length));
+}
+
 // ─── Pure: `git worktree list --porcelain` ───────────────────────────────────
 
 export interface ParsedWorktree {

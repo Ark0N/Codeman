@@ -21,6 +21,7 @@ import {
   removeCaseWorktree,
   resolveCaseRepository,
   resolveManagedWorktree,
+  respellUnder,
   unquoteGitPath,
   worktreeBaseError,
   worktreeBranchError,
@@ -102,6 +103,15 @@ describe('paths', () => {
     expect(isPathWithin('/r/.claude/worktrees/a', '/r/.claude/worktrees/a')).toBe(true);
     expect(isPathWithin('/r/.claude/worktrees/a/src', '/r/.claude/worktrees/a')).toBe(true);
     expect(isPathWithin('/r/.claude/worktrees/ab', '/r/.claude/worktrees/a')).toBe(false);
+  });
+  it('respellUnder moves a path named through the case link onto the real repository root', () => {
+    expect(respellUnder('/link/.claude/worktrees/a', '/link', '/real')).toBe('/real/.claude/worktrees/a');
+    expect(respellUnder('/link/.claude/worktrees/a/src/', '/link', '/real')).toBe('/real/.claude/worktrees/a/src');
+    expect(respellUnder('/link', '/link', '/real')).toBe('/real');
+    // Not under the alias (a segment match, never a string prefix), or no alias at all: unchanged.
+    expect(respellUnder('/linked/x', '/link', '/real')).toBe('/linked/x');
+    expect(respellUnder('/real/.claude/worktrees/a', '/link', '/real')).toBe('/real/.claude/worktrees/a');
+    expect(respellUnder('/real/x', '/real', '/real')).toBe('/real/x');
   });
 });
 
