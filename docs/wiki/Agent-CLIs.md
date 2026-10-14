@@ -72,12 +72,12 @@ output. The other CLIs expose no equivalent.
 | Precise idle detection                            | Yes    | Codex, Pi, OpenCode, OMP and Gemini: same screen check, via their own prompt and working line. DeepSeek: reports its state itself. Others: output stabilization, coarser |
 | Auto-resume when a usage limit resets             | Yes    | No                                                   |
 | Plan usage chip                                   | Yes    | No                                                   |
-| Approvals Inbox                                   | Yes    | DeepSeek yes; others no                              |
+| Approvals Inbox                                   | Yes    | DeepSeek and Codex as alerts (answer in the terminal); others no |
 | Read My Mind                                      | Yes    | No                                                   |
 | Ralph loop and its task tracker                   | Yes    | No                                                   |
 | Subagent and team windows                         | Yes    | No                                                   |
 | Model, effort, advisor, and ultracode controls    | Yes    | No                                                   |
-| `stop` and `blocked` wait signals                 | Yes    | DeepSeek yes; elsewhere 400 if you ask for them explicitly |
+| `stop` and `blocked` wait signals                 | Yes    | DeepSeek yes; Codex `blocked` only; elsewhere 400 if you ask for them explicitly |
 | The bundled agent skill                           | Yes    | No                                                   |
 
 Everything that makes a session a session works everywhere. What is Claude-only is mostly
@@ -153,6 +153,17 @@ Two behaviours that are deliberate and worth knowing:
   does; before 1.26.1 every Codex session reported idle for its whole life. Codex
   conversations also appear in Past Sessions and can be resumed, and on phones the keyboard
   bar grows `⇧←` / `⇧→` for Codex's queued-message editing and prompt stack.
+- **A dialog waiting for you turns the tab red.** Codex is launched with its approvals on
+  unless you tick the bypass option, and it has no hooks to say it stopped, so Codeman reads
+  its dialogs off the screen: a command, edit or network approval, a question it asks you
+  (Plan mode), and the "Trust this folder?" prompt when it starts in a new folder. Each one
+  raises the same red "needs you" alert a Claude permission prompt does, with the desktop
+  notification, web push, webhook, the phone overview's NEEDS YOU row and an Approvals Inbox
+  card, and the alert clears a few seconds after you answer. Answer in the terminal: Codeman
+  never answers a Codex dialog for you, so the inbox card and the push carry no Approve or
+  Deny buttons. While such a dialog is up the session shows as idle (a question used to show
+  as working), and agents can wait on it with the `blocked` signal. "Implement this plan?"
+  at the end of a plan is not counted, since the turn has ended there.
 
 ### Gemini
 

@@ -142,9 +142,10 @@ Three semantics that break callers who assume otherwise:
 `wait-output` matches a **literal substring, never a regex.** That is deliberate: no regex
 means no catastrophic backtracking on attacker-influenced output.
 
-Only `claude` and `deepseek` sessions emit `stop` and `blocked`: Claude's come from Claude
-Code hooks, DeepSeek's from the harness reporting its state to Codeman. Shell and the other
-external CLI sessions accept `idle`, `working`, and `exit`.
+Only `claude` and `deepseek` sessions emit `stop`: Claude's come from Claude Code hooks,
+DeepSeek's from the harness reporting its state to Codeman. `blocked` fires for those two
+and for `codex`, whose approval, question and trust dialogs Codeman reads off the screen.
+Shell and the other external CLI sessions accept `idle`, `working`, and `exit`.
 
 ## SSE
 

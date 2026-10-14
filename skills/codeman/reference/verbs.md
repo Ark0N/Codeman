@@ -377,7 +377,9 @@ only when the workspace actually has them, see [§5.1](#51-where-to-spawn)) **an
 `deepseek`** — the one external CLI that reports its own lifecycle, so its `stop` is a
 real end-of-turn signal rather than a guess. On
 `shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`omp`, requesting them explicitly is a
-400, and lifecycle transitions there are coarse (a short shell command may emit **no**
+400 (except `blocked` on `codex`, which Codeman reads off its screen when an approval,
+question or trust dialog is up; a wait for it answers at once if one already is), and
+lifecycle transitions there are coarse (a short shell command may emit **no**
 `idle` transition at all, verified live), so synchronize those with markers.
 
 ⚠️ A dsh session can still refuse them for a per-SESSION reason: `statusReporting:
