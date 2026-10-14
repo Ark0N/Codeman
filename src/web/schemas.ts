@@ -707,7 +707,16 @@ export const StatusTelemetrySchema = z.object({
           miss_recache_tokens: z.number().nullish(),
           last_miss_at: z.number().nullish(),
           recache_tokens_if_cold: z.number().nullish(),
-          last_miss_cause: z.object({ causes: z.array(z.unknown()).max(20).nullish() }).nullish(),
+          // Keep the first 20 causes instead of 400-ing the whole post (which also drops the
+          // footer, the plan chip and the model report it carries) when Claude Code reports more. The
+          // preprocess slices BEFORE the array validates, so an over-long array costs one bounded
+          // slice, never per-element validation across every entry (parsePromptCache then keeps
+          // the string ones among those 20).
+          last_miss_cause: z
+            .object({
+              causes: z.preprocess((v) => (Array.isArray(v) ? v.slice(0, 20) : v), z.array(z.unknown()).nullish()),
+            })
+            .nullish(),
         })
         .nullish(),
     })

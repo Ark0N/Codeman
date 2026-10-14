@@ -154,6 +154,20 @@ describe('POST /api/status-telemetry', () => {
     expect(events.filter((e) => e === SessionPromptCache)).toHaveLength(1);
   });
 
+  it('keeps the first 20 miss causes instead of refusing a post that carries more', async () => {
+    const causes = Array.from({ length: 25 }, (_, i) => `cause_${i}`);
+    const res = await post({
+      sessionId: SID,
+      data: { ...REAL, prompt_cache: { warm: false, ttl: '1h', last_miss_cause: { causes } } },
+    });
+    // Accepted, not 400: an over-long causes array must not blank the whole statusline.
+    expect(res.statusCode).toBe(200);
+    const session = h.ctx.sessions.get(SID) as unknown as { promptCache: { lastMissCauses?: string[] } | null };
+    expect(session.promptCache?.lastMissCauses).toHaveLength(20);
+    expect(session.promptCache?.lastMissCauses?.[0]).toBe('cause_0');
+    expect(session.promptCache?.lastMissCauses?.[19]).toBe('cause_19');
+  });
+
   it('rejects a malformed body (missing sessionId) with 400', async () => {
     const res = await post({ data: REAL });
     expect(res.statusCode).toBe(400);
