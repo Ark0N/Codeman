@@ -1,0 +1,30 @@
+› Run: touch second.txt (needs app…
+  access outside the read only
+  sandbox. I’ll request approval to
+  run that exact command.
+
+• Running touch second.txt
+
+
+  Would you like to run the
+  following command?
+
+  Environment: local
+
+  Reason: May I run `touch
+  second.txt` outside the read
+  only sandbox to create the
+  requested file?
+
+  $ touch second.txt
+
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for
+     commands that start with `touch
+     second.txt` (p)
+  3. No, and tell Codex what to do
+     differently (esc)
+
+  Press enter to confirm or esc to
+  cancel

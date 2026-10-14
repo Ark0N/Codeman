@@ -89,7 +89,11 @@ import {
   isPaneQuiet,
   watchingLabel,
   isAwaitingWorkers,
+  isBlockedScreen,
   WATCHING_TAIL_LINES,
+  BLOCKED_TAIL_LINES,
+  BLOCKED_RECHECK_MS,
+  BLOCKED_CLEAR_READS,
   IDLE_RECHECK_MS,
   PANE_PROBE_MIN_INTERVAL_MS,
   PANE_PROBE_RECHECK_MS,
@@ -596,6 +600,21 @@ export class Session extends EventEmitter {
   private _watchingWindow = WATCHING_TAIL_LINES;
   /** Lazily compiled `capabilities.workDetect.awaitingLine`. See _awaitingLinePattern(). */
   private _awaitingLineRe: RegExp | null | undefined = undefined;
+  /** Lazily compiled `capabilities.workDetect.blockedLine`. See _blockedLinePattern(). */
+  private _blockedLineRe: RegExp | null | undefined = undefined;
+  /** Resolved with the pattern above: how many rows at the foot of the screen it sees. */
+  private _blockedWindow = BLOCKED_TAIL_LINES;
+  /**
+   * The pane is showing a dialog the CLI blocks on, read off the screen with
+   * `capabilities.workDetect.blockedLine` (codex: an approval, a question, the trust
+   * prompt). Live state, not persisted: a restarted server re-reads it from the attach
+   * repaint the same way the watching label comes back. See `_noteBlockedReading()`.
+   */
+  private _screenBlocked = false;
+  /** Consecutive readable captures without the dialog (cleared at BLOCKED_CLEAR_READS). */
+  private _blockedGoneReads = 0;
+  /** Re-reads the screen while a dialog is up, so the alert clears with it. */
+  private _blockedRecheckTimer: NodeJS.Timeout | null = null;
   /**
    * The newest model the running CLI reported for itself (its statusline, or its own
    * footer read off the probe's capture), or null when none has. Feeds `displayModel`
@@ -1427,6 +1446,16 @@ export class Session extends EventEmitter {
    */
   get watching(): string | null {
     return this._watching;
+  }
+
+  /**
+   * True while the pane shows a dialog its CLI is blocked on, as read off the screen
+   * (`capabilities.workDetect.blockedLine`). Always false for a CLI that declares none,
+   * Claude included: its dialogs arrive as hook events instead. The `blocked` wait reads
+   * it so a caller that asks after the dialog appeared is answered at once.
+   */
+  get screenBlocked(): boolean {
+    return this._screenBlocked;
   }
 
   /**
@@ -3081,6 +3110,10 @@ export class Session extends EventEmitter {
         this._expensiveProcessTimer = null;
       }
       this._pendingCleanData = '';
+      // Nothing reads this pane any more, so a dialog on it can no longer be seen to
+      // close: drop the state (and its timer) while the listeners are still attached.
+      // A re-attach re-reads the screen and raises it again if the dialog is still up.
+      this._clearScreenBlocked();
       // If using mux, mark the session as detached but don't kill it
       if (this._muxSession && this._mux) {
         this._mux.setAttached(this.id, false);
@@ -3265,10 +3298,19 @@ export class Session extends EventEmitter {
     if (now - this._lastPaneProbeAt < PANE_PROBE_MIN_INTERVAL_MS) return this._lastPaneProbeWorking;
     this._lastPaneProbeAt = now;
     const text = this._mux.capturePaneText?.(this._muxSession.muxName) ?? null;
+    // A dialog the CLI is blocked on is not work, whatever else is on screen: codex's
+    // question dialog carries `esc to interrupt` in its own key hints, which is codex's
+    // working line, so without this a session waiting on the user's answer read as busy.
+    // Decided from THIS capture, never from `_screenBlocked`, which lags a vanished dialog
+    // by design (see `_noteBlockedReading`) and would otherwise call a resumed turn idle.
+    const blockedOnScreen = text === null ? null : this._paneShowsBlocked(text);
+    this._noteBlockedReading(blockedOnScreen, text);
     // A turn that ended by handing off to workers the CLI waits for is work too: the
     // composer is up and the pane is quiet, but the next turn starts without the user.
     this._lastPaneProbeWorking =
-      text === null ? null : this._workingLinePattern().test(text) || this._paneAwaitsWorkers(text);
+      text === null
+        ? null
+        : !blockedOnScreen && (this._workingLinePattern().test(text) || this._paneAwaitsWorkers(text));
     this._readWatching(text);
     this._readScreenModel(text);
     return this._lastPaneProbeWorking;
@@ -3460,6 +3502,95 @@ export class Session extends EventEmitter {
     if (!this._awaitingLineRe) return false;
     const glyph = getCli(this.mode)?.capabilities.workDetect?.promptGlyph ?? '❯';
     return isAwaitingWorkers(paneText, this._awaitingLineRe, glyph);
+  }
+
+  /**
+   * The regex matching the dialog this CLI blocks on, or null for a CLI whose registry
+   * entry declares none (every CLI but codex today, Claude included: its dialogs arrive
+   * as hook events). Compiled once per session through `compileVersionRegex()`, the same
+   * guard the schema applies, so a pattern it refuses yields null rather than a throw.
+   */
+  private _blockedLinePattern(): RegExp | null {
+    if (this._blockedLineRe === undefined) {
+      const detect = getCli(this.mode)?.capabilities.workDetect;
+      this._blockedLineRe = detect?.blockedLine ? compileVersionRegex(detect.blockedLine) : null;
+      this._blockedWindow = detect?.blockedLines ?? BLOCKED_TAIL_LINES;
+    }
+    return this._blockedLineRe;
+  }
+
+  /** Whether this capture shows a dialog the CLI is blocked on. See `isBlockedScreen()`. */
+  private _paneShowsBlocked(paneText: string): boolean {
+    const pattern = this._blockedLinePattern();
+    return pattern ? isBlockedScreen(paneText, pattern, this._blockedWindow) : false;
+  }
+
+  /**
+   * Fold one screen reading into the blocked state, announcing each transition with
+   * `blockedChanged` (the web server turns it into the alert and the `blocked` signal).
+   *
+   * The two directions are deliberately unequal:
+   * - RAISE on one reading. A match needs the dialog's own footer at the foot of the
+   *   screen, which is only there when the dialog is fully drawn.
+   * - CLEAR on BLOCKED_CLEAR_READS readings in a row. A single capture can land inside a
+   *   full-frame repaint, and clearing on it would re-raise a moment later and send the
+   *   alert, push and webhook twice for one dialog.
+   * A capture that could not be read (`null`) is no evidence either way and changes
+   * nothing, so a tmux hiccup can neither raise nor drop an alert. That is the opposite
+   * of `_readWatching`, and for the same reason: each degrades toward the alert.
+   *
+   * While blocked, `_blockedRecheckTimer` keeps reading, since answering resumes the turn
+   * and a busy pane never reaches the settle path that raised it.
+   *
+   * @param frame the capture the reading came from; rides the raise as the alert's context
+   */
+  private _noteBlockedReading(onScreen: boolean | null, frame: string | null): void {
+    if (onScreen === null || !this._blockedLinePattern()) return;
+    if (onScreen) {
+      this._blockedGoneReads = 0;
+      if (!this._screenBlocked) {
+        this._screenBlocked = true;
+        this.emit('blockedChanged', true, frame);
+      }
+      this._armBlockedRecheck();
+      return;
+    }
+    if (!this._screenBlocked) return;
+    if (++this._blockedGoneReads < BLOCKED_CLEAR_READS) {
+      this._armBlockedRecheck();
+      return;
+    }
+    this._clearScreenBlocked();
+  }
+
+  /** (Re)arm the while-blocked screen read. One-shot and self-rearming, like the trust scan. */
+  private _armBlockedRecheck(): void {
+    if (this._blockedRecheckTimer) clearTimeout(this._blockedRecheckTimer);
+    this._blockedRecheckTimer = setTimeout(() => {
+      this._blockedRecheckTimer = null;
+      // No pane left to read (detached): nothing can change until a re-attach, whose
+      // `_resetBuffers()` clears the state and whose repaint reads the screen afresh.
+      if (this._isStopped || !this._screenBlocked || !this._mux?.capturePaneText || !this._muxSession) return;
+      const text = this._mux.capturePaneText(this._muxSession.muxName) ?? null;
+      // Unreadable this time: keep the state, keep looking (_noteBlockedReading ignores a null).
+      if (text === null) {
+        this._armBlockedRecheck();
+        return;
+      }
+      this._noteBlockedReading(this._paneShowsBlocked(text), text);
+    }, BLOCKED_RECHECK_MS);
+  }
+
+  /** Drop the blocked state (and its timer), announcing it when it was set. */
+  private _clearScreenBlocked(): void {
+    this._blockedGoneReads = 0;
+    if (this._blockedRecheckTimer) {
+      clearTimeout(this._blockedRecheckTimer);
+      this._blockedRecheckTimer = null;
+    }
+    if (!this._screenBlocked) return;
+    this._screenBlocked = false;
+    this.emit('blockedChanged', false, null);
   }
 
   /**
@@ -4004,6 +4135,9 @@ export class Session extends EventEmitter {
     // into a program that never enabled tracking.
     this._cliMouseModes.clear();
     this._syncCliMouseTracking();
+    // Nor does it start inside a dialog. Announced, so a pending alert for the old
+    // pane's dialog is resolved rather than left behind it.
+    this._clearScreenBlocked();
     this._markActivity(true);
   }
 
@@ -4015,6 +4149,11 @@ export class Session extends EventEmitter {
     if (this._trustDialogTimer) {
       clearTimeout(this._trustDialogTimer);
       this._trustDialogTimer = null;
+    }
+    // Clear the while-blocked screen read (the state itself is left to its owner)
+    if (this._blockedRecheckTimer) {
+      clearTimeout(this._blockedRecheckTimer);
+      this._blockedRecheckTimer = null;
     }
 
     // Clear activity timeout to prevent memory leak

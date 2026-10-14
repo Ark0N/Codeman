@@ -1,0 +1,23 @@
+╰─────────────────────────────────────────────────╯
+
+
+  >_ OpenAI Codex (v0.162.0)
+     /tmp/codex-scratch/repo
+
+• Model changed to gpt-6-luna medium for Plan mode.
+
+
+› I want a file named animal.txt. Use your question tool to
+  ask me which animal to write in it, with 3 options. Ask
+  only that one question.
+
+
+■ Conversation interrupted - use /feedback if something went
+wrong
+
+
+› › 1. Yes, proceed (y)   Press enter to confirm or esc to
+  cancel   tab to add notes | enter to submit answer | esc
+  to interrupt
+
+  GPT-6-Luna medium · /tmp/codex-scratch/repo Plan mode
