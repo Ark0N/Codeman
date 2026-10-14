@@ -212,6 +212,20 @@ describe('POST /api/status-telemetry: the session model (displayModel)', () => {
     expect(session.toState().displayModel).toBeUndefined();
   });
 
+  it('stores no prompt-cache from a CLI with no statusline exporter, but still broadcasts plan usage', async () => {
+    const session = realSession('codex', 'codex-cache');
+    const res = await post({
+      sessionId: 'codex-cache',
+      data: { ...REAL, prompt_cache: { warm: true, ttl: '1h', expires_at: Math.floor(Date.now() / 1000) + 3600 } },
+    });
+    expect(res.statusCode).toBe(200);
+    // Prompt cache is gated like the model report; the rest of the post still lands.
+    expect(session.toState().promptCache).toBeUndefined();
+    const events = h.ctx.broadcast.mock.calls.map(([name]) => name);
+    expect(events).not.toContain(SessionPromptCache);
+    expect(events).toContain(SessionStatusTelemetry);
+  });
+
   it('broadcasts the STORED prompt-cache object, so a compaction stamp reaches the live readout', async () => {
     const session = realSession('claude', 'claude-compact');
     const expiresAtS = Math.floor(Date.now() / 1000) + 3600;
