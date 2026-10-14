@@ -769,6 +769,8 @@ type AttachmentHistoryRouteItem = Omit<SessionAttachmentHistoryItem, 'externalPa
 };
 
 const FILESYSTEM_PICKER_ENTRY_LIMIT = 500;
+/** Entries one lazy File Viewer directory listing returns (`?lazy=1`). */
+const LAZY_FILE_TREE_ENTRY_LIMIT = 2000;
 const FILESYSTEM_TEXT_PREVIEW_LIMIT = 2 * 1024 * 1024;
 const FILESYSTEM_BINARY_PREVIEW_LIMIT = 50 * 1024 * 1024;
 const FILESYSTEM_IMAGE_PREVIEW_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']);
@@ -1722,10 +1724,113 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   });
 
   // File tree listing
-  app.get('/api/sessions/:id/files', async (req) => {
+  app.get('/api/sessions/:id/files', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { depth, showHidden, q } = req.query as { depth?: string; showHidden?: string; q?: string };
+    const {
+      depth,
+      showHidden,
+      q,
+      lazy,
+      path: lazyPath,
+    } = req.query as {
+      depth?: string;
+      showHidden?: string;
+      q?: string;
+      lazy?: string;
+      path?: string;
+    };
     const session = findSessionOrFail(ctx, id, req);
+
+    // ===== Lazy mode =====
+    // `?lazy=1[&path=<workspace-relative dir>]` lists ONE directory, the way the
+    // path picker browses: on a slow mount (WSL /mnt/<drive> is 9P, a stat per
+    // entry) the depth-5 walk below took 14 s for a 5,000-node workspace, one
+    // folder takes well under a second. Directories come back WITHOUT `children`
+    // (= not loaded yet; the client fetches them on expand), every entry carries
+    // `mtimeMs` for date sorting, and the generated-directory excludes do not
+    // apply: nothing below is walked, so node_modules costs one row, not a scan.
+    if (lazy === '1' || lazy === 'true') {
+      const includeHidden = showHidden === 'true';
+      const relativeDir = typeof lazyPath === 'string' ? lazyPath : '';
+      const resolved = validateSessionFilePath(session.workingDir, relativeDir || '.');
+      if (!resolved) {
+        reply.code(404);
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Folder not found in this workspace');
+      }
+      if (!includeHidden && relativeDir.split(/[\\/]/).some((segment) => segment.startsWith('.'))) {
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Hidden folders are not shown');
+      }
+      let entries;
+      try {
+        entries = await fs.readdir(resolved.resolvedPath, { withFileTypes: true });
+      } catch {
+        reply.code(400);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'This folder cannot be read');
+      }
+      const base = relativeDir.replace(/[\\/]+$/, '');
+      const nodes: Array<{
+        name: string;
+        path: string;
+        type: 'file' | 'directory';
+        size?: number;
+        extension?: string;
+        mtimeMs?: number;
+      }> = [];
+      let files = 0;
+      let directories = 0;
+      let lazyTruncated = false;
+      for (const entry of entries) {
+        if (!includeHidden && entry.name.startsWith('.')) continue;
+        if (nodes.length >= LAZY_FILE_TREE_ENTRY_LIMIT) {
+          lazyTruncated = true;
+          break;
+        }
+        const fullPath = join(resolved.resolvedPath, entry.name);
+        let isDirectory = entry.isDirectory();
+        let stat: import('node:fs').Stats | undefined;
+        try {
+          // stat (not lstat): a symlinked folder lists as a folder, and its
+          // children are re-confined to the workspace when it is expanded.
+          stat = await fs.stat(fullPath);
+          isDirectory = stat.isDirectory();
+        } catch {
+          if (entry.isSymbolicLink()) continue; // dangling link
+        }
+        if (!isDirectory && !entry.isFile() && !stat?.isFile()) continue;
+        const path = base ? `${base}/${entry.name}` : entry.name;
+        if (isDirectory) {
+          directories++;
+          nodes.push({ name: entry.name, path, type: 'directory', mtimeMs: stat?.mtimeMs });
+        } else {
+          files++;
+          nodes.push({
+            name: entry.name,
+            path,
+            type: 'file',
+            size: stat?.size,
+            extension: entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined,
+            mtimeMs: stat?.mtimeMs,
+          });
+        }
+      }
+      nodes.sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      return {
+        success: true,
+        data: {
+          root: session.workingDir,
+          path: base,
+          lazy: true,
+          tree: nodes,
+          totalFiles: files,
+          totalDirectories: directories,
+          truncated: lazyTruncated,
+        },
+      };
+    }
 
     const maxDepth = Math.min(parseInt(depth || '5', 10), 10);
     const includeHidden = showHidden === 'true';

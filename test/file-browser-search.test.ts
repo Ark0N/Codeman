@@ -786,7 +786,7 @@ describe('File Viewer server search', () => {
       expect(elements.fileBrowserTree.innerHTML).toContain('Loading files');
       expect(elements.fileBrowserTree.innerHTML).not.toContain('old-result.ts');
       expect(elements.fileBrowserTree.innerHTML).not.toContain('old-preference.ts');
-      expect(pending[1].url).toBe('/api/sessions/session%2FA/files?depth=5&showHidden=true');
+      expect(pending[1].url).toBe('/api/sessions/session%2FA/files?lazy=1&showHidden=true');
 
       pending[1].reply.resolve(response(successfulTree('new-preference.ts')));
       await toggle;
@@ -877,8 +877,8 @@ describe('File Viewer server search', () => {
       const firstToggle = app.toggleFileBrowserHidden();
       const secondToggle = app.toggleFileBrowserHidden();
       expect(pending.slice(1).map(({ url }) => url)).toEqual([
-        '/api/sessions/session%2FA/files?depth=5&showHidden=true',
-        '/api/sessions/session%2FA/files?depth=5&showHidden=false',
+        '/api/sessions/session%2FA/files?lazy=1&showHidden=true',
+        '/api/sessions/session%2FA/files?lazy=1&showHidden=false',
       ]);
 
       pending[1].reply.resolve(response(successfulTree('stale-hidden.ts')));
@@ -1674,7 +1674,7 @@ describe('File Viewer server search', () => {
       expect(immediateState.activeSessionId).toBe('session/B');
       expect(immediateState.ownerSessionId).toBe('session/B');
       expect(immediateState.resizeCalls).toBe(1);
-      expect(immediateState.fileUrls).toEqual(['/api/sessions/session%2FB/files?depth=5&showHidden=false']);
+      expect(immediateState.fileUrls).toEqual(['/api/sessions/session%2FB/files?lazy=1&showHidden=false']);
 
       expect(filePending).toHaveLength(1);
       expect(app._fileBrowserState.ownerSessionId).toBe('session/B');
@@ -1755,7 +1755,7 @@ describe('File Viewer server search', () => {
       expect(elements.fileBrowserExpandBtn.innerHTML).toBe('\u229E');
       expect(elements.fileBrowserTree.querySelectorAll('.file-tree-item')).toHaveLength(0);
       expect(elements.fileBrowserTree.innerHTML).toContain('Loading files');
-      expect(pending.map(({ url }) => url)).toEqual(['/api/sessions/session%2FB/files?depth=5&showHidden=false']);
+      expect(pending.map(({ url }) => url)).toEqual(['/api/sessions/session%2FB/files?lazy=1&showHidden=false']);
 
       await vi.advanceTimersByTimeAsync(250);
       expect(pending).toHaveLength(1);
@@ -1797,7 +1797,7 @@ describe('File Viewer server search', () => {
       await vi.advanceTimersByTimeAsync(250);
 
       expect(pending.map(({ url }) => url)).toEqual([
-        '/api/sessions/session%2FB/files?depth=5&showHidden=false',
+        '/api/sessions/session%2FB/files?lazy=1&showHidden=false',
         '/api/sessions/session%2FB/files?depth=5&showHidden=false&q=during%20load',
       ]);
       expect(pending.every(({ url }) => !url.includes('session%2FA'))).toBe(true);
@@ -1815,9 +1815,9 @@ describe('File Viewer server search', () => {
 
       expect(secondA).not.toBe(firstA);
       expect(pending.map(({ url }) => url)).toEqual([
-        '/api/sessions/session%2FA/files?depth=5&showHidden=false',
-        '/api/sessions/session%2FB/files?depth=5&showHidden=false',
-        '/api/sessions/session%2FA/files?depth=5&showHidden=false',
+        '/api/sessions/session%2FA/files?lazy=1&showHidden=false',
+        '/api/sessions/session%2FB/files?lazy=1&showHidden=false',
+        '/api/sessions/session%2FA/files?lazy=1&showHidden=false',
       ]);
 
       pending[0].reply.resolve(response(successfulTree('stale-A.ts')));
@@ -1976,5 +1976,160 @@ describe('File Viewer server search', () => {
       await replacement;
       expect(elements.fileBrowserTree.innerHTML).toContain('replacement.ts');
     });
+  });
+});
+
+describe('File Viewer lazy tree, sort and local filter', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const lazyTree = (tree: unknown[], overrides: Record<string, unknown> = {}) => ({
+    success: true,
+    data: {
+      lazy: true,
+      tree,
+      totalFiles: tree.filter((n: any) => n.type === 'file').length,
+      totalDirectories: tree.filter((n: any) => n.type === 'directory').length,
+      truncated: false,
+      ...overrides,
+    },
+  });
+  const dir = (path: string, mtimeMs?: number) => ({ name: path.split('/').pop(), path, type: 'directory', mtimeMs });
+  const file = (path: string, mtimeMs?: number) => ({
+    name: path.split('/').pop(),
+    path,
+    type: 'file',
+    size: 1,
+    extension: 'ts',
+    mtimeMs,
+  });
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+  async function loadedRoot(tree: unknown[]) {
+    const harness = loadPanel();
+    const load = harness.app.loadFileBrowser('session/A');
+    expect(harness.pending[0].url).toBe('/api/sessions/session%2FA/files?lazy=1&showHidden=false');
+    harness.pending[0].reply.resolve(response(lazyTree(tree)));
+    await load;
+    return harness;
+  }
+
+  it('loads a folder only when it is expanded, once, with a loading row meanwhile', async () => {
+    const { app, elements, pending } = await loadedRoot([dir('src'), file('README.md')]);
+    expect(elements.fileBrowserTree.innerHTML).toContain('README.md');
+    expect(pending).toHaveLength(1);
+
+    app.toggleFileBrowserFolder('src');
+    expect(pending).toHaveLength(2);
+    expect(pending[1].url).toBe('/api/sessions/session%2FA/files?lazy=1&showHidden=false&path=src');
+    expect(elements.fileBrowserTree.innerHTML).toContain('Loading...');
+
+    pending[1].reply.resolve(response(lazyTree([file('src/app.ts')])));
+    await flush();
+    expect(elements.fileBrowserTree.innerHTML).toContain('app.ts');
+    expect(elements.fileBrowserTree.innerHTML).not.toContain('Loading...');
+    expect(elements.fileBrowserStatus.textContent).toContain('2 files, 1 dirs loaded');
+
+    app.toggleFileBrowserFolder('src');
+    app.toggleFileBrowserFolder('src');
+    expect(pending).toHaveLength(2);
+  });
+
+  it('drops a folder listing that lands after a refresh', async () => {
+    const { app, elements, pending } = await loadedRoot([dir('src')]);
+    app.toggleFileBrowserFolder('src');
+    app.refreshFileBrowser();
+    pending[1].reply.resolve(response(lazyTree([file('src/stale.ts')])));
+    await flush();
+    expect(elements.fileBrowserTree.innerHTML).not.toContain('stale.ts');
+  });
+
+  it('shows a failed folder load and retries after collapse and expand', async () => {
+    const { app, elements, pending } = await loadedRoot([dir('src')]);
+    app.toggleFileBrowserFolder('src');
+    pending[1].reply.resolve(response({ success: false, error: 'This folder cannot be read' }, false));
+    await flush();
+    expect(elements.fileBrowserTree.innerHTML).toContain('Failed to load: This folder cannot be read');
+    app.toggleFileBrowserFolder('src');
+    app.toggleFileBrowserFolder('src');
+    expect(pending).toHaveLength(3);
+  });
+
+  it('sorts by date with folders first, and remembers the choice', async () => {
+    const { app, elements } = await loadedRoot([
+      file('old.ts', 100),
+      file('new.ts', 300),
+      dir('zeta', 50),
+      file('undated.ts'),
+      file('mid.ts', 200),
+    ]);
+    app.setFileBrowserSort('mtime-desc');
+    const html = elements.fileBrowserTree.innerHTML;
+    const order = ['zeta', 'new.ts', 'mid.ts', 'old.ts', 'undated.ts'].map((name) => html.indexOf(`>${name}<`));
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(app._fileBrowserSort).toBe('mtime-desc');
+
+    app.setFileBrowserSort('name-desc');
+    const byName = elements.fileBrowserTree.innerHTML;
+    expect(byName.indexOf('>undated.ts<')).toBeLessThan(byName.indexOf('>new.ts<'));
+    expect(byName.indexOf('>zeta<')).toBeLessThan(byName.indexOf('>undated.ts<'));
+  });
+
+  it('filters only loaded entries locally, with no request, and Enter runs the workspace search', async () => {
+    const { app, elements, pending } = await loadedRoot([dir('src'), dir('docs'), file('widget-root.ts')]);
+    app.toggleFileBrowserFolder('src');
+    pending[1].reply.resolve(response(lazyTree([file('src/widget.ts'), file('src/other.ts')])));
+    await flush();
+    app.toggleFileBrowserFolder('src');
+
+    elements.fileBrowserSearch.value = 'wid*ts';
+    app.filterFileBrowserLoaded('wid*ts');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(pending).toHaveLength(2);
+    const html = elements.fileBrowserTree.innerHTML;
+    expect(html).toContain('widget.ts');
+    expect(html).toContain('widget-root.ts');
+    expect(html).not.toContain('other.ts');
+    expect(html).not.toContain('>docs<');
+    expect(elements.fileBrowserStatus.textContent).toBe(
+      '2 matches in loaded folders · Enter searches the whole workspace'
+    );
+
+    app.onFileBrowserSearchKeydown({ key: 'Enter', target: { value: 'widget' }, preventDefault: vi.fn() });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(pending[2].url).toBe('/api/sessions/session%2FA/files?depth=5&showHidden=false&q=widget');
+
+    app.filterFileBrowserLoaded('');
+    expect(app._fileBrowserState.view).toBe('normal');
+    expect(elements.fileBrowserTree.innerHTML).toContain('>docs<');
+  });
+
+  it('opens a server-search folder the lazy tree has not loaded by loading each ancestor', async () => {
+    const { app, elements, pending } = await loadedRoot([dir('a')]);
+    elements.fileBrowserSearch.value = 'deep';
+    app.filterFileBrowser('deep');
+    await vi.advanceTimersByTimeAsync(250);
+    pending[1].reply.resolve(
+      response(successfulData({ matches: [{ name: 'deep', path: 'a/b/deep', type: 'directory' }], matchCount: 1 }))
+    );
+    await flush();
+    elements.fileBrowserTree.querySelectorAll('.file-tree-item')[0].click();
+    await flush();
+    expect(pending[2].url).toContain('&path=a');
+    pending[2].reply.resolve(response(lazyTree([dir('a/b')])));
+    await flush();
+    expect(pending[3].url).toContain('&path=a%2Fb');
+    pending[3].reply.resolve(response(lazyTree([dir('a/b/deep')])));
+    await flush();
+    await flush();
+    expect(pending[4].url).toContain('&path=a%2Fb%2Fdeep');
+    expect(app.fileBrowserExpandedDirs.has('a/b/deep')).toBe(true);
+    expect(app._fileBrowserState.view).toBe('normal');
   });
 });

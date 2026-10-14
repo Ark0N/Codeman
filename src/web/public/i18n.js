@@ -59,6 +59,15 @@
     '\u2B06 Upload': '\u2B06 上传',
     'Insert Path': '插入路径',
     'Quick browser: browse any allowed folder, upload and download files': '快速浏览：浏览允许的文件夹，上传和下载文件',
+    'Filter loaded · Enter: whole workspace': '筛选已加载 · 回车搜索整个工作区',
+    'Typing filters the folders already loaded; press Enter to search the whole workspace':
+      '输入时只筛选已加载的文件夹；按回车搜索整个工作区',
+    'Sort files': '文件排序',
+    'Name A→Z': '名称 A→Z',
+    'Name Z→A': '名称 Z→A',
+    'Newest first': '最新优先',
+    'Oldest first': '最旧优先',
+    'No matches in loaded folders': '已加载的文件夹中没有匹配项',
     'Skip to terminal': '跳转到终端',
     'Go to main page': '返回主页',
     'Session tabs': '会话标签页',
@@ -1256,6 +1265,12 @@
       [/^Upload failed: (.+)$/, (_m, error) => `上传失败：${error}`],
       [/^Uploaded (\d+) files$/, (_m, n) => `已上传 ${n} 个文件`],
       [/^Uploaded (.+)$/, (_m, path) => `已上传 ${path}`],
+      [
+        /^(\d+) match(?:es)? in loaded folders · Enter searches the whole workspace$/,
+        (_m, n) => `已加载文件夹中 ${n} 个匹配 · 回车搜索整个工作区`,
+      ],
+      [/^(\d+) files, (\d+) dirs loaded(.*)$/, (_m, f, d, rest) => `已加载 ${f} 个文件、${d} 个文件夹${rest}`],
+      [/^Failed to load: (.+)$/, (_m, error) => `加载失败：${error}`],
       [/^Failed to (.+)$/, (_m, action) => `操作失败：${action}`],
       [/^Will create: (.+)$/, (_m, path) => `将创建：${path}`],
       // The spreadsheet preview: an HTTP status, and the notice bar's counts.

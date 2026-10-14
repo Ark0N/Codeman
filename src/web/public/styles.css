@@ -11360,12 +11360,16 @@ kbd {
 }
 
 .file-browser-search {
+  display: flex;
+  gap: 0.3rem;
   padding: 0.4rem;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
 .file-browser-search input {
+  flex: 1;
+  min-width: 0;
   width: 100%;
   padding: 0.3rem 0.5rem;
   font-size: 0.75rem;
@@ -11378,6 +11382,25 @@ kbd {
 .file-browser-search input:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+.file-browser-sort {
+  flex: 0 0 auto;
+  max-width: 7.5rem;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.7rem;
+  color: var(--text);
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+/* Lazy tree: the row under an expanded folder while its listing loads (or failed). */
+.file-tree-placeholder {
+  padding: 0.2rem 0.5rem;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  font-style: italic;
 }
 
 .file-browser-body {

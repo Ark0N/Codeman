@@ -588,7 +588,13 @@
         </div>
       </div>
       <div class="file-browser-search">
-        <input type="text" id="fileBrowserSearch" placeholder="Filter files..." oninput="app.filterFileBrowser(this.value)">
+        <input type="text" id="fileBrowserSearch" placeholder="Filter loaded · Enter: whole workspace" title="Typing filters the folders already loaded; press Enter to search the whole workspace" oninput="app.filterFileBrowserLoaded(this.value)" onkeydown="app.onFileBrowserSearchKeydown(event)" enterkeyhint="search">
+        <select id="fileBrowserSort" class="file-browser-sort" aria-label="Sort files" onchange="app.setFileBrowserSort(this.value)">
+          <option value="name-asc">Name A→Z</option>
+          <option value="name-desc">Name Z→A</option>
+          <option value="mtime-desc">Newest first</option>
+          <option value="mtime-asc">Oldest first</option>
+        </select>
       </div>
       <div class="file-browser-body" id="fileBrowserTree">
         <div class="file-browser-empty">Select a session to view files</div>

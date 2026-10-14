@@ -9,6 +9,14 @@ until you get home.
 A panel that browses the active session's working directory. Its header button is on by
 default; if it is missing, re-enable it in **App Settings → Header & Panels**.
 
+The tree loads one folder at a time: opening the panel lists the workspace's top level, and
+expanding a folder fetches just that folder, so a large workspace on a slow mount (WSL
+`/mnt/c`, a network share) opens in well under a second instead of waiting for a walk of
+the whole tree. The sort menu beside the search box orders each folder by name or by
+modified time (newest first finds the file an agent just wrote), folders always first, and
+is remembered per device. Typing in the search box filters what is already loaded, in your
+browser, with no request; press **Enter** to search the whole workspace on the server.
+
 It renders what it can:
 
 | Kind                     | Behaviour                                                                 |
