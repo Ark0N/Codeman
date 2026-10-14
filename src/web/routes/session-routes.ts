@@ -685,7 +685,9 @@ function currentSignalFor(session: { pid: number | null; status: SessionStatus }
  * history, but this one is a level the server is still looking at, so a caller that
  * asks after the dialog appeared is answered at once instead of waiting out its timeout
  * for an edge that already passed. Only when `blocked` was asked for: such a pane is also
- * `idle`, and a caller that asked for `idle` alone must keep getting `idle`.
+ * `idle`, and a caller that asked for `idle` alone must keep getting `idle`. Used by
+ * `GET .../wait` and by a DUPLICATE send-and-wait, every place a wait answers from the
+ * session's current state.
  */
 function currentSignalForWait(
   session: { pid: number | null; status: SessionStatus; screenBlocked?: boolean },
@@ -2017,7 +2019,9 @@ export function registerSessionRoutes(
           // A DUPLICATE has no new turn coming, so it answers from the current state
           // instead of blocking for a transition that already happened.
           requireTransition: !duplicate,
-          currentSignal: duplicate ? currentSignalFor(session, workerDead) : undefined,
+          // The `...ForWait` variant, as on GET .../wait: a screen-read dialog the first
+          // delivery raised is a level, and a retry asking for `blocked` must find it.
+          currentSignal: duplicate ? currentSignalForWait(session, workerDead, until) : undefined,
         });
       } catch (err) {
         if (err instanceof WaitCapacityError) {
