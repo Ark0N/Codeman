@@ -59,7 +59,6 @@
     '\u2B06 Upload': '\u2B06 上传',
     'Insert Path': '插入路径',
     'Quick browser: browse any allowed folder, upload and download files': '快速浏览：浏览允许的文件夹，上传和下载文件',
-    'Select a session first': '请先选择一个会话',
     'Skip to terminal': '跳转到终端',
     'Go to main page': '返回主页',
     'Session tabs': '会话标签页',
