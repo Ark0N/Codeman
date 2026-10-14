@@ -352,6 +352,21 @@ describe('phone toolbar Attach button', () => {
     expect(kind('clip.ogv', 'image/jpeg')).toBe('image'); // the MIME type wins when present
   });
 
+  it('counts a video MIME only for the containers the server admits on ?kind=video', () => {
+    const { app, window } = loadToolbar();
+    const kind = (type: string, name = 'clip') => app._promptAttachKind(new window.File(['x'], name, { type }));
+    // The five the server's ?kind=video branch accepts (session-routes.ts).
+    for (const type of ['video/mp4', 'video/quicktime', 'video/x-m4v', 'video/webm', 'video/ogg']) {
+      expect(kind(type)).toBe('video');
+    }
+    // A video MIME outside that set is refused client-side (no full upload then a
+    // 400) when the name's extension is not one the server admits either.
+    expect(kind('video/3gpp', 'clip.3gp')).toBeNull();
+    expect(kind('video/x-matroska', 'clip.mkv')).toBeNull();
+    // An admitted extension still rescues an odd MIME, as the server's path does.
+    expect(kind('video/3gpp', 'clip.mp4')).toBe('video');
+  });
+
   it('flags the upload as a video by name as well as by MIME type', async () => {
     const { app, window, fetchMock } = loadToolbar();
     await app._uploadPasteImage('session-1', new window.File(['v'], 'clip.ogv', { type: '' }));

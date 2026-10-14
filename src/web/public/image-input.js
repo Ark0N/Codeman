@@ -269,12 +269,16 @@ Object.assign(CodemanApp.prototype, {
   /** What a pick or a paste may upload: 'image', or 'video' for the camera
    *  roll's clips (the server streams those to disk under their own cap), else
    *  null. The one filter behind Attach, drop, the Compose and paste-dialog
-   *  pickers and the clipboard handlers. The MIME type decides; some Android
-   *  file managers hand over a File with none, so the name's extension is the
-   *  fallback, mirroring the server's own allowlists. */
+   *  pickers and the clipboard handlers. The MIME type decides, but a video MIME
+   *  only for the containers the server admits; some Android file managers hand
+   *  over a File with none, so the name's extension is the fallback, mirroring
+   *  the server's own allowlists. */
   _promptAttachKind(file) {
     if (file.type.startsWith('image/')) return 'image';
-    if (file.type.startsWith('video/')) return 'video';
+    // A video MIME counts only for the five containers the server accepts on
+    // ?kind=video (its own set in session-routes.ts); a 3gp or mkv falls to the
+    // extension check below and is refused up front, not after a 1GB upload and a 400.
+    if (/^video\/(mp4|quicktime|x-m4v|webm|ogg)$/i.test(file.type)) return 'video';
     const ext = (file.name || '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] || '';
     if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif'].includes(ext)) return 'image';
     if (['mp4', 'webm', 'mov', 'm4v', 'ogv'].includes(ext)) return 'video';
