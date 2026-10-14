@@ -93,6 +93,7 @@ import {
   WATCHING_TAIL_LINES,
   BLOCKED_TAIL_LINES,
   BLOCKED_RECHECK_MS,
+  BLOCKED_QUIET_RECHECK_MS,
   BLOCKED_CLEAR_READS,
   IDLE_RECHECK_MS,
   PANE_PROBE_MIN_INTERVAL_MS,
@@ -613,6 +614,8 @@ export class Session extends EventEmitter {
   private _screenBlocked = false;
   /** Consecutive readable captures without the dialog (cleared at BLOCKED_CLEAR_READS). */
   private _blockedGoneReads = 0;
+  /** When the last reading that SAW the dialog was taken. See `_armBlockedRecheck()`. */
+  private _blockedSeenAt = 0;
   /** Re-reads the screen while a dialog is up, so the alert clears with it. */
   private _blockedRecheckTimer: NodeJS.Timeout | null = null;
   /**
@@ -3548,6 +3551,8 @@ export class Session extends EventEmitter {
     if (onScreen === null || !this._blockedLinePattern()) return;
     if (onScreen) {
       this._blockedGoneReads = 0;
+      // Stamped after the capture returned: output processed later is newer than it.
+      this._blockedSeenAt = Date.now();
       if (!this._screenBlocked) {
         this._screenBlocked = true;
         this.emit('blockedChanged', true, frame);
@@ -3571,6 +3576,20 @@ export class Session extends EventEmitter {
       // No pane left to read (detached): nothing can change until a re-attach, whose
       // `_resetBuffers()` clears the state and whose repaint reads the screen afresh.
       if (this._isStopped || !this._screenBlocked || !this._mux?.capturePaneText || !this._muxSession) return;
+      // A dialog leaves the screen only through a repaint, and tmux sends every repaint
+      // to this client as PTY output (`_markActivity`). So while the last reading saw
+      // the dialog and nothing has been drawn since, it is still up: skip the capture
+      // (synchronous, see BLOCKED_QUIET_RECHECK_MS) and look again next interval. Never
+      // once a reading has missed it: the confirming read must happen on a quiet pane
+      // too, or the clear would wait for output that may never come.
+      if (
+        this._blockedGoneReads === 0 &&
+        this._lastActivityAt < this._blockedSeenAt &&
+        Date.now() - this._blockedSeenAt < BLOCKED_QUIET_RECHECK_MS
+      ) {
+        this._armBlockedRecheck();
+        return;
+      }
       const text = this._mux.capturePaneText(this._muxSession.muxName) ?? null;
       // Unreadable this time: keep the state, keep looking (_noteBlockedReading ignores a null).
       if (text === null) {

@@ -25,7 +25,9 @@ import {
   BLOCKED_MAX_TAIL_LINES,
   BLOCKED_RECHECK_MS,
   BLOCKED_CLEAR_READS,
+  BLOCKED_QUIET_RECHECK_MS,
   IDLE_SILENCE_MS,
+  PANE_PROBE_MIN_INTERVAL_MS,
 } from '../src/session-activity.js';
 import type { SessionMode } from '../src/types.js';
 
@@ -195,11 +197,20 @@ function feed(session: Session, data: string): void {
   internals._detectInteractiveActivity(data);
 }
 
+/**
+ * What the pane shows, and how often the session has read it: every read is a synchronous
+ * `tmux capture-pane` on the live server.
+ */
+type FakeScreen = { text: string | null; captures?: number };
+
 /** A session whose mux answers captures from `screen.text` (null = unreadable). */
-function withFakePane(screen: { text: string | null }, mode: SessionMode = 'codex'): Session {
+function withFakePane(screen: FakeScreen, mode: SessionMode = 'codex'): Session {
   const mux = {
     isAvailable: () => true,
-    capturePaneText: () => screen.text,
+    capturePaneText: () => {
+      screen.captures = (screen.captures ?? 0) + 1;
+      return screen.text;
+    },
   } as unknown as NonNullable<ConstructorParameters<typeof Session>[0]>['mux'];
   return new Session({
     workingDir: '/tmp',
@@ -207,6 +218,16 @@ function withFakePane(screen: { text: string | null }, mode: SessionMode = 'code
     mux,
     muxSession: { muxName: 'codeman-test', sessionId: 'test', createdAt: Date.now() },
   } as ConstructorParameters<typeof Session>[0]);
+}
+
+/**
+ * The pane changes the only way a real one can: tmux redraws it to the attached client,
+ * which reaches the session as output. A cursor move and an erase, with no composer glyph
+ * in it, so it marks activity without arming the idle confirmation.
+ */
+function redraw(session: Session, screen: FakeScreen, text: string | null): void {
+  screen.text = text;
+  feed(session, '\x1b[2;1H\x1b[K');
 }
 
 /** Output, then quiet: the moment the idle confirmation reads the screen. */
@@ -269,7 +290,7 @@ describe('Session.screenBlocked', () => {
 
     // Answered: codex resumes the turn, and nothing settles while it runs. The timer is
     // what notices, and one read alone is not enough.
-    screen.text = fixture('working.txt');
+    redraw(session, screen, fixture('working.txt'));
     vi.advanceTimersByTime(BLOCKED_RECHECK_MS);
     expect(session.screenBlocked).toBe(true);
     vi.advanceTimersByTime(BLOCKED_RECHECK_MS * (BLOCKED_CLEAR_READS - 1));
@@ -291,9 +312,9 @@ describe('Session.screenBlocked', () => {
     const changes = recordChanges(session);
     settle(session);
 
-    screen.text = fixture('working.txt');
+    redraw(session, screen, fixture('working.txt'));
     vi.advanceTimersByTime(BLOCKED_RECHECK_MS);
-    screen.text = dialog;
+    redraw(session, screen, dialog);
     vi.advanceTimersByTime(BLOCKED_RECHECK_MS * 3);
     expect(session.screenBlocked).toBe(true);
     expect(changes).toHaveLength(1);
@@ -304,13 +325,57 @@ describe('Session.screenBlocked', () => {
     const screen = { text: fixture('exec-approval.txt') as string | null };
     const session = withFakePane(screen);
     settle(session);
-    screen.text = null;
+    // The pane moved, so the session looks, and tmux answers nothing it can read.
+    redraw(session, screen, null);
+    const before = screen.captures!;
     vi.advanceTimersByTime(BLOCKED_RECHECK_MS * 5);
+    expect(screen.captures! - before).toBeGreaterThanOrEqual(5);
     expect(session.screenBlocked).toBe(true);
 
     // ...and it is still watching: once the screen reads again without the dialog, it clears.
-    screen.text = fixture('after-approve.txt');
+    redraw(session, screen, fixture('after-approve.txt'));
     vi.advanceTimersByTime(BLOCKED_RECHECK_MS * BLOCKED_CLEAR_READS);
+    expect(session.screenBlocked).toBe(false);
+  });
+
+  it('does not re-read a quiet pane every interval while a dialog sits unanswered', () => {
+    // Each read is a synchronous `tmux capture-pane` (about 8 ms of blocked event loop,
+    // measured 2026-10-14), and a dialog can sit unanswered overnight. It leaves the
+    // screen only through a repaint, which reaches the session as output, so a pane that
+    // drew nothing since the last reading that saw the dialog is still showing it.
+    vi.useFakeTimers();
+    const screen: FakeScreen = { text: fixture('exec-approval.txt') };
+    const session = withFakePane(screen);
+    settle(session);
+    expect(session.screenBlocked).toBe(true);
+
+    const quietMs = 10 * 60_000;
+    const before = screen.captures!;
+    vi.advanceTimersByTime(quietMs);
+    // The safety-net read only, never one per BLOCKED_RECHECK_MS (that would be 300 here).
+    expect(screen.captures! - before).toBeLessThanOrEqual(quietMs / BLOCKED_QUIET_RECHECK_MS);
+    expect(session.screenBlocked).toBe(true);
+
+    // The answer repaints the pane, and the clear comes as fast as before.
+    redraw(session, screen, fixture('after-approve.txt'));
+    vi.advanceTimersByTime(BLOCKED_RECHECK_MS * BLOCKED_CLEAR_READS);
+    expect(session.screenBlocked).toBe(false);
+  });
+
+  it('takes the confirming read even when no output follows the reading that missed the dialog', () => {
+    // tmux updates the pane before it sends this client the repaint, so a capture can see
+    // the dialog gone while the session has been sent nothing yet. Skipping a quiet pane
+    // is right only while the last reading SAW the dialog: once one reading missed it,
+    // waiting for output could leave the alert up for the whole safety-net interval.
+    vi.useFakeTimers();
+    const screen: FakeScreen = { text: fixture('exec-approval.txt') };
+    const session = withFakePane(screen);
+    settle(session);
+    vi.advanceTimersByTime(PANE_PROBE_MIN_INTERVAL_MS);
+    screen.text = fixture('after-approve.txt'); // and not one byte of output, from here on
+    (session as unknown as { _probePaneWorking(): boolean | null })._probePaneWorking();
+    expect(session.screenBlocked).toBe(true);
+    vi.advanceTimersByTime(BLOCKED_RECHECK_MS);
     expect(session.screenBlocked).toBe(false);
   });
 
@@ -320,7 +385,7 @@ describe('Session.screenBlocked', () => {
     const session = withFakePane(screen);
     const changes = recordChanges(session);
     settle(session);
-    screen.text = fixture('after-approve.txt');
+    redraw(session, screen, fixture('after-approve.txt'));
     vi.advanceTimersByTime(BLOCKED_RECHECK_MS * BLOCKED_CLEAR_READS);
     screen.text = fixture('edit-approval.txt');
     settle(session);

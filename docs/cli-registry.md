@@ -162,7 +162,11 @@ Three rules hold for any CLI that declares one:
 - The state raises on one reading (the session's settle probe, which reads the screen once
   the pane goes quiet, which is when a dialog has just been drawn), and while it is up a timer
   re-reads the screen every 2 s (`BLOCKED_RECHECK_MS`), because answering resumes the turn and
-  a busy pane would not reach the settle path again until the turn ended. It clears only after
+  a busy pane would not reach the settle path again until the turn ended. The read is skipped
+  while the pane has drawn nothing since the last reading that saw the dialog (a dialog leaves
+  only through a repaint), with a safety-net read every 30 s (`BLOCKED_QUIET_RECHECK_MS`), so a
+  dialog left unanswered for hours does not cost a synchronous `tmux capture-pane` every 2 s.
+  It clears only after
   two readable captures in a row without the dialog (`BLOCKED_CLEAR_READS`), so a capture
   taken mid-repaint cannot clear and re-raise it (a second alert, push and webhook for one
   dialog). An unreadable capture changes nothing in either direction. A blocked screen wins

@@ -180,6 +180,17 @@ export const BLOCKED_MAX_TAIL_LINES = 24;
 export const BLOCKED_RECHECK_MS = 2000;
 
 /**
+ * The longest a session showing a blocking dialog goes without re-reading a QUIET pane.
+ * A dialog leaves the screen only through a repaint, and every repaint reaches the
+ * session as PTY output, so while nothing has been drawn since the last reading that saw
+ * the dialog it is still up, and the BLOCKED_RECHECK_MS read is skipped. That read is a
+ * synchronous `tmux capture-pane`, about 8 ms of blocked event loop (measured 2026-10-14),
+ * and a dialog can sit unanswered overnight: one per 2 s per waiting session for hours.
+ * This bound is only the safety net under that reasoning, never the clear's latency.
+ */
+export const BLOCKED_QUIET_RECHECK_MS = 30_000;
+
+/**
  * Consecutive readable captures without the dialog before the blocked state clears. One
  * read can land mid-repaint (a resize redraws the whole frame), and a clear followed by a
  * re-raise would send the alert, the push and the webhook a second time for the same
