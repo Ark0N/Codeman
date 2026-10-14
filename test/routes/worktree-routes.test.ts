@@ -22,6 +22,7 @@ import { CASES_DIR } from '../../src/web/route-helpers.js';
 import { getDataDir } from '../../src/config/instance.js';
 import { userCasesDir } from '../../src/config/multiuser.js';
 import { Session } from '../../src/session.js';
+import { applyAgentSkill } from '../../src/hooks-config.js';
 import type { WorktreeGitRunner } from '../../src/git-worktrees.js';
 
 const ENV = {
@@ -180,6 +181,31 @@ describe('worktree routes: happy path', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toContain('contains modified or untracked files');
     expect(readFileSync(join(wtPath, 'wip.txt'), 'utf-8')).toBe('work');
+  });
+
+  it('removes a worktree its sessions got the agent skill in (agentSkillEnabled on)', async () => {
+    // The agent skill is injected into the folder a session runs in, so a worktree session gets
+    // an untracked `<skills dir>/codeman/`, which used to make `git worktree remove` refuse forever.
+    (h.ctx.getAgentSkillEnabled as unknown as { mockResolvedValue(v: boolean): void }).mockResolvedValue(true);
+    expect((await create({ name: 'skilled' })).statusCode).toBe(201);
+    const wtPath = join(repo, '.claude', 'worktrees', 'skilled');
+    const qs = await h.app.inject({
+      method: 'POST',
+      url: '/api/quick-start',
+      payload: { caseName: 'wtcase', mode: 'claude', worktree: 'skilled' },
+    });
+    expect(qs.statusCode).toBe(200);
+    h.ctx.sessions.delete(qs.json().data.sessionId);
+    expect(existsSync(join(wtPath, '.claude', 'skills', 'codeman', 'SKILL.md'))).toBe(true);
+    // The other skills directory (codex, gemini and the rest scan `.agents/skills`), written by
+    // the same function quick-start calls; those CLIs are not installed here.
+    await applyAgentSkill(wtPath, true, '.agents/skills');
+    expect(existsSync(join(wtPath, '.agents', 'skills', 'codeman', 'SKILL.md'))).toBe(true);
+    expect(git(wtPath, 'status', '--porcelain')).toBe('');
+    expect(git(repo, 'status', '--porcelain')).toBe('');
+    const res = await remove('skilled');
+    expect(res.statusCode).toBe(200);
+    expect(existsSync(wtPath)).toBe(false);
   });
 
   it('removes a worktree whose folder was deleted by hand and frees its name', async () => {

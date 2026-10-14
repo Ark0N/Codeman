@@ -29,6 +29,8 @@ import { readDockerCases } from '../../docker-hosts.js';
 import { readRemoteCases } from '../../remote-hosts.js';
 import { dataPath, getDataDir } from '../../config/instance.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
+import { listClis } from '../../config/cli-registry/registry.js';
+import { agentSkillDir } from '../../hooks-config.js';
 import { describeUnknownPath, probePathKind } from '../../utils/index.js';
 import {
   createCaseWorktree,
@@ -64,6 +66,19 @@ const SAFE_CASE_NAME = /^[a-zA-Z0-9_-]+$/;
 /** Host paths of every Docker case workspace: git never runs for a case at or inside one. */
 const defaultDockerWorkspaces = async (): Promise<string[]> =>
   (await readDockerCases(getDataDir()).catch(() => [])).map((c) => c.hostWorkspacePath).filter(Boolean);
+
+/**
+ * Every workspace skills folder a session of some registry CLI gets Codeman's agent skill in
+ * (`capabilities.agentSkillDir`), read from the registry at call time as data, never by CLI id.
+ */
+const registryAgentSkillDirs = (): string[] => {
+  const dirs = new Set<string>();
+  for (const cli of listClis()) {
+    const dir = agentSkillDir(cli.capabilities);
+    if (dir) dirs.add(dir);
+  }
+  return [...dirs];
+};
 
 /** A live session in a worktree, as the list reports it to a caller who may see it. */
 export interface WorktreeSessionRef {
@@ -239,7 +254,10 @@ export function registerWorktreeRoutes(
     if (nameError) return failWith(reply, ApiErrorCode.INVALID_INPUT, nameError);
     const resolved = await caseRepository(req, reply, name);
     if (!resolved.ok) return resolved.fail;
-    const created = await createCaseWorktree(resolved.repo, body, { git: deps.git });
+    const created = await createCaseWorktree(resolved.repo, body, {
+      git: deps.git,
+      agentSkillDirs: registryAgentSkillDirs(),
+    });
     if (!created.ok) return failFrom(reply, created);
     reply.code(201);
     return { success: true, data: { worktree: created.worktree } };

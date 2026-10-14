@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  agentSkillExcludeLine,
   createCaseWorktree,
   defaultWorktreeBranch,
   excludeAppendText,
@@ -166,6 +167,13 @@ describe('excludeAppendText', () => {
   });
   it('is a no-op when every line is present', () => {
     expect(excludeAppendText('/.claude/worktrees/\n', ['/.claude/worktrees/'])).toEqual({ text: '', added: [] });
+  });
+  it('agentSkillExcludeLine names the skill copy of a plain relative skills folder only', () => {
+    expect(agentSkillExcludeLine('.claude/skills')).toBe('/.claude/skills/codeman/');
+    expect(agentSkillExcludeLine('.agents/skills')).toBe('/.agents/skills/codeman/');
+    for (const bad of ['', '/abs', 'a/../b', 'a//b', '.', 'x/', 'a b', '*', '!neg']) {
+      expect(agentSkillExcludeLine(bad), bad).toBeNull();
+    }
   });
 });
 

@@ -18,7 +18,9 @@
  * already ignore it. `/.claude/settings.local.json` gets the same treatment: Codeman installs its
  * hooks there for every claude session, and an untracked copy in a worktree makes
  * `git worktree remove` refuse forever (Claude Code itself ignores that file through the global
- * excludes file, which is not guaranteed to be set up on a given machine).
+ * excludes file, which is not guaranteed to be set up on a given machine). The copy of Codeman's
+ * agent skill (`<skills dir>/codeman/`, injected while `agentSkillEnabled` is on) is excluded for
+ * the same reason, for every skills folder the registry names (`WorktreeOptions.agentSkillDirs`).
  *
  * Split like the other git modules: a PURE half (name and branch validation, `worktree list`
  * parsing, exclude text, the managed-path rule) unit-tested without git, and an IO half that
@@ -87,6 +89,19 @@ export const WORKTREES_DIR_SEGMENTS = ['.claude', 'worktrees'] as const;
 export const WORKTREES_EXCLUDE_LINE = '/.claude/worktrees/';
 /** The `info/exclude` line for the hooks file Codeman writes into every claude workspace. */
 export const SETTINGS_LOCAL_EXCLUDE_LINE = '/.claude/settings.local.json';
+
+/** A workspace-relative skills folder (`.claude/skills`, `.agents/skills`): plain segments only. */
+const SKILLS_DIR_RE = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+
+/**
+ * The `info/exclude` line for the copy of Codeman's agent skill in `skillsDir` of a workspace
+ * (`<skillsDir>/codeman/`, written into the folder a session runs in while `agentSkillEnabled`
+ * is on), or null for a folder that is not a plain relative path.
+ */
+export function agentSkillExcludeLine(skillsDir: string): string | null {
+  if (!SKILLS_DIR_RE.test(skillsDir) || skillsDir.split('/').some((s) => s === '.' || s === '..')) return null;
+  return `/${skillsDir}/codeman/`;
+}
 
 // ─── Pure: names ─────────────────────────────────────────────────────────────
 
@@ -301,7 +316,7 @@ export function excludeAppendText(existing: string, lines: readonly string[]): {
   if (added.length === 0) return { text: '', added };
   const lead = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
   return {
-    text: `${lead}# Added by Codeman: git worktrees and the per-workspace hooks file stay local\n${added.join('\n')}\n`,
+    text: `${lead}# Added by Codeman: git worktrees and the files Codeman writes into each workspace stay local\n${added.join('\n')}\n`,
     added,
   };
 }
@@ -450,6 +465,13 @@ export interface WorktreeOptions {
   dockerWorkspaces?: string[];
   /** Overrides `os.homedir()` for the unrelated-ancestor rule (tests). */
   home?: string;
+  /**
+   * Every workspace skills folder a session can get Codeman's agent skill in (the registry's
+   * `capabilities.agentSkillDir` values, passed in as data by the caller). A create excludes
+   * `<dir>/codeman/` for each, like the hooks file: a session in a worktree gets an untracked
+   * copy there, and `git worktree remove` would refuse that worktree forever.
+   */
+  agentSkillDirs?: readonly string[];
 }
 
 const realOr = async (p: string): Promise<string> => {
@@ -797,11 +819,17 @@ export async function createCaseWorktree(
       return fail('OPERATION_FAILED', `Could not inspect ${target}: ${(err as Error).message}`);
     }
 
+    const skillProbes: Array<{ line: string; probe: string }> = [];
+    for (const dir of new Set(opts.agentSkillDirs ?? [])) {
+      const line = agentSkillExcludeLine(dir);
+      if (line) skillProbes.push({ line, probe: `${dir}/codeman` });
+    }
     const excluded = await ensureExcluded(
       repo,
       [
         { line: WORKTREES_EXCLUDE_LINE, probe: `${WORKTREES_DIR_SEGMENTS.join('/')}/${req.name}` },
         { line: SETTINGS_LOCAL_EXCLUDE_LINE, probe: '.claude/settings.local.json' },
+        ...skillProbes,
       ],
       git
     );
