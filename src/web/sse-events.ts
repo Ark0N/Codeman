@@ -26,7 +26,8 @@
  * - **Tunnel** (7): started, stopped, progress, error, qrRotated, qrRegenerated, qrAuthUsed
  * - **Image / attachments** (2): image:detected, attachment:detected
  * - **Hooks** (10): idle_prompt, permission_prompt, elicitation_dialog, elicitation_complete, elicitation_response, stop, agent_working, teammate_idle, task_completed, prompt_submitted
- *   (agent_working is the odd one out: reported by the DeepSeek Harness status bridge, not by a Claude Code hook)
+ *   (agent_working is the odd one out: reported by the DeepSeek Harness status bridge, not by a Claude Code hook;
+ *   permission_prompt also arrives with `source: 'screen'` for a codex dialog read off its screen)
  * - **Approvals** (3): pending, updated, resolved (cross-session Approvals Inbox)
  * - **Custom Model Endpoint Profiles** (1): swapped-out (a session's model got evicted by another session on the same llama-swap endpoint)
  * - **Orchestrator** (12): stateChanged, planProgress, planReady, phase*, verification, task*, completed, error
@@ -365,7 +366,11 @@ export const AttachmentDetected = 'attachment:detected' as const;
 
 /** Claude Code hook: session idle, waiting for input. */
 export const HookIdlePrompt = 'hook:idle_prompt' as const;
-/** Claude Code hook: tool requesting permission. */
+/**
+ * Claude Code hook: tool requesting permission. Also raised by the server itself, with
+ * `source: 'screen'`, for a dialog read off a hook-less CLI's screen (codex; see
+ * `web/screen-blocked.ts`), which is cleared by `approval:resolved`.
+ */
 export const HookPermissionPrompt = 'hook:permission_prompt' as const;
 /** Claude Code hook: elicitation dialog (Claude asking a question). */
 export const HookElicitationDialog = 'hook:elicitation_dialog' as const;

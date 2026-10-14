@@ -13,6 +13,7 @@ import fastifyCookie from '@fastify/cookie';
 import { registerApprovalRoutes } from '../../src/web/routes/approval-routes.js';
 import { registerHookEventRoutes } from '../../src/web/routes/hook-event-routes.js';
 import { approvalInbox } from '../../src/web/approval-inbox.js';
+import { raiseScreenBlocked } from '../../src/web/screen-blocked.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { httpStatusForErrorCode, type ApiErrorCode } from '../../src/types.js';
 import { createMockRouteContext, type MockSession } from '../mocks/index.js';
@@ -455,7 +456,6 @@ describe('approval routes', () => {
   });
 });
 
-
 describe('approval routes: supervised-hook (DeepSeek) alert-only items', () => {
   let harness: RouteTestHarness;
   let session: MockSession;
@@ -502,6 +502,59 @@ describe('approval routes: supervised-hook (DeepSeek) alert-only items', () => {
     expect(session.writeBuffer).toEqual([]);
     // Item stays pending — it is an alert, not a failed answer.
     expect(await listApprovals(harness)).toHaveLength(1);
+  });
+});
+
+describe('approval routes: dialogs read off a hook-less screen (codex) are alert-only', () => {
+  let harness: RouteTestHarness;
+  let session: MockSession;
+  const noopDeps = {
+    broadcast: () => {},
+    broadcastSessionStateDebounced: () => {},
+    sendPushNotifications: () => {},
+  };
+
+  beforeEach(async () => {
+    harness = await createEnvelopeHarness();
+    session = harness.ctx.sessions.get(SESSION_ID)!;
+    session.mode = 'codex';
+  });
+
+  afterEach(async () => {
+    for (const item of approvalInbox.listPending()) {
+      approvalInbox.resolveForSession(item.sessionId, 'dismissed');
+    }
+    approvalInbox.onPending = approvalInbox.onUpdated = approvalInbox.onResolved = undefined;
+    await harness.app.close();
+  });
+
+  it('lists the item, and the page-load sweep keeps it', async () => {
+    raiseScreenBlocked(session as never, noopDeps, '› 1. Yes, proceed (y)\n  Press enter to confirm or esc to cancel');
+    const approvals = await listApprovals(harness);
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({ sessionId: SESSION_ID, kind: 'permission', answerInTerminal: true });
+  });
+
+  it('refuses an answer with the terminal-only error, not "cannot have pending approvals"', async () => {
+    // The hooks gate would say a codex session cannot have an item at all, which is false
+    // about the one the caller holds; the alert-only check runs first.
+    raiseScreenBlocked(session as never, noopDeps, null);
+    const [item] = await listApprovals(harness);
+    for (const payload of [{ action: 'approve' }, { action: 'deny' }, { action: 'option', option: 1 }]) {
+      const res = await harness.app.inject({ method: 'POST', url: `/api/approvals/${item.id}/answer`, payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/^Codex approvals must be answered in the terminal/);
+    }
+    expect(session.writeBuffer).toEqual([]);
+    expect(await listApprovals(harness)).toHaveLength(1);
+  });
+
+  it('can still be dismissed', async () => {
+    raiseScreenBlocked(session as never, noopDeps, null);
+    const [item] = await listApprovals(harness);
+    const res = await harness.app.inject({ method: 'POST', url: `/api/approvals/${item.id}/dismiss`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(await listApprovals(harness)).toHaveLength(0);
   });
 });
 

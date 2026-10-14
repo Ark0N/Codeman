@@ -29,6 +29,7 @@ import { getLifecycleLog } from '../session-lifecycle-log.js';
 import { fileStreamManager } from '../file-stream-manager.js';
 import { sessionWaits } from './session-wait-registry.js';
 import { approvalInbox } from './approval-inbox.js';
+import { raiseScreenBlocked, clearScreenBlocked } from './screen-blocked.js';
 import { composeAutoSessionName, deriveAutoSessionName } from '../session-auto-name.js';
 import { MAX_SESSION_NAME_LENGTH } from '../config/terminal-limits.js';
 
@@ -44,6 +45,7 @@ export interface SessionListenerRefs {
   working: () => void;
   idle: () => void;
   watchingChanged: () => void;
+  blockedChanged: (blocked: boolean, frame: string | null) => void;
   displayModelChanged: () => void;
   taskCreated: (task: BackgroundTask) => void;
   taskUpdated: (task: BackgroundTask) => void;
@@ -98,6 +100,8 @@ interface SessionListenerDeps {
  * Call `attachSessionListeners()` after to wire them to the session.
  */
 export function createSessionListeners(session: Session, deps: SessionListenerDeps): SessionListenerRefs {
+  /** The Approvals Inbox item the session's last screen-read dialog opened (see blockedChanged). */
+  let screenBlockedItemId: string | null = null;
   return {
     // ─── Terminal Output ─────────────────────────────────────
 
@@ -274,6 +278,21 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
      */
     watchingChanged: () => {
       deps.broadcastSessionStateDebounced(session.id);
+    },
+
+    /**
+     * The pane started or stopped showing a dialog its CLI is blocked on, read off the
+     * screen for a CLI with no hook to report it (`capabilities.workDetect.blockedLine`:
+     * codex). Raised as a Claude `permission_prompt` hook would be, alert-only, and
+     * cleared by resolving the item it opened; web/screen-blocked.ts has the rules.
+     */
+    blockedChanged: (blocked: boolean, frame: string | null) => {
+      if (blocked) {
+        screenBlockedItemId = raiseScreenBlocked(session, deps, frame);
+      } else {
+        clearScreenBlocked(session.id, screenBlockedItemId);
+        screenBlockedItemId = null;
+      }
     },
 
     /**
@@ -519,6 +538,7 @@ export function attachSessionListeners(session: Session, refs: SessionListenerRe
   session.on('working', refs.working);
   session.on('idle', refs.idle);
   session.on('watchingChanged', refs.watchingChanged);
+  session.on('blockedChanged', refs.blockedChanged);
   session.on('displayModelChanged', refs.displayModelChanged);
   session.on('taskCreated', refs.taskCreated);
   session.on('taskUpdated', refs.taskUpdated);
@@ -557,6 +577,7 @@ export function detachSessionListeners(session: Session, refs: SessionListenerRe
   session.off('working', refs.working);
   session.off('idle', refs.idle);
   session.off('watchingChanged', refs.watchingChanged);
+  session.off('blockedChanged', refs.blockedChanged);
   session.off('displayModelChanged', refs.displayModelChanged);
   session.off('taskCreated', refs.taskCreated);
   session.off('taskUpdated', refs.taskUpdated);

@@ -270,7 +270,8 @@ export function buildToolDefinitions(modes: readonly string[]): ToolDefinition[]
         'prompt, idle, working, exit) or prints a literal marker (match). Returns timed_out when timeout_ms passes: ' +
         'call again to keep waiting. Your own prompt is echoed into the output, so a marker written whole in the ' +
         'prompt matches at once: ask for it in two halves ("print DONE followed by _7f3a") and match the joined ' +
-        'form (DONE_7f3a), one word without spaces. stop and blocked exist only for claude and deepseek sessions.',
+        'form (DONE_7f3a), one word without spaces. stop exists only for claude and deepseek sessions; blocked ' +
+        'also for codex, whose dialogs Codeman reads off its screen.',
       inputSchema: {
         type: 'object',
         properties: {

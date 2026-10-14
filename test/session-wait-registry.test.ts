@@ -11,6 +11,7 @@ import {
   SessionWaitRegistry,
   WaitCapacityError,
   hooksAvailableForMode,
+  blockedSignalAvailable,
   parseWaitSignals,
   resolveWaitSignals,
   signalForStatus,
@@ -100,6 +101,26 @@ describe('signalForStatus', () => {
   });
 });
 
+describe('blockedSignalAvailable', () => {
+  it('is true where hooks report it, and for a CLI that declares a blockedLine (codex)', () => {
+    expect(blockedSignalAvailable('claude')).toBe(true);
+    expect(blockedSignalAvailable('codex')).toBe(true);
+    // Not keyed on hooks: codex has none, and its screen-read dialogs are still a source.
+    expect(hooksAvailableForMode('codex')).toBe(false);
+  });
+
+  it('is false for a CLI with neither (shell, gemini, opencode)', () => {
+    for (const mode of ['shell', 'gemini', 'opencode'] as const) {
+      expect(blockedSignalAvailable(mode)).toBe(false);
+    }
+  });
+
+  it('follows the per-session deepseek bridge, which is its only source', () => {
+    expect(blockedSignalAvailable('deepseek')).toBe(true);
+    expect(blockedSignalAvailable('deepseek', { deepSeekStatusReporting: false })).toBe(false);
+  });
+});
+
 describe('hooksAvailableForMode', () => {
   it('is true only for claude', () => {
     expect(hooksAvailableForMode('claude')).toBe(true);
@@ -144,8 +165,22 @@ describe('resolveWaitSignals', () => {
     const result = resolveWaitSignals('stop', codex);
     expect(result.until).toEqual([]);
     expect(result.error).toContain('codex');
-    expect(resolveWaitSignals('blocked', codex).error).toBeTruthy();
     expect(resolveWaitSignals('idle,stop', codex).error).toBeTruthy();
+    // gemini declares no blockedLine, so nothing can ever raise `blocked` for it.
+    expect(resolveWaitSignals('blocked', { mode: 'gemini' as SessionMode }).error).toBeTruthy();
+  });
+
+  it('accepts `blocked` on codex, whose dialogs are read off the screen, but still not `stop`', () => {
+    // capabilities.workDetect.blockedLine gives codex a source for `blocked`; nothing on a
+    // screen says a turn ended, so `stop` keeps its 400.
+    expect(resolveWaitSignals('blocked', codex)).toEqual({ until: ['blocked'], error: null });
+    expect(resolveWaitSignals('idle,blocked,exit', codex)).toEqual({ until: ['idle', 'blocked', 'exit'], error: null });
+    const stop = resolveWaitSignals('stop,blocked', codex);
+    expect(stop.until).toEqual([]);
+    expect(stop.error).toContain('stop');
+    expect(stop.error).not.toContain('Signal(s) stop, blocked');
+    // The suggestion names what does fire for codex.
+    expect(stop.error).toContain('idle, blocked or exit');
   });
 
   it('drops hook-only signals from the DEFAULT set instead of erroring', () => {

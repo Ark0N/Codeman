@@ -1287,6 +1287,9 @@
         (_m, n) => `窗口太小，容纳不下 ${n} 个窗格：只显示聚焦的窗格`,
       ],
       [/^The agent exited \((-?\d+)\)$/, (_m, code) => `智能体已退出（${code}）`],
+      // A dialog read off a hook-less CLI's screen (src/web/screen-blocked.ts), as the
+      // notification drawer shows it. The CLI's label passes through.
+      [/^(.+) is waiting for your answer in the terminal$/, (_m, cli) => `${cli} 正在终端中等待你的回答`],
       [/^The agent exited \(signal (\d+)\)$/, (_m, signal) => `智能体已退出（信号 ${signal}）`],
       // A session header's harness logo (tile grid, split pane): "<harness> · <model>",
       // and where the model came from when the CLI did not report it. The harness
