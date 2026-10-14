@@ -3405,6 +3405,20 @@ Object.assign(CodemanApp.prototype, {
     );
   },
 
+  /**
+   * Open the lazy path picker (the mobile keyboard's Path key) from the Files
+   * panel: one folder per request instead of a 5,000-node tree walk, any allowed
+   * root rather than only this workspace, plus Upload and Download. Its Insert
+   * puts the chosen path on the prompt without Enter, like the Path key.
+   */
+  openQuickFileBrowser() {
+    if (!this.activeSessionId) {
+      this.showToast?.('Select a session first', 'info');
+      return;
+    }
+    KeyboardAccessoryBar.pickPath();
+  },
+
   async toggleFileBrowserHidden() {
     const state = this._ensureFileBrowserState();
     const rawInput = typeof state.filter === 'string' ? state.filter : '';

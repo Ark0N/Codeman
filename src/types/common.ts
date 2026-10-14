@@ -10,6 +10,7 @@
  * - NiceConfig / DEFAULT_NICE_CONFIG — process priority settings for `nice`/`ionice`
  * - ProcessStats — memory/CPU/child-count snapshot for resource monitoring
  * - FilesystemBrowseData — bounded path-picker directory listing returned to the web UI
+ * - FilesystemUploadData — where a path-picker upload was written
  */
 
 /**
@@ -97,6 +98,16 @@ export interface FilesystemBrowseData {
   roots: FilesystemBrowseRoot[];
   entries: FilesystemBrowseEntry[];
   truncated: boolean;
+}
+
+/** Response payload for `POST /api/filesystem/upload` (path picker Upload). */
+export interface FilesystemUploadData {
+  /** Path the file was written to, under the requested (unresolved) folder path */
+  path: string;
+  /** Final file name, after sanitizing and any ` (n)` collision suffix */
+  name: string;
+  /** Bytes written */
+  size: number;
 }
 
 /** Response payload for `PUT /api/sessions/:id/file-content` (File Viewer edit mode). */

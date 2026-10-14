@@ -55,6 +55,11 @@
       '应用于新本地会话；可用强度取决于模型和 Codex 版本。自定义端点、Docker 和远程会话保留自己的设置。',
     'Default Codex model may only contain letters, digits, ".", "_", "-" and "/"':
       'Codex 默认模型只能包含字母、数字、"."、"_"、"-" 和 "/"',
+    'Upload files to this folder': '上传文件到此文件夹',
+    '\u2B06 Upload': '\u2B06 上传',
+    'Insert Path': '插入路径',
+    'Quick browser: browse any allowed folder, upload and download files': '快速浏览：浏览允许的文件夹，上传和下载文件',
+    'Select a session first': '请先选择一个会话',
     'Skip to terminal': '跳转到终端',
     'Go to main page': '返回主页',
     'Session tabs': '会话标签页',
@@ -1245,6 +1250,13 @@
       [/^You're up to date \(v(.+)\)\.$/, (_m, version) => `已是最新版本（v${version}）。`],
       [/^Update available: v(.+)$/, (_m, version) => `有可用更新：v${version}`],
       [/^Selected: (.+)$/, (_m, value) => `已选择：${value}`],
+      // Path picker transfer: file names and paths are user text, passed through.
+      [/^Download (.+)$/, (_m, name) => `下载 ${name}`],
+      [/^Uploading (\d+)\/(\d+): (.+)$/, (_m, n, total, rest) => `正在上传 ${n}/${total}：${rest}`],
+      [/^Uploading (.+)$/, (_m, rest) => `正在上传 ${rest}`],
+      [/^Upload failed: (.+)$/, (_m, error) => `上传失败：${error}`],
+      [/^Uploaded (\d+) files$/, (_m, n) => `已上传 ${n} 个文件`],
+      [/^Uploaded (.+)$/, (_m, path) => `已上传 ${path}`],
       [/^Failed to (.+)$/, (_m, action) => `操作失败：${action}`],
       [/^Will create: (.+)$/, (_m, path) => `将创建：${path}`],
       // The spreadsheet preview: an HTTP status, and the notice bar's counts.

@@ -15042,6 +15042,53 @@ body.touch-device.cjk-input-visible .main {
   color: var(--danger, #ef4444);
 }
 
+/* Upload (fileTransfer pickers only): sits between the status line and Sort,
+ * which the status line's flex pushes to the right. */
+.path-picker-toolbar:has(.path-picker-upload:not([hidden])) .path-picker-status {
+  flex: 1;
+}
+
+.path-picker-upload {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  color: var(--accent);
+  font-size: 0.7rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.path-picker-upload[hidden] {
+  display: none;
+}
+
+.path-picker-upload:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.path-picker-item-download {
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 30px;
+  margin-right: 6px;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.path-picker-item-download:hover,
+.path-picker-item-download:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .path-picker-list {
   flex: 1;
   min-height: 140px;
