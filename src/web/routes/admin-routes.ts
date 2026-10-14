@@ -128,17 +128,17 @@ export function registerAdminRoutes(app: FastifyInstance, ctx: SessionPort & Aut
       return createErrorResponse(ApiErrorCode.USER_NOT_FOUND, 'User not found');
     }
     const linked = readLinkedWorkspacePaths();
-    const available = await Promise.all(
-      Object.entries(linked).map(async ([name, path]) => {
-        if (!SAFE_CASE_NAME.test(name)) return null;
-        try {
-          const [realPath, stat] = await Promise.all([fsp.realpath(path), fsp.stat(path)]);
-          return stat.isDirectory() ? { name, path: realPath } : null;
-        } catch {
-          return null;
-        }
-      })
-    );
+    const availableByPath = new Map<string, { name: string; path: string }>();
+    for (const [name, path] of Object.entries(linked)) {
+      if (!SAFE_CASE_NAME.test(name)) continue;
+      try {
+        const [realPath, stat] = await Promise.all([fsp.realpath(path), fsp.stat(path)]);
+        if (stat.isDirectory() && !availableByPath.has(realPath))
+          availableByPath.set(realPath, { name, path: realPath });
+      } catch {
+        // Ignore stale or unavailable linked folders.
+      }
+    }
     const policy = getSharedWorkspacePolicy(username);
     return {
       success: true,
@@ -147,7 +147,7 @@ export function registerAdminRoutes(app: FastifyInstance, ctx: SessionPort & Aut
         role: user.role,
         restricted: policy?.restricted ?? false,
         workspaceNames: policy?.workspaceNames ?? [],
-        available: available.filter((item): item is { name: string; path: string } => item !== null),
+        available: [...availableByPath.values()],
       },
     };
   });
