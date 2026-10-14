@@ -51,6 +51,9 @@ export function registerScheduledRoutes(app: FastifyInstance, ctx: SessionPort &
     // Multi-user: default a missing workingDir to the user's own cases dir rather
     // than the server's cwd. Single-user keeps process.cwd() (byte-identical).
     const effectiveWorkingDir = workingDir || (isMultiUserMode() ? resolveCasesDir(getAuthUser(req)) : process.cwd());
+    if (!isWorkingDirAllowed(getAuthUser(req), effectiveWorkingDir)) {
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'workingDir is not within your allowed workspace');
+    }
 
     const run = await ctx.startScheduledRun(prompt, effectiveWorkingDir, durationMinutes ?? 60, ownerFor(req));
     return { run };

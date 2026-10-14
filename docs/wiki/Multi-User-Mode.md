@@ -60,6 +60,26 @@ Admins see everything.
 Ownership threads through every list endpoint, the session lookup helper, the WebSocket
 layer, and file previews. A user cannot address another user's session even by id.
 
+## Sharing a selected workspace
+
+An admin can open **App Settings → Users → Workspaces** on a regular user's row and select
+one or more already linked local projects. Saving the selection restricts that account to
+those project directories, including their subdirectories. Its private case space and other
+linked, remote, and Docker cases are hidden; creating or cloning projects is disabled. Saving
+an empty selection blocks workspace access until the admin grants a project. **Remove
+restriction** restores the normal private case space.
+
+The admin can link an existing project from **New Case → Link Existing** before granting it.
+Saving or changing a user's grants stops live sessions whose working directories are no longer
+allowed. Sessions in a shared project still belong to the user who started them; other regular
+users cannot see or control those sessions, while admins can.
+
+This is still application-level path confinement. All sessions run as the same OS account, so
+an agent allowed to run arbitrary host commands can access files outside Codeman's UI rules.
+An existing **bypass-permissions grant remains effective** for a restricted user, as does shell
+mode. Use this feature to prevent accidental project selection; use separate OS accounts or
+Docker isolation when users must not be able to cross that boundary.
+
 ## Safer defaults for regular users
 
 Non-admins get tighter defaults, and lifting them is an explicit per-user grant:
@@ -86,6 +106,8 @@ at any time, and existing browser sessions can be revoked.
 - **Enabling it does not migrate existing cases** into a user space. They stay where they
   are, owned by whoever the ownership rules resolve them to.
 - **Admins see everything**, including other users' sessions. Choose admins accordingly.
+- **Shared project files are common.** Users may have private sessions in the same workspace,
+  but edits to that project's files are visible to every user granted access.
 - **The audit log is append-only and local.** Ship it somewhere if you care about it.
 - **It is not a substitute for OS accounts.** Restating this because it is the one thing
   people get wrong.

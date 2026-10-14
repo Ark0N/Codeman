@@ -67,10 +67,11 @@ import {
   readJsonConfig,
 } from '../route-helpers.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
+import { getSharedWorkspaceNames, isWorkspaceRestricted } from '../../shared-workspace-store.js';
 import type { AuthUser } from '../../types.js';
 import { SseEvent } from '../sse-events.js';
 import type { EventPort, ConfigPort, SessionPort } from '../ports/index.js';
-import type { FastifyRequest } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { dataPath, getDataDir } from '../../config/instance.js';
 import {
   checkDockerAvailable,
@@ -129,6 +130,13 @@ const APP_VERSION = (() => {
  */
 const LOCAL_CLONE_ADMIN_ONLY =
   'Cloning from a local path is admin-only in multi-user mode. Use a repository URL instead.';
+
+function refuseRestrictedProjectCreation(req: FastifyRequest, reply?: FastifyReply): ApiResponse<never> | null {
+  const user = getAuthUser(req);
+  if (!isMultiUserMode() || user.role === 'admin' || !isWorkspaceRestricted(user.username)) return null;
+  reply?.code(403);
+  return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Project creation is disabled for this account');
+}
 
 /**
  * Whether a clone or preflight must run with git's credential helpers cleared:
@@ -197,9 +205,14 @@ async function readLinkedCases(): Promise<Record<string, string>> {
  */
 async function resolveCasePath(name: string, user?: AuthUser): Promise<string> {
   const linkedCases = await readLinkedCases();
-  // Linked cases carry no owner (legacy/admin-only registry): a non-admin must not
-  // resolve arbitrary linked paths by name in multi-user mode (path-escape guard).
-  if (linkedCases[name] && (!isMultiUserMode() || user?.role === 'admin')) return linkedCases[name];
+  const sharedNames = user?.role === 'user' ? getSharedWorkspaceNames(user.username) : [];
+  if (user?.role === 'user' && isWorkspaceRestricted(user.username)) {
+    if (sharedNames.includes(name) && linkedCases[name]) return linkedCases[name];
+    return join(resolveCasesDir(user), '.codeman-workspace-not-granted', name);
+  }
+  if (linkedCases[name] && (!isMultiUserMode() || user?.role === 'admin' || sharedNames.includes(name))) {
+    return linkedCases[name];
+  }
   return join(resolveCasesDir(user), name);
 }
 
@@ -256,36 +269,37 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     const cases: CaseInfo[] = [];
     const user = getAuthUser(req);
     const admin = isAdmin(req);
-    // Non-admins enumerate their OWN case space; admins see the shared CASES_DIR.
+    const restricted = user.role === 'user' && isWorkspaceRestricted(user.username);
+    // Restricted users see only assigned workspaces; others use their own space.
     const listBase = resolveCasesDir(user);
 
-    // Get cases from the user's (or shared) cases dir
-    try {
-      const entries = await fs.readdir(listBase, { withFileTypes: true });
-      for (const e of entries) {
-        if (e.isDirectory() && SAFE_CASE_NAME.test(e.name)) {
-          const casePath = join(listBase, e.name);
-          // Only a directory Codeman scaffolded for an agent spawn carries a marker,
-          // so this stays absent for every human-created, linked or cloned case.
-          const marker = await readAgentCaseMarker(casePath);
-          cases.push({
-            name: e.name,
-            path: casePath,
-            hasClaudeMd: await boundedPathExists(join(casePath, 'CLAUDE.md')),
-            location: 'local',
-            ...(marker ? { agentCreated: agentCreatedInfo(marker) } : {}),
-          });
+    if (user.role === 'admin' || !isWorkspaceRestricted(user.username)) {
+      try {
+        const entries = await fs.readdir(listBase, { withFileTypes: true });
+        for (const e of entries) {
+          if (e.isDirectory() && SAFE_CASE_NAME.test(e.name)) {
+            const casePath = join(listBase, e.name);
+            const marker = await readAgentCaseMarker(casePath);
+            cases.push({
+              name: e.name,
+              path: casePath,
+              hasClaudeMd: await boundedPathExists(join(casePath, 'CLAUDE.md')),
+              location: 'local',
+              ...(marker ? { agentCreated: agentCreatedInfo(marker) } : {}),
+            });
+          }
         }
+      } catch {
+        // dir may not exist yet
       }
-    } catch {
-      // dir may not exist yet
     }
 
-    // Linked cases (v1 registry has no owner) are admin-only in multi-user mode.
+    // Linked cases are visible to admins and users with an explicit workspace grant.
     const linkedCases = await readLinkedCases();
     const existingNames = new Set(cases.map((c) => c.name));
-    if (admin) {
-      for (const [name, path] of Object.entries(linkedCases)) {
+    const sharedNames = new Set(getSharedWorkspaceNames(user.username));
+    for (const [name, path] of Object.entries(linkedCases)) {
+      if (admin || sharedNames.has(name)) {
         if (existingNames.has(name) || !SAFE_CASE_NAME.test(name)) continue;
         const state = await probePath(path);
         if (state === 'absent') continue;
@@ -305,7 +319,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     // Get remote cases (owner-scoped; legacy no-owner = admin-only)
     const remoteHosts = await readRemoteHosts(CODEMAN_CONFIG_DIR);
     const remoteHostMap = new Map(remoteHosts.map((host) => [host.id, host]));
-    for (const remoteCase of await readRemoteCases(CODEMAN_CONFIG_DIR)) {
+    for (const remoteCase of restricted ? [] : await readRemoteCases(CODEMAN_CONFIG_DIR)) {
       const host = remoteHostMap.get(remoteCase.hostId);
       if (!host || !SAFE_CASE_NAME.test(remoteCase.name)) continue;
       if (!admin && !canAccessOwned(user, remoteCase.owner)) continue;
@@ -333,7 +347,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     // Get docker cases
     const dockerHosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
     const dockerHostMap = new Map(dockerHosts.map((host) => [host.id, host]));
-    for (const dockerCase of await readDockerCases(CODEMAN_CONFIG_DIR)) {
+    for (const dockerCase of restricted ? [] : await readDockerCases(CODEMAN_CONFIG_DIR)) {
       const host = dockerHostMap.get(dockerCase.hostId);
       if (!host || !SAFE_CASE_NAME.test(dockerCase.name)) continue;
       if (!admin && !canAccessOwned(user, dockerCase.owner)) continue;
@@ -396,6 +410,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
    */
   app.get('/api/cases/agent-created', async (req): Promise<ApiResponse<{ cases: AgentCaseSummary[] }>> => {
     const user = getAuthUser(req);
+    if (user.role !== 'admin' && isWorkspaceRestricted(user.username)) {
+      return { success: true, data: { cases: [] } };
+    }
     const listBase = resolveCasesDir(user);
     const inUsePaths = new Set(
       Array.from(ctx.sessions.values())
@@ -528,6 +545,8 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
   app.post('/api/cases', async (req, reply): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
     const { name, description, path: customPath } = parseBody(CreateCaseSchema, req.body);
+    const creationRefusal = refuseRestrictedProjectCreation(req, reply);
+    if (creationRefusal) return creationRefusal;
 
     // A custom folder writes outside the cases directory and registers the path in the shared,
     // ownerless linked-cases registry, so it carries the same bar as POST /api/cases/link.
@@ -642,6 +661,8 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     > => {
       const { name, repository, ref, shallow, description } = parseBody(CloneCaseSchema, req.body);
       const user = getAuthUser(req);
+      const creationRefusal = refuseRestrictedProjectCreation(req, reply);
+      if (creationRefusal) return creationRefusal;
 
       const parsed = parseGitRepositoryUrl(repository);
       if (!parsed.cloneable) return createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.message);
@@ -837,6 +858,8 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   });
 
   app.post('/api/cases/remote-link', async (req): Promise<ApiResponse<{ case: unknown }>> => {
+    const creationRefusal = refuseRestrictedProjectCreation(req);
+    if (creationRefusal) return creationRefusal;
     const remoteCase = { ...parseBody(RemoteCaseLinkSchema, req.body), type: 'remote' as const, owner: ownerFor(req) };
     const hosts = await readRemoteHosts(CODEMAN_CONFIG_DIR);
     const host = hosts.find((item) => item.id === remoteCase.hostId);
@@ -922,6 +945,8 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     ): Promise<
       ApiResponse<{ case: unknown; capsEnforced?: boolean; isDesktop?: boolean; imageBuilding?: boolean }>
     > => {
+      const creationRefusal = refuseRestrictedProjectCreation(req);
+      if (creationRefusal) return creationRefusal;
       const dockerCase = {
         ...parseBody(DockerCaseLinkSchema, req.body),
         type: 'docker' as const,
@@ -1214,6 +1239,8 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     > => {
       const body = parseBody(DockerQuickCreateSchema, req.body);
       const { name, description } = body;
+      const creationRefusal = refuseRestrictedProjectCreation(req);
+      if (creationRefusal) return creationRefusal;
       const casePath = validatePathWithinBase(name, resolveCasesDir(getAuthUser(req)));
       if (!casePath) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
 
@@ -1405,6 +1432,8 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
   // Import a bundle (already present in the exports dir) into a NEW docker case.
   app.post('/api/docker-cases/import', async (req): Promise<ApiResponse<{ case: unknown }>> => {
+    const creationRefusal = refuseRestrictedProjectCreation(req);
+    if (creationRefusal) return creationRefusal;
     const { bundle, newCaseName, destWorkspacePath } = parseBody(DockerImportSchema, req.body);
     const bundlePath = join(DOCKER_EXPORTS_DIR, bundle);
     if (!existsSync(bundlePath)) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Bundle not found in exports dir');
@@ -1583,11 +1612,13 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
   app.delete('/api/cases/:name', async (req): Promise<ApiResponse<{ name: string }>> => {
     const { name } = req.params as { name: string };
     const user = getAuthUser(req);
+    if (user.role === 'user' && isWorkspaceRestricted(user.username)) {
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Project management is disabled for this account');
+    }
 
     if (!validatePathWithinBase(name, resolveCasesDir(user))) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case name');
     }
-
     // Fold ownership INTO the match (don't early-return): a non-owned same-named remote/
     // docker case is skipped so control falls through to the caller's own local delete.
     // canAccessOwned is all-true for admins/single-user, so flag-OFF stays byte-identical.
@@ -1700,7 +1731,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     // (remote/docker names are globally unique, local names per-user). No metadata is
     // disclosed for a foreign case. canAccessOwned is allow-all for admins/single-user.
     const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
-    const remoteCase = remoteCases.find((item) => item.name === name && canAccessOwned(getAuthUser(req), item.owner));
+    const user = getAuthUser(req);
+    const restricted = user.role === 'user' && isWorkspaceRestricted(user.username);
+    const remoteCase = restricted
+      ? undefined
+      : remoteCases.find((item) => item.name === name && canAccessOwned(user, item.owner));
     if (remoteCase) {
       const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === remoteCase.hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
@@ -1718,9 +1753,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       };
     }
 
-    const dockerCase = (await readDockerCases(CODEMAN_CONFIG_DIR)).find(
-      (item) => item.name === name && canAccessOwned(getAuthUser(req), item.owner)
-    );
+    const dockerCase = restricted
+      ? undefined
+      : (await readDockerCases(CODEMAN_CONFIG_DIR)).find(
+          (item) => item.name === name && canAccessOwned(user, item.owner)
+        );
     if (dockerCase) {
       const host = (await readDockerHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === dockerCase.hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Docker host not found');

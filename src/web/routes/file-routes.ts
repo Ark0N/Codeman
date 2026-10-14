@@ -52,6 +52,11 @@ import { sanitizeAttachmentHistoryItem } from '../../session-attachment-history.
 import { isBlockedAttachmentPath, isUnderTree, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
 import { isMultiUserMode, userSpacePath } from '../../config/multiuser.js';
 import {
+  getSharedWorkspaceNames,
+  isWorkspaceRestricted,
+  readLinkedWorkspacePaths,
+} from '../../shared-workspace-store.js';
+import {
   CASES_DIR,
   canAccessOwned,
   findSessionOrFail,
@@ -872,6 +877,12 @@ function extraConfiguredPickerRoots(): Array<{ label: string; path: string }> {
 function configuredFilesystemPickerRoots(req: FastifyRequest): Array<{ label: string; path: string }> {
   const user = getAuthUser(req);
   if (isMultiUserMode() && user.role !== 'admin') {
+    if (isWorkspaceRestricted(user.username)) {
+      const linked = readLinkedWorkspacePaths();
+      return getSharedWorkspaceNames(user.username)
+        .filter((name) => typeof linked[name] === 'string')
+        .map((name) => ({ label: name, path: linked[name] }));
+    }
     return [{ label: 'My Space', path: userSpacePath(user.username) }, ...extraConfiguredPickerRoots()];
   }
   return [

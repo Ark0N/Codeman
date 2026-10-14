@@ -24,6 +24,7 @@ import {
   parseBody,
 } from '../route-helpers.js';
 import { resolveClaudeModeForUsername } from '../../user-store.js';
+import { isWorkspaceRestricted } from '../../shared-workspace-store.js';
 import { writeHooksConfig, stripCaseEnvKeys } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { buildRalphLoopPrompt } from '../../prompts/index.js';
@@ -296,8 +297,13 @@ export function registerRalphRoutes(
       advisorModel,
     } = parseBody(RalphLoopStartSchema, req.body);
 
+    const user = getAuthUser(req);
+    if (user.role !== 'admin' && isWorkspaceRestricted(user.username)) {
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Project creation is disabled for this account');
+    }
+
     // Multi-user: cases live in the requesting user's space.
-    const rlCasesBase = resolveCasesDir(getAuthUser(req));
+    const rlCasesBase = resolveCasesDir(user);
     const casePath = join(rlCasesBase, caseName);
 
     // Security: Path traversal protection

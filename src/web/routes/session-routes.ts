@@ -121,6 +121,7 @@ import { resolveCliLaunchError } from '../../utils/cli-launcher.js';
 import { applyLaunchDefaults } from '../launch-defaults.js';
 import { legacyConfigForMode } from '../../session-cli-registry-bridge.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
+import { getSharedWorkspaceNames, isWorkspaceRestricted } from '../../shared-workspace-store.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import {
   writeHooksConfig,
@@ -1013,7 +1014,11 @@ export function registerSessionRoutes(
     if (!isMultiUserMode()) return list;
     const user = getAuthUser(req);
     if (user.role === 'admin') return list;
-    return (list as Array<{ owner?: string }>).filter((s) => canAccessOwned(user, s.owner));
+    return (list as Array<{ owner?: string; remote?: unknown; workingDir?: string }>).filter(
+      (s) =>
+        canAccessOwned(user, s.owner) &&
+        (!isWorkspaceRestricted(user.username) || (!s.remote && isWorkingDirAllowed(user, s.workingDir || '')))
+    );
   });
 
   // ========== Legacy Session Tab Order (temporary synchronized compatibility bridge) ==========
@@ -3700,13 +3705,14 @@ export function registerSessionRoutes(
     // per-user, so a name collision must not shadow the caller's own case. canAccessOwned
     // is allow-all for admins/single-user, so flag-OFF stays byte-identical.
     const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
+    const restricted = getAuthUser(req).role === 'user' && isWorkspaceRestricted(getAuthUser(req).username);
     const remoteCase = remoteCases.find(
-      (item) => item.name === caseName && canAccessOwned(getAuthUser(req), item.owner)
+      (item) => !restricted && item.name === caseName && canAccessOwned(getAuthUser(req), item.owner)
     );
     const dockerCase = remoteCase
       ? undefined
       : (await readDockerCases(CODEMAN_CONFIG_DIR)).find(
-          (item) => item.name === caseName && canAccessOwned(getAuthUser(req), item.owner)
+          (item) => !restricted && item.name === caseName && canAccessOwned(getAuthUser(req), item.owner)
         );
     if (remoteCase) {
       const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === remoteCase.hostId);
@@ -3914,10 +3920,11 @@ export function registerSessionRoutes(
       } catch {
         // File missing or unparseable — treat as empty registry
       }
-      // Multi-user: the linked-cases registry is ownerless/global, so only admins may
-      // resolve a name to an arbitrary linked path. A non-admin resolves inside their
-      // OWN case space only (single-user: isAdmin true, so linked cases still honoured).
-      const linked = isAdmin(req) ? linkedCases[caseName] : undefined;
+      // Linked workspaces stay hidden unless the caller is an admin or has an
+      // explicit grant for this case name.
+      const user = getAuthUser(req);
+      const shared = getSharedWorkspaceNames(user.username).includes(caseName);
+      const linked = isAdmin(req) || shared ? linkedCases[caseName] : undefined;
       casePath = linked || validatePathWithinBase(caseName, resolveCasesDir(getAuthUser(req)));
       if (!casePath) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');

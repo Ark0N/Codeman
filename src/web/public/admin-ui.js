@@ -411,6 +411,7 @@
             <button class="btn btn-xs" data-act="role">${u.role === 'admin' ? 'Demote' : 'Promote'}</button>
             <button class="btn btn-xs" data-act="disabled">${u.disabled ? 'Enable' : 'Disable'}</button>
             <button class="btn btn-xs" data-act="bypass">${u.canBypassPermissions ? 'Revoke bypass' : 'Grant bypass'}</button>
+            ${u.role === 'user' ? '<button class="btn btn-xs" data-act="workspaces">Workspaces</button>' : ''}
             <button class="btn btn-xs" data-act="reset">Reset pw</button>
             <button class="btn btn-xs" data-act="logout">Logout</button>
             <button class="btn btn-xs" data-act="delete" style="color:var(--red,#c33)">Delete</button>
@@ -427,6 +428,7 @@
       const username = b.closest('tr').dataset.u;
       b.onclick = () => {
         if (b.dataset.act === 'cases') return toggleCaseDrawer(username);
+        if (b.dataset.act === 'workspaces') return openWorkspaceModal(username);
         return panelAction(
           username,
           b.dataset.act,
@@ -438,6 +440,68 @@
     for (const name of [...apOpenDrawers]) {
       if (users.some((u) => u.username === name)) void renderCaseDrawer(name);
       else apOpenDrawers.delete(name);
+    }
+  }
+
+  async function openWorkspaceModal(username) {
+    let modal = document.getElementById('adminWorkspaceModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.className = 'modal';
+      modal.id = 'adminWorkspaceModal';
+      modal.style.zIndex = '3200';
+      document.body.appendChild(modal);
+    }
+    modal.innerHTML = `<div class="modal-content" style="max-width:620px">
+      <div class="modal-header"><h2>Workspaces for ${esc(username)}</h2></div>
+      <div class="modal-body"><p>Choose linked projects this user may access. Restricting access stops their sessions outside the selected workspaces.</p>
+        <div id="adminWorkspaceOptions">Loading…</div><p id="adminWorkspaceMessage" style="min-height:1.2em;color:var(--text-muted)"></p></div>
+      <div class="modal-footer"><button class="btn" data-workspace-action="close">Close</button>
+        <button class="btn" data-workspace-action="clear">Remove restriction</button>
+        <button class="btn btn-primary" data-workspace-action="save">Restrict to selected</button></div>
+    </div>`;
+    modal.style.display = 'flex';
+    const endpoint = `/api/admin/users/${encodeURIComponent(username)}/workspaces`;
+    const setMessage = (message) => {
+      const el = modal.querySelector('#adminWorkspaceMessage');
+      if (el) el.textContent = message;
+    };
+    modal.querySelector('[data-workspace-action="close"]').onclick = () => (modal.style.display = 'none');
+    modal.querySelector('[data-workspace-action="save"]').onclick = async () => {
+      const workspaceNames = [...modal.querySelectorAll('input[name="sharedWorkspace"]:checked')].map(
+        (input) => input.value
+      );
+      const r = await apiSend('PUT', endpoint, { workspaceNames });
+      if (!r.ok) return setMessage((r.body && r.body.error) || 'Could not update workspaces.');
+      setMessage(`Saved. Stopped ${r.data.stoppedSessions || 0} session(s) outside these workspaces.`);
+    };
+    modal.querySelector('[data-workspace-action="clear"]').onclick = async () => {
+      if (!window.confirm(`Remove ${username}'s workspace restriction?`)) return;
+      const r = await apiSend('DELETE', endpoint);
+      if (!r.ok) return setMessage((r.body && r.body.error) || 'Could not remove restriction.');
+      setMessage('Restriction removed. Their private case space is available again.');
+    };
+    try {
+      const data = await apiGet(endpoint);
+      const selected = new Set(data.workspaceNames || []);
+      const options = modal.querySelector('#adminWorkspaceOptions');
+      if (!data.available.length) {
+        options.textContent = 'No linked local workspaces are available. Link a project first, then reopen this panel.';
+        return;
+      }
+      options.innerHTML =
+        `<p>Current policy: <strong>${data.restricted ? 'Restricted' : 'Unrestricted'}</strong></p>` +
+        data.available
+          .map(
+            (
+              workspace
+            ) => `<label style="display:flex;gap:.6em;align-items:flex-start;padding:.45em 0;border-bottom:1px solid var(--border,#ddd)" title="${esc(workspace.path)}">
+          <input type="checkbox" name="sharedWorkspace" value="${esc(workspace.name)}" ${selected.has(workspace.name) ? 'checked' : ''}>
+          <span><strong>${esc(workspace.name)}</strong><br><small>${esc(workspace.path)}</small></span></label>`
+          )
+          .join('');
+    } catch {
+      modal.querySelector('#adminWorkspaceOptions').textContent = 'Failed to load linked workspaces.';
     }
   }
 

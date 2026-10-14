@@ -536,6 +536,7 @@ codeman users list
 
 - **按用户的空间**：每个用户的案例位于 `~/codeman-users/<name>/cases`；会话、案例、搜索与实时事件都按属主隔离。管理员可以看到全部。
 - **可单独吊销的登录**：命名用户的密码以 scrypt 哈希保存在 `~/.codeman/users.json`；可随时禁用、重置（一次性密码）或删除账号。管理员操作审计记录在 `~/.codeman/admin-audit.jsonl`。
+- **指定共享工作区**：管理员可在 App Settings → Users → Workspaces 中，把已链接的本地项目授权给普通用户。该用户只能在 CodeMan 界面中看到获准项目，不能通过界面新建项目；在共享项目中的会话仍归启动者所有，管理员可查看所有会话。已有的绕过权限与 shell 授权仍然有效，因此这是防止误选项目的应用层限制，不是操作系统沙箱。
 - **普通用户的更安全默认值**：非管理员以 `--permission-mode auto` 运行 Claude（Anthropic 的分类器护栏模式）；raw shell 会话、cron `launchCommand` 与跳过权限模式需要按用户显式授权。
 
 > ⚠️ **这只是工作空间的划分，不是用户之间的沙箱。** 所有会话都以同一个操作系统账户运行，因此有心用户的智能体依然能触及他人的文件。若需要真正的隔离，请结合 **Docker 案例**，或在不同的操作系统账户下运行独立实例。参见 [`docs/multi-user-plan.md`](docs/multi-user-plan.md) 与 [`docs/security-architecture.md`](docs/security-architecture.md) 的多用户章节。
