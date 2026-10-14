@@ -1447,6 +1447,7 @@ class CodemanApp {
         this.closeAllPanels();
         this.closeHelp();
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();
+        this.closeWorktreeModal?.();
         this.closeSessionManager();
         this.closeCommandPalette?.();
         this.closeShortcutOverlay?.();
@@ -10336,9 +10337,10 @@ class CodemanApp {
     delete this.respawnActionLogs[sessionId];
   }
 
+  /** Resolves true once the session is gone from the server, false when it is still there. */
   async closeSession(sessionId, killMux = true) {
     // Already on its way out (a repeated click, the mux panel racing the tab).
-    if (this._closingSessions.has(sessionId)) return;
+    if (this._closingSessions.has(sessionId)) return false;
     // The tab goes FIRST and the server is asked after. The kill takes the server
     // a few hundred ms (SIGTERM grace, the process tree, tmux), and a tab that sat
     // there that long after "Kill" read as a click that did nothing. A refused
@@ -10416,7 +10418,7 @@ class CodemanApp {
       } else {
         this.showToast('Tab hidden, tmux still running', 'info');
       }
-      return;
+      return true;
     }
 
     // Still on the server (or the server is unreachable, in which case the resync
@@ -10431,6 +10433,7 @@ class CodemanApp {
       this.renderSessionTabs();
     }
     this.showToast('Failed to close session', 'error');
+    return false;
   }
 
   // Request confirmation before closing a session
@@ -10444,6 +10447,20 @@ class CodemanApp {
     const name = this.getSessionName(session);
     const sessionNameEl = document.getElementById('closeConfirmSessionName');
     sessionNameEl.textContent = name;
+
+    // A session in a Codeman-managed git worktree also offers to remove the worktree
+    // (git worktree remove, never forced) once the session is gone. Read now, before the
+    // session leaves this.sessions.
+    const worktree = this._managedWorktreeOfSession?.(session) || null;
+    this.pendingCloseWorktree = worktree;
+    const wtOption = document.getElementById('closeConfirmWorktree');
+    if (wtOption) {
+      wtOption.hidden = !worktree;
+      const wtName = document.getElementById('closeConfirmWorktreeName');
+      if (wtName) wtName.textContent = worktree ? worktree.name : '';
+      const wtBranch = document.getElementById('closeConfirmWorktreeBranch');
+      if (wtBranch) wtBranch.checked = false;
+    }
 
     // Update kill button text based on session mode
     const killTitle = document.getElementById('closeConfirmKillTitle');
@@ -10472,15 +10489,24 @@ class CodemanApp {
 
   cancelCloseSession() {
     this.pendingCloseSessionId = null;
+    this.pendingCloseWorktree = null;
     document.getElementById('closeConfirmModal').classList.remove('active');
   }
 
-  async confirmCloseSession(killMux = true) {
+  /**
+   * `removeWorktree`: Close Session's "Kill & remove worktree". The worktree is removed only
+   * after the server confirms the session is gone (a live session inside is refused anyway),
+   * and only ever through `git worktree remove` without --force.
+   */
+  async confirmCloseSession(killMux = true, { removeWorktree = false } = {}) {
     const sessionId = this.pendingCloseSessionId;
+    const worktree = removeWorktree ? this.pendingCloseWorktree : null;
+    const deleteBranch = !!document.getElementById('closeConfirmWorktreeBranch')?.checked;
     this.cancelCloseSession();
 
     if (sessionId) {
-      await this.closeSession(sessionId, killMux);
+      const gone = await this.closeSession(sessionId, killMux);
+      if (gone && worktree) await this._removeWorktreeAfterClose?.(worktree, deleteBranch);
     }
   }
 
