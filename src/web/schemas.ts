@@ -759,6 +759,34 @@ export const ClonePreflightSchema = z.object({
   repository: z.string().min(1).max(2048),
 });
 
+// ========== Git worktrees of a case (src/git-worktrees.ts) ==========
+
+/**
+ * A worktree name: one segment of letters, digits, `.`, `_`, `-`, starting with a letter or
+ * digit, at most 64 characters (Claude Code's own `--worktree` limit). The finer rules (no `..`,
+ * no trailing `.lock`) are `worktreeNameError()`, which every route applies after this.
+ */
+const worktreeNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'Invalid worktree name. Use letters, digits, ".", "_" and "-".');
+
+/** Schema for POST /api/cases/:name/worktrees: a new worktree on a new branch. */
+export const CreateWorktreeSchema = z.object({
+  name: worktreeNameSchema,
+  /** New branch name; default `worktree-<name>`, Claude Code's convention. */
+  branch: z.string().min(1).max(200).optional(),
+  /** Start point (branch, tag or commit); default the case's current HEAD. */
+  base: z.string().min(1).max(200).optional(),
+});
+
+/** Query of DELETE /api/cases/:name/worktrees/:worktree. */
+export const RemoveWorktreeQuerySchema = z.object({
+  /** Also `git branch -d` the worktree's branch (never `-D`). */
+  deleteBranch: z.enum(['true', 'false', '1', '0']).optional(),
+});
+
 const RemoteCommandOverridesSchema = z
   .object({
     shell: z.string().min(1).max(300).optional(),
@@ -1139,6 +1167,13 @@ export const QuickStartSchema = z.object({
   parentSessionId: parentSessionIdSchema,
   /** Tab group to place the new session in: see tabGroupIdSchema. */
   tabGroupId: tabGroupIdSchema,
+  /**
+   * Start the session in this git worktree of the case (`<case>/.claude/worktrees/<worktree>`,
+   * created through POST /api/cases/:name/worktrees) instead of the case folder. Local cases
+   * only: refused (400) for remote and Docker cases. The worktree must be a registered worktree
+   * of the case's repository; it is never created here.
+   */
+  worktree: worktreeNameSchema.optional(),
   /** Model override written to <case>/.claude/settings.local.json (e.g. "opus[1m]").
    *  Empty string clears. Applied for local AND docker cases (the docker workspace is
    *  a real host dir, so the settings file crosses the bind mount); rejected for
