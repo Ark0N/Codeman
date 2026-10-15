@@ -43,6 +43,27 @@ describe('whats-new extraction', () => {
     ]);
   });
 
+  it('reads a lead-in behind the commit prefix changesets writes for a committed changeset', () => {
+    const section = '- d18deed: **Each release announces itself (#618).** Text.\n- 13e652e: A fix with no lead-in.';
+    expect(extractHighlights(section)).toEqual(['Each release announces itself (#618)']);
+  });
+
+  it('skips group labels the release notes put in bold (Fixes, Fixes applied while landing)', () => {
+    const section = [
+      '  **Tab layouts (#538).** Text.',
+      '  **Fixes.**',
+      '  - **Shells reload cleanly (#601).** Text.',
+      '  **Fixes applied while landing.** Remote tabs keep their scrollback.',
+    ].join('\n');
+    expect(extractHighlights(section)).toEqual(['Tab layouts (#538)', 'Shells reload cleanly (#601)']);
+  });
+
+  it('yields no highlights for a release written without bold lead-ins', () => {
+    const changelog =
+      '## 1.32.1\n\n### Patch Changes\n\n- 13e652e: Terminal copy: no gutter on the clipboard (#469).\n';
+    expect(buildWhatsNew(changelog, '1.32.1')).toEqual({ version: '1.32.1', highlights: [] });
+  });
+
   it('caps the list', () => {
     const many = Array.from({ length: 20 }, (_, i) => `**Feature number ${i}.** text`).join('\n\n');
     expect(extractHighlights(many)).toHaveLength(8);

@@ -17,14 +17,21 @@ export function versionSection(changelog, version) {
   return lines.slice(start + 1, end).join('\n');
 }
 
+// Bold phrases the release notes use as group labels rather than as the headline of a change:
+// "**Fixes.**" heads the list of fixes, "**Fixes applied while landing.**" the review fixes.
+const SECTION_LABELS =
+  /^(?:thanks\b.*|fixes|fixes applied while landing|docs|docs and tests|new features|also in this release)$/i;
+
 /** Bold lead-ins at the start of a paragraph or bullet, cleaned for display. */
 export function extractHighlights(section) {
   const out = [];
   for (const line of section.split('\n')) {
-    const m = /^\s*(?:[-*]\s+)?\*\*([^*]{3,120})\*\*/.exec(line);
+    // `changeset version` prefixes the first line of a committed changeset with its commit
+    // ("- d18deed: **Lead.** text"), which is the shape every changesets-bot release has.
+    const m = /^\s*(?:[-*]\s+)?(?:[0-9a-f]{7,40}:\s+)?\*\*([^*]{3,120})\*\*/.exec(line);
     if (!m) continue;
     const text = m[1].replace(/[\s.:]+$/, '').trim();
-    if (!text || /^thanks\b/i.test(text)) continue;
+    if (!text || SECTION_LABELS.test(text)) continue;
     if (!out.includes(text)) out.push(text);
   }
   return out.slice(0, MAX_HIGHLIGHTS);
