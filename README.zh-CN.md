@@ -785,9 +785,19 @@ Web UI 仍是主要界面；完整指南见 **[docs/tui.md](docs/tui.md)**（英
 | _「让一个 claude 工作会话在 `refactor-auth` 上总结 `src/session.ts`，然后关掉它。」_  | 拉起、走完就绪阶梯（包括首次运行的信任对话框）、发送并等待、读取干净的 transcript 答案、删除。 |
 | _「盯着会话 w4，如果它卡在权限提示上就告诉我。」_                                      | 阻塞在 `blocked` 信号上，并把问题交给**你**。它绝不会替另一个会话回答提示。                    |
 
+一句简短的话就够了。下面这个 Claude Code 主会话收到 `use codeman to start 5 claude workers, one per TODO item`，五个真实的 Claude Code 工作会话依次开机，并排显示在平铺网格里：
+
+<p align="center">
+  <img src="docs/images/codeman-skill-grid-20261015.gif" alt="一次真实的 codeman 技能运行（平铺网格）：主 Claude Code 会话作为唯一的窗格开机，输入提示 use codeman to start 5 claude workers, one per TODO item，然后五个 Claude Code 工作会话以 CRT 动画依次作为新窗格开机，六个智能体同时工作" width="900">
+</p>
+
 #### 第 3 步：没有了
 
-智能体会删掉它启动的每一个会话。你可以在仪表盘里看着标签出现又消失。
+智能体会删掉它启动的每一个会话。你可以在仪表盘里看着标签出现又消失。起八个工作会话时，每个都有自己的标签，还有一条派生连线连回启动它的主会话：
+
+<p align="center">
+  <img src="docs/images/codeman-skill-tabs-20261015.gif" alt="一次真实的 codeman 技能运行（普通视图）：输入提示 use codeman to start 8 claude workers, one per TODO item，八个工作会话标签从左到右依次开机，主会话到每个标签之间画出派生连线，然后点开一个工作会话标签，看到一个正在接收任务的真实 Claude Code 工作会话" width="900">
+</p>
 
 #### 一次真实的运行，从头到尾
 

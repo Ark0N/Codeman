@@ -27,6 +27,8 @@ A GIF that leaves `docs/images/` stays in git history, so removing it does not s
 | `zerolag-demo-20260728.gif` | README, wiki `Input-And-Voice`, `packages/xterm-zerolag-input/README.md`, CHANGELOG, getcodeman.com docs | instant local echo next to slow server echo, on two phones |
 | `codeman-tab-states-20261010.gif` | README, Tab Alerts section | annotated tab states: working, blocked on a question, idle |
 | `codeman-skill-crt-20261010.gif` | README, agent skill section | one prompt to Claude Code spawning and driving two worker sessions through the skill |
+| `codeman-skill-grid-20261015.gif` | README, agent skill section (Step 2) | one prompt to a Claude Code lead, five Claude Code workers powering on as tiles in the grid |
+| `codeman-skill-tabs-20261015.gif` | README, agent skill section (Step 3) | one prompt to a Claude Code lead, eight worker tabs powering on with lineage lines, then a click into a live worker |
 | `subagent-demo-20260724.gif` | the "mission control" article on dev.to, Hashnode and Medium (hotlinked from `master`) | subagent windows fanning out |
 
 Before removing one, search for hotlinks: `README*.md`, `docs/wiki/`, `packages/*/README.md`, `CHANGELOG.md`, the site (`pr/website/`), and published articles, which link `raw.githubusercontent.com/Ark0N/Codeman/master/docs/images/<file>` and break silently.
@@ -36,7 +38,7 @@ On 2026-10-13, seven GIFs that no page embedded left `docs/images/` and moved in
 ### Adding or replacing a README GIF
 
 1. Keep the master (the lossless MP4 or the full-size GIF) in `pr/media/clips/<feature>/`, or in the project folder it came from.
-2. Commit only the size the README shows, named `<feature>-<YYYYMMDD>.gif`, and keep it lean: the current ones are 0.8 to 7 MB.
+2. Commit only the size the README shows, named `<feature>-<YYYYMMDD>.gif`, and keep it lean: the current ones are 0.8 to 10 MB.
 3. A replaced GIF leaves `docs/images/` in the same commit, unless something outside the repo hotlinks it (see above).
 
 ## Website media (getcodeman.com)

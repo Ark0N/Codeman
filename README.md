@@ -783,9 +783,19 @@ That is the entire interface. No curl, no endpoint names, no session ids. These 
 | _"Have a claude worker on `refactor-auth` summarize `src/session.ts`, then close it."_     | Spawns, runs the readiness ladder (first-run trust dialog included), send-and-wait, reads the clean transcript answer, deletes. |
 | _"Watch session w4 and tell me if it gets stuck on a permission prompt."_                  | Blocks on the `blocked` signal and surfaces the question to **you**. It never answers another session's prompt itself. |
 
+One short line is enough. Here a Claude Code lead gets `use codeman to start 5 claude workers, one per TODO item`, and five real Claude Code workers power on, shown side by side in the tile grid:
+
+<p align="center">
+  <img src="docs/images/codeman-skill-grid-20261015.gif" alt="A real codeman skill run in the tile grid: the lead Claude Code session powers on as the only tile, the prompt use codeman to start 5 claude workers, one per TODO item is typed, then five Claude Code worker sessions power on as new tiles one after another with the CRT animation, and all six agents work at once" width="900">
+</p>
+
 #### Step 3: nothing
 
-The agent deletes every session it started. Watch the tabs appear and disappear in the dashboard while it works.
+The agent deletes every session it started. Watch the tabs appear and disappear in the dashboard while it works. With eight workers, each one gets its own tab, and a lineage line runs back to the lead that spawned it:
+
+<p align="center">
+  <img src="docs/images/codeman-skill-tabs-20261015.gif" alt="A real codeman skill run in the normal view: the prompt use codeman to start 8 claude workers, one per TODO item is typed, eight worker tabs power on left to right while lineage lines draw from the lead to each one, then clicking a worker tab shows a live Claude Code worker receiving its task" width="900">
+</p>
 
 #### A real run, start to finish
 
