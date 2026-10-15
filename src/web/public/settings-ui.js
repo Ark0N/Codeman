@@ -4719,6 +4719,14 @@ Object.assign(CodemanApp.prototype, {
       this.showToast?.('Shortcut must include Ctrl, Cmd, or Alt', 'error');
       return;
     }
+    // Refuse a chord something else already owns: the registry dispatches the first match,
+    // so a duplicate would silently take over (or lose to) the other action.
+    const taken = this.findShortcutConflict(e, shortcutId);
+    if (taken) {
+      this.renderShortcutSettingsList();
+      this.showToast?.(`${this.describeShortcutEvent(e)} is already used by ${taken}`, 'error');
+      return;
+    }
     const modifiers = [];
     if (e.ctrlKey) modifiers.push('ctrl');
     if (e.metaKey) modifiers.push('meta');
@@ -4735,7 +4743,70 @@ Object.assign(CodemanApp.prototype, {
     this.renderShortcutSettingsList();
   },
 
+  /** Label of the action that already owns the chord in `e`, or '' when it is free. */
+  findShortcutConflict(e, shortcutId) {
+    // Chords the keydown handlers claim before (or outside) the registry: they are fixed, so a
+    // rebind onto one of them would be dead or would hijack it. Alt+1-9 switch tabs by index
+    // (the document handler does not exclude Cmd); Ctrl/Shift+Enter insert a newline and
+    // Ctrl/Cmd+V pastes, and the user-bound gate sits above those branches in the xterm handler.
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && /^Digit[1-9]$/.test(e.code || '')) {
+      return 'Switch to Tab N';
+    }
+    // (Alt+Shift+Enter is the tile grid's Zoom chord, a registry entry, so Alt stays free.)
+    if (e.key === 'Enter' && !e.altKey && (e.ctrlKey || e.shiftKey)) return 'Insert Newline';
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && String(e.key).toLowerCase() === 'v') return 'Paste';
+    if (typeof this.getShortcutRegistry !== 'function' || typeof this.matchesShortcutEvent !== 'function') return '';
+    const other = this.getShortcutRegistry().find(
+      (shortcut) =>
+        shortcut.id !== shortcutId && !shortcut.disabled && Array.isArray(shortcut.bindings) && this.matchesShortcutEvent(e, shortcut)
+    );
+    return other ? other.label : '';
+  },
+
+  /**
+   * Label of the action that already owns a chord in `shortcut`'s bindings, or ''. Used when a
+   * binding comes back without a capture (re-enable, Reset), where the chord may have been
+   * given to another action in the meantime.
+   */
+  findShortcutBindingConflict(shortcut) {
+    for (const binding of shortcut?.bindings || []) {
+      const mods = binding.modifiers || [];
+      const taken = this.findShortcutConflict(
+        {
+          ctrlKey: mods.includes('ctrl'),
+          metaKey: mods.includes('meta'),
+          shiftKey: mods.includes('shift'),
+          altKey: mods.includes('alt'),
+          key: binding.key || '',
+          code: binding.code || '',
+        },
+        shortcut.id
+      );
+      if (taken) return taken;
+    }
+    return '';
+  },
+
+  describeShortcutEvent(e) {
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.metaKey) parts.push('Meta');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.altKey) parts.push('Alt');
+    parts.push(e.key && e.key.length === 1 ? e.key.toUpperCase() : e.key || e.code);
+    return parts.join('+');
+  },
+
   resetShortcutOverride(shortcutId) {
+    // Reset puts the default chord back (and re-enables the row): refuse when another action
+    // has taken that chord since, instead of leaving two actions on one key.
+    const fallback = typeof DEFAULT_SHORTCUTS !== 'undefined' ? DEFAULT_SHORTCUTS.find((d) => d.id === shortcutId) : null;
+    const taken = fallback ? this.findShortcutBindingConflict(fallback) : '';
+    if (taken) {
+      this.renderShortcutSettingsList();
+      this.showToast?.(`The default chord is already used by ${taken}`, 'error');
+      return;
+    }
     const settings = this.loadAppSettingsFromStorage();
     const shortcutOverrides = { ...(settings.shortcutOverrides || {}) };
     delete shortcutOverrides[shortcutId];
@@ -4745,6 +4816,17 @@ Object.assign(CodemanApp.prototype, {
   },
 
   toggleShortcutEnabled(shortcutId, enabled) {
+    if (enabled) {
+      // Re-enabling brings the row's chord back into play: leave it disabled when another action
+      // has been bound to that chord while it was off.
+      const shortcut = this.getShortcutRegistry?.().find((s) => s.id === shortcutId);
+      const taken = this.findShortcutBindingConflict(shortcut);
+      if (taken) {
+        this.renderShortcutSettingsList();
+        this.showToast?.(`Its chord is already used by ${taken}`, 'error');
+        return;
+      }
+    }
     const settings = this.loadAppSettingsFromStorage();
     const shortcutOverrides = { ...(settings.shortcutOverrides || {}) };
     shortcutOverrides[shortcutId] = { ...(shortcutOverrides[shortcutId] || {}), disabled: !enabled };

@@ -749,6 +749,9 @@ Object.assign(CodemanApp.prototype, {
         return false;
       }
 
+      // A chord the user rebound to an app action (Settings -> Shortcuts) must not also type into the PTY.
+      if (ev.type === 'keydown' && this.isUserBoundShortcutEvent?.(ev)) return false;
+
       // Command palette chord (COD-153): keep it out of the PTY. The document
       // CAPTURE handler has already opened the palette by the time xterm sees
       // this keydown, but its preventDefault() does NOT stop xterm — without
