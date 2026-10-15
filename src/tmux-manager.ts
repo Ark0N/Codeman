@@ -4076,7 +4076,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         // Without geometry there is no cursor move, so fall back to the old trim.
         // Keeping the blank rows here would park the caret at the bottom of the
         // pane with nothing to correct it — worse than not trying at all.
-        if (!geometry) return normalizeScrollbackEol(rawCapture.replace(/\n+$/g, ''));
+        if (!geometry) {
+          const trimmed = rawCapture.replace(/\n+$/g, '');
+          return trimmed ? `${normalizeScrollbackEol(trimmed)}\x1b[0m` : '';
+        }
         // Take the line terminator off and nothing else. The trailing blank rows
         // that remain are the real bottom of the screen, and the cursor move
         // below counts up from it. tmux joins rows with a bare `\n`; normalize to
@@ -4090,7 +4093,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         // `_replayWouldShrinkBuffer` exists to refuse, arriving from the server
         // side where that guard cannot see it.
         if (!hasVisibleContent(trimmed)) return '';
-        return `${normalizeScrollbackEol(trimmed)}${formatCursorRestore(geometry)}`;
+        // capture-pane -e can leave the last row's SGR active (e.g. a nested
+        // tmux status bar). Hand live output the same default style as a visible
+        // snapshot, resetting before the cursor move so its position is kept.
+        return `${normalizeScrollbackEol(trimmed)}\x1b[0m${formatCursorRestore(geometry)}`;
       }
 
       const buffer = rawCapture.replace(/\n+$/g, '');
@@ -4099,7 +4105,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // positioned snapshot repaint and fall back to the raw capture. Normalize
       // its bare `\n` line endings to `\r\n` so the replay doesn't staircase
       // diagonally in a fresh xterm (COD-138, same reason as the fullHistory path).
-      return normalizeScrollbackEol(buffer);
+      return buffer ? `${normalizeScrollbackEol(buffer)}\x1b[0m` : '';
     } catch (err) {
       // ENOBUFS carries the truncated multi-MB stdout on the error object —
       // log a concise line instead of dumping it into the journal.
