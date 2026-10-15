@@ -2356,15 +2356,17 @@ Object.assign(CodemanApp.prototype, {
     if (!buffer?.getLine) return false;
     const pos = this._clientPointToCell(clientX, clientY);
     if (!pos) return false;
-    const rows = Math.max(1, this.terminal.rows || 1);
-    const cursorRow = Math.max(0, Math.min(rows - 1, buffer.cursorY || 0));
-    const tappedRow = pos.row - 1;
-    if (tappedRow === cursorRow) return true;
-    let start = cursorRow;
-    while (start > 0 && buffer.getLine(buffer.viewportY + start)?.isWrapped) start--;
-    let end = cursorRow;
-    while (end + 1 < rows && buffer.getLine(buffer.viewportY + end + 1)?.isWrapped) end++;
-    return tappedRow >= start && tappedRow <= end;
+    // Compare ABSOLUTE buffer lines: cursorY is baseY-relative and the tap is
+    // viewport-relative, so they only agree while the viewport sits at the bottom
+    // (a tab switch parks it above, see scrollToLastNonEmptyLine).
+    const cursorLine = buffer.baseY + (buffer.cursorY || 0);
+    const tappedLine = buffer.viewportY + pos.row - 1;
+    let start = cursorLine;
+    while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
+    let end = cursorLine;
+    // Bounded by length: xterm's getLine wraps around its circular list past the end.
+    while (end + 1 < buffer.length && buffer.getLine(end + 1)?.isWrapped) end++;
+    return tappedLine >= start && tappedLine <= end;
   },
 
   /**
