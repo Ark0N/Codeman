@@ -250,9 +250,9 @@ the wait promptly instead of burning the caller's whole timeout on something tha
 can no longer happen). On a `claude` worker, prefer an explicit `until=stop,exit`
 once the session is up: the default set's `idle` also resolves on a spinner pause,
 and on a fresh session the **startup** `idle` (emitted when the CLI first comes up)
-can land inside your first wait window and report a turn that never ran. Measured:
-a session parked on the trust dialog emits no *further* `idle`, so it is the
-startup transition, not the dialog, that produces the false success below.
+can land inside your first wait window and report a turn that never ran. That
+startup `idle` is held while Claude's workspace-trust dialog is on screen (inside
+the 90 s startup window), because the dialog's own ❯ is not a composer.
 
 ⚠️ **`exit` means "nothing is running", which includes "not started yet".** The
 server answers from `pid === null` plus a mux-layer pane-death probe, and that
@@ -290,11 +290,11 @@ instead. The same caution applies to the external CLIs.
 Nothing here reports "the agent is ready for a prompt", and no combination of
 `until`/`fresh` synthesizes one. A freshly created session reads as `exit` (above),
 and a `claude` worker in a brand-new case comes up on the CLI's **trust dialog**,
-which contains a ❯ prompt of its own. Send-and-wait posted at that moment types the
-prompt into the dialog, where the `\r` never gets past it, while the session's
-startup `idle` lands inside the wait window: the wait resolves on `idle` in a
-couple of seconds with `timedOut: false`, which looks exactly like a completed
-turn.
+which contains a ❯ of its own. A prompt posted at that moment is typed into the
+dialog, and its `\r` confirms the highlighted `No, exit`: the CLI quits and the
+pane dies, so send-and-wait resolves on `exit`. Codeman holds the session's `idle`
+while the dialog is on screen, so waiting for `idle` before prompting no longer
+clears too early, but that still does not make `idle` a readiness signal.
 
 The reliable sequence is: poll `GET /api/v1/sessions/:id` until `.data.pid` is
 non-null, then `wait-output` for the composer's own marker (`bypass`, the status

@@ -227,10 +227,10 @@ whether your integration works, and the last one is what actually bites:
 ⚠️ **There is no readiness signal, and skipping readiness is the failure that looks
 like success.** A session reports `idle` before its CLI has spawned, and a `claude`
 worker in a brand-new case comes up on the CLI's **trust dialog**, which has a ❯
-prompt of its own. Prompt it at that moment and the text lands in the dialog, the
-`\r` does not get past it, and the session's startup `idle` lands inside the wait
-window: the wait resolves on `idle` in a couple of seconds with `timedOut: false`,
-indistinguishable from a finished turn. Wait for the pid, then wait for the
+prompt of its own. Prompt it at that moment and the text lands in the dialog,
+whose highlighted option is `No, exit`, so the prompt's `\r` quits the CLI. Codeman
+holds the session's `idle` while the dialog is on screen, which makes waiting for
+`idle` safe but still not a readiness signal. Wait for the pid, then wait for the
 composer, answering the dialog only as the bounded fallback.
 
 ⚠️ **Answering it is not "press Enter".** Claude Code 2.1.252 dropped the options'
