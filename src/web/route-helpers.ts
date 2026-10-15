@@ -11,7 +11,8 @@ import fs from 'node:fs/promises';
 import type { z } from 'zod';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { Session } from '../session.js';
-import { ApiErrorCode, createErrorResponse, type AuthUser, type SessionState } from '../types.js';
+import { ApiErrorCode, createErrorResponse, type ApiResponse, type AuthUser, type SessionState } from '../types.js';
+import type { WaitCapacityError } from './session-wait-registry.js';
 import { MAX_CONCURRENT_SESSIONS } from '../config/map-limits.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import { SseEvent } from './sse-events.js';
@@ -626,4 +627,51 @@ export function autoConfigureRalph(session: Session, workingDir: string, ctx: Ev
       state: session.ralphTracker.loopState,
     });
   }
+}
+
+// ========== Long-poll helpers (shared by the wait routes and the inbox routes) ==========
+
+/**
+ * Map a waiter-cap rejection to the code that tells the caller the truth.
+ *
+ * The two caps mean different things and warrant different recovery: `session` is
+ * genuinely about THIS session, while `owner` and `total` are process-wide budgets
+ * that say nothing about it. Reporting a global cap as `SESSION_BUSY` (409,
+ * documented as "Session is busy") sent an agent off to a different session to hit
+ * the identical error. `RATE_LIMITED` is the code whose whole meaning is "come back
+ * later", and clients and proxies already treat 429 that way.
+ */
+export function waitCapacityResponse(err: WaitCapacityError): ApiResponse<never> {
+  const code = err.scope === 'session' ? ApiErrorCode.SESSION_BUSY : ApiErrorCode.RATE_LIMITED;
+  // The registry's message already names the scope and the limit; passing it through
+  // verbatim keeps the wording in one place.
+  return createErrorResponse(code, err.message);
+}
+
+/**
+ * An `AbortController` that fires when the CLIENT goes away, and only then.
+ *
+ * Freeing an abandoned waiter matters because the documented pattern is a loop of
+ * short waits: `curl --max-time 30 ".../wait?timeout=600000"` abandons a live waiter
+ * every iteration until the cap is hit and an innocent session reports busy. Same for
+ * any proxy that cuts the connection.
+ *
+ * ⚠️ **It must listen on the RESPONSE, not the request.** `req.raw` emits `'close'`
+ * as soon as the request body has finished streaming, which on a POST is BEFORE the
+ * handler ever blocks — measured at +1ms with `aborted: false`, indistinguishable
+ * from a real hang-up at +0ms. Wiring the abort there cancels every send-and-wait
+ * instantly and silently kills the feature (it survives on GET only because a GET has
+ * no body to finish). `reply.raw` emits `'close'` both when the response completes
+ * and when the socket dies, and `writableFinished` is what tells those apart: true
+ * only if the response actually went out. The guard is load-bearing, not defensive.
+ *
+ * `app.inject()` never emits `'close'` at all, so this is only observable over real
+ * HTTP — which is why the regression test for it binds a port.
+ */
+export function abortOnClientHangUp(reply: FastifyReply): AbortController {
+  const controller = new AbortController();
+  reply.raw.on('close', () => {
+    if (!reply.raw.writableFinished) controller.abort();
+  });
+  return controller;
 }

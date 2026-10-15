@@ -4,7 +4,7 @@
  * auto-clear, auto-compact, image watcher, flicker filter, and logout.
  */
 
-import { FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import { FastifyInstance, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { join, dirname, extname, basename, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
@@ -115,6 +115,8 @@ import {
   sessionCapacityMessage,
   SETTINGS_PATH,
   validatePathWithinBase,
+  waitCapacityResponse,
+  abortOnClientHangUp,
 } from '../route-helpers.js';
 import { buildAgentCaseMarker, writeAgentCaseMarker } from '../../agent-case-marker.js';
 import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
@@ -739,23 +741,6 @@ function parseWaitQuery<T>(schema: z.ZodType<T>, query: unknown, label: string):
 }
 
 /**
- * Map a waiter-cap rejection to the code that tells the caller the truth.
- *
- * The two caps mean different things and warrant different recovery: `session` is
- * genuinely about THIS session, while `owner` and `total` are process-wide budgets
- * that say nothing about it. Reporting a global cap as `SESSION_BUSY` (409,
- * documented as "Session is busy") sent an agent off to a different session to hit
- * the identical error. `RATE_LIMITED` is the code whose whole meaning is "come back
- * later", and clients and proxies already treat 429 that way.
- */
-function waitCapacityResponse(err: WaitCapacityError): ApiResponse<never> {
-  const code = err.scope === 'session' ? ApiErrorCode.SESSION_BUSY : ApiErrorCode.RATE_LIMITED;
-  // The registry's message already names the scope and the limit; passing it through
-  // verbatim keeps the wording in one place.
-  return createErrorResponse(code, err.message);
-}
-
-/**
  * The signal a session is ALREADY emitting, corrected for liveness.
  *
  * `signalForStatus` alone is not enough here, because `Session` parks a DEAD PTY at
@@ -929,34 +914,6 @@ export function _resetPaneLivenessState(): void {
 /** Test seam: how many panes are currently being watched for a dead worker. */
 export function _paneDeathWatcherCount(): number {
   return paneDeathWatchers.size;
-}
-
-/**
- * An `AbortController` that fires when the CLIENT goes away, and only then.
- *
- * Freeing an abandoned waiter matters because the documented pattern is a loop of
- * short waits: `curl --max-time 30 ".../wait?timeout=600000"` abandons a live waiter
- * every iteration until the cap is hit and an innocent session reports busy. Same for
- * any proxy that cuts the connection.
- *
- * ⚠️ **It must listen on the RESPONSE, not the request.** `req.raw` emits `'close'`
- * as soon as the request body has finished streaming, which on a POST is BEFORE the
- * handler ever blocks — measured at +1ms with `aborted: false`, indistinguishable
- * from a real hang-up at +0ms. Wiring the abort there cancels every send-and-wait
- * instantly and silently kills the feature (it survives on GET only because a GET has
- * no body to finish). `reply.raw` emits `'close'` both when the response completes
- * and when the socket dies, and `writableFinished` is what tells those apart: true
- * only if the response actually went out. The guard is load-bearing, not defensive.
- *
- * `app.inject()` never emits `'close'` at all, so this is only observable over real
- * HTTP — which is why the regression test for it binds a port.
- */
-function abortOnClientHangUp(reply: FastifyReply): AbortController {
-  const controller = new AbortController();
-  reply.raw.on('close', () => {
-    if (!reply.raw.writableFinished) controller.abort();
-  });
-  return controller;
 }
 
 /**

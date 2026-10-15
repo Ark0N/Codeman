@@ -64,6 +64,7 @@ import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import { QR_AUTH_FAILURE_MAX } from '../../config/tunnel-config.js';
 import { AUTH_SESSION_TTL_MS } from '../../config/auth-config.js';
 import { resolveTerminalHistoryConfig } from '../../config/terminal-history.js';
+import { agentInboxPersistence } from '../agent-inbox-persistence.js';
 
 /**
  * Defaults for `POST /api/deepseek/install-profile`.
@@ -1128,6 +1129,10 @@ export function registerSystemRoutes(
         workflowRunWatcher,
         'Workflow run watcher'
       );
+
+      // Agent inbox snapshot (default OFF). From `merged` like the toggles above: a
+      // partial PUT that omits the key must not switch it off and delete the file.
+      agentInboxPersistence.setEnabled(merged.agentInboxPersistEnabled === true);
 
       // Handle image watcher toggle dynamically
       toggleService((merged.imageWatcherEnabled as boolean) ?? false, imageWatcher, 'Image watcher', () => {

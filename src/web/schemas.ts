@@ -1538,6 +1538,12 @@ export const SettingsUpdateSchema = z
     /** Also drop snapshots older than this many days; 0 = no age limit. */
     configBackupKeepDays: z.number().int().min(0).max(3650).optional(),
     /**
+     * Agent inbox snapshot on disk (src/web/agent-inbox-persistence.ts). SYNCED, default OFF:
+     * off means no file is written, and switching it off deletes the snapshot (the in-memory
+     * inboxes stay). On, pending messages between agents survive a server restart.
+     */
+    agentInboxPersistEnabled: z.boolean().optional(),
+    /**
      * Read My Mind predictor model override. Empty/absent = the AI-checker
      * default (opus: prediction quality is the product and it runs only on an
      * explicit press). Shell-safety is validated again at spawn time.
@@ -1835,6 +1841,32 @@ export const SessionWaitOutputQuerySchema = z.object({
   // the documented contract, so a large value must clamp rather than 400.
   timeout: z.coerce.number().int().positive().optional(),
 });
+
+// ========== Agent Inbox Routes ==========
+
+/**
+ * Body for `POST /api/sessions/:id/inbox`. The byte cap (`MAX_MESSAGE_BYTES`) is the
+ * store's, checked there in UTF-8 bytes; this bound is only the outer fence so a
+ * multi-megabyte body never reaches it. Multi-line text is fine: it is stored and
+ * handed back as data, never typed.
+ */
+export const InboxPostSchema = z
+  .object({
+    text: z.string().min(1, 'text must not be empty').max(16_384),
+  })
+  .strict();
+
+/** Query for `GET /api/sessions/:id/inbox`. `wait` follows the wait routes' `timeout`: clamped, never a 400 for size. */
+export const InboxReadQuerySchema = z.object({
+  wait: z.coerce.number().int().positive().optional(),
+});
+
+/** Body for `POST /api/sessions/:id/inbox/ack`: the ids a read handed out. */
+export const InboxAckSchema = z
+  .object({
+    ids: z.array(z.string().min(1).max(64)).min(1).max(200),
+  })
+  .strict();
 
 // ========== Session Mutation Routes ==========
 

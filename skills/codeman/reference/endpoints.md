@@ -608,6 +608,22 @@ Approving a permission dialog on your own is exactly the laundering this skill f
 can access, which includes the user's own working sessions. An approval belonging to one
 of those is something you **report**, never something you answer.
 
+### Agent inbox: hand a worker text without typing into its pane
+
+Stored, not typed: the receiver reads it when it asks. Semantics, CLI form and the
+receiver loop: `verbs.md` §5.15.
+
+| Task | Call |
+|------|------|
+| post to a session's inbox | `POST /api/v1/sessions/:id/inbox` body `{"text":"…"}` → `.data.message.{id,from}`; 409 = inbox full, nothing stored |
+| read (yours marks seen, anyone else's is a peek) | `GET /api/v1/sessions/:id/inbox` → `.data.{receiver,pending,unseen,messages[]}` |
+| block until something unseen arrives | `GET /api/v1/sessions/:id/inbox?wait=60000` → `.data.wait.{posted,timedOut,ended}` |
+| remove what you handled (receiver only, idempotent) | `POST /api/v1/sessions/:id/inbox/ack` body `{"ids":["…"]}`; 403 from anyone else |
+| counts per session, never text | `GET /api/v1/agent-inbox/summary` → `.data.sessions[id].{pending,unseen,oldestUnseenAt,parked}` |
+
+`from` and "who is the receiver" both come from the `X-Codeman-Parent-Session` header the
+preamble's `CURL` sends, never from the body.
+
 ### The wait primitives
 
 Three bounded long-polls. Shared semantics:

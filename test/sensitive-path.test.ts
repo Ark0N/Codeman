@@ -88,6 +88,7 @@ describe('isSensitivePath', () => {
       ['codeman push keys (VAPID private)', `${HOME}/.codeman/push-keys.json`],
       ['codeman intent profiles', `${HOME}/.codeman/intents.json`],
       ['codeman intents on a named instance', `${HOME}/.codeman-beta/intents.json`],
+      ['codeman agent inbox snapshot', `${HOME}/.codeman/agent-inbox.json`],
     ];
 
     it.each(blocked)('blocks the %s', (_label, path) => {

@@ -116,6 +116,8 @@ import {
 } from './session-listener-wiring.js';
 import { sessionWaits } from './session-wait-registry.js';
 import { intentStore } from '../intent-store.js';
+import { agentInbox } from './agent-inbox.js';
+import { agentInboxPersistence } from './agent-inbox-persistence.js';
 import { AI_CHECK_MODEL } from '../config/ai-defaults.js';
 import { approvalInbox } from './approval-inbox.js';
 import { SCREEN_BLOCKED_SOURCE } from './screen-blocked.js';
@@ -201,6 +203,7 @@ import {
   registerScheduledRoutes,
   registerHookEventRoutes,
   registerApprovalRoutes,
+  registerInboxRoutes,
   registerRebootRestoreRoutes,
   registerReadMyMindRoutes,
   registerGitStatusRoutes,
@@ -1229,6 +1232,7 @@ export class WebServer extends EventEmitter {
     registerScheduledRoutes(this.app, ctx);
     registerHookEventRoutes(this.app, ctx);
     registerApprovalRoutes(this.app, ctx);
+    registerInboxRoutes(this.app, ctx);
     registerRebootRestoreRoutes(this.app, ctx);
     registerReadMyMindRoutes(this.app, ctx);
     registerGitStatusRoutes(this.app, ctx);
@@ -1686,6 +1690,10 @@ export class WebServer extends EventEmitter {
     // The 'exit' here is NOT redundant with the PTY-exit listener: listeners are
     // detached a few lines above, before `session.stop()`, so on a delete the
     // session's own exit event never reaches the registry.
+    // The agent inbox goes with a DELETED session only. killMux=false is shutdown or
+    // detach, and a detached session comes back to the mail posted while it was away.
+    // Before cancelAll, so a reader released by it reads an empty inbox.
+    if (killMux) agentInbox.drop(sessionId);
     sessionWaits.notifySignal(sessionId, 'exit');
     sessionWaits.cancelAll(sessionId);
     approvalInbox.resolveForSession(sessionId, 'session_ended');
@@ -2209,6 +2217,13 @@ export class WebServer extends EventEmitter {
   private async getAgentSkillEnabled(): Promise<boolean> {
     const settings = await this.readSettings();
     return settings.agentSkillEnabled === true;
+  }
+
+  // Whether pending agent-inbox mail is snapshotted to disk (synced
+  // `agentInboxPersistEnabled` setting). Default OFF: an absent key writes nothing.
+  private async getAgentInboxPersistEnabled(): Promise<boolean> {
+    const settings = await this.readSettings();
+    return settings.agentInboxPersistEnabled === true;
   }
 
   // Whether a Claude session installs Codeman's hooks block into its workspace
@@ -3041,6 +3056,10 @@ export class WebServer extends EventEmitter {
     // This prevents race conditions where clients connect before state is ready
     // CRITICAL: Skip in test mode to prevent tests from picking up user sessions
     if (!this.testMode) {
+      // Pending agent mail first (opt-in snapshot), so it is in place before any
+      // route can answer. Pruned against the restored sessions in finalizeRestoredState.
+      const restoredMail = agentInboxPersistence.load(await this.getAgentInboxPersistEnabled());
+      if (restoredMail > 0) console.log(`[AgentInbox] restored ${restoredMail} pending message(s)`);
       const restored = await this.restoreMuxSessions();
       await this.finalizeRestoredState(restored);
 
@@ -4013,6 +4032,13 @@ export class WebServer extends EventEmitter {
     this.tabLayouts.markRestorationComplete();
     await this.cleanupStaleSessions();
     await this.tabLayouts.reconcileAfterRestoration();
+    // Same gate as the tab layouts: only a restore that succeeded may decide which
+    // inboxes are orphans. A failed one returns above and leaves every message alone.
+    // Kept: live sessions plus every record state.json still holds (a session that
+    // was not re-adopted this boot but is kept for recovery keeps its mail).
+    const keep = new Set([...this.sessions.keys(), ...Object.keys(this.store.getSessions())]);
+    const pruned = agentInbox.pruneExcept(keep);
+    if (pruned > 0) console.log(`[AgentInbox] dropped ${pruned} inbox(es) of sessions that did not come back`);
   }
 
   /**
@@ -4189,6 +4215,8 @@ export class WebServer extends EventEmitter {
     sessionWaits.cancelEverything();
     approvalInbox.stop();
     this.keepWarmService.stop();
+    // A post within the debounce window before shutdown would otherwise not reach disk.
+    agentInboxPersistence.flush();
     // Same reason as `cancelEverything` above: an in-flight wake is awaited by a request,
     // and `app.close()` (the last line of this method) does not abort in-flight requests —
     // so without this a restart during a wake waits out the readiness poll.

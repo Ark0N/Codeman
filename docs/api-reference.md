@@ -591,9 +591,92 @@ request returns. The capture runs synchronous tmux calls on the server; the
 
 ## The `codeman agent` CLI (client over these endpoints)
 
-`codeman agent ls|spawn|send|wait|read|interrupt|rm` (`src/cli-agent.ts`) is the command-line client for the endpoints above, for agents the skill does not reach (a pi or shell session, a machine without `jq`). It adds no route: `spawn` is `POST /api/v1/quick-start` (+ `wait-output` on the mode's `capabilities.composerReadyMark` from the CLI registry, where it declares one), `send` is `POST …/input` with `clientId`+`seq` (and `wait`/`waitTimeout` for `--wait` / `--until <signals>`; `delivered:false` without `duplicate` and `wait.ended` both exit 3 — the CLI never reports a dead worker as done), `wait` is `GET …/wait` (`--until`) or `GET …/wait-output` (`--match`, `from=buffer` by default), `read` is `GET …/last-response` or `GET …/terminal?tail=`, `interrupt` is `POST …/input` with a bare `\u001b`, `rm` is `DELETE …/sessions/:id`. A fire-and-forget `send` to a sleeping wake-on-LAN host reads the route's `buffered` (own line, exit 0) and `dropped` (exit 1: the chunk is gone). An id may be the 8-character form `ls` prints, resolved through `GET /api/v1/sessions`; anything shorter refuses before any request, the same floor as `PARENT_SESSION_ID_MIN_PREFIX`. Every call carries `X-Codeman-Parent-Session`; only `spawn`'s quick-start carries `X-Codeman-Agent-Origin: codeman-agent-cli` (the agent-scratch label must never reach a request that cannot create the case directory). Basic auth comes from `CODEMAN_PASSWORD` or the data dir's `.env`. Server-side error codes are shown verbatim (`INVALID_INPUT: until=stop …` on a hook-less mode is not hidden); exit codes are `0` ok, `1` error, `2` timeout, `3` the session exited, `4` refused by a client-side guard. See the README section "`codeman agent`" for the guards and `test/cli-agent.test.ts` for the pinned behaviour.
+`codeman agent ls|spawn|send|wait|read|interrupt|rm|post|inbox|ack` (`src/cli-agent.ts`) is the command-line client for the endpoints above, for agents the skill does not reach (a pi or shell session, a machine without `jq`). It adds no route: `spawn` is `POST /api/v1/quick-start` (+ `wait-output` on the mode's `capabilities.composerReadyMark` from the CLI registry, where it declares one), `send` is `POST …/input` with `clientId`+`seq` (and `wait`/`waitTimeout` for `--wait` / `--until <signals>`; `delivered:false` without `duplicate` and `wait.ended` both exit 3 — the CLI never reports a dead worker as done), `wait` is `GET …/wait` (`--until`) or `GET …/wait-output` (`--match`, `from=buffer` by default), `read` is `GET …/last-response` or `GET …/terminal?tail=`, `interrupt` is `POST …/input` with a bare `\u001b`, `rm` is `DELETE …/sessions/:id`, and the inbox verbs map one to one onto the [agent inbox](#agent-inbox) routes (`post` → `POST …/inbox`, `inbox [id] [--wait]` → `GET …/inbox[?wait=]`, own inbox by default, `ack <ids…>` → `POST …/inbox/ack`); `ls` adds an `INBOX` column from `GET /api/v1/agent-inbox/summary` and drops it when that route does not answer. A fire-and-forget `send` to a sleeping wake-on-LAN host reads the route's `buffered` (own line, exit 0) and `dropped` (exit 1: the chunk is gone). An id may be the 8-character form `ls` prints, resolved through `GET /api/v1/sessions`; anything shorter refuses before any request, the same floor as `PARENT_SESSION_ID_MIN_PREFIX`. Every call carries `X-Codeman-Parent-Session`; only `spawn`'s quick-start carries `X-Codeman-Agent-Origin: codeman-agent-cli` (the agent-scratch label must never reach a request that cannot create the case directory). Basic auth comes from `CODEMAN_PASSWORD` or the data dir's `.env`. Server-side error codes are shown verbatim (`INVALID_INPUT: until=stop …` on a hook-less mode is not hidden); exit codes are `0` ok, `1` error, `2` timeout, `3` the session exited, `4` refused by a client-side guard. See the README section "`codeman agent`" for the guards and `test/cli-agent.test.ts` for the pinned behaviour.
 
 `codeman mcp` (`src/mcp-server.ts`) is a Model Context Protocol server on stdio over the same endpoints, for MCP clients: `list_sessions` (`GET /api/v1/sessions`), `start_session` (`POST /api/v1/quick-start` with `X-Codeman-Agent-Origin: codeman-mcp`, then `wait-output` on the mode's ready mark), `send_prompt` (`POST …/input` with `wait`/`waitTimeout`), `wait_for_session` (`GET …/wait` or `…/wait-output`), `read_output` (`GET …/last-response` or `…/terminal?tail=`), `interrupt_session` and `delete_session`. It adds no route. The URL comes from `CODEMAN_API_URL` or `--url`, never a guess; prompting, interrupting and deleting are limited to sessions the process started (or the calling session's own children) unless it runs with `--allow-any-session`. See the README section "MCP server" and `test/mcp-server.test.ts`.
+
+## Agent inbox
+
+A per-session mailbox: another agent (or the user) posts a message, and the
+receiving agent reads it when it chooses to. Nothing is typed into the
+receiver's pane, which is the difference from `POST …/input`: a post does not
+start or interrupt a turn, and the text may span several lines. Design and the
+reasons behind each rule: [discussion #558](https://github.com/Ark0N/Codeman/discussions/558).
+
+| Method | Route | Body / query | Answer (`data`) |
+|---|---|---|---|
+| `POST` | `/api/v1/sessions/:id/inbox` | `{ text }` | `{ sessionId, message, pending, unseen }` |
+| `GET` | `/api/v1/sessions/:id/inbox` | `?wait=<ms>` (optional) | `{ sessionId, receiver, messages, pending, unseen, wait? }` |
+| `POST` | `/api/v1/sessions/:id/inbox/ack` | `{ ids: string[] }` (1 to 200) | `{ sessionId, removed, pending, unseen }` |
+| `GET` | `/api/v1/agent-inbox/summary` | | `{ sessions: { [id]: { pending, unseen, oldestUnseenAt, parked } } }` |
+
+A message is `{ id, from, text, createdAt, seen }`. `from` is a session id or
+`null` (the user); `seen` says whether the receiver had read it before this read.
+
+**Who is calling.** The server resolves the caller from the
+`X-Codeman-Parent-Session` header, the one `codeman agent` sends on every
+request, with the same resolver as session lineage: a live session the caller
+can see, with the same owner as the receiving session, matched by exact id or a
+unique prefix of at least 8 characters. Anything else counts as no session.
+The body cannot name a sender (`InboxPostSchema` is strict). In multi-user mode
+that means a caller cannot claim to be another owner's session. In single-user
+mode every local process holds the same credentials, so the header is a hint the
+client gives about itself, not proof.
+
+**Read until ack.** A read returns every pending message, oldest first, and
+removes nothing. Only `POST …/ack` removes, by id. Acking an id that is already
+gone is a success, so a retry after a lost response does not fail.
+
+**Seen is the receiver's.** A read marks messages seen only when the resolved
+caller is the receiving session itself (`receiver: true`). Any other read, a
+coordinator checking a worker or a request without the header, is a peek and
+changes nothing. `ack` from anyone but the receiver is `403 FORBIDDEN`.
+
+**`?wait=`** blocks while the inbox holds nothing **unseen**. A message that
+was read but not acked does not end the wait, so a receiver that keeps one
+pending does not spin. The value is clamped to the agent-wait bounds like
+`timeout` on `/wait`, a timeout is a `200` with `wait.timedOut: true`, and the
+waiter counts against the same per-session, per-owner and total caps (`409
+SESSION_BUSY` / `429 RATE_LIMITED`). `wait` has the shape of the other wait
+results plus `posted` (a post released it). A session deleted during the wait
+answers `wait.ended: true` with an empty inbox.
+
+**Limits.** 200 messages, 16384 bytes (UTF-8) per message, 512 KiB of text per
+inbox. A message over the per-message cap is `400 INVALID_INPUT`. A post that
+would cross either inbox cap is `409 CONFLICT` and nothing is stored; the oldest
+message is never dropped to make room. Messages expire 12 hours after their
+`createdAt`, read or not.
+
+**Summary.** `GET /api/v1/agent-inbox/summary` lists every session the caller
+can see that has mail or a parked receiver: `pending`, `unseen`,
+`oldestUnseenAt` (epoch ms, `null` when nothing is unseen) and `parked` (the
+receiver itself is waiting on `?wait=` right now). Counts only, never text. It
+is not part of the session object, so a post does not broadcast
+`session:updated`.
+
+**Lifetime.** An inbox is deleted with its session (`DELETE
+/api/v1/sessions/:id` and every other delete path), not when a session is
+detached. By default inboxes live in memory and a server restart empties them.
+The synced setting `agentInboxPersistEnabled` (default off; Settings → Cross-session features)
+writes them to `agent-inbox.json` in the data dir (mode `0600`, tmp file +
+rename) and restores them at boot. Inboxes of sessions that did not come back
+are pruned only after the session restore succeeded. Switching the setting off
+deletes the file and keeps what is in memory. The file is never read by
+`/api/search`, and the file viewer refuses it.
+
+```bash
+# coordinator: leave a task for a worker
+curl -s -X POST "$API/api/v1/sessions/$WORKER/inbox" \
+  -H "X-Codeman-Parent-Session: $CODEMAN_SESSION_ID" -H 'Content-Type: application/json' \
+  -d "$(jq -n --arg t "$(cat task.md)" '{text: $t}')"
+
+# worker: wait for new mail, handle it, then ack by id
+curl -s "$API/api/v1/sessions/$CODEMAN_SESSION_ID/inbox?wait=300000" \
+  -H "X-Codeman-Parent-Session: $CODEMAN_SESSION_ID" | jq '.data.messages'
+curl -s -X POST "$API/api/v1/sessions/$CODEMAN_SESSION_ID/inbox/ack" \
+  -H "X-Codeman-Parent-Session: $CODEMAN_SESSION_ID" -H 'Content-Type: application/json' \
+  -d '{"ids":["<id>"]}'
+```
 
 ## Prompt uploads (`POST /api/v1/sessions/:id/paste-image`)
 

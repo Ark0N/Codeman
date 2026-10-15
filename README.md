@@ -988,6 +988,9 @@ codeman agent read "$SID" --tail 3000                     # terminal tail, ANSI 
 codeman agent send "$SID" 'run the tests, then print WORKDONE followed by _4711'   # hook-less modes (opencode, pi, …): ask for the marker in halves …
 codeman agent wait "$SID" --match WORKDONE_4711           # … and wait on the joined form, which the prompt's echo never contains
 codeman agent interrupt "$SID"                            # a bare ESC, conversation intact
+codeman agent post "$SID" 'context for later, not a prompt'   # stored in its inbox, not typed into the pane
+codeman agent inbox --wait --timeout 300000               # your own inbox: blocks while nothing is new
+codeman agent ack <msg-id>                                # remove what you handled (read never removes)
 codeman agent rm "$SID"                                   # any session except this one
 ```
 
@@ -1067,6 +1070,7 @@ REST over Fastify — **~230 handlers across 25 route modules**, plus an SSE str
 | `GET`    | `/api/sessions/:id/last-response` | The last answer as clean text, read from the transcript (claude, codex, deepseek) |
 | `GET`    | `/api/sessions/:id/wait`   | Block until a signal fires (`?until=stop,idle,exit&timeout=&fresh=`); a timeout is a `200` |
 | `GET`    | `/api/sessions/:id/wait-output` | Block until a literal string appears (`?match=&nocase=&from=now\|buffer&timeout=`) |
+| `POST` / `GET` | `/api/sessions/:id/inbox` | Agent inbox: post `{text}` / read every pending message (`?wait=` blocks while nothing is new); `POST …/inbox/ack {ids}` removes them, receiver only |
 | `GET`    | `/api/sessions/unified`    | Unified live + history list (Session Manager) — `?q=&limit=`                       |
 | `POST`   | `/api/sessions/:id/pin`    | Pin/unpin in the Session Manager (`{pinned}`)                                      |
 | `PUT`    | `/api/session-order`       | Sync tab order across devices (`{order: [ids]}`)                                   |

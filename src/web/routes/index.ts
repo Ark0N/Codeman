@@ -12,6 +12,7 @@ export { registerCronRoutes } from './cron-routes.js';
 export { registerSystemRoutes } from './system-routes.js';
 export { registerHookEventRoutes } from './hook-event-routes.js';
 export { registerApprovalRoutes } from './approval-routes.js';
+export { registerInboxRoutes } from './inbox-routes.js';
 export { registerRebootRestoreRoutes } from './reboot-restore-routes.js';
 export { registerReadMyMindRoutes } from './readmymind-routes.js';
 export { registerGitStatusRoutes } from './git-status-routes.js';

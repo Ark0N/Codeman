@@ -18,9 +18,9 @@ fi
 AUTH=(); [ -n "${CODEMAN_PASSWORD:-}" ] && AUTH=(-u "${CODEMAN_USERNAME:-admin}:$CODEMAN_PASSWORD")
 # -k: harmless on http, required on https (self-signed cert).
 # X-Codeman-Parent-Session: tags workers YOU spawn as your children, so the web UI can
-# draw the lineage. Set once here and every present and future create call carries it;
-# it is ignored on every other endpoint. Purely cosmetic (see §5.1) and it can never
-# fail a spawn, so there is no case where you would want to leave it off.
+# draw the lineage. Set once here and every present and future create call carries it.
+# The agent inbox reads it too, as "who is calling" (§5.15); every other endpoint ignores
+# it. It can never fail a spawn, so there is no case where you would want to leave it off.
 # X-Codeman-Agent-Origin: marks a case directory a spawn CREATES as agent scratch, so the
 # user can find and delete it long after your workers are gone (§5.14). Same deal: set
 # once, cosmetic, never fails a spawn, and it labels only directories Codeman creates.
