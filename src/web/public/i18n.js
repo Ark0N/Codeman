@@ -798,6 +798,8 @@
 
     // Dynamic common status / toasts
     'Settings saved': '设置已保存',
+    // The once-per-release toast (settings-ui.js checkWhatsNew); its highlights stay English.
+    "See what's new": '查看更新内容',
     'Settings applied': '设置已应用',
     'Save and keep Settings open': '保存并保持设置打开',
     'Settings saved locally': '设置已保存到本机',
@@ -1244,6 +1246,10 @@
       [/^Update to v(.+)$/, (_m, version) => `更新到 v${version}`],
       [/^You're up to date \(v(.+)\)\.$/, (_m, version) => `已是最新版本（v${version}）。`],
       [/^Update available: v(.+)$/, (_m, version) => `有可用更新：v${version}`],
+      [
+        /^Codeman updated to v([^:\s]+): (.+?)(?: \(\+(\d+) more\))?$/,
+        (_m, version, shown, more) => `Codeman 已更新到 v${version}：${shown}${more ? `（另有 ${more} 项）` : ''}`,
+      ],
       [/^Selected: (.+)$/, (_m, value) => `已选择：${value}`],
       [/^Failed to (.+)$/, (_m, action) => `操作失败：${action}`],
       [/^Will create: (.+)$/, (_m, path) => `将创建：${path}`],

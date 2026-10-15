@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import vm from 'node:vm';
+import { JSDOM } from 'jsdom';
 // @ts-expect-error plain .mjs helper shared with scripts/generate-whats-new.mjs
 import { extractHighlights, versionSection, buildWhatsNew } from '../scripts/lib/whats-new.mjs';
 
@@ -93,5 +95,34 @@ describe('shipped whats-new.json', () => {
     expect(readFileSync(resolve(root, 'src/web/public/app.js'), 'utf8')).toContain(
       'this.checkWhatsNew?.(data.version)'
     );
+  });
+});
+
+describe('the announcement in zh-CN', () => {
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', {
+    runScripts: 'outside-only',
+    url: 'http://localhost/',
+  });
+  vm.runInContext(readFileSync(resolve(root, 'src/web/public/i18n.js'), 'utf8'), dom.getInternalVMContext());
+  const api = (
+    dom.window as unknown as { CodemanI18n: { t(s: string): string; configure(o: Record<string, string>): void } }
+  ).CodemanI18n;
+  api.configure({ language: 'zh-CN' });
+
+  it('translates the button and the toast frame, keeping the version and the English highlights', () => {
+    expect(api.t("See what's new")).toBe('查看更新内容');
+    expect(api.t('Codeman updated to v1.41.2: Tab layouts (#538) · Split view')).toBe(
+      'Codeman 已更新到 v1.41.2：Tab layouts (#538) · Split view'
+    );
+    expect(api.t('Codeman updated to v1.41.2: A · B · C (+5 more)')).toBe(
+      'Codeman 已更新到 v1.41.2：A · B · C（另有 5 项）'
+    );
+  });
+
+  it('builds the strings the pattern expects', () => {
+    const ui = readFileSync(resolve(root, 'src/web/public/settings-ui.js'), 'utf8');
+    expect(ui).toContain('`Codeman updated to v${runningVersion}: ${shown}${more}`');
+    expect(ui).toContain('` (+${notes.highlights.length - 3} more)`');
+    expect(ui).toContain(`label: "See what's new"`);
   });
 });
