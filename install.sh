@@ -7,8 +7,9 @@
 #
 # The flow: look at what is already on the machine, ask at most three
 # questions (how the dashboard is reached, optionally what to call this
-# machine on your tailnet, whether to run Codeman as a service), then do all
-# the work unattended and end on the URL, with a QR code for your phone.
+# machine on your tailnet, whether to run Codeman as a service; on a laptop,
+# a follow-up on keeping it awake), then do all the work unattended and end on
+# the URL, with a QR code for your phone.
 #
 # Flags (each has an environment-variable twin, listed below):
 #   --tailscale | --lan | --local   How the dashboard is reached (question 1)
@@ -48,6 +49,7 @@
 #   install.sh name [<n>]   - Rename this machine on your tailnet (default: codeman-<hostname>)
 #   install.sh status       - Print the URLs, the QR code and how to manage the service
 #   install.sh cloudflared  - Install cloudflared for the in-app Cloudflare tunnel
+#   install.sh keep-awake   - Keep this machine awake while Codeman runs (macOS: adds the lid helper)
 
 set -euo pipefail
 
@@ -129,6 +131,18 @@ SUBCOMMAND_ARG=""
 # alone) | empty (no service manager here).
 LAUNCH_CHOICE="3"
 SERVICE_TYPE=""
+# Follow-up to question 3, laptops only (choose_keep_awake): KEEP_AWAKE=1
+# writes keepAwakeEnabled into settings.json, KEEP_AWAKE_LID_HELPER=1 installs
+# the macOS root helper that covers lid-close sleep. Empty = leave as is.
+KEEP_AWAKE=""
+KEEP_AWAKE_LID_HELPER=""
+# Where laptop detection looks. Variables only so the test harness can point
+# them at a fake tree.
+POWER_SUPPLY_ROOT="/sys/class/power_supply"
+LID_BUTTON_ROOT="/proc/acpi/button/lid"
+KEEP_AWAKE_HELPER_DIR="/Library/Application Support/Codeman"
+KEEP_AWAKE_HELPER_PLIST="/Library/LaunchDaemons/com.codeman.keepawake.plist"
+KEEP_AWAKE_HELPER_LABEL="com.codeman.keepawake"
 
 # Everything the unattended steps print goes here; the terminal gets one line
 # per step and the tail of this file on failure.
@@ -2705,6 +2719,200 @@ cloudflared_subcommand() {
 # Wait briefly for codeman-web.service to report active. A bad node path or a
 # busy port makes the unit crash within the first seconds (then sit in
 # activating/auto-restart), so a blind "started!" message would be a lie.
+# ----------------------------------------------------------------------------
+# Keep awake (laptops): Codeman holds an OS sleep lock while it runs
+# ----------------------------------------------------------------------------
+# The server does the work (src/keep-awake-manager.ts: systemd-inhibit on
+# Linux, caffeinate on macOS); the installer only asks, writes the setting and,
+# on macOS, installs the root helper for the one thing caffeinate cannot do:
+# keep a closed MacBook awake (scripts/keep-awake-macos.sh).
+
+# True on a machine with its own battery or a lid. A peripheral's battery
+# (scope=Device, e.g. a wireless mouse) does not make a desktop a laptop.
+is_laptop() {
+    local os="$1" d t scope
+    if [[ "$os" == "macos" ]]; then
+        pmset -g batt 2>/dev/null | grep -q 'InternalBattery'
+        return
+    fi
+    if [[ -d "$LID_BUTTON_ROOT" ]] && [[ -n "$(ls -A "$LID_BUTTON_ROOT" 2>/dev/null)" ]]; then
+        return 0
+    fi
+    for d in "$POWER_SUPPLY_ROOT"/*; do
+        [[ -f "$d/type" ]] || continue
+        t=$(cat "$d/type" 2>/dev/null || true)
+        [[ "$t" == "Battery" ]] || continue
+        scope=$(cat "$d/scope" 2>/dev/null || true)
+        [[ "$scope" == "Device" ]] && continue
+        return 0
+    done
+    return 1
+}
+
+keep_awake_settings_file() {
+    printf '%s\n' "$HOME/.codeman/settings.json"
+}
+
+# The server writes settings.json with JSON.stringify(…, null, 2).
+keep_awake_enabled_now() {
+    grep -q '"keepAwakeEnabled": *true' "$(keep_awake_settings_file)" 2>/dev/null
+}
+
+# Asked right after question 3, on laptops only ($2 = force skips that check,
+# for `install.sh keep-awake`). The default is no, so --yes and headless runs
+# never turn it on: keeping a machine awake is the owner's call.
+choose_keep_awake() {
+    local os="$1" force="${2:-}"
+    KEEP_AWAKE=""
+    KEEP_AWAKE_LID_HELPER=""
+    if [[ "$force" != "force" ]]; then
+        is_laptop "$os" || return 0
+    fi
+    if keep_awake_enabled_now; then
+        info "Keep-awake is already on (App Settings > System > Power)."
+    else
+        echo -e "  ${DIM}Closing the lid suspends the machine, and every agent session freezes until it wakes.${NC}" >&2
+        prompt_yes_no "Keep this machine awake while Codeman runs, even with the lid closed (only while plugged in)?" "n" || return 0
+        KEEP_AWAKE="1"
+    fi
+    # The helper needs sudo, so it is only ever offered to a person at a terminal.
+    if [[ "$os" == "macos" ]] && [[ ! -f "$KEEP_AWAKE_HELPER_PLIST" ]] &&
+        [[ "$NONINTERACTIVE" != "1" && "$ASSUME_YES" != "1" ]] && has_tty; then
+        echo -e "  ${DIM}macOS sleeps on lid close whatever an app asks. A small root helper (pmset disablesleep) covers that, only while Codeman runs.${NC}" >&2
+        if prompt_yes_no "Install the lid helper? (asks for your admin password once)" "y"; then
+            KEEP_AWAKE_LID_HELPER="1"
+            sudo_session_start
+        fi
+    fi
+    return 0
+}
+
+# Turn the setting on before the service starts, so its first boot already
+# holds the lock. node does the JSON; a settings file that does not parse is
+# left untouched.
+write_keep_awake_setting() {
+    local file
+    file=$(keep_awake_settings_file)
+    mkdir -p "$(dirname "$file")"
+    if node -e '
+        const fs = require("fs");
+        const p = process.argv[1];
+        let s = {};
+        try { s = JSON.parse(fs.readFileSync(p, "utf8")); }
+        catch (e) { if (e.code !== "ENOENT") process.exit(2); }
+        if (s === null || typeof s !== "object" || Array.isArray(s)) process.exit(2);
+        s.keepAwakeEnabled = true;
+        if (s.keepAwakeAcOnly === undefined) s.keepAwakeAcOnly = true;
+        fs.writeFileSync(p, JSON.stringify(s, null, 2));
+    ' "$file" </dev/null; then
+        success "Keep-awake is on (only while plugged in; App Settings > System > Power)"
+        return 0
+    fi
+    warn "Could not turn keep-awake on: $file is not valid JSON. Use App Settings > System > Power instead."
+    return 1
+}
+
+# macOS: copy the helper to a ROOT-OWNED path (a root daemon must never run a
+# file the user can edit, and the install dir is the user's) and load it as a
+# LaunchDaemon that runs every 20 seconds. It only acts while the server keeps
+# a fresh request file in the data dir.
+install_keep_awake_lid_helper() {
+    local src="$INSTALL_DIR/scripts/keep-awake-macos.sh"
+    local script="$KEEP_AWAKE_HELPER_DIR/keep-awake-macos.sh"
+    local request="$HOME/.codeman/keep-awake-lid.pid"
+    local tmp
+    if [[ ! -f "$src" ]]; then
+        warn "Lid helper not found at $src; skipped."
+        return 1
+    fi
+    if ! { run_as_root mkdir -p "$KEEP_AWAKE_HELPER_DIR" &&
+        run_as_root chown root:wheel "$KEEP_AWAKE_HELPER_DIR" &&
+        run_as_root chmod 755 "$KEEP_AWAKE_HELPER_DIR" &&
+        run_as_root install -m 755 -o root -g wheel "$src" "$script"; }; then
+        warn "Could not install the lid helper (sudo refused?). Run later: install.sh keep-awake"
+        return 1
+    fi
+    tmp=$(mktemp)
+    cat > "$tmp" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$KEEP_AWAKE_HELPER_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$(xml_escape "$script")</string>
+    <string>$(xml_escape "$request")</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>20</integer>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
+EOF
+    run_as_root launchctl unload "$KEEP_AWAKE_HELPER_PLIST" 2>/dev/null || true
+    if ! run_as_root install -m 644 -o root -g wheel "$tmp" "$KEEP_AWAKE_HELPER_PLIST"; then
+        rm -f "$tmp"
+        warn "Could not write $KEEP_AWAKE_HELPER_PLIST. Run later: install.sh keep-awake"
+        return 1
+    fi
+    rm -f "$tmp"
+    run_as_root launchctl load -w "$KEEP_AWAKE_HELPER_PLIST" 2>/dev/null || true
+    if run_as_root launchctl list "$KEEP_AWAKE_HELPER_LABEL" &>/dev/null; then
+        success "Lid helper installed (it only acts while Codeman asks it to)"
+        return 0
+    fi
+    warn "The lid helper did not load. Inspect: sudo launchctl list $KEEP_AWAKE_HELPER_LABEL"
+    return 1
+}
+
+# Uninstall: undo a disablesleep only the helper set (its .owned marker, never
+# an administrator's own setting), then remove the daemon and its files.
+remove_keep_awake_lid_helper() {
+    [[ -f "$KEEP_AWAKE_HELPER_PLIST" || -d "$KEEP_AWAKE_HELPER_DIR" ]] || return 0
+    run_as_root launchctl unload "$KEEP_AWAKE_HELPER_PLIST" 2>/dev/null || true
+    if [[ -f "$KEEP_AWAKE_HELPER_DIR/keep-awake.owned" ]]; then
+        run_as_root pmset -a disablesleep 0 2>/dev/null || true
+    fi
+    run_as_root rm -f "$KEEP_AWAKE_HELPER_PLIST" "$KEEP_AWAKE_HELPER_DIR/keep-awake-macos.sh" \
+        "$KEEP_AWAKE_HELPER_DIR/keep-awake.owned" 2>/dev/null || true
+    run_as_root rmdir "$KEEP_AWAKE_HELPER_DIR" 2>/dev/null || true
+    success "Removed the keep-awake lid helper"
+}
+
+# Work-phase half of choose_keep_awake. Both steps are optional extras: a
+# failure warns and the install carries on.
+apply_keep_awake() {
+    if [[ "$KEEP_AWAKE" == "1" ]]; then
+        write_keep_awake_setting || true
+    fi
+    if [[ "$KEEP_AWAKE_LID_HELPER" == "1" ]]; then
+        install_keep_awake_lid_helper || true
+    fi
+    return 0
+}
+
+# `install.sh keep-awake`: turn it on for an existing install (no laptop check:
+# asking for it is the answer), add the macOS lid helper, then restart the
+# service so the running server picks it up.
+keep_awake_subcommand() {
+    print_banner
+    command -v node &>/dev/null || die "node is required. Install Codeman first (run the installer without arguments)."
+    local os
+    os=$(detect_os)
+    choose_keep_awake "$os" force
+    if [[ -z "$KEEP_AWAKE" && -z "$KEEP_AWAKE_LID_HELPER" ]]; then
+        info "Nothing changed."
+        return 0
+    fi
+    apply_keep_awake
+    echo ""
+    restart_running_service
+}
+
 verify_systemd_active() {
     local attempt
     for attempt in 1 2 3; do
@@ -3032,6 +3240,7 @@ main() {
     choose_network_binding
     echo ""
     choose_launch_mode "$os"
+    choose_keep_awake "$os"
     echo ""
 
     # ========================================================================
@@ -3049,6 +3258,9 @@ main() {
     # (failed npm install/build, Ctrl+C) re-runs the full setup flow
     # (symlinks, PATH, launch menu) instead of silently "updating".
     date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL_DIR/.install-complete"
+
+    # Before the service starts, so its first boot already reads the setting.
+    apply_keep_awake
 
     local service_ok="true"
     if [[ "$LAUNCH_CHOICE" == "2" ]]; then
@@ -3493,6 +3705,36 @@ print_done_screen() {
     return 0
 }
 
+# Restart Codeman under whatever supervises it, so a new build or a changed
+# setting takes effect; otherwise say how. Shared by update and keep-awake.
+restart_running_service() {
+    local agent_plist="$HOME/Library/LaunchAgents/com.codeman.web.plist"
+    if systemctl --user is-active codeman-web.service &>/dev/null 2>&1; then
+        info "Restarting codeman-web service..."
+        systemctl --user restart codeman-web.service 2>/dev/null || true
+        if verify_systemd_active; then
+            success "codeman-web service restarted"
+        else
+            warn "codeman-web.service did not come back up."
+            warn "Inspect: systemctl --user status codeman-web ; journalctl --user -u codeman-web -e"
+        fi
+    elif [[ -f "$agent_plist" ]]; then
+        info "Restarting LaunchAgent..."
+        launchctl unload "$agent_plist" 2>/dev/null || true
+        launchctl load "$agent_plist" 2>/dev/null || true
+        success "LaunchAgent restarted"
+    elif [[ -f "/Library/LaunchDaemons/com.codeman.web.plist" ]]; then
+        # Left alone on purpose (see setup_launchd_service); it keeps running
+        # the previous build until its owner restarts it.
+        info "A system LaunchDaemon supervises Codeman; restart it to apply:"
+        echo -e "    ${CYAN}sudo launchctl kickstart -k system/com.codeman.web${NC}"
+    else
+        echo -e "  ${DIM}Restart codeman web to apply:${NC}"
+        echo -e "    ${CYAN}codeman web --stop; codeman web -d${NC}"
+    fi
+    echo ""
+}
+
 update() {
     if [[ ! -d "$INSTALL_DIR/.git" ]]; then
         die "Codeman is not installed at $INSTALL_DIR. Run the installer first."
@@ -3525,32 +3767,15 @@ update() {
     success "Updated to $(node -e "console.log(require('./package.json').version)")"
     echo ""
 
-    # Auto-restart service if running, otherwise tell the user
-    local agent_plist="$HOME/Library/LaunchAgents/com.codeman.web.plist"
-    if systemctl --user is-active codeman-web.service &>/dev/null 2>&1; then
-        info "Restarting codeman-web service..."
-        systemctl --user restart codeman-web.service 2>/dev/null || true
-        if verify_systemd_active; then
-            success "codeman-web service restarted"
-        else
-            warn "codeman-web.service did not come back up."
-            warn "Inspect: systemctl --user status codeman-web ; journalctl --user -u codeman-web -e"
-        fi
-    elif [[ -f "$agent_plist" ]]; then
-        info "Restarting LaunchAgent..."
-        launchctl unload "$agent_plist" 2>/dev/null || true
-        launchctl load "$agent_plist" 2>/dev/null || true
-        success "LaunchAgent restarted"
-    elif [[ -f "/Library/LaunchDaemons/com.codeman.web.plist" ]]; then
-        # Left alone on purpose (see setup_launchd_service); it keeps running
-        # the previous build until its owner restarts it.
-        info "A system LaunchDaemon supervises Codeman; restart it to run the new build:"
-        echo -e "    ${CYAN}sudo launchctl kickstart -k system/com.codeman.web${NC}"
-    else
-        echo -e "  ${DIM}Restart codeman web to use the new version:${NC}"
-        echo -e "    ${CYAN}codeman web --stop; codeman web -d${NC}"
+    restart_running_service
+
+    # The lid helper runs from a root-owned copy, so an update never reaches it
+    # on its own (and must not: that would need sudo here). Say so when it drifted.
+    if [[ -f "$KEEP_AWAKE_HELPER_DIR/keep-awake-macos.sh" ]] &&
+        ! cmp -s "$INSTALL_DIR/scripts/keep-awake-macos.sh" "$KEEP_AWAKE_HELPER_DIR/keep-awake-macos.sh"; then
+        info "The keep-awake lid helper has a newer version. Refresh it with: install.sh keep-awake"
+        echo ""
     fi
-    echo ""
 
     # Reflect the service's actual binding in the closing notice. Updates
     # never rewrite the service files, so the existing choice is authoritative.
@@ -3602,6 +3827,9 @@ uninstall() {
         launchctl unload "$agent_plist" 2>/dev/null || true
         rm -f "$agent_plist"
         success "Removed LaunchAgent"
+    fi
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        remove_keep_awake_lid_helper
     fi
     if [[ -f "$daemon_plist" ]]; then
         # This installer never writes a LaunchDaemon (setup_launchd_service
@@ -3721,6 +3949,7 @@ Subcommands
   name [<n>]    Rename this machine on your tailnet (default: codeman-<hostname>)
   status        Print the URLs, the QR code and how to manage the service
   cloudflared   Install cloudflared for the in-app Cloudflare tunnel
+  keep-awake    Keep this machine awake while Codeman runs (macOS: adds the lid helper)
 
 Environment: CODEMAN_NONINTERACTIVE=1, CODEMAN_INSTALL_DIR, CODEMAN_HOST,
 CODEMAN_PASSWORD, CODEMAN_PORT, CODEMAN_TAILSCALE=1, CODEMAN_TAILSCALE_NAME,
@@ -3762,7 +3991,7 @@ parse_flags() {
                 CODEMAN_PORT="$1"; export CODEMAN_PORT; RECONFIGURE="1" ;;
             --port=*)      CODEMAN_PORT="${1#--port=}"; export CODEMAN_PORT; RECONFIGURE="1" ;;
             --help|-h)     usage; exit 0 ;;
-            update|uninstall|tailscale|name|status|cloudflared)
+            update|uninstall|tailscale|name|status|cloudflared|keep-awake)
                 [[ -z "$SUBCOMMAND" ]] || die "Only one subcommand at a time ($SUBCOMMAND and $1 given)."
                 SUBCOMMAND="$1" ;;
             -*)            die "Unknown option: $1 (see --help)" ;;
@@ -3795,6 +4024,7 @@ case "$SUBCOMMAND" in
     name)        setup_name_subcommand ;;
     status)      status_subcommand ;;
     cloudflared) cloudflared_subcommand ;;
+    keep-awake)  keep_awake_subcommand ;;
     *)
         # Only a COMPLETED install re-runs as a quiet update. A partial one
         # (clone succeeded but build/menu never finished) lacks the marker and
