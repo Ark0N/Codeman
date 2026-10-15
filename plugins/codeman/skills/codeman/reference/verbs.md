@@ -795,10 +795,14 @@ Rules that matter:
   changes nothing for it. Only the receiver can ack (403 otherwise).
 - **`--wait` waits for something new.** It returns at once when there is unseen mail
   and otherwise blocks until a post arrives; seen but unacked messages come back with it
-  and do not end the wait. Timeout is exit 2, the session vanishing is exit 3.
+  and do not end the wait. Timeout is exit 2, and so is a wait the server cut short
+  (a restart): loop again. Exit 3 means the session list no longer has the session.
+  `--wait` on someone else's inbox returns at once while they have unseen mail (only
+  their read clears it); check `ls` instead.
 - **The sender is resolved, not claimed.** `from` is the session the header resolves to,
   or `null` (the user). In single-user mode that is a hint, since every local process
-  holds the same credentials.
+  holds the same credentials. In multi-user mode it is checked against the owner;
+  an admin can still act as any session of the receiver's owner.
 - **Full means refused.** 200 messages or 512 KiB per inbox, 16 KiB per message. A full
   inbox answers 409 and stores nothing; the oldest is never dropped. Messages expire 12
   hours after they were posted.

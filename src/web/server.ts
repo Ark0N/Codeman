@@ -1691,8 +1691,9 @@ export class WebServer extends EventEmitter {
     // detached a few lines above, before `session.stop()`, so on a delete the
     // session's own exit event never reaches the registry.
     // The agent inbox goes with a DELETED session only. killMux=false is shutdown or
-    // detach, and a detached session comes back to the mail posted while it was away.
-    // Before cancelAll, so a reader released by it reads an empty inbox.
+    // detach: mail posted before that is still there when the session is re-attached
+    // (while detached, the routes answer 404, so nothing new arrives). Before
+    // cancelAll, so a reader released by it reads an empty inbox.
     if (killMux) agentInbox.drop(sessionId);
     sessionWaits.notifySignal(sessionId, 'exit');
     sessionWaits.cancelAll(sessionId);

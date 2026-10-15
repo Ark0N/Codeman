@@ -228,8 +228,12 @@ export class AgentInbox {
       if (!Array.isArray(raw)) continue;
       const queue: StoredMessage[] = [];
       let bytes = 0;
-      for (const entry of raw) {
-        if (!isStoredMessage(entry) || entry.createdAt <= cutoff) continue;
+      // Oldest first whatever order the file has, so the caps keep the oldest mail,
+      // which is the rule for posts too.
+      const entries = raw
+        .filter((entry): entry is StoredMessage => isStoredMessage(entry) && entry.createdAt > cutoff)
+        .sort((a, b) => a.createdAt - b.createdAt);
+      for (const entry of entries) {
         const size = Buffer.byteLength(entry.text, 'utf8');
         if (queue.length >= MAX_MESSAGES_PER_INBOX || bytes + size > MAX_INBOX_BYTES) break;
         queue.push({ ...entry });
@@ -253,8 +257,9 @@ export class AgentInbox {
     const queue = this.inboxes.get(sessionId);
     if (!queue) return [];
     const cutoff = this.now() - MESSAGE_TTL_MS;
-    if (queue.length === 0 || queue[0].createdAt > cutoff) return queue;
-    // Oldest first, so the expired ones are a prefix.
+    // Every message, not only queue[0]: a clock stepping back can put an older
+    // createdAt behind a newer one. At most 200 entries, so the scan is cheap.
+    if (!queue.some((m) => m.createdAt <= cutoff)) return queue;
     const kept = queue.filter((m) => m.createdAt > cutoff);
     this.store(sessionId, kept);
     this.onChange?.();

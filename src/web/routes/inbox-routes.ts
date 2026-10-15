@@ -8,8 +8,10 @@
  * the caller can see that has the same owner as the receiver (exact id, or a unique
  * prefix of at least 8). Anything else is "no session": a post is from the user, and a
  * read is a peek. What that buys: in multi-user mode a caller cannot name another
- * owner's session. In single-user mode every local process holds the same
- * credentials, so the header is a hint the client sets about itself.
+ * owner's session (an admin, who can see every session, can act as any session of
+ * the receiver's owner, as admins can everywhere else). In single-user mode every
+ * local process holds the same credentials, so the header is a hint the client sets
+ * about itself.
  *
  * - `POST /api/sessions/:id/inbox` stores a message. `from` is the resolved caller or
  *   null. A full inbox is 409 CONFLICT; the oldest message is never dropped.
@@ -135,8 +137,9 @@ export function registerInboxRoutes(app: FastifyInstance, ctx: SessionPort): voi
     }
 
     // Read AFTER the wait: this is what the caller gets, so it must be current. A wait
-    // that ended because the session was deleted reads an empty inbox.
-    const read = agentInbox.read(id, { receiver });
+    // that ended because the session was deleted reads an empty inbox. A client that
+    // hung up never sees this answer, so its read must not mark anything seen.
+    const read = agentInbox.read(id, { receiver: receiver && !wait?.aborted });
     return { success: true, data: { sessionId: id, receiver, ...read, ...(wait ? { wait } : {}) } };
   });
 

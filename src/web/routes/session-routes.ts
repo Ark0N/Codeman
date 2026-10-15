@@ -119,6 +119,7 @@ import {
   abortOnClientHangUp,
 } from '../route-helpers.js';
 import { buildAgentCaseMarker, writeAgentCaseMarker } from '../../agent-case-marker.js';
+import { agentInbox } from '../agent-inbox.js';
 import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
 import { clampEnvOverridesForOwner } from '../../session-env-clamp.js';
 import { enabledClis, getCli } from '../../config/cli-registry/registry.js';
@@ -1680,6 +1681,9 @@ export function registerSessionRoutes(
       // below re-looks-up the record by id, so the returned SessionState is unused here.
       findPersistedSessionOrFail(ctx.store, id, req);
       ctx.store.demoteOrRemoveSession(id);
+      // A detached session kept its agent inbox (server.ts _doCleanupSession drops it
+      // only on killMux); retiring the row is the delete, so the mail goes now.
+      agentInbox.drop(id);
       // Mirrors the broadcast at the tail of the live-session cleanup path
       // (_doCleanupSession in server.ts) — without it, other open tabs keep
       // showing the retired row until their next unrelated fetch.

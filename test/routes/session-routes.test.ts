@@ -26,6 +26,7 @@ import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
 import { Session } from '../../src/session.js';
+import { agentInbox } from '../../src/web/agent-inbox.js';
 
 // Mock execFile so the send-key route's `tmux` invocation is observable (not run for real).
 const { execFile } = vi.hoisted(() => ({ execFile: vi.fn() }));
@@ -983,6 +984,17 @@ describe('session-routes', () => {
       // with no broadcast, so other open tabs kept showing the retired row until
       // their next unrelated fetch.
       expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:deleted', { id: 'ghost-session' });
+    });
+
+    it('a persisted-only delete drops the agent inbox the detach kept', async () => {
+      // Detach (killMux=false) keeps the inbox; retiring the row afterwards is the delete.
+      agentInbox.resetForTests();
+      agentInbox.post('ghost-session', null, 'mail from before the detach');
+      vi.mocked(harness.ctx.store.getSession).mockReturnValueOnce({ id: 'ghost-session', owner: undefined } as never);
+      const res = await harness.app.inject({ method: 'DELETE', url: '/api/sessions/ghost-session' });
+      expect(res.statusCode).toBe(200);
+      expect(agentInbox.pendingCount('ghost-session')).toBe(0);
+      agentInbox.resetForTests();
     });
 
     it('404s a persisted-only session id the state store does not recognize either', async () => {

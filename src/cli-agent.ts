@@ -890,6 +890,17 @@ export interface InboxReadOptions {
   waitMs?: number;
 }
 
+/** True only when the session list was read and does not contain `id`. */
+async function sessionIsGone(deps: AgentDeps, id: string): Promise<boolean> {
+  try {
+    const res = await deps.request(deps.ctx, { method: 'GET', path: '/api/v1/sessions' });
+    if (!res.json?.success) return false;
+    return !((res.json.data as SessionRow[] | undefined) ?? []).some((s) => s.id === id);
+  } catch {
+    return false;
+  }
+}
+
 /** Relative age for humans: `12s`, `4m`, `3h`. */
 function age(createdAt: number, now: number): string {
   const s = Math.max(0, Math.round((now - createdAt) / 1000));
@@ -901,8 +912,8 @@ function age(createdAt: number, now: number): string {
 /**
  * `agent inbox` — read this session's inbox (or peek at another's). Removes nothing:
  * a message stays until `agent ack <id>`. Only reading your OWN inbox marks messages
- * seen. Exit 0 with mail, 2 when a `--wait` ran out with nothing unseen, 3 when the
- * session went away during the wait.
+ * seen. Exit 0 with mail, 2 when a `--wait` ran out with nothing unseen or the server
+ * cut it short (restart, detach), 3 when the session is gone from the list.
  */
 export async function agentInboxRead(deps: AgentDeps, options: InboxReadOptions): Promise<number> {
   const target = await resolveSessionId(deps, options.id ?? deps.ctx.selfId);
@@ -924,7 +935,12 @@ export async function agentInboxRead(deps: AgentDeps, options: InboxReadOptions)
       }
     | undefined;
   const messages = data?.messages ?? [];
-  const code = data?.wait?.ended ? EXIT.dead : data?.wait?.timedOut ? EXIT.timeout : EXIT.ok;
+  // `ended` is also what a server restart or a detach answers. Exit 3 tells a receiver
+  // loop to stop, so it needs the session list to confirm the session is gone; while
+  // it is still listed (or the list cannot be had, as during a restart) the wait was
+  // only cut short, which is exit 2: loop again.
+  const gone = data?.wait?.ended ? await sessionIsGone(deps, target.id) : false;
+  const code = gone ? EXIT.dead : data?.wait?.timedOut || data?.wait?.ended ? EXIT.timeout : EXIT.ok;
   if (deps.json) {
     emitJson(deps, data ?? {});
     return code;
@@ -936,8 +952,10 @@ export async function agentInboxRead(deps: AgentDeps, options: InboxReadOptions)
     deps.io.out(palette.muted(`── ${m.id} from ${sender}, ${age(m.createdAt, now)} ago, `) + tag);
     deps.io.out(m.text);
   }
-  if (data?.wait?.ended) {
+  if (gone) {
     deps.io.err(palette.err(`${GLYPH.fail} the session went away during the wait`));
+  } else if (data?.wait?.ended) {
+    deps.io.err(palette.muted('(the server ended the wait early, e.g. a restart; exit 2, wait again)'));
   } else if (messages.length === 0) {
     deps.io.err(palette.muted(data?.wait?.timedOut ? '(no mail; wait timed out, exit 2)' : '(no mail)'));
   } else if (data?.receiver) {
@@ -1165,6 +1183,10 @@ export function registerAgentCommands(program: Command): Command {
       "Leave a message in another session's inbox (ONE quoted argument; multi-line is fine). Nothing is typed into its pane: it reads with `agent inbox`"
     )
     .option('--json', 'Machine-readable output')
+    // A message is often a file (`"$(cat task.md)"`) and markdown starts with `- ` or
+    // `---` often enough; without this commander takes it for an unknown option.
+    // `--json` and `-h` are still options: text that is exactly one goes after `--`.
+    .allowUnknownOption()
     .action((id: string, words: string[], options: { json?: boolean }) =>
       run(Boolean(options.json), (deps) => {
         const message = postTextFromArgs(words);

@@ -714,12 +714,32 @@ describe('agent inbox verbs', () => {
     expect(deps.err.join('')).toMatch(/peek: nothing was marked seen/);
   });
 
-  it('inbox --wait passes the budget and maps timeout to exit 2, a vanished session to exit 3', async () => {
+  it('inbox --wait passes the budget and maps timeout to exit 2', async () => {
     const timedOut = fakeDeps([ok({ receiver: true, messages: [], pending: 0, unseen: 0, wait: { timedOut: true } })]);
     expect(await agentInboxRead(timedOut, { waitMs: 30_000 })).toBe(EXIT.timeout);
     expect(timedOut.calls[0]).toMatchObject({ query: { wait: 30_000 }, timeoutMs: 40_000 });
-    const ended = fakeDeps([ok({ receiver: true, messages: [], pending: 0, unseen: 0, wait: { ended: true } })]);
-    expect(await agentInboxRead(ended, { waitMs: 30_000 })).toBe(EXIT.dead);
+  });
+
+  describe('a wait the server ended', () => {
+    const ended = ok({ receiver: true, messages: [], pending: 0, unseen: 0, wait: { ended: true } });
+
+    it('is exit 3 only when the session list confirms the session is gone', async () => {
+      const deps = fakeDeps([ended, ok([{ id: OTHER }])]);
+      expect(await agentInboxRead(deps, { waitMs: 30_000 })).toBe(EXIT.dead);
+      expect(deps.calls[1]).toMatchObject({ method: 'GET', path: '/api/v1/sessions' });
+      expect(deps.err.join('')).toMatch(/went away/);
+    });
+
+    it('is exit 2 (wait again) while the session is still listed: a restart or detach', async () => {
+      const deps = fakeDeps([ended, ok([{ id: SELF }])]);
+      expect(await agentInboxRead(deps, { waitMs: 30_000 })).toBe(EXIT.timeout);
+      expect(deps.err.join('')).toMatch(/ended the wait early/);
+    });
+
+    it('is exit 2 when the list cannot be had (the server is still coming back)', async () => {
+      const deps = fakeDeps([ended, apiError(503, 'INTERNAL_ERROR', 'restarting')]);
+      expect(await agentInboxRead(deps, { waitMs: 30_000 })).toBe(EXIT.timeout);
+    });
   });
 
   it('ack posts the ids to this session’s own inbox', async () => {
@@ -765,6 +785,26 @@ describe('help texts carry the traps the skill documents', () => {
 
   it('send names the -- escape for a prompt that starts with "-"', () => {
     expect(sub('send').description()).toContain('send <id> -- "- fix the bug"');
+  });
+
+  it('post takes text that starts with "-" (markdown from a file) without --', async () => {
+    const program = new Command();
+    program.exitOverride();
+    const post = registerAgentCommands(program).commands.find((c) => c.name() === 'post')!;
+    const got: Array<{ words: string[]; json: boolean }> = [];
+    post.action((_id: string, words: string[], o: { json?: boolean }) => {
+      got.push({ words, json: Boolean(o.json) });
+    });
+    for (const text of ['- [ ] item\nnext', '---\ntitle: a', '-v is great']) {
+      await program.parseAsync(['node', 'codeman', 'agent', 'post', 'abcdefgh', text]);
+    }
+    await program.parseAsync(['node', 'codeman', 'agent', 'post', 'abcdefgh', 'hi', '--json']);
+    expect(got).toEqual([
+      { words: ['- [ ] item\nnext'], json: false },
+      { words: ['---\ntitle: a'], json: false },
+      { words: ['-v is great'], json: false },
+      { words: ['hi'], json: true },
+    ]);
   });
 
   it('rm does not claim a lineage check it does not make', () => {

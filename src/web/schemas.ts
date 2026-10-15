@@ -1847,12 +1847,17 @@ export const SessionWaitOutputQuerySchema = z.object({
 /**
  * Body for `POST /api/sessions/:id/inbox`. The byte cap (`MAX_MESSAGE_BYTES`) is the
  * store's, checked there in UTF-8 bytes; this bound is only the outer fence so a
- * multi-megabyte body never reaches it. Multi-line text is fine: it is stored and
+ * multi-megabyte body never reaches it. It is 4× the byte cap in characters (a UTF-8
+ * character is at most 4 bytes), so every over-size message gets the store's answer,
+ * which tells the sender what to do instead. Multi-line text is fine: it is stored and
  * handed back as data, never typed.
  */
 export const InboxPostSchema = z
   .object({
-    text: z.string().min(1, 'text must not be empty').max(16_384),
+    text: z
+      .string()
+      .min(1, 'text must not be empty')
+      .max(4 * 16_384),
   })
   .strict();
 

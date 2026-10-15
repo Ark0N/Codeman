@@ -101,6 +101,28 @@ describe('agent inbox routes', () => {
       expect(res.statusCode).toBe(400);
     });
 
+    it('multi-user, non-admin: a session the caller cannot see never resolves as the sender', async () => {
+      process.env.CODEMAN_MULTIUSER = '1';
+      currentUser = { username: 'alice', role: 'user' };
+      (h.ctx.sessions.get(RX) as unknown as { owner: string }).owner = 'alice';
+      (h.ctx.sessions.get(TX) as unknown as { owner: string }).owner = 'bob';
+      (h.ctx.sessions.get(OTHER) as unknown as { owner: string }).owner = 'alice';
+      expect(data(await post(RX, 'x', TX)).message.from).toBeNull();
+      expect(data(await post(RX, 'y', OTHER)).message.from).toBe(OTHER);
+      // Nor can alice read as bob's session or ack for it: bob's inbox is a 404 to her.
+      expect((await read(TX, TX)).statusCode).toBe(404);
+      expect((await ack(TX, ['m'], TX)).statusCode).toBe(404);
+    });
+
+    it('multi-user, admin: may act as any session of the receiver’s owner (admins see everything)', async () => {
+      process.env.CODEMAN_MULTIUSER = '1';
+      currentUser = { username: 'root', role: 'admin' };
+      (h.ctx.sessions.get(RX) as unknown as { owner: string }).owner = 'bob';
+      (h.ctx.sessions.get(TX) as unknown as { owner: string }).owner = 'bob';
+      expect(data(await post(RX, 'x', TX)).message.from).toBe(TX);
+      expect(data(await read(RX, RX)).receiver).toBe(true);
+    });
+
     it('multi-user: a session of another owner never resolves as the sender', async () => {
       process.env.CODEMAN_MULTIUSER = '1';
       currentUser = { username: 'alice', role: 'admin' };
@@ -128,8 +150,12 @@ describe('agent inbox routes', () => {
       expect(data(await read(RX)).messages[0].id).toBe(first);
     });
 
-    it('a message over the byte cap is 400', async () => {
-      expect((await post(RX, 'é'.repeat(8193))).statusCode).toBe(400);
+    it('a message over the byte cap is 400 with the store’s hint, multi-byte or not', async () => {
+      for (const text of ['é'.repeat(8193), 'x'.repeat(16_385)]) {
+        const res = await post(RX, text);
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.body).error).toMatch(/Write it to a file in the workspace and post the path/);
+      }
     });
 
     it('404 for an unknown session', async () => {

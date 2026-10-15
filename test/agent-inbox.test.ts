@@ -161,6 +161,15 @@ describe('AgentInbox', () => {
       expect(new AgentInbox(() => now).restore(snap)).toBe(0);
     });
 
+    it('sweeps an expired message that is not first (clock stepped back)', () => {
+      const late = post('posted first, stamped later');
+      now -= 1000; // the clock steps back
+      const early = post('posted second, stamped earlier');
+      now += MESSAGE_TTL_MS + 1000 - (late.createdAt - early.createdAt) / 2;
+      // `early` is past the TTL, `late` is not, and `early` sits behind `late`.
+      expect(inbox.read(RX, { receiver: false }).messages.map((m) => m.id)).toEqual([late.id]);
+    });
+
     it('expiry fires onChange so the snapshot catches up', () => {
       post('m');
       let changes = 0;
@@ -246,6 +255,13 @@ describe('AgentInbox', () => {
           },
         })
       ).toBe(1);
+    });
+
+    it('restores oldest first whatever the file order, so the caps keep the oldest', () => {
+      const msg = (id: string, createdAt: number) => ({ id, from: null, text: 'x', createdAt, seenAt: null });
+      const restored = new AgentInbox(() => now);
+      restored.restore({ version: 1, inboxes: { s: [msg('new', now - 10), msg('old', now - 20)] } });
+      expect(restored.read('s', { receiver: false }).messages.map((m) => m.id)).toEqual(['old', 'new']);
     });
 
     it('holds the count cap on restore', () => {
