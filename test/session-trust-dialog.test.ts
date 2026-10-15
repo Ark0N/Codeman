@@ -239,6 +239,48 @@ describe('Session trust-dialog auto-accept', () => {
     expect(writes).toEqual([]);
   });
 
+  it('reads the dialog that painted inside the throttle of the read before it', () => {
+    vi.useFakeTimers();
+    // Measured on 2.1.294: one read at +156 ms saw a blank pane, the dialog painted
+    // within the throttle, and a quiet dialog sends no further output to read on.
+    let screen = '';
+    const { writes, tick } = sessionShowing(() => screen);
+    tick();
+    vi.advanceTimersByTime(500);
+    screen = RENDERED_DIALOG_2_1_252;
+    tick(); // the dialog's own paint: throttled, and the last output the pane produces
+    vi.advanceTimersByTime(5000);
+    expect(writes[0]).toBe(TRUST_KEY_DOWN);
+  });
+
+  it('cancels a deferred read when the session is stopped', async () => {
+    vi.useFakeTimers();
+    // DELETE goes through stop(), and a read deferred just before it must not outlive it.
+    let screen = '';
+    const { session, tick } = sessionShowing(() => screen);
+    tick();
+    screen = RENDERED_DIALOG_2_1_252;
+    const before = vi.getTimerCount();
+    tick(); // throttled, so a read is deferred
+    expect(vi.getTimerCount()).toBe(before + 1);
+    await session.stop(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('neither scans nor arms a timer once the session is stopped', async () => {
+    vi.useFakeTimers();
+    // Killing the pane produces output of its own, and the buffer tail still shows the
+    // dialog, so a deleted session went on "answering" it on a timer for several seconds.
+    const { session, tick } = sessionShowing(() => RENDERED_DIALOG_2_1_252);
+    await session.stop(false);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    tick();
+    tick(); // inside the throttle of the first
+    expect(vi.getTimerCount()).toBe(0);
+    expect(log.mock.calls.some(([line]) => String(line).includes('trust dialog'))).toBe(false);
+    log.mockRestore();
+  });
+
   it('does not press Enter on a normal screen', () => {
     vi.useFakeTimers();
     const { writes, tick } = sessionShowing(() => RENDERED_MAIN_UI);
