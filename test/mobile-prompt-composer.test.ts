@@ -45,8 +45,14 @@ function loadComposer(sessionId = 'session-1') {
     _predictiveEcho: { clearPredictions: vi.fn() },
     _sendInputAsync: vi.fn(),
     _uploadAndInsertImages: vi.fn(async () => ['/tmp/image-one.png']),
-    _promptAttachKind: (file: { type: string }) =>
-      file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : null,
+    _promptAttachKind: (file: { type: string; name?: string }) =>
+      file.type.startsWith('image/')
+        ? 'image'
+        : file.type.startsWith('video/')
+          ? 'video'
+          : /\.(pdf|docx|txt|md)$/i.test(file.name || '')
+            ? 'document'
+            : null,
     showToast: vi.fn(),
   };
   const schedule = (callback: () => void, delay = 0) => {
@@ -576,18 +582,38 @@ describe('mobile prompt composer', () => {
     expect((document.querySelector('.paste-send') as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('offers videos in the Image key picker and filters the pick through the shared classifier', async () => {
+  it('offers videos and documents in the Attach key picker and filters the pick through the shared classifier', async () => {
     const { app, bar, document } = loadComposer();
     bar.composePrompt();
     const fileInput = document.querySelector('.paste-file-input') as HTMLInputElement;
-    expect(fileInput.getAttribute('accept')).toBe('image/*,video/*');
+    expect(fileInput.getAttribute('accept')).toBe(
+      'image/*,video/*,.pdf,.docx,.pptx,.xlsx,.zip,.txt,.md,.csv,.tsv,.json,.log,.yaml,.yml,.xml'
+    );
+    expect((document.querySelector('.paste-image') as HTMLButtonElement).textContent).toBe('📎 Attach');
     const video = new document.defaultView!.File(['clip'], 'clip.mov', { type: 'video/quicktime' });
     const pdf = new document.defaultView!.File(['%PDF'], 'notes.pdf', { type: 'application/pdf' });
-    Object.defineProperty(fileInput, 'files', { configurable: true, value: [video, pdf] });
+    const script = new document.defaultView!.File(['#!/bin/sh'], 'run.sh', { type: 'text/x-shellscript' });
+    Object.defineProperty(fileInput, 'files', { configurable: true, value: [video, pdf, script] });
 
     fileInput.dispatchEvent(new document.defaultView!.Event('change', { bubbles: true }));
-    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video], { insert: false });
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video, pdf], { insert: false });
     await vi.waitFor(() => expect(textarea(document).value).toContain('/tmp/image-one.png'));
+  });
+
+  it('puts an uploaded document path into the draft like a photo', async () => {
+    const { app, bar, document } = loadComposer();
+    app._uploadAndInsertImages.mockResolvedValueOnce(['/case/.codeman-uploads/paste-1-ab-notes.pdf']);
+    bar.composePrompt();
+    const input = textarea(document);
+    input.value = 'summarize';
+    input.selectionStart = input.selectionEnd = input.value.length;
+    input.dispatchEvent(new document.defaultView!.Event('input', { bubbles: true }));
+    const fileInput = document.querySelector('.paste-file-input') as HTMLInputElement;
+    const pdf = new document.defaultView!.File(['%PDF'], 'notes.pdf', { type: '' }); // no MIME: the name decides
+    Object.defineProperty(fileInput, 'files', { configurable: true, value: [pdf] });
+    fileInput.dispatchEvent(new document.defaultView!.Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(input.value).toBe('summarize /case/.codeman-uploads/paste-1-ab-notes.pdf'));
+    expect(app.terminal.paste).not.toHaveBeenCalled();
   });
 
   it('takes a video pasted into the editor through the shared classifier', () => {

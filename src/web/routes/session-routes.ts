@@ -13,6 +13,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { finished } from 'node:stream/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
 import { performance } from 'node:perf_hooks';
 import {
   ApiErrorCode,
@@ -323,18 +324,36 @@ export function stripInkRedrawBloat(buffer: string): string {
 }
 
 /**
- * Validate image bytes against a declared extension. Sniffs the first ~12 bytes
- * for a known magic-number signature. Defends against polyglots (e.g. HTML or
- * SVG disguised under a `Content-Type: image/png` header) and against simple
- * extension-only spoofing — both the multipart filename and the Content-Type
- * are attacker-controlled, the raw bytes are not.
+ * The text half of the document allowlist: these are judged on their encoding
+ * (valid UTF-8, no NUL byte) rather than on a signature, since plain text has none.
+ */
+const TEXT_UPLOAD_EXTS = new Set(['.txt', '.md', '.csv', '.tsv', '.json', '.log', '.yaml', '.yml', '.xml']);
+
+/**
+ * Validate upload bytes against a declared extension. Sniffs the first ~12 bytes
+ * for a known magic-number signature (a text file is instead required to be
+ * UTF-8 without a NUL byte, the one check plain text allows). Defends against
+ * polyglots (e.g. HTML or SVG disguised under a `Content-Type: image/png`
+ * header) and against simple extension-only spoofing — both the multipart
+ * filename and the Content-Type are attacker-controlled, the raw bytes are not.
+ * Fail-closed: an extension this function does not know is never a match.
  *
  * Signatures: https://en.wikipedia.org/wiki/List_of_file_signatures
  */
 export function imageMagicMatchesExt(data: Buffer, ext: string): boolean {
+  if (TEXT_UPLOAD_EXTS.has(ext)) return data.length > 0 && !data.includes(0) && isUtf8(data);
   if (data.length < 12) return false;
   const u32be = (off: number): number => data.readUInt32BE(off);
   switch (ext) {
+    case '.pdf':
+      // "%PDF-"
+      return u32be(0) === 0x25504446 && data[4] === 0x2d;
+    case '.docx':
+    case '.pptx':
+    case '.xlsx':
+    case '.zip':
+      // PK\x03\x04, the local-file header every non-empty zip (OOXML included) opens with
+      return u32be(0) === 0x504b0304;
     case '.png':
       return u32be(0) === 0x89504e47 && u32be(4) === 0x0d0a1a0a;
     case '.jpg':
@@ -428,11 +447,27 @@ async function ensureUploadDir(workingDir: string): Promise<string | null> {
   return uploadDir;
 }
 
+/**
+ * The part of an uploaded document's name that survives into the saved name,
+ * so `Q3 report (final).pdf` is findable as `paste-<ts>-<hex>-Q3-report-final.pdf`.
+ * Only `[A-Za-z0-9._-]` survive, runs of anything else become one `-`, and the
+ * result is capped at 40 chars; nothing in it can be a path separator or a
+ * second extension that matters (the allowlisted extension is appended after).
+ */
+function sanitizeUploadStem(filename: string): string {
+  const stem = basename(filename).replace(/\.[^.]*$/, '');
+  return stem
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '')
+    .slice(0, 40);
+}
+
 /** Open a fresh, uniquely named paste file for writing. */
-async function openPasteFile(imageDir: string, ext: string) {
+async function openPasteFile(imageDir: string, ext: string, stem = '') {
   // Date.now() collides on same-ms uploads from two tabs (last-write wins
   // silently). Append 8 hex chars so concurrent pastes get distinct names.
-  const filename = `paste-${Date.now()}-${randomBytes(4).toString('hex')}${ext}`;
+  // The `paste-` prefix is what the GC (paste-image-gc.ts) matches on.
+  const filename = `paste-${Date.now()}-${randomBytes(4).toString('hex')}${stem ? `-${stem}` : ''}${ext}`;
   const filepath = join(imageDir, filename);
   // O_EXCL: refuse to overwrite (collision is impossible with random suffix,
   // but defends against TOCTOU). O_NOFOLLOW: refuse if filepath is a symlink.
@@ -5350,6 +5385,12 @@ export function registerSessionRoutes(
   // so an uploaded video is a type that previews. 3gp/mkv are deliberately out: they
   // would upload but not preview, and a phone's camera roll produces neither.
   const ALLOWED_VIDEO_EXTS = new Set([...VIDEO_ATTACHMENT_EXTENSIONS].map((e) => `.${e}`));
+  // Documents a user hands an agent to read: the office formats plus the text
+  // family. Curated on purpose, never SUPPORTED_ATTACHMENT_EXTENSIONS or
+  // EDITABLE_EXTENSIONS, which carry sh/py/js/html; a prompt upload is a thing
+  // to read, not a thing to run or serve. Each is judged on its bytes by
+  // imageMagicMatchesExt (signature, or UTF-8 without NUL for text).
+  const ALLOWED_DOCUMENT_EXTS = new Set(['.pdf', '.docx', '.pptx', '.xlsx', '.zip', ...TEXT_UPLOAD_EXTS]);
   const VIDEO_MIME_EXT: Record<string, string> = {
     mp4: '.mp4',
     quicktime: '.mov',
@@ -5358,6 +5399,19 @@ export function registerSessionRoutes(
     ogg: '.ogv',
   };
   // The per-file size cap (MAX_PASTE_IMAGE_BYTES) is enforced by @fastify/multipart (registered in server.ts).
+
+  /** Write buffered upload bytes into the session's upload dir. Null: the dir is not a real directory. */
+  async function writeBufferedUpload(workingDir: string, ext: string, bytes: Buffer, stem = '') {
+    const uploadDir = await ensureUploadDir(workingDir);
+    if (!uploadDir) return null;
+    const { filename, filepath, fh } = await openPasteFile(uploadDir, ext, stem);
+    try {
+      await fh.writeFile(bytes);
+    } finally {
+      await fh.close();
+    }
+    return { path: filepath, filename };
+  }
 
   app.post('/api/sessions/:id/paste-image', async (req, reply) => {
     // CSRF defense: state-changing routes must come from same origin.
@@ -5492,13 +5546,13 @@ export function registerSessionRoutes(
           `Unsupported video type. Allowed: ${[...ALLOWED_VIDEO_EXTS].join(', ')}`
         );
       }
-      const imageDir = await ensureUploadDir(session.workingDir);
-      if (!imageDir) {
+      const uploadDir = await ensureUploadDir(session.workingDir);
+      if (!uploadDir) {
         await finished(part.file.resume()).catch(() => {});
         reply.code(403);
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, `${UPLOADS_DIR} is not a regular directory`);
       }
-      const { filename, filepath, fh } = await openPasteFile(imageDir, ext);
+      const { filename, filepath, fh } = await openPasteFile(uploadDir, ext);
       // Written as it arrives: a phone video is far too large to buffer the way an
       // image is. The container is judged on the first 12 bytes as soon as they are
       // in, so a mislabeled upload stops touching disk at its first chunk; the rest
@@ -5557,12 +5611,41 @@ export function registerSessionRoutes(
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Empty file');
     }
 
+    // Dispatch mirrors the client's _promptAttachKind: an image MIME type takes
+    // the image path whatever the name says, a document extension (the MIME a
+    // phone gives a .md is anyone's guess) takes the document branch, anything
+    // else the image path exactly as before, HEIC sniff included. See CLAUDE.md.
+    const origExt = part.filename ? extname(part.filename).toLowerCase() : '';
+    const imageMime = /^image\//i.test(part.mimetype || '');
+    if (!imageMime && ALLOWED_DOCUMENT_EXTS.has(origExt)) {
+      if (!imageMagicMatchesExt(imageBytes, origExt)) {
+        // The first bytes of a text file are user content, so for text the log
+        // names the failure and never the bytes; a signature is safe to print.
+        const detail = TEXT_UPLOAD_EXTS.has(origExt)
+          ? `reason=${imageBytes.includes(0) ? 'nul-byte' : 'not-utf8'}`
+          : `magic=${imageBytes.subarray(0, 12).toString('hex')}`;
+        console.warn(
+          `[paste-image] document mismatch: filename=${JSON.stringify(part.filename)} mime=${JSON.stringify(part.mimetype)} declaredExt=${origExt} size=${imageBytes.length} ${detail}`
+        );
+        reply.code(415);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `File bytes do not match declared type ${origExt}`);
+      }
+      const saved = await writeBufferedUpload(
+        session.workingDir,
+        origExt,
+        imageBytes,
+        sanitizeUploadStem(part.filename)
+      );
+      if (!saved) {
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `${UPLOADS_DIR} is not a regular directory`);
+      }
+      return saved;
+    }
+
     // Determine extension from filename or Content-Type.
     let ext = '.png';
-    if (part.filename) {
-      const origExt = extname(part.filename).toLowerCase();
-      if (ALLOWED_IMAGE_EXTS.has(origExt)) ext = origExt;
-    }
+    if (ALLOWED_IMAGE_EXTS.has(origExt)) ext = origExt;
     const mimeMatch = (part.mimetype || '').toLowerCase().match(/^image\/(png|jpeg|jpg|webp|gif|bmp|heic|heif)$/);
     if (mimeMatch) {
       const map: Record<string, string> = {
@@ -5603,6 +5686,15 @@ export function registerSessionRoutes(
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Could not convert HEIC image to JPEG');
       }
     } else if (!imageMagicMatchesExt(imageBytes, ext)) {
+      // A foreign extension with no image MIME (a script, an HTML page, a video
+      // without its flag) was never going to be an image: say so, rather than
+      // the ".png" the default extension would name. Decided only HERE, after
+      // the sniff, so anything the image path ever accepted by its bytes (a
+      // HEIC under a generic name) still is.
+      if (origExt && !ALLOWED_IMAGE_EXTS.has(origExt) && !imageMime) {
+        reply.code(400);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Unsupported file type: ${origExt}`);
+      }
       // Sniff actual bytes — a polyglot HTML/PNG would otherwise pass and
       // serve back with image/png MIME. Log the real header so format
       // mismatches can be pinned down without a reproduce-and-guess loop. The
@@ -5614,20 +5706,12 @@ export function registerSessionRoutes(
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Image bytes do not match declared type ${ext}`);
     }
 
-    // {workingDir}/.codeman-uploads/, see ensureUploadDir.
-    const imageDir = await ensureUploadDir(session.workingDir);
-    if (!imageDir) {
+    const saved = await writeBufferedUpload(session.workingDir, ext, imageBytes);
+    if (!saved) {
       reply.code(403);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, `${UPLOADS_DIR} is not a regular directory`);
     }
-    const { filename, filepath, fh } = await openPasteFile(imageDir, ext);
-    try {
-      await fh.writeFile(imageBytes);
-    } finally {
-      await fh.close();
-    }
-
-    return { path: filepath, filename };
+    return saved;
   });
 
   // Returned so the server can own the registry's LIFETIME (drop state when a session is

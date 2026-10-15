@@ -66,7 +66,8 @@ autocorrect: Enter adds a new line, and only Send delivers the text, as one past
 by Enter, so your line breaks reach the agent intact. Anything already typed on the terminal
 prompt moves into the editor when it opens. Drafts are kept per session and in memory only,
 so switching tabs keeps them and a page reload forgets them; a dot on the key shows a draft
-is parked. The editor's Image button attaches photos or videos and puts their paths into the draft.
+is parked. The editor's Attach button attaches photos, videos or documents and puts their paths
+into the draft.
 Destructive commands need a double press, so you cannot fire `/clear` with a stray thumb. On
 Codex sessions the bar also shows `⇧←` and `⇧→`, the Shift-modified arrows Codex binds to
 editing the last queued message and walking the prompt stack.
@@ -103,12 +104,16 @@ into the Run dropdown.
 ## The Attach button
 
 The toolbar's **Attach** button (the picture icon beside the mic) is the keyboard-down way to
-hand the agent a photo or a video. One tap opens the camera and photo library sheet, nothing
-else: no editor, no keyboard. The chosen files upload and their paths land on the prompt, so
-you then tap the terminal, write the rest of your message and press Enter. Videos (mp4, webm,
-mov, m4v, ogv) upload as recorded, up to 1 GB each by default
-(`CODEMAN_MAX_PASTE_VIDEO_BYTES` on the server changes it), so a long 4K clip takes a moment
-on the way up.
+hand the agent a photo, a video or a document. One tap opens the system's sheet (camera,
+photo library, or a file from Files or a cloud drive), nothing else: no editor, no keyboard.
+The chosen files upload and their paths land on the prompt, so you then tap the terminal,
+write the rest of your message and press Enter. Videos (mp4, webm, mov, m4v, ogv)
+upload as recorded, up to 1 GB each by default (`CODEMAN_MAX_PASTE_VIDEO_BYTES` on the
+server changes it), so a long 4K clip takes a moment on the way up. Documents are PDFs,
+Office files (docx, pptx, xlsx), zips and plain-text formats such as txt, md, csv and json;
+a document keeps the plain-letters part of its name in the saved file, so the agent and you
+can tell the uploads apart. See [Working With Files](Working-With-Files) for where they land and how long they
+stay.
 
 If the keyboard was up when you tapped Attach, iOS closes it to show the photo sheet and does
 not bring it back, so the tap on the terminal is how you get it again. That is the system's
@@ -120,7 +125,7 @@ anything you had already typed, so you can write in front of a path, fix a word,
 **Use terminal keyboard** hands a single-line message back the other way, onto the prompt,
 so neither surface holds a half of your message. A multi-line message cannot make that trip
 (the prompt is a single line), so it stays parked as a draft and the dot on the Compose key
-shows it is waiting. The Compose editor's own Image button remains for the times you are
+shows it is waiting. The Compose editor's own Attach button remains for the times you are
 already writing in the editor.
 
 ## Tapping, links and copying

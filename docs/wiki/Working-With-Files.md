@@ -168,17 +168,39 @@ blocks sensitive trees. In multi-user mode a non-admin gets only their own user 
 root, because per-user spaces live inside the home directory and a home-directory root would
 expose everyone.
 
-## Images into a session
+## Files into a session
 
-Paste from the clipboard or drag and drop straight onto the terminal. The image is written
+Paste from the clipboard or drag and drop straight onto the terminal. The file is written
 where the agent can read it and the reference is inserted into your prompt. On a phone, the
-toolbar's Attach button opens the camera or photo library, videos included, and puts the path
-on your prompt, where it behaves like text you typed; the Image button inside the Compose
-editor does the same into the editor. Dropping a video onto the terminal works the same way.
+toolbar's Attach button opens the camera, photo library or files, and puts the path on your
+prompt, where it behaves like text you typed; the Attach button inside the Compose editor
+does the same into the editor. Dropping a video or a document onto the terminal works the
+same way.
 
-HEIC images from an iPhone are converted to JPEG on the way in.
-Videos (mp4, webm, mov, m4v, ogv) are stored as recorded, up to 1 GB each by default
-(`CODEMAN_MAX_PASTE_VIDEO_BYTES`); they stream to disk rather than through server memory.
+Images (png, jpg, gif, webp, bmp, heic) are re-encoded on the device before they go up (a GIF
+goes as is, so it keeps its frames), and HEIC from an iPhone is converted to JPEG. Videos (mp4, webm, mov, m4v, ogv) are stored as recorded,
+up to 1 GB each by default (`CODEMAN_MAX_PASTE_VIDEO_BYTES`); they stream to disk rather than
+through server memory. Documents are the office formats (pdf, docx, pptx, xlsx, zip) and the
+text family (txt, md, csv, tsv, json, log, yaml, yml, xml). Each is checked on the way in,
+against its file signature for the binary formats and against its encoding for text (UTF-8,
+no NUL bytes), so a script renamed to `.pdf` is refused while a `.txt` can hold any text at
+all. Files with script or page extensions (sh, py, js, html) are not accepted, since a prompt
+upload is something for the agent to read, not something for Codeman to store and serve. A
+document keeps a trimmed copy of its original name, letters, digits, dot, dash and underscore
+with anything else turned into a dash, so `Q3 report.pdf` is findable as
+`paste-<time>-<id>-Q3-report.pdf`; a name made entirely of other characters saves without
+one. Uploads are refused for remote (SSH) sessions, whose working directory is on the other
+host.
+
+Uploads land in `.codeman-uploads/` inside the case, next to the code the agent is working
+on, because that is the one path a local agent and a Docker case (whose workspace is mounted
+at the same absolute path) both see the same way. The first upload writes a `.gitignore` of `*` into `.codeman-uploads/`, so the
+directory ignores itself and your repository never picks the files up, while your own ignore file is
+left alone; a `.gitignore` you already had there is never overwritten. Files older than seven
+days are swept hourly, and the directory goes when the last session of the case is closed (a
+session that is only detached keeps it). Earlier releases wrote to `.claude-images/`; that
+directory is still swept and cleaned up the same way for one release so a case in use before
+the move is not left with stray files.
 
 ## Generated artifacts
 
