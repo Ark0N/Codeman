@@ -11,6 +11,7 @@
  *   DELETE /api/admin/users/:username
  *   GET    /api/admin/users/:username/cases          (list the user's case folders)
  *   DELETE /api/admin/users/:username/cases/:caseName (delete one case folder)
+ *   GET/PUT/DELETE /api/admin/users/:username/workspaces (inspect, restrict, or restore access)
  *
  * Self-service GET /api/me + POST /api/me/password live in me-routes.ts.
  */
@@ -34,7 +35,7 @@ import {
   updateUser,
   UserStoreError,
 } from '../../user-store.js';
-import { getAuthUser, requireAdmin, revokeUserSessions } from '../route-helpers.js';
+import { getAuthUser, isWorkingDirAllowed, requireAdmin, revokeUserSessions } from '../route-helpers.js';
 import { webviewCapabilities } from '../../webview-capabilities.js';
 import { htmlViewCapabilities } from '../../html-view-capabilities.js';
 import { appendAdminAudit } from '../admin-audit.js';
@@ -42,6 +43,12 @@ import { SseEvent } from '../sse-events.js';
 import type { AuthPort } from '../ports/auth-port.js';
 import type { SessionPort } from '../ports/session-port.js';
 import type { EventPort } from '../ports/event-port.js';
+import {
+  deleteSharedWorkspacePolicy,
+  getSharedWorkspacePolicy,
+  readLinkedWorkspacePaths,
+  writeSharedWorkspacePolicy,
+} from '../../shared-workspace-store.js';
 
 const CreateUserSchema = z.object({
   username: z.string().min(1).max(64),
@@ -55,6 +62,9 @@ const UpdateUserSchema = z.object({
   canBypassPermissions: z.boolean().optional(),
 });
 const DeleteUserSchema = z.object({ deleteSpace: z.boolean().optional() });
+const WorkspacePolicySchema = z.object({
+  workspaceNames: z.array(z.string().regex(/^[^./\\][^/\\]{0,127}$/)).max(100),
+});
 
 // Case-folder names: a single path segment, no separators, no leading dot (hidden
 // dirs like .claude are infrastructure, not cases), so '.'/'..' are excluded too.
@@ -107,6 +117,107 @@ export function registerAdminRoutes(app: FastifyInstance, ctx: SessionPort & Aut
       success: true,
       data: users.map((u) => ({ ...toPublicUser(u), stats: statsFor(u.username) })),
     };
+  });
+
+  app.get('/api/admin/users/:username/workspaces', async (req, reply) => {
+    if (!gate(req, reply)) return;
+    const username = normalizeUsername((req.params as { username: string }).username);
+    const user = await findUser(username);
+    if (!user) {
+      reply.code(404);
+      return createErrorResponse(ApiErrorCode.USER_NOT_FOUND, 'User not found');
+    }
+    const linked = readLinkedWorkspacePaths();
+    const availableByPath = new Map<string, { name: string; path: string }>();
+    for (const [name, path] of Object.entries(linked)) {
+      if (!SAFE_CASE_NAME.test(name)) continue;
+      try {
+        const [realPath, stat] = await Promise.all([fsp.realpath(path), fsp.stat(path)]);
+        if (stat.isDirectory() && !availableByPath.has(realPath))
+          availableByPath.set(realPath, { name, path: realPath });
+      } catch {
+        // Ignore stale or unavailable linked folders.
+      }
+    }
+    const policy = getSharedWorkspacePolicy(username);
+    return {
+      success: true,
+      data: {
+        username,
+        role: user.role,
+        restricted: policy?.restricted ?? false,
+        workspaceNames: policy?.workspaceNames ?? [],
+        available: [...availableByPath.values()],
+      },
+    };
+  });
+
+  app.put('/api/admin/users/:username/workspaces', async (req, reply) => {
+    if (!gate(req, reply)) return;
+    const username = normalizeUsername((req.params as { username: string }).username);
+    const parsed = WorkspacePolicySchema.safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.error.issues[0]?.message ?? 'Invalid input');
+    }
+    const user = await findUser(username);
+    if (!user) {
+      reply.code(404);
+      return createErrorResponse(ApiErrorCode.USER_NOT_FOUND, 'User not found');
+    }
+    if (user.role !== 'user') {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Workspace restrictions apply to regular users only');
+    }
+    const linked = readLinkedWorkspacePaths();
+    const invalid = parsed.data.workspaceNames.find((name) => !(name in linked));
+    if (invalid) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Workspace is not linked: ${invalid}`);
+    }
+    for (const name of parsed.data.workspaceNames) {
+      try {
+        if (!(await fsp.stat(linked[name])).isDirectory()) throw new Error('not a directory');
+      } catch {
+        reply.code(400);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Workspace is unavailable: ${name}`);
+      }
+    }
+
+    writeSharedWorkspacePolicy(username, parsed.data.workspaceNames);
+    let stoppedSessions = 0;
+    for (const session of [...ctx.sessions.values()]) {
+      if (session.owner !== username) continue;
+      if (!session.remote && isWorkingDirAllowed({ username, role: 'user' }, session.workingDir)) continue;
+      try {
+        await ctx.cleanupSession(session.id, true, 'workspace_access_revoked');
+        stoppedSessions++;
+      } catch {
+        /* best effort; authorization checks still deny access to the session */
+      }
+    }
+    audit(req, 'user.workspaces.update', username, {
+      workspaceNames: parsed.data.workspaceNames,
+      stoppedSessions,
+    });
+    ctx.broadcast(SseEvent.AdminUsersChanged, {});
+    return {
+      success: true,
+      data: { restricted: true, workspaceNames: parsed.data.workspaceNames, stoppedSessions },
+    };
+  });
+
+  app.delete('/api/admin/users/:username/workspaces', async (req, reply) => {
+    if (!gate(req, reply)) return;
+    const username = normalizeUsername((req.params as { username: string }).username);
+    if (!(await findUser(username))) {
+      reply.code(404);
+      return createErrorResponse(ApiErrorCode.USER_NOT_FOUND, 'User not found');
+    }
+    deleteSharedWorkspacePolicy(username);
+    audit(req, 'user.workspaces.clear', username);
+    ctx.broadcast(SseEvent.AdminUsersChanged, {});
+    return { success: true, data: { username, restricted: false } };
   });
 
   app.post('/api/admin/users', async (req, reply) => {
@@ -203,6 +314,7 @@ export function registerAdminRoutes(app: FastifyInstance, ctx: SessionPort & Aut
       // record, so it is safe to read before the delete.)
       const owned = [...ctx.sessions.values()].filter((s) => s.owner === username).map((s) => s.id);
       await deleteUser(username); // throws LAST_ADMIN / USER_NOT_FOUND (no side effects)
+      deleteSharedWorkspacePolicy(username);
       for (const id of owned) {
         await ctx.cleanupSession(id, true, 'admin_delete_user').catch(() => {});
       }

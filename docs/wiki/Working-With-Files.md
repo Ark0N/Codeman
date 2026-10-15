@@ -164,9 +164,9 @@ key clears the unsent prompt, and never sends the agent's `/clear` command.
 
 This is a separate file-serving surface from the viewer, with its own rules: it allowlists
 your home directory, the cases directory, and anything in `CODEMAN_FILE_PICKER_ROOTS`, and
-blocks sensitive trees. In multi-user mode a non-admin gets only their own user space as a
-root, because per-user spaces live inside the home directory and a home-directory root would
-expose everyone.
+blocks sensitive trees. In multi-user mode a regular user gets only their own user space as a
+root. An admin-restricted user instead gets only the linked local workspaces assigned to them;
+host-wide and configured roots are omitted.
 
 ## Images into a session
 

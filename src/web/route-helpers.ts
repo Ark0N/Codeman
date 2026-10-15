@@ -31,6 +31,7 @@ import type { StaleExpirationMap } from '../utils/index.js';
 import { dataPath } from '../config/instance.js';
 import { getCasesDir } from '../config/cases-dir.js';
 import { isMultiUserMode, maxSessionsPerUser, userCasesDir } from '../config/multiuser.js';
+import { getSharedWorkspacePaths, isWorkspaceRestricted } from '../shared-workspace-store.js';
 import { SYNTHETIC_ADMIN, findUser } from '../user-store.js';
 import { AGENT_ORIGIN_SPAWNED_BY_SESSION, normalizeAgentOrigin } from '../agent-case-marker.js';
 
@@ -190,7 +191,9 @@ export function resolveCasesDir(user?: AuthUser): string {
  */
 export function isWorkingDirAllowed(user: AuthUser, workingDir: string): boolean {
   if (!isMultiUserMode() || user.role === 'admin') return true;
-  const base = userCasesDir(user.username);
+  const restricted = isWorkspaceRestricted(user.username);
+  const bases = restricted ? getSharedWorkspacePaths(user.username) : [userCasesDir(user.username)];
+  if (bases.length === 0) return false;
   // Resolve the deepest existing ancestor to defeat symlink escapes without
   // requiring the leaf to exist yet.
   const resolveExisting = (p: string): string => {
@@ -206,18 +209,22 @@ export function isWorkingDirAllowed(user: AuthUser, workingDir: string): boolean
       }
     }
   };
-  let realBase: string;
-  try {
-    realBase = realpathSync(base);
-  } catch {
-    // base does not exist yet — create it so confinement has a stable anchor
-    mkdirSync(base, { recursive: true });
-    realBase = realpathSync(base);
-  }
   const realTarget = resolveExisting(workingDir);
-  if (realTarget === realBase) return true;
-  const rel = relative(realBase, realTarget);
-  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+  for (const base of bases) {
+    let realBase: string;
+    try {
+      realBase = realpathSync(base);
+    } catch {
+      if (restricted) continue;
+      // Create the ordinary per-user case space so first-time users can start a case.
+      mkdirSync(base, { recursive: true });
+      realBase = realpathSync(base);
+    }
+    if (realTarget === realBase) return true;
+    const rel = relative(realBase, realTarget);
+    if (rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)) return true;
+  }
+  return false;
 }
 
 /**
@@ -331,7 +338,19 @@ function sessionNotFoundError(sessionId: string): Error & { statusCode: number; 
 export function findSessionOrFail(ctx: SessionPort, sessionId: string, req?: FastifyRequest): Session {
   const session = ctx.sessions.get(sessionId);
   if (!session) throw sessionNotFoundError(sessionId);
-  if (req && !canAccessOwned(getAuthUser(req), session.owner)) throw sessionNotFoundError(sessionId);
+  if (req) {
+    const user = getAuthUser(req);
+    if (!canAccessOwned(user, session.owner)) throw sessionNotFoundError(sessionId);
+    if (session.owner === user.username) {
+      if (
+        session.remote
+          ? user.role === 'user' && isWorkspaceRestricted(user.username)
+          : !isWorkingDirAllowed(user, session.workingDir)
+      ) {
+        throw sessionNotFoundError(sessionId);
+      }
+    }
+  }
   return session;
 }
 
@@ -351,7 +370,19 @@ export function findPersistedSessionOrFail(
 ): SessionState {
   const persisted = store.getSession(sessionId);
   if (!persisted) throw sessionNotFoundError(sessionId);
-  if (req && !canAccessOwned(getAuthUser(req), persisted.owner)) throw sessionNotFoundError(sessionId);
+  if (req) {
+    const user = getAuthUser(req);
+    if (!canAccessOwned(user, persisted.owner)) throw sessionNotFoundError(sessionId);
+    if (persisted.owner === user.username) {
+      if (
+        persisted.remote
+          ? user.role === 'user' && isWorkspaceRestricted(user.username)
+          : !isWorkingDirAllowed(user, persisted.workingDir)
+      ) {
+        throw sessionNotFoundError(sessionId);
+      }
+    }
+  }
   return persisted;
 }
 

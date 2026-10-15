@@ -77,7 +77,7 @@ Roughly 235 handlers across 26 route modules. By domain:
 | Orchestrator        | 10       | Plans and phases.                                     |
 | Ralph               | 9        | Loop control and configuration.                       |
 | Cron                | 9        | Jobs and run history.                                 |
-| Admin               | 8        | Multi-user administration.                            |
+| Admin               | 11       | Multi-user accounts and shared-workspace grants.      |
 | Plan                | 8        | Plan orchestration.                                   |
 | Respawn             | 7        | Respawn configuration and presets.                    |
 | Webviews            | 6        | Saved dashboards, plus the proxy.                     |
