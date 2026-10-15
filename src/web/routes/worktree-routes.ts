@@ -202,15 +202,13 @@ export function registerWorktreeRoutes(
     req: FastifyRequest,
     reply: FastifyReply,
     name: string
-  ): Promise<{ ok: true; repo: CaseRepository; casePath: string } | { ok: false; fail: Fail }> {
+  ): Promise<{ ok: true; repo: CaseRepository; casePath: string; dockerRoots: string[] } | { ok: false; fail: Fail }> {
     const folder = await resolveLocalCaseFolder(req, name);
     if (!folder.ok) return { ok: false, fail: failWith(reply, folder.code, folder.message) };
-    const repo = await resolveCaseRepository(folder.casePath, {
-      git: deps.git,
-      dockerWorkspaces: await dockerWorkspaces(),
-    });
+    const dockerRoots = await dockerWorkspaces();
+    const repo = await resolveCaseRepository(folder.casePath, { git: deps.git, dockerWorkspaces: dockerRoots });
     if (!repo.ok) return { ok: false, fail: failFrom(reply, repo) };
-    return { ok: true, repo: repo.repo, casePath: folder.casePath };
+    return { ok: true, repo: repo.repo, casePath: folder.casePath, dockerRoots };
   }
 
   app.get('/api/cases/:name/worktrees', async (req, reply): Promise<ApiResponse<CaseWorktreeList>> => {
@@ -282,7 +280,8 @@ export function registerWorktreeRoutes(
           isInUse: (path) =>
             liveLocalSessions(ctx, resolved.casePath, resolved.repo.repoRoot).some((s) => isPathWithin(s.dir, path)),
         },
-        { git: deps.git }
+        // The worktree folder itself must not be (or hold) a Docker case workspace either.
+        { git: deps.git, dockerWorkspaces: resolved.dockerRoots }
       );
       if (!removed.ok) return failFrom(reply, removed);
       return { success: true, data: { removed: removed.removed } };

@@ -46,7 +46,9 @@
  *   - git never runs for a case at or inside a Docker case workspace (or whose common git dir is
  *     there): a container could plant a checkout filter or a hook, and `git worktree add` runs the
  *     repository's post-checkout hook and filters on the HOST. On a local case that is acceptable,
- *     since the user's agent runs code there anyway.
+ *     since the user's agent runs code there anyway. A managed worktree that is, sits inside, or
+ *     holds a Docker case workspace is never removed either: `git worktree remove` runs a status
+ *     inside the tree, then deletes it under the container.
  *   - A repository that merely encloses the case and is the home folder or above (a dotfiles repo
  *     in `$HOME`) is not the case's repository, and a case folder below a repository's top level
  *     is refused: the worktrees would not be where the case is.
@@ -485,6 +487,9 @@ const realOr = async (p: string): Promise<string> => {
 const DOCKER_REFUSAL =
   'Worktrees are not available for a folder inside a Docker case workspace: a container can write there, and git would run its hooks and filters on this machine.';
 
+const DOCKER_WORKTREE_REFUSAL =
+  'This worktree is, or holds, a Docker case workspace: git would run inside a folder a container can write, and removing it would delete that workspace. Remove the Docker case first.';
+
 /**
  * The repository a case folder IS, or why it is not one Codeman makes worktrees for. Never runs
  * git when the folder (or the repository's common git dir) is at or inside a Docker case workspace.
@@ -889,6 +894,17 @@ export async function removeCaseWorktree(
     // git's record of it (measured on git 2.43: exit 0, nothing on disk touched).
     const found = await resolveManagedWorktree(repo, req.name, { ...opts, allowMissing: true });
     if (!found.ok) return found;
+    // The case passed the Docker rule, but the worktree folder itself can be a Docker case's
+    // workspace (a Docker case linked to it), or hold one. `git worktree remove` runs a status
+    // INSIDE the tree first (container-written files, checkout filters on this machine), then
+    // deletes the whole tree, ignored files included, under a container that still mounts it.
+    // A folder that is gone has neither problem: git only drops its record.
+    if (!found.missing) {
+      const dockerRoots = await Promise.all((opts.dockerWorkspaces ?? []).filter(Boolean).map(realOr));
+      if (dockerRoots.some((root) => isPathWithin(found.path, root) || isPathWithin(root, found.path))) {
+        return fail('INVALID_INPUT', DOCKER_WORKTREE_REFUSAL);
+      }
+    }
     if (await req.isInUse(found.path)) {
       return fail(
         'CONFLICT',

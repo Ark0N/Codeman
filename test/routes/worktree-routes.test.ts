@@ -301,6 +301,24 @@ describe('worktree routes: refusals', () => {
     expect(qs.json().error).toContain('Docker');
   });
 
+  it('refuses to remove a worktree a Docker case uses as its workspace', async () => {
+    expect((await create({ name: 'boxed' })).statusCode).toBe(201);
+    const wtPath = join(repo, '.claude', 'worktrees', 'boxed');
+    await mkdir(getDataDir(), { recursive: true });
+    await writeFile(
+      join(getDataDir(), 'docker-cases.json'),
+      JSON.stringify([{ name: 'boxcase', type: 'docker', hostId: 'd1', hostWorkspacePath: wtPath }])
+    );
+    // The local case itself is fine (listing and creating still work)...
+    expect((await list()).statusCode).toBe(200);
+    // ...but removing the folder the container mounts is refused, and nothing is deleted.
+    const res = await remove('boxed');
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toContain('Docker case workspace');
+    expect(existsSync(join(wtPath, 'README.md'))).toBe(true);
+    expect(git(repo, 'worktree', 'list')).toContain('boxed');
+  });
+
   it('refuses a remote case with a 400', async () => {
     await mkdir(getDataDir(), { recursive: true });
     await writeFile(

@@ -62,7 +62,9 @@ If a worktree's folder was deleted by hand, its row says **missing** and offers 
 
 - **Docker cases and remote (SSH) cases.** A container can write to its workspace, and creating
   a worktree runs the repository's hooks and checkout filters on the Codeman machine, so git is
-  never run there. A remote case's repository is on another machine.
+  never run there. A remote case's repository is on another machine. For the same reason a
+  worktree that a Docker case uses as its workspace (or that holds one) is never removed from
+  here: remove the Docker case first.
 - A case folder that is not the top of a repository (a subfolder of one), a bare repository, or
   an empty repository with no commit yet.
 - Worktrees outside `.claude/worktrees/` (made by hand with `git worktree add`) are listed, but

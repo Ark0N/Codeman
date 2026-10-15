@@ -5,7 +5,16 @@
  * injected runner proving the Docker refusal never spawns git at all. Port: N/A.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -23,6 +32,7 @@ import {
   resolveCaseRepository,
   resolveManagedWorktree,
   respellUnder,
+  runWorktreeGit,
   unquoteGitPath,
   worktreeBaseError,
   worktreeBranchError,
@@ -349,6 +359,43 @@ describe('git worktrees on a real repository', () => {
     expect(clean).toMatchObject({ ok: true, removed: { name: 'w1', branch: 'worktree-w1', branchDeleted: true } });
     expect(git(repoDir, 'branch', '--list', 'worktree-w1')).toBe('');
     expect(git(repoDir, 'worktree', 'list', '--porcelain')).not.toContain('w1');
+  });
+
+  it('never removes a worktree that is, or holds, a Docker case workspace', async () => {
+    const made = await createCaseWorktree(repo, { name: 'boxed' });
+    if (!made.ok) throw new Error(made.message);
+    const wtPath = made.worktree.path;
+    mkdirSync(join(wtPath, 'sandbox'));
+    // The worktree IS a Docker case's workspace, or one sits inside it: refused before git runs,
+    // and nothing is deleted. git still lists it.
+    for (const dockerWorkspaces of [[wtPath], [join(wtPath, 'sandbox')]]) {
+      let spawned = 0;
+      const counting: WorktreeGitRunner = async (cwd, args, o) => {
+        if (args.includes('remove')) spawned++;
+        return runWorktreeGit(cwd, args, o);
+      };
+      const r = await removeCaseWorktree(
+        repo,
+        { name: 'boxed', isInUse: () => false },
+        { git: counting, dockerWorkspaces }
+      );
+      expect(r).toMatchObject({ ok: false, code: 'INVALID_INPUT' });
+      if (!r.ok) expect(r.message).toContain('Docker case workspace');
+      expect(spawned).toBe(0);
+      expect(existsSync(join(wtPath, 'a.txt'))).toBe(true);
+    }
+    expect(git(repoDir, 'worktree', 'list', '--porcelain')).toContain('boxed');
+    // An unrelated Docker workspace does not get in the way.
+    rmSync(join(wtPath, 'sandbox'), { recursive: true });
+    const elsewhere = join(dir, 'other-box');
+    mkdirSync(elsewhere);
+    const ok = await removeCaseWorktree(
+      repo,
+      { name: 'boxed', isInUse: () => false },
+      { dockerWorkspaces: [elsewhere] }
+    );
+    expect(ok.ok).toBe(true);
+    expect(existsSync(wtPath)).toBe(false);
   });
 
   it('keeps an unmerged branch: git branch -d refuses, never -D', async () => {
