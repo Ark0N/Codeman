@@ -3143,13 +3143,24 @@ export class Session extends EventEmitter {
    * a two-marker match (isTrustDialogScreen), and an attempt cap.
    */
   private _maybeAcceptTrustDialog(): void {
-    if (this._trustDialogAccepted) return;
+    // Stopped: the kill itself produces PTY output, and the buffer tail still holds the
+    // dialog, so without this a deleted session kept "answering" it for several seconds.
+    if (this._trustDialogAccepted || this._isStopped) return;
     const now = Date.now();
     if (now - this._interactiveStartedAt > TRUST_DIALOG_WINDOW_MS) {
       this._trustDialogAccepted = true; // window closed; anything matching now is not the dialog
       return;
     }
-    if (now - this._lastTrustDialogScanAt < TRUST_DIALOG_RETRY_MS) return;
+    const sinceScan = now - this._lastTrustDialogScanAt;
+    if (sinceScan < TRUST_DIALOG_RETRY_MS) {
+      // ⚠️ Defer a throttled read, never drop it. The dialog's own paint is usually the
+      // last output a launching pane produces, and it tends to land inside the throttle
+      // of the read the blank screen before it triggered: dropped, nothing re-read the
+      // screen and the session sat on the dialog for good (2 of 12 fresh launches on
+      // Claude Code 2.1.294). A read already scheduled covers this one.
+      if (!this._trustDialogTimer) this._rescanTrustDialogIn(TRUST_DIALOG_RETRY_MS - sinceScan + 100);
+      return;
+    }
     this._lastTrustDialogScanAt = now;
 
     // Prefer the pane; fall back to the buffer tail on a direct-PTY session,
@@ -3184,14 +3195,17 @@ export class Session extends EventEmitter {
     // on a live 2.1.252 spawn: cursor moved at 6 s, then nothing). The timer is
     // one-shot and self-rearming through this same path, and every exit route
     // goes through _clearAllTimers().
-    // The +100ms puts the re-entry OUTSIDE the scan throttle above; firing at
-    // exactly the throttle boundary would let the scan return early and break
-    // the chain with the dialog still on screen.
+    // The +100ms puts the re-entry OUTSIDE the scan throttle above.
+    this._rescanTrustDialogIn(TRUST_DIALOG_RETRY_MS + 100);
+  }
+
+  /** Re-run the trust-dialog scan after `delayMs`, replacing any read already scheduled. */
+  private _rescanTrustDialogIn(delayMs: number): void {
     if (this._trustDialogTimer) clearTimeout(this._trustDialogTimer);
     this._trustDialogTimer = setTimeout(() => {
       this._trustDialogTimer = null;
       this._maybeAcceptTrustDialog();
-    }, TRUST_DIALOG_RETRY_MS + 100);
+    }, delayMs);
   }
 
   /**
