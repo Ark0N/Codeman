@@ -614,6 +614,8 @@
         <div class="file-preview-header">
           <span class="file-preview-title" id="filePreviewTitle">file.ts</span>
           <div class="file-preview-actions">
+            <button class="btn-icon-sm" id="filePreviewBackBtn" onclick="app.stepFilePreviewHistory(-1)" title="Back (Alt+←)" aria-label="Back to the previous file" hidden disabled>&larr;</button>
+            <button class="btn-icon-sm" id="filePreviewForwardBtn" onclick="app.stepFilePreviewHistory(1)" title="Forward (Alt+→)" aria-label="Forward to the next file" hidden disabled>&rarr;</button>
             <button class="btn-icon-sm" id="filePreviewPrevBtn" onclick="app.stepFolderPreview(-1)" title="Previous file in folder (←)" aria-label="Previous file in folder" hidden>&lsaquo;</button>
             <button class="btn-icon-sm" id="filePreviewNextBtn" onclick="app.stepFolderPreview(1)" title="Next file in folder (→)" aria-label="Next file in folder" hidden>&rsaquo;</button>
             <button class="btn-icon-sm" id="filePreviewFolderBtn" onclick="app.openFolderOfPreview()" title="Show folder" aria-label="Show folder" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
@@ -624,6 +626,7 @@
             <button class="btn-icon-sm file-preview-edit-btn" id="filePreviewEditBtn" onclick="app.enterFilePreviewEdit()" title="Edit file" aria-label="Edit file" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg></button>
             <button class="btn-icon-sm" onclick="app.copyFilePreviewContent()" title="Copy content">&#x2398;</button>
             <button class="btn-icon-sm" id="filePreviewDetachBtn" onclick="app.detachFilePreview()" title="Open in new tab" aria-label="Open in new tab" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></button>
+            <button class="btn-icon-sm" id="filePreviewExpandBtn" onclick="app.toggleFilePreviewExpanded()" title="Expand" aria-label="Expand" aria-pressed="false"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
             <button class="btn-icon-sm" onclick="app.closeFilePreview()" title="Close">&times;</button>
           </div>
         </div>
@@ -635,6 +638,7 @@
           <button class="file-preview-editbar-btn file-preview-editbar-btn--save" id="filePreviewSaveBtn" onclick="app.saveFilePreviewEdit()" disabled>Save</button>
         </div>
         <div class="file-preview-footer" id="filePreviewFooter"></div>
+        <div class="file-preview-resize" id="filePreviewResize" title="Drag to resize" aria-hidden="true"></div>
       </div>
     </div>
 

@@ -33,8 +33,11 @@ const FILE_PREVIEW_PREF_KEYS = {
   htmlRendered: 'codeman:filePreviewHtmlRendered',
   lineNumbers: 'codeman:filePreviewLineNumbers',
   wrap: 'codeman:filePreviewWrap',
+  expanded: 'codeman:filePreviewExpanded',
 };
-const FILE_PREVIEW_PREF_DEFAULTS = { mdRendered: true, htmlRendered: true, lineNumbers: false, wrap: true };
+const FILE_PREVIEW_PREF_DEFAULTS = { mdRendered: true, htmlRendered: true, lineNumbers: false, wrap: true, expanded: false };
+// Back/forward list of previews opened from one overlay session (links between documents).
+const FILE_PREVIEW_HISTORY_MAX = 50;
 const AWAY_DIGEST_SECTIONS = [
   ['needsAttention', 'Needs Attention'],
   ['completed', 'Completed'],
@@ -4108,6 +4111,9 @@ Object.assign(CodemanApp.prototype, {
 
     if (!overlay || !bodyEl) return;
 
+    this._recordFilePreviewHistory(filePath, sessionId, attachmentId, options);
+    this._bindFilePreviewChrome();
+
     // Only the newest load may write: paging ←/→ through a folder starts the next
     // load while the previous one still awaits its fetch, and its late answer would
     // put the previous file's text under the next file's title.
@@ -4133,6 +4139,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Show overlay with loading state
     overlay.classList.add('visible');
+    this._applyFilePreviewExpanded();
     titleEl.textContent = filePath;
     bodyEl.innerHTML = '<div class="binary-message">Loading...</div>';
     footerEl.textContent = '';
@@ -4537,6 +4544,142 @@ Object.assign(CodemanApp.prototype, {
     this._openFolderGridFile(next);
   },
 
+  // ═══════════════════════════════════════════════════════════════
+  // File Viewer window: back/forward between previews, expand, resize
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Remember a preview in the back/forward list. A navigation that came FROM the
+   * list (stepFilePreviewHistory) is not recorded again, and neither is a reload
+   * of the file already showing (the MD/Page toggles reopen the same file). Opening
+   * something new while standing mid-list drops the forward entries, as a browser does.
+   */
+  _recordFilePreviewHistory(filePath, sessionId, attachmentId, options) {
+    const h = (this.filePreviewHistory = this.filePreviewHistory || { entries: [], index: -1 });
+    if (!this._filePreviewHistoryStepping) {
+      const cur = h.entries[h.index];
+      const same =
+        cur && cur.filePath === filePath && cur.sessionId === sessionId && (cur.attachmentId || null) === (attachmentId || null);
+      if (!same) {
+        h.entries.length = h.index + 1;
+        h.entries.push({ filePath, sessionId, attachmentId: attachmentId || null, options });
+        if (h.entries.length > FILE_PREVIEW_HISTORY_MAX) h.entries.shift();
+        h.index = h.entries.length - 1;
+      }
+    }
+    this._updateFilePreviewHistoryNav();
+  },
+
+  /** Back (-1) / forward (+1) through the previews opened in this overlay session. */
+  stepFilePreviewHistory(delta) {
+    const h = this.filePreviewHistory;
+    if (!h) return;
+    const target = h.index + delta;
+    if (target < 0 || target >= h.entries.length) return;
+    if (this.filePreviewEdit?.dirty && !confirm('Discard unsaved changes?')) return;
+    h.index = target;
+    const e = h.entries[target];
+    // openFilePreview records synchronously, before its first await, so the flag
+    // only needs to cover the call itself.
+    this._filePreviewHistoryStepping = true;
+    try {
+      return this.openFilePreview(e.filePath, e.sessionId, e.attachmentId, e.options || {});
+    } finally {
+      this._filePreviewHistoryStepping = false;
+    }
+  },
+
+  /** Buttons show once there is somewhere to go; each is disabled at its end of the list. */
+  _updateFilePreviewHistoryNav() {
+    const h = this.filePreviewHistory;
+    const multi = !!h && h.entries.length > 1;
+    const back = this.$('filePreviewBackBtn');
+    const fwd = this.$('filePreviewForwardBtn');
+    if (back) {
+      back.hidden = !multi;
+      back.disabled = !multi || h.index <= 0;
+    }
+    if (fwd) {
+      fwd.hidden = !multi;
+      fwd.disabled = !multi || h.index >= h.entries.length - 1;
+    }
+  },
+
+  /** Expand button: fill the screen, remembered across opens. */
+  toggleFilePreviewExpanded() {
+    this._setFilePreviewPref('expanded', !this._filePreviewPref('expanded'));
+    this._applyFilePreviewExpanded();
+  },
+
+  _applyFilePreviewExpanded() {
+    const on = this._filePreviewPref('expanded');
+    const win = this.$('filePreviewOverlay')?.querySelector?.('.file-preview-window');
+    win?.classList?.toggle('expanded', on);
+    const btn = this.$('filePreviewExpandBtn');
+    if (btn) {
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      const label = on ? 'Restore size' : 'Expand';
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
+    }
+  },
+
+  /**
+   * One-time wiring for the window chrome: Alt+←/→ for back/forward (capture phase
+   * so the terminal behind the overlay never types the arrow) and the corner grip.
+   */
+  _bindFilePreviewChrome() {
+    if (this._filePreviewChromeBound) return;
+    this._filePreviewChromeBound = true;
+    document.addEventListener(
+      'keydown',
+      (ev) => {
+        if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+        if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+        if (!this.$('filePreviewOverlay')?.classList.contains('visible')) return;
+        const t = ev.target;
+        if (t && (t.isContentEditable || (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) && !t.classList?.contains('xterm-helper-textarea')))) return;
+        const h = this.filePreviewHistory;
+        const delta = ev.key === 'ArrowLeft' ? -1 : 1;
+        if (!h || h.index + delta < 0 || h.index + delta >= h.entries.length) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.stepFilePreviewHistory(delta);
+      },
+      true
+    );
+    this._bindFilePreviewResize();
+  },
+
+  /** Drag the corner grip to size the window; the window is centred, so the delta counts twice. */
+  _bindFilePreviewResize() {
+    const grip = this.$('filePreviewResize');
+    const win = grip?.parentElement;
+    if (!grip || !win) return;
+    grip.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault();
+      const startX = ev.clientX;
+      const startY = ev.clientY;
+      const startW = win.offsetWidth;
+      const startH = win.offsetHeight;
+      grip.setPointerCapture?.(ev.pointerId);
+      const move = (e) => {
+        const w = Math.max(320, Math.min(window.innerWidth * 0.96, startW + 2 * (e.clientX - startX)));
+        const h = Math.max(240, Math.min(window.innerHeight * 0.94, startH + 2 * (e.clientY - startY)));
+        win.style.width = `${Math.round(w)}px`;
+        win.style.height = `${Math.round(h)}px`;
+      };
+      const up = () => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        grip.removeEventListener('pointercancel', up);
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    });
+  },
+
   /** "Show folder" in the preview: the grid of the previewed file's folder. */
   openFolderOfPreview() {
     const target = this.filePreviewFolderTarget;
@@ -4617,6 +4760,8 @@ Object.assign(CodemanApp.prototype, {
     // Back on the grid (if one is open underneath): its current tile stays marked.
     if (this.folderGrid) this.folderGrid.index = null;
     this._updateFolderPreviewNav(null);
+    this.filePreviewHistory = null;
+    this._updateFilePreviewHistoryNav();
     const overlay = this.$('filePreviewOverlay');
     if (overlay) {
       overlay.classList.remove('visible');
