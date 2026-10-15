@@ -617,13 +617,16 @@ export function registerSystemRoutes(
           // synchronous-spawn precedent this endpoint is modelled on.
           detached: true,
           // Inherit the environment: this needs a HOME to resolve $DSH_HOME
-          // against, and a PATH carrying `pnpm`. ⚠️ `dsh plugin` does NOT bundle a
+          // against, and a PATH carrying `pnpm` (see the PATH below). ⚠️ `dsh plugin` does NOT bundle a
           // package manager — it `spawnSync`s a literal `pnpm` with no npm
           // fallback, so on a host without one this exits 127 and dsh's own
           // stderr ("pnpm not found on PATH") is what reaches the caller through
           // the OPERATION_FAILED detail below. That is the same missing
           // dependency that broke the docker agent image in issue #352.
-          env: process.env,
+          // PATH leads with the directory `dsh` itself resolved to: CLI management installs
+          // `dsh` and `pnpm` into the user prefix (`~/.local/bin`), which a service's own PATH
+          // usually lacks, so `dsh plugin` could not find the `pnpm` sitting next to it.
+          env: { ...process.env, PATH: [dir, process.env.PATH].filter(Boolean).join(':') },
         });
       } catch (err) {
         resolve({ code: null, output: `spawn failed: ${getErrorMessage(err)}`, timedOut: false });

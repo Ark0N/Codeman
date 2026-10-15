@@ -92,7 +92,7 @@ const RUN_MODE_LAUNCH = {
   },
   deepseek: {
     label: 'DeepSeek',
-    installHint: 'DeepSeek Harness CLI (dsh) not found. Install with: npm install -g @deepseek-ai/dsh',
+    installHint: 'DeepSeek Harness CLI (dsh) not found. Install with: npm install -g @deepseek-ai/dsh && (command -v pnpm >/dev/null || npm install -g pnpm)',
     // The two-part availability check is deliberate. `dsh` being installed is
     // not enough — DeepSeek ships no terminal front door, so a box can have a
     // perfect binary and nothing a pane can run.

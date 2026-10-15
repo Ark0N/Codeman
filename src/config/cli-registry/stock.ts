@@ -1300,8 +1300,14 @@ const DEEPSEEK: CliEntry = {
     launcherTargetParam: 'profile',
     install: {
       command: {
-        linux: 'npm install -g @deepseek-ai/dsh',
-        darwin: 'npm install -g @deepseek-ai/dsh',
+        // pnpm rides along: `dsh plugin` spawns a literal `pnpm` with no npm fallback, so the
+        // terminal profile this CLI needs before it can run cannot be installed without it (#352).
+        // ⚠️ Only when none is on PATH. `corepack enable` puts a `pnpm` shim in node's own bin
+        // directory, which is npm's global bin for nvm and Homebrew, and `npm install -g pnpm`
+        // refuses to overwrite it (EEXIST). Asked for in the same command as dsh, that failure
+        // took dsh down with it, on exactly the machines that already had a working pnpm.
+        linux: 'npm install -g @deepseek-ai/dsh && (command -v pnpm >/dev/null || npm install -g pnpm)',
+        darwin: 'npm install -g @deepseek-ai/dsh && (command -v pnpm >/dev/null || npm install -g pnpm)',
       },
       npmPackage: '@deepseek-ai/dsh',
       docsUrl: 'https://github.com/deepseek-ai/deepseek-harness',

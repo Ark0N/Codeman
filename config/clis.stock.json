@@ -238,8 +238,8 @@
       },
       "install": {
         "command": {
-          "linux": "npm install -g @deepseek-ai/dsh",
-          "darwin": "npm install -g @deepseek-ai/dsh"
+          "linux": "npm install -g @deepseek-ai/dsh && (command -v pnpm >/dev/null || npm install -g pnpm)",
+          "darwin": "npm install -g @deepseek-ai/dsh && (command -v pnpm >/dev/null || npm install -g pnpm)"
         },
         "npmPackage": "@deepseek-ai/dsh",
         "docsUrl": "https://github.com/deepseek-ai/deepseek-harness",

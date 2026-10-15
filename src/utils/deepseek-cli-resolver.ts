@@ -84,7 +84,8 @@ export const DEEPSEEK_VERSION_REGEX = /(?:^|\s)v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0
  */
 export const DEEPSEEK_IDENTITY_REGEX = /DeepSeek\s+Harness/i;
 
-const DEEPSEEK_NOT_FOUND = 'DeepSeek Harness CLI (dsh) not found. Install with: npm install -g @deepseek-ai/dsh';
+const DEEPSEEK_NOT_FOUND =
+  'DeepSeek Harness CLI (dsh) not found. Install with: npm install -g @deepseek-ai/dsh && (command -v pnpm >/dev/null || npm install -g pnpm)';
 
 /** Where profiles live: `$DSH_HOME/profiles`, defaulting to `~/.dsh/profiles`. */
 export function resolveDshHome(): string {
