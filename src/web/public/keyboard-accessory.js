@@ -1339,8 +1339,9 @@ const KeyboardAccessoryBar = {
       this._syncComposerDraftIndicator();
       close({ preserveDraft: false });
     };
-    const handleImages = async (files) => {
-      const images = Array.from(files || []).filter((file) => app._promptAttachKind(file));
+    // Takes files already admitted by app._admitPromptAttachments (the picker and
+    // the paste below), which also toasts whatever it refused.
+    const handleImages = async (images) => {
       if (images.length === 0 || typeof app._uploadAndInsertImages !== 'function') return;
       saveDraft();
       this._composerUploads.set(sessionId, (this._composerUploads.get(sessionId) || 0) + 1);
@@ -1381,7 +1382,6 @@ const KeyboardAccessoryBar = {
         if (remaining > 0) this._composerUploads.set(sessionId, remaining);
         else this._composerUploads.delete(sessionId);
         syncUploadUi();
-        if (overlay.isConnected) fileInput.value = '';
       }
     };
 
@@ -1389,9 +1389,11 @@ const KeyboardAccessoryBar = {
     textarea.addEventListener('paste', (event) => {
       const items = event.clipboardData?.items;
       if (!items) return;
-      const images = Array.from(items)
+      const files = Array.from(items)
         .map((item) => item.getAsFile())
-        .filter((file) => file && app._promptAttachKind(file));
+        .filter(Boolean);
+      // Pasted text with no admitted file lands in the textarea natively: no toast.
+      const images = app._admitPromptAttachments(files, { textPasted: !!event.clipboardData.getData('text/plain') });
       if (images.length > 0) {
         event.preventDefault();
         void handleImages(images);
@@ -1404,7 +1406,12 @@ const KeyboardAccessoryBar = {
       }
     });
     imageButton.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', () => void handleImages(fileInput.files));
+    fileInput.addEventListener('change', () => {
+      const files = Array.from(fileInput.files || []);
+      // Reset so picking the same refused file again still fires change (and its toast).
+      fileInput.value = '';
+      void handleImages(app._admitPromptAttachments(files));
+    });
     overlay.querySelector('.prompt-composer-terminal').addEventListener('click', () => {
       // Hand the text BACK to the terminal prompt so both surfaces hold the same
       // prompt, the mirror of the adoption composePrompt() does on open. Only a
@@ -1519,10 +1526,11 @@ const KeyboardAccessoryBar = {
       if (this._sendBracketedPaste(sessionId, text, 'Paste')) close();
     };
 
-    // Filter to what the server admits, close the dialog, and hand off to the
-    // shared upload+insert pipeline. Returns true if any file was handled.
-    const handleImages = (files) => {
-      const images = Array.from(files || []).filter((f) => app._promptAttachKind(f));
+    // Filter to what the server admits (app._admitPromptAttachments toasts what it
+    // refuses), close the dialog, and hand off to the shared upload+insert
+    // pipeline. Returns true if any file was handled.
+    const handleImages = (files, options) => {
+      const images = app._admitPromptAttachments(Array.from(files || []), options);
       if (images.length === 0) return false;
       close();
       // Upload to, and insert into, the shell this overlay was opened for.
@@ -1532,21 +1540,24 @@ const KeyboardAccessoryBar = {
 
     // File picker (camera / photo library / files) — the reliable mobile path.
     overlay.querySelector('.paste-image').addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', () => handleImages(fileInput.files));
+    fileInput.addEventListener('change', () => {
+      const files = Array.from(fileInput.files || []);
+      // Reset so picking the same refused file again still fires change (and its toast).
+      fileInput.value = '';
+      handleImages(files);
+    });
 
     // Best-effort: capture images pasted straight into the textarea.
     textarea.addEventListener('paste', (e) => {
       const items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
-      const imageFiles = [];
+      const files = [];
       for (let i = 0; i < items.length; i++) {
         const blob = items[i].getAsFile();
-        if (blob && app._promptAttachKind(blob)) imageFiles.push(blob);
+        if (blob) files.push(blob);
       }
-      if (imageFiles.length > 0) {
-        e.preventDefault();
-        handleImages(imageFiles);
-      }
+      // Pasted text with no admitted file lands in the textarea natively: no toast.
+      if (handleImages(files, { textPasted: !!e.clipboardData.getData('text/plain') })) e.preventDefault();
     });
 
     overlay.querySelector('.paste-cancel').addEventListener('click', close);

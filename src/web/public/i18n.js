@@ -1319,6 +1319,8 @@
       [/^Worktree (\S+) and branch (\S+) removed$/, (_m, wt, branch) => `已移除工作树 ${wt} 和分支 ${branch}`],
       [/^Worktree (\S+) removed$/, (_m, wt) => `已移除工作树 ${wt}`],
       [/^Worktree (\S+) was kept: ([\s\S]+)$/, (_m, wt, why) => `工作树 ${wt} 已保留：${why}`],
+      // A pick, drop or paste that mixed admitted files with refused ones (image-input.js).
+      [/^(\d+) files? skipped: unsupported type$/, (_m, n) => `已跳过 ${n} 个不支持类型的文件`],
       // Group names are user text: they pass through untranslated.
       [/^Move to "(.+)"$/, (_m, group) => `移到“${group}”`],
       // Session names are user text too.
