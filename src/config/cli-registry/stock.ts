@@ -1795,14 +1795,54 @@ const COPILOT: CliEntry = {
       format: 'copilot-json',
       relocation: { envVar: 'COPILOT_HOME', path: 'mcp-config.json' },
     },
-    // COPILOT_HOME can restate permissions and COPILOT_ALLOW_ALL turns every one on; both
-    // already match the COPILOT_ allowedPrefix, so a non-granted multi-user owner must not
-    // be able to set them through envOverrides.
+    // Every one of these matches the COPILOT_ allowedPrefix, so a non-granted multi-user owner
+    // must not be able to set it through envOverrides. Read from the 1.0.98 bundle (copilot reads
+    // far more COPILOT_* variables than `copilot help environment` lists), by what each hands back:
+    // - approval: COPILOT_ALLOW_ALL turns every tool on; COPILOT_PLAN_THEN_AUTOPILOT switches a
+    //   plan into autopilot; COPILOT_ASSISTED_APPROVAL; COPILOT_HOME restates the permission config.
+    // - code at boot or without an approval row: COPILOT_CLI_DIST_DIR runs `<dir>/index.js` in place
+    //   of the CLI, the package caches pick which CLI build runs, COPILOT_EDITOR,
+    //   COPILOT_PROVIDER_API_KEY_COMMAND and COPILOT_AHP_HOST_BIN are run as commands, skills and
+    //   provider configs are loaded from the named paths, and the hook switches widen what hooks run.
+    // - credential redirects: the Copilot and GitHub API bases receive the CLI's sign-in token, which
+    //   in multi-user mode is the operator's (every user shares the OS account and ~/.copilot), and
+    //   the BYOK provider family aims a Codeman custom endpoint elsewhere.
+    // The prefix stays because COPILOT_GITHUB_TOKEN and the harmless knobs live in it; a variable a
+    // later release adds is NOT covered until it is listed here.
     privilegedEnvKeys: [
       'COPILOT_HOME',
       'COPILOT_ALLOW_ALL',
+      'COPILOT_PLAN_THEN_AUTOPILOT',
+      'COPILOT_ASSISTED_APPROVAL',
+      'COPILOT_CLI_DIST_DIR',
+      'COPILOT_CLI_RESOLVED_DIST_DIR',
+      'COPILOT_PKG_CACHE_HOME',
+      'COPILOT_CACHE_HOME',
+      'COPILOT_EDITOR',
+      'COPILOT_AHP_HOST_BIN',
+      'COPILOT_DEBUG_VOICE_ENGINE_SCRIPT',
+      'COPILOT_SKILLS_DIRS',
+      'COPILOT_PROVIDERS_CONFIG',
+      'COPILOT_HOOK_ALLOW_HTTP_AUTH_HOOKS',
+      'COPILOT_HOOK_ALLOW_LOCALHOST',
+      'COPILOT_E2E_TEST_HOOKS',
+      'COPILOT_API_URL',
+      'COPILOT_DEBUG_GITHUB_API_URL',
+      'COPILOT_GH_HOST',
+      'COPILOT_MC_BASE_URL',
+      'COPILOT_AHP_URL',
+      'COPILOT_DEBUG_ENTRA_BROKER_URL',
+      'COPILOT_CAFE_METRICS_URL',
       'COPILOT_PROVIDER_BASE_URL',
       'COPILOT_PROVIDER_API_KEY',
+      'COPILOT_PROVIDER_API_KEY_COMMAND',
+      'COPILOT_PROVIDER_BEARER_TOKEN',
+      'COPILOT_PROVIDER_HEADERS',
+      'COPILOT_PROVIDER_TYPE',
+      'COPILOT_PROVIDER_WIRE_MODEL',
+      'COPILOT_PROVIDER_MODEL_ID',
+      'COPILOT_PROVIDER_GHES_HOST',
+      'COPILOT_PROVIDER_GHES_TOKEN',
       'COPILOT_MODEL',
     ],
     // Grok/codex-shaped clamp: a bare spawn is already Manual Approval, so the multi-user clamp

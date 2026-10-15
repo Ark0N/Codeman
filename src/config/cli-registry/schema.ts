@@ -464,8 +464,10 @@ const capabilitiesSchema = z
       )
       .max(8),
     // Exact env var NAMES, not prefixes: this list is a targeted deny, and a prefix here
-    // would let one entry silently strip a whole namespace off every owner's overrides.
-    privilegedEnvKeys: z.array(envName).max(8),
+    // would let one entry silently strip a whole namespace off every owner's overrides. The
+    // bound is generous because a longer list only takes more away from non-granted owners:
+    // copilot's COPILOT_ prefix covers dozens of variables that run code or redirect its token.
+    privilegedEnvKeys: z.array(envName).max(48),
     gates: z.record(z.string(), z.object({ minVersion: z.string().max(20), failClosed: z.boolean() }).strict()),
     maxFrameBytes: z.number().int().positive().optional(),
     newline: z.enum(['line-feed', 'esc-enter']).optional(),
