@@ -26,9 +26,9 @@ A GIF that leaves `docs/images/` stays in git history, so removing it does not s
 | `tile-grid-20261009.gif` | README, Tile Grid section | the Tiles button opening six live sessions side by side, and closing them |
 | `zerolag-demo-20260728.gif` | README, wiki `Input-And-Voice`, `packages/xterm-zerolag-input/README.md`, CHANGELOG, getcodeman.com docs | instant local echo next to slow server echo, on two phones |
 | `codeman-tab-states-20261010.gif` | README, Tab Alerts section | annotated tab states: working, blocked on a question, idle |
-| `codeman-skill-crt-20261010.gif` | README, agent skill section | one prompt to Claude Code spawning and driving two worker sessions through the skill |
-| `codeman-skill-grid-20261015.gif` | README, agent skill section (Step 2) | one prompt to a Claude Code lead, five Claude Code workers powering on as tiles in the grid |
-| `codeman-skill-tabs-20261015.gif` | README, agent skill section (Step 3) | one prompt to a Claude Code lead, eight worker tabs powering on with lineage lines, then a click into a live worker |
+| `codeman-skill-crt-20261010.gif` | README, agent skill section; wiki `Codeman-Skill` (getcodeman.com docs show the MP4 cut) | one prompt to Claude Code spawning and driving two worker sessions through the skill |
+| `codeman-skill-grid-20261015.gif` | README, agent skill section (Step 2); wiki `Codeman-Skill` (getcodeman.com docs show the MP4 cut) | one prompt to a Claude Code lead, five Claude Code workers powering on as tiles in the grid |
+| `codeman-skill-tabs-20261015.gif` | README, agent skill section (Step 3); wiki `Codeman-Skill` (getcodeman.com docs show the MP4 cut) | one prompt to a Claude Code lead, eight worker tabs powering on with lineage lines, then a click into a live worker |
 | `subagent-demo-20260724.gif` | the "mission control" article on dev.to, Hashnode and Medium (hotlinked from `master`) | subagent windows fanning out |
 
 Before removing one, search for hotlinks: `README*.md`, `docs/wiki/`, `packages/*/README.md`, `CHANGELOG.md`, the site (`pr/website/`), and published articles, which link `raw.githubusercontent.com/Ark0N/Codeman/master/docs/images/<file>` and break silently.
@@ -43,7 +43,7 @@ On 2026-10-13, seven GIFs that no page embedded left `docs/images/` and moved in
 
 ## Website media (getcodeman.com)
 
-The site is built and deployed from `pr/website/` (gitignored) with `pr/deploy-site.sh`. Its videos and GIFs sit in `pr/website/assets/` because that directory is what gets uploaded: they are web cuts (1280 to 1600 px wide, high CRF, posters next to them) derived from masters in the library. `pr/site-notes.md` records how each one was cut and from which master. A few superseded files stay deployed on purpose, so links that point at them keep resolving.
+The site is built and deployed from `pr/website/` (gitignored) with `pr/deploy-site.sh`. Its `/docs` pages are generated from `docs/wiki/`, and a wiki GIF that has an MP4 cut of the same run on the site is shown there as that video (the README and the GitHub wiki keep the GIF, since GitHub cannot autoplay inline video). Its videos and GIFs sit in `pr/website/assets/` because that directory is what gets uploaded: they are web cuts (1280 to 1600 px wide, high CRF, posters next to them) derived from masters in the library. `pr/site-notes.md` records how each one was cut and from which master. A few superseded files stay deployed on purpose, so links that point at them keep resolving.
 
 ## Release notes and the media kit (`design-assets` branch)
 

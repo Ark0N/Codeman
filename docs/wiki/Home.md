@@ -41,7 +41,8 @@ codeman web    # then open http://localhost:3000
 
 **Driving it from code**
 
-- [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent) - the bundled skill, worker sessions, wait primitives.
+- [The Codeman Skill](Codeman-Skill) - one prompt, a whole crew: an agent starting and supervising worker sessions.
+- [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent) - the `codeman agent` commands, the MCP server, wait primitives.
 - [HTTP API](HTTP-API) - the envelope, auth, the endpoint map, SSE events.
 - [Hooks And Integrations](Hooks-And-Integrations) - events flowing back into Codeman.
 
@@ -101,6 +102,7 @@ codeman web    # then open http://localhost:3000
 
 | Page                                                              | What it answers                              |
 | ----------------------------------------------------------------- | -------------------------------------------- |
+| [The Codeman Skill](Codeman-Skill)                                | How do I get an agent to start and run workers for me? |
 | [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent)    | How does an agent spawn and drive workers?   |
 | [HTTP API](HTTP-API)                                              | What can I call, and what comes back?        |
 | [Hooks And Integrations](Hooks-And-Integrations)                  | How do I wire Codeman into something else?   |

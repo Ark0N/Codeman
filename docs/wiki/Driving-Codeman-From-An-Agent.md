@@ -12,58 +12,19 @@ everything else.
 
 A skill in the `SKILL.md` format that Claude Code, Codex, Gemini CLI, OpenCode, Grok, OMP
 and most other agent CLIs read. It teaches the agent the whole API, so you ask in plain
-English instead of pasting endpoint documentation into prompts.
+English instead of pasting endpoint documentation into prompts:
 
-### Install it
+```bash
+codeman skill install    # or: npx skills add Ark0N/Codeman --skill codeman -g
+```
 
-| How          | Command                                                     | Scope                                                       |
-| ------------ | ----------------------------------------------------------- | ----------------------------------------------------------- |
-| Skills CLI   | `npx skills add Ark0N/Codeman --skill codeman -g`            | Global, any skills-aware agent. The way to give it to pi.    |
-| Claude Code plugin | `/plugin marketplace add Ark0N/Codeman`, then `/plugin install codeman@codeman` | Global, through Claude Code's plugin manager. `/plugin update codeman` follows releases. Pick this or `codeman skill install`, not both, or the skill is listed twice (`codeman` and `codeman:codeman`). |
-| Bundled CLI  | `codeman skill install`                                      | Global, at `~/.claude/skills/codeman`.                       |
-| Bundled CLI  | `codeman skill install --case <name> [--mode <mode>]`        | One case. `--mode codex` (or any other run mode) writes it where that CLI looks for skills. |
-| Web UI       | **App Settings → Agents & CLIs → All agent CLIs → Codeman Agent Skill** | Injects into each case when a session is created, where that session's CLI looks: `.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI, OpenCode, Antigravity, Grok, DeepSeek and OMP. Not pi: a project skill makes pi ask to trust the folder at startup. Off by default. |
+Then ask the agent in a Codeman session something like *"use codeman to start 5 claude
+workers, one per TODO item"*. It starts the workers, hands each one its task, gathers the
+answers and deletes the sessions it created.
 
-`codeman skill uninstall [--case <name>]` reverses the CLI installs (with `--case`, every
-Codeman-managed copy in that case), and never touches a `skills/codeman` you wrote yourself.
-
-Two things to know when the agent is **Codex**: its default sandbox blocks network access
-even to this machine, so the skill needs **Bypass approvals and sandbox** (App Settings,
-Codex); and Codex 0.162 runs its commands in a shared background process, whose Codeman
-variables can belong to the session that started it. The skill checks for both and says so
-instead of acting.
-
-### Then just ask
-
-| You say                                                                                 | What happens                                                                             |
-| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| "What sessions are running right now?"                                                   | Lists them with name, mode, and status. Read-only.                                          |
-| "Start a shell worker on the `myapp` case, run the test suite, tell me if it passes."     | Spawns, waits on a completion marker, reads the exit code, cleans up.                       |
-| "Spin up 3 workers for lint, typecheck and tests, run them in parallel, report failures." | One session per task, all started first, then gathered as each finishes.                    |
-| "Have a claude worker summarize `src/session.ts`, then close it."                         | Spawns, runs the readiness ladder, sends and waits, reads the answer, deletes the session.  |
-| "Watch session w4 and tell me if it gets stuck on a permission prompt."                   | Blocks on the `blocked` signal and surfaces the question to **you**.                        |
-
-Sessions the agent creates get deleted when it is done. You can watch the tabs appear and
-disappear in the dashboard while it works.
-
-### What it will and will not do
-
-- **It self-gates.** Outside a Codeman session it refuses to act and does not guess an API
-  URL, so a global install costs an unrelated Claude Code session nothing.
-- **Unprompted, it may only** spawn sessions, prompt them, and delete ones **it created in
-  that conversation, by exact id**, behind a guard that refuses to delete the agent's own
-  session.
-- **It will not** answer another session's permission prompt on your behalf. It surfaces the
-  question instead.
-- **Deleting a case** (which erases a real directory of your code), bulk kills, respawn,
-  Ralph, cron, orchestrator, and settings writes all require you to ask, naming the target.
-
-Turning the setting back off **does not remove already-injected copies**, because a
-create-time sweep would yank the skill out from under other live sessions sharing that
-directory. Remove them per case with `codeman skill uninstall --case <name>`.
-
-The skill ships with the verb index always loaded, plus on-demand references for the verbs,
-worked multi-worker recipes, endpoint tables, and cross-session messaging. It drives
+**[The Codeman Skill](Codeman-Skill)** has the rest: recordings of real runs, every install
+route (Claude Code plugin, skills CLI, per case, the web UI setting), prompts that work as
+written, what it will and will not do on its own, and the notes for Codex. It drives
 DeepSeek Harness workers the same way it drives Claude ones (`spawn_workers alpha
 beta:deepseek` is a mixed fleet in one call), since those are the two modes with real
 completion signals.
@@ -281,6 +242,7 @@ failing the spawn, because a cosmetic field must never break a worker.
 
 ## Read next
 
+- [The Codeman Skill](Codeman-Skill) - the skill in action, its install routes and its limits.
 - [HTTP API](HTTP-API) - the endpoint map and the envelope.
 - [Hooks And Integrations](Hooks-And-Integrations) - events flowing the other way.
 - [Watching Agents Work](Watching-Agents-Work) - seeing the fan-out in the UI.

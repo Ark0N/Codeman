@@ -207,10 +207,13 @@ cover them properly.
 ### Can agents start and supervise other agents?
 
 Yes. Codeman ships an agent skill that lets an agent inside a session drive the HTTP API:
-list sessions, spawn workers, send prompts, and block until a worker's turn finishes. It is
-off by default and enabled per case.
+list sessions, spawn workers in any installed CLI, send prompts, and block until a worker's
+turn finishes. Install it once with `codeman skill install` or the Claude Code plugin, then
+ask in plain English, for example *"use codeman to start 5 claude workers, one per TODO
+item"*. The web UI setting that injects it into every new session's case is off by default.
 
-See [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent).
+See [The Codeman Skill](Codeman-Skill), with recordings of real runs, and
+[Driving Codeman From An Agent](Driving-Codeman-From-An-Agent) for the other routes.
 
 ### Can I run a case in a container?
 

@@ -42,6 +42,7 @@
 
 **Automation**
 
+- [The Codeman Skill](Codeman-Skill)
 - [Driving It From An Agent](Driving-Codeman-From-An-Agent)
 - [HTTP API](HTTP-API)
 - [Hooks & Integrations](Hooks-And-Integrations)
