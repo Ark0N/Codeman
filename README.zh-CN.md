@@ -5,7 +5,7 @@
 <h2 align="center">AI 编程智能体的任务控制中心</h2>
 
 <p align="center">
-  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Antigravity &bull; Gemini &bull; Pi &bull; Grok &bull; DeepSeek &bull; OMP &bull; 终端 —— 统一仪表盘 &bull; 任意设备</em>
+  <em>Claude Code &bull; OpenCode &bull; Codex &bull; Antigravity &bull; Gemini &bull; Pi &bull; Grok &bull; DeepSeek &bull; OMP &bull; Copilot &bull; 终端 —— 统一仪表盘 &bull; 任意设备</em>
 </p>
 
 <p align="center">
@@ -29,7 +29,7 @@
 
 > 本文档由英文版 [`README.md`](README.md) 翻译而来。如有出入，以英文版为准。
 
-**Codeman** 是一个自托管的 AI 编程智能体任务控制中心。它在持久化的 tmux 会话里拉起 Claude Code、OpenCode、Codex、Antigravity、Gemini、Pi、Grok、DeepSeek Harness 或 OMP，把真实的终端流式传到任意浏览器，并在你离开之后让智能体继续干活：空闲时重新提示、用量限额重置后自动续跑、按计划执行任务，还能实时展示每一个后台智能体的工作。
+**Codeman** 是一个自托管的 AI 编程智能体任务控制中心。它在持久化的 tmux 会话里拉起 Claude Code、OpenCode、Codex、Antigravity、Gemini、Pi、Grok、DeepSeek Harness、OMP 或 GitHub Copilot CLI，把真实的终端流式传到任意浏览器，并在你离开之后让智能体继续干活：空闲时重新提示、用量限额重置后自动续跑、按计划执行任务，还能实时展示每一个后台智能体的工作。
 
 一行命令即可安装（macOS 和 Linux，Windows 通过 WSL）：
 
@@ -44,7 +44,7 @@ codeman web
 
 安装器在每次系统改动前都会先询问；重跑同一条命令即可原地更新。详见[快速开始 — 安装](#快速开始--安装)。
 
-- **一个仪表盘，九个 CLI**：每个会话可选 [Claude Code、OpenCode、Codex、Antigravity、Gemini、Pi、Grok、DeepSeek 或 OMP](#更多特性)（外加普通 shell），在本机、[Docker 容器](#隔离的-docker-会话)或 [SSH 远程主机](#远程-ssh-会话)上运行，你自己的仪表盘也能作为 [Web 标签页](#更多特性)并排打开
+- **一个仪表盘，十个 CLI**：每个会话可选 [Claude Code、OpenCode、Codex、Antigravity、Gemini、Pi、Grok、DeepSeek、OMP 或 GitHub Copilot](#更多特性)（外加普通 shell），在本机、[Docker 容器](#隔离的-docker-会话)或 [SSH 远程主机](#远程-ssh-会话)上运行，你自己的仪表盘也能作为 [Web 标签页](#更多特性)并排打开
 - **真正的手机友好**：[触控优化的终端](#移动端优化的-web-ui)，即时本地回显、二维码登录、滑动导航与推送通知
 - **睡觉时也在跑**：[空闲检测 + 重生循环](#重生控制器respawn-controller)，订阅限额重置后自动续跑，支持 24 小时以上的无人值守运行
 - **看见智能体在想什么**：每个子智能体和团队成员都有[实时浮动窗口](#实时智能体可视化)，附带实时活动记录
@@ -72,7 +72,7 @@ curl -fsSL https://getcodeman.com/install | bash
 - **重跑即更新。** 再次运行同一条命令即可原地更新已完成的安装：`~/.codeman/app` 中的本地改动会被 stash（绝不丢弃），运行中的服务会自动重启并校验。若首次安装中途失败，重跑会继续完成完整的安装流程。`install.sh status` 会再次打印 URL 和二维码；另外还有 `install.sh update`、`install.sh tailscale` 和 `install.sh uninstall`。
 - **给急性子的参数。** `curl -fsSL https://getcodeman.com/install | bash -s -- --tailscale --service` 直接在命令行上回答这些问题（还有 `--lan`、`--local`、`--run`、`--no-start`、`--name <n>`、`--port <n>`、`--yes`）。**CI / 无终端环境：** 没有终端时，涉及系统改动的步骤会带着说明中止，而不是静默执行；在自动化场景设置 `CODEMAN_NONINTERACTIVE=1` 即可批准这些步骤。
 
-你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli)、[Antigravity](https://antigravity.google)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Pi](https://pi.dev)、[Grok Build](https://github.com/xai-org/grok-build)、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 或 [OMP](https://github.com/can1357/oh-my-pi)（任意组合均可；自 Google 面向消费者停售后，Gemini CLI 仅限企业版，Antigravity 是其继任者）。安装器会自动检测这九个中已安装的任意一个；若一个都没有，会给出一个菜单让你安装其中任意一个（DeepSeek 除外，它的 npm 包只装一个启动器，没有可运行的 profile），也可以选择跳过、稍后自行安装。安装完成后：
+你至少需要安装一个 AI 编程 CLI —— [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[OpenCode](https://opencode.ai)、[Codex](https://developers.openai.com/codex/cli)、[Antigravity](https://antigravity.google)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Pi](https://pi.dev)、[Grok Build](https://github.com/xai-org/grok-build)、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)、[OMP](https://github.com/can1357/oh-my-pi) 或 [GitHub Copilot CLI](https://github.com/github/copilot-cli)（任意组合均可；自 Google 面向消费者停售后，Gemini CLI 仅限企业版，Antigravity 是其继任者）。安装器会自动检测这十个中已安装的任意一个；若一个都没有，会给出一个菜单让你安装其中任意一个（DeepSeek 除外，它的 npm 包只装一个启动器，没有可运行的 profile），也可以选择跳过、稍后自行安装。安装完成后：
 
 ```bash
 codeman web
@@ -261,7 +261,7 @@ codeman service install           # systemd/launchd 服务：重启后自动回�
 | 字段                   | 作用                                                                                        |
 | ---------------------- | ------------------------------------------------------------------------------------------- |
 | **工作目录 / case**    | 智能体操作的文件夹。「case」就是一个 Codeman 记住的命名工作目录。**Add Case** 可以从零创建、链接一个已有文件夹，或把一个 GitHub 仓库直接克隆成 case（**Clone Repo**）。 |
-| **CLI / 运行模式**     | `Claude`（默认）、`OpenCode`、`Codex`、`Antigravity`、`Gemini`、`Pi`、`Grok`、`DeepSeek`、`OMP` 或 `Terminal`（普通 shell）。 |
+| **CLI / 运行模式**     | `Claude`（默认）、`OpenCode`、`Codex`、`Antigravity`、`Gemini`、`Pi`、`Grok`、`DeepSeek`、`OMP`、`Copilot` 或 `Terminal`（普通 shell）。 |
 | **模型**               | 每会话模型（App Settings → Models → New Claude sessions）。软默认值 —— 会话内 `/model` 依然有效。 |
 | **Effort / Ultracode** | 推理力度（`low`–`max`），或用 `ultracode` 开启动态多智能体工作流。随时可用 `/effort` 切换。 |
 
@@ -465,7 +465,7 @@ PTY 输出 → 16ms 服务端批处理 → DEC 2026 包裹 → SSE → 客户端
 - **底栏里的 Git 状态**：默认关闭（**App Settings → Header & Panels → Bottom bar → Git status**，按设备生效）。底栏右侧的一个小指示器让你一眼看清当前会话所在仓库的状态：`● 3` 表示未提交的文件，`↑ 2` 表示未推送的提交，`⚠` 表示合并冲突，`✓` 表示全部已提交并推送。点击它会打开一个可拖动的窗口，列出已暂存、未暂存、未跟踪和有冲突的文件（按折叠的文件夹分组，关掉该设置则显示为平铺列表）以及未推送的提交；**点击文件即可查看它的 diff**（新文件全部显示为新增，已删除的文件全部显示为删除），**Open file** 可直接跳到查看器。一个包含多个项目的文件夹，会为向下两层内找到的每个仓库各给一个可折叠分区，打开之前全部折叠。只读且离线（Codeman 绝不 fetch，也绝不改动仓库）；Docker 和远程会话不显示
 - **把 GitHub 仓库克隆成 case** —— 在 **Add Case → Clone Repo** 里粘贴一个仓库 URL，Codeman 会把它克隆到 `~/codeman-cases/<name>` 并注册为普通 case，随时可以跑智能体。输入时它会预检 URL（告诉你能否匿名克隆，并为可选的分支/标签字段提供仓库真实的分支与标签），从 URL 里填好 case 名，还让你选 Run 按钮该用哪个 CLI。支持 `https://` 的公开仓库；Codeman 绝不收集或保存凭据
 - **在自定义文件夹里创建 case**：在 **Add Case → Create New** 里勾选 **Create in a custom folder**，选一个父文件夹（可用 Browse 浏览）和一个名字，Codeman 就会在那里而不是 `~/codeman-cases` 里搭建新 case。目标必须是一个新的或空的文件夹；系统目录、你的主目录本身、`~/.ssh` 这类凭据目录，以及 Codeman 自己的数据目录都会被拒绝。多用户模式下仅管理员可用
-- **多 CLI** —— 每个会话可选 **Claude Code**、**OpenCode**、**Codex**、**Antigravity**、**Gemini**、**Pi**、**Grok**、**DeepSeek Harness** 或 **OMP**；环境变量前缀自动隔离（`CLAUDE_CODE_*`、`OPENCODE_*`、`CODEX_*`、`ANTIGRAVITY_*`、`GEMINI_*`/`GOOGLE_*`、`PI_*`、`GROK_*`/`XAI_*`、`DSH_*`/`DEEPSEEK_*` 与 `OMP_*`）。详见 [`docs/opencode-integration.md`](docs/opencode-integration.md)、[`docs/pi-integration.md`](docs/pi-integration.md)、[`docs/grok-integration.md`](docs/grok-integration.md)、[`docs/deepseek-integration.md`](docs/deepseek-integration.md) 与 [`docs/omp-integration.md`](docs/omp-integration.md)
+- **多 CLI** —— 每个会话可选 **Claude Code**、**OpenCode**、**Codex**、**Antigravity**、**Gemini**、**Pi**、**Grok**、**DeepSeek Harness**、**OMP** 或 **GitHub Copilot CLI**；环境变量前缀自动隔离（`CLAUDE_CODE_*`、`OPENCODE_*`、`CODEX_*`、`ANTIGRAVITY_*`、`GEMINI_*`/`GOOGLE_*`、`PI_*`、`GROK_*`/`XAI_*`、`DSH_*`/`DEEPSEEK_*`、`OMP_*` 与 `COPILOT_*`）。详见 [`docs/opencode-integration.md`](docs/opencode-integration.md)、[`docs/pi-integration.md`](docs/pi-integration.md)、[`docs/grok-integration.md`](docs/grok-integration.md)、[`docs/deepseek-integration.md`](docs/deepseek-integration.md)、[`docs/omp-integration.md`](docs/omp-integration.md) 与 [`docs/copilot-integration.md`](docs/copilot-integration.md)
 - **自定义模型端点**（1.29.0 新增，目前仅 HTTP API）—— 让某个会话的 CLI 指向任意 OpenAI 兼容端点，而不是它自己的官方后端：本地的 llama.cpp、llama-swap、Ollama 或 vLLM 机器，也可以是 Azure AI Foundry、OpenRouter 这类云端网关。端点只需保存一次（`POST /api/model-endpoints`，模型列表从它的 `/v1/models` 自动发现），再应用到会话（`POST /api/sessions/:id/custom-model`），CLI 就会在原地重启并接上该端点。Claude、OpenCode、Pi、Grok 与 OMP 已实测通过；Codex、Gemini 与 DeepSeek 存在已记录的缺口，Antigravity 没有可用机制。工具栏选择器是下一步。详见 [`docs/custom-model-endpoints.md`](docs/custom-model-endpoints.md)
 - **Web 标签页** —— 把 Grafana、Uptime Kuma、一个 Vite 开发服务器或任何仪表盘 URL 作为标签页打开在会话旁边（Run 下拉菜单 → **Web / URL** → **Add URL**）。仪表盘通过 Codeman 自己的源代理，因此 `http://` 目标在手机上走 HTTPS 也能用、走隧道也能用；单页应用能在自己的路径上正常路由，页面自己重载后也能自行恢复。智能体打印出的 `localhost` 链接会自动以 Web 标签页打开。详见 [`docs/web-tabs.md`](docs/web-tabs.md)
 - **Docker 会话** —— 在隔离且加固的容器中运行 case。**Create New** 上勾选一个复选框即可用合理的默认值启动容器并在其中启动智能体；同一 case 的多个会话共享一个容器，也可以把 case 挂到你已经在跑的容器上；可将容器连同工作区导出为可移植的 `.tar.gz`，迁移到另一台机器。详见 [`docs/docker-cases.md`](docs/docker-cases.md)
@@ -686,7 +686,7 @@ Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 
 
 ### 输入、文件与响应头
 
-- **模式校验的输入** —— 每个 API 请求体都用 Zod v4 模式检查；一个 `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `ANTIGRAVITY_*` / `GEMINI_*` / `GOOGLE_*` / `PI_*` / `GROK_*` / `XAI_*` / `DSH_*` / `DEEPSEEK_*` / `OMP_*` 环境变量前缀允许列表把控每个 CLI 能接收哪些设置，而那些能把 CLI 流量改道的键（base URL、配置目录）对非管理员用户会被钳制
+- **模式校验的输入** —— 每个 API 请求体都用 Zod v4 模式检查；一个 `CLAUDE_CODE_*` / `OPENCODE_*` / `CODEX_*` / `ANTIGRAVITY_*` / `GEMINI_*` / `GOOGLE_*` / `PI_*` / `GROK_*` / `XAI_*` / `DSH_*` / `DEEPSEEK_*` / `OMP_*` / `COPILOT_*` 环境变量前缀允许列表把控每个 CLI 能接收哪些设置，而那些能把 CLI 流量改道的键（base URL、配置目录）对非管理员用户会被钳制
 - **路径限定** —— 文件路由在边界检查前先 `realpath`（无 TOCTOU）；`..`、绝对路径、以及解析到工作目录之外的符号链接都会被拒绝。上限：10 MB 文本预览 / 2 GB 原始与下载（`CODEMAN_MAX_DOWNLOAD_BYTES`；响应体是流式的并支持 `Range` 请求，所以这个上限只是合理性边界，不是内存保护）；`/api/download` 对敏感路径（`.env`、`*credentials*`、`~/.ssh/`、`.aws/credentials`）做黑名单。SVG/HTML 以 `octet-stream` + `nosniff` + attachment 提供，因此会被下载而非执行。HTML 唯一会被渲染的地方是文件查看器的网页视图：一个独立的 `/html-view/<capability>/` 地址，只覆盖该文件所在的文件夹，响应带 `Content-Security-Policy: sandbox` 且不含 `allow-same-origin`，因此页面是不透明源，永远读不到 Codeman 的 cookie，也驱动不了它的 API；隐藏文件夹和范围过大的根目录（`/`、主目录、`/tmp`）会被拒绝，退出登录时这些凭证也会被吊销
 - **安全响应头** —— `Content-Security-Policy`（`default-src 'self'`，每个例外都逐条列举）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、HTTPS 下的 HSTS，以及**仅**对 `localhost` / `127.0.0.1` / `::1` 反射的 CORS
 
@@ -933,7 +933,7 @@ for _ in $(seq 1 10); do
 done
 printf '%s\n' "$TXT"
 
-# 5b. 其他模式（shell/opencode/gemini/antigravity/pi/grok/omp）没有 transcript，读终端。
+# 5b. 其他模式（shell/opencode/gemini/antigravity/pi/grok/omp/copilot）没有 transcript，读终端。
 #     ⚠️ 用 terminal?tail=，不要用 /output：后者的 textOutput 对每个由 tmux 承载的
 #     （也就是每个交互式）会话都是空的。tail 按字节计，返回的是含 ANSI 的终端数据。
 curl -s "$API/api/sessions/$SID/terminal?tail=8000" | jq -r '.data.terminalBuffer'
@@ -1154,7 +1154,7 @@ flowchart TB
         end
 
         subgraph External["外部"]
-            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Antigravity / Gemini / Pi / Grok / DeepSeek / OMP</small>"]
+            CLI["AI CLI<br/><small>Claude Code / OpenCode / Codex / Antigravity / Gemini / Pi / Grok / DeepSeek / OMP / GitHub Copilot</small>"]
             BG["后台智能体<br/><small>(Task 工具)</small>"]
         end
     end
