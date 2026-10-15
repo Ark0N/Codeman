@@ -563,6 +563,7 @@ export class Session extends EventEmitter {
   private _activityStreak: ActivityStreak | null = null; // Unbroken run of PTY repaints (working detection)
   private _lastPaneProbeAt = 0; // Throttle for the tmux screen probe
   private _lastPaneProbeWorking: boolean | null = null; // Its last verdict (null = could not read)
+  private _lastPaneProbeTrustDialog = false; // Same capture showed the workspace-trust dialog (see _confirmIdle)
   /**
    * Background work the pane's own footer reports, e.g. `1 monitor`; null for none.
    *
@@ -2711,6 +2712,7 @@ export class Session extends EventEmitter {
     this._interactiveStartedAt = Date.now();
     this._trustDialogAttempts = 0;
     this._lastTrustDialogScanAt = 0;
+    this._lastPaneProbeTrustDialog = false; // the last pane's verdict, not this one's
     if (this._trustDialogTimer) {
       clearTimeout(this._trustDialogTimer);
       this._trustDialogTimer = null;
@@ -3283,6 +3285,18 @@ export class Session extends EventEmitter {
     // composer is up and the pane is quiet, but the next turn starts without the user.
     this._lastPaneProbeWorking =
       text === null ? null : this._workingLinePattern().test(text) || this._paneAwaitsWorkers(text);
+    // A capture that failed proves nothing either way, so it keeps the last answer.
+    if (text !== null) {
+      const trustDialog = isTrustDialogScreen(text);
+      if (
+        trustDialog &&
+        !this._lastPaneProbeTrustDialog &&
+        now - this._interactiveStartedAt <= TRUST_DIALOG_WINDOW_MS
+      ) {
+        console.log(`[Session] Holding idle while the workspace trust dialog is on screen: ${this.id}`);
+      }
+      this._lastPaneProbeTrustDialog = trustDialog;
+    }
     this._readWatching(text);
     this._readScreenModel(text);
     return this._lastPaneProbeWorking;
@@ -3534,6 +3548,16 @@ export class Session extends EventEmitter {
     // Ask the screen before concluding, and keep asking on a slow cadence.
     if (this._probePaneWorking() === true) {
       this._markWorking();
+      this.activityTimeout = setTimeout(() => this._confirmIdle(), PANE_PROBE_RECHECK_MS);
+      return;
+    }
+    // ⚠️ The workspace-trust dialog is not a composer, although its `❯` (on "No, exit")
+    // arms this check and the dialog sits quiet. Calling it idle let an agent that waited
+    // for idle send its prompt into the dialog, and the prompt's Enter answered *exit*.
+    // Not working either, so the status stays where it is until the dialog is gone.
+    // Bounded by the auto-accept's own startup window: later on, a screen that merely
+    // quotes the dialog (an agent reading session-trust-dialog.ts) must not hold idle off.
+    if (this._lastPaneProbeTrustDialog && Date.now() - this._interactiveStartedAt <= TRUST_DIALOG_WINDOW_MS) {
       this.activityTimeout = setTimeout(() => this._confirmIdle(), PANE_PROBE_RECHECK_MS);
       return;
     }

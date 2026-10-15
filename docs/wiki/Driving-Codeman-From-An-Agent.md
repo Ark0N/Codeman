@@ -149,9 +149,9 @@ Read these before writing any code. Each one has cost somebody an afternoon.
    output marker instead.
 7. **Nothing reports "ready", so wait for it explicitly.** A new session answers
    `{"signal":"exit","immediate":true}` until its PID exists, and that means *not started*,
-   not *crashed*. A Claude worker in a fresh case then sits on the CLI's trust dialog; prompt
-   it there and the wait resolves on idle in about two seconds looking exactly like a finished
-   turn, while your text sits stuck in the dialog.
+   not *crashed*. A Claude worker in a fresh case then sits on the CLI's trust dialog, whose
+   highlighted option is `No, exit`: prompt it there and your Enter quits the CLI. Codeman
+   holds `idle` while the dialog is on screen, but that is not a readiness signal either.
 
 ### Recipes
 
