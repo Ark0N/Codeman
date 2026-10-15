@@ -827,7 +827,7 @@ describe('session-routes', () => {
       for (const [name, mime, bytes, ext] of [
         ['animation.txt', 'image/gif', gif, '.gif'], // the MIME type wins over the name, as on the client
         ['camera.pdf', 'image/heic', heic, '.jpg'],
-        ['camera.bin', 'application/octet-stream', heic, '.jpg'], // sniffed, as before 1.36
+        ['camera.bin', 'application/octet-stream', heic, '.jpg'], // sniffed, as it was before documents
       ] as const) {
         const res = await upload(name, mime, bytes);
         expect(res.statusCode, name).toBe(200);

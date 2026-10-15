@@ -177,8 +177,8 @@ prompt, where it behaves like text you typed; the Attach button inside the Compo
 does the same into the editor. Dropping a video or a document onto the terminal works the
 same way.
 
-Images (png, jpg, gif, webp, bmp, heic) go in after a re-encode on the device, and HEIC from
-an iPhone is converted to JPEG. Videos (mp4, webm, mov, m4v, ogv) are stored as recorded,
+Images (png, jpg, gif, webp, bmp, heic) are re-encoded on the device before they go up (a GIF
+goes as is, so it keeps its frames), and HEIC from an iPhone is converted to JPEG. Videos (mp4, webm, mov, m4v, ogv) are stored as recorded,
 up to 1 GB each by default (`CODEMAN_MAX_PASTE_VIDEO_BYTES`); they stream to disk rather than
 through server memory. Documents are the office formats (pdf, docx, pptx, xlsx, zip) and the
 text family (txt, md, csv, tsv, json, log, yaml, yml, xml). Each is checked on the way in,
@@ -193,8 +193,8 @@ one. Uploads are refused for remote (SSH) sessions, whose working directory is o
 host.
 
 Uploads land in `.codeman-uploads/` inside the case, next to the code the agent is working
-on, because that is the one path a local agent, a container and a remote host all see the
-same way. The first upload writes a `.gitignore` of `*` into `.codeman-uploads/`, so the
+on, because that is the one path a local agent and a Docker case (whose workspace is mounted
+at the same absolute path) both see the same way. The first upload writes a `.gitignore` of `*` into `.codeman-uploads/`, so the
 directory ignores itself and your repository never picks the files up, while your own ignore file is
 left alone; a `.gitignore` you already had there is never overwritten. Files older than seven
 days are swept hourly, and the directory goes when the last session of the case is closed (a
