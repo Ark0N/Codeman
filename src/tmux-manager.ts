@@ -7,13 +7,13 @@
  * - **Persistence**: Sessions survive server restarts and disconnects
  * - **Ghost recovery**: Orphaned sessions are discovered and reattached on startup
  * - **Resource tracking**: Memory, CPU, and child process stats per session
- * - **Reliable input**: `send-keys -l` sends literal text in a single command
+ * - **Reliable input**: a submitted prompt goes in as one bracketed paste, then a separate Enter
  * - **Teammate support**: Immutable pane IDs enable targeting individual teammates
  *
  * tmux sessions are named `codeman-{sessionId}` and stored in ~/.codeman/mux-sessions.json.
  *
  * Key features:
- * - `send-keys 'text' Enter` sends literal text in a single command
+ * - `paste-buffer -p` + a separate `send-keys Enter` submits a prompt (see sendInput)
  * - `list-sessions -F` provides structured queries
  * - `display-message -p '#{pane_pid}'` for reliable PID discovery
  * - Single server architecture
@@ -434,6 +434,84 @@ export function resolveTmuxPaneTarget(muxName: string, paneTarget?: string): str
     return null;
   }
   return `${muxName}.${paneTarget}`;
+}
+
+let submitBufferSeq = 0;
+
+/** The tmux commands of one bracketed paste, see buildPasteTextCommands(). */
+export interface PasteTextCommands {
+  /** Fills a buffer of its own with the text. */
+  set: string;
+  /** Pastes that buffer into the target, bracketed, and deletes it (`-d`). */
+  paste: string;
+  /** Deletes the buffer when `paste` failed; `-d` only runs on a successful paste. */
+  discard: string;
+}
+
+/**
+ * Escape a final `;` for tmux. tmux splits commands on an argument that ENDS in
+ * `;` (`set-buffer -- 'a;'` stores `a`, `send-keys -l 'a;'` types `a`, a lone `;`
+ * is no argument at all); a final `\;` is its escape for a literal `;`. A `;`
+ * anywhere else in the argument is literal already. Exported for unit testing.
+ */
+export function escapeTmuxTrailingSemicolon(text: string): string {
+  return text.endsWith(';') ? `${text.slice(0, -1)}\\;` : text;
+}
+
+/**
+ * Whether a text+Enter submit types `text` as keys instead of pasting it: true for
+ * a single character. Claude Code's and Codex's selection dialogs ignore a bracketed
+ * paste, so a pasted `3` + Enter confirms the highlighted option instead of option 3;
+ * a typed `3` selects it. One character cannot form the burst Codex reads as a paste,
+ * so typing it is safe there. Exported for unit testing.
+ */
+export function submitsAsKeys(text: string): boolean {
+  return [...text].length === 1;
+}
+
+/**
+ * tmux commands that type `text` into `target` as ONE bracketed paste, ahead of a
+ * separately sent `Enter` that submits it. Exported for unit testing.
+ *
+ * Why a paste and not `send-keys -l`: Codex detects a paste that arrives WITHOUT
+ * bracketed-paste markers heuristically, from characters arriving in a fast burst,
+ * and folds an Enter that lands inside that burst window into the paste as a
+ * newline. `send-keys -l` types exactly such an unmarked burst, so a text+Enter
+ * pair sat in Codex's composer unsubmitted: always for long text (Codex shows it as
+ * `[Pasted Content N chars]`, which SubmitVerifier cannot match against the prompt,
+ * so nothing re-presses Enter), intermittently for short text at the 50 ms gap.
+ * `paste-buffer -p` wraps the text in the markers (only when the pane asked for
+ * them, so an app without bracketed paste sees the same bytes as before) and the
+ * Enter after it is unambiguous.
+ *
+ * Each call gets its own named buffer so concurrent sends cannot paste each other's
+ * text. tmux keeps a named buffer until something deletes it (`buffer-limit` trims
+ * only automatic ones), hence `discard` for a paste that fails.
+ *
+ * A single character is typed instead (submitsAsKeys), so a dialog answer selects.
+ * A final `;` is escaped (escapeTmuxTrailingSemicolon).
+ */
+export function buildPasteTextCommands(tmux: string, target: string, text: string): PasteTextCommands {
+  const buffer = `codeman-submit-${process.pid}-${++submitBufferSeq}`;
+  return {
+    set: `${tmux} set-buffer -b ${buffer} -- ${shellescape(escapeTmuxTrailingSemicolon(text))}`,
+    paste: `${tmux} paste-buffer -p -d -b ${buffer} -t ${shellescape(target)}`,
+    discard: `${tmux} delete-buffer -b ${buffer}`,
+  };
+}
+
+/**
+ * Run a bracketed paste. A failed paste (the pane or the server is gone) deletes
+ * the buffer before the paste's own error propagates; a failing delete is ignored.
+ */
+export async function pasteText(run: (cmd: string) => Promise<unknown>, cmds: PasteTextCommands): Promise<void> {
+  await run(cmds.set);
+  try {
+    await run(cmds.paste);
+  } catch (err) {
+    await run(cmds.discard).catch(() => undefined);
+    throw err;
+  }
 }
 
 /**
@@ -3738,10 +3816,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
-   * Send input directly to a tmux session using `send-keys`.
+   * Send input directly to a tmux session.
    *
-   * Uses tmux send-keys for reliable input delivery:
-   * - `-l` flag sends literal text (no key interpretation)
+   * - Text followed by `\r` goes in as ONE bracketed paste (buildPasteTextCommands),
+   *   so Codex cannot fold the Enter into a paste burst; a single character is typed
+   *   with `send-keys -l` instead, so a dialog answer selects (submitsAsKeys)
+   * - Text without `\r` is typed literally with `send-keys -l` (no key interpretation)
    * - `Enter` key is sent as a SEPARATE tmux invocation after a small delay
    * - Ink (Claude CLI) needs text and Enter split to avoid treating Enter as a newline
    */
@@ -3776,19 +3856,32 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         // Send text first, then Enter as a SEPARATE tmux command after a short delay.
         // Ink (Claude CLI's terminal framework) needs them split — sending both in a
         // single tmux invocation (via \;) causes Ink to interpret Enter as a newline
-        // character in the input buffer rather than as form submission.
-        await execAsync(`${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(textPart)}`, {
-          timeout: EXEC_TIMEOUT_MS,
-        });
+        // character in the input buffer rather than as form submission. The text goes
+        // in as a bracketed paste so Codex cannot fold the Enter into it either
+        // (see buildPasteTextCommands). A single character is typed, because a
+        // selection dialog ignores a pasted `3` and Enter then confirms the
+        // highlighted option (see submitsAsKeys).
+        if (submitsAsKeys(textPart)) {
+          await execAsync(
+            `${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+            { timeout: EXEC_TIMEOUT_MS }
+          );
+        } else {
+          await pasteText(
+            (cmd) => execAsync(cmd, { timeout: EXEC_TIMEOUT_MS }),
+            buildPasteTextCommands(this.tmux(), session.muxName, textPart)
+          );
+        }
         await new Promise((resolve) => setTimeout(resolve, 50));
         await execAsync(`${this.tmux()} send-keys -t "${session.muxName}" Enter`, {
           timeout: EXEC_TIMEOUT_MS,
         });
       } else if (textPart) {
         // Text only, no Enter
-        await execAsync(`${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(textPart)}`, {
-          timeout: EXEC_TIMEOUT_MS,
-        });
+        await execAsync(
+          `${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+          { timeout: EXEC_TIMEOUT_MS }
+        );
       } else if (hasCarriageReturn) {
         // Enter only
         await execAsync(`${this.tmux()} send-keys -t "${session.muxName}" Enter`, {
@@ -3930,19 +4023,25 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const textPart = input.replace(/\r/g, '').replace(/\n/g, '').trimEnd();
 
       if (textPart && hasCarriageReturn) {
-        execSync(`${tmux} send-keys -t ${shellescape(target)} -l ${shellescape(textPart)}`, {
-          encoding: 'utf-8',
-          timeout: EXEC_TIMEOUT_MS,
-        });
+        execSync(
+          `${tmux} send-keys -t ${shellescape(target)} -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+          {
+            encoding: 'utf-8',
+            timeout: EXEC_TIMEOUT_MS,
+          }
+        );
         execSync(`${tmux} send-keys -t ${shellescape(target)} Enter`, {
           encoding: 'utf-8',
           timeout: EXEC_TIMEOUT_MS,
         });
       } else if (textPart) {
-        execSync(`${tmux} send-keys -t ${shellescape(target)} -l ${shellescape(textPart)}`, {
-          encoding: 'utf-8',
-          timeout: EXEC_TIMEOUT_MS,
-        });
+        execSync(
+          `${tmux} send-keys -t ${shellescape(target)} -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+          {
+            encoding: 'utf-8',
+            timeout: EXEC_TIMEOUT_MS,
+          }
+        );
       } else if (hasCarriageReturn) {
         execSync(`${tmux} send-keys -t ${shellescape(target)} Enter`, {
           encoding: 'utf-8',
