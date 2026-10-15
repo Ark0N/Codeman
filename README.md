@@ -753,7 +753,7 @@ For AI agents and automation that control Codeman without a browser: an agent th
 
 ### The agent skill (start here)
 
-Everything in this section also ships as an **agent skill**, [`skills/codeman`](skills/codeman/SKILL.md), in the `SKILL.md` format Claude Code, Codex, Gemini CLI, OpenCode, Grok, OMP and most other agent CLIs read. Install it once and you never paste API docs into a prompt again. You ask for what you want in plain English, and the agent already sitting inside a Codeman session loads the recipes and drives the API itself.
+Everything in this section also ships as an **agent skill**, [`skills/codeman`](skills/codeman/SKILL.md), in the `SKILL.md` format Claude Code, Codex, Gemini CLI, OpenCode, Grok, OMP and most other agent CLIs read. Install it once and you never paste API docs into a prompt again. You ask for what you want in plain English, and the agent already sitting inside a Codeman session loads the recipes and drives the API itself. Full guide, with every install route, the recordings and what it will and will not do on its own: [The Codeman Skill](https://github.com/Ark0N/Codeman/wiki/Codeman-Skill).
 
 <p align="center">
   <a href="docs/images/codeman-skill-crt-20261010.png"><img src="docs/images/codeman-skill-crt-20261010.gif" alt="A real codeman skill run: one short prompt typed into Claude Code, the tile grid powering on, then a DeepSeek Harness worker on a local qwen model and a Claude Code worker powering on as new tiles, with lineage lines from the lead to both" width="900"></a>

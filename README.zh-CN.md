@@ -755,7 +755,7 @@ Web UI 仍是主要界面；完整指南见 **[docs/tui.md](docs/tui.md)**（英
 
 ### 智能体技能（从这里开始）
 
-这一节的所有内容也打包成了一个**智能体技能**，位于 [`skills/codeman`](skills/codeman/SKILL.md)，采用 Claude Code、Codex、Gemini CLI、OpenCode、Grok、OMP 以及大多数其他智能体 CLI 都能读取的 `SKILL.md` 格式。装一次，就再也不用把 API 文档粘进提示词。你用大白话说想要什么，已经坐在 Codeman 会话里的智能体会自己加载配方并驱动 API。
+这一节的所有内容也打包成了一个**智能体技能**，位于 [`skills/codeman`](skills/codeman/SKILL.md)，采用 Claude Code、Codex、Gemini CLI、OpenCode、Grok、OMP 以及大多数其他智能体 CLI 都能读取的 `SKILL.md` 格式。装一次，就再也不用把 API 文档粘进提示词。你用大白话说想要什么，已经坐在 Codeman 会话里的智能体会自己加载配方并驱动 API。完整说明（所有安装方式、录屏，以及它会自己做什么、不会做什么）：[The Codeman Skill](https://github.com/Ark0N/Codeman/wiki/Codeman-Skill)（英文）。
 
 <p align="center">
   <a href="docs/images/codeman-skill-crt-20261010.png"><img src="docs/images/codeman-skill-crt-20261010.gif" alt="一次真实的 codeman 技能运行：在 Claude Code 里输入一句简短的提示，平铺网格开机，然后一个跑在本地 qwen 模型上的 DeepSeek Harness 工作会话和一个 Claude Code 工作会话作为新窗格开机，主会话到两者之间画出派生连线" width="900"></a>
