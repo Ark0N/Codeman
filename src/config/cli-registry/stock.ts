@@ -703,6 +703,8 @@ const CODEX: CliEntry = {
     //   (its notes field open)              `  tab or esc to clear notes | enter to submit answer`
     //   workspace trust, at startup         `› 1. Trust and continue`
     //                                       `  enter continue · esc quit`
+    //   (the same prompt reached after the  `  2. Back to Agent Command Center`
+    //   update prompt, 0.162.0, 2026-10-16) `  enter continue · esc back`
     // The pattern needs both: a `› N.` option row, then the key-hint row, which must END
     // the window. Below about 60 columns that hint wraps onto rows of its own
     // (`  Press enter to confirm or esc to` / `  cancel`, or `tab to add notes` /
@@ -725,7 +727,7 @@ const CODEX: CliEntry = {
       workingLine: '[Ee]sc to interrupt',
       watchingLine: String.raw`^\s{0,4}(\d+ background terminals?) running · /ps to view · /stop to close$`,
       watchingLines: 4,
-      blockedLine: String.raw`(?:^|\n) {0,4}› \d\. [\s\S]*\n {2}(?:Press enter to confirm|tab (?:to add|or esc to clear) notes|enter continue)(?:[^\n]|\n {2}(?=[a-z←])){0,120}(?:cancel|interrupt|quit|answer|all)$`,
+      blockedLine: String.raw`(?:^|\n) {0,4}› \d\. [\s\S]*\n {2}(?:Press enter to confirm|tab (?:to add|or esc to clear) notes|enter continue)(?:[^\n]|\n {2}(?=[a-z←])){0,120}(?:cancel|interrupt|quit|back|answer|all)$`,
       blockedLines: 20,
     },
     // The footer under the composer, measured on a live 0.147.0 pane:

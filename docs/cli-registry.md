@@ -142,9 +142,10 @@ with newlines and tested once (`isBlockedScreen()`, `session-activity.ts`), so i
 several markers and anchor the dialog's footer on the END of the window (no `m` flag: `$` is
 the last row). Codex's needs a `› N.` option row and then its key-hint row (`Press enter to
 confirm or esc to cancel`, `tab to add notes | enter to submit answer | esc to interrupt`,
-`enter continue · esc quit` for the startup trust prompt), allowing for that row to wrap
-onto rows of its own below about 60 columns. Measured on codex-cli 0.162.0 at widths 200 down
-to 36: the command, edit and network-escalation approvals, single and multi-question
+`enter continue · esc quit` for the startup trust prompt, `esc back` when it follows the
+update prompt), allowing for that row to wrap onto rows of its own below about 60 columns.
+Measured on codex-cli 0.162.0 at widths 200 down to 36: the command, edit and
+network-escalation approvals, single and multi-question
 `request_user_input` dialogs (notes field open or closed), and the workspace trust prompt
 match; the idle and working views, popups the user opened (`/model`, `/permissions`,
 `/review`), the composer holding the dialogs' words and a transcript quoting them verbatim

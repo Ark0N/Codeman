@@ -59,6 +59,10 @@ const DIALOGS = [
   'question-notes-typed.txt',
   'trust-dialog.txt', // drawn at the TOP of an otherwise blank screen at startup
   'trust-dialog-w40.txt',
+  // The same prompt, reached through the update prompt (`2. Skip`) on 0.162.0 with 0.163.0
+  // out: `2. Back to Agent Command Center` over `enter continue · esc back`. Captured
+  // 2026-10-16 from Codeman's own launch flags in a fresh git repo, at 120 columns.
+  'trust-dialog-back.txt',
 ];
 
 /** Screens with no dialog codex blocks on, several of them quoting the dialogs' words. */
