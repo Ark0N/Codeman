@@ -46,7 +46,8 @@ case. Each has a stable id, and that id is what the API, the wait primitives, an
 event use.
 
 Several sessions can share one case. That is the normal way to parallelize: three workers
-in the same repo, three tabs, one case.
+in the same repo, three tabs, one case. They then also share one folder; when the workers
+edit and commit in parallel, give each its own checkout with [Git Worktrees](Git-Worktrees).
 
 A session carries state the case does not:
 

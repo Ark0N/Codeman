@@ -182,6 +182,7 @@ import {
   readDockerHosts,
   toSessionDocker,
 } from '../../docker-hosts.js';
+import { resolveCaseRepository, resolveManagedWorktree } from '../../git-worktrees.js';
 import { LRUMap } from '../../utils/lru-map.js';
 import { describeUnknownPath, probePathKind } from '../../utils/index.js';
 import { findLatestOmpSessionId } from '../../utils/omp-session-resolver.js';
@@ -3733,6 +3734,7 @@ export function registerSessionRoutes(
       agentOrigin,
       customModel,
       tabGroupId,
+      worktree,
     } = parseBody(QuickStartSchema, req.body);
 
     // Resolved ONCE here: the same value labels a case directory this request creates
@@ -3766,6 +3768,16 @@ export function registerSessionRoutes(
       : (await readDockerCases(CODEMAN_CONFIG_DIR)).find(
           (item) => item.name === caseName && canAccessOwned(getAuthUser(req), item.owner)
         );
+    // Worktrees are local only (src/git-worktrees.ts): refused BEFORE a remote host is woken or a
+    // container is touched, since neither branch below could honour it.
+    if (worktree && (remoteCase || dockerCase)) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        remoteCase
+          ? 'worktree is not available for remote (SSH) cases: the repository is on another machine'
+          : 'worktree is not available for Docker cases: git would run on this machine over a workspace the container can write'
+      );
+    }
     if (remoteCase) {
       const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((item) => item.id === remoteCase.hostId);
       if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
@@ -4007,6 +4019,27 @@ export function registerSessionRoutes(
       );
     }
 
+    // Where the session runs: the case folder, or one of its git worktrees. A worktree is only
+    // ever USED here (created through POST /api/cases/:name/worktrees), so a case that does not
+    // exist yet is a 404 rather than a scaffold, and the worktree must be a registered, managed
+    // one, every path component a real directory (src/git-worktrees.ts).
+    let workspacePath = resolvedCasePath;
+    if (worktree) {
+      if (localCaseState === 'absent') {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, `Case "${caseName}" not found`);
+      }
+      if (localCaseState !== 'directory') {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Case path is not a folder');
+      }
+      const caseRepo = await resolveCaseRepository(resolvedCasePath, {
+        dockerWorkspaces: (await readDockerCases(CODEMAN_CONFIG_DIR)).map((c) => c.hostWorkspacePath).filter(Boolean),
+      });
+      if (!caseRepo.ok) return createErrorResponse(ApiErrorCode[caseRepo.code], caseRepo.message);
+      const managed = await resolveManagedWorktree(caseRepo.repo, worktree);
+      if (!managed.ok) return createErrorResponse(ApiErrorCode[managed.code], managed.message);
+      workspacePath = managed.path;
+    }
+
     // Create case folder and CLAUDE.md if it doesn't exist (only for non-linked, non-remote,
     // non-docker cases — docker workspaces are scaffolded in their own block below)
     if (localCaseState === 'absent') {
@@ -4065,9 +4098,9 @@ export function registerSessionRoutes(
       // of its own. Skipped for remote cases — resolvedCasePath is a REMOTE path that
       // doesn't exist on the local filesystem.
       if (getCli(mode)?.capabilities.hooks === 'always') {
-        await applyWorkspaceHooks(resolvedCasePath, await ctx.getWorkspaceHooksEnabled());
+        await applyWorkspaceHooks(workspacePath, await ctx.getWorkspaceHooksEnabled());
       } else {
-        await refreshStaleCodemanHooks(resolvedCasePath).catch(() => {});
+        await refreshStaleCodemanHooks(workspacePath).catch(() => {});
       }
     }
 
@@ -4079,7 +4112,7 @@ export function registerSessionRoutes(
     // hostWorkspacePath is a real host dir and the skill crosses the bind mount.
     const quickStartSkillDir = agentSkillDir(getCli(mode)?.capabilities);
     if (!remote && quickStartSkillDir && (await ctx.getAgentSkillEnabled())) {
-      await injectAgentSkill(resolvedCasePath, quickStartSkillDir);
+      await injectAgentSkill(workspacePath, quickStartSkillDir);
     }
 
     // Docker cases: the workspace is a REAL host dir bind-mounted into the container.
@@ -4112,14 +4145,14 @@ export function registerSessionRoutes(
     // docker — the docker workspace is a real host dir, so the settings file crosses
     // the bind mount and the in-container claude reads it). Remote was rejected above.
     if (getCli(mode)?.capabilities.model.source === 'claude-settings-file' && modelOverride !== undefined) {
-      await updateCaseModel(resolvedCasePath, modelOverride || null);
+      await updateCaseModel(workspacePath, modelOverride || null);
     }
 
     // Strip stale disk entries for keys this request is actively setting (Claude only —
     // see POST /api/sessions for full rationale).
     // Same chain, same replacement as the create path above: byte-identical, drift-proof.
     if (!isExternalCliMode(mode) && !remote && envOverrides && Object.keys(envOverrides).length > 0) {
-      await stripCaseEnvKeys(resolvedCasePath, Object.keys(envOverrides));
+      await stripCaseEnvKeys(workspacePath, Object.keys(envOverrides));
     }
 
     // Create a new session with the case as working directory
@@ -4175,7 +4208,7 @@ export function registerSessionRoutes(
     );
     const qsTerminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const qsGatedEnvOverrides = await clampEnvOverridesForOwner(owner, envOverrides);
-    const qsResolvedOmpConfig = resolveOmpConfigForCreate(mode, resolvedCasePath, qsLaunchOmpConfig);
+    const qsResolvedOmpConfig = resolveOmpConfigForCreate(mode, workspacePath, qsLaunchOmpConfig);
 
     // Custom Model Endpoint Profiles, applied AT CREATE TIME (docs/custom-model-endpoints-plan.md)
     // rather than via the dedicated restart-in-place route (POST /api/sessions/:id/custom-
@@ -4281,7 +4314,7 @@ export function registerSessionRoutes(
         customModel.modelId,
         qsCustomModelSessionId,
         cmContextLength,
-        resolvedCasePath
+        workspacePath
       );
       if (!cmApplied) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${mode} has no known custom-model mechanism`);
@@ -4322,7 +4355,7 @@ export function registerSessionRoutes(
 
     const qsSessionOptions: ConstructorParameters<typeof Session>[0] = {
       id: qsCustomModelSessionId,
-      workingDir: resolvedCasePath,
+      workingDir: workspacePath,
       name: sessionName ? sessionName.slice(0, MAX_SESSION_NAME_LENGTH) : '',
       mux: ctx.mux,
       useMux: true,
@@ -4380,7 +4413,7 @@ export function registerSessionRoutes(
     // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
     // so the initial state already has the phrase configured (only if globally enabled)
     if (getCli(mode)?.capabilities.ralph && !remote && !docker && ctx.store.getConfig().ralphEnabled) {
-      autoConfigureRalph(session, resolvedCasePath, ctx);
+      autoConfigureRalph(session, workspacePath, ctx);
       if (!session.ralphTracker.enabled) {
         session.ralphTracker.enable();
         session.ralphTracker.enableAutoEnable(); // Allow re-enabling on restart
@@ -4472,6 +4505,7 @@ export function registerSessionRoutes(
         sessionId: session.id,
         casePath: resolvedCasePath,
         caseName,
+        ...(worktree ? { worktree, workingDir: workspacePath } : {}),
         ...(customModel ? { modelSwapInProgress: qsCustomModelSwapInProgress } : {}),
         ...(tabGroupId ? { tabLayout } : {}),
       };

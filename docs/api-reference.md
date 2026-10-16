@@ -1043,6 +1043,42 @@ Both routes accept two optional query parameters, which the UI sends from its pe
 
 Lists are capped (300 files and 50 commits per repository) while the counts stay exact. A branch with no upstream reports the commits no remote has (`HEAD --not --remotes`); a repository with no remote reports `unpushedCount: 0`, since there is nothing to push to. Concurrent polls of one folder share a single git invocation; `?fresh=1` (what the panel's Refresh button and opening the panel send) skips the short-lived caches, though it still joins a computation already running.
 
+## Git worktrees of a case
+
+A local case whose folder is the top of a git repository can keep **worktrees** at `<case>/.claude/worktrees/<name>`, each on its own branch, so several agents on one repository never share a checkout. This is the layout Claude Code's own `claude --worktree <name>` uses (branch `worktree-<name>`), so either tool finds the other's worktrees. Remote (SSH) and Docker cases are refused with `400 INVALID_INPUT` before git runs, and so is a local case whose folder is at or inside a Docker case workspace: `git worktree add` runs the repository's post-checkout hook and checkout filters on this machine, and a container can write there. A case folder that is not a repository, is a bare repository, or sits below the repository's top level is `400` too. The case resolves the way quick-start resolves it (a linked case is admin-only in multi-user mode, everything else is the caller's own case space; another user's case is `404`), and a case folder on a mount that does not answer is `422 OPERATION_FAILED`, never `404`.
+
+`GET /api/cases/:name/worktrees` lists `git worktree list` for the case's repository:
+
+```json
+{
+  "caseName": "myrepo",
+  "repoRoot": "/home/me/codeman-cases/myrepo",
+  "worktreesDir": "/home/me/codeman-cases/myrepo/.claude/worktrees",
+  "truncated": false,
+  "worktrees": [
+    { "path": "/home/me/codeman-cases/myrepo", "head": "6910cb15…", "branch": "main", "detached": false, "bare": false,
+      "locked": false, "prunable": false, "main": true, "isCase": true, "managed": false, "sessionCount": 0, "sessions": [] },
+    { "path": "/home/me/codeman-cases/myrepo/.claude/worktrees/fix-login", "branch": "worktree-fix-login",
+      "main": false, "isCase": false, "managed": true, "name": "fix-login",
+      "sessionCount": 1, "sessions": [{ "id": "2a568379-…", "name": "w1-fix-login" }] }
+  ]
+}
+```
+
+`managed` is `true` only for `<repoRoot>/.claude/worktrees/<name>`: those are the ones Codeman starts sessions in and removes; any other worktree of the repository is listed for information. `sessionCount` counts live sessions of every owner running in that worktree (a session belongs to the deepest worktree holding its folder), `sessions` lists the ones the caller may see. `lockReason`/`prunableReason` appear when git reports them.
+
+`POST /api/cases/:name/worktrees` with `{ name, branch?, base? }` creates one (`201`, `{ worktree: { name, path, branch, base, head, excludeAdded, warnings } }`):
+
+- `name`: 1 to 64 characters of `A-Z a-z 0-9 . _ -`, starting with a letter or digit, no `..`, not ending in `.` or `.lock`. `400` otherwise.
+- `branch`: the NEW branch, default `worktree-<name>`. Letters, digits, `.`, `_`, `-`, `/`, then `git check-ref-format --branch` must accept it unchanged. An existing branch is `409 ALREADY_EXISTS` (never reset), and so is a name whose folder already exists.
+- `base`: where the branch starts, default `HEAD` (the case's current commit): a branch, tag or commit, resolved before anything is written (`400` when it is not a commit, which includes an empty repository).
+- `excludeAdded` lists the lines appended to the repository's local `info/exclude` (in the real common git dir, never a tracked `.gitignore`) when git did not already ignore them: `/.claude/worktrees/`, so the main checkout does not show the worktrees as untracked, `/.claude/settings.local.json`, the hooks file Codeman writes for every claude session, which would otherwise make `git worktree remove` refuse, and the agent skill copy (`/.claude/skills/codeman/`, `/.agents/skills/codeman/`: every skills folder the CLI registry names) that sessions get while `agentSkillEnabled` is on, for the same reason.
+- A symlinked `.claude` or `.claude/worktrees` directory is refused (`400`): a repository cannot redirect the worktree outside itself.
+
+`DELETE /api/cases/:name/worktrees/:worktree[?deleteBranch=true]` removes a managed worktree with `git worktree remove` **without `--force`**: git refuses a worktree with modified or untracked files (or a locked one), and that refusal is the answer, `409 CONFLICT` with git's own words in `error`. A live session at or inside the worktree is `409` as well. With `deleteBranch=true` the branch is deleted with `git branch -d`, never `-D`, so an unmerged branch is kept: the response is still `200`, with `branchDeleted: false` and git's reason in `branchError`. Response: `{ removed: { name, path, branch, branchDeleted, branchError? } }`. A folder git does not list as a worktree of this repository, or a symlink in its place, is `404`/`400`. A worktree that is, sits inside, or holds a Docker case workspace is `400` too (git would run inside a folder the container writes, and the removal would delete that workspace under it). A managed worktree whose folder is gone (deleted by hand; the list reports it `prunable`) is still removable: git then only drops its record, which is what frees the name for a new worktree. A session never starts in one.
+
+**Starting a session in a worktree** goes through the normal create paths: `POST /api/quick-start` takes `worktree: "<name>"` next to `caseName` and runs the session (and the hooks, the agent skill and `modelOverride`) in the worktree folder; the response adds `worktree` and `workingDir`. It is refused for remote and Docker cases (`400`), for a worktree that is not a registered, managed one (`404`), and for a case that does not exist (`404`: a worktree launch never scaffolds a case). `POST /api/sessions` takes the worktree path as `workingDir` like any other folder.
+
 ## CLI management
 
 Read and write the CLI registry (`docs/cli-registry.md`). Every **write** route answers `403 FORBIDDEN` while `cliManagementEnabled` is off (the default), and for a non-admin in multi-user mode. A write that would overwrite a `clis.json` which does not parse, or which has group/world permission bits, is refused with `409 CONFLICT` and a message naming the fix; the file is left untouched.

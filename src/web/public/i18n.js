@@ -265,6 +265,50 @@
     'New or link a case…': '新建或关联案例…',
     'Case settings…': '案例设置…',
     'No cases match': '没有匹配的案例',
+    // Git worktrees of a case (session-ui.js openWorktreeModal, the case picker row, the
+    // phone case sheet and Close Session's worktree option). Worktree and branch names,
+    // paths and git's own messages are user/git text and pass through untranslated.
+    'Git worktrees…': 'Git 工作树…',
+    'Git worktrees': 'Git 工作树',
+    'Close git worktrees': '关闭 Git 工作树',
+    Worktrees: '工作树',
+    'Worktrees…': '工作树…',
+    "Each worktree is its own checkout of the case's repository, on its own branch, in .claude/worktrees/ of the case. Agents working in parallel then never share one folder.":
+      '每个工作树都是案例仓库的独立检出，有自己的分支，位于案例的 .claude/worktrees/ 中。并行工作的智能体因此不会共用同一个文件夹。',
+    'Start sessions with': '启动会话所用',
+    'New worktree': '新建工作树',
+    Branch: '分支',
+    'Start from': '起点',
+    "New branch worktree-<name> from the case's current commit, unless you pick another below.":
+      '从案例当前提交新建分支 worktree-<name>，除非在下方另行选择。',
+    'Branch and start point': '分支和起点',
+    "A branch, tag or commit. Default: the case's current commit (HEAD).":
+      '分支、标签或提交。默认：案例当前提交（HEAD）。',
+    'Create & start session': '创建并启动会话',
+    'Loading worktrees…': '正在加载工作树…',
+    'No worktrees yet. Create one below.': '还没有工作树。请在下方创建。',
+    'detached HEAD': '游离 HEAD',
+    'main checkout': '主检出',
+    'not created by Codeman': '非 {name} 创建',
+    locked: '已锁定',
+    missing: '已丢失',
+    Open: '打开',
+    'Start a session in this worktree': '在此工作树中启动会话',
+    'Remove…': '移除…',
+    'git worktree remove refuses while the worktree has uncommitted or untracked files. Codeman never forces it.':
+      '工作树中有未提交或未跟踪的文件时，git worktree remove 会拒绝执行。{name} 从不强制移除。',
+    'Its folder is gone. Removing it clears the record git keeps of it, so the name can be used again.':
+      '它的文件夹已不存在。移除它会清除 git 保存的记录，这个名称便可再次使用。',
+    'Remove worktree': '移除工作树',
+    'Kill & remove worktree': '终止并移除工作树',
+    'git refuses while the worktree has uncommitted or untracked files; nothing is forced':
+      '工作树中有未提交或未跟踪的文件时 git 会拒绝；不会强制执行',
+    'Also delete its branch (git branch -d keeps a branch that is not merged)':
+      '同时删除其分支（git branch -d 会保留未合并的分支）',
+    'Name: letters, digits, ".", "_" and "-", starting with a letter or digit, at most 64 characters.':
+      '名称：字母、数字、"."、"_" 和 "-"，以字母或数字开头，最多 64 个字符。',
+    'A launch is already in progress': '已有启动正在进行',
+    'Codeman did not answer.': '{name} 没有响应。',
     'Add Case': '添加案例',
     'Open sessions': '打开会话',
     'Recent Sessions': '最近会话',
@@ -1254,6 +1298,16 @@
       [/^Terminal restored to (\d+)x(\d+)$/, (_m, cols, rows) => `终端已恢复为 ${cols}x${rows}`],
       [/^View truncated to the first (\d+) cells$/, (_m, n) => `视图仅显示前 ${n} 个单元格`],
       [/^(\d+) unsupported number formats$/, (_m, n) => `${n} 种不支持的数字格式`],
+      // Git worktree toasts (session-ui.js): worktree and branch names and git's own
+      // words pass through untranslated.
+      [/^Worktree (\S+) created on branch (\S+)$/, (_m, wt, branch) => `已创建工作树 ${wt}，分支 ${branch}`],
+      [
+        /^Worktree (\S+) removed\. Branch (\S+) kept: ([\s\S]+)$/,
+        (_m, wt, branch, why) => `已移除工作树 ${wt}。保留了分支 ${branch}：${why}`,
+      ],
+      [/^Worktree (\S+) and branch (\S+) removed$/, (_m, wt, branch) => `已移除工作树 ${wt} 和分支 ${branch}`],
+      [/^Worktree (\S+) removed$/, (_m, wt) => `已移除工作树 ${wt}`],
+      [/^Worktree (\S+) was kept: ([\s\S]+)$/, (_m, wt, why) => `工作树 ${wt} 已保留：${why}`],
       // Group names are user text: they pass through untranslated.
       [/^Move to "(.+)"$/, (_m, group) => `移到“${group}”`],
       // Session names are user text too.
