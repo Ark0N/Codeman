@@ -67,6 +67,8 @@ switches, the run mode, respawn presets, the case order, the Cloudflare tunnel, 
 models. Every user can **read** them, but only an **admin** can change them. For a regular
 user the settings write routes answer `403 FORBIDDEN` (see the
 [HTTP API](HTTP-API) and [`docs/api-reference.md`](https://github.com/Ark0N/Codeman/blob/master/docs/api-reference.md)).
+A regular user reads them without what is the admin's: the Deepgram key an admin saved for
+voice dictation, and the admin's case names (case order, last used case).
 
 In the browser this means:
 
@@ -74,10 +76,17 @@ In the browser this means:
   header buttons, keyboard bar and the rest of the per-device keys) on that device. If they
   also changed a server-wide setting, one notice says it can only be changed by an admin,
   and the setting keeps the server's value.
-- A regular user's run-mode pick and respawn presets are kept in that browser and not sent
-  to the server, and their last used case is not recorded server-wide. What an admin set
-  still loads on the next visit.
+- A regular user's run-mode pick and respawn presets are their own: kept in that browser
+  under their name, not sent to the server, and still theirs on the next visit (over what
+  an admin set). Their last used case is not recorded server-wide.
 - Reordering cases and switching the tunnel on or off are admin actions.
+- If the page could not tell yet who is signed in (a slow or failed sign-in check), the
+  server's refusal is read the same way: the same notice, and nothing more is sent.
+
+The operations that act on the whole server are admin actions too: updating Codeman,
+opening the multi-display window, regenerating the tunnel QR code (it clears every user's
+pending QR login) and cleaning up stale session state. **Revoke All** signs a regular user
+out of their own logins only, and the tunnel panel lists only their own.
 
 Per-user server settings are not part of this version.
 

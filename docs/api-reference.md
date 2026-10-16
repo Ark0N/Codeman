@@ -78,10 +78,15 @@ the HTTP status.
 |-------------|------|---------|
 | `INVALID_INPUT` | 400 | Malformed request / failed validation |
 | `UNAUTHORIZED` | 401 | Authentication required or failed |
+| `FORBIDDEN` | 403 | Signed in, but not allowed (e.g. a non-admin calling an admin-only route in multi-user mode) |
+| `PASSWORD_CHANGE_REQUIRED` | 403 | Multi-user: the user must change their password before anything else |
 | `NOT_FOUND` | 404 | Resource does not exist |
+| `USER_NOT_FOUND` | 404 | Multi-user: no user with that name |
 | `SESSION_BUSY` | 409 | Session is busy |
 | `CONFLICT` | 409 | Conflicts with current state (e.g. already running) |
 | `ALREADY_EXISTS` | 409 | Resource already exists |
+| `USER_EXISTS` | 409 | Multi-user: a user with that name already exists |
+| `LAST_ADMIN` | 409 | Multi-user: refusing to demote, disable or delete the last enabled admin |
 | `OPERATION_FAILED` | 422 | Well-formed but could not be completed |
 | `RATE_LIMITED` | 429 | Too many requests |
 | `INTERNAL_ERROR` | 500 | Unexpected server error |
@@ -1081,18 +1086,31 @@ A local case whose folder is the top of a git repository can keep **worktrees** 
 
 ## Settings
 
-`~/.codeman/settings.json` is one file for the whole server: the synced App Settings (feature switches, the plan-usage collection switch `showPlanUsageLimits`, `runMode`, `respawnPresets`, `tunnelEnabled`, ...), plus `modelConfig`, `caseOrder` and `lastUsedCase`. Reads are open to every signed-in user. **In multi-user mode every write is admin only:** for a non-admin the routes below answer `403 FORBIDDEN` before the body is even validated, so nothing is written, no watcher is toggled and no tunnel is started. Single-user mode is unaffected.
+`~/.codeman/settings.json` is one file for the whole server: the synced App Settings (feature switches, the plan-usage collection switch `showPlanUsageLimits`, `runMode`, `respawnPresets`, `tunnelEnabled`, ...), plus `modelConfig`, `caseOrder` and `lastUsedCase`. Reads are open to every signed-in user; in multi-user mode a non-admin reads it without what is the admin's (`voiceSettings.apiKey`, the Deepgram key an admin saved, and the admin's case names in `caseOrder` and `lastUsedCase`). **In multi-user mode every write is admin only:** for a non-admin the routes below answer `403 FORBIDDEN` before the body is even validated, so nothing is written, no watcher is toggled and no tunnel is started. Single-user mode is unaffected.
 
 | Method | Path                          | Body                                 | Notes |
 | ------ | ----------------------------- | ------------------------------------ | ----- |
-| `GET`  | `/api/settings`               | none                                 | The stored settings object. Never writes. |
+| `GET`  | `/api/settings`               | none                                 | The stored settings object. Never writes. For a non-admin in multi-user mode, without `voiceSettings.apiKey`, `caseOrder` and `lastUsedCase`. |
 | `PUT`  | `/api/settings`               | partial settings (strict schema)     | Merged into the stored file; services (watchers, tunnel, tmux history limit) reconcile to the merged result. `403 FORBIDDEN` for a non-admin in multi-user mode. A tunnel enable without `CODEMAN_PASSWORD` is refused separately (`403 OPERATION_FAILED`, resend with `acknowledgeUnauthTunnel: true`). |
 | `GET`  | `/api/execution/model-config` | none                                 | `modelConfig` (cron's and the plan orchestrator's default model). |
 | `PUT`  | `/api/execution/model-config` | `{ defaultModel?, agentTypeOverrides?, ... }` | Replaces `modelConfig`. `403 FORBIDDEN` for a non-admin in multi-user mode. |
 | `PUT`  | `/api/cases/order`            | `{ order: string[] }`                | The one case order every user's `GET /api/cases` is sorted by. `403 FORBIDDEN` for a non-admin in multi-user mode. |
 | `PUT`  | `/api/config`                 | `{ pollIntervalMs?, defaultTimeoutMs?, maxConcurrentSessions?, respawn? }` (strict) | The process-wide app config in `state.json`. `403 FORBIDDEN` for a non-admin in multi-user mode. |
 
-A non-admin's `POST /api/quick-start` and `POST /api/ralph-loop/start` work as before but do not record their case as `lastUsedCase` (every user can read it).
+A non-admin's `POST /api/quick-start` and `POST /api/ralph-loop/start` work as before but do not record their case as `lastUsedCase` (a server-wide key).
+
+### System operations
+
+The same multi-user rule covers the operations that act on the whole server. For a non-admin:
+
+| Method | Path                          | Multi-user non-admin |
+| ------ | ----------------------------- | -------------------- |
+| `POST` | `/api/system/update`          | `403 FORBIDDEN` (the update restarts the server under every user) |
+| `POST` | `/api/system/span-displays`   | `403 FORBIDDEN` (opens a window on the server's desktop) |
+| `POST` | `/api/tunnel/qr/regenerate`   | `403 FORBIDDEN` (it clears every user's outstanding QR login code) |
+| `POST` | `/api/cleanup-state`          | `403 FORBIDDEN` (drops every user's stale session records) |
+| `POST` | `/api/auth/revoke`            | Revokes only the caller's own login sessions: the bare form (`{}`) signs them out everywhere, and a `sessionToken` is revoked only when it is theirs. For an admin, and in single-user mode, the bare form still revokes every login session |
+| `GET`  | `/api/tunnel/info`            | `authSessions` lists only the caller's own logins |
 
 ## CLI management
 
