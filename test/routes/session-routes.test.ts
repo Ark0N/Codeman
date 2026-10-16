@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyMultipart from '@fastify/multipart';
-import { dirname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { registryFilePath, reloadCliRegistry } from '../../src/config/cli-registry/registry.js';
 import fs, { mkdtemp, rm, mkdir, writeFile, readFile, readdir, symlink } from 'node:fs/promises';
@@ -858,12 +858,39 @@ describe('session-routes', () => {
       for (const [name, bytes] of [
         ['fake.pdf', png], // PNG bytes under a PDF name
         ['fake.docx', pdf], // a PDF under an OOXML name
-        ['binary.txt', Buffer.from('hello\u0000world')], // a NUL byte is never text
-        ['latin1.csv', Buffer.from([0x61, 0x2c, 0xe9, 0x0a])], // not UTF-8
       ] as const) {
         const res = await upload(name, 'application/octet-stream', bytes);
         expect(res.statusCode, name).toBe(415);
-        expect(JSON.parse(res.body).error, name).toMatch(/do not match declared type/);
+        expect(JSON.parse(res.body).error, name).toBe(`File bytes do not match declared type ${extname(name)}`);
+      }
+      expect(await readdir(workDir)).toEqual([]);
+      await rm(workDir, { recursive: true });
+    });
+
+    it('refuses non-UTF-8 text by naming the encoding, UTF-16 when a BOM says so', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-doc-'));
+      harness.ctx._session.workingDir = workDir;
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const notUtf8 = (ext: string) => `This ${ext} file is not UTF-8 text; save it as UTF-8 and attach it again`;
+      const utf16 = (ext: string) => `This ${ext} file is UTF-16 text, not UTF-8; save it as UTF-8 and attach it again`;
+      try {
+        for (const [name, bytes, error, reason] of [
+          // Excel "Unicode Text" / Notepad "Unicode": UTF-16LE with its BOM.
+          ['export.txt', Buffer.from('\ufeffa\tb\n', 'utf16le'), utf16('.txt'), 'utf16-bom'],
+          ['export.csv', Buffer.from([0xfe, 0xff, 0x00, 0x61, 0x00, 0x0a]), utf16('.csv'), 'utf16-bom'], // UTF-16BE
+          ['binary.txt', Buffer.from('hello\u0000world'), notUtf8('.txt'), 'nul-byte'], // NUL, no BOM
+          ['latin1.csv', Buffer.from('a,René\n', 'latin1'), notUtf8('.csv'), 'not-utf8'], // Excel's default CSV
+        ] as const) {
+          warn.mockClear();
+          const res = await upload(name, 'application/octet-stream', bytes);
+          expect(res.statusCode, name).toBe(415);
+          expect(JSON.parse(res.body).error, name).toBe(error);
+          expect(String(warn.mock.calls[0]?.[0]), name).toMatch(
+            new RegExp(`declaredExt=\\S+ size=\\d+ reason=${reason}$`)
+          );
+        }
+      } finally {
+        warn.mockRestore();
       }
       expect(await readdir(workDir)).toEqual([]);
       await rm(workDir, { recursive: true });
