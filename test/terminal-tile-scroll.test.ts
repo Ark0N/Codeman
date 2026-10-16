@@ -232,7 +232,7 @@ describe('a tile pages a hollow buffer through the primary pane gates', () => {
 
     expect(up.preventDefault).toHaveBeenCalled();
     expect(up.stopPropagation).toHaveBeenCalled();
-    expect(ws.inputFrames()).toEqual([]); // coalesced, not sent per event
+    expect(ws.inputFrames()).toEqual([]); // fallback page reports remain batched
     expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]); // no seq: never persisted
 
     mount.fire('wheel', wheelLines(term.rows / 2));
@@ -319,27 +319,37 @@ describe('a fullscreen Claude tile forwards the wheel to the CLI as SGR reports'
 
     expect(up.preventDefault).toHaveBeenCalled();
     expect(up.stopPropagation).toHaveBeenCalled();
-    expect(ws.inputFrames()).toEqual([]); // coalesced, not sent per event
-    expect(flushed(ws)).toEqual([{ t: 'i', d: UP.repeat(3) }]); // no seq: never persisted
+    expect(ws.inputFrames()).toEqual([{ t: 'i', d: UP }]); // first report never waits for a timer
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]); // no seq: never persisted
 
     mount.fire('wheel', wheelLines(2, AT));
-    expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: DOWN.repeat(2) });
+    expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: DOWN });
   });
 
-  it('forwards a Chrome-on-Windows notch (100 px) as four ticks and caps a fling at five', async () => {
+  it('uses fractional native scrolling for a tracked Codex tile, never PageUp', async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'codex', cliMouseTracking: true } }), {
+      mode: 'codex',
+    });
+    for (let i = 0; i < 10; i++) mount.fire('wheel', wheel(-3, AT));
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
+  });
+
+  it('normalizes a pixel wheel event to one native tick, including accelerated deltas', async () => {
     const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
 
     mount.fire('wheel', wheel(-100, AT));
-    expect(flushed(ws)).toEqual([{ t: 'i', d: UP.repeat(4) }]);
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
 
     mount.fire('wheel', wheelLines(-1000, AT));
-    expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: UP.repeat(5) });
+    expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: UP });
   });
 
-  it('moves a precision touchpad delta one line, and consumes a pure horizontal swipe without sending', async () => {
+  it('accumulates precision touchpad deltas and consumes a pure horizontal swipe without sending', async () => {
     const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
 
-    mount.fire('wheel', wheel(-3, AT)); // 0.12 of a line
+    mount.fire('wheel', wheel(-3, AT)); // 0.12 of a line must not round up
+    expect(flushed(ws)).toEqual([]);
+    for (let i = 0; i < 8; i++) mount.fire('wheel', wheel(-3, AT));
     expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
 
     const sideways = wheel(0, { ...AT, deltaX: 120 });
@@ -348,14 +358,19 @@ describe('a fullscreen Claude tile forwards the wheel to the CLI as SGR reports'
     expect(flushed(ws)).toHaveLength(1);
   });
 
-  it('coalesces the reports of wheels within 40 ms into one frame', async () => {
+  it('sends the first report immediately and coalesces subsequent wheels within 40 ms', async () => {
     const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
 
     mount.fire('wheel', wheelLines(-2, AT));
     vi.advanceTimersByTime(20);
     mount.fire('wheel', wheelLines(-2, AT));
 
-    expect(flushed(ws)).toEqual([{ t: 'i', d: UP.repeat(4) }]);
+    mount.fire('wheel', wheelLines(-2, AT));
+    expect(ws.inputFrames()).toEqual([{ t: 'i', d: UP }]);
+    expect(flushed(ws)).toEqual([
+      { t: 'i', d: UP },
+      { t: 'i', d: UP.repeat(2) },
+    ]);
   });
 
   it('snaps a scrolled-up viewport home before reporting, since SGR rows address the live screen', async () => {
@@ -436,14 +451,14 @@ describe('a fullscreen Claude tile forwards the wheel to the CLI as SGR reports'
     const primary = makeApp({ other: FULLSCREEN }, 'other') as App & {
       terminal: unknown;
       _sendSyntheticSgrWheel(x: number, y: number, lines: number): void;
-      _wheelScrollLines(ev: unknown): number;
+      _wheelScrollNativeLines(ev: unknown): number;
       _flushWheelSgrQueue(): void;
     };
     const sent: string[] = [];
     primary._sendInputEphemeral = (_id: string, data: string) => sent.push(data);
     primary.terminal = new FakeTerminal({});
     for (const ev of sequence) {
-      primary._sendSyntheticSgrWheel(ev.clientX, ev.clientY, primary._wheelScrollLines(ev));
+      primary._sendSyntheticSgrWheel(ev.clientX, ev.clientY, primary._wheelScrollNativeLines(ev));
       primary._flushWheelSgrQueue();
     }
 
@@ -531,11 +546,11 @@ describe('page-key travel, cap and coalescing', () => {
     FakeFit.proposed = { cols: 80, rows: 36 };
   });
 
-  it('accumulates sub-page travel: two wheels of 10 lines are one PageUp', async () => {
+  it('answers sub-page travel immediately and repays it on the next event', async () => {
     const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'opencode' } }));
 
     mount.fire('wheel', wheelLines(-10));
-    expect(flushed(ws)).toEqual([]);
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
     mount.fire('wheel', wheelLines(-10));
 
     expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
@@ -707,7 +722,6 @@ describe("gesture handling is the primary pane's, through the shared pure helper
     primary._flushWheelSgrQueue();
 
     expect(tileBytes).toContain(PAGE_UP);
-    expect(tileBytes).toContain(PAGE_DOWN);
     expect(tileBytes).toBe(sent.join(''));
   });
 
@@ -736,7 +750,7 @@ describe("gesture handling is the primary pane's, through the shared pure helper
       .map((f) => f.d)
       .join('');
     // One page for the slow ticks, one for the wobble's opening event, nothing more.
-    expect(tileBytes).toBe(PAGE_UP + PAGE_UP);
+    expect(tileBytes).toBe(''); // rapid reversals cancel unsent movement
 
     const primary = makeApp({ other: { mode: 'codex' } }, 'other') as App & {
       terminal: unknown;
@@ -895,7 +909,7 @@ describe('rows the tile pushed above the screen itself are not history', () => {
     const first = wheelLines(-6);
     mount.fire('wheel', first);
     expect(first.preventDefault).toHaveBeenCalled();
-    expect(flushed(ws)).toEqual([]);
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
     mount.fire('wheel', wheelLines(-6));
     expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
   });

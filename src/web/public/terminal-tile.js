@@ -229,6 +229,7 @@
     }
 
     async connect() {
+      this._wheelNativeStarted = false;
       const savedFontSize = this.fontSize ?? parseInt(localStorage.getItem('codeman-font-size'), 10);
       this.terminal = new Terminal({
         theme: { ...global.codemanCurrentXtermTheme() },
@@ -1089,19 +1090,23 @@
       if (this._destroyed || !this.terminal || !ev) return false;
       const app = global.app;
       const input = global.CodemanTerminalInput;
-      if (!app?._shouldForwardWheelToApp || !input?.sgrWheelReports || !input.wheelDeltaWholeLines) return false;
+      if (!app?._shouldForwardWheelToApp || !input?.sgrWheelReports || !input.wheelTicksForGesture) return false;
       // xterm's own encoder forwards the wheel while the CLI's tracking reaches
       // it, and its alt-scroll owns the alternate buffer, as in the primary pane.
       const tracking = this.terminal.modes?.mouseTrackingMode;
       if (tracking && tracking !== 'none') return false;
       if (this.terminal.buffer?.active?.type === 'alternate') return false;
       if (!app._shouldForwardWheelToApp(ev, { terminal: this.terminal, sessionId: this.sessionId })) return false;
+      if (ev.ctrlKey || Math.abs(ev.deltaX || 0) > Math.abs(ev.deltaY || 0)) return true;
       // SGR coordinates address the live screen, so a report from a scrolled-up
       // viewport would hit-test another row: snap home first (_forwardScrollToApp).
       if (!app._terminalViewportAtBottom?.(this.terminal)) this.terminal.scrollToBottom?.();
-      const lines = input.wheelDeltaWholeLines(ev, this.terminal.rows);
+      const lines = input.wheelDeltaNativeLines(ev, this.terminal.rows);
+      if (this._wheelTickGesture?.dir && this._wheelTickGesture.dir !== Math.sign(lines)) this._scrollBytes = '';
+      const step = input.wheelTicksForGesture(this._wheelTickGesture, lines, performance.now());
+      this._wheelTickGesture = step.state;
       const pos = app._clientPointToCell?.(ev.clientX, ev.clientY, this.terminal);
-      const bytes = input.sgrWheelReports(lines, pos);
+      const bytes = input.sgrWheelReports(step.ticks, pos);
       if (bytes) this._queueScrollBytes(bytes);
       return true;
     }
@@ -1201,6 +1206,8 @@
       // session, which is usually not the active one: a page key would move its
       // selector. Consumed, so xterm does not scroll the rows under it either.
       if (app.tabAlerts?.get(this.sessionId) === 'action') return true;
+      if (ev.ctrlKey || Math.abs(ev.deltaX || 0) > Math.abs(ev.deltaY || 0)) return true;
+      if (this._pageKeyGesture?.dir && this._pageKeyGesture.dir !== Math.sign(lines)) this._scrollBytes = '';
       const step = input.pageKeysForGesture(this._pageKeyGesture, ev, lines, this.terminal.rows, performance.now());
       this._pageKeyGesture = step.state;
       if (step.keys) this._queueScrollBytes(step.keys);
@@ -1208,7 +1215,7 @@
     }
 
     // Coalesces the scroll bytes (SGR wheel reports and page keys alike) into
-    // one send per 40 ms, bounded at 512 bytes so a fling cannot build a backlog
+    // one send per 40 ms, bounded by report count so a fling cannot build a backlog
     // that keeps scrolling after it stops. A narrow
     // twin of the primary pane's _queueScrollBytes / _flushWheelSgrQueue
     // (terminal-ui.js; keep the two in step), which flushes to the active
@@ -1216,8 +1223,16 @@
     // session, over this pane's socket while it is open.
     _queueScrollBytes(data) {
       if (!data || this._destroyed) return;
-      if (this._scrollBytes.length > 512) return;
-      this._scrollBytes += data;
+      this._scrollBytes = global.CodemanTerminalInput.coalesceScrollBytes(this._scrollBytes, data);
+      if (data.startsWith('\x1b[<') && !this._wheelNativeStarted) {
+        this._wheelNativeStarted = true;
+        if (this._scrollFlushTimer) clearTimeout(this._scrollFlushTimer);
+        this._scrollFlushTimer = null;
+        const bytes = this._scrollBytes;
+        this._scrollBytes = '';
+        global.app?._sendInputEphemeral?.(this.sessionId, bytes);
+        return;
+      }
       if (this._scrollFlushTimer) return;
       this._scrollFlushTimer = setTimeout(() => {
         this._scrollFlushTimer = null;

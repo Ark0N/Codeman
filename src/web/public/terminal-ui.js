@@ -98,10 +98,6 @@
   const PAGE_KEY_GESTURE_GAP_MS = 150;
   // ...but not for sub-row jitter (0.1 row, ~2px)...
   const PAGE_KEY_MIN_START_ROWS = 0.1;
-  // ...and only for a trackpad-sized opening event. A mouse-wheel notch (100px,
-  // 4 rows) accumulates toward half a screen as before; paging at once on it made
-  // slow notches, each its own gesture past the gap, page a full screen apiece.
-  const PAGE_KEY_IMMEDIATE_MAX_ROWS = 2;
   // A pre-paid page's debt outlives the gesture gap for this long when the next
   // event goes the SAME way, so slow small wheel ticks (40 px every 250 ms, a
   // Firefox 1-line notch) pay it back instead of each pre-paying a page of its own.
@@ -119,6 +115,14 @@
       : ev.deltaMode === 2 // DOM_DELTA_PAGE
         ? delta * (rows || 24)
         : delta / 25; // DOM_DELTA_PIXEL (Chrome/WebKit, and every trackpad)
+  }
+
+  // A wheel event is at most one native tick: a common mouse notch is
+  // deltaY=100px (or Firefox's 3 lines), not four/three separate notches.
+  // Small touchpad events retain their fractional distance and accumulate in
+  // wheelTicksForGesture. Touch drags bypass this wheel-only normalization.
+  function wheelDeltaNativeLines(ev, rows) {
+    return Math.max(-1, Math.min(1, wheelDeltaLines(ev, rows)));
   }
 
   // The same travel rounded to whole lines for the SGR wheel reports: a pure
@@ -145,6 +149,35 @@
     const btn = lines < 0 ? 64 : 65;
     const ticks = Math.min(Math.abs(lines), SGR_WHEEL_MAX_TICKS);
     return `\x1b[<${btn};${pos.col};${pos.row}M`.repeat(ticks);
+  }
+
+  // Fractional travel belongs to one direction and one recent gesture. Unlike
+  // rounding every event up, splitting 25px into ten touchpad events still sends
+  // one tick. Excess fling travel is discarded, never replayed after the finger
+  // stops. Both the primary pane (including touch) and tiles use this adapter.
+  function wheelTicksForGesture(state, lines, now) {
+    if (!Number.isFinite(lines) || !lines) return { state: state || {}, ticks: 0 };
+    const dir = Math.sign(lines);
+    const fresh = !state || state.dir !== dir || now - state.lastAt > PAGE_KEY_GESTURE_GAP_MS;
+    const total = (fresh ? 0 : state.pending || 0) + lines;
+    const whole = Math.trunc(total + Math.sign(total) * 1e-9);
+    return {
+      state: { dir, lastAt: now, pending: Math.abs(total - whole) < 1e-9 ? 0 : total - whole },
+      ticks: whole === 0 ? 0 : Math.sign(whole) * Math.min(Math.abs(whole), SGR_WHEEL_MAX_TICKS),
+    };
+  }
+
+  // Only unsent scroll input can be cancelled. Keep at most five SGR reports
+  // or three page keys per flush, and replace an obsolete direction immediately.
+  // Local and remote transports share the same bounded gesture queue.
+  function coalesceScrollBytes(queued, data) {
+    const direction = (bytes) => bytes?.match(/\x1b\[<(64|65);|\x1b\[(5|6)~/)?.[0];
+    const previous = direction(queued);
+    const next = direction(data);
+    const combined = previous && previous === next ? queued + data : data;
+    const reports = combined.match(/\x1b\[<(?:64|65);\d+;\d+M|\x1b\[[56]~/g) || [];
+    const limit = combined.startsWith('\x1b[<') ? SGR_WHEEL_MAX_TICKS : PAGE_KEY_MAX_PER_BATCH;
+    return reports.slice(-limit).join('');
   }
 
   // Rows of travel per page key for a terminal `rows` tall (half a screen).
@@ -181,15 +214,15 @@
   //    PAGE_KEY_GESTURE_GAP_MS, stretched to PAGE_KEY_DEBT_MS while a pre-paid
   //    page is still owed in the same direction. One contact is never split by
   //    time, so a slow drag (one line per 170 ms) is one gesture;
-  //  - a new gesture's trackpad-sized opening event (at least
-  //    PAGE_KEY_MIN_START_ROWS, under PAGE_KEY_IMMEDIATE_MAX_ROWS) pages AT ONCE,
+  //  - a new gesture's ordinary wheel/touch opening event (at least
+  //    PAGE_KEY_MIN_START_ROWS, under one page of travel) pages AT ONCE,
   //    pre-paid: the half screen it skipped is owed back by the rest of the
   //    gesture, so the rate stays one page per half screen. A debt left by a
   //    pre-paid page dies with its gesture;
   //  - a direction change inside a gesture (a reversal within the gap, or
   //    within the same contact) drops a pre-paid debt and accumulates, never
   //    pre-paying, so a +/-3 px trackpad wobble cannot page back and forth;
-  //  - everything else, a wheel notch included, accumulates through
+  //  - larger openings and subsequent events accumulate through
   //    pageKeysForTravel, carried across notches.
   // Returns { state, keys } with keys '' when nothing is due.
   function pageKeysForGesture(state, ev, lines, rows, now) {
@@ -215,13 +248,14 @@
       gestureStart = quiet > (prepaid && !reversed ? PAGE_KEY_DEBT_MS : PAGE_KEY_GESTURE_GAP_MS);
     }
     if (gestureStart || reversed) {
-      // A pre-paid debt belongs to its gesture and its direction.
-      if (prepaid) pending = 0;
+      // Travel and debt belong to their direction; never make a reversal pay
+      // off movement accumulated going the other way.
+      if (prepaid || reversed) pending = 0;
       prepaid = false;
     }
     if (gestureStart) {
       const size = Math.abs(lines);
-      if (size >= PAGE_KEY_MIN_START_ROWS && size < Math.min(perPage, PAGE_KEY_IMMEDIATE_MAX_ROWS)) {
+      if (size >= PAGE_KEY_MIN_START_ROWS && size < perPage) {
         // Pre-pay one page; the skipped travel is owed back (pending carries the opposite sign).
         return {
           state: { pending: lines - dir * perPage, lastAt: now, dir, prepaid: true, touchId },
@@ -389,13 +423,15 @@
     PAGE_KEY_MAX_PER_BATCH,
     wheelDeltaLines,
     wheelDeltaWholeLines,
+    wheelDeltaNativeLines,
     SGR_WHEEL_MAX_TICKS,
     sgrWheelReports,
+    wheelTicksForGesture,
+    coalesceScrollBytes,
     pageKeysForTravel,
     pageKeysForGesture,
     PAGE_KEY_GESTURE_GAP_MS,
     PAGE_KEY_MIN_START_ROWS,
-    PAGE_KEY_IMMEDIATE_MAX_ROWS,
     PAGE_KEY_DEBT_MS,
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
     MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR,
@@ -1110,9 +1146,10 @@ Object.assign(CodemanApp.prototype, {
         if (this.terminal?.buffer?.active?.type === 'alternate') return;
         ev.preventDefault();
         ev.stopPropagation();
+        if (ev.ctrlKey || (!ev.shiftKey && Math.abs(ev.deltaX) > Math.abs(ev.deltaY))) return;
         if (this._shouldForwardWheelToApp(ev)) {
           this._logScrollRouting('forward-sgr');
-          this._forwardScrollToApp(ev.clientX, ev.clientY, this._wheelScrollLines(ev));
+          this._forwardScrollToApp(ev.clientX, ev.clientY, this._wheelScrollNativeLines(ev));
           return;
         }
         // Local scrolling accumulates FRACTIONAL lines: a macOS trackpad emits
@@ -5780,23 +5817,10 @@ Object.assign(CodemanApp.prototype, {
     return true;
   },
 
-  // Wheel forwarding gate for the container wheel handler: no Shift override,
-  // xterm's own encoder dormant, viewport at the bottom, and a TUI VERIFIED to
-  // scroll its transcript on SGR wheel reports, which today is claude 2.1.187+
-  // with mouse tracking on (fullscreen) and nothing else (older Claude Code
-  // captures wheel as select-menu option navigation, an unknown version is
-  // treated as older, and inline Claude ignores it). Gemini and codex are
-  // strip modes too but keep the local wheel — taps/clicks are still forwarded
-  // for them (harmless no-ops at worst).
-  //
-  // Codex USED to forward here and was the #227 regression (DodgyBadger, Codex
-  // latest / Chrome / Win11: dead wheel in codex, working scrollbar drag).
-  // Measured on codex-cli 0.147.0 in a bare tmux: it never enables mouse
-  // tracking (`mouse_any_flag=0`) and SGR wheel reports fed to its PTY change
-  // NOTHING on screen — it runs an inline viewport (`alternate_on=0`) and pushes
-  // its transcript into the terminal's own scrollback (tmux `history_size`
-  // grows), so there is no in-app pager to drive and local scrollback IS the
-  // codex transcript. Forwarding therefore swallowed every tick.
+  // Forward only to CLIs that explicitly enable mouse tracking. Fullscreen
+  // Codex 0.163.0 was verified against canonical tmux captures: one SGR report
+  // scrolls one transcript row. Inline Codex (tracking off) must retain local
+  // history/fallback behavior; unconditional forwarding caused the old #227 bug.
   // Wheel delta → whole scroll lines. macOS trackpads turn Shift+two-finger
   // scroll into a HORIZONTAL wheel (deltaY≈0, deltaX carries the magnitude), and
   // Shift routes the wheel to local scrollback (_shouldForwardWheelToApp returns
@@ -5813,6 +5837,10 @@ Object.assign(CodemanApp.prototype, {
   _wheelScrollLines(ev) {
     // Pure horizontal swipe: 0, never the ±1 fallback (wheelDeltaWholeLines).
     return window.CodemanTerminalInput.wheelDeltaWholeLines(ev, this.terminal?.rows);
+  },
+
+  _wheelScrollNativeLines(ev) {
+    return window.CodemanTerminalInput.wheelDeltaNativeLines(ev, this.terminal?.rows);
   },
 
   /** Unrounded variant for the smooth local-scroll path, which accumulates
@@ -5848,8 +5876,9 @@ Object.assign(CodemanApp.prototype, {
     if (mode && mode !== 'none') return false;
     const session = this.sessions?.get(target.sessionId || this.activeSessionId);
     const sessionMode = session?.mode || 'claude';
-    if (sessionMode !== 'claude') return false;
-    if (!this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
+    if (sessionMode !== 'claude' && sessionMode !== 'codex') return false;
+    if (sessionMode === 'codex' && this.tabAlerts?.get(target.sessionId || this.activeSessionId) === 'action') return false;
+    if (sessionMode === 'claude' && !this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
     // Only while Claude is actually listening for the mouse. In its default
     // inline renderer (2.1.280 measured: alternate_on=0, mouse_any_flag=0) the
     // transcript lives in real scrollback, like codex, and SGR wheel reports are
@@ -5892,25 +5921,45 @@ Object.assign(CodemanApp.prototype, {
     if (!this.activeSessionId || !lines) return;
     const pos = this._clientPointToCell(clientX, clientY);
     if (!pos) return;
-    this._queueScrollBytes(window.CodemanTerminalInput.sgrWheelReports(lines, pos));
+    const input = window.CodemanTerminalInput;
+    const state = this._wheelTickSession === this.activeSessionId ? this._wheelTickGesture : null;
+    if (state?.dir && state.dir !== Math.sign(lines)) this._wheelSgrQueue = '';
+    const step = input.wheelTicksForGesture(state, lines, performance.now());
+    this._wheelTickSession = this.activeSessionId;
+    this._wheelTickGesture = step.state;
+    this._queueScrollBytes(input.sgrWheelReports(step.ticks, pos));
   },
 
   /**
-   * Shared 40ms coalescer for every byte a scroll gesture sends to the PTY (SGR
+   * Coalesces scroll input into 40ms batches after the first native report (SGR
    * wheel reports and the PageUp/PageDown fallback alike). Each flush becomes a
    * tmux send-keys server-side, so per-event writes would spawn a process storm
-   * on a single flick; the queue is bounded so a wild scroll can't build a
+   * on a single flick; report counts are bounded so a wild scroll can't build a
    * backlog that keeps scrolling after the finger stops.
    *
    * A TerminalTile keeps its own narrow twin (TerminalTile._queueScrollBytes,
-   * terminal-tile.js: same 40ms window, same 512-byte bound) because this queue
+   * terminal-tile.js: same 40ms window and report limits) because this queue
    * flushes to the active session only; keep the two in step.
    */
   _queueScrollBytes(data) {
     if (!data || !this.activeSessionId) return;
-    const queued = this._wheelSgrQueue || '';
-    if (queued.length > 512) return;
-    this._wheelSgrQueue = queued + data;
+    // The first native report of a newly selected tab must not wait behind
+    // replay/atlas work for a 40ms timer (measured 60-250ms in practice).
+    // Selection generation also covers A -> B -> A when B was never scrolled.
+    const firstNativeForVisit = data.startsWith('\x1b[<') &&
+      (this._wheelNativeStartSession !== this.activeSessionId ||
+        this._wheelNativeStartGeneration !== this._selectGeneration);
+    const queued = !firstNativeForVisit && this._wheelQueueSession === this.activeSessionId
+      ? this._wheelSgrQueue || '' : '';
+    this._wheelQueueSession = this.activeSessionId;
+    this._wheelSgrQueue = window.CodemanTerminalInput.coalesceScrollBytes(queued, data);
+    if (firstNativeForVisit) {
+      this._wheelNativeStartSession = this.activeSessionId;
+      this._wheelNativeStartGeneration = this._selectGeneration;
+      if (this._wheelSgrFlushTimer) clearTimeout(this._wheelSgrFlushTimer);
+      this._flushWheelSgrQueue();
+      return;
+    }
     if (this._wheelSgrFlushTimer) return;
     this._wheelSgrFlushTimer = setTimeout(() => this._flushWheelSgrQueue(), 40);
   },
@@ -5930,9 +5979,8 @@ Object.assign(CodemanApp.prototype, {
    *    PageUp/PageDown keys (`messages_page_up/down`) but IGNORES SGR wheel
    *    reports — six `\x1b[<64;…M` reports against an idle pane left the capture
    *    byte-identical — so paging is the only gesture that reaches it;
-   *  - `codex`, which draws on tmux's alternate screen too (0.157.1, 0.160), which
-   *    the full strip hides from xterm, and pages on PageUp/PageDown while SGR
-   *    wheel reports do nothing.
+   *  - `codex` with no observed mouse tracking. Native tracked fullscreen
+   *    Codex uses fractional SGR reports; this remains its fallback capability.
    *
    * ⚠️ Which modes page is read from `window.__codemanTranscriptPageKeys`, the
    * list the server builds from the `transcriptPageKeys` CAPABILITY, never an id
@@ -5964,8 +6012,8 @@ Object.assign(CodemanApp.prototype, {
    * unset (the inline renderer, or fullscreen right after a server restart), the
    * user turned on "Wheel scrolls local history" (which pins the wheel to a buffer
    * that, for a repaint-mode CLI, is empty: the setting's footgun), or the CLI is
-   * one that never fills the buffer and never accepts the wheel (opencode, codex:
-   * both ignore SGR wheel reports, #227, and page on PageUp/PageDown). Before
+   * one that never fills the buffer and does not accept the wheel (OpenCode,
+   * or Codex without observed mouse tracking). Those modes page instead. Before
    * this, all of those produced a completely dead gesture; the #205 reporter
    * proved the keyboard route works by paging back through intact text with Fn+Up.
    * This is not wheel forwarding: it sends plain keys, and only over a hollow buffer.
@@ -5975,8 +6023,7 @@ Object.assign(CodemanApp.prototype, {
    * scrollback is never touched. Shift is excluded on purpose: it is the explicit
    * "give me local scrollback" gesture and must keep that meaning.
    *
-   * The FIRST event of a trackpad-sized gesture (opening under
-   * PAGE_KEY_IMMEDIATE_MAX_ROWS) pages at once. Waiting for half a screen of
+   * The FIRST event of a deliberate sub-page gesture pages at once. Waiting for half a screen of
    * travel (19 rows, ~475px on a 38-row pane) meant an ordinary trackpad flick
    * never sent a key at all. That page is pre-paid: the travel it skipped is
    * owed back by the rest of the gesture, so the rate stays one page per
@@ -5984,8 +6031,8 @@ Object.assign(CodemanApp.prototype, {
    * (PAGE_KEY_GESTURE_GAP_MS, or PAGE_KEY_DEBT_MS while a same-direction page is
    * still owed), a reversal after the gap or a tab switch starts a new gesture;
    * one contact is never split by time, and a quick reversal never pre-pays. A
-   * larger opening event is a wheel notch and accumulates as before, so slow
-   * notches still page once per `perPage` rows.
+   * wheel opening below the page threshold also pages immediately. Subsequent events
+   * repay the skipped travel rather than paging once per notch.
    *
    * Consumed WITHOUT paging: a pinch (`ctrlKey`, how Chrome reports a trackpad
    * pinch), a mostly horizontal swipe (both deltas present, |deltaX| > |deltaY|;
@@ -6009,6 +6056,7 @@ Object.assign(CodemanApp.prototype, {
    */
   _maybePageCliTranscript(ev, lines) {
     if (!lines || ev?.shiftKey || !this.activeSessionId) return false;
+    if (ev?.ctrlKey || Math.abs(ev?.deltaX || 0) > Math.abs(ev?.deltaY || 0)) return this._localScrollbackIsHollow();
     if (!this._localScrollbackIsHollow()) return false;
     // An open dialog in THIS pane's session (the active one): a page key would
     // move its selector. Consumed, so the buffer does not scroll under it either.
@@ -6021,6 +6069,7 @@ Object.assign(CodemanApp.prototype, {
       this._pageKeySession = this.activeSessionId;
       this._pageKeyGesture = null;
     }
+    if (this._pageKeyGesture?.dir && this._pageKeyGesture.dir !== Math.sign(lines)) this._wheelSgrQueue = '';
     const step = window.CodemanTerminalInput.pageKeysForGesture(
       this._pageKeyGesture,
       ev,
@@ -6071,7 +6120,9 @@ Object.assign(CodemanApp.prototype, {
     // Ephemeral (fire-and-forget): wheel reports are loss-tolerant, so they skip
     // the durable seq/ACK queue — no localStorage churn, no "Nb queued" flicker
     // in the connection indicator on every scroll tick.
-    if (data && this.activeSessionId) this._sendInputEphemeral(this.activeSessionId, data);
+    if (data && this.activeSessionId && this._wheelQueueSession === this.activeSessionId) {
+      this._sendInputEphemeral(this.activeSessionId, data);
+    }
   },
 
   // Desktop counterpart of the touchend tap branch: hand-encode an SGR report
