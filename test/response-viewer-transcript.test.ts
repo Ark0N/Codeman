@@ -514,6 +514,47 @@ describe('GitHub Copilot pane dialect', () => {
     expect(first.text).not.toContain('┃');
   });
 
+  // The footer and composer every screen below ends with.
+  const tail = [
+    ' /tmp/work/.../scratch-2                                                  Session: credits unavailable',
+    rule,
+    '❯',
+    rule,
+    ' ← open sidebar · Interactive · Manual Approval · / commands · ? help · tab next tab           mock',
+  ];
+
+  it("keeps a shell prompt inside an answer's code block as answer text, not a new prompt", () => {
+    const screen = [
+      ' ❯ how do I run the tests   11:20',
+      ' ● Run this from the repo root:',
+      '',
+      '   ❯ npm test',
+      '',
+      '   Then read the summary line.',
+      ...tail,
+    ].join('\n');
+    const blocks = parseExternalCliTranscript(screen, 'copilot');
+    expect(blocks.filter((b) => b.kind === 'prompt').map((b) => b.text)).toEqual(['how do I run the tests']);
+    const answer = getLastTranscriptResponse(blocks);
+    expect(answer).toContain('Run this from the repo root:');
+    expect(answer).toContain('❯ npm test');
+    expect(answer).toContain('Then read the summary line.');
+  });
+
+  it('keeps a paragraph between two rules inside an answer, and treats only the last triple as the composer', () => {
+    const screen = [
+      ' ❯ quote the passage   11:21',
+      ' ● Here it is:',
+      rule,
+      '   Quoted passage between two rules.',
+      rule,
+      ...tail,
+    ].join('\n');
+    expect(getLastTranscriptResponse(parseExternalCliTranscript(screen, 'copilot'))).toBe(
+      'Quoted passage between two rules.'
+    );
+  });
+
   it('answers nothing for a session that has only drawn its banner or a trust dialog', () => {
     const banner = pane.split('\n').slice(0, 9).join('\n');
     expect(getLastTranscriptResponse(parseExternalCliTranscript(banner, 'copilot'))).toBe('');

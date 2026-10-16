@@ -28,6 +28,12 @@ interface PaneDialect {
   status: RegExp[];
   /** Rows that carry nothing (the empty composer), dropped and treated as a block boundary. */
   ignore: RegExp[];
+  /**
+   * The composer row, the one between two rules at the bottom of the screen. Only the LAST rule,
+   * composer row, rule triple counts: an answer can hold a rule-delimited paragraph or a quoted
+   * prompt of its own, and that is answer text.
+   */
+  composer: RegExp;
   /** Furniture drawn at the end of a row (a scrollbar gutter), removed before anything else reads it. */
   lineTrailer?: RegExp;
   /**
@@ -44,7 +50,9 @@ const PANE_DIALECTS: Record<string, PaneDialect> = {
   // rules, and a `← open sidebar · … · / commands · ? help` footer. Tool-call rows are not
   // modelled: they open with the same bullet and read as part of the answer.
   copilot: {
-    prompt: /^\s*❯\s+(\S.*)$/,
+    // Copilot draws a submitted prompt at column 0 or 1; the continuation rows of an answer are
+    // indented three spaces, so a shell prompt inside a code block (`   ❯ npm test`) is not a prompt.
+    prompt: /^ ?❯\s+(\S.*)$/,
     promptTrailer: /\s{2,}\d{1,2}:\d{2}\s*$/,
     responseBullet: /^\s*●\s+/,
     status: [
@@ -55,7 +63,8 @@ const PANE_DIALECTS: Record<string, PaneDialect> = {
       /\/ commands · \? help/,
       /^\s*[◉◎]\s+Working\b/,
     ],
-    ignore: [/^\s*❯\s*$/],
+    ignore: [/^ ?❯\s*$/],
+    composer: /^ ?❯/,
     // The right-hand scrollbar gutter, `┃` on a row (or alone on a blank one).
     lineTrailer: /\s*[┃▐]\s*$/,
     startup: [/Copilot v\d+\.\d+\.\d+ uses AI/, /Confirm folder trust/, /Do you trust the files in this folder/],
@@ -339,8 +348,18 @@ function parseDialectTranscript(cleaned: string, dialect: PaneDialect): Response
   const rows = cleaned.split('\n').map((row) => (dialect.lineTrailer ? row.replace(dialect.lineTrailer, '') : row));
   // The composer sits between two rules and holds whatever is typed but not sent. That is not a
   // prompt row: otherwise typing under a tall answer would make the answer's tail read as banner.
-  const isComposerRow = (i: number) =>
-    i > 0 && i < rows.length - 1 && isDividerOnlyLine(rows[i - 1] ?? '') && isDividerOnlyLine(rows[i + 1] ?? '');
+  let composerIndex = -1;
+  for (let i = rows.length - 2; i > 0; i -= 1) {
+    if (
+      dialect.composer.test(rows[i] ?? '') &&
+      isDividerOnlyLine(rows[i - 1] ?? '') &&
+      isDividerOnlyLine(rows[i + 1] ?? '')
+    ) {
+      composerIndex = i;
+      break;
+    }
+  }
+  const isComposerRow = (i: number) => i === composerIndex;
   const hasPrompt = rows.some((row, i) => dialect.prompt.test(row) && !isComposerRow(i));
   const startupVisible = rows.some((row) => dialect.startup.some((re) => re.test(row)));
   let sawPrompt = !hasPrompt && !startupVisible;
