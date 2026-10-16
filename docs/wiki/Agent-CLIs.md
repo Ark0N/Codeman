@@ -282,7 +282,7 @@ approval. A multi-user user without the bypass grant gets a plain `copilot`, whi
 Copilot's own Manual Approval mode. Model, permission mode and the rest are also changeable
 inside its TUI.
 
-**Options and resume.** The model picked in the Run menu goes as `--model`. A session from
+**Options and resume.** `--model` is sent only by an API caller that sets `copilotConfig.model`; the Run menu has no Copilot model picker (a saved custom endpoint sets `COPILOT_MODEL` instead). A session from
 Past Sessions continues with `--continue`, which resumes the most recent Copilot conversation
 in that directory. A tab name you set yourself is passed as `--name`, so Copilot's own session
 list reads like that tab (an automatic `w1-myapp` name is not pinned); Copilot refuses `--name`

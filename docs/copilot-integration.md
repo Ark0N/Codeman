@@ -49,7 +49,7 @@ Codeman never logs Copilot in or stores its credentials.
 | Launch | `copilot`, in Copilot's own Manual Approval mode. |
 | Run button | `copilot --yolo` (allow every tool, path and URL), like the other CLIs' bypass switches, so an unattended session never stops on an approval. |
 | Permission clamp | `allowAll` is a `privilegedParam`. A multi-user owner without the bypass grant has it forced back to `false`; an absent config is never materialized (a bare `copilot` is already safe). `COPILOT_HOME`, `COPILOT_ALLOW_ALL`, `COPILOT_PROVIDER_*` and `COPILOT_MODEL` are privileged env keys. |
-| Model | `--model <id>` from the Run menu / Session Options. |
+| Model | `--model <id>`, sent only by an API caller that sets `copilotConfig.model` (the value must start with a letter or digit, like `resumeSessionId`). Nothing in the UI sets it: a saved custom endpoint sets `COPILOT_MODEL` instead (see below). |
 | Resume | `--resume <value>`, sent only by an API caller that sets `copilotConfig.resumeSessionId` (Past Sessions does not). The value (an id, an id prefix or a session name) must be one plain word starting with a letter or digit: `--resume`'s value is optional, so `--resume --yolo` would otherwise make `--yolo` its own flag and bypass the clamp. |
 | Continue | `--continue`, from **Past Sessions**: it resumes the most recent conversation Copilot has for that directory. Nothing sets it on a respawn. Skipped when a resume value is set. |
 | Name | A tab name **you set yourself** is passed as `--name <tab name>`, so Copilot's own session list reads like that tab. An automatic name (`w1-myapp`, or an auto-named title) is not pinned. Copilot refuses `--name` with `--resume`/`--continue`, so it is dropped there and a continued session keeps the name it had. |
@@ -130,10 +130,12 @@ Sign in inside the container (`copilot login`), or set `COPILOT_GITHUB_TOKEN` fo
 
 ## Remote SSH cases
 
-The launch line is built by the same registry path as a local session (the same flags, the same
-privileged-param clamp). A remote host needs its own `copilot` on its own PATH and its own
-sign-in. This path has unit coverage for the built command but was not exercised against a
-real remote host.
+A remote or Docker pane runs a bare `copilot` (`defaultRemoteCommandForMode`, pinned in
+`test/location-overlay-commands.test.ts`), in Copilot's own Manual Approval mode. The
+`copilotConfig` flags (`--yolo`, `--model`, `--resume`, `--continue`) are a local-session feature
+and are not sent there, so there is nothing for the privileged-param clamp to do. A remote host
+needs its own `copilot` on its own PATH and its own sign-in. This path has unit coverage for the
+built command but was not exercised against a real remote host.
 
 ## What Codeman deliberately does NOT wire up
 
