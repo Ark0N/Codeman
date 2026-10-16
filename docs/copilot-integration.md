@@ -121,28 +121,6 @@ work from inside a Copilot tab and against Copilot workers:
   dropped, so a session that has not been asked anything answers nothing.
 - `interrupt` sends a bare ESC; `rm` refuses itself.
 
-## Plan usage
-
-The header chip gets a **Copilot** row with one `mo` window: the calendar-month premium-request
-quota. The tooltip adds the counts and the reset date.
-
-- **Source.** `GET https://api.github.com/copilot_internal/user` →
-  `quota_snapshots.premium_interactions` (`entitlement`, `remaining`, `percent_remaining`;
-  `quota_reset_date_utc`). `chat` and `completions` are `unlimited` on the paid plans and metered
-  (200 and 2000) on Free; the chip shows neither. It
-  is the quota the editors show, but it is **not part of GitHub's documented REST API**.
-- **When.** Every 10 minutes from the host, read-only, only while the CLI is installed, a
-  token resolves and plan-usage display is on (turning the chip off stops the request).
-- **Token.** `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, then the signed-in user's
-  `authTokens` entry in `<COPILOT_HOME or ~/.copilot>/config.json` (github.com sign-ins only).
-  It is sent only to api.github.com over HTTPS with redirects refused, and is never logged or
-  put in an error.
-- **Failure.** Offline, 401, a changed shape, an unlimited quota or a premium quota of zero (a
-  Free account answers `entitlement: 0`, `has_quota: false`) all yield no row. Overage
-  is clamped to 100% in the bar and the real count is kept.
-
-`copilot billing` exists only inside the TUI, so there is no CLI route to the same number.
-
 ## Docker cases
 
 The agent image installs `@github/copilot`, and a docker case runs Copilot like any mode. **No
@@ -172,6 +150,5 @@ real remote host.
 - `agent read` does not model tool-call rows: they open with the same `●` bullet and read as
   part of the answer.
 - `agent read` sees the visible screen, so an answer longer than one screen is its tail.
-- The plan-usage endpoint is undocumented and may change shape; the row then disappears.
 - Custom endpoints: tool calls through a BYOK endpoint were not exercised.
 - Remote SSH was not exercised against a real remote host.

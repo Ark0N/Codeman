@@ -72,7 +72,7 @@ output. The other CLIs expose no equivalent.
 | Docker cases, remote SSH cases                    | Yes    | Yes                                                  |
 | Precise idle detection                            | Yes    | Codex, Pi, OpenCode, OMP, Copilot and Gemini: same screen check, via their own prompt and working line. DeepSeek: reports its end of turn itself. Antigravity and Grok: generic cues only, unreliable |
 | Auto-resume when a usage limit resets             | Yes    | No                                                   |
-| Plan usage chip                                   | Yes    | Codex and GitHub Copilot (monthly premium requests); others no |
+| Plan usage chip                                   | Yes    | No                                                   |
 | Approvals Inbox                                   | Yes    | DeepSeek and Codex as alerts (answer in the terminal); others no |
 | Read My Mind                                      | Yes    | No                                                   |
 | Ralph loop and its task tracker                   | Yes    | No                                                   |
@@ -301,13 +301,6 @@ not available: wait on `idle`, `exit` or an output marker.
 **Selecting and scrolling.** Copilot turns mouse tracking on itself. Codeman strips that, so a
 plain drag selects text (and Auto Copy works) and clicks still reach Copilot. The wheel, and a
 swipe on a phone, scroll Copilot's own transcript; Shift+wheel scrolls Codeman's local history.
-
-**Plan usage.** The header chip gains a **Copilot** row with one `mo` window: this month's
-premium requests used. The tooltip shows the counts (for example `1215 of 5000 requests`) and
-the reset date. It is read from GitHub's `copilot_internal/user` endpoint with Copilot's own
-token, every 10 minutes, only while Copilot is installed and signed in and the chip is on. That
-endpoint is not part of GitHub's documented API: if it fails, or your plan has no premium
-quota (Free) or an unlimited one, the row is simply absent.
 
 **MCP servers.** [MCP server sync](Settings-Reference) includes Copilot's
 `~/.copilot/mcp-config.json` (relocated by `COPILOT_HOME`), as a target and a source.
