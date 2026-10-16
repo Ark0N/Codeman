@@ -4477,28 +4477,33 @@ export function registerSessionRoutes(
         ).catch(() => {});
       }
 
-      // Save lastUsedCase to settings for TUI/web sync
-      try {
-        const settingsFilePath = SETTINGS_PATH;
-        let settings: Record<string, unknown> = {};
+      // Save lastUsedCase to settings for TUI/web sync. It is a key of the server-wide
+      // settings.json, readable by every user through GET /api/settings, so a non-admin's
+      // case name is not written there in multi-user mode (writes are admin-only, like
+      // PUT /api/settings). isAdmin is always true in single-user mode.
+      if (isAdmin(req)) {
         try {
-          settings = JSON.parse(await fs.readFile(settingsFilePath, 'utf-8'));
+          const settingsFilePath = SETTINGS_PATH;
+          let settings: Record<string, unknown> = {};
+          try {
+            settings = JSON.parse(await fs.readFile(settingsFilePath, 'utf-8'));
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+          }
+          settings.lastUsedCase = caseName;
+          const dir = dirname(settingsFilePath);
+          if (!existsSync(dir)) {
+            mkdirSync(dir, { recursive: true });
+          }
+          // Use async write to avoid blocking event loop
+          fs.writeFile(settingsFilePath, JSON.stringify(settings, null, 2)).catch((err) => {
+            // Non-critical but log for debugging
+            console.warn('[Server] Failed to save settings (lastUsedCase):', err);
+          });
         } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-        }
-        settings.lastUsedCase = caseName;
-        const dir = dirname(settingsFilePath);
-        if (!existsSync(dir)) {
-          mkdirSync(dir, { recursive: true });
-        }
-        // Use async write to avoid blocking event loop
-        fs.writeFile(settingsFilePath, JSON.stringify(settings, null, 2)).catch((err) => {
           // Non-critical but log for debugging
-          console.warn('[Server] Failed to save settings (lastUsedCase):', err);
-        });
-      } catch (err) {
-        // Non-critical but log for debugging
-        console.warn('[Server] Failed to prepare settings update:', err);
+          console.warn('[Server] Failed to prepare settings update:', err);
+        }
       }
 
       return {

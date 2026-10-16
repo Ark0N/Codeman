@@ -869,7 +869,10 @@ export function registerSystemRoutes(
     return { config: ctx.store.getConfig() };
   });
 
-  app.put('/api/config', async (req) => {
+  app.put('/api/config', async (req, reply) => {
+    // Process-wide app config in state.json (poll interval, timeouts, the session cap,
+    // respawn defaults): admin-only in multi-user mode, like PUT /api/settings.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const configData = parseBody(ConfigUpdateSchema, req.body, 'Invalid config');
     ctx.store.setConfig(configData as Partial<ReturnType<typeof ctx.store.getConfig>>);
     return { config: ctx.store.getConfig() };
@@ -953,7 +956,13 @@ export function registerSystemRoutes(
     return readJsonConfig(SETTINGS_PATH, 'settings', {});
   });
 
-  app.put('/api/settings', async (req) => {
+  app.put('/api/settings', async (req, reply) => {
+    // Multi-user mode: settings.json is ONE file for the whole server (feature switches,
+    // the plan-usage collection switch, run mode, respawn presets, the tunnel), so a write
+    // is admin-only, like every other server-wide setting (docs/multi-user-plan.md,
+    // Settings row). Refused FIRST: nothing is parsed, written, toggled or started for a
+    // non-admin. GET above stays readable by everyone. No-op in single-user mode.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const settings = parseBody(SettingsUpdateSchema, req.body, 'Invalid settings') as Record<string, unknown>;
 
     // COD-55: enabling the Cloudflare tunnel publishes the whole app (full terminal
@@ -1092,7 +1101,10 @@ export function registerSystemRoutes(
     return { success: true, data: settings.modelConfig || {} };
   });
 
-  app.put('/api/execution/model-config', async (req) => {
+  app.put('/api/execution/model-config', async (req, reply) => {
+    // The `modelConfig` key of the server-wide settings.json (cron's and the plan
+    // orchestrator's default model): admin-only in multi-user mode, like PUT /api/settings.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const modelConfig = parseBody(ModelConfigUpdateSchema, req.body, 'Invalid model config') as Record<string, unknown>;
 
     try {
