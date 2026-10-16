@@ -52,7 +52,7 @@ Uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`) via `@chan
 
 When the user says **COM** (`COM` = patch, `COM minor`, `COM major`): **Read [`docs/releasing.md`](docs/releasing.md) and follow every step in order**; never improvise a release from memory. It covers the changeset, `npm run version-packages`, the `**Version**` line below, the branch check and explicit-path commit, deploy, the getcodeman.com badge, watching BOTH CI workflows, the MCP registry publish, and the Discussions announcement.
 
-**Version**: 1.41.1 (must match `package.json`)
+**Version**: 1.42.0 (must match `package.json`)
 
 ## Project Overview
 
