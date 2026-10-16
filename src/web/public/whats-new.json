@@ -1,0 +1,13 @@
+{
+  "version": "1.41.1",
+  "highlights": [
+    "HTML files open as pages, and markdown opens rendered from the terminal (#547)",
+    "`codeman mcp`: drive Codeman from any MCP client (#615)",
+    "The codeman skill for every agent CLI (#613)",
+    "Tiles: move them by hand, or tear one off into its own window (#584)",
+    "Focus section on the vertical rail (#582)",
+    "Tabs land in groups (#528)",
+    "Folder grid and more clickable paths (#604)",
+    "Phone Attach button and videos (#606)"
+  ]
+}
