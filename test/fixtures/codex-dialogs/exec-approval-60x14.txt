@@ -1,0 +1,14 @@
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: May I run the requested quoted heredoc with
+  write access to create lines.txt?
+
+  $ cat > lines.txt <<'EOF'
+  line 1
+  [… 21 lines] ^a view all
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do differently (esc)
+  Press enter to confirm or esc to cancel

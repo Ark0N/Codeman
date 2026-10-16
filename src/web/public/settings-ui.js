@@ -35,7 +35,11 @@ Object.assign(CodemanApp.prototype, {
       this.setPendingHook(data.sessionId, 'permission_prompt');
     }
     const toolInfo = data.tool ? `${data.tool}${data.command ? ': ' + data.command : data.file ? ': ' + data.file : ''}` : '';
-    this._notifySession(data.sessionId, 'critical', 'hook-permission', 'Permission Required', toolInfo || 'Claude needs tool approval to continue');
+    // A dialog read off a hook-less CLI's screen (codex; `source: 'screen'`, see
+    // src/web/screen-blocked.ts) carries a server-built message naming that CLI, so the
+    // notification does not claim it is Claude asking.
+    const screenMessage = data.source === 'screen' && data.message ? data.message : '';
+    this._notifySession(data.sessionId, 'critical', 'hook-permission', 'Permission Required', toolInfo || screenMessage || 'Claude needs tool approval to continue');
   },
 
   _onHookElicitationDialog(data) {

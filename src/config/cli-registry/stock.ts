@@ -677,10 +677,11 @@ const CODEX: CliEntry = {
     // which the agent writes (and while a prompt is typed, the last two). Matching the complete row raises the bar — an assistant
     // message has to end with this exact line, to the character — but nothing here makes
     // forging it impossible, so do not read the Claude comment above as applying here.
-    // What contains it is that codex declares `hooks: 'none'`: no hook event from a codex
-    // session ever reaches `notePrompt()`, so there is no idle item to pre-acknowledge
-    // and a forged label costs a wrong badge and nothing else. A CLI that gains hook
-    // signals must not keep a pattern this soft.
+    // What contains it is that codex declares `hooks: 'none'`: no IDLE prompt from a codex
+    // session ever reaches `notePrompt()` (its screen-read dialogs below open PERMISSION
+    // items, which a watching label never acknowledges), so there is no idle item to
+    // pre-acknowledge and a forged label costs a wrong badge and nothing else. A CLI that
+    // gains idle signals must not keep a pattern this soft.
     // ⚠️ Background TERMINALS are the only background work codex advertises on screen.
     // A sub-agent started without waiting outlives the turn just as a terminal does —
     // measured 2026-09-22, the sandboxed process was still running — and the pane shows
@@ -689,11 +690,45 @@ const CODEX: CliEntry = {
     // composer. So a codex session waiting on a sub-agent reads as plainly idle here.
     // Nothing is misfiled by that (codex raises no idle prompts), and there is no row to
     // match until codex pins one.
+    // Codex is the one CLI Codeman launches with its approvals on by default, and it has no
+    // hook to say it stopped for one, so its dialogs are read off the screen. Measured on a
+    // live codex-cli 0.162.0 pane on 2026-10-14 (`-a on-request -s read-only`, widths 200,
+    // 80, 60, 44 and 36): every dialog it blocks on REPLACES the composer and its footer
+    // with a numbered option list, the selected one marked `›`, over a key-hint row:
+    //   command approval (a network         `› 1. Yes, proceed (y)` ...
+    //   escalation too), edit approval
+    //                                       `  Press enter to confirm or esc to cancel`
+    //   question (request_user_input)       `  › 1. Blue  Write the color blue.` ...
+    //                                       `  tab to add notes | enter to submit answer | esc to interrupt`
+    //   (its notes field open)              `  tab or esc to clear notes | enter to submit answer`
+    //   workspace trust, at startup         `› 1. Trust and continue`
+    //                                       `  enter continue · esc quit`
+    //   (the same prompt reached after the  `  2. Back to Agent Command Center`
+    //   update prompt, 0.162.0, 2026-10-16) `  enter continue · esc back`
+    // The pattern needs both: a `› N.` option row, then the key-hint row, which must END
+    // the window. Below about 60 columns that hint wraps onto rows of its own
+    // (`  Press enter to confirm or esc to` / `  cancel`, or `tab to add notes` /
+    // `enter to submit answer` / `esc to interrupt` one per row), so the hint may run on
+    // over rows that start with two spaces and a lowercase word or arrow, and must end on
+    // one of its own closing words. The transcript can quote every one of those strings
+    // (measured: an answer that printed them verbatim) and still not match, because while
+    // no dialog is up codex keeps its composer row (`› ...`, column 0, which ends the
+    // run) and its footer below anything the agent prints. The longest option list
+    // measured, a question at 36 columns, put the `›` row 16 non-blank rows up; 20 leaves
+    // room for longer option text, and a dialog whose marker scrolls out of the window is
+    // simply not seen (the behaviour before this field). Not matched on purpose:
+    // `Implement this plan?` after a plan turn, whose `enter select · esc back` footer is
+    // the same as `/model`, `/permissions` and `/review`, menus the user opened at the
+    // keyboard; the plan turn has ended there, and the session reads idle as before.
+    // ⚠️ The question dialog's hint contains `esc to interrupt`, the working line, so
+    // such a pane read as WORKING before this field: a blocked screen now wins over it.
     workDetect: {
       promptGlyph: '›',
       workingLine: '[Ee]sc to interrupt',
       watchingLine: String.raw`^\s{0,4}(\d+ background terminals?) running · /ps to view · /stop to close$`,
       watchingLines: 4,
+      blockedLine: String.raw`(?:^|\n) {0,4}› \d\. [\s\S]*\n {2}(?:Press enter to confirm|tab (?:to add|or esc to clear) notes|enter continue)(?:[^\n]|\n {2}(?=[a-z←])){0,120}(?:cancel|interrupt|quit|back|answer|all)$`,
+      blockedLines: 20,
     },
     // The footer under the composer, measured on a live 0.147.0 pane:
     // `  gpt-5.6-terra default · ~/codeman-cases/th-scratch` (model, reasoning effort,

@@ -34,8 +34,11 @@ reloading the dashboard while a permission dialog is blocking a session does not
 with a normal-looking tab.
 
 For Claude sessions, these come from Claude Code's hooks and are precise about *why* the
-session stopped; DeepSeek Harness sessions report the same states themselves. For the other
-CLIs there are no hooks, so you get the coarser output-based signal.
+session stopped; DeepSeek Harness sessions report the same states themselves. Codex has no
+hooks, but its dialogs are distinctive enough to read off the screen, so a Codex session
+waiting on an approval, a question or the "Trust this folder?" prompt turns red too, and
+clears a few seconds after you answer. For the other CLIs there are no hooks, so you get the
+coarser output-based signal.
 
 ## Window title and OS notifications
 
@@ -109,7 +112,9 @@ Behaviour worth knowing:
 ## The Approvals Inbox
 
 **Opt-in, off by default. Claude sessions, plus DeepSeek Harness sessions, whose terminal
-front door reports its prompts to Codeman.**
+front door reports its prompts to Codeman, and Codex sessions, whose dialogs Codeman reads
+off the screen.** DeepSeek and Codex cards are alerts: they say "Answer in the terminal" and
+carry no answer buttons, because Codeman cannot verify a keystroke into those dialogs.
 
 One queue of every prompt currently waiting on a human, across all your sessions, answerable
 in place. When you have eight workers running, this is the difference between checking eight
@@ -214,7 +219,8 @@ from the lock screen.
 - **iOS needs the home screen install.** A Safari tab will never receive push.
 - **The bell is invisible at zero.** That is deliberate, not a broken setting.
 - **Approvals need real signals.** They are built on hook events, which Claude emits and
-  DeepSeek Harness reports itself; the other CLIs do neither.
+  DeepSeek Harness reports itself, and on Codex's dialogs as its screen shows them; the
+  other CLIs give neither.
 - **A stale menu answer is refused, not sent.** If you answer a card for a dialog that has
   since gone away, Codeman declines rather than typing a digit into the composer.
 

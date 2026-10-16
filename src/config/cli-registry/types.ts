@@ -406,6 +406,32 @@ export interface CliCapabilities {
      * tested. See `isAwaitingWorkers()` in `session-activity.ts`.
      */
     awaitingLine?: string;
+    /**
+     * Source of a regex matching the dialog this CLI draws when it stops and waits for the
+     * user to answer something (an approval, a question, a trust prompt): Codeman reads
+     * such a pane as BLOCKED, with the same red "needs you" alert, push, webhook and
+     * `blocked` wait signal a Claude `permission_prompt` hook raises. It is the source of
+     * that state for a CLI with no hook of its own (`hooks: 'none'`); a CLI whose hooks
+     * report it never consults the screen for it.
+     *
+     * Tested against the last `blockedLines` non-blank rows of a pane capture, joined
+     * with `\n`, so the pattern can require several markers at once and anchor on the
+     * end of the window (no `m` flag: `$` is the last row). It must anchor on chrome
+     * only that CLI draws, at the FOOT of the screen, where a dialog replaces the
+     * composer: the text above is the agent's own, and it can print anything. A forged
+     * match may cost a false alert and nothing else, because Codeman never answers such a
+     * dialog. See `isBlockedScreen()` in `session-activity.ts`.
+     *
+     * A CLI that omits it is never blocked from the screen, which is what every CLI was
+     * before the field existed.
+     */
+    blockedLine?: string;
+    /**
+     * How many non-blank rows at the foot of the screen `blockedLine` sees. A dialog's
+     * options wrap at narrow widths, which is what pushes its markers up the screen, so
+     * this is sized for the narrowest pane the CLI was measured at. Default 1.
+     */
+    blockedLines?: number;
   };
   /**
    * How many columns this CLI indents its transcript body by, so a copy taken from its

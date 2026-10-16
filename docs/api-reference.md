@@ -205,15 +205,17 @@ auto-retried by several clients (silently doubling the polling load), `504` is w
 a genuine tunnel failure looks like, and `204` cannot carry `waitedMs` / `status` /
 `limitPaused`. Reserve error handling for the four codes in the table below.
 
-**2. `stop` and `blocked` fire only for `claude` sessions.** Both come from Claude
-Code hooks, and no other mode installs them: `shell` runs no agent, and the external
-CLIs (`opencode`, `codex`, `gemini`, `antigravity`, `pi`) render their own TUIs and post
-no hooks. For every non-`claude` mode only `idle`, `working` and `exit` are
-accepted, and of those only `exit` is dependable: see the caveats under
-[Signals](#signals) before building on `idle`. Requesting `stop` or `blocked`
-**explicitly** on such a session is a
-`400`; omitting `until` never fails, the server just drops them from the default set
-and echoes the narrowed set back as `wait.until`. Three more places hooks can go
+**2. `stop` fires only for `claude` (and `deepseek`) sessions, `blocked` also for
+`codex`.** Both come from Claude Code hooks, and no other mode installs them: `shell`
+runs no agent, and the external CLIs render their own TUIs and post no hooks
+(`deepseek`'s status bridge reports the same two, see its own docs). The one exception
+is `blocked` on `codex`: Codeman reads codex's approval, question and trust dialogs off
+its screen and raises `blocked` for them (see [Signals](#signals)). For every other mode
+only `idle`, `working` and `exit` are accepted, and of those only `exit` is
+dependable: see the caveats under [Signals](#signals) before building on `idle`.
+Requesting a signal the session can never emit **explicitly** is a `400` (`stop` on
+`codex` included); omitting `until` never fails, the server just drops them from the
+default set and echoes the narrowed set back as `wait.until`. Three more places hooks can go
 missing even in `claude` mode: a **Docker case** needs
 `CODEMAN_DOCKER_BRIDGE_HOOKS=1`, since a container cannot reach a loopback-bound
 Codeman (without it, only `idle` / `working` / `exit` work); a **remote-SSH
@@ -239,8 +241,8 @@ contract is a **marker unique to each call** (`MARK="DONE_$RANDOM"`, send
 |--------|--------|--------------------|
 | `idle` | the session's own `idle` event | `claude`: yes, on ❯-prompt detection after activity. `shell`: **once only**, ~500 ms after start, and never again. External CLIs: not guaranteed (they render their own TUIs and readiness is output stabilization) |
 | `working` | the session's own `working` event | `claude` only in practice (spinner and work-keyword detection are Claude output formats) |
-| `stop` | the Claude Code `stop` hook, the definitive end-of-turn signal | `claude` only |
-| `blocked` | a `permission_prompt` or `elicitation_dialog` hook | `claude` only, and rarer than it looks: see below |
+| `stop` | the Claude Code `stop` hook, the definitive end-of-turn signal | `claude` (and `deepseek`) only |
+| `blocked` | a `permission_prompt` or `elicitation_dialog` hook; on `codex`, a dialog read off its screen | `claude`, `deepseek` and `codex`; on `claude` rarer than it looks: see below |
 | `exit` | no process is behind the session | every mode |
 
 `stop` is the signal to orchestrate on where it exists; `idle` is a heuristic
@@ -276,6 +278,17 @@ auto`. What does still fire under the default is `elicitation_dialog`, the agent
 asking the user a question. So `until=stop,blocked,exit` is a reasonable belt on a
 long turn, but a worker that never comes back is far more likely to be working than
 blocked, and polling `blocked` alone will sit at its timeout.
+
+**`blocked` on `codex` is read off the screen**, because codex has no hooks and is
+launched with its approvals on unless `codexConfig.dangerouslyBypassApprovals` is set.
+A codex pane showing a command, edit or network approval, a question (`request_user_input`)
+or the startup trust prompt raises `blocked` (plus the red alert, push and webhook a Claude
+`permission_prompt` raises, alert-only: answer it in the terminal), and the session reads
+`idle` while it is up. Unlike a hook, this is a level the server keeps reading, so a wait
+for `blocked` that arrives while the dialog is already up answers at once
+(`immediate: true`); a wait that did not ask for `blocked` is unaffected. It clears 2 to 4 s
+after the dialog leaves the screen. `stop` stays a `400` on codex: nothing on a screen says a
+turn ended.
 
 ⚠️ **On a `shell` session, only `exit` and marker-matching are dependable.** A shell
 session emits its one `idle` at startup and then stays `status: "idle"` forever,
@@ -520,7 +533,7 @@ read the timeout as "the worker is wedged" and kill a session that was working f
 
 | `errorCode` | HTTP | When |
 |-------------|------|------|
-| `INVALID_INPUT` | 400 | unknown `until` / `wait` token; `stop` or `blocked` requested explicitly on a mode that installs no hooks (the message names the mode); `regex=` on `/wait-output`; `match` outside 1 to 200 chars; a non-numeric `timeout` |
+| `INVALID_INPUT` | 400 | unknown `until` / `wait` token; `stop` or `blocked` requested explicitly on a mode that can never emit it (`stop` without hooks, `blocked` without hooks or a screen-read dialog; the message names the mode); `regex=` on `/wait-output`; `match` outside 1 to 200 chars; a non-numeric `timeout` |
 | `NOT_FOUND` | 404 | no such session, or one this caller does not own |
 | `SESSION_BUSY` | 409 | this session's waiter cap is full |
 | `RATE_LIMITED` | 429 | a per-owner or process-wide waiter cap is full. Retry later; the session you named is not the problem |
@@ -759,15 +772,18 @@ non-string) is a `400 INVALID_INPUT`. Requests without the field are unchanged.
 ## Approvals Inbox
 
 Cross-session queue of prompts waiting on a human (permission dialogs,
-AskUserQuestion questions, idle prompts). Claude-mode sessions only; items are
-in-memory (a server restart drops them; the next prompt re-fires the hook).
+AskUserQuestion questions, idle prompts). Answerable items come from Claude-mode
+sessions only; DeepSeek Harness (its status bridge) and Codex (dialogs read off its
+screen) open **alert-only** items with `answerInTerminal: true`. Items are
+in-memory (a server restart drops them; the next prompt re-fires the hook, and a
+codex dialog still on screen is read again after the pane re-attaches).
 Design: [`approvals-inbox-plan.md`](approvals-inbox-plan.md).
 
 - `GET /api/v1/approvals` → `{ approvals: ApprovalItem[] }`, oldest first,
   ownership-scoped in multi-user mode. `ApprovalItem`: `{ id, sessionId,
   sessionName, kind: 'permission'|'question'|'idle', createdAt, toolName?,
   toolSummary?, message?, cwd?, context?, options?: {n, label}[],
-  acknowledgedAt? }`. `context` is the ANSI-stripped visible pane frame;
+  acknowledgedAt?, answerInTerminal? }`. `context` is the ANSI-stripped visible pane frame;
   `options` is present only when the dialog's numbered choices parsed
   confidently; `acknowledgedAt` marks an item a human has already looked at
   (see `/viewed` below) and tells clients not to re-arm its tab alert. Listing
@@ -781,8 +797,9 @@ Design: [`approvals-inbox-plan.md`](approvals-inbox-plan.md).
   (sends the digit; accepted only when `n` is among the item's parsed
   `options`), or `{ action: 'text', text }` (idle prompts only; submits the
   line as a prompt). `404 NOT_FOUND` when the item is no longer pending,
-  `409 CONFLICT` when the dialog left the screen or another actor answered
-  first, `422 OPERATION_FAILED` when the session refused input.
+  `400 INVALID_INPUT` for an `answerInTerminal` item (`<CLI> approvals must be
+  answered in the terminal`), `409 CONFLICT` when the dialog left the screen or
+  another actor answered first, `422 OPERATION_FAILED` when the session refused input.
 - `POST /api/v1/approvals/:id/dismiss` removes the item without keystrokes.
 - `POST /api/v1/approvals/session/:sessionId/viewed` → `{ sessionId,
   acknowledged: itemId | null }`. Marks the session's pending **idle** item as

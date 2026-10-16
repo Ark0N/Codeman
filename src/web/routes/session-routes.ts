@@ -713,6 +713,27 @@ function currentSignalFor(session: { pid: number | null; status: SessionStatus }
   return signalForStatus(session.status);
 }
 
+/**
+ * `currentSignalFor`, answering `blocked` for a session whose pane is showing a dialog
+ * its CLI is blocked on (`Session.screenBlocked`, read off the screen for a CLI with no
+ * hook: codex) when the caller asked for it. A hook-raised `blocked` is an edge with no
+ * history, but this one is a level the server is still looking at, so a caller that
+ * asks after the dialog appeared is answered at once instead of waiting out its timeout
+ * for an edge that already passed. Only when `blocked` was asked for: such a pane is also
+ * `idle`, and a caller that asked for `idle` alone must keep getting `idle`. Used by
+ * `GET .../wait` and by a DUPLICATE send-and-wait, every place a wait answers from the
+ * session's current state.
+ */
+function currentSignalForWait(
+  session: { pid: number | null; status: SessionStatus; screenBlocked?: boolean },
+  dead: boolean,
+  until: readonly WaitSignal[]
+): WaitSignal | null {
+  const signal = currentSignalFor(session, dead);
+  if (signal !== 'exit' && session.screenBlocked && until.includes('blocked')) return 'blocked';
+  return signal;
+}
+
 // ── Worker liveness for tmux-backed sessions ────────────────────────────────
 //
 // `session.pid` is the LOCAL `tmux attach` client, not the worker. Codeman sets
@@ -2033,7 +2054,9 @@ export function registerSessionRoutes(
           // A DUPLICATE has no new turn coming, so it answers from the current state
           // instead of blocking for a transition that already happened.
           requireTransition: !duplicate,
-          currentSignal: duplicate ? currentSignalFor(session, workerDead) : undefined,
+          // The `...ForWait` variant, as on GET .../wait: a screen-read dialog the first
+          // delivery raised is a level, and a retry asking for `blocked` must find it.
+          currentSignal: duplicate ? currentSignalForWait(session, workerDead, until) : undefined,
         });
       } catch (err) {
         if (err instanceof WaitCapacityError) {
@@ -2217,7 +2240,7 @@ export function registerSessionRoutes(
         abortSignal: abort.signal,
         requireTransition: query.fresh === '1' || query.fresh === 'true',
         // Read BEFORE awaiting: this is the state the caller is asking about.
-        currentSignal: currentSignalFor(session, workerIsDead(ctx.mux, session)),
+        currentSignal: currentSignalForWait(session, workerIsDead(ctx.mux, session), until),
       });
 
       return {

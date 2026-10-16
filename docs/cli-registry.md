@@ -46,9 +46,10 @@ interface CliEntry {
   launch: CliLaunch; // the structured argv template
   env: CliEnv; // exports, tmux setenv keys, the env-override allowlist
   capabilities: CliCapabilities; // what every call site reads instead of the id
-  //   .workDetect?: { promptGlyph, workingLine, watchingLine?, watchingLines?, awaitingLine? }
-  //   — how this CLI's pane shows work, work it started in the background, and a turn
-  //   that ended waiting for workers it will resume from
+  //   .workDetect?: { promptGlyph, workingLine, watchingLine?, watchingLines?, awaitingLine?,
+  //                   blockedLine?, blockedLines? }
+  //   (how this CLI's pane shows work, work it started in the background, a turn
+  //   that ended waiting for workers it will resume from, and a dialog it is blocked on)
   //   .modelDetect?: { screenLine, screenLines? }
   //   (where this CLI's own chrome names the model it runs: SessionState.displayModel)
   //   .launchDefaults?: { [launchParam]: settingsKey }
@@ -62,7 +63,7 @@ interface CliEntry {
 
 ### Regexes that come from config
 
-Five capability fields carry a regular expression an override file can set: `discovery.version.regex`, `capabilities.workDetect.workingLine`, `capabilities.workDetect.watchingLine`, `capabilities.workDetect.awaitingLine` and `capabilities.modelDetect.screenLine`. All five go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
+Six capability fields carry a regular expression an override file can set: `discovery.version.regex`, `capabilities.workDetect.workingLine`, `capabilities.workDetect.watchingLine`, `capabilities.workDetect.awaitingLine`, `capabilities.workDetect.blockedLine` and `capabilities.modelDetect.screenLine`. All six go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
 
 `workingLine` is the one that matters most, because it is compiled once per session and then run against every accumulated PTY chunk and every pane capture. A nested quantifier there is a ReDoS against the event loop for the whole server, not just that session. The guard therefore runs in two places, and neither is redundant: `schema.ts` rejects the entry at LOAD time so a bad pattern never reaches a session, and `_workingLinePattern()` in `session.ts` compiles through the same helper so the runtime cannot end up with a pattern the schema would have refused.
 
@@ -118,9 +119,65 @@ nothing the agent can write — not even the status line above it, whose command
 running with permissions bypassed can write into its own `.claude/settings.json`. Codex's row
 shares its slot with the last row of the transcript whenever no terminal is running, so a
 message ending in that exact line is matched. What keeps that harmless is `hooks: 'none'`: no
-hook event from a codex session reaches the approvals inbox, so a forged label costs a wrong
-badge and cannot silence an alert. Before giving a CLI both hook signals and a pattern, make
-sure its row is one the agent cannot write.
+IDLE prompt from a codex session ever reaches the approvals inbox (its screen-read dialogs,
+below, open PERMISSION items, which a watching label never acknowledges), so a forged label
+costs a wrong badge and cannot silence an alert. Before giving a CLI idle signals and a
+pattern, make sure its row is one the agent cannot write.
+
+### Dialogs a CLI blocks on (`blockedLine`)
+
+`blockedLine` is the screen-read source of the `blocked` state for a CLI with no hook to
+report it. Codex is the reason it exists: it is the one CLI Codeman launches with its
+approvals on by default, and with `hooks: 'none'` a codex session parked on "Would you like to
+run the following command?" used to read as plainly idle, and one parked on a question as
+WORKING (the question's own key hints end in `esc to interrupt`, codex's working line). A
+pane matching it is BLOCKED, which raises exactly what a Claude `permission_prompt` hook
+raises: the red "needs you" tab alert and desktop notification, web push and webhooks, the
+phone overview's NEEDS YOU row, an Approvals Inbox item, a run-summary row and the `blocked`
+wait signal (`web/screen-blocked.ts`). `stop` stays unavailable for such a CLI: nothing on a
+screen says a turn ended.
+
+The pattern runs over the last `blockedLines` (1 to 24, default 1) non-blank rows, joined
+with newlines and tested once (`isBlockedScreen()`, `session-activity.ts`), so it can demand
+several markers and anchor the dialog's footer on the END of the window (no `m` flag: `$` is
+the last row). Codex's needs a `› N.` option row and then its key-hint row (`Press enter to
+confirm or esc to cancel`, `tab to add notes | enter to submit answer | esc to interrupt`,
+`enter continue · esc quit` for the startup trust prompt, `esc back` when it follows the
+update prompt), allowing for that row to wrap onto rows of its own below about 60 columns.
+Measured on codex-cli 0.162.0 at widths 200 down to 36: the command, edit and
+network-escalation approvals, single and multi-question
+`request_user_input` dialogs (notes field open or closed), and the workspace trust prompt
+match; the idle and working views, popups the user opened (`/model`, `/permissions`,
+`/review`), the composer holding the dialogs' words and a transcript quoting them verbatim
+do not. `Implement this plan?` after a plan turn is deliberately not matched: its footer is
+the same as `/model`'s, and the turn has ended there. The fixtures are in
+`test/fixtures/codex-dialogs/`.
+
+Three rules hold for any CLI that declares one:
+
+- ⚠️ The text is pane-derived and the agent writes most of the pane, so the pattern must end
+  on chrome only the CLI draws, at the foot of the screen, where a dialog replaces the
+  composer. A match is an ALERT and nothing else: the inbox item is `answerInTerminal`, the
+  answer route refuses it, push offers no Approve/Deny, and Codeman never answers such a
+  dialog itself, so a forged match costs a false alert and never a keystroke.
+- The state raises on one reading (the session's settle probe, which reads the screen once
+  the pane goes quiet, which is when a dialog has just been drawn), and while it is up a timer
+  re-reads the screen every 2 s (`BLOCKED_RECHECK_MS`), because answering resumes the turn and
+  a busy pane would not reach the settle path again until the turn ended. The read is skipped
+  while the pane has drawn nothing since the last reading that saw the dialog (a dialog leaves
+  only through a repaint), with a safety-net read every 30 s (`BLOCKED_QUIET_RECHECK_MS`), so a
+  dialog left unanswered for hours does not cost a synchronous `tmux capture-pane` every 2 s.
+  It clears only after
+  two readable captures in a row without the dialog (`BLOCKED_CLEAR_READS`), so a capture
+  taken mid-repaint cannot clear and re-raise it (a second alert, push and webhook for one
+  dialog). An unreadable capture changes nothing in either direction. A blocked screen wins
+  over the working line in the same capture.
+- Hooks win: a session whose CLI reports blocked itself (`hooksAvailableForMode()`) gets
+  nothing from the screen, so declaring both can never alert twice for one dialog.
+
+A `GET /api/sessions/:id/wait?until=blocked` that arrives while such a dialog is already up is
+answered at once (`immediate: true`): unlike a hook's edge, this is a level the server is
+still reading. A caller that asked only for `idle` keeps getting `idle`.
 
 ### Three capabilities that must stay independent
 

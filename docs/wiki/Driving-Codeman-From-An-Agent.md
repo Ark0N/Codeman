@@ -141,10 +141,13 @@ Read these before writing any code. Each one has cost somebody an afternoon.
 5. **Wait instead of polling, and a timeout is not an error.** The wait endpoints answer
    `200` with `wait.timedOut: true`. Loop over short waits rather than one long call, because
    tunnels cut idle connections.
-6. **Only `claude` and `deepseek` sessions emit `stop` and `blocked`.** Claude's come from
-   Claude Code hooks, DeepSeek's from the harness reporting its state to Codeman. Shell and
-   the other external CLIs accept only `idle`, `working`, and `exit`; asking for `stop`
-   explicitly there is a `400`, while omitting `until` is always safe. On a shell session
+6. **Only `claude` and `deepseek` sessions emit `stop`; `blocked` also fires for `codex`.**
+   Claude's come from Claude Code hooks, DeepSeek's from the harness reporting its state to
+   Codeman, and Codex's `blocked` from Codeman reading its approval, question and trust
+   dialogs off the screen (a wait that asks for `blocked` while such a dialog is already up
+   answers at once). Shell and the other external CLIs accept only `idle`, `working`, and
+   `exit`; asking for `stop` explicitly there (codex included) is a `400`, while omitting
+   `until` is always safe. On a shell session
    `idle` fires **once at startup and never again**, so synchronize hook-less sessions with an
    output marker instead.
 7. **Nothing reports "ready", so wait for it explicitly.** A new session answers

@@ -22,8 +22,11 @@ terminal into something that can notify you.
 This is why several Codeman features are Claude-only. The one partial exception is DeepSeek
 Harness, whose terminal front door reports idle, working and blocked to Codeman over the
 harness's own supervisor contract, so it gets the hook-driven surfaces without any hook
-file. The other CLIs have no equivalent, so for them Codeman watches terminal output, which
-reveals that something happened but not what it was.
+file. Codex gets one of them from its screen: Codeman reads its approval, question and
+trust dialogs off the pane and raises the same red "needs you" alert a `permission_prompt`
+hook raises (see [Agent CLIs](Agent-CLIs#codex)). The other CLIs have no equivalent, so for
+them Codeman watches terminal output, which reveals that something happened but not what it
+was.
 
 ### How hooks get installed
 
