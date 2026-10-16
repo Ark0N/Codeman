@@ -192,7 +192,8 @@ to it as well.
 - **At rest the footer hint is the idle mark.** The composer's `>` is no good for that, since
   the submitted prompt is echoed as `> <text>` as well. `? for shortcuts` is drawn only at
   rest, and the turn's last repaint carries it. A shell call that waits for approval replaces
-  the composer, so the tab reads as idle (waiting on you) until you answer.
+  the composer and the footer hint is not drawn there, so the tab keeps reading as working
+  until you answer.
 
 ### Pi
 

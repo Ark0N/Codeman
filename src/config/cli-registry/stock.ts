@@ -1002,7 +1002,9 @@ const ANTIGRAVITY: CliEntry = {
     // the composer, and the footer's left end reads `esc to cancel`; at rest the footer
     // reads `? for shortcuts` and nothing else on screen matches. A shell call replaces the
     // composer with a `Run this command?` list, the spinner stops, and the pane goes
-    // silent, so it reads as idle (waiting on the user), like gemini.
+    // silent. Nothing arms the idle check while the list is up (the footer hint is drawn only
+    // at rest), so a pending approval reads as working until it is answered. That differs from
+    // gemini, whose `▀` bar comes back on every spinner repaint.
     // ⚠️ The frames are the 8-dot braille set (`⣯ ⡿ ⣻ ⣾ ⣷ ⣟ ⢿ ⣽`), none of which is in
     // SPINNER_PATTERN's Claude set, and this entry used to declare nothing, so no frame
     // ever marked an antigravity tab working and it never showed the activity spinner.

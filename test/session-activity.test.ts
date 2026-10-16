@@ -1,6 +1,6 @@
 /**
  * Working/idle detection for an interactive agent pane, Claude's, Codex's, pi's, opencode's, omp's
- * and Gemini CLI's.
+ * Gemini CLI's and Antigravity's.
  *
  * The bug this pins: Claude redraws the composer (`❯`) about once a second all
  * the way through a turn, so the old "saw a ❯, wait 2s, call it idle" rule
@@ -15,8 +15,9 @@
  *
  * The status-line fixtures below are verbatim captures from live panes
  * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220, Codex CLI 0.152.1, pi 1.1.0,
- * opencode 1.3.0, omp 18.8.6 / 18.0.11 and Gemini CLI 0.63.0 (its turns driven by a local
- * stand-in for the Gemini API, since the CLI's look does not depend on the backend).
+ * opencode 1.3.0, omp 18.8.6 / 18.0.11, Gemini CLI 0.63.0 (its turns driven by a local
+ * stand-in for the Gemini API, since the CLI's look does not depend on the backend) and
+ * Antigravity `agy` 1.3.3.
  */
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { Session } from '../src/session.js';
@@ -1070,7 +1071,7 @@ describe('antigravity interactive activity', () => {
     expect(session.status).toBe('idle');
   });
 
-  it('reads a pending shell confirmation as idle, and ends the resumed turn too', () => {
+  it('keeps a pending shell confirmation working until it is answered, and ends the resumed turn too', () => {
     vi.useFakeTimers();
     let screen = AGY_WORKING;
     const session = withFakePane(() => screen, 'antigravity');
@@ -1084,9 +1085,12 @@ describe('antigravity interactive activity', () => {
 
     screen = AGY_CONFIRM;
     feed(session, 'Run this command?\r\n');
-    vi.advanceTimersByTime(10_000);
-    // The footer hint is not drawn under the confirmation, so nothing armed the check:
-    // the pane stays working until the user answers and the turn ends below.
+    vi.advanceTimersByTime(60_000);
+    // The footer hint is not drawn under the confirmation, so nothing arms the idle check:
+    // the pane stays working (unlike gemini, whose bar returns on every repaint) until the
+    // user answers and the turn ends below.
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
     screen = AGY_WORKING;
     spin(session, 3000);
     screen = AGY_AT_REST;
@@ -1095,6 +1099,28 @@ describe('antigravity interactive activity', () => {
 
     expect(events[0]).toBe('working');
     expect(events[events.length - 1]).toBe('idle');
+    expect(session.status).toBe('idle');
+  });
+});
+
+describe('antigravity reattach', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Declaring workDetect turns off the 3 s settle for a restored pane, so a reattached agy pane
+  // depends on the footer hint arriving in tmux's attach repaint to leave `busy`.
+  it('settles a reattached antigravity pane that is at rest', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(AGY_AT_REST, 'antigravity');
+    (session as unknown as { _status: string })._status = 'busy';
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, AGY_TURN_END);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['idle']);
     expect(session.status).toBe('idle');
   });
 });
