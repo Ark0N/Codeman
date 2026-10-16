@@ -277,5 +277,34 @@
         "docsUrl": "https://omp.sh"
       }
     }
+  },
+  {
+    "id": "jcode",
+    "label": "jcode",
+    "shortBadge": "JC",
+    "enabled": true,
+    "order": 95,
+    "kind": "agent",
+    "discovery": {
+      "binaries": [
+        "jcode"
+      ],
+      "searchDirs": [
+        "~/.local/bin",
+        "/usr/local/bin",
+        "~/bin"
+      ],
+      "install": {
+        "command": {
+          "linux": "curl -fsSL https://jcode.sh/install | bash",
+          "darwin": "curl -fsSL https://jcode.sh/install | bash"
+        },
+        "docsUrl": "https://jcode.sh/docs",
+        "agentImageLayer": {
+          "kind": "dedicated",
+          "reason": "Not on npm: jcode ships a standalone Rust binary through jcode.sh/install, whose launcher is a script that execs the binary beside it."
+        }
+      }
+    }
   }
 ]

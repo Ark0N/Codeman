@@ -203,6 +203,21 @@ RUN curl -fsSL https://omp.sh/install | sh \
  && rm -f /root/.local/bin/omp \
  && omp --version
 
+# jcode is NOT on npm: a standalone Rust binary via jcode.sh's installer, which
+# writes $HOME/.jcode/builds/versions/<v>/ and links $HOME/.local/bin/jcode to it.
+# The linked `jcode` is a small sh LAUNCHER that resolves its own path and execs
+# the `jcode-<os>-<arch>.bin` beside it, so (unlike grok/omp above) the whole
+# version directory is copied, to /opt/jcode, and /usr/local/bin/jcode links the
+# launcher there. Root's ~/.jcode is dropped in the same layer so the image does
+# not carry the ~160MB binary twice. JCODE_SKIP_SERVER_RELOAD: there is no jcode
+# daemon at build time to hand off to.
+RUN curl -fsSL https://jcode.sh/install | JCODE_SKIP_SERVER_RELOAD=1 bash \
+ && mkdir -p /opt/jcode \
+ && cp -a "$(dirname "$(readlink -f /root/.local/bin/jcode)")/." /opt/jcode/ \
+ && ln -sfn /opt/jcode/jcode /usr/local/bin/jcode \
+ && rm -rf /root/.jcode /root/.local/bin/jcode \
+ && jcode --version
+
 # `agent` user (gid 0) with an arbitrary-uid-writable HOME. The uid is
 # auto-assigned (node:22-slim already occupies uid 1000 with its `node` user); at
 # runtime Codeman overrides with `--user <hostUid>:0` on Linux, so the baked uid

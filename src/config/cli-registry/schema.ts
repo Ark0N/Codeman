@@ -301,6 +301,8 @@ const capabilitiesSchema = z
     // the CLI to page its own transcript. Distinct from wheelForward (SGR reports).
     // Optional: absent means no paging, the safe default for an unmeasured CLI.
     transcriptPageKeys: z.boolean().optional(),
+    // Spare the CLI's own detached daemon (another process group) when a pane is killed.
+    sharedDaemon: z.boolean().optional(),
     keyboardAccessory: z.enum(['agent', 'shell']),
     privilegedCommandGate: z.boolean(),
     startMode: z.enum(['interactive', 'shell']),

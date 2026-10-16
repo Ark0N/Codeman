@@ -1125,6 +1125,23 @@ Read and write the CLI registry (`docs/cli-registry.md`). Every **write** route 
 | `PUT`    | `/api/clis/custom/:id`        | `{ label, shortBadge, binaries, argv, enabled? }`       | Replace an existing custom entry. An absent `enabled` keeps the entry's current state. `400` for a stock id, `404` for an unknown one. |
 | `DELETE` | `/api/clis/:id`               | none                                                    | Delete a custom entry. `400` for a stock id, `404` for an unknown one.                                  |
 
+### Per-CLI availability probes
+
+Each agent CLI has a read-only probe, `GET /api/<mode>/status`, which answers
+`{ available, path }` for the binary the server would launch (no session needed, not gated).
+`pi`, `grok`, `omp` and `jcode` add `version`, since their binary names are short or shared
+with unrelated programs and the resolver rejects a candidate whose `--version` has the wrong
+shape; `deepseek` answers a wider shape (`runnable`, `profiles`, ...). `GET /api/jcode/status`
+is answered by the generic registry resolver, the same one a jcode spawn uses, so it applies
+the entry's `jcode v<semver>` version anchor.
+
+A jcode session takes `jcodeConfig: { model?, resumeSessionId? }` on `POST /api/sessions`
+and `POST /api/quick-start` (`--model`, `--resume`; the resume value is a jcode session id or
+short name and must start with a letter or digit). jcode takes no `envOverrides` prefix, and
+`GET /api/sessions/:id/last-response` answers an empty `text` (and `messages: []` with
+`?context=full`) for it: read its screen with `GET /api/sessions/:id/terminal?tail=` instead.
+See `docs/jcode-integration.md`.
+
 ## MCP server sync
 
 Copies MCP servers between the agent CLIs' own user-level config files (`docs/cli-registry.md`, "MCP server sync"). **Opt-in:** both routes answer `403 FORBIDDEN` while the synced `mcpSyncEnabled` setting is off (the default), and for a non-admin in multi-user mode, because the routes write files in the server user's home. A second `POST` while one is running answers `409 CONFLICT`.

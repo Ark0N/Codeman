@@ -8,7 +8,7 @@
  * - SessionConfig — creation-time config (id, workingDir, createdAt)
  * - SessionOutput — captured stdout/stderr/exitCode
  * - SessionStatus — 'idle' | 'busy' | 'stopped' | 'error'
- * - SessionMode — 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp' (which CLI backend)
+ * - SessionMode — 'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp' | 'jcode' (which CLI backend)
  * - ClaudeMode — CLI permission mode ('dangerously-skip-permissions' | 'auto' | 'normal' | 'allowedTools')
  * - SessionColor — visual differentiation color
  * - OpenCodeConfig — OpenCode-specific settings (model, autoAllowTools, continueSession)
@@ -18,6 +18,7 @@
  * - PiConfig — Pi CLI (pi.dev) settings (model, provider, thinking, resume/continue, project trust)
  * - GrokConfig — Grok Build CLI (xAI `grok`) settings (model, alwaysApprove, resume/continue)
  * - DeepSeekConfig — DeepSeek Harness (`dsh`) settings (profile, permissionMode, resume, status bridge)
+ * - JcodeConfig: jcode settings (model, resume)
  *
  * Cross-domain relationships:
  * - SessionState.respawnConfig embeds RespawnConfig (respawn domain)
@@ -56,7 +57,8 @@ export type SessionMode =
   | 'pi'
   | 'grok'
   | 'deepseek'
-  | 'omp';
+  | 'omp'
+  | 'jcode';
 
 /**
  * Who owns a session's name. `placeholder`: Codeman's own `w<n>-<case>` (or no
@@ -78,7 +80,7 @@ export interface SessionWriteOptions {
 
 export type RemoteCommandMode = Extract<
   SessionMode,
-  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp'
+  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp' | 'jcode'
 >;
 
 /**
@@ -213,7 +215,7 @@ export interface RemoteSessionInfo {
 /** Which CLI backends a Docker case can run (same set as remote). */
 export type DockerCommandMode = Extract<
   SessionMode,
-  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp'
+  'shell' | 'claude' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp' | 'jcode'
 >;
 
 /** Container engine. Docker and Podman differ in the uid/userns + host-gateway alias. */
@@ -522,6 +524,24 @@ export interface GrokConfig {
   /** Continue the most recent session for the working directory (-c). Skipped when resumeSessionId is set. */
   continueSession?: boolean;
   /** Resume a specific session by ID (--resume). Ids only, never titles or paths. */
+  resumeSessionId?: string;
+}
+
+/**
+ * jcode (1jehuang/jcode) session configuration.
+ *
+ * jcode has no approval prompts and no bypass flag, so there is nothing
+ * privileged to configure; the provider and its login come from jcode's own
+ * `~/.jcode/config.toml`. Verified against jcode 0.98.1.
+ */
+export interface JcodeConfig {
+  /** Model ID passed via --model (e.g. "claude-opus-4-8", "gpt-5.5"). */
+  model?: string;
+  /**
+   * Resume a jcode session (--resume): its id (`session_fox_<ms>_<hex>`) or its
+   * short name (`fox`), as ONE plain word starting with a letter or digit, since
+   * --resume's value is optional and a leading `-` would make it its own flag.
+   */
   resumeSessionId?: string;
 }
 
@@ -897,6 +917,8 @@ export interface SessionState {
   deepSeekConfig?: DeepSeekConfig;
   /** OMP-specific configuration (only for mode === 'omp') */
   ompConfig?: OmpConfig;
+  /** jcode configuration (only for mode === 'jcode') */
+  jcodeConfig?: JcodeConfig;
   /** Claude conversation session ID to resume after reboot (set by restore script) */
   resumeSessionId?: string;
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */

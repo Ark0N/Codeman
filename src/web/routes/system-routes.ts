@@ -528,6 +528,20 @@ export function registerSystemRoutes(
     };
   });
 
+  // ========== jcode ==========
+
+  // The sibling shape (path + version), answered by the GENERIC registry resolver rather than a
+  // module of its own: it is what a jcode spawn resolves the binary with, and it already applies
+  // the entry's `jcode v<semver>` version anchor (npm carries an unrelated `jcode` package).
+  app.get('/api/jcode/status', async () => {
+    const { isCliAvailable, resolveCliBinDir, resolveCliVersion } = await import('../../utils/cli-resolver.js');
+    return {
+      available: isCliAvailable('jcode'),
+      path: resolveCliBinDir('jcode'),
+      version: resolveCliVersion('jcode'),
+    };
+  });
+
   // ========== DeepSeek Harness ==========
 
   // The widest of the per-CLI status shapes, because this mode has the widest

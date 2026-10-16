@@ -555,6 +555,19 @@ export interface CliCapabilities {
    * Absent means no paging, so a CLI nobody has measured keeps plain local scrolling.
    */
   transcriptPageKeys?: boolean;
+  /**
+   * The CLI's TUI is a CLIENT of a per-user daemon that its first client starts and every
+   * later session of the CLI shares (jcode). The daemon detaches into its own session and
+   * process group, but stays a descendant of that first pane by parent pid, so a session
+   * kill signals only the descendants still in the pane's process group
+   * (`descendantsInPaneGroup()`, proc-tree.ts). Without it, closing the tab that happened
+   * to start the daemon took it down and cut every other session of the CLI off.
+   *
+   * The flip side is that processes the agent started through that daemon (its tools run
+   * there, not in the pane) outlive the tab; stopping them is the CLI's own business
+   * (`jcode server stop`). Absent = every descendant is killed, as for every other CLI.
+   */
+  sharedDaemon?: boolean;
   keyboardAccessory: 'agent' | 'shell';
   /** Multi-user: this CLI is a raw shell, so its commands need the privileged gate. */
   privilegedCommandGate: boolean;
