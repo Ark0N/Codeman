@@ -29,6 +29,10 @@ The practical rule: **appearance and input are per device, behaviour is shared.*
 did not follow you, it is in one of the first two rows, and you change it again on that
 device.
 
+In [Multi-User Mode](Multi-User-Mode) the server's settings are shared by every user, so
+only an **admin** can change them. A regular user's **Save** keeps their per-device settings
+as usual and tells them that server-wide settings can only be changed by an admin.
+
 ## App Settings
 
 ### Updates
