@@ -1758,6 +1758,9 @@ const COPILOT: CliEntry = {
     // (`cliMouseTracking`). Same shape and reason as opencode. The wheel keeps working because
     // `_shouldForwardWheelToApp` forwards it as SGR reports while the CLI is tracking.
     altScreen: 'strip-mux-and-mouse',
+    // Forwards the wheel as SGR reports while the CLI is tracking the mouse, at any version
+    // (`_shouldForwardWheelToApp` in terminal-ui.js has no version check for copilot).
+    wheelForward: { mode: 'always' },
     // Pages its own transcript on PageUp/PageDown (1.0.95, measured in tmux: three PageUp moved
     // lines 109-140 to 010-042 and PageDown returned). This is the fallback when the
     // wheel-forward flag is stale after a server restart, so the wheel and a swipe never go dead.
