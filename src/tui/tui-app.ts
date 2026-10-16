@@ -1015,6 +1015,7 @@ const MODE_ITEMS: ReadonlyArray<{ id: TuiRunMode; label: string; detail: string 
   { id: 'pi', label: 'pi', detail: 'pi.dev' },
   { id: 'grok', label: 'grok', detail: 'xAI Grok Build' },
   { id: 'deepseek', label: 'deepseek', detail: 'DeepSeek Harness (dsh)' },
+  { id: 'jcode', label: 'jcode', detail: 'jcode' },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

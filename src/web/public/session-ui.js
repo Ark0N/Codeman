@@ -79,6 +79,15 @@ const RUN_MODE_LAUNCH = {
     supportsCustomModel: true,
     buildConfig: () => null,
   },
+  jcode: {
+    label: 'jcode',
+    installHint: 'jcode not found. Install with: curl -fsSL https://jcode.sh/install | bash',
+    // No custom endpoint recipe yet: jcode's provider lives in its shared daemon, not the pane.
+    supportsCustomModel: false,
+    // Deliberately no jcodeConfig: jcode has no approval prompts, so there is no bypass
+    // switch to opt into (same as pi).
+    buildConfig: () => null,
+  },
   grok: {
     label: 'Grok',
     installHint: 'Grok CLI not found. Install with: curl -fsSL https://x.ai/cli/install.sh | bash',
@@ -2491,6 +2500,10 @@ Object.assign(CodemanApp.prototype, {
 
   async runDeepSeek() {
     return this._runCliMode('deepseek');
+  },
+
+  async runJcode() {
+    return this._runCliMode('jcode');
   },
 
 

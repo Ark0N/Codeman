@@ -154,6 +154,24 @@ describe('GET /api/sessions/:id/last-response — external CLI panes', () => {
     expect(body.data.hasContext).toBe(false);
   });
 
+  it('answers jcode with an honest empty, never a segmented pane', async () => {
+    // jcode is a repainting alternate-screen TUI: segmenting its stream served the
+    // welcome banner as "the answer" (measured on a live pane), and the Claude scan
+    // below the external branch could adopt a Claude conversation from the same folder.
+    // It has no transcript reader yet, so "nothing said yet" is the only honest reply.
+    session.mode = 'jcode';
+    session.terminalBuffer = PANE;
+
+    const { res, body } = await lastResponse();
+    expect(res.statusCode).toBe(200);
+    expect(body.data.text).toBe('');
+    expect(body.data.messages).toBeUndefined();
+
+    const full = await lastResponse(true);
+    expect(full.body.data.text).toBe('');
+    expect(full.body.data.messages).toEqual([]);
+  });
+
   it('leaves Claude mode on the Claude transcript path', async () => {
     // Regression guard: a claude pane must NOT be segmented off its terminal
     // buffer, or a real transcript would be shadowed by scraped pane text.

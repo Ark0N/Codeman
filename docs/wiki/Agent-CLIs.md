@@ -1,9 +1,9 @@
 # Agent CLIs
 
-Codeman drives ten run modes: nine agent CLIs plus a plain shell. This page covers picking
+Codeman drives eleven run modes: ten agent CLIs plus a plain shell. This page covers picking
 one, setting it up, and the differences that actually change how you work.
 
-## The ten modes
+## The eleven modes
 
 | Mode                 | CLI                          | Get it                                                                 |
 | -------------------- | ---------------------------- | ---------------------------------------------------------------------- |
@@ -16,6 +16,7 @@ one, setting it up, and the differences that actually change how you work.
 | **Grok Build**       | `grok`                       | [github.com/xai-org/grok-build](https://github.com/xai-org/grok-build) |
 | **DeepSeek Harness** | `dsh`                        | [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) |
 | **OMP**              | `omp`                        | [github.com/can1357/oh-my-pi](https://github.com/can1357/oh-my-pi)     |
+| **jcode**            | `jcode`                      | [jcode.sh](https://jcode.sh)                                           |
 | **Terminal / Shell** | your `$SHELL`                | Already installed.                                                     |
 
 Any combination works, including all of them. The run mode is chosen per session from the
@@ -50,10 +51,11 @@ If a CLI is installed but a Run button for it never appears:
    precisely to avoid this; a hand-written plist or unit will not.
 3. Restart the server after installing a new CLI.
 
-`pi`, `grok`, `omp` and `dsh` are additionally identity-probed rather than trusted by name:
+`pi`, `grok`, `omp`, `dsh` and `jcode` are additionally identity-probed rather than trusted by name:
 `pi` and `omp` are generic enough that something else on your PATH may answer to them,
-`grok` has npm squatters, and Debian ships an unrelated `dsh` (dancer's shell). Each has a
-status endpoint (`/api/grok/status`, `/api/deepseek/status`, `/api/omp/status`) that reports
+`grok` has npm squatters, an unrelated npm package is also called `jcode`, and Debian ships an
+unrelated `dsh` (dancer's shell). Each has a status endpoint (`/api/grok/status`,
+`/api/deepseek/status`, `/api/omp/status`, `/api/jcode/status`) that reports
 the path and version that actually resolved, so a misresolution is visible rather than
 presenting as "the mode just does not work".
 
@@ -69,7 +71,7 @@ output. The other CLIs expose no equivalent.
 | Respawn cycling and unattended runs               | Yes    | Yes                                                  |
 | Cron jobs                                         | Yes    | Yes                                                  |
 | Docker cases, remote SSH cases                    | Yes    | Yes                                                  |
-| Precise idle detection                            | Yes    | Codex, Pi, OpenCode, OMP and Gemini: same screen check, via their own prompt and working line. DeepSeek: reports its state itself. Others: output stabilization, coarser |
+| Precise idle detection                            | Yes    | Codex, Pi, OpenCode, OMP, Gemini and jcode: same screen check, via their own prompt and working line. DeepSeek: reports its state itself. Others: output stabilization, coarser |
 | Auto-resume when a usage limit resets             | Yes    | No                                                   |
 | Plan usage chip                                   | Yes    | No                                                   |
 | Approvals Inbox                                   | Yes    | DeepSeek and Codex as alerts (answer in the terminal); others no |
@@ -262,6 +264,33 @@ an OMP session that had started a turn showed as working for good.
 
 Guide: [`docs/omp-integration.md`](https://github.com/Ark0N/Codeman/blob/master/docs/omp-integration.md).
 
+### jcode
+
+A coding agent written in Rust, installed with `curl -fsSL https://jcode.sh/install | bash`
+into `~/.local/bin`. jcode keeps its own logins and provider choice (`jcode login`, `/login`,
+`~/.jcode/config.toml`); there is no Codeman-side login, key field, or bypass switch, and Run
+sends no jcode config at all, because jcode never asks before running a tool. A session can
+be started on a model (`--model`) or resume a jcode session by its id or short name
+(`--resume`).
+
+Four things worth knowing:
+
+- **Run `jcode` once in a terminal first.** A fresh install opens an onboarding wizard
+  instead of the prompt for its first few launches, and a prompt typed into that wizard is
+  lost. Finish or skip it once (Esc), and Codeman sessions open straight at the prompt.
+- **All jcode sessions share one background daemon**, which jcode starts the first time and
+  keeps running after the tab that started it is closed. jcode's tools run inside that
+  daemon, so they see the daemon's environment, not the tab's. For that reason Codeman does
+  not inject its agent skill into jcode, and accepts no per-session `JCODE_*` environment
+  variables: set those in `~/.jcode/config.toml` or in the server's own environment.
+- **Read a jcode worker from its terminal.** Codeman cannot read jcode's answers back yet,
+  so the Response Viewer and `last-response` stay empty for it; `codeman agent read <id>
+  --tail 3000` (or the terminal tail) shows what it said.
+- **Idle detection is the precise kind**: Codeman reads jcode's spinner row above the
+  prompt, and the wheel or a swipe pages jcode's own transcript.
+
+Guide: [`docs/jcode-integration.md`](https://github.com/Ark0N/Codeman/blob/master/docs/jcode-integration.md).
+
 ### Terminal / Shell
 
 A plain shell in a tmux session. No agent, no hooks, no idle detection.
@@ -288,6 +317,7 @@ respawns. Which variables are accepted depends on the mode:
 | Grok        | `GROK_*`, `XAI_*`                 |
 | DeepSeek    | `DSH_*`, `DEEPSEEK_*`             |
 | OMP         | `OMP_*`                           |
+| jcode       | none (its tools run in a shared daemon, see [jcode](#jcode)) |
 
 Anything outside the allowlist is rejected at the schema. This is intentional: the allowlist
 is one global list, so widening it for one CLI widens it for all of them. In multi-user mode
@@ -303,7 +333,7 @@ into the case's `.claude/settings.local.json` so that `/model` keeps working.
 
 - **Claude Code** if you want every Codeman feature. Unattended overnight runs, usage-limit
   auto-resume, the Approvals Inbox, and subagent visualization all assume it.
-- **Codex, OpenCode, Gemini, Antigravity, Grok, OMP** when you prefer that agent or that
+- **Codex, OpenCode, Gemini, Antigravity, Grok, OMP, jcode** when you prefer that agent or that
   model. You get the session layer, respawn, cron, Docker, and remote SSH; you do not get the
   hook-driven features.
 - **DeepSeek Harness** if you want DeepSeek's models with real status signals. It is the one

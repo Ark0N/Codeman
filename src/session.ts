@@ -56,6 +56,7 @@ import {
   type AntigravityConfig,
   type PiConfig,
   type GrokConfig,
+  type JcodeConfig,
   type DeepSeekConfig,
   type OmpConfig,
   type SessionRemote,
@@ -748,6 +749,8 @@ export class Session extends EventEmitter {
   private _piConfig: PiConfig | undefined;
   // Grok configuration (only for mode === 'grok')
   private _grokConfig: GrokConfig | undefined;
+  // jcode configuration (only for mode === 'jcode')
+  private _jcodeConfig: JcodeConfig | undefined;
 
   // DeepSeek Harness configuration (only for mode === 'deepseek')
   private _deepSeekConfig: DeepSeekConfig | undefined;
@@ -875,6 +878,8 @@ export class Session extends EventEmitter {
       piConfig?: PiConfig;
       /** Grok configuration (only for mode === 'grok') */
       grokConfig?: GrokConfig;
+      /** jcode configuration (only for mode === 'jcode') */
+      jcodeConfig?: JcodeConfig;
       /** DeepSeek Harness configuration (only for mode === 'deepseek') */
       deepSeekConfig?: DeepSeekConfig;
       /** OMP configuration (only for mode === 'omp') */
@@ -1035,6 +1040,11 @@ export class Session extends EventEmitter {
     // Apply Grok configuration
     if (config.grokConfig) {
       this._grokConfig = config.grokConfig;
+    }
+
+    // Apply jcode configuration
+    if (config.jcodeConfig) {
+      this._jcodeConfig = config.jcodeConfig;
     }
 
     // Apply env overrides (exported at spawn, not persisted to disk).
@@ -2009,6 +2019,7 @@ export class Session extends EventEmitter {
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
+      jcodeConfig: this._jcodeConfig,
       deepSeekConfig: this._deepSeekConfig,
       ompConfig: this._ompConfig,
       resumeSessionId: this._resumeSessionId,
@@ -2381,6 +2392,7 @@ export class Session extends EventEmitter {
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
+      jcodeConfig: this._jcodeConfig,
       deepSeekConfig: this._deepSeekConfig,
       // OMP resolution/pinning does NOT happen here. This object is built
       // EAGERLY — including on every boot-recovery reattach, before anyone
@@ -2866,6 +2878,7 @@ export class Session extends EventEmitter {
             antigravityConfig: this._antigravityConfig,
             piConfig: this._piConfig,
             grokConfig: this._grokConfig,
+            jcodeConfig: this._jcodeConfig,
             deepSeekConfig: this._deepSeekConfig,
             ompConfig: this._ompConfig,
             resumeSessionId: this._resumeSessionId,
@@ -3430,6 +3443,7 @@ export class Session extends EventEmitter {
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
+      jcodeConfig: this._jcodeConfig,
       deepSeekConfig: this._deepSeekConfig,
       ompConfig: this._ompConfig,
     };

@@ -70,6 +70,7 @@ one:
 | **Grok Build**       | xAI's CLI.                                                      |
 | **DeepSeek Harness** | Needs a terminal profile; the menu offers to install one.       |
 | **OMP**              | Oh My Pi, configured entirely through its own `~/.omp`.          |
+| **jcode**            | Configured through its own `~/.jcode`; no permission prompts.    |
 | **Terminal / Shell** | A plain shell, no agent. Also the **Run Shell** button.          |
 
 The dropdown also lists any saved dashboard URLs ([Web Tabs](Web-Tabs)) and your recent

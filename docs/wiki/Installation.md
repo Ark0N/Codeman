@@ -9,7 +9,7 @@ Getting Codeman onto a machine, verifying it works, updating it, and removing it
 | **macOS or Linux** | Windows works through WSL2. See [Windows](#windows-wsl) below.                                                                        |
 | **Node.js 22+**  | The installer offers to install it if missing.                                                                                          |
 | **tmux**         | Not optional. Sessions live inside tmux, which is what makes them survive a server restart, a dropped connection, or a closed laptop.    |
-| **An agent CLI** | At least one of [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), [Antigravity](https://antigravity.google), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Pi](https://pi.dev), [Grok Build](https://github.com/xai-org/grok-build), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [OMP](https://github.com/can1357/oh-my-pi). Plain shell sessions need none. See [Agent CLIs](Agent-CLIs). |
+| **An agent CLI** | At least one of [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), [Antigravity](https://antigravity.google), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Pi](https://pi.dev), [Grok Build](https://github.com/xai-org/grok-build), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [OMP](https://github.com/can1357/oh-my-pi), [jcode](https://jcode.sh). Plain shell sessions need none. See [Agent CLIs](Agent-CLIs). |
 
 Codeman itself sends no telemetry and phones no home. The only network traffic is your
 browser to your server, and whatever the agent CLI you chose does on its own.
@@ -168,6 +168,7 @@ Codeman drives CLIs, it does not bundle them. Install at least one:
 | **Grok Build**  | `curl -fsSL https://x.ai/cli/install.sh \| bash`                   | xAI. Lands in `~/.grok/bin`; `grok login --device-auth` for headless hosts.  |
 | **DeepSeek Harness** | `npm i -g @deepseek-ai/dsh pnpm`, then a terminal profile      | The npm package is only a launcher. Codeman's Run menu installs the community terminal profile for you. See [Agent CLIs](Agent-CLIs). |
 | **OMP**         | `curl -fsSL https://omp.sh/install \| sh`                          | Oh My Pi. Run it once by hand to finish its own onboarding.                |
+| **jcode**       | `curl -fsSL https://jcode.sh/install \| bash`                      | Run it once by hand to finish (or skip) its onboarding wizard.             |
 
 Log each CLI in once, by hand, before pointing Codeman at it. Codeman never collects or
 stores your CLI credentials.

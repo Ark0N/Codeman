@@ -254,6 +254,27 @@ describe('grok', () => {
   });
 });
 
+describe('jcode', () => {
+  const jc = (jcodeConfig?: SpawnBridgeOptions['jcodeConfig']) => render({ mode: 'jcode', sessionId: SID, jcodeConfig });
+
+  it('spawns bare by default: no bypass flag exists to send', () => {
+    expect(jc()).toBe('jcode');
+  });
+
+  it('passes --model and --resume', () => {
+    expect(jc({ model: 'claude-opus-4-8' })).toBe('jcode --model claude-opus-4-8');
+    expect(jc({ resumeSessionId: 'session_fox_1792160401272_f5b47ce47d631006' })).toBe(
+      'jcode --resume session_fox_1792160401272_f5b47ce47d631006'
+    );
+    expect(jc({ model: 'gpt-5.5', resumeSessionId: 'fox' })).toBe('jcode --model gpt-5.5 --resume fox');
+  });
+
+  it('drops a resume value that would read as a flag of its own', () => {
+    // --resume's value is optional in jcode, so `--resume --no-update` is two flags.
+    expect(jc({ resumeSessionId: '--no-update' })).toBe('jcode');
+  });
+});
+
 describe('deepseek', () => {
   const ds = (deepSeekConfig?: SpawnBridgeOptions['deepSeekConfig']) =>
     render({ mode: 'deepseek', sessionId: SID, deepSeekConfig });

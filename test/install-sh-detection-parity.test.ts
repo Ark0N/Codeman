@@ -86,6 +86,9 @@ const LITERAL_SEARCH_PATHS: Record<string, string[]> = {
     '$HOME/.npm-global/bin/omp',
     '$HOME/bin/omp',
   ],
+  // Not from a hand-written array: jcode arrived after the generated block replaced them, so
+  // this is the registry's own list (the installer's ~/.local/bin target, then the image's).
+  JCODE: ['$HOME/.local/bin/jcode', '/usr/local/bin/jcode', '$HOME/bin/jcode'],
 };
 
 /** Array prefix in `install.sh` -> registry id, for the two that differ. */
@@ -99,6 +102,7 @@ const ARRAY_PREFIX_TO_CLI_ID: Record<string, string> = {
   GROK: 'grok',
   ANTIGRAVITY: 'antigravity',
   OMP: 'omp',
+  JCODE: 'jcode',
 };
 
 /**

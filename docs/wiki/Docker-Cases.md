@@ -4,7 +4,7 @@ Run a case inside its own container instead of directly on your host: for isolat
 reproducible toolchain, and for the ability to pick the whole environment up and move it to
 another machine.
 
-A docker case is a **location overlay**, not a run mode. All ten run modes work inside a
+A docker case is a **location overlay**, not a run mode. All eleven run modes work inside a
 container. See [Core Concepts](Core-Concepts).
 
 ## One-time setup: the base image
@@ -26,7 +26,7 @@ A zero exit code proves the layers ran, not that the toolchain works. Verify:
 
 ```bash
 docker run --rm codeman/agent:base bash -lc \
-  'for c in claude codex gemini opencode agy pi grok dsh omp; do printf "%-9s " $c; $c --version 2>&1 | head -1; done'
+  'for c in claude codex gemini opencode agy pi grok dsh omp jcode; do printf "%-9s " $c; $c --version 2>&1 | head -1; done'
 ```
 
 The image is secret-free. Credentials are delivered at runtime, never baked in, so exports
@@ -116,7 +116,9 @@ as whole directories, because those directories also hold sessions, extensions, 
 installed packages, which can be gigabytes. So in-container Pi and Grok sessions are
 invisible from the host (`pi -c` and `grok -c` inside a docker case see only that
 container's history). OMP's `sessions/` is the exception and is shared read-write, because
-Codeman reads it host-side for history and resume.
+Codeman reads it host-side for history and resume. jcode's credentials are not seeded at all
+(`~/.jcode` keeps its OAuth tokens beside its builds, sessions and caches): sign in to jcode
+inside the container.
 
 **Git hosts.** The agent image can also include the GitHub CLI (`gh`) and the Azure CLI (`az`,
 with the `azure-devops` extension), off by default, and its git then uses them as credential

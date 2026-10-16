@@ -1652,5 +1652,153 @@ const OMP: CliEntry = {
   },
 };
 
+// jcode (1jehuang/jcode, a Rust coding-agent TUI). Measured on a live v0.98.1 pane inside tmux
+// (capture-pane every 200 ms through real turns, a recorded tmux client stream, PageUp/PageDown
+// and SGR wheel reports, a bracketed-paste prompt; 2026-10-16). Three things about it shape
+// this entry and are worth knowing before changing it:
+//
+//   1. Every jcode TUI is a CLIENT of one shared per-user daemon (`jcode serve`, started by the
+//      first client in its own session, so it outlives the pane that started it). The agent and
+//      its tools run in the DAEMON, with the daemon's environment: a second client's env never
+//      reaches its bash tool (measured, `probe=[]`). A session's `CODEMAN_SESSION_ID` and
+//      `CODEMAN_API_URL` are therefore whatever the session that started the daemon had, or
+//      nothing. That is why the agent skill is not injected (below) and why `JCODE_*` is not an
+//      `envOverrides` prefix: most of that namespace is read by the daemon, so a per-session
+//      value would do nothing, and where it did act (the session that starts the daemon) it
+//      would reach every jcode session, hook and command-path variables included.
+//   2. It has no approval prompts and no bypass flag: bash runs ungated apart from jcode's own
+//      model-side reflection gate and a catastrophic-path deny. Nothing to clamp, nothing to
+//      read as blocked, same shape as pi.
+//   3. A fresh install opens an onboarding wizard instead of the composer until its launch
+//      counter passes 5 (or 10 sessions exist). A prompt typed into it is lost, so a new user
+//      should run `jcode` once in a terminal (or press Esc in the pane) before driving it.
+const JCODE: CliEntry = {
+  id: 'jcode' as CliEntry['id'],
+  label: 'jcode',
+  shortBadge: 'JC',
+  // No brand colour to borrow (the mark is a monochrome halftone donut, and its TUI's own blue
+  // is gemini's #8ab4f8), so an amber no other entry uses.
+  accent: '#f59e0b',
+  enabled: true,
+  stock: true,
+  order: 95,
+  kind: 'agent',
+  discovery: {
+    binaries: ['jcode'],
+    // The official installer links `~/.local/bin/jcode` (its `JCODE_INSTALL_DIR` default) to a
+    // launcher script under `~/.jcode/builds/`; the agent image puts it in `/usr/local/bin`.
+    searchDirs: [HOME_DIRS.local, HOME_DIRS.usrLocal, HOME_DIRS.homeBin],
+    // `jcode --version` prints `jcode v0.98.1 (1c7426eb1)`. npm carries an unrelated `jcode`
+    // package, so the probe is anchored on the `jcode v` prefix and a mismatch counts as absent.
+    version: { arg: '--version', regex: '(?:^|\\s)jcode v(\\d+\\.\\d+\\.\\d+)', requireVersionMatch: true },
+    install: {
+      command: {
+        linux: 'curl -fsSL https://jcode.sh/install | bash',
+        darwin: 'curl -fsSL https://jcode.sh/install | bash',
+      },
+      docsUrl: 'https://jcode.sh/docs',
+      agentImageLayer: {
+        kind: 'dedicated',
+        reason:
+          'Not on npm: jcode ships a standalone Rust binary through jcode.sh/install, whose launcher is a script that execs the binary beside it.',
+      },
+    },
+  },
+  launch: {
+    params: {
+      model: { type: 'token', pattern: 'model' },
+      // jcode ids look like `session_fox_1792160401272_f5b47ce47d631006` and `--resume` also
+      // takes the short name (`fox`). Its value is OPTIONAL (bare `--resume` opens the session
+      // picker), so the token must not be able to start with `-`, or it would be read as a
+      // flag of its own: `path-segment` requires a leading alphanumeric.
+      resumeId: { type: 'token', pattern: 'path-segment' },
+    },
+    variants: [
+      {
+        id: 'default',
+        args: [
+          { lit: 'jcode' },
+          { flag: '--model', valueFrom: 'model', when: { param: 'model', state: 'set' } },
+          { flag: '--resume', valueFrom: 'resumeId', when: { param: 'resumeId', state: 'set' } },
+        ],
+      },
+    ],
+    legacyConfigAliases: { resumeId: 'resumeSessionId' },
+    legacyConfigField: 'jcodeConfig',
+    resumeAppend: { style: 'flag', flag: '--resume' },
+  },
+  env: {
+    exports: [{ name: 'COLORTERM', value: 'truecolor' }],
+    unset: ['NO_COLOR'],
+    // Provider logins live in jcode's own files (`~/.jcode/auth.json`, `~/.config/jcode/*.env`)
+    // and are read by the daemon, so there is nothing for the server to forward into the pane.
+    tmuxSetenvKeys: [],
+    dockerExecEnvNames: [],
+    // Deliberately none: see note 1 above the entry.
+    allowedPrefixes: [],
+    allowedKeys: [],
+  },
+  capabilities: {
+    ...agentDefaults(),
+    // A full-screen alternate-screen TUI that turns mouse tracking on itself (tmux
+    // `alternate_on=1`, `mouse_any_flag=1`, `mouse_sgr_flag=1`), the opencode shape: kept, a
+    // drag would be reported to jcode instead of selecting text, so Auto Copy and copy-on-select
+    // would silently do nothing.
+    altScreen: 'strip-mux-and-mouse',
+    // Pages its own transcript on PageUp/PageDown (measured: PageUp brought the welcome header
+    // back, PageDown returned to the composer). Over the hollow alt-screen buffer the wheel and a
+    // swipe become those keys instead of doing nothing.
+    transcriptPageKeys: true,
+    // Closing a jcode tab must not take the shared daemon (note 1) down with it: it is a
+    // descendant of whichever pane started it, in a process group of its own (setsid).
+    // Measured before this flag: deleting that tab left the next tab's client looping on
+    // `Connection lost - retrying` with its prompt queued.
+    sharedDaemon: true,
+    echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // At rest the composer row is `<n>> ` (the prompt number, then `>`); while a turn runs the
+    // same row reads `<n>…` and a status row appears directly above it, a braille spinner (the
+    // gemini/omp frame set, ~12 fps) then the phase and the elapsed time:
+    // `⠋ sending… 0s`, `⠦ thinking… 2s · https`, `⠼ waiting for response… 3s · https`,
+    // `⠸ running bash · <detail> · 12s · Alt+B bg`, or, while streaming, the time first
+    // (`⠼ 12s · 45.1 tps · ↑16k ↓20`). Past a minute the time reads `1m 3s`, past an hour
+    // `1h 2m`. A dropped connection swaps the spinner for `↻ network disconnected, waiting to
+    // retry · … · 5s`, still mid-turn. At rest that row is empty or a dim tip, never a spinner.
+    // The spinner repaints the pane at least every 100 ms for the whole turn (recorded tmux
+    // client stream), so the pane is never quiet mid-turn, and at rest it sends nothing at all
+    // (12 s recorded: zero bytes), so the idle check settles.
+    // The glyph is the bare `>`: the turn-ending repaint redraws only the cells that changed,
+    // which on that row is the `…` turning into `>` (recorded: `\x1b[43;2H...> `), never the
+    // prompt number. It only ARMS the idle check. It also leaves the submit verifier inert,
+    // which is what jcode wants (no early-Enter defect): every composer row starts with its
+    // number, so no screen row starts with `>` the way the verifier requires.
+    workDetect: {
+      promptGlyph: '>',
+      workingLine: String.raw`(?:^|\n) *(?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] [^\n]*\d[smh]\b|↻ network disconnected)`,
+    },
+    // jcode reads `./.agents/skills` (and `./.jcode/skills`, `./.claude/skills`), but its tools
+    // run in the shared daemon, whose CODEMAN_* identity belongs to whichever session started
+    // it (note 1). An injected skill would act as THAT session, so it is not injected.
+    agentSkillInjection: false,
+    customModelInjection: { kind: 'unsupported' },
+  },
+  overlays: {
+    // No credStore: Docker seeding is CRED_STORES in docker-hosts.ts, which has no `.jcode` row.
+    // `~/.jcode` holds the OAuth tokens beside 160 MB of builds, sessions and SQLite caches, and
+    // API keys live in `~/.config/jcode`; sign in inside the container instead.
+  },
+};
+
 /** The full stock catalog, in the order the run menu shows by default. */
-export const STOCK_CLIS: CliEntry[] = [CLAUDE, SHELL, OPENCODE, CODEX, GEMINI, ANTIGRAVITY, PI, GROK, DEEPSEEK, OMP];
+export const STOCK_CLIS: CliEntry[] = [
+  CLAUDE,
+  SHELL,
+  OPENCODE,
+  CODEX,
+  GEMINI,
+  ANTIGRAVITY,
+  PI,
+  GROK,
+  DEEPSEEK,
+  OMP,
+  JCODE,
+];

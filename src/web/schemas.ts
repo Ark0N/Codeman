@@ -440,6 +440,30 @@ const GrokConfigSchema = z
   .optional();
 
 /**
+ * Schema for jcode (1jehuang/jcode)-specific configuration.
+ *
+ * jcode has no approval prompts and no bypass flag, so there is nothing for the
+ * multi-user clamp to touch.
+ */
+const JcodeConfigSchema = z
+  .object({
+    model: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9._\-/]+$/)
+      .optional(),
+    // A session id (`session_fox_<ms>_<hex>`) or short name (`fox`). Leading
+    // alphanumeric: --resume's value is optional, so a value starting with `-`
+    // would be parsed as a flag of its own.
+    resumeSessionId: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/)
+      .optional(),
+  })
+  .optional();
+
+/**
  * Schema for OMP CLI-specific configuration.
  */
 const OmpConfigSchema = z
@@ -596,6 +620,7 @@ export const CreateSessionSchema = z.object({
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
   grokConfig: GrokConfigSchema,
+  jcodeConfig: JcodeConfigSchema,
   deepSeekConfig: DeepSeekConfigSchema,
   ompConfig: OmpConfigSchema,
   /** Resume a previous Claude conversation by its session ID (used for reboot recovery) */
@@ -807,6 +832,7 @@ const RemoteCommandOverridesSchema = z
     pi: z.string().min(1).max(300).optional(),
     grok: z.string().min(1).max(300).optional(),
     deepseek: z.string().min(1).max(300).optional(),
+    jcode: z.string().min(1).max(300).optional(),
   })
   .strict()
   .optional();
@@ -1195,6 +1221,7 @@ export const QuickStartSchema = z.object({
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
   grokConfig: GrokConfigSchema,
+  jcodeConfig: JcodeConfigSchema,
   deepSeekConfig: DeepSeekConfigSchema,
   ompConfig: OmpConfigSchema,
   envOverrides: safeEnvOverridesSchema,

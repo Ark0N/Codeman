@@ -225,6 +225,9 @@ describe('WebServer.renderIndexHtml', () => {
       deepseek: false,
       deepseekBinary: false,
       omp: true,
+      // No per-CLI resolver module: the registry's generic one answers, and it resolves
+      // nothing under vitest (its probes would otherwise run whatever `jcode` is on PATH).
+      jcode: false,
       cloudflared: true,
       git: true,
       shell: true,
