@@ -719,8 +719,17 @@ Object.assign(CodemanApp.prototype, {
     try { localStorage.setItem('codeman_runMode', mode); } catch {}
     this._applyRunMode();
     // Sync to server for cross-device persistence. Not for a non-admin in multi-user mode,
-    // where settings.json is server-wide and its PUT admin-only: the mode stays on this device.
-    if (!this._settingsReadOnly?.()) this._apiPut('/api/settings', { runMode: mode }).catch(() => {});
+    // where settings.json is server-wide and its PUT admin-only: the mode is kept as their own
+    // on this device and wins over the server's on the next load (_rememberOwnSetting,
+    // settings-ui.js). A PUT refused that way (sent before the role was known) marks the page
+    // read-only for the writes after it (_noteSettingsWriteRefusal).
+    if (this._settingsReadOnly?.()) {
+      this._rememberOwnSetting?.('runMode', mode);
+    } else {
+      this._apiPut('/api/settings', { runMode: mode })
+        .then((res) => this._noteSettingsWriteRefusal?.(res))
+        .catch(() => {});
+    }
     // Close menu
     document.getElementById('runModeMenu')?.classList.remove('active');
   },

@@ -11,7 +11,13 @@
  *    really changed a synced setting (an untouched synced key that no admin ever
  *    stored must not read as a change: that is what the form baseline is for).
  *  - The background writes (run mode, respawn presets, last used case, case order,
- *    the respawn-preset migration on load, the tunnel toggles) are not sent.
+ *    the respawn-preset migration on load, the tunnel toggles) are not sent, and the
+ *    non-admin's own run mode and respawn presets stay theirs on this device across a
+ *    reload (the server's would otherwise overwrite them on every load).
+ *  - A save sent before the role was known (/api/me slow or failed) that the server
+ *    refuses with 403 FORBIDDEN ends like a known non-admin's: synced keys back to the
+ *    server's value, the one admin toast (never "Settings saved"), read-only from then.
+ *  - The display-key split does not depend on GET /api/settings having loaded.
  *  - Admins and single-user mode send everything as before.
  *  - Both toasts read in Chinese under zh-CN.
  *
@@ -40,11 +46,24 @@ const SAVE_TOAST = 'Saved on this device. Server-wide settings can only be chang
 const ADMIN_TOAST = 'Server-wide settings can only be changed by an admin';
 
 type Settings = Record<string, unknown>;
-type Who = 'non-admin' | 'admin' | 'single-user';
-const IDENTITY: Record<Who, Settings> = {
+type Who = 'non-admin' | 'admin' | 'single-user' | 'unknown';
+/** `unknown`: GET /api/me has not answered yet, so admin-ui.js has set no identity. */
+const IDENTITY: Record<Who, Settings | undefined> = {
   'non-admin': { username: 'bob', role: 'user', multiUser: true },
   admin: { username: 'root', role: 'admin', multiUser: true },
   'single-user': { username: 'admin', role: 'admin', multiUser: false },
+  unknown: undefined,
+};
+
+/** What PUT /api/settings answers a non-admin in multi-user mode (system-routes.ts). */
+const forbiddenResponse = () => {
+  const res = {
+    ok: false,
+    status: 403,
+    json: async () => ({ success: false, error: 'You do not have permission', errorCode: 'FORBIDDEN' }),
+    clone: () => res,
+  };
+  return res;
 };
 
 /**
@@ -74,6 +93,11 @@ const REAL = new Set([
   '_settingsReadOnly',
   '_captureSettingsFormBaseline',
   '_keepServerSyncedSettings',
+  '_displaySettingKeySet',
+  '_noteSettingsWriteRefusal',
+  '_applyOwnSettings',
+  '_readOwnSettings',
+  '_ownSettingsKey',
 ]);
 
 /** Methods the load/save paths call that other modules add to the prototype. */
@@ -97,7 +121,7 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
  * this device's blob and `server` as GET /api/settings (merged in by the real loader, which
  * is also what publishes the display-key list the non-admin save reads).
  */
-async function boot(who: Who, stored: Settings, server: Settings) {
+async function boot(who: Who, stored: Settings, server: Settings | null) {
   const dom = new JSDOM(INDEX, { url: 'http://localhost/', runScripts: 'outside-only' });
   const win = dom.window as unknown as Window &
     typeof globalThis & { eval(src: string): void; __App: any; __codemanUser: Settings; fetch: unknown };
@@ -128,7 +152,7 @@ async function boot(who: Who, stored: Settings, server: Settings) {
       'window.__App = CodemanApp;',
     ].join('\n')
   );
-  win.__codemanUser = IDENTITY[who];
+  win.__codemanUser = IDENTITY[who] as Settings;
   const target = Object.create(win.__App.prototype);
   target.sessions = new Map();
   target.sessionOrder = [];
@@ -227,6 +251,69 @@ describe('a non-admin in multi-user mode saving App Settings', () => {
   });
 });
 
+describe('a save sent before the role was known, refused as admin-only', () => {
+  it('ends like a known non-admin save: synced key kept at the server value, one admin toast', async () => {
+    const { app, target, box, storedBlob, toasts, puts } = await boot('unknown', { ...SERVER }, SERVER);
+    target._apiPut = vi.fn(async () => forbiddenResponse());
+    await open_(app);
+    box('appSettingsTabTwoRows').checked = true; // per-device
+    box('appSettingsAutoNameSessions').checked = true; // synced
+    await app.saveAppSettings();
+
+    // The one PUT that went out before anything knew better, and nothing after it: the model
+    // config is not sent, and "Settings saved" (the old answer to a 403) is never shown.
+    expect(target._apiPut).toHaveBeenCalledTimes(1);
+    expect(puts()).toEqual([]);
+    expect(toasts()).toEqual([SAVE_TOAST]);
+    expect(storedBlob().tabTwoRows).toBe(true);
+    expect(storedBlob().autoNameSessions).toBe(false);
+
+    // Read-only from here on: the next save sends nothing.
+    expect(app._settingsReadOnly()).toBe(true);
+    await open_(app);
+    box('appSettingsAutoNameSessions').checked = true;
+    await app.saveAppSettings();
+    expect(target._apiPut).toHaveBeenCalledTimes(1);
+    expect(toasts()).toEqual([SAVE_TOAST, SAVE_TOAST]);
+  });
+
+  it('the same for a page whose /api/me failed (admin-ui.js falls back to a single-user admin)', async () => {
+    const { app, target, box, storedBlob, toasts } = await boot('single-user', { ...SERVER }, SERVER);
+    target._apiPut = vi.fn(async () => forbiddenResponse());
+    await open_(app);
+    box('appSettingsAutoNameSessions').checked = true;
+    await app.saveAppSettings();
+    expect(toasts()).toEqual([SAVE_TOAST]);
+    expect(storedBlob().autoNameSessions).toBe(false);
+  });
+
+  it('is not confused with the tunnel no-password 403 (another errorCode): that still prompts', async () => {
+    const { app, target } = await boot('admin', { ...SERVER }, SERVER);
+    const res = {
+      ok: false,
+      status: 403,
+      json: async () => ({ success: false, error: 'no password', errorCode: 'OPERATION_FAILED' }),
+    };
+    expect(await app._noteSettingsWriteRefusal({ ...res, clone: () => res })).toBe(false);
+    expect(app._settingsReadOnly()).toBe(false);
+    expect(target._settingsWriteForbidden).toBeUndefined();
+  });
+});
+
+describe('a non-admin save when GET /api/settings failed at page load', () => {
+  it('still keeps the synced keys at the stored value and toasts once', async () => {
+    const { app, box, storedBlob, toasts, puts } = await boot('non-admin', { ...SERVER }, null);
+    await open_(app);
+    box('appSettingsTabTwoRows').checked = true;
+    box('appSettingsAutoNameSessions').checked = true;
+    await app.saveAppSettings();
+    expect(puts()).toEqual([]);
+    expect(storedBlob().tabTwoRows).toBe(true);
+    expect(storedBlob().autoNameSessions).toBe(false);
+    expect(toasts()).toEqual([SAVE_TOAST]);
+  });
+});
+
 describe('an admin, and single-user mode, saving App Settings', () => {
   for (const who of ['admin', 'single-user'] as const) {
     it(`${who}: sends the settings PUT and the model config as before`, async () => {
@@ -256,8 +343,7 @@ async function open_(app: { openAppSettings(): void }) {
 
 // ─── Background writes (vm harness: settings-ui.js + session-ui.js + respawn-ui.js) ───
 
-function loadBackground(who: Who) {
-  const storage = new Map<string, string>();
+function loadBackground(who: Who, storage = new Map<string, string>()) {
   const elements: Record<string, any> = {
     quickStartCase: { value: 'mine' },
     welcomeTunnelBtn: { classList: { contains: () => false }, disabled: false },
@@ -268,15 +354,20 @@ function loadBackground(who: Who) {
   const CodemanApp = function CodemanApp(this: any) {};
   const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) }));
   const confirmMock = vi.fn(() => true);
+  const listeners: Record<string, (() => void)[]> = {};
+  const win: Record<string, unknown> = { __codemanUser: IDENTITY[who] };
   const context = vm.createContext({
     CodemanApp,
     VoiceInput: {},
-    window: { __codemanUser: IDENTITY[who] },
+    window: win,
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
       setItem: (key: string, value: string) => storage.set(key, value),
     },
-    document: { getElementById: (id: string) => elements[id] ?? null },
+    document: {
+      getElementById: (id: string) => elements[id] ?? null,
+      addEventListener: (type: string, fn: () => void) => (listeners[type] ||= []).push(fn),
+    },
     fetch: fetchMock,
     confirm: confirmMock,
     console,
@@ -297,7 +388,13 @@ function loadBackground(who: Who) {
   app._dismissTunnelConnecting = vi.fn();
   app._updateWelcomeTunnelBtn = vi.fn();
   app._updateTunnelIndicator = vi.fn();
-  return { app, fetchMock, confirmMock, storage };
+  win.app = app;
+  /** What admin-ui.js does once GET /api/me answers. */
+  const resolveMe = (identity: Settings) => {
+    win.__codemanUser = identity;
+    for (const fn of listeners['codeman:me'] || []) fn();
+  };
+  return { app, fetchMock, confirmMock, storage, resolveMe };
 }
 
 const settingsPuts = (b: ReturnType<typeof loadBackground>) => [
@@ -346,6 +443,59 @@ describe('background writes', () => {
     expect(b.confirmMock).not.toHaveBeenCalled();
     expect(b.fetchMock).not.toHaveBeenCalled();
     expect(b.app.showToast.mock.calls.map((c: unknown[]) => c[0])).toEqual([ADMIN_TOAST]);
+  });
+
+  it("a non-admin's own run mode and respawn presets survive a reload over the server's", async () => {
+    const before = loadBackground('non-admin');
+    before.app.setRunMode('codex');
+    before.app.saveRespawnPresets([{ id: 'mine', name: 'mine' }]);
+    expect(settingsPuts(before)).toEqual([]);
+
+    // The next page load, on the same device: the server holds an admin's picks.
+    const after = loadBackground('non-admin', before.storage);
+    await after.app.loadAppSettingsFromServer(
+      Promise.resolve({ runMode: 'shell', respawnPresets: [{ id: 'admin', name: 'admin' }] })
+    );
+    expect(after.app.runMode).toBe('codex');
+    expect(after.storage.get('codeman_runMode')).toBe('codex');
+    // What loadRespawnPresets() reads before anything else (respawn-ui.js).
+    expect(after.app._serverRespawnPresets).toEqual([{ id: 'mine', name: 'mine' }]);
+    expect(JSON.parse(after.storage.get('codeman-respawn-presets')!)).toEqual([{ id: 'mine', name: 'mine' }]);
+    expect(settingsPuts(after)).toEqual([]);
+  });
+
+  it('they win too when the role resolves only after the settings load (codeman:me)', async () => {
+    const before = loadBackground('non-admin');
+    before.app.setRunMode('codex');
+    const after = loadBackground('unknown', before.storage);
+    await after.app.loadAppSettingsFromServer(Promise.resolve({ runMode: 'shell' }));
+    expect(after.app.runMode).toBe('shell');
+    after.resolveMe(IDENTITY['non-admin'] as Settings);
+    expect(after.app.runMode).toBe('codex');
+    expect(after.storage.get('codeman_runMode')).toBe('codex');
+  });
+
+  it("they are the user's own: another user, or an admin, on the same device gets the server's", async () => {
+    const before = loadBackground('non-admin');
+    before.app.setRunMode('codex');
+    const other = loadBackground('unknown', before.storage);
+    await other.app.loadAppSettingsFromServer(Promise.resolve({ runMode: 'shell' }));
+    other.resolveMe({ username: 'carol', role: 'user', multiUser: true });
+    expect(other.app.runMode).toBe('shell');
+    const admin = loadBackground('admin', before.storage);
+    await admin.app.loadAppSettingsFromServer(Promise.resolve({ runMode: 'shell' }));
+    expect(admin.app.runMode).toBe('shell');
+  });
+
+  it('a background PUT refused as admin-only (role not known yet) makes the page read-only', async () => {
+    const b = loadBackground('unknown');
+    b.app._apiPut = vi.fn(() => Promise.resolve(forbiddenResponse()));
+    b.app.setRunMode('codex');
+    await tick();
+    await tick();
+    expect(b.app._settingsReadOnly()).toBe(true);
+    b.app.saveRespawnPresets([{ id: 'p' }]);
+    expect(b.app._apiPut).toHaveBeenCalledTimes(1);
   });
 
   for (const who of ['admin', 'single-user'] as const) {
