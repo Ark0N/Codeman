@@ -11,7 +11,9 @@
  *    key and case names (an admin still reads the file as it is);
  *  - a non-admin's quick-start does not record its case as `lastUsedCase` (a key every
  *    user can read through GET /api/settings), while an admin's still does;
- *  - an admin's PUT /api/settings still writes.
+ *  - an admin's PUT /api/settings still writes;
+ *  - a non-admin's bare POST /api/auth/revoke signs out only their own logins: an admin's
+ *    cookie still works afterwards (it used to clear every login on the server).
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -140,6 +142,29 @@ describe('a non-admin and the server-wide settings.json', () => {
     const theirs = await send('POST', '/api/ralph-loop/start', root, { caseName: 'rootralph', taskDescription: 'x' });
     expect(theirs.status).toBe(200);
     expect((await settleSettings((s) => s.lastUsedCase === 'rootralph')).lastUsedCase).toBe('rootralph');
+  });
+});
+
+describe("a non-admin's Revoke All", () => {
+  /** Sign in with Basic auth and keep only the session cookie it mints. */
+  async function cookieFor(headers: Record<string, string>) {
+    const res = await fetch(url('/api/status'), { headers });
+    expect(res.status).toBe(200);
+    const cookie = (res.headers.get('set-cookie') || '').split(';')[0];
+    expect(cookie).toMatch(/^codeman_session=/);
+    return { Cookie: cookie };
+  }
+
+  it("signs out only the non-admin's own logins, never an admin's", async () => {
+    const rootCookie = await cookieFor(root);
+    const bobCookie = await cookieFor(bob);
+    expect((await fetch(url('/api/status'), { headers: rootCookie })).status).toBe(200);
+
+    const res = await send('POST', '/api/auth/revoke', bobCookie, {});
+    expect(res.status).toBe(200);
+
+    expect((await fetch(url('/api/status'), { headers: rootCookie })).status).toBe(200);
+    expect((await fetch(url('/api/status'), { headers: bobCookie })).status).toBe(401);
   });
 });
 

@@ -17,7 +17,7 @@ import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } f
 import { isUnauthenticatedNetworkAcknowledged } from '../network-auth-policy.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { findUser, canUsernameRunPrivilegedCommands } from '../../user-store.js';
-import { getAuthUser, isAdmin, requireAdmin, canAccessOwned } from '../route-helpers.js';
+import { getAuthUser, isAdmin, requireAdmin, canAccessOwned, revokeUserSessions } from '../route-helpers.js';
 import {
   ConfigUpdateSchema,
   SettingsUpdateSchema,
@@ -185,12 +185,17 @@ export function registerSystemRoutes(
 
   app.get('/api/tunnel/status', async () => ctx.tunnelManager.getStatus());
 
-  app.get('/api/tunnel/info', async () => {
+  app.get('/api/tunnel/info', async (req) => {
     const status = ctx.tunnelManager.getStatus();
     const sseClients = ctx.getSseClientCount();
     const sessions: Array<{ ip: string; ua: string; createdAt: number; method: string }> = [];
+    // Multi-user mode: a non-admin is shown only their own logins (address and browser of
+    // every other user's sessions are not theirs to read), matching what their Revoke All
+    // can revoke (POST /api/auth/revoke). null = everyone's (admin, single-user mode).
+    const onlyUser = isMultiUserMode() && !isAdmin(req) ? getAuthUser(req).username : null;
     if (ctx.authSessions) {
       for (const [, record] of ctx.authSessions) {
+        if (onlyUser !== null && record.username !== onlyUser) continue;
         sessions.push({ ip: record.ip, ua: record.ua, createdAt: record.createdAt, method: record.method });
       }
     }
@@ -322,7 +327,10 @@ export function registerSystemRoutes(
 
   // ========== QR Regeneration ==========
 
-  app.post('/api/tunnel/qr/regenerate', async () => {
+  app.post('/api/tunnel/qr/regenerate', async (req, reply) => {
+    // Clears EVERY outstanding QR login code (each user's minted one too) and rotates the
+    // server's token: admin-only in multi-user mode, like the other tunnel controls.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     ctx.tunnelManager.regenerateQrToken();
     return {};
   });
@@ -331,6 +339,19 @@ export function registerSystemRoutes(
 
   app.post('/api/auth/revoke', async (req) => {
     const result = RevokeSessionSchema.safeParse(req.body);
+    // Multi-user mode: a NON-ADMIN revokes only their own login sessions. The bare form
+    // below clears every session on the server, so for them it used to sign out every
+    // user, admins included; a named token is revoked only when it is one of theirs.
+    if (isMultiUserMode() && !isAdmin(req)) {
+      const username = getAuthUser(req).username;
+      const token = result.success ? result.data.sessionToken : undefined;
+      if (token) {
+        if (ctx.authSessions?.peek(token)?.username === username) ctx.authSessions?.delete(token);
+      } else {
+        revokeUserSessions(ctx.authSessions, username);
+      }
+      return {};
+    }
     if (result.success && result.data.sessionToken) {
       ctx.authSessions?.delete(result.data.sessionToken);
     } else {
@@ -349,6 +370,8 @@ export function registerSystemRoutes(
   // panels can be dragged across the physical monitor seam. macOS only; needs
   // the one-time "Displays have separate Spaces" OFF prerequisite (see script).
   app.post('/api/system/span-displays', async (req, reply) => {
+    // Launches a browser window on the SERVER's desktop: admin-only in multi-user mode.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     // macOS only: the launcher uses osascript + Finder desktop bounds and Chrome
     // --app geometry flags. Fail clearly elsewhere instead of spawning a bash
     // that errors out invisibly (the toast would otherwise lie "Opening…").
@@ -401,7 +424,9 @@ export function registerSystemRoutes(
 
   // Kick off a detached update to the latest release. Returns immediately; the
   // browser then polls /api/system/update/status across the service restart.
-  app.post('/api/system/update', async (_req, reply) => {
+  app.post('/api/system/update', async (req, reply) => {
+    // Updates and restarts the server under every user: admin-only in multi-user mode.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const result = await startUpdate();
     if (result.ok) {
       return { updateId: result.updateId, toTag: result.toTag, toVersion: result.toVersion };
@@ -743,7 +768,10 @@ export function registerSystemRoutes(
 
   // ========== State & Lifecycle ==========
 
-  app.post('/api/cleanup-state', async () => {
+  app.post('/api/cleanup-state', async (req, reply) => {
+    // Drops every user's stale session records (and their tab-layout entries): admin-only
+    // in multi-user mode, like the other server-wide maintenance operations.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const activeSessionIds = new Set(ctx.sessions.keys());
     const result = await ctx.tabLayouts.runStaleSessionCleanup(activeSessionIds, (ids) =>
       ctx.store.cleanupSessionsByIds(ids)

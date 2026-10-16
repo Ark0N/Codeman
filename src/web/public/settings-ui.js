@@ -1884,8 +1884,12 @@ Object.assign(CodemanApp.prototype, {
           regenBtn.textContent = 'Regenerate QR';
           regenBtn.style.cssText = 'margin-top:8px;padding:4px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;font-size:11px';
           regenBtn.onclick = () => {
+            // A refusal is not a success: in multi-user mode this is admin-only (403).
             fetch('/api/tunnel/qr/regenerate', { method: 'POST' })
-              .then(() => this.showToast('QR code regenerated', 'success'))
+              .then((res) => {
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                this.showToast('QR code regenerated', 'success');
+              })
               .catch(() => this.showToast('Failed to regenerate QR', 'error'));
           };
           const card = container.parentElement;
