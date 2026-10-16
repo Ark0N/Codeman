@@ -627,6 +627,9 @@ Object.assign(CodemanApp.prototype, {
   },
 
   async saveLastUsedCase(caseName) {
+    // Multi-user non-admin: lastUsedCase is a key of the server-wide settings.json, whose
+    // PUT is admin-only (403), so it is not sent (_settingsReadOnly, settings-ui.js).
+    if (this._settingsReadOnly?.()) return;
     try {
       await fetch('/api/settings', {
         method: 'PUT',
@@ -715,8 +718,9 @@ Object.assign(CodemanApp.prototype, {
     this._runMode = mode;
     try { localStorage.setItem('codeman_runMode', mode); } catch {}
     this._applyRunMode();
-    // Sync to server for cross-device persistence
-    this._apiPut('/api/settings', { runMode: mode }).catch(() => {});
+    // Sync to server for cross-device persistence. Not for a non-admin in multi-user mode,
+    // where settings.json is server-wide and its PUT admin-only: the mode stays on this device.
+    if (!this._settingsReadOnly?.()) this._apiPut('/api/settings', { runMode: mode }).catch(() => {});
     // Close menu
     document.getElementById('runModeMenu')?.classList.remove('active');
   },
@@ -4881,6 +4885,16 @@ Object.assign(CodemanApp.prototype, {
   },
 
   async saveCaseOrder(order) {
+    // Multi-user non-admin: the case order is ONE server-wide list (settings.json caseOrder)
+    // and PUT /api/cases/order is admin-only (403), so the move is not sent: say why, and put
+    // the list back the way the server orders it.
+    if (this._settingsReadOnly?.()) {
+      this.showToast('Server-wide settings can only be changed by an admin', 'warning');
+      const select = document.getElementById('quickStartCase');
+      await this.loadQuickStartCases(select?.value);
+      this.renderCaseManageList();
+      return;
+    }
     try {
       await fetch('/api/cases/order', {
         method: 'PUT',

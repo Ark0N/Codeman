@@ -847,6 +847,11 @@
     'Settings applied': '设置已应用',
     'Save and keep Settings open': '保存并保持设置打开',
     'Settings saved locally': '设置已保存到本机',
+    // Multi-user mode, a non-admin (settings-ui.js / session-ui.js): server-wide settings
+    // writes are admin-only there.
+    'Saved on this device. Server-wide settings can only be changed by an admin.':
+      '已保存到本设备。服务器全局设置只能由管理员更改。',
+    'Server-wide settings can only be changed by an admin': '服务器全局设置只能由管理员更改',
     'Tunnel active': '隧道已启用',
     'Tunnel starting — QR code will appear when ready...': '隧道正在启动，准备好后将显示二维码…',
     'Push notifications enabled': '推送通知已启用',

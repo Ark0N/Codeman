@@ -711,6 +711,10 @@ Object.assign(CodemanApp.prototype, {
     // Activate focus trap
     this.activeFocusTrap = new FocusTrap(modal);
     this.activeFocusTrap.activate();
+
+    // Multi-user non-admin only: remember what the form shows now, so Save can tell a real
+    // change to a server-wide setting from an untouched one (see the method).
+    this._captureSettingsFormBaseline();
   },
 
   /**
@@ -1976,6 +1980,11 @@ Object.assign(CodemanApp.prototype, {
   async toggleTunnelFromWelcome() {
     const btn = document.getElementById('welcomeTunnelBtn');
     if (!btn) return;
+    // The tunnel is a server-wide setting (PUT /api/settings), admin-only in multi-user mode.
+    if (this._settingsReadOnly()) {
+      this.showToast('Server-wide settings can only be changed by an admin', 'warning');
+      return;
+    }
     const isActive = btn.classList.contains('active');
     btn.disabled = true;
     try {
@@ -2302,11 +2311,21 @@ Object.assign(CodemanApp.prototype, {
   async _handleTunnelEnableRefusal(res) {
     if (!res || res.ok) return false;
     let message = 'Tunnel refused: set CODEMAN_PASSWORD before exposing Codeman publicly.';
+    let errorCode = '';
     try {
       const body = await res.json();
       if (body && body.error) message = body.error;
+      if (body && typeof body.errorCode === 'string') errorCode = body.errorCode;
     } catch {
       /* non-JSON body — use the default message */
+    }
+    // A non-admin in multi-user mode: PUT /api/settings is admin-only there (403 FORBIDDEN).
+    // That is not the no-password refusal below, so no security prompt and no retry. The
+    // callers skip the PUT for a known non-admin; this covers a role that had not resolved yet.
+    if (res.status === 403 && errorCode === 'FORBIDDEN') {
+      this._dismissTunnelConnecting?.();
+      this.showToast('Server-wide settings can only be changed by an admin', 'warning');
+      return true;
     }
     // 403 = the no-password safety refusal (COD-55). Warn loudly and let the
     // operator acknowledge the risk; on confirm, retry with explicit acknowledgment.
@@ -2356,6 +2375,12 @@ Object.assign(CodemanApp.prototype, {
   },
 
   async _tunnelPanelToggle(enable) {
+    // The tunnel is a server-wide setting (PUT /api/settings), admin-only in multi-user mode.
+    if (this._settingsReadOnly()) {
+      this.showToast('Server-wide settings can only be changed by an admin', 'warning');
+      this.closeTunnelPanel();
+      return;
+    }
     try {
       const res = await fetch('/api/settings', {
         method: 'PUT',
@@ -2692,6 +2717,13 @@ Object.assign(CodemanApp.prototype, {
       },
     };
 
+    // One-shot form read for _captureSettingsFormBaseline(): hand back what the form
+    // shows, before anything below is checked, stored, applied or sent.
+    if (this._readSettingsFormOnce === true) {
+      this._readSettingsFormOnce = false;
+      return settings;
+    }
+
     // SettingsUpdateSchema is .strict() and checks codexModel with this same
     // pattern, so one bad character 400s the WHOLE settings PUT while the toast
     // still says "Settings saved". Refuse it here, before anything is persisted.
@@ -2713,6 +2745,14 @@ Object.assign(CodemanApp.prototype, {
     // Shortcut overrides are edited from the Shortcuts tab (not rebuilt from the
     // general-settings DOM), so the fresh rebuild would drop them on every save.
     if (_prev.shortcutOverrides !== undefined) settings.shortcutOverrides = _prev.shortcutOverrides;
+
+    // Multi-user mode, signed in as a non-admin: settings.json is one file for the whole
+    // server and PUT /api/settings answers 403 (system-routes.ts), so nothing is sent
+    // below. The per-device keys still save here exactly as before; every SYNCED key
+    // keeps the server's value, which the next page load would put back anyway, so this
+    // device never shows a server-wide change that did not happen.
+    const settingsReadOnly = this._settingsReadOnly();
+    const syncedChangeRefused = settingsReadOnly && this._keepServerSyncedSettings(settings, _prev);
 
     // Save to localStorage
     this.saveAppSettingsToStorage(settings);
@@ -2934,7 +2974,9 @@ Object.assign(CodemanApp.prototype, {
     let webhookError = '';
     let serverSaved = false;
     try {
-      const res = await this._apiPut('/api/settings', {
+      // A non-admin's save is not sent at all (see settingsReadOnly above): the server
+      // would refuse it with a 403, the plan-usage collection flip included.
+      const res = settingsReadOnly ? null : await this._apiPut('/api/settings', {
         ...serverSettings,
         ...(_chipFlip !== undefined ? { showPlanUsageLimits: _chipFlip } : {}),
         notificationPreferences: notifPrefsToSave,
@@ -2958,8 +3000,9 @@ Object.assign(CodemanApp.prototype, {
       // evidence the server kept the flags the Apply refresh below reads.
       serverSaved = !!res?.ok;
 
-      // Save model configuration separately
-      await this.saveModelConfigFromSettings();
+      // Save model configuration separately. For a non-admin it is not sent either, and the
+      // answer says whether this save would have changed it.
+      const modelConfigRefused = (await this.saveModelConfigFromSettings()) === true;
 
       // The webhook is server state in its own 0600 file (its URL is a secret, kept out of
       // settings.json), so like the model config above it is saved beside the settings PUT, not in
@@ -2968,12 +3011,17 @@ Object.assign(CodemanApp.prototype, {
       webhookError = this._webhookPending() ? await this.saveWebhook() : '';
       if (webhookError) {
         this.showToast(`Settings saved, but not the webhook: ${webhookError}`, 'warning');
+      } else if (syncedChangeRefused || modelConfigRefused) {
+        // ONE toast for the whole save, and only when the user really changed a server-wide
+        // setting: a non-admin saving a font size hears "Settings saved" as everyone does.
+        this.showToast('Saved on this device. Server-wide settings can only be changed by an admin.', 'warning');
       } else {
         this.showToast(keepOpen ? 'Settings applied' : 'Settings saved', 'success');
       }
 
-      // Show tunnel-specific feedback if toggled on
-      if (settings.tunnelEnabled) {
+      // Show tunnel-specific feedback if toggled on (never for a non-admin, whose save
+      // starts nothing: the box only shows what the server already has)
+      if (settings.tunnelEnabled && !settingsReadOnly) {
         this.showToast('Tunnel starting — QR code will appear when ready...', 'info');
       }
     } catch (err) {
@@ -2999,13 +3047,81 @@ Object.assign(CodemanApp.prototype, {
     // gestureControlEnabled from settings.json), so a change only takes effect on
     // reload. Reload when it actually changed — the server PUT above already
     // persisted the new value.
-    if (settings.gestureControlEnabled !== _prevGestureEnabled) {
+    // `?? false`: a non-admin's save puts a synced key the server never stored back to
+    // absent (_keepServerSyncedSettings), and absent means off, as in _prevGestureEnabled.
+    if ((settings.gestureControlEnabled ?? false) !== _prevGestureEnabled) {
       this.showToast(
         settings.gestureControlEnabled ? 'Enabling gesture control — reloading…' : 'Disabling gesture control — reloading…',
         'info'
       );
       setTimeout(() => location.reload(), 400);
     }
+  },
+
+  /**
+   * True only for a signed-in NON-ADMIN in multi-user mode, where every server-wide settings
+   * write is refused with 403 FORBIDDEN (PUT /api/settings, PUT /api/execution/model-config and
+   * PUT /api/cases/order: settings.json is one file for the whole server). Single-user mode and
+   * admins answer false. Read at call time, because `window.__codemanUser` resolves after page
+   * load (admin-ui.js fetches /api/me). Other modules call it as `this._settingsReadOnly?.()`,
+   * so a harness that loads one of them without this file reads it as writable, which is what
+   * an admin gets.
+   */
+  _settingsReadOnly() {
+    // typeof guard: the load path calls this, and some vm harnesses define no `window`.
+    const me = (typeof window !== 'undefined' && window.__codemanUser) || {};
+    return !!(me.multiUser && me.role !== 'admin');
+  },
+
+  /**
+   * What the App Settings form showed when it opened, read the way saveAppSettings() reads it
+   * (its one-shot `_readSettingsFormOnce` form read), so a non-admin's save can tell whether the
+   * user changed a SYNCED setting. The stored blob cannot answer that: a key no admin has ever
+   * saved is absent from it while the form shows the default, which would read as a change on
+   * every save. Taken only for a non-admin; nobody else's save asks for it.
+   */
+  _captureSettingsFormBaseline() {
+    this._settingsFormBaseline = null;
+    if (!this._settingsReadOnly()) return;
+    this._readSettingsFormOnce = true;
+    let pending;
+    try {
+      pending = this.saveAppSettings();
+    } finally {
+      // Consumed by the read itself; cleared here too in case it threw before reaching it.
+      this._readSettingsFormOnce = false;
+    }
+    Promise.resolve(pending)
+      .then((form) => {
+        this._settingsFormBaseline = form && typeof form === 'object' ? form : null;
+      })
+      .catch(() => {});
+  },
+
+  /**
+   * A non-admin's save in multi-user mode (saveAppSettings): put every SYNCED key of `settings`
+   * back to the value this device last had from the server (`prev`; deleted when it had none),
+   * and answer whether the form changed one since it opened. Synced means outside the per-device
+   * `displayKeys` merge policy of loadAppSettingsFromServer(), whose own list this reads, never a
+   * copy: those are the keys the server's settings.json overwrites on every page load. A
+   * per-device key is left exactly as the user set it.
+   * @returns {boolean} true when the user changed at least one synced setting
+   */
+  _keepServerSyncedSettings(settings, prev) {
+    const displayKeys = this._displaySettingKeys;
+    if (!(displayKeys instanceof Set)) return false;
+    // Without a baseline (the form was read before the role was known) the stored blob stands
+    // in, and a key it lacks is not counted: no toast is better than one on every save.
+    const baseline = this._settingsFormBaseline || prev || {};
+    let changed = false;
+    for (const key of Object.keys(settings)) {
+      // shortcutOverrides is carried over from `prev` already and never comes from the form.
+      if (displayKeys.has(key) || key === 'shortcutOverrides') continue;
+      if (key in baseline && JSON.stringify(settings[key]) !== JSON.stringify(baseline[key])) changed = true;
+      if (prev && key in prev) settings[key] = prev[key];
+      else delete settings[key];
+    }
+    return changed;
   },
 
   /**
@@ -3058,10 +3174,12 @@ Object.assign(CodemanApp.prototype, {
     } catch (err) {
       console.warn('Failed to load model config:', err);
     }
+    // What the form shows now, so a non-admin's save can tell whether it was changed.
+    this._modelConfigBaseline = JSON.stringify(this._modelConfigFromSettingsForm());
   },
 
-  // Save model configuration from settings modal to server
-  async saveModelConfigFromSettings() {
+  /** The model configuration as the settings modal's form shows it (the PUT body). */
+  _modelConfigFromSettingsForm() {
     const defaultModelEl = document.getElementById('appSettingsDefaultModel');
     const showRecsEl = document.getElementById('appSettingsShowModelRecommendations');
     const exploreEl = document.getElementById('appSettingsModelExplore');
@@ -3075,11 +3193,26 @@ Object.assign(CodemanApp.prototype, {
     if (testEl?.value) agentTypeOverrides.test = testEl.value;
     if (reviewEl?.value) agentTypeOverrides.review = reviewEl.value;
 
-    const config = {
+    return {
       defaultModel: defaultModelEl?.value || '',
       showRecommendations: showRecsEl?.checked ?? true,
       agentTypeOverrides,
     };
+  },
+
+  /**
+   * Save model configuration from settings modal to server.
+   * @returns {Promise<boolean|undefined>} true only when a non-admin in multi-user mode changed it:
+   *   the config is a key of the server-wide settings.json and its PUT is admin-only (403), so it is
+   *   not sent, and saveAppSettings() folds this into its one admin-only toast
+   */
+  async saveModelConfigFromSettings() {
+    const config = this._modelConfigFromSettingsForm();
+
+    if (this._settingsReadOnly()) {
+      const baseline = this._modelConfigBaseline;
+      return typeof baseline === 'string' && JSON.stringify(config) !== baseline;
+    }
 
     try {
       await fetch('/api/execution/model-config', {
@@ -4393,6 +4526,8 @@ Object.assign(CodemanApp.prototype, {
         // and should not be synced from the server to avoid overriding mobile defaults.
         // NOTE: Feature toggles (subagentTrackingEnabled, imageWatcherEnabled, ralphTrackerEnabled)
         // are NOT display keys — they control server-side behavior and must sync from server.
+        // Published below for _keepServerSyncedSettings() (a non-admin's save in multi-user
+        // mode), which needs this same split and must never keep a copy of it.
         const displayKeys = new Set([
           'showFontControls', 'showSystemStats', 'headerStatsStyle', 'showTokenCount', 'showCost',
           'showLifecycleLog', 'showResponseViewer', 'showRedrawButton',
@@ -4411,6 +4546,7 @@ Object.assign(CodemanApp.prototype, {
           'showTileGridButton',
           'tileDetachEnabled',
         ]);
+        this._displaySettingKeys = displayKeys;
         // The plan-usage chip is a PER-DEVICE display setting (desktop default ON,
         // handheld default OFF): desktop can show it while mobile stays hidden. Drop
         // the server's stored value here so it is NEVER seeded into a device that
@@ -4461,8 +4597,9 @@ Object.assign(CodemanApp.prototype, {
           this._serverRespawnPresets = respawnPresets;
           // Also update localStorage for offline access
           localStorage.setItem('codeman-respawn-presets', JSON.stringify(respawnPresets));
-        } else {
-          // Migration: push existing localStorage presets to server
+        } else if (!this._settingsReadOnly()) {
+          // Migration: push existing localStorage presets to server. Not for a non-admin in
+          // multi-user mode: the presets are a server-wide setting there (admin-only PUT).
           const localPresets = localStorage.getItem('codeman-respawn-presets');
           if (localPresets) {
             const parsed = JSON.parse(localPresets);

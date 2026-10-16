@@ -597,7 +597,10 @@ Object.assign(CodemanApp.prototype, {
     // Update local cache + legacy localStorage
     this._serverRespawnPresets = custom;
     localStorage.setItem('codeman-respawn-presets', JSON.stringify(custom));
-    // Persist to server (cross-device sync)
+    // Persist to server (cross-device sync). Not for a non-admin in multi-user mode: the
+    // presets are a key of the server-wide settings.json there, and its PUT is admin-only
+    // (403), so they stay on this device (_settingsReadOnly, settings-ui.js).
+    if (this._settingsReadOnly?.()) return;
     this._apiPut('/api/settings', { respawnPresets: custom }).catch(() => {});
   },
 
