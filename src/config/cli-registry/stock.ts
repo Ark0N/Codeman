@@ -1691,7 +1691,8 @@ const COPILOT: CliEntry = {
   launch: {
     params: {
       allowAll: { type: 'bool' },
-      model: { type: 'token', pattern: 'model' },
+      // `model-plain`, not `model`: the leading alphanumeric keeps a flag-shaped value out.
+      model: { type: 'token', pattern: 'model-plain' },
       // `path-segment`, not `id-dotted`: the leading alphanumeric keeps a flag-shaped value out.
       resumeId: { type: 'token', pattern: 'path-segment' },
       continueSession: { type: 'bool' },

@@ -372,6 +372,17 @@ describe('copilot', () => {
     expect(cp({ resumeSessionId: 'my-feature' })).toBe('copilot --resume my-feature');
   });
 
+  // `--model --yolo` would make `--yolo` its own flag and get around the allowAll clamp, so a model id
+  // starts with an alphanumeric too. A provider/id value (the `/`) is still accepted.
+  it('drops a model value that would be read as a flag', () => {
+    for (const model of ['--yolo', '-n', '--allow-all-tools', '.', '/etc/passwd']) {
+      expect(cp({ model })).toBe('copilot');
+      expect(cp({ allowAll: false, model })).toBe('copilot');
+    }
+    expect(cp({ model: 'claude-sonnet-5.5' })).toBe('copilot --model claude-sonnet-5.5');
+    expect(cp({ model: 'openai/gpt-5' })).toBe('copilot --model openai/gpt-5');
+  });
+
   it('never puts a credential on the command line', () => {
     const cmd = cp({ allowAll: true, model: 'auto' }) ?? '';
     expect(cmd).not.toContain('token');

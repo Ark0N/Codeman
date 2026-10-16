@@ -441,10 +441,12 @@ const GrokConfigSchema = z
 
 const CopilotConfigSchema = z
   .object({
+    // A leading alphanumeric, like resumeSessionId below: a value like `--yolo` would otherwise be read
+    // as its own flag after `--model` (bypassing the allowAll clamp). `/` stays for provider/id.
     model: z
       .string()
       .max(100)
-      .regex(/^[a-zA-Z0-9._\-/]+$/)
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._\-/]*$/)
       .optional(),
     allowAll: z.boolean().optional(),
     continueSession: z.boolean().optional(),
