@@ -559,7 +559,7 @@ Object.assign(CodemanApp.prototype, {
     const caseName = this._commandPaletteCaseName(query);
     const agent = this._commandPaletteAgent(caseName);
     const mode = agent?.id || this.runMode || this._runMode || 'claude';
-    const labels = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', pi: 'Pi', grok: 'Grok', deepseek: 'DeepSeek', omp: 'OMP', copilot: 'Copilot' };
+    const labels = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', pi: 'Pi', grok: 'Grok', deepseek: 'DeepSeek', omp: 'OMP', copilot: 'Copilot', jcode: 'jcode' };
     return {
       id: 'new-session',
       type: 'new-session',

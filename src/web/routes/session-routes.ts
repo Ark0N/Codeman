@@ -1462,6 +1462,8 @@ export function registerSessionRoutes(
       piConfig: mode === 'pi' ? gatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? gatedGrokConfig : undefined,
       copilotConfig: mode === 'copilot' ? gatedCopilotConfig : undefined,
+      // No bypass switch to clamp (jcode has no approval prompts), so the body's own config.
+      jcodeConfig: mode === 'jcode' ? launchBody.jcodeConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? gatedDeepSeekConfig : undefined,
       ompConfig: resolveOmpConfigForCreate(mode, workingDir, launchBody.ompConfig),
       resumeSessionId: validatedResumeId,
@@ -3226,6 +3228,21 @@ export function registerSessionRoutes(
       };
     }
 
+    // An external CLI with no transcript reader that the pane segmenter cannot read either
+    // (jcode: a repainting alternate-screen TUI, whose segmented stream served its welcome
+    // banner as "the answer", measured) has nothing honest to return. Empty, "nothing said
+    // yet", like the DeepSeek reader above: the Claude scan below would otherwise go looking
+    // in ~/.claude/projects and could adopt a Claude conversation from the same folder.
+    // `codeman agent read --source terminal` / MCP `read_output` still read the screen.
+    {
+      const caps = getCli(session.mode)?.capabilities;
+      if (caps?.external && caps.transcript === 'none') {
+        return context === 'full' || context === 'turn'
+          ? { text: '', timestamp: '', messages: [] }
+          : { text: '', timestamp: '' };
+      }
+    }
+
     // Scan ~/.claude/projects/*/ for the transcript file
     const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
 
@@ -4248,6 +4265,7 @@ export function registerSessionRoutes(
       piConfig,
       grokConfig,
       copilotConfig,
+      jcodeConfig,
       deepSeekConfig,
       ompConfig,
       envOverrides,
@@ -4320,6 +4338,7 @@ export function registerSessionRoutes(
         piConfig ||
         grokConfig ||
         copilotConfig ||
+        jcodeConfig ||
         deepSeekConfig ||
         ompConfig ||
         openCodeConfig ||
@@ -4391,6 +4410,7 @@ export function registerSessionRoutes(
         piConfig ||
         grokConfig ||
         copilotConfig ||
+        jcodeConfig ||
         deepSeekConfig ||
         ompConfig ||
         openCodeConfig ||
@@ -4492,6 +4512,7 @@ export function registerSessionRoutes(
             piConfig,
             grokConfig,
             copilotConfig,
+            jcodeConfig,
             deepSeekConfig,
           } as unknown as Record<string, unknown>)
         );
@@ -4579,7 +4600,7 @@ export function registerSessionRoutes(
         writeFileSync(join(resolvedCasePath, 'CLAUDE.md'), claudeMd);
 
         // Write .claude/settings.local.json with hooks for desktop notifications
-        // (Claude-specific — OpenCode, Codex, Gemini, Antigravity, Pi, Grok, DeepSeek and OMP use their own systems)
+        // (Claude-specific — OpenCode, Codex, Gemini, Antigravity, Pi, Grok, DeepSeek, OMP and jcode use their own systems)
         if (
           mode !== 'opencode' &&
           mode !== 'codex' &&
@@ -4587,7 +4608,8 @@ export function registerSessionRoutes(
           mode !== 'antigravity' &&
           mode !== 'pi' &&
           mode !== 'grok' &&
-          mode !== 'omp'
+          mode !== 'omp' &&
+          mode !== 'jcode'
         ) {
           await writeHooksConfig(resolvedCasePath);
         }
@@ -4695,6 +4717,7 @@ export function registerSessionRoutes(
       piConfig,
       grokConfig,
       copilotConfig,
+      jcodeConfig,
       deepSeekConfig,
       ompConfig,
     };
@@ -4914,6 +4937,7 @@ export function registerSessionRoutes(
       piConfig: mode === 'pi' ? qsGatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? qsGatedGrokConfig : undefined,
       copilotConfig: mode === 'copilot' ? qsGatedCopilotConfig : undefined,
+      jcodeConfig: mode === 'jcode' ? qsLaunchConfigs.jcodeConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? qsGatedDeepSeekConfig : undefined,
       ompConfig: qsResolvedOmpConfig,
       envOverrides: qsGatedEnvOverrides,

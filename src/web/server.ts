@@ -4171,6 +4171,7 @@ export class WebServer extends EventEmitter {
               piConfig: muxSession.mode === 'pi' ? savedState?.piConfig : undefined,
               grokConfig: muxSession.mode === 'grok' ? savedState?.grokConfig : undefined,
               copilotConfig: muxSession.mode === 'copilot' ? savedState?.copilotConfig : undefined,
+              jcodeConfig: muxSession.mode === 'jcode' ? savedState?.jcodeConfig : undefined,
               deepSeekConfig: muxSession.mode === 'deepseek' ? savedState?.deepSeekConfig : undefined,
               ompConfig: muxSession.mode === 'omp' ? savedState?.ompConfig : undefined,
               envOverrides: savedEnvOverrides,

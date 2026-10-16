@@ -85,3 +85,36 @@ export function collectDescendants(
   }
   return out;
 }
+
+/**
+ * The descendants a session kill may signal when the pane's CLI runs a SHARED daemon
+ * (`capabilities.sharedDaemon`): only those still in the pane's own process group.
+ *
+ * Such a CLI's first client starts a per-user daemon that every other session of that
+ * CLI talks to, and the daemon detaches itself into its own session (setsid), which also
+ * makes it the leader of a new process group. It stays a descendant of that first pane
+ * by parent pid, though, so the plain descendant kill took it down with the pane and cut
+ * every other session off (measured with jcode: deleting the tab that happened to start
+ * the daemon left the next tab's client reconnecting forever). A process that left the
+ * pane's group did so on purpose, and its whole subtree inherits the new group, so the
+ * group is what draws the line.
+ *
+ * A pid whose group could not be read is KEPT in the kill list: it most likely exited
+ * between the walk and the lookup, and the kill path already checks liveness before it
+ * signals. Callers that could not read the groups at all keep the full list, which is
+ * the behaviour before this existed.
+ *
+ * @param descendants the walk's result for the pane pid
+ * @param groupOf pgid per pid, as read once by the caller
+ * @param paneGroup the pane process's own pgid
+ */
+export function descendantsInPaneGroup(
+  descendants: readonly number[],
+  groupOf: ReadonlyMap<number, number>,
+  paneGroup: number
+): number[] {
+  return descendants.filter((pid) => {
+    const group = groupOf.get(pid);
+    return group === undefined || group === paneGroup;
+  });
+}

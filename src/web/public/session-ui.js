@@ -89,6 +89,15 @@ const RUN_MODE_LAUNCH = {
     // The multi-user clamp forces it back off for non-granted owners server-side.
     buildConfig: () => ({ copilotConfig: { allowAll: true } }),
   },
+  jcode: {
+    label: 'jcode',
+    installHint: 'jcode not found. Install with: curl -fsSL https://jcode.sh/install | bash',
+    // No custom endpoint recipe yet: jcode's provider lives in its shared daemon, not the pane.
+    supportsCustomModel: false,
+    // Deliberately no jcodeConfig: jcode has no approval prompts, so there is no bypass
+    // switch to opt into (same as pi).
+    buildConfig: () => null,
+  },
   grok: {
     label: 'Grok',
     installHint: 'Grok CLI not found. Install with: curl -fsSL https://x.ai/cli/install.sh | bash',
@@ -2698,6 +2707,10 @@ Object.assign(CodemanApp.prototype, {
 
   async runCopilot() {
     return this._runCliMode('copilot');
+  },
+
+  async runJcode() {
+    return this._runCliMode('jcode');
   },
 
 

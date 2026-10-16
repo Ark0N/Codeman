@@ -22,7 +22,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { collectDescendants } from './proc-tree.js';
+import { collectDescendants, descendantsInPaneGroup } from './proc-tree.js';
 import {
   foreignViewSessionName,
   buildForeignDockerViewKillCommand,
@@ -61,6 +61,7 @@ import {
   type PiConfig,
   type GrokConfig,
   type CopilotConfig,
+  type JcodeConfig,
   type DeepSeekConfig,
   type OmpConfig,
   type SessionRemote,
@@ -1213,6 +1214,7 @@ export function buildSpawnCommand(options: {
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
   copilotConfig?: CopilotConfig;
+  jcodeConfig?: JcodeConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   resumeSessionId?: string;
@@ -2563,6 +2565,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       piConfig,
       grokConfig,
       copilotConfig,
+      jcodeConfig,
       deepSeekConfig,
       ompConfig,
       resumeSessionId,
@@ -2662,6 +2665,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       piConfig,
       grokConfig,
       copilotConfig,
+      jcodeConfig,
       deepSeekConfig,
       ompConfig,
       resumeSessionId,
@@ -2931,6 +2935,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       piConfig,
       grokConfig,
       copilotConfig,
+      jcodeConfig,
       deepSeekConfig,
       ompConfig,
       resumeSessionId,
@@ -2982,6 +2987,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       piConfig,
       grokConfig,
       copilotConfig,
+      jcodeConfig,
       deepSeekConfig,
       ompConfig,
       resumeSessionId,
@@ -3160,6 +3166,45 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     });
   }
 
+  /**
+   * Narrow a pane's descendants to the ones a kill may signal, for a CLI that runs a
+   * shared daemon (`capabilities.sharedDaemon`): those still in the pane's process group
+   * (see `descendantsInPaneGroup()`). One bounded `ps` for the pane and its descendants,
+   * as an argv (no shell). Any other CLI, or a lookup that failed, gets the list back
+   * unchanged, which is the kill as it always was.
+   */
+  private async killableDescendants(mode: SessionMode, panePid: number, descendants: number[]): Promise<number[]> {
+    if (descendants.length === 0 || !getCli(mode)?.capabilities.sharedDaemon) return descendants;
+    try {
+      const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
+        execFile(
+          'ps',
+          ['-o', 'pid=,pgid=', '-p', [panePid, ...descendants].join(',')],
+          { timeout: EXEC_TIMEOUT_MS },
+          // `ps -p` exits non-zero when some pid is already gone; what it printed still counts.
+          (err, out) => (out ? resolve({ stdout: out }) : reject(err ?? new Error('ps printed nothing')))
+        );
+      });
+      const groupOf = new Map<number, number>();
+      for (const line of stdout.split('\n')) {
+        const [pid, pgid] = line.trim().split(/\s+/).map(Number);
+        if (Number.isInteger(pid) && Number.isInteger(pgid)) groupOf.set(pid, pgid);
+      }
+      const paneGroup = groupOf.get(panePid);
+      if (paneGroup === undefined) return descendants;
+      const killable = descendantsInPaneGroup(descendants, groupOf, paneGroup);
+      if (killable.length < descendants.length) {
+        console.log(
+          `[TmuxManager] Sparing ${descendants.length - killable.length} process(es) outside pane ${panePid}'s group (the CLI's shared daemon)`
+        );
+      }
+      return killable;
+    } catch (err) {
+      console.warn(`[TmuxManager] Could not read process groups for pane ${panePid}; killing every descendant:`, err);
+      return descendants;
+    }
+  }
+
   // Check if a process is still alive. Signal decisions only: an unreaped zombie
   // counts here, so its process group still gets the SIGKILL below. The WAITS use
   // waitForProcessesExit(), which counts a zombie as exited.
@@ -3308,8 +3353,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     const allPids: number[] = [currentPid];
 
-    // Strategy 1: Kill all child processes recursively
-    let childPids = await this.getChildPidsFresh(currentPid);
+    // Strategy 1: Kill all child processes recursively (but never a shared daemon the
+    // pane's CLI started for every session of that CLI: see killableDescendants)
+    let childPids = await this.killableDescendants(session.mode, currentPid, await this.getChildPidsFresh(currentPid));
     if (childPids.length > 0) {
       console.log(`[TmuxManager] Found ${childPids.length} child processes to kill`);
       allPids.push(...childPids);
@@ -3328,7 +3374,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // catch anything spawned since the first one.
       await waitForProcessesExit(childPids, { timeoutMs: TMUX_KILL_WAIT_MS });
 
-      childPids = await this.getChildPidsFresh(currentPid);
+      childPids = await this.killableDescendants(session.mode, currentPid, await this.getChildPidsFresh(currentPid));
       for (const childPid of childPids) {
         if (this.isProcessAlive(childPid)) {
           try {

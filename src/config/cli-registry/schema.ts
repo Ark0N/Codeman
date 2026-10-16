@@ -314,6 +314,8 @@ const capabilitiesSchema = z
     // Keep the PTY's rows while a phone keyboard is up (inline renderers only).
     // Optional: absent means the keyboard resizes, the safe default.
     keyboardHold: z.literal('inline').optional(),
+    // Spare the CLI's own detached daemon (another process group) when a pane is killed.
+    sharedDaemon: z.boolean().optional(),
     keyboardAccessory: z.enum(['agent', 'shell']),
     privilegedCommandGate: z.boolean(),
     startMode: z.enum(['interactive', 'shell']),
