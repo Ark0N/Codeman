@@ -17,7 +17,7 @@ import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } f
 import { isUnauthenticatedNetworkAcknowledged } from '../network-auth-policy.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { findUser, canUsernameRunPrivilegedCommands } from '../../user-store.js';
-import { getAuthUser, requireAdmin, canAccessOwned } from '../route-helpers.js';
+import { getAuthUser, isAdmin, requireAdmin, canAccessOwned } from '../route-helpers.js';
 import {
   ConfigUpdateSchema,
   SettingsUpdateSchema,
@@ -142,6 +142,28 @@ export function resolveSpanUrl(hostHeader: string | undefined, fallbackPort = '3
   const hostPort = String(hostHeader ?? '').split(':')[1] ?? '';
   const port = /^\d+$/.test(hostPort) ? hostPort : fallbackPort;
   return `http://localhost:${port}`;
+}
+
+/**
+ * What GET /api/settings answers a NON-ADMIN in multi-user mode: settings.json minus what
+ * belongs to the server's admin rather than to the reader. `voiceSettings.apiKey` is the
+ * Deepgram key an admin saved, a credential (the reader's browser seeded it into its own
+ * voice config and dictated on the admin's account); `caseOrder` and `lastUsedCase` name the
+ * admin's cases. Everything else stays readable, because the page reads the synced feature
+ * switches from it. Writes are admin-only there (PUT /api/settings). Exported for unit testing.
+ */
+export function settingsForNonAdmin(settings: unknown): unknown {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return settings;
+  const out: Record<string, unknown> = { ...(settings as Record<string, unknown>) };
+  delete out.caseOrder;
+  delete out.lastUsedCase;
+  const voice = out.voiceSettings;
+  if (voice && typeof voice === 'object' && !Array.isArray(voice) && 'apiKey' in voice) {
+    const voiceOut: Record<string, unknown> = { ...(voice as Record<string, unknown>) };
+    delete voiceOut.apiKey;
+    out.voiceSettings = voiceOut;
+  }
+  return out;
 }
 
 export function registerSystemRoutes(
@@ -941,7 +963,7 @@ export function registerSystemRoutes(
 
   // ========== Settings ==========
 
-  app.get('/api/settings', async () => {
+  app.get('/api/settings', async (req) => {
     // A plain read. This route must NEVER write settings.json: readJsonConfig()
     // answers `{}` for ANY read failure (a parse error, EACCES, EMFILE, a read
     // that lands inside PUT's non-atomic write), not only for a missing file,
@@ -953,7 +975,11 @@ export function registerSystemRoutes(
     // `workspaceHooksEnabled` means ON, and the client resolves its own display
     // default through planUsageChipEnabled(). Pinned by
     // test/routes/system-routes-settings-get-plan-usage-default.test.ts.
-    return readJsonConfig(SETTINGS_PATH, 'settings', {});
+    const settings = await readJsonConfig<unknown>(SETTINGS_PATH, 'settings', {});
+    // Readable by every signed-in user, but a non-admin in multi-user mode gets it without
+    // the admin's credential and case names (settingsForNonAdmin). isAdmin is always true in
+    // single-user mode, so that answer is the file as it is.
+    return isAdmin(req) ? settings : settingsForNonAdmin(settings);
   });
 
   app.put('/api/settings', async (req, reply) => {

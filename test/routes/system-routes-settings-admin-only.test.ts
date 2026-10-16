@@ -10,14 +10,16 @@
  *    tunnel, the tmux history limit);
  *  - the same gate on the other server-wide writes: PUT /api/execution/model-config,
  *    PUT /api/config and PUT /api/cases/order;
- *  - an admin, and single-user mode, write as before; GET /api/settings stays readable.
+ *  - an admin, and single-user mode, write as before; GET /api/settings stays readable,
+ *    but a non-admin reads it without the admin's Deepgram key and case names
+ *    (settingsForNonAdmin).
  *
  * Uses app.inject(), so no real HTTP port is needed. Port: N/A.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
-import { registerSystemRoutes } from '../../src/web/routes/system-routes.js';
+import { registerSystemRoutes, settingsForNonAdmin } from '../../src/web/routes/system-routes.js';
 import { registerCaseRoutes } from '../../src/web/routes/case-routes.js';
 
 const { STORED, subagentWatcher, imageWatcher, workflowRunWatcher } = vi.hoisted(() => {
@@ -66,6 +68,7 @@ vi.mock('../../src/workflow-run-watcher.js', () => ({ workflowRunWatcher }));
 
 import fs from 'node:fs/promises';
 const writeFile = vi.mocked(fs.writeFile);
+const readFile = vi.mocked(fs.readFile);
 
 const NON_ADMIN = { username: 'bob', role: 'user' } as const;
 const ADMIN = { username: 'root', role: 'admin' } as const;
@@ -172,6 +175,54 @@ describe('server-wide settings writes are admin-only in multi-user mode', () => 
         expect(ctx.mux.setHistoryLimit).toHaveBeenCalledTimes(1);
       });
     }
+  });
+
+  describe("GET /api/settings: what is the admin's stays the admin's", () => {
+    // An admin's App Settings save stores the Deepgram key (voiceSettings.apiKey) here, and
+    // the admin's own cases are named in caseOrder / lastUsedCase.
+    const WITH_SECRETS = {
+      autoNameSessions: true,
+      runMode: 'shell',
+      caseOrder: ['rootcase', 'secret-project'],
+      lastUsedCase: 'secret-project',
+      voiceSettings: { provider: 'deepgram', apiKey: 'dg-SECRET-probe-123', language: 'en' },
+    };
+
+    it('gives a non-admin the settings without the Deepgram key and the case names', async () => {
+      const { app } = await as(NON_ADMIN);
+      readFile.mockResolvedValueOnce(JSON.stringify(WITH_SECRETS));
+      const res = await app.inject({ method: 'GET', url: '/api/settings' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body).not.toContain('dg-SECRET-probe-123');
+      expect(res.body).not.toContain('secret-project');
+      expect(JSON.parse(res.body)).toEqual({
+        autoNameSessions: true,
+        runMode: 'shell',
+        voiceSettings: { provider: 'deepgram', language: 'en' },
+      });
+    });
+
+    for (const [label, user] of [
+      ['an admin in multi-user mode', ADMIN],
+      ['single-user mode', null],
+    ] as const) {
+      it(`gives ${label} the file as it is`, async () => {
+        const { app } = await as(user);
+        readFile.mockResolvedValueOnce(JSON.stringify(WITH_SECRETS));
+        const res = await app.inject({ method: 'GET', url: '/api/settings' });
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body)).toEqual(WITH_SECRETS);
+      });
+    }
+
+    it('settingsForNonAdmin leaves its input alone and passes a non-object through', () => {
+      const input = structuredClone(WITH_SECRETS);
+      settingsForNonAdmin(input);
+      expect(input).toEqual(WITH_SECRETS);
+      expect(settingsForNonAdmin([1, 2])).toEqual([1, 2]);
+      expect(settingsForNonAdmin(null)).toBe(null);
+      expect(settingsForNonAdmin({ voiceSettings: { language: 'de' } })).toEqual({ voiceSettings: { language: 'de' } });
+    });
   });
 
   describe('PUT /api/execution/model-config', () => {

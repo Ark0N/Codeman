@@ -7,7 +7,8 @@
  * real file back, so "settings.json is unchanged" is asserted on bytes:
  *  - PUT /api/settings, PUT /api/execution/model-config and PUT /api/cases/order are
  *    403 FORBIDDEN for a non-admin, and the file is byte-identical afterwards;
- *  - GET /api/settings stays readable by the non-admin;
+ *  - GET /api/settings stays readable by the non-admin, without the admin's Deepgram
+ *    key and case names (an admin still reads the file as it is);
  *  - a non-admin's quick-start does not record its case as `lastUsedCase` (a key every
  *    user can read through GET /api/settings), while an admin's still does;
  *  - an admin's PUT /api/settings still writes.
@@ -37,6 +38,7 @@ const INITIAL = {
   lastUsedCase: 'rootcase',
   caseOrder: ['rootcase'],
   modelConfig: { defaultModel: 'sonnet' },
+  voiceSettings: { provider: 'deepgram', apiKey: 'dg-SECRET-live-456', language: 'en' },
 };
 const readSettingsBytes = () => fs.readFile(SETTINGS_PATH, 'utf-8');
 
@@ -101,10 +103,18 @@ describe('a non-admin and the server-wide settings.json', () => {
     expect(await readSettingsBytes()).toBe(before);
   });
 
-  it('can still read it', async () => {
+  it("can still read it, without the admin's Deepgram key and case names", async () => {
     const res = await send('GET', '/api/settings', bob);
     expect(res.status).toBe(200);
     expect(res.body.data.autoNameSessions).toBe(false);
+    expect(JSON.stringify(res.body)).not.toContain('dg-SECRET-live-456');
+    expect(res.body.data.voiceSettings).toEqual({ provider: 'deepgram', language: 'en' });
+    expect('caseOrder' in res.body.data).toBe(false);
+    expect('lastUsedCase' in res.body.data).toBe(false);
+
+    const admin = await send('GET', '/api/settings', root);
+    expect(admin.body.data.voiceSettings.apiKey).toBe('dg-SECRET-live-456');
+    expect(admin.body.data.caseOrder).toEqual(['rootcase']);
   });
 
   it("does not get its quick-start case recorded as everyone's lastUsedCase; an admin's still is", async () => {
