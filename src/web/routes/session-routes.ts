@@ -331,6 +331,16 @@ export function stripInkRedrawBloat(buffer: string): string {
 const TEXT_UPLOAD_EXTS = new Set(['.txt', '.md', '.csv', '.tsv', '.json', '.log', '.yaml', '.yml', '.xml']);
 
 /**
+ * Documents a user hands an agent to read: the office formats plus the text
+ * family. Curated on purpose, never SUPPORTED_ATTACHMENT_EXTENSIONS or
+ * EDITABLE_EXTENSIONS, which carry sh/py/js/html; a prompt upload is a thing
+ * to read, not a thing to run or serve. Each is judged on its bytes by
+ * imageMagicMatchesExt (signature, or UTF-8 without NUL for text). The browser
+ * keeps its own copies (test/upload-document-list-parity.test.ts pins them).
+ */
+export const ALLOWED_DOCUMENT_EXTS = new Set(['.pdf', '.docx', '.pptx', '.xlsx', '.zip', ...TEXT_UPLOAD_EXTS]);
+
+/**
  * Validate upload bytes against a declared extension. Sniffs the first ~12 bytes
  * for a known magic-number signature (a text file is instead required to be
  * UTF-8 without a NUL byte, the one check plain text allows). Defends against
@@ -5447,12 +5457,6 @@ export function registerSessionRoutes(
   // so an uploaded video is a type that previews. 3gp/mkv are deliberately out: they
   // would upload but not preview, and a phone's camera roll produces neither.
   const ALLOWED_VIDEO_EXTS = new Set([...VIDEO_ATTACHMENT_EXTENSIONS].map((e) => `.${e}`));
-  // Documents a user hands an agent to read: the office formats plus the text
-  // family. Curated on purpose, never SUPPORTED_ATTACHMENT_EXTENSIONS or
-  // EDITABLE_EXTENSIONS, which carry sh/py/js/html; a prompt upload is a thing
-  // to read, not a thing to run or serve. Each is judged on its bytes by
-  // imageMagicMatchesExt (signature, or UTF-8 without NUL for text).
-  const ALLOWED_DOCUMENT_EXTS = new Set(['.pdf', '.docx', '.pptx', '.xlsx', '.zip', ...TEXT_UPLOAD_EXTS]);
   const VIDEO_MIME_EXT: Record<string, string> = {
     mp4: '.mp4',
     quicktime: '.mov',
