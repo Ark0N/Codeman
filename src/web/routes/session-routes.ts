@@ -5683,14 +5683,24 @@ export function registerSessionRoutes(
       if (!imageMagicMatchesExt(imageBytes, origExt)) {
         // The first bytes of a text file are user content, so for text the log
         // names the failure and never the bytes; a signature is safe to print.
-        const detail = TEXT_UPLOAD_EXTS.has(origExt)
-          ? `reason=${imageBytes.includes(0) ? 'nul-byte' : 'not-utf8'}`
+        // A text refusal names the encoding, since an Excel or Notepad export
+        // (UTF-16 with a BOM, or Windows-1252) is not a corrupt file.
+        const isText = TEXT_UPLOAD_EXTS.has(origExt);
+        const bom = imageBytes.length >= 2 ? imageBytes.readUInt16BE(0) : 0;
+        const utf16 = bom === 0xfffe || bom === 0xfeff;
+        const detail = isText
+          ? `reason=${utf16 ? 'utf16-bom' : imageBytes.includes(0) ? 'nul-byte' : 'not-utf8'}`
           : `magic=${imageBytes.subarray(0, 12).toString('hex')}`;
         console.warn(
           `[paste-image] document mismatch: filename=${JSON.stringify(part.filename)} mime=${JSON.stringify(part.mimetype)} declaredExt=${origExt} size=${imageBytes.length} ${detail}`
         );
         reply.code(415);
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `File bytes do not match declared type ${origExt}`);
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          isText
+            ? `This ${origExt} file is ${utf16 ? 'UTF-16 text, not UTF-8' : 'not UTF-8 text'}; save it as UTF-8 and attach it again`
+            : `File bytes do not match declared type ${origExt}`
+        );
       }
       const saved = await writeBufferedUpload(
         session.workingDir,
