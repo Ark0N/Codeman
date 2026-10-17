@@ -237,7 +237,7 @@ minutes, never retry the credential.
 flushed slightly *after* the `stop` hook fires, so a read taken the instant the wait
 returns is too early (verified live: empty on the first call, full prose seconds later).
 It is also `""` before the worker's first completed turn, and permanently `""` for
-`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok` and `omp`, which write no transcript at
+`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok`, `omp` and `copilot`, which write no transcript at
 all. `deepseek` is NOT one of those — it is read from `$DSH_HOME/sessions/**` and lags
 for the same reason claude does (the harness finalizes the assistant message just after
 it reports `idle`), so poll it the same way.
@@ -341,7 +341,7 @@ ESC=$(printf '\033')
 
 `POST /api/v1/quick-start` body (all optional):
 `{"caseName":"worker-1","mode":"claude","sessionName":"auth-worker","effort":"high"}`
-,  `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity|pi|grok|deepseek|omp`; response is
+,  `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity|pi|grok|deepseek|omp|copilot`; response is
 `.data.{sessionId, caseName, casePath}`. Creates the case directory (a real directory
 on the user's disk) if missing, do not retry it in a loop, and remember the name.
 
@@ -356,9 +356,9 @@ a soft default the worker can change with `/advisor`. Remote and docker cases re
 `OPERATION_FAILED`; it never falls back to claude. Probe first whenever you did not pick
 the mode yourself: `GET /api/v1/claude/status`, `GET /api/v1/opencode/status`,
 `GET /api/v1/codex/status`, `GET /api/v1/gemini/status`, `GET /api/v1/antigravity/status`, `GET /api/v1/grok/status`, `GET /api/v1/deepseek/status`,
-`GET /api/v1/pi/status` and `GET /api/v1/omp/status` each return `.data.{available, path}` (no session needed).
-Pi's, grok's and OMP's also carry `.data.version`, because `pi` is a short generic name,
-`grok` is a name with npm squatters, and `omp` is a similarly short name, so an unrelated
+`GET /api/v1/pi/status`, `GET /api/v1/omp/status` and `GET /api/v1/copilot/status` each return `.data.{available, path}` (no session needed).
+Pi's, grok's, OMP's and Copilot's also carry `.data.version`, because `pi` is a short generic name,
+`grok` is a name with npm squatters, and `omp` is a similarly short name, and `copilot` is a generic one, so an unrelated
 binary on `$PATH` can shadow any of them: the resolver rejects one whose `--version` is
 not version-shaped, so `available:false` there can mean "a different program of the same
 name is in front" rather than "nothing is installed". `shell` has no CLI to probe.
@@ -486,7 +486,7 @@ Quirks that will bite you:
 - ⚠️ **`active-tools` proves presence, never absence.** It is fed by the BashToolParser,
   which reads Claude's rendered `● Bash(…)` lines, and `_processExpensiveParsers`
   returns early for every external CLI mode (`session.ts:~2225`), so it is permanently
-  `[]` on `opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`/`omp`. ⚠️ **`shell` is NOT one of those**
+  `[]` on `opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`/`omp`/`copilot`. ⚠️ **`shell` is NOT one of those**
   (`isExternalCliMode`, `session.ts:176-187`, lists only those seven), so the parser does
   run on a shell worker, and `TEXT_COMMAND_PATTERN` (`bash-tool-parser.ts:89`) matches
   bare `tail|cat|head|less|grep|watch|multitail <path>` lines with no `● Bash(` wrapper:

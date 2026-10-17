@@ -506,6 +506,8 @@ describe('agent spawn', () => {
   it('takes the readiness mark from the CLI registry, not from a mode list', () => {
     expect(composerReadyMark('claude')).toBe('shift+tab');
     expect(composerReadyMark('deepseek')).toBe('❯');
+    // Copilot's trust dialog draws `❯ 1. Yes`, so its mark is the composer's footer hint instead.
+    expect(composerReadyMark('copilot')).toBe('/ commands · ? help');
     expect(composerReadyMark('pi')).toBeUndefined();
     expect(composerReadyMark('no-such-cli')).toBeUndefined();
   });

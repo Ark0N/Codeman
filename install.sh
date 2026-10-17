@@ -168,19 +168,19 @@ export PUPPETEER_SKIP_DOWNLOAD="${PUPPETEER_SKIP_DOWNLOAD:-1}"
 # script will ever execute, and they arrive embedded in this file — same TLS fetch, same
 # commit as the script itself. Nothing fetched at install time is ever executed; there is
 # no network refresh of these arrays. See cli_catalog_select_platform below.
-CLI_IDS=('claude' 'shell' 'opencode' 'codex' 'gemini' 'antigravity' 'pi' 'grok' 'deepseek' 'omp')
-CLI_LABELS=('Claude Code' 'Shell' 'OpenCode' 'Codex' 'Gemini' 'Antigravity' 'Pi' 'Grok' 'DeepSeek' 'OMP')
-CLI_ENABLED=(1 1 1 1 1 1 1 1 1 1)
-CLI_LAUNCHER_ONLY=(0 0 0 0 0 0 0 0 1 0)
-CLI_DOCS=('https://docs.claude.com/claude-code' '' 'https://opencode.ai/docs' 'https://developers.openai.com/codex/cli' 'https://github.com/google-gemini/gemini-cli' 'https://antigravity.google/cli' 'https://pi.dev' 'https://github.com/xai-org/grok-build' 'https://github.com/deepseek-ai/deepseek-harness' 'https://omp.sh')
-CLI_CMD_LINUX=('curl -fsSL https://claude.ai/install.sh | bash' '' 'curl -fsSL https://opencode.ai/install | bash' 'npm install -g @openai/codex' 'npm install -g @google/gemini-cli' 'curl -fsSL https://antigravity.google/cli/install.sh | bash' 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent' 'curl -fsSL https://x.ai/cli/install.sh | bash' '' 'curl -fsSL https://omp.sh/install | sh')
-CLI_CMD_DARWIN=('curl -fsSL https://claude.ai/install.sh | bash' '' 'curl -fsSL https://opencode.ai/install | bash' 'npm install -g @openai/codex' 'npm install -g @google/gemini-cli' 'curl -fsSL https://antigravity.google/cli/install.sh | bash' 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent' 'curl -fsSL https://x.ai/cli/install.sh | bash' '' 'brew install can1357/tap/omp')
-CLI_ALL_BINS=('claude' 'opencode' 'codex' 'gemini' 'agy' 'pi' 'grok' 'dsh' 'omp')
-CLI_BIN_OFF=(0 1 1 2 3 4 5 6 7 8)
-CLI_BIN_LEN=(1 0 1 1 1 1 1 1 1 1)
-CLI_ALL_PATHS=("$HOME/.local/bin/claude" "$HOME/.claude/local/claude" "/usr/local/bin/claude" "$HOME/.npm-global/bin/claude" "$HOME/bin/claude" "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode" "/usr/local/bin/opencode" "$HOME/go/bin/opencode" "$HOME/.bun/bin/opencode" "$HOME/.npm-global/bin/opencode" "$HOME/bin/opencode" "$HOME/.codex/bin/codex" "$HOME/.local/bin/codex" "/usr/local/bin/codex" "$HOME/.bun/bin/codex" "$HOME/.npm-global/bin/codex" "$HOME/bin/codex" "$HOME/.gemini/bin/gemini" "$HOME/.local/bin/gemini" "/usr/local/bin/gemini" "$HOME/.bun/bin/gemini" "$HOME/.npm-global/bin/gemini" "$HOME/bin/gemini" "$HOME/.local/bin/agy" "$HOME/.antigravity/bin/agy" "/usr/local/bin/agy" "$HOME/bin/agy" "$HOME/.local/bin/pi" "/usr/local/bin/pi" "$HOME/.bun/bin/pi" "$HOME/.npm-global/bin/pi" "$HOME/bin/pi" "$HOME/.grok/bin/grok" "$HOME/.local/bin/grok" "/usr/local/bin/grok" "$HOME/bin/grok" "$HOME/.local/bin/dsh" "/usr/local/bin/dsh" "$HOME/.npm-global/bin/dsh" "$HOME/bin/dsh" "$HOME/.local/bin/omp" "$HOME/.omp/bin/omp" "/usr/local/bin/omp" "$HOME/.bun/bin/omp" "$HOME/.npm-global/bin/omp" "$HOME/bin/omp")
-CLI_PATH_OFF=(0 5 5 12 18 24 28 33 37 41)
-CLI_PATH_LEN=(5 0 7 6 6 4 5 4 4 6)
+CLI_IDS=('claude' 'shell' 'opencode' 'codex' 'gemini' 'antigravity' 'pi' 'grok' 'deepseek' 'omp' 'copilot')
+CLI_LABELS=('Claude Code' 'Shell' 'OpenCode' 'Codex' 'Gemini' 'Antigravity' 'Pi' 'Grok' 'DeepSeek' 'OMP' 'GitHub Copilot')
+CLI_ENABLED=(1 1 1 1 1 1 1 1 1 1 1)
+CLI_LAUNCHER_ONLY=(0 0 0 0 0 0 0 0 1 0 0)
+CLI_DOCS=('https://docs.claude.com/claude-code' '' 'https://opencode.ai/docs' 'https://developers.openai.com/codex/cli' 'https://github.com/google-gemini/gemini-cli' 'https://antigravity.google/cli' 'https://pi.dev' 'https://github.com/xai-org/grok-build' 'https://github.com/deepseek-ai/deepseek-harness' 'https://omp.sh' 'https://github.com/github/copilot-cli')
+CLI_CMD_LINUX=('curl -fsSL https://claude.ai/install.sh | bash' '' 'curl -fsSL https://opencode.ai/install | bash' 'npm install -g @openai/codex' 'npm install -g @google/gemini-cli' 'curl -fsSL https://antigravity.google/cli/install.sh | bash' 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent' 'curl -fsSL https://x.ai/cli/install.sh | bash' '' 'curl -fsSL https://omp.sh/install | sh' 'npm install -g @github/copilot')
+CLI_CMD_DARWIN=('curl -fsSL https://claude.ai/install.sh | bash' '' 'curl -fsSL https://opencode.ai/install | bash' 'npm install -g @openai/codex' 'npm install -g @google/gemini-cli' 'curl -fsSL https://antigravity.google/cli/install.sh | bash' 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent' 'curl -fsSL https://x.ai/cli/install.sh | bash' '' 'brew install can1357/tap/omp' 'npm install -g @github/copilot')
+CLI_ALL_BINS=('claude' 'opencode' 'codex' 'gemini' 'agy' 'pi' 'grok' 'dsh' 'omp' 'copilot')
+CLI_BIN_OFF=(0 1 1 2 3 4 5 6 7 8 9)
+CLI_BIN_LEN=(1 0 1 1 1 1 1 1 1 1 1)
+CLI_ALL_PATHS=("$HOME/.local/bin/claude" "$HOME/.claude/local/claude" "/usr/local/bin/claude" "$HOME/.npm-global/bin/claude" "$HOME/bin/claude" "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode" "/usr/local/bin/opencode" "$HOME/go/bin/opencode" "$HOME/.bun/bin/opencode" "$HOME/.npm-global/bin/opencode" "$HOME/bin/opencode" "$HOME/.codex/bin/codex" "$HOME/.local/bin/codex" "/usr/local/bin/codex" "$HOME/.bun/bin/codex" "$HOME/.npm-global/bin/codex" "$HOME/bin/codex" "$HOME/.gemini/bin/gemini" "$HOME/.local/bin/gemini" "/usr/local/bin/gemini" "$HOME/.bun/bin/gemini" "$HOME/.npm-global/bin/gemini" "$HOME/bin/gemini" "$HOME/.local/bin/agy" "$HOME/.antigravity/bin/agy" "/usr/local/bin/agy" "$HOME/bin/agy" "$HOME/.local/bin/pi" "/usr/local/bin/pi" "$HOME/.bun/bin/pi" "$HOME/.npm-global/bin/pi" "$HOME/bin/pi" "$HOME/.grok/bin/grok" "$HOME/.local/bin/grok" "/usr/local/bin/grok" "$HOME/bin/grok" "$HOME/.local/bin/dsh" "/usr/local/bin/dsh" "$HOME/.npm-global/bin/dsh" "$HOME/bin/dsh" "$HOME/.local/bin/omp" "$HOME/.omp/bin/omp" "/usr/local/bin/omp" "$HOME/.bun/bin/omp" "$HOME/.npm-global/bin/omp" "$HOME/bin/omp" "$HOME/.local/bin/copilot" "/usr/local/bin/copilot" "$HOME/.bun/bin/copilot" "$HOME/.npm-global/bin/copilot" "$HOME/bin/copilot")
+CLI_PATH_OFF=(0 5 5 12 18 24 28 33 37 41 47)
+CLI_PATH_LEN=(5 0 7 6 6 4 5 4 4 6 5)
 # <<< END GENERATED CLI CATALOGUE
 
 # ============================================================================

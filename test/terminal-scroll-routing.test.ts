@@ -303,6 +303,31 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
     expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~'.repeat(3) }]);
   });
 
+  it('pages a Copilot pane when the tracking flag is stale, so the wheel never goes dead', () => {
+    // Copilot pages its own transcript on PageUp/PageDown (three PageUp moved lines 109-140 to
+    // 010-042 against a 140-line answer in tmux, and PageDown returned). While it tracks the mouse
+    // the wheel is forwarded as SGR reports; with the flag stale (a server restart) this is the
+    // gesture's fallback, on an alternate-screen TUI whose local buffer is one screen.
+    const { app, sent } = hollowApp({ mode: 'copilot', cliMouseTracking: false });
+
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(true);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
+
+    app._maybePageCliTranscript({ shiftKey: false }, 18);
+    app._flushWheelSgrQueue();
+    expect(sent[1]).toEqual({ id: 'sess-1', data: '\x1b[6~' });
+  });
+
+  it('does not page a Copilot pane that has real local scrollback', () => {
+    const { app, sent } = hollowApp({ mode: 'copilot' });
+    app.terminal.buffer.active.baseY = 200;
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(false);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([]);
+  });
+
   it('pages an OpenCode pane too, whose TUI never fills the local buffer', () => {
     // OpenCode's TUI runs on the ALTERNATE SCREEN (measured on 1.18.31: tmux
     // `alternate_on=1`, `history_size=0`), so the browser's normal buffer stays at
@@ -704,6 +729,29 @@ describe('pageKeysForGesture, the pure gesture rules both panes share', () => {
 
   it('caps a fling at PAGE_KEY_MAX_PER_BATCH keys', () => {
     expect(run([[-1000, 0]])[0].keys).toBe(UP.repeat(3));
+  });
+});
+
+describe('GitHub Copilot wheel forwarding', () => {
+  // Copilot's mouse DECSETs are stripped so a drag selects locally, which stops xterm from
+  // encoding the wheel for it; the gate must therefore forward by hand, but only while tracking.
+  it('forwards the wheel while the CLI tracks the mouse, with no version gate', () => {
+    const { app } = hollowApp({ mode: 'copilot', cliMouseTracking: true });
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
+  });
+
+  it('keeps Shift+wheel on local scrollback and falls back to paging when not tracking', () => {
+    const tracking = hollowApp({ mode: 'copilot', cliMouseTracking: true });
+    expect(tracking.app._shouldForwardWheelToApp({ shiftKey: true })).toBe(false);
+    const idle = hollowApp({ mode: 'copilot', cliMouseTracking: false });
+    expect(idle.app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+  });
+
+  it('does not change what other non-claude modes do', () => {
+    for (const mode of ['codex', 'opencode', 'grok', 'gemini']) {
+      const { app } = hollowApp({ mode, cliMouseTracking: true });
+      expect(app._shouldForwardWheelToApp({ shiftKey: false }), mode).toBe(false);
+    }
   });
 });
 

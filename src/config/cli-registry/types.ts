@@ -525,7 +525,7 @@ export interface CliCapabilities {
    *   own mouse support must work in the pane (htop/vim in a shell).
    *
    * Stock CLIs: `strip-full` = claude, codex, gemini (Ink TUIs); `strip-mux-and-mouse` =
-   * opencode (a full-screen TUI that enables tracking itself); `strip-mux-only` =
+   * opencode and copilot (full-screen TUIs that enable tracking themselves); `strip-mux-only` =
    * antigravity, grok, deepseek, omp; `preserve` = shell, pi.
    *
    * A fourth combination is the point to split this into flags; three is still cheaper
@@ -539,8 +539,12 @@ export interface CliCapabilities {
     /** Names a PREDICT_PROFILES key. Unknown or absent degrades to 'buffer', never to broken. */
     predictProfile?: string;
   };
-  /** Forwarding the wheel to the CLI's own transcript. 'never' keeps local scrollback. */
-  wheelForward: { mode: 'never' | 'version-gated'; minVersion?: string };
+  /**
+   * Forwarding the wheel to the CLI's own transcript. 'never' keeps local scrollback;
+   * 'version-gated' forwards from `minVersion` on; 'always' forwards at any version. Either
+   * forwarding mode applies only while the CLI has mouse tracking on (`cliMouseTracking`).
+   */
+  wheelForward: { mode: 'never' | 'version-gated' | 'always'; minVersion?: string };
   /**
    * The CLI pages its OWN transcript on PageUp/PageDown, so a wheel or touch scroll over
    * a pane with no local history can be turned into those keys instead of doing nothing
