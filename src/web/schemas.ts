@@ -104,6 +104,12 @@ export const FilesystemPreviewQuerySchema = z.object({
 });
 
 /**
+ * Query validation for a path-picker upload: `path` names the destination
+ * FOLDER, resolved and confined exactly like a browse.
+ */
+export const FilesystemUploadQuerySchema = FilesystemPreviewQuerySchema;
+
+/**
  * Body validation for `PUT /api/sessions/:id/file-content` (File Viewer edit
  * mode). `content.max()` counts UTF-16 code units, which for UTF-8 output is
  * always <= the byte length, so it is a coarse pre-filter that never rejects
