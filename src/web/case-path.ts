@@ -98,9 +98,13 @@ export function blockedReason(
     const firstSegment = absPath.slice(ctx.home.length + 1).split(sep)[0];
     if (/^\.codeman/.test(firstSegment)) return "Codeman's own data folder cannot be a case";
   }
+  // Only the cases folder itself and its DIRECT children are listed as local cases (GET /api/cases reads
+  // that one level), so only those would be registered twice. A deeper folder is not listed and is a
+  // perfectly good linked case: with CODEMAN_CASES_PATH pointing at a broad root such as /mnt/user/Scripts,
+  // refusing everything below it blocked most of the tree.
   for (const dir of ctx.casesDirs ?? []) {
-    if (isWithin(absPath, dir)) {
-      return 'That folder is inside the cases folder; create a case there with plain Create New (no custom folder)';
+    if (absPath === dir || dirname(absPath) === dir) {
+      return `That folder is in the cases folder (${dir}), where it is already listed as a case; create it there with plain Create New (no custom folder)`;
     }
   }
   return null;

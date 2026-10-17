@@ -54,12 +54,22 @@ describe('blockedReason', () => {
     expect(blockedReason('/usrlocal', c)).toBeNull();
   });
 
-  it('refuses a cases directory and anything inside it, when given', () => {
+  it('refuses a cases directory and its direct children, when given', () => {
     const withCases = { ...c, casesDirs: ['/home/u/codeman-cases'] };
     expect(blockedReason('/home/u/codeman-cases', withCases)).toMatch(/plain Create New/);
     expect(blockedReason('/home/u/codeman-cases/foo', withCases)).toMatch(/plain Create New/);
+    expect(blockedReason('/home/u/codeman-cases/foo', withCases)).toContain('/home/u/codeman-cases');
     expect(blockedReason('/home/u/codeman-cases-old/foo', withCases)).toBeNull();
     expect(blockedReason('/home/u/codeman-cases/foo', c)).toBeNull();
+  });
+
+  it('allows a folder deeper than a direct child of the cases directory (it is not listed as a local case)', () => {
+    // CODEMAN_CASES_PATH can be a broad root such as /mnt/user/Scripts; GET /api/cases lists only its
+    // direct children, so a folder further down can be linked without appearing twice.
+    const broad = { ...c, casesDirs: ['/mnt/user/Scripts'] };
+    expect(blockedReason('/mnt/user/Scripts/GitHub', broad)).toMatch(/plain Create New/);
+    expect(blockedReason('/mnt/user/Scripts/GitHub/opticon454', broad)).toBeNull();
+    expect(blockedReason('/mnt/user/Scripts/GitHub/opticon454/app', broad)).toBeNull();
   });
 
   it('judges against the system roots it is given', () => {
