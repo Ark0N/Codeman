@@ -123,6 +123,15 @@ export const MAX_PASTE_IMAGE_BYTES = parseInt(process.env.CODEMAN_MAX_PASTE_IMAG
  */
 export const MAX_PASTE_VIDEO_BYTES = parseInt(process.env.CODEMAN_MAX_PASTE_VIDEO_BYTES || '') || 1024 * 1024 * 1024; // 1GB
 
+/**
+ * Maximum size (bytes) of one file uploaded through the filesystem path picker
+ * (`POST /api/filesystem/upload`, the picker's Upload button). Like the video
+ * cap it streams to disk, so it bounds disk use, not memory. 0 is not accepted
+ * here: an upload always has a ceiling. Override: CODEMAN_MAX_PICKER_UPLOAD_BYTES (bytes)
+ */
+export const MAX_PICKER_UPLOAD_BYTES =
+  parseInt(process.env.CODEMAN_MAX_PICKER_UPLOAD_BYTES || '') || 1024 * 1024 * 1024; // 1GB
+
 // ============================================================================
 // File Download Limits
 // ============================================================================

@@ -236,6 +236,26 @@ export async function isWorkingDirAllowedForUsername(
   return isWorkingDirAllowed({ username, role: user?.role ?? 'user' }, workingDir);
 }
 
+/**
+ * Same-origin check for multipart uploads (paste-image, the path picker's
+ * upload). Cookies are SameSite=lax and multipart/form-data is a "simple" CORS
+ * request (no preflight), so a cross-origin `<form enctype="multipart/form-data">`
+ * submit would attach the session cookie unimpeded. Origin (else Referer) must
+ * match the request's Host; a non-browser client that sends neither must supply
+ * `X-Codeman-CSRF`, a header browsers cannot add cross-origin without a
+ * preflight, which the CORS config does not allow from other origins.
+ */
+export function isSameOriginMultipartRequest(req: FastifyRequest): boolean {
+  const reqHost = req.headers.host;
+  const source = req.headers.origin ?? req.headers.referer;
+  if (!source) return !!req.headers['x-codeman-csrf'];
+  try {
+    return new URL(source).host === reqHost;
+  } catch {
+    return false;
+  }
+}
+
 /** Whether the caller is an admin (or single-user mode, where the sole user is admin). */
 export function isAdmin(req: FastifyRequest): boolean {
   return !isMultiUserMode() || getAuthUser(req).role === 'admin';
