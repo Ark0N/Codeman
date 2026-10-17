@@ -158,10 +158,60 @@ describe('connection indicator — keystroke backlog threshold', () => {
     expect(els.connectionText.textContent).toBe('WS');
   });
 
-  it('annotates a genuine backlog (>4B) with a queued byte count', () => {
-    const { app, els } = makeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 40 });
+  it('annotates a genuine backlog (>4B) with a queued byte count once it has persisted', () => {
+    const { app, els } = makeApp({
+      activeSessionId: 's1',
+      _wsState: 'connected',
+      queuedBytes: 40,
+      // The backlog has been above the threshold for well over the hold.
+      _backlogOverSince: Date.now() - 5000,
+    } as never);
     app._updateConnectionIndicator();
     expect(els.connectionText.textContent).toMatch(/^WS · 40B queued$/);
+    app._pendingDeliveries.clear();
+    app._updateConnectionIndicator(); // drains: clears the hold timer
+  });
+});
+
+// A paste, an IME commit or a fast word is a few dozen bytes for a few milliseconds until its ACK
+// lands. Showing " · NB queued" for that made the "WS" pill widen and shrink on every burst.
+describe('connection indicator — a brief burst does not widen the pill', () => {
+  it('keeps the plain "WS" while a >4B burst is still inside the hold window', () => {
+    const { app, els } = makeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 40 });
+    app._updateConnectionIndicator();
+    expect(els.connectionText.textContent).toBe('WS');
+    app._pendingDeliveries.clear();
+    app._updateConnectionIndicator();
+    expect(els.connectionText.textContent).toBe('WS');
+  });
+
+  it('forgets the burst when it drains, so a later one starts a fresh hold', () => {
+    const { app } = makeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 40 });
+    app._updateConnectionIndicator();
+    expect((app as unknown as { _backlogOverSince: number | null })._backlogOverSince).not.toBeNull();
+    app._pendingDeliveries.clear();
+    app._updateConnectionIndicator();
+    expect((app as unknown as { _backlogOverSince: number | null })._backlogOverSince).toBeNull();
+    expect((app as unknown as { _backlogHoldTimer: unknown })._backlogHoldTimer).toBeNull();
+  });
+
+  it('schedules the re-render for when the hold elapses, with no keystroke or ACK needed', () => {
+    const { app } = makeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 40 });
+    app._updateConnectionIndicator();
+    expect((app as unknown as { _backlogHoldTimer: unknown })._backlogHoldTimer).not.toBeNull();
+    app._pendingDeliveries.clear();
+    app._updateConnectionIndicator(); // cancels it
+  });
+
+  it('shows the count once the same backlog has stayed up past the hold', () => {
+    const { app, els } = makeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 40 });
+    app._updateConnectionIndicator();
+    expect(els.connectionText.textContent).toBe('WS');
+    (app as unknown as { _backlogOverSince: number })._backlogOverSince = Date.now() - 1500;
+    app._updateConnectionIndicator();
+    expect(els.connectionText.textContent).toBe('WS · 40B queued');
+    app._pendingDeliveries.clear();
+    app._updateConnectionIndicator();
   });
 });
 
@@ -455,6 +505,24 @@ describe('_updateConnectionIndicator — COD-136 unchanged-skip', () => {
 
     expect(els.connectionIndicator.writes.display).toBe(displayWrites + 1);
     expect(els.connectionIndicator.style.display).toBe('flex');
+    expect(els.connectionText.textContent).toBe('WS');
+  });
+});
+
+describe('connection indicator — the backlog tracking never throws on the input path', () => {
+  it('still renders when the queue cannot be read', () => {
+    const { app, els } = makeApp({ activeSessionId: 's1', _wsState: 'connected' });
+    (app as unknown as { _pendingBytes: () => never })._pendingBytes = () => {
+      throw new Error('no queue');
+    };
+    // The compute reads the queue too, so stub it as the real hot path would see a healthy one.
+    (app as unknown as { _computeConnectionDescriptor: () => unknown })._computeConnectionDescriptor = () => ({
+      display: 'flex',
+      dotClass: 'connection-dot connected',
+      text: 'WS',
+      title: 'Terminal connected over WebSocket',
+    });
+    expect(() => app._updateConnectionIndicator()).not.toThrow();
     expect(els.connectionText.textContent).toBe('WS');
   });
 });

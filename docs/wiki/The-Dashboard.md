@@ -202,6 +202,13 @@ Both wait about 2.5 seconds before appearing, so a deploy that restarts the serv
 flash a warning at you every time. If the browser reports itself offline, the grace period
 is skipped.
 
+**The transport readout.** With a session open, the header shows how its terminal is
+connected: `WS` (WebSocket, the normal case), `WS…` (connecting or reconnecting) or `HTTP`
+(the WebSocket is unavailable and input goes over HTTP). If typed or pasted input is backing
+up faster than it is acknowledged, the readout grows a suffix such as `WS · 1.2KB queued`.
+That suffix appears only after the backlog has stayed up for about a second, so a paste or a
+fast burst that clears at once does not make the pill widen and shrink.
+
 There is also a watchdog for the case where the connection stops delivering without
 erroring. If the server's heartbeat stops arriving, Codeman reconnects on its own rather
 than sitting on a green dot showing frozen data.
