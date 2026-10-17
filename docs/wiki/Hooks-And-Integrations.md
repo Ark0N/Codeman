@@ -19,7 +19,7 @@ terminal into something that can notify you.
 | `teammate_idle`        | An agent-team member goes idle.                  | Team surfaces.                                 |
 | `task_completed`       | A task finishes.                                 | Task tracking, run summary.                    |
 
-This is why several Codeman features are Claude-only. The one partial exception is DeepSeek
+This is why several Codeman features are Claude-only. One partial exception is DeepSeek
 Harness, whose terminal front door reports idle, working and blocked to Codeman over the
 harness's own supervisor contract, so it gets the hook-driven surfaces without any hook
 file. Codex gets one of them from its screen: Codeman reads its approval, question and

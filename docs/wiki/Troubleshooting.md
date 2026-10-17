@@ -116,11 +116,12 @@ seconds in. Current versions confirm against the actual screen before believing 
 
 ### A session is stuck showing busy
 
-For Antigravity and Grok Build, idle detection is output-based and coarser by necessity:
-those CLIs expose no hooks and declare no working line Codeman can read off the screen.
-Codex, OpenCode, Gemini CLI, Pi and OMP get the same screen check Claude does, and DeepSeek
-Harness reports its own state. A session that has genuinely gone quiet will settle. If it
-never does, interrupt it (`Ctrl+C` with nothing selected).
+For Antigravity and Grok Build the busy and idle status is unreliable: those CLIs expose no
+hooks and declare no working line, so after launch Codeman has only generic cues to go on
+(Claude's `❯` prompt marker, a braille spinner glyph), which they may not draw. Codex,
+OpenCode, Gemini CLI, Pi and OMP get the same screen check Claude does, so a session of
+theirs that has genuinely gone quiet will settle. If it never does, interrupt it (`Ctrl+C`
+with nothing selected).
 
 ### The agent asks about bypass permissions every time
 

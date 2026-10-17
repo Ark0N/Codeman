@@ -216,8 +216,10 @@ runs no agent, and the external CLIs render their own TUIs and post no hooks
 (`deepseek`'s status bridge reports the same two, see its own docs). The one exception
 is `blocked` on `codex`: Codeman reads codex's approval, question and trust dialogs off
 its screen and raises `blocked` for them (see [Signals](#signals)). For every other mode
-only `idle`, `working` and `exit` are accepted, and of those only `exit` is
-dependable: see the caveats under [Signals](#signals) before building on `idle`.
+only `idle`, `working` and `exit` are accepted. `exit` is dependable everywhere; `idle` and
+`working` are screen-checked for `opencode`, `gemini`, `pi` and `omp` (as for `claude` and
+`codex`) and not guaranteed elsewhere: see the caveats under [Signals](#signals) before
+building on `idle`.
 Requesting a signal the session can never emit **explicitly** is a `400` (`stop` on
 `codex` included); omitting `until` never fails, the server just drops them from the
 default set and echoes the narrowed set back as `wait.until`. Three more places hooks can go

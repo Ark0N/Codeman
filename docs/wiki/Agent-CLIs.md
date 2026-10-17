@@ -69,7 +69,7 @@ output. The other CLIs expose no equivalent.
 | Respawn cycling and unattended runs               | Yes    | Yes                                                  |
 | Cron jobs                                         | Yes    | Yes                                                  |
 | Docker cases, remote SSH cases                    | Yes    | Yes                                                  |
-| Precise idle detection                            | Yes    | Codex, Pi, OpenCode, OMP and Gemini: same screen check, via their own prompt and working line. DeepSeek: reports its state itself. Others: output stabilization, coarser |
+| Precise idle detection                            | Yes    | Codex, Pi, OpenCode, OMP and Gemini: same screen check, via their own prompt and working line. DeepSeek: reports its end of turn itself. Antigravity and Grok: generic cues only, unreliable |
 | Auto-resume when a usage limit resets             | Yes    | No                                                   |
 | Plan usage chip                                   | Yes    | No                                                   |
 | Approvals Inbox                                   | Yes    | DeepSeek and Codex as alerts (answer in the terminal); others no |
@@ -305,7 +305,8 @@ into the case's `.claude/settings.local.json` so that `/model` keeps working.
   auto-resume, the Approvals Inbox, and subagent visualization all assume it.
 - **Codex, OpenCode, Gemini, Antigravity, Grok, OMP** when you prefer that agent or that
   model. You get the session layer, respawn, cron, Docker, and remote SSH; you do not get the
-  hook-driven features.
+  hook-driven features (Codex dialogs still raise the red alert and an alert-only inbox card,
+  see [Codex](#codex) above).
 - **DeepSeek Harness** if you want DeepSeek's models with real status signals. It is the one
   non-Claude mode that reports idle, working and blocked to Codeman itself.
 - **Pi** if you want a fast, unsandboxed agent and you understand what project trust does.

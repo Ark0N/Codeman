@@ -39,8 +39,8 @@ hooks, but its dialogs are distinctive enough to read off the screen, so a Codex
 waiting on an approval, a question or the "Trust this folder?" prompt turns red too, and
 clears a few seconds after you answer. For the other CLIs there are no hooks and no dialog
 reading, so you get only the coarser working and idle state: read off the screen for
-OpenCode, Gemini CLI, Pi and OMP, and inferred from output settling for Antigravity and
-Grok Build.
+OpenCode, Gemini CLI, Pi and OMP, and unreliable for Antigravity and Grok Build, which
+declare nothing Codeman can read it from.
 
 ## Window title and OS notifications
 
@@ -141,17 +141,19 @@ Behaviour worth knowing:
   sending, and refuses with a conflict if the dialog is no longer there. Otherwise your
   keystroke would land in the composer as stray text.
 - **Permission and question items clear only on definitive signals**: the turn ending, the
-  dialog completing, an answer, a supersede, the session exiting, or a 12 hour timeout. They
-  do not clear on a heuristic "looks busy again" signal, because that signal is wrong often
-  enough to lose a real prompt.
+  dialog completing, an answer, a supersede, the session exiting, or a 12 hour timeout. A
+  Codex item also clears a few seconds after its dialog leaves the screen, and a DeepSeek
+  Harness item when the harness reports it is working again. They do not clear on a
+  heuristic "looks busy again" signal, because that signal is wrong often enough to lose a
+  real prompt.
 - **In memory only.** Restarting the server clears the queue; the prompts themselves are
   still sitting in the sessions.
 
 ### Approve and Deny from the notification
 
-With the inbox enabled, push notifications for a Claude prompt carry **Approve** and
-**Deny** buttons. Those are handled by the service worker directly, so they work with no tab
-open: tap Approve on a locked phone and the agent continues. A Codex or DeepSeek Harness
+With the inbox enabled, push notifications for a Claude permission prompt carry **Approve**
+and **Deny** buttons. Those are handled by the service worker directly, so they work with no
+tab open: tap Approve on a locked phone and the agent continues. A Codex or DeepSeek Harness
 notification carries no Approve or Deny, since those dialogs are answered in the terminal.
 
 With the inbox off, the buttons are stripped from the notification payload entirely rather
@@ -192,9 +194,9 @@ current sessions, then past ones. Rows use the same language as the tab strip: a
 when fine, pulsing while working, yellow when waiting for input, red when a question is
 pending.
 
-Answer strips let you resolve a Claude prompt straight from the home screen without opening
-the session. A Codex or DeepSeek Harness strip offers **Answer in terminal** instead, which
-opens the session.
+With the Approvals Inbox on, answer strips let you resolve a Claude permission or question
+dialog straight from the home screen without opening the session. A Codex or DeepSeek
+Harness strip offers **Answer in terminal** instead, which opens the session.
 
 ## The Away Digest
 

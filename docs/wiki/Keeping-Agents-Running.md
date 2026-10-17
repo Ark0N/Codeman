@@ -30,9 +30,12 @@ output silence, and token stability.
 **For the other CLIs** it depends on what the CLI tells Codeman. Codex, OpenCode, Gemini
 CLI, Pi and OMP each declare their own prompt marker and working line, so they get the same
 screen check Claude does (before 1.26.1 every Codex session reported idle for its whole
-life). DeepSeek Harness reports idle, working and blocked to Codeman itself, which is as
-precise as hooks. Antigravity and Grok Build declare neither, so they fall back to output
-stabilization: the session is idle when output stops changing, which is coarser.
+life). DeepSeek Harness reports its end of turn and its dialogs to Codeman itself, which is
+as precise as hooks; its working and idle display still comes from its output. Antigravity
+and Grok Build declare neither. Codeman calls a new pane of theirs idle 3 seconds after
+launch, and after that it has only generic cues to go on (Claude's `❯` prompt marker, a
+braille spinner glyph), which these CLIs may not draw, so their working and idle status is
+unreliable.
 
 ## The Respawn Controller
 
@@ -163,7 +166,8 @@ run summary and lifecycle log carry the detail.
   a vague next cycle.
 - **Non-Claude sessions can respawn**, but with no usage-limit auto-resume, and with
   output-based idle detection except on DeepSeek Harness, whose own end-of-turn report
-  reaches the respawn controller the way Claude's `stop` hook does.
+  reaches the respawn controller the way Claude's `stop` hook does while its status bridge
+  is on (a local session, by default).
 - **Do not run respawn on a session you are actively typing in.** It will send prompts
   underneath you.
 

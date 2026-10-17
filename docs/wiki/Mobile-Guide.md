@@ -43,9 +43,9 @@ as the keyboard appearing.
 
 Tapping the "C" logo gives a session overview rather than a welcome page:
 
-1. **NEEDS YOU** first: sessions blocked on a question, with answer strips so you can
-   resolve a Claude prompt without opening the session. A Codex or DeepSeek Harness row
-   offers **Answer in terminal** instead, which opens the session.
+1. **NEEDS YOU** first: sessions blocked on a question, with answer strips (Approvals Inbox
+   on) so you can resolve a Claude dialog without opening the session. A Codex or DeepSeek
+   Harness row offers **Answer in terminal** instead, which opens the session.
 2. **CURRENT SESSIONS** with live status.
 3. **PAST SESSIONS**, resumable.
 
@@ -169,8 +169,8 @@ phone, and it is the main reason the feature exists.
 ## Notifications
 
 Push notifications reach you with no tab open, and with the Approvals Inbox on, those for a
-Claude prompt carry **Approve** and **Deny** buttons handled by the service worker, so you
-can unblock a Claude agent from the lock screen.
+Claude permission prompt carry **Approve** and **Deny** buttons handled by the service
+worker, so you can unblock a Claude agent from the lock screen.
 
 Setup in [Notifications And Approvals](Notifications-And-Approvals).
 
