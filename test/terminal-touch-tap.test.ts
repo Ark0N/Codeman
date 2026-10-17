@@ -1096,6 +1096,39 @@ describe('terminal link tap', () => {
     expect(sent).toHaveLength(1); // the tap still positions the caret via the mouse report
   });
 
+  it('finds the caret line from the absolute cursor row while the viewport is parked above the bottom', () => {
+    // A tab switch parks the viewport above baseY when the frame keeps trailing blank
+    // rows (scrollToLastNonEmptyLine). cursorY is baseY-relative, so read as a screen
+    // row it points 2 rows too high here: at the history URL, not the composer.
+    const history = 'docs at https://example.com/guide';
+    const composer = '❯ summarize https://example.com/typed for me';
+    const lines = ['', '', '', 'older', 'old', history, 'more', composer, '', ''];
+    const { app, windowRef } = linkHarness(lines);
+    Object.assign(app.terminal, { rows: 4 });
+    Object.assign(app.terminal.buffer.active, { baseY: 6, viewportY: 4, cursorY: 1 });
+
+    // Screen row 3 is absolute line 7, the composer: the typed URL stays editable.
+    expect(app._handleMobileTerminalTap(at(composer.indexOf('https'), 3), true, 'history')).toBe('history');
+    expect(windowRef.open).not.toHaveBeenCalled();
+
+    // Screen row 1 is absolute line 5, scrollback: its URL opens.
+    expect(app._handleMobileTerminalTap(at(history.indexOf('https'), 1), true, 'history')).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledWith('https://example.com/guide', '_blank', 'noopener,noreferrer');
+  });
+
+  it('stops the caret-line wrap walk at the buffer end even when every row is wrapped', () => {
+    // xterm's getLine indexes its circular list modulo capacity, so past the last row it
+    // returns earlier rows again; with all of them soft-wrapped an unbounded walk never ends.
+    const { app } = linkHarness(['❯ a', 'b', 'c'], 2);
+    let reads = 0;
+    app.terminal.buffer.active.getLine = (row: number) => {
+      if (++reads > 1000) throw new Error('wrap walk did not stop');
+      return { isWrapped: true, translateToString: () => ['❯ a', 'b', 'c'][((row % 3) + 3) % 3] };
+    };
+
+    expect(app._tapIsOnCaretLine(at(0, 2).clientX, at(0, 2).clientY)).toBe(true);
+  });
+
   it('activates a link in a plain shell session, where every tap classifies as input', () => {
     // A shell has no TUI to own taps, so _classifyMobileTerminalTap short-circuits to
     // 'input' for the whole screen — gating link taps on the intent would leave every URL
