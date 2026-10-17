@@ -1,11 +1,10 @@
 /**
- * @fileoverview Claude's `/resume` title belongs to Claude unless the user chose one.
+ * @fileoverview The CLI's session name is the tab's name.
  *
  * `--name` sets the prompt-box label, the `/resume` picker entry and the terminal
- * title, and a pinned title stops Claude generating its own. Pinning the
- * `w1-myapp` placeholder therefore listed every conversation of a case under the
- * same name in `/resume`. Only a manual name is pinned now (`cliPinnedName`), and
- * a rename reaches the transcript as a `custom-title` row.
+ * title, and a pinned title stops Claude generating its own. Every tab's name is pinned
+ * (`cliPinnedName`), placeholder and auto names included, so Claude's own session list
+ * matches the tab. A rename reaches the transcript as a `custom-title` row.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
@@ -18,19 +17,18 @@ import { appendClaudeCustomTitle } from '../src/claude-session-title.js';
 type RespawnOptionsProbe = { _buildRespawnPaneOptions(): { name?: string; cliName?: string } };
 
 describe('Session.cliPinnedName', () => {
-  it('pins nothing for a placeholder, so Claude titles the conversation itself', () => {
+  it('pins the placeholder name, so the CLI session matches the tab', () => {
     const session = new Session({ workingDir: '/tmp', name: 'w1-demo' });
-    expect(session.cliPinnedName).toBeUndefined();
+    expect(session.cliPinnedName).toBe('w1-demo');
     const options = (session as unknown as RespawnOptionsProbe)._buildRespawnPaneOptions();
-    // The tab keeps its name; only the CLI flag is withheld.
     expect(options.name).toBe('w1-demo');
-    expect(options.cliName).toBeUndefined();
+    expect(options.cliName).toBe('w1-demo');
   });
 
-  it('pins nothing for an auto name, whose cut of the prompt Claude beats', () => {
+  it('pins an auto name too, from the next spawn', () => {
     const session = new Session({ workingDir: '/tmp', name: 'w1-demo' });
     expect(session.applyAutoName('w1-demo: fix the login redirect')).toBe(true);
-    expect(session.cliPinnedName).toBeUndefined();
+    expect(session.cliPinnedName).toBe('w1-demo: fix the login redirect');
   });
 
   it('pins a name the user chose, at creation or by a rename', () => {

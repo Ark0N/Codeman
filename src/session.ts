@@ -1806,16 +1806,19 @@ export class Session extends EventEmitter {
   }
 
   /**
-   * The name to pin on the Claude CLI as `--name`, or undefined to let Claude
-   * title the conversation itself. `--name` is the prompt-box label, the
-   * `/resume` picker entry and the terminal title all at once, and a pinned
-   * title stops Claude generating its own, so only a name the user chose is
-   * worth pinning. Pinning the `w1-myapp` placeholder gave every conversation
-   * in a case the same `/resume` entry; an auto name is a cut of the first
-   * prompt, which Claude's own generated title already beats.
+   * The name to pin on the Claude CLI as `--name`: the tab's own name, whatever its source,
+   * so the CLI's prompt-box label, `/resume` entry and terminal title (and Claude Code's
+   * remote session list) read the same as the tab. Leaving a placeholder or auto-named tab
+   * unpinned let Claude generate its own title, which then differed from the tab it was
+   * running in (`w4-myapp` in Codeman, "Fix the flaky teardown" in Claude).
+   *
+   * The cost is that every conversation of a case starts with the same `/resume` entry shape
+   * (`w1-myapp`, `w2-myapp`); the tab number keeps those distinct per tab. A rename or an
+   * auto-name reaches the CLI at the next spawn: a process started with `--name` re-appends its
+   * in-memory title after each turn (see claude-session-title.ts).
    */
   get cliPinnedName(): string | undefined {
-    return this._nameSource === 'manual' ? this._name : undefined;
+    return this._name.trim() ? this._name : undefined;
   }
 
   setAutoClear(enabled: boolean, threshold?: number): void {
