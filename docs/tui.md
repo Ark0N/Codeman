@@ -90,7 +90,7 @@ Groups are always in this order, and a session is in exactly one of them:
 
 | Group | Glyph | Means | Comes from |
 | --- | --- | --- | --- |
-| **NEEDS YOU** | `⚠` | A permission or question dialog is blocking the agent | The approvals inbox (`permission_prompt` hooks, with the on-screen options parsed) |
+| **NEEDS YOU** | `⚠` | A permission or question dialog is blocking the agent | The approvals inbox (`permission_prompt` hooks, with the on-screen options parsed; for Codex, a dialog read off its screen) |
 | | `✋` | Waiting for your next instruction, or errored | `idle_prompt`, or an errored session (equally something only a human clears) |
 | **WORKING** | `✻` animating | A turn is running | The same working classification the web dashboard uses |
 | **IDLE** | `○` | Live, but sitting there | |
@@ -157,6 +157,10 @@ it in tmux a moment ago, or the agent moved on), the server refuses with a 409 a
 the TUI says `that dialog is no longer on screen` rather than pressing a key into a
 live composer. The answer is scoped to the options the server parsed off the actual
 frame, never to a guess.
+
+Only a Claude dialog can be answered this way. A Codex or DeepSeek Harness item is an
+alert: the server refuses the answer and the TUI shows its message saying to answer in
+the terminal, so attach with `Enter` and answer it in the pane.
 
 An idle prompt (`✋`) is not a dialog: there is nothing to approve, so `p` is the
 reply path and the footer says `p reply` instead of `p prompt`.

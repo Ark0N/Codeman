@@ -244,8 +244,8 @@ contract is a **marker unique to each call** (`MARK="DONE_$RANDOM"`, send
 
 | Signal | Source | Actually fires for |
 |--------|--------|--------------------|
-| `idle` | the session's own `idle` event | `claude`: yes, on ❯-prompt detection after activity. `shell`: **once only**, ~500 ms after start, and never again. External CLIs: not guaranteed (they render their own TUIs and readiness is output stabilization) |
-| `working` | the session's own `working` event | `claude` only in practice (spinner and work-keyword detection are Claude output formats) |
+| `idle` | the session's own `idle` event | `claude`: yes, on ❯-prompt detection after activity. `codex`, `opencode`, `gemini`, `pi`, `omp`: yes, the same screen check through the prompt marker and working line each declares (`capabilities.workDetect`). `shell`: **once only**, ~500 ms after start, and never again. Other external CLIs (`antigravity`, `grok`, `deepseek`): not guaranteed (they render their own TUIs and readiness is output stabilization) |
+| `working` | the session's own `working` event | `claude`, plus `codex`, `opencode`, `gemini`, `pi` and `omp` through the working line each declares. Elsewhere not guaranteed: it rests on generic output heuristics such as a braille spinner glyph |
 | `stop` | the Claude Code `stop` hook, the definitive end-of-turn signal | `claude` (and `deepseek`) only |
 | `blocked` | a `permission_prompt` or `elicitation_dialog` hook; on `codex`, a dialog read off its screen | `claude`, `deepseek` and `codex`; on `claude` rarer than it looks: see below |
 | `exit` | no process is behind the session | every mode |

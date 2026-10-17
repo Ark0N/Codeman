@@ -166,7 +166,9 @@ wait primitives.
 
 This is why some features are Claude-only. The one partial exception is DeepSeek Harness,
 whose terminal front door reports idle, working and blocked to Codeman over the harness's
-own supervisor contract, so it gets the hook-driven signals without a hook file. The other
+own supervisor contract, so it gets the hook-driven signals without a hook file. Codex gets
+one of them from its screen: Codeman reads its approval, question and trust dialogs off the
+pane and raises the same red "needs you" alert a `permission_prompt` hook raises. The other
 CLIs have no equivalent, so for them Codeman falls back to watching terminal output, which
 is coarser: it can see that something happened, not what it was.
 
