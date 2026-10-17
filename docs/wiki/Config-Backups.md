@@ -102,7 +102,8 @@ Both apply together. Three guarantees:
 | Keep this many backups | `configBackupKeepCount` | 20 |
 | Delete backups older than (days) | `configBackupKeepDays` | 30 |
 | **Back up now** | | |
-| The list, with **Restore** per entry | | |
+| The list, with **Restore**, **Compare with current** and **Changes in this backup** per entry | | |
+| **Compare** … with … **Show changes** | | |
 
 The settings are saved server-side and read fresh, so a change applies on the next pass. The
 list and **Back up now** use the **saved** folder and retention: apply your edits first.
@@ -127,6 +128,26 @@ You can also restore by hand: the files in a backup folder are the originals, so
 over the file in the data directory is equivalent (stop Codeman first if you are replacing
 `clis.json` or `users.json`).
 
+## Comparing backups
+
+Before you restore, or to find out what changed and when, use **Compare** in the list:
+
+- **Compare with current** on a backup shows what differs between that backup and the config
+  running now, which is also what a restore of it would undo.
+- **Changes in this backup** shows what differs between the backup before it and this one.
+- The **Compare … with … Show changes** pickers compare any two backups, or a backup with the
+  current config.
+
+Each file that differs is listed with its changed keys (`theme.mode`, `tags[1]`, a variable name
+in `.env`) as before → after, plus files that appeared or vanished between the two states. Files
+that are the same are listed on one line. A file that is not JSON shows only that it differs, and
+a file with more than 200 changes is cut short, so use the files themselves for a full diff. A
+self-refreshed discovery timestamp in `custom-model-hosts.json` is not counted as a change.
+
+**Credential values are never shown.** `.env`, `users.json` and `push-keys.json` list only the
+names that changed, and in every other file a key that looks like a token, secret, password,
+credential or key is shown as "changed" without its value.
+
 ## Security
 
 - Some tracked files carry credentials (`.env`, `users.json`, `custom-model-hosts.json`,
@@ -135,9 +156,10 @@ over the file in the data directory is equivalent (stop Codeman first if you are
 - **A custom folder is your decision.** Putting it on a shared drive, a synced folder or a
   network share copies those credentials there, with whatever permissions that location has.
   Choose a private location, or turn the feature off if you cannot.
-- In [multi-user mode](Multi-User-Mode) all of it is admin only: the list, Back up now and
-  Restore.
-- Listing returns file names and sizes, never contents.
+- In [multi-user mode](Multi-User-Mode) all of it is admin only: the list, Back up now,
+  Restore and Compare.
+- Listing returns file names and sizes, never contents. A comparison returns changed values but
+  never a credential's (see [Comparing backups](#comparing-backups)).
 
 ## HTTP API
 
@@ -146,6 +168,8 @@ API=http://localhost:3000
 curl -s "$API/api/config-backups" | jq                                  # settings, folder, list
 curl -s -X POST "$API/api/config-backups" | jq                          # back up now
 curl -s -X POST "$API/api/config-backups/cfg-20261011-120305/restore" | jq
+curl -s "$API/api/config-backups/diff?from=cfg-20261011-120305" | jq   # that backup vs the running config
+curl -s "$API/api/config-backups/diff?from=cfg-20261011-120305&to=cfg-20261012-090000" | jq
 ```
 
 See [HTTP API](HTTP-API) and the endpoint reference in `docs/api-reference.md`.

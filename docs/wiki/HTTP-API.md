@@ -176,6 +176,7 @@ curl -s -X POST "$API/api/mcp-sync" | jq             # apply it: add missing ser
 curl -s "$API/api/config-backups" | jq              # config snapshots: folder, retention, list (admin only in multi-user mode)
 curl -s -X POST "$API/api/config-backups" | jq      # back up the customized config files now
 curl -s -X POST "$API/api/config-backups/cfg-20261011-120000/restore" | jq   # put a snapshot back (after a pre-restore copy)
+curl -s "$API/api/config-backups/diff?from=cfg-20261011-120000" | jq   # what differs from the running config (`to=` another snapshot id to compare two)
 
 # with ID set to a session id:
 curl -s "$API/api/sessions/$ID/last-response" | jq -r '.data.text'   # last answer, from the transcript (claude, codex, deepseek)

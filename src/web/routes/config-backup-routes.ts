@@ -4,10 +4,14 @@
  * GET  /api/config-backups              — settings in effect, the folder, and the snapshots in it.
  * POST /api/config-backups              — snapshot now (a manual request always makes one).
  * POST /api/config-backups/:id/restore  — put a snapshot's files back (after a `pre-restore` snapshot).
+ * GET  /api/config-backups/diff?from=&to= — what differs between two snapshots, or a snapshot and the
+ *                                           running config (`current`, the default for `to`).
  *
  * The files include credentials (`.env`, `users.json`, endpoint keys), so in multi-user mode all three
- * are admin only. Responses carry file NAMES and sizes, never file content. Restore replaces files the
- * running server may have cached: `restartRequired` says which ones only apply after a restart.
+ * are admin only. Responses carry file NAMES and sizes, never file content, except the diff, which shows
+ * changed values but never a credential's (`.env`, `users.json`, `push-keys.json` and any key that looks
+ * like a token/secret/password are reported as "changed" only). Restore replaces files the running server
+ * may have cached: `restartRequired` says which ones only apply after a restart.
  */
 
 import { createRequire } from 'node:module';
@@ -18,10 +22,12 @@ import { isMultiUserMode } from '../../config/multiuser.js';
 import { getDataDir } from '../../config/instance.js';
 import {
   CONFIG_BACKUP_FILES,
+  CONFIG_DIFF_CURRENT,
   ConfigBackupCorruptError,
   ConfigBackupNotFoundError,
   createConfigBackup,
   defaultConfigBackupDir,
+  diffConfigBackups,
   listConfigBackups,
   pruneConfigBackups,
   readConfigBackupSettings,
@@ -30,6 +36,7 @@ import {
   type ConfigBackupResult,
   type ConfigBackupSettings,
   type ConfigBackupSummary,
+  type ConfigDiff,
 } from '../../config-backup.js';
 
 // Only recorded in each manifest; a missing package.json just leaves it blank.
@@ -110,6 +117,37 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
     } catch (err) {
       reply.code(500);
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Backup failed: ${getErrorMessage(err)}`);
+    }
+  });
+
+  app.get('/api/config-backups/diff', async (req, reply): Promise<ApiResponse<ConfigDiff>> => {
+    const denied = deny(req, reply);
+    if (denied) return denied;
+    const q = req.query as { from?: string; to?: string };
+    if (typeof q.from !== 'string' || !q.from) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, '`from` is required (a backup id or "current")');
+    }
+    try {
+      const { dir } = await readEffectiveBackupSettings();
+      const data = diffConfigBackups({
+        dataDir: getDataDir(),
+        backupDir: dir,
+        from: q.from,
+        to: typeof q.to === 'string' && q.to ? q.to : CONFIG_DIFF_CURRENT,
+      });
+      return { success: true, data };
+    } catch (err) {
+      if (err instanceof ConfigBackupNotFoundError) {
+        reply.code(404);
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, err.message);
+      }
+      if (err instanceof ConfigBackupCorruptError) {
+        reply.code(409);
+        return createErrorResponse(ApiErrorCode.CONFLICT, err.message);
+      }
+      reply.code(500);
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Diff failed: ${getErrorMessage(err)}`);
     }
   });
 

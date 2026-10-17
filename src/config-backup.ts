@@ -398,3 +398,175 @@ export function restoreConfigBackup(opts: {
   }
   return { restored, safetySnapshot: safety.status === 'created' ? safety.id : null };
 }
+
+/** The live files in the data dir, as a side of a diff. */
+export const CONFIG_DIFF_CURRENT = 'current';
+
+export interface ConfigDiffChange {
+  /** Dotted path inside the file (`a.b[0].c`), or the variable name for `.env`. */
+  path: string;
+  kind: 'added' | 'removed' | 'changed';
+  /** JSON text of the value; absent when it did not exist on that side or `redacted` is set. */
+  before?: string;
+  after?: string;
+  /** The value is a credential, so only the fact that it differs is reported. */
+  redacted?: boolean;
+}
+
+export interface ConfigDiffFile {
+  name: string;
+  /** `added` = only in `to`, `removed` = only in `from`. */
+  status: 'added' | 'removed' | 'changed' | 'unchanged';
+  changes: ConfigDiffChange[];
+  /** More changes than `MAX_DIFF_CHANGES`; the rest are not listed. */
+  truncated: boolean;
+  /** `keys` = per-key changes; `bytes` = the file is not JSON/env, so only "differs" is known. */
+  detail: 'keys' | 'bytes';
+}
+
+export interface ConfigDiff {
+  from: string;
+  to: string;
+  files: ConfigDiffFile[];
+  /** Files whose status is not `unchanged`. */
+  changed: number;
+}
+
+const MAX_DIFF_CHANGES = 200;
+const MAX_DIFF_VALUE_CHARS = 200;
+
+/** Files whose every value is a credential or key: only names are ever shown. */
+const REDACT_ALL_FILES: ReadonlySet<string> = new Set(['.env', 'users.json', 'push-keys.json']);
+/** Elsewhere a value is hidden when its own key looks like a credential. */
+const SECRET_KEY_RE = /(token|secret|passw|credential|auth|key$)/i;
+
+type Leaves = Map<string, string>;
+
+function flattenJson(value: unknown, path: string, out: Leaves): void {
+  if (Array.isArray(value) && value.length > 0) {
+    value.forEach((v, i) => flattenJson(v, `${path}[${i}]`, out));
+  } else if (value && typeof value === 'object' && Object.keys(value).length > 0) {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      flattenJson(v, path ? `${path}.${k}` : k, out);
+    }
+  } else {
+    out.set(path || '(root)', JSON.stringify(value) ?? 'null');
+  }
+}
+
+function parseEnv(text: string): Leaves {
+  const out: Leaves = new Map();
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=(.*)$/.exec(line);
+    if (m) out.set(m[1], m[2].trim());
+  }
+  return out;
+}
+
+/** Per-key view of a tracked file, or null when it is not JSON/env text. */
+function leavesOf(name: string, data: Buffer): Leaves | null {
+  const text = data.toString('utf8');
+  if (name === '.env') return parseEnv(text);
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    const volatile = VOLATILE_KEYS[name];
+    const out: Leaves = new Map();
+    flattenJson(volatile ? withoutKeys(parsed, new Set(volatile)) : parsed, '', out);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+const clip = (s: string): string => (s.length > MAX_DIFF_VALUE_CHARS ? `${s.slice(0, MAX_DIFF_VALUE_CHARS)}…` : s);
+
+function diffLeaves(name: string, a: Leaves, b: Leaves): { changes: ConfigDiffChange[]; truncated: boolean } {
+  const all = REDACT_ALL_FILES.has(name);
+  const changes: ConfigDiffChange[] = [];
+  for (const path of [...new Set([...a.keys(), ...b.keys()])].sort()) {
+    const before = a.get(path);
+    const after = b.get(path);
+    if (before === after) continue;
+    const kind = before === undefined ? 'added' : after === undefined ? 'removed' : 'changed';
+    if (all || SECRET_KEY_RE.test(path.split('.').pop() ?? '')) {
+      changes.push({ path, kind, redacted: true });
+    } else {
+      changes.push({
+        path,
+        kind,
+        ...(before !== undefined && { before: clip(before) }),
+        ...(after !== undefined && { after: clip(after) }),
+      });
+    }
+  }
+  return { changes: changes.slice(0, MAX_DIFF_CHANGES), truncated: changes.length > MAX_DIFF_CHANGES };
+}
+
+/** The tracked files of one side, verified: a snapshot's against its manifest, the live ones as they are. */
+function loadDiffSide(side: string, dataDir: string, backupDir: string): Map<string, Buffer> {
+  const out = new Map<string, Buffer>();
+  if (side === CONFIG_DIFF_CURRENT) {
+    for (const name of CONFIG_BACKUP_FILES) {
+      try {
+        const path = join(dataDir, name);
+        if (statSync(path).isFile()) out.set(name, readFileSync(path));
+      } catch {
+        /* absent or unreadable: not part of this side */
+      }
+    }
+    return out;
+  }
+  const manifest = readManifest(backupDir, side);
+  if (!manifest) throw new ConfigBackupNotFoundError(`No config backup named ${side}`);
+  const allowed = new Set<string>(CONFIG_BACKUP_FILES);
+  for (const f of manifest.files) {
+    if (!allowed.has(f.name)) continue;
+    let data: Buffer;
+    try {
+      data = readFileSync(join(backupDir, side, f.name));
+    } catch {
+      throw new ConfigBackupCorruptError(`${f.name} is missing from ${side}`);
+    }
+    if (sha256(data) !== f.sha256)
+      throw new ConfigBackupCorruptError(`${f.name} in ${side} does not match its checksum`);
+    out.set(f.name, data);
+  }
+  return out;
+}
+
+/**
+ * What differs between two states of the tracked files; a state is a snapshot id or `current`
+ * (the live files). Never returns the value of a credential: see REDACT_ALL_FILES and SECRET_KEY_RE.
+ */
+export function diffConfigBackups(opts: { dataDir: string; backupDir: string; from: string; to: string }): ConfigDiff {
+  const a = loadDiffSide(opts.from, opts.dataDir, opts.backupDir);
+  const b = loadDiffSide(opts.to, opts.dataDir, opts.backupDir);
+  const files: ConfigDiffFile[] = [];
+  for (const name of CONFIG_BACKUP_FILES) {
+    const before = a.get(name);
+    const after = b.get(name);
+    if (!before && !after) continue;
+    const base = { name, changes: [] as ConfigDiffChange[], truncated: false };
+    if (before && after && sha256(before) === sha256(after)) {
+      files.push({ ...base, status: 'unchanged', detail: 'keys' });
+      continue;
+    }
+    const la = before ? leavesOf(name, before) : new Map<string, string>();
+    const lb = after ? leavesOf(name, after) : new Map<string, string>();
+    const status = !before ? 'added' : !after ? 'removed' : 'changed';
+    if (!la || !lb) {
+      files.push({ ...base, status, detail: 'bytes' });
+      continue;
+    }
+    const { changes, truncated } = diffLeaves(name, la, lb);
+    // Only volatile keys differed (a discovery timestamp): the same state as far as the user is concerned.
+    files.push({
+      name,
+      status: changes.length || status !== 'changed' ? status : 'unchanged',
+      changes,
+      truncated,
+      detail: 'keys',
+    });
+  }
+  return { from: opts.from, to: opts.to, files, changed: files.filter((f) => f.status !== 'unchanged').length };
+}

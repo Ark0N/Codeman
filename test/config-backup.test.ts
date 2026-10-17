@@ -23,6 +23,7 @@ import {
   ConfigBackupNotFoundError,
   createConfigBackup,
   defaultConfigBackupDir,
+  diffConfigBackups,
   listConfigBackups,
   normalizeBackupDir,
   pruneConfigBackups,
@@ -293,5 +294,97 @@ describe('restoreConfigBackup', () => {
     restoreConfigBackup({ dataDir: data, backupDir: backups, id: made.id });
     expect(existsSync(join(root, 'escape.json'))).toBe(false);
     expect(existsSync(join(data, 'state.json'))).toBe(false);
+  });
+});
+
+describe('diffConfigBackups', () => {
+  const snap = (now: number) => {
+    const r = createConfigBackup({ dataDir: data, backupDir: backups, reason: 't', force: true, now });
+    if (r.status !== 'created') throw new Error('expected a snapshot');
+    return r.id;
+  };
+  const diff = (from: string, to: string) => diffConfigBackups({ dataDir: data, backupDir: backups, from, to });
+  const file = (d: ReturnType<typeof diff>, name: string) => d.files.find((f) => f.name === name)!;
+
+  it('lists key-level changes between two backups', () => {
+    put('settings.json', JSON.stringify({ displayName: 'a', theme: { mode: 'dark' }, tags: ['x'] }));
+    const a = snap(T0);
+    put('settings.json', JSON.stringify({ displayName: 'b', theme: { mode: 'dark' }, tags: ['x', 'y'], extra: 1 }));
+    const b = snap(T0 + 1000);
+    const f = file(diff(a, b), 'settings.json');
+    expect(f.status).toBe('changed');
+    expect(f.changes).toEqual([
+      { path: 'displayName', kind: 'changed', before: '"a"', after: '"b"' },
+      { path: 'extra', kind: 'added', after: '1' },
+      { path: 'tags[1]', kind: 'added', after: '"y"' },
+    ]);
+  });
+
+  it('compares a backup with the running config, and reports files that appeared or vanished', () => {
+    put('settings.json', '{"a":1}');
+    put('webhook.json', '{"url":"u"}');
+    const a = snap(T0);
+    put('settings.json', '{"a":2}');
+    rmSync(join(data, 'webhook.json'));
+    put('intents.json', '{"i":true}');
+    const d = diff(a, 'current');
+    expect(d.changed).toBe(3);
+    expect(file(d, 'settings.json').changes).toEqual([{ path: 'a', kind: 'changed', before: '1', after: '2' }]);
+    expect(file(d, 'webhook.json').status).toBe('removed');
+    expect(file(d, 'intents.json').status).toBe('added');
+    expect(diff(a, a).changed).toBe(0);
+  });
+
+  it('never returns a credential value, only that it differs', () => {
+    put('.env', 'SECRET_ONE=hunter2\nOTHER=abc\n');
+    put('users.json', JSON.stringify({ admin: { name: 'root' } }));
+    put('custom-model-hosts.json', JSON.stringify([{ name: 'h', apiKey: 'sk-old', url: 'http://x' }]));
+    const a = snap(T0);
+    put('.env', 'SECRET_ONE=hunter3\nOTHER=abd\n');
+    put('users.json', JSON.stringify({ admin: { name: 'rooted' } }));
+    put('custom-model-hosts.json', JSON.stringify([{ name: 'h', apiKey: 'sk-new', url: 'http://y' }]));
+    const d = diff(a, 'current');
+    const json = JSON.stringify(d);
+    for (const secret of ['hunter', 'abc', 'abd', 'root', 'sk-old', 'sk-new']) expect(json).not.toContain(secret);
+    expect(file(d, '.env').changes.every((c) => c.redacted)).toBe(true);
+    expect(file(d, 'custom-model-hosts.json').changes).toEqual([
+      { path: '[0].apiKey', kind: 'changed', redacted: true },
+      { path: '[0].url', kind: 'changed', before: '"http://x"', after: '"http://y"' },
+    ]);
+  });
+
+  it('does not count a self-refreshed discovery timestamp as a difference', () => {
+    put('custom-model-hosts.json', JSON.stringify([{ name: 'h', lastDiscoveredAt: 1 }]));
+    const a = snap(T0);
+    put('custom-model-hosts.json', JSON.stringify([{ name: 'h', lastDiscoveredAt: 2 }]));
+    const d = diff(a, 'current');
+    expect(file(d, 'custom-model-hosts.json').status).toBe('unchanged');
+    expect(d.changed).toBe(0);
+  });
+
+  it('reports a file that is not JSON as differing, without its content', () => {
+    put('settings.json', 'not json at all');
+    const a = snap(T0);
+    put('settings.json', 'still not json');
+    const f = file(diff(a, 'current'), 'settings.json');
+    expect(f).toMatchObject({ status: 'changed', detail: 'bytes', changes: [] });
+  });
+
+  it('caps the changes listed per file', () => {
+    put('settings.json', '{}');
+    const a = snap(T0);
+    put('settings.json', JSON.stringify(Object.fromEntries(Array.from({ length: 250 }, (_, i) => [`k${i}`, i]))));
+    const f = file(diff(a, 'current'), 'settings.json');
+    expect(f.changes).toHaveLength(200);
+    expect(f.truncated).toBe(true);
+  });
+
+  it('refuses unknown ids, path traversal and a tampered snapshot', () => {
+    put('settings.json', '{"a":1}');
+    const a = snap(T0);
+    expect(() => diff('cfg-20200101-000000', 'current')).toThrow(ConfigBackupNotFoundError);
+    expect(() => diff('../etc', 'current')).toThrow(ConfigBackupNotFoundError);
+    writeFileSync(join(backups, a, 'settings.json'), '{"a":99}');
+    expect(() => diff(a, 'current')).toThrow(ConfigBackupCorruptError);
   });
 });

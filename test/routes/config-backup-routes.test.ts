@@ -106,6 +106,7 @@ describe('/api/config-backups', () => {
       ['GET', '/api/config-backups'],
       ['POST', '/api/config-backups'],
       ['POST', '/api/config-backups/cfg-20261001-120000/restore'],
+      ['GET', '/api/config-backups/diff?from=cfg-20261001-120000'],
     ] as const) {
       expect((await app.inject({ method, url })).statusCode, `${method} ${url}`).toBe(403);
     }
@@ -117,5 +118,27 @@ describe('/api/config-backups', () => {
       authUser: { username: 'root', role: 'admin' },
     });
     expect((await app.inject({ method: 'GET', url: '/api/config-backups' })).json().success).toBe(true);
+  });
+});
+
+describe('GET /api/config-backups/diff', () => {
+  it('compares a backup with the running config, defaulting `to` to current', async () => {
+    const { app } = await createRouteTestHarness(registerConfigBackupRoutes);
+    const made = (await app.inject({ method: 'POST', url: '/api/config-backups' })).json().data;
+    settings({ displayName: 'after' });
+    const res = await app.inject({ method: 'GET', url: `/api/config-backups/diff?from=${made.id}` });
+    expect(res.statusCode).toBe(200);
+    const d = res.json().data;
+    expect(d.to).toBe('current');
+    expect(d.files.find((f: { name: string }) => f.name === 'settings.json').changes).toEqual([
+      { path: 'displayName', kind: 'changed', before: '"before"', after: '"after"' },
+    ]);
+  });
+
+  it('400 without `from`, 404 for an unknown backup', async () => {
+    const { app } = await createRouteTestHarness(registerConfigBackupRoutes);
+    expect((await app.inject({ method: 'GET', url: '/api/config-backups/diff' })).statusCode).toBe(400);
+    const missing = await app.inject({ method: 'GET', url: '/api/config-backups/diff?from=cfg-20200101-000000' });
+    expect(missing.statusCode).toBe(404);
   });
 });

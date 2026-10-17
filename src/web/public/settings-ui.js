@@ -1393,14 +1393,72 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
     const kb = (n) => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`);
-    const rows = data.backups.map((b) => {
+    this._configBackups = data.backups;
+    const rows = data.backups.map((b, i) => {
       const when = new Date(b.createdAt).toLocaleString();
       const names = b.files.map((f) => escapeHtml(f.name)).join(', ');
+      const id = escapeHtml(b.id);
+      // The list is newest first, so the next row is the backup this one followed.
+      const prev = data.backups[i + 1];
+      const vsPrev = prev ? `<button class="btn-toolbar btn-sm" onclick="app.showConfigDiff('${escapeHtml(prev.id)}','${id}')">Changes in this backup</button>` : '';
       return `<li><b>${escapeHtml(when)}</b> <span class="set-row-desc">(${escapeHtml(b.reason)}, ${kb(b.bytes)})</span>
-        <button class="btn-toolbar btn-sm" onclick="app.restoreConfigBackup('${escapeHtml(b.id)}')">Restore</button>
+        <button class="btn-toolbar btn-sm" onclick="app.restoreConfigBackup('${id}')">Restore</button>
+        <button class="btn-toolbar btn-sm" onclick="app.showConfigDiff('${id}','current')">Compare with current</button>
+        ${vsPrev}
         <div class="set-row-desc">${names}</div></li>`;
     });
-    out.innerHTML = `<div>${data.backups.length} backup${data.backups.length === 1 ? '' : 's'} in <code>${escapeHtml(data.dir)}</code></div><ul>${rows.join('')}</ul>`;
+    const options = (sel) => [`<option value="current"${sel === 'current' ? ' selected' : ''}>Current config</option>`]
+      .concat(data.backups.map((b) => `<option value="${escapeHtml(b.id)}"${sel === b.id ? ' selected' : ''}>${escapeHtml(new Date(b.createdAt).toLocaleString())} (${escapeHtml(b.reason)})</option>`))
+      .join('');
+    const picker = data.backups.length
+      ? `<div class="set-row-desc">Compare <select id="configDiffFrom">${options(data.backups[0].id)}</select> with <select id="configDiffTo">${options('current')}</select>
+        <button class="btn-toolbar btn-sm" onclick="app.showConfigDiff(app.$('configDiffFrom').value, app.$('configDiffTo').value)">Show changes</button></div>`
+      : '';
+    out.innerHTML = `<div>${data.backups.length} backup${data.backups.length === 1 ? '' : 's'} in <code>${escapeHtml(data.dir)}</code></div>${picker}<ul>${rows.join('')}</ul><div id="configBackupDiff"></div>`;
+  },
+
+  /** What differs between two states of the config files: a backup id or `current` (the running config). */
+  async showConfigDiff(from, to) {
+    const out = this.$('configBackupDiff');
+    if (!out) return;
+    out.textContent = 'Comparing…';
+    const res = await this._api(`/api/config-backups/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      out.textContent = body?.error || 'Could not compare these';
+      return;
+    }
+    const label = (id) => {
+      if (id === 'current') return 'the current config';
+      const b = (this._configBackups || []).find((x) => x.id === id);
+      return b ? new Date(b.createdAt).toLocaleString() : id;
+    };
+    const d = body.data;
+    const verb = { added: 'added', removed: 'removed', changed: 'changed' };
+    const files = d.files.filter((f) => f.status !== 'unchanged').map((f) => {
+      let detail;
+      if (f.detail === 'bytes') {
+        detail = '<div class="set-row-desc">Differs (not a key/value file, so no detail).</div>';
+      } else {
+        const rows = f.changes.map((c) => {
+          const val = (v) => `<code>${escapeHtml(v ?? '')}</code>`;
+          const text = c.redacted ? `${verb[c.kind]} <span class="set-row-desc">(value hidden: credential)</span>`
+            : c.kind === 'added' ? `added ${val(c.after)}`
+            : c.kind === 'removed' ? `removed (was ${val(c.before)})`
+            : `${val(c.before)} → ${val(c.after)}`;
+          return `<li><code>${escapeHtml(c.path)}</code>: ${text}</li>`;
+        });
+        const more = f.truncated ? '<li class="set-row-desc">More changes not shown.</li>' : '';
+        detail = f.changes.length ? `<ul>${rows.join('')}${more}</ul>` : '';
+      }
+      const whole = f.status === 'added' ? ' (new file)' : f.status === 'removed' ? ' (file gone)' : '';
+      return `<div><b>${escapeHtml(f.name)}</b>${whole}${detail}</div>`;
+    });
+    const same = d.files.filter((f) => f.status === 'unchanged').map((f) => escapeHtml(f.name));
+    out.innerHTML = `<div><b>${escapeHtml(label(d.from))}</b> → <b>${escapeHtml(label(d.to))}</b>: ${
+      d.changed ? `${d.changed} file${d.changed === 1 ? '' : 's'} differ` : 'no differences'}</div>${files.join('')}${
+      same.length ? `<div class="set-row-desc">Unchanged: ${same.join(', ')}</div>` : ''}`;
   },
 
   async backupConfigNow() {
