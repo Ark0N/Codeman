@@ -246,6 +246,14 @@ async function exercise() {
     preventDefault: vi.fn(),
   });
   harvestAll(app, 'file drop');
+  // A drop mixing an admitted image with a refused file: the admitted one uploads.
+  app._uploadAndInsertImages = vi.fn();
+  section.dispatch('drop', {
+    target: section.children.find((el) => el.dataset.sessionId === 's-1'),
+    dataTransfer: { types: ['Files'], files: [{ type: 'image/png' }, { type: 'application/pdf' }] },
+    preventDefault: vi.fn(),
+  });
+  harvestAll(app, 'mixed file drop');
 
   // The toasts of a full grid, by the cap and by the window.
   app._joinTileGridFromRun('s-7');
@@ -349,6 +357,7 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
       'This group has no session to show as tiles',
       'No sessions to show as tiles',
       'Unsupported file type',
+      '1 file skipped: unsupported type',
       'Split: unavailable while tiles are open',
       'Tiles: show several sessions side by side (right-click for how many)',
       'Tiles: back to a single session (right-click for how many tiles)',

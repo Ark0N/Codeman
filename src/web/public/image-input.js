@@ -101,12 +101,8 @@ Object.assign(CodemanApp.prototype, {
       if (!this.activeSessionId) return;
       if (!e.dataTransfer || !e.dataTransfer.files.length) return;
 
-      const mediaFiles = Array.from(e.dataTransfer.files).filter((f) => this._promptAttachKind(f));
-      if (mediaFiles.length === 0) {
-        this.showToast('Unsupported file type', 'error');
-        return;
-      }
-      this._uploadAndInsertImages(mediaFiles);
+      const mediaFiles = this._admitPromptAttachments(Array.from(e.dataTransfer.files));
+      if (mediaFiles.length > 0) this._uploadAndInsertImages(mediaFiles);
     });
   },
 
@@ -122,11 +118,8 @@ Object.assign(CodemanApp.prototype, {
    *  Without the overlay (local echo off) there is nothing to buffer into, so the
    *  text goes straight out. The trailing space keeps the next word off the path. */
   async _attachFromToolbar(files, sessionId) {
-    const media = files.filter((f) => this._promptAttachKind(f));
-    if (media.length === 0) {
-      this.showToast('Unsupported file type', 'error');
-      return;
-    }
+    const media = this._admitPromptAttachments(files);
+    if (media.length === 0) return;
     if (!sessionId) return; // no captured session: refuse rather than guess at one
     const paths = await this._uploadAndInsertImages(media, { insert: false, sessionId });
     if (paths.length === 0) return;
@@ -231,14 +224,16 @@ Object.assign(CodemanApp.prototype, {
       pasteConsumed = true;
 
       // Check for images, videos or documents in clipboard items
-      var imageFiles = [];
+      var pastedFiles = [];
       var items = e.clipboardData && e.clipboardData.items;
       if (items) {
         for (var i = 0; i < items.length; i++) {
           var blob = items[i].getAsFile();
-          if (blob && self._promptAttachKind(blob)) imageFiles.push(blob);
+          if (blob) pastedFiles.push(blob);
         }
       }
+      var text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+      var imageFiles = self._admitPromptAttachments(pastedFiles, { textPasted: !!text });
 
       // Clean up the trap
       setTimeout(function() {
@@ -256,7 +251,6 @@ Object.assign(CodemanApp.prototype, {
         // via raw sendInput() strips those markers and makes pasted input
         // indistinguishable from typed input, weakening the CLI's
         // prompt-injection defenses.
-        var text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
         if (text && terminal) terminal.paste(text);
       }
     });
@@ -288,6 +282,22 @@ Object.assign(CodemanApp.prototype, {
       return 'document';
     }
     return null;
+  },
+
+  /** The files of a pick, drop or paste that _promptAttachKind admits, telling the
+   *  user about any it refuses: all of them is "Unsupported file type", some of
+   *  them a count of what was skipped while the rest still upload. A clipboard
+   *  paste that also carries text passes `textPasted`: when none of its files is
+   *  admitted the text is pasted instead, so that case stays quiet. */
+  _admitPromptAttachments(files, { textPasted = false } = {}) {
+    const admitted = files.filter((f) => this._promptAttachKind(f));
+    const skipped = files.length - admitted.length;
+    if (skipped > 0 && admitted.length > 0) {
+      this.showToast(`${skipped} file${skipped > 1 ? 's' : ''} skipped: unsupported type`, 'info');
+    } else if (skipped > 0 && !textPasted) {
+      this.showToast('Unsupported file type', 'error');
+    }
+    return admitted;
   },
 
   // Max images accepted in one batch (paste / drop / mobile picker). Each is

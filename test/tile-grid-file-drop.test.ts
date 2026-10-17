@@ -8,8 +8,9 @@
  * phase): anywhere over it (a tile, an empty cell, a divider, its padding)
  * dragover and drop are cancelled, so the page never navigates, and a drop on
  * a tile uploads its files to THAT tile's session, through the same classifier
- * (_promptAttachKind: images, videos and documents) and the same "Unsupported
- * file type" toast as the single view. Tab and tile drags are the targets' own
+ * (_promptAttachKind: images, videos and documents) and the same toasts as the
+ * single view (_admitPromptAttachments: "Unsupported file type", or a count of
+ * the files skipped). Tab and tile drags are the targets' own
  * (_acceptTabDrops, capture phase) and stay untouched.
  *
  * Real code via the shared vm harness (test/mocks/tile-grid-vm.ts). Port: N/A.
@@ -66,12 +67,13 @@ describe('a file dropped on a tile', () => {
     expect(app.activeSessionId).toBe('s-a');
   });
 
-  it('only the files the classifier admits are uploaded: a document and a video count, an unnamed text part does not', () => {
+  it('only the files the classifier admits are uploaded, and the skipped one is counted: a document and a video count, an unnamed text part does not', () => {
     const app = gridApp();
     const pdf = { type: 'application/pdf', name: 'Q3 report.pdf' };
     const mov = { type: 'video/quicktime', name: 'IMG_0001.MOV' };
     section.dispatch('drop', fileEvent(tileEl('s-c'), [{ type: 'text/plain' }, PNG, pdf, mov]));
     expect(app._uploadAndInsertImages).toHaveBeenCalledWith([PNG, pdf, mov], { sessionId: 's-c' });
+    expect(app.showToast).toHaveBeenCalledWith('1 file skipped: unsupported type', 'info');
   });
 
   it('a drop with nothing the classifier admits says so, as the single view does, and uploads nothing', () => {
