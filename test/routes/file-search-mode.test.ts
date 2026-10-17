@@ -91,4 +91,30 @@ describe('files endpoint search mode', () => {
     expect(body.data.matches).toHaveLength(1);
     expect(body.data.matches[0]).toMatchObject({ name: 'nested', type: 'directory' });
   });
+
+  it('shares the scan budget across sibling folders in both tree and search modes', async () => {
+    const bulk = join(root, 'a-bulk');
+    const later = join(root, 'z-later');
+    mkdirSync(bulk);
+    mkdirSync(later);
+    for (let index = 0; index < 5100; index++) {
+      writeFileSync(join(bulk, `item-${index}.txt`), '');
+    }
+    writeFileSync(join(later, 'needle.ts'), 'x\n');
+
+    try {
+      const tree = await get('');
+      const treePaths = tree.data.tree.map((entry: { path: string }) => entry.path);
+      expect(treePaths).toContain('a-bulk');
+      expect(treePaths).toContain('z-later');
+      expect(tree.data.truncated).toBe(true);
+
+      const search = await get('?q=needle');
+      expect(search.data.matches.map((match: { path: string }) => match.path)).toContain(join('z-later', 'needle.ts'));
+      expect(search.data.truncated).toBe(true);
+    } finally {
+      rmSync(bulk, { recursive: true, force: true });
+      rmSync(later, { recursive: true, force: true });
+    }
+  });
 });
