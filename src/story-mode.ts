@@ -372,7 +372,7 @@ export function keyKindOf(point: string): StoryKeyKind | undefined {
  * follows it.
  */
 function keyPointsOf(text: string): string[] {
-  if (text.length <= 160) return [];
+  if (text.length <= 40) return [];
   const spans: string[] = [];
   const plain = plainMarkdown(text.slice(0, 8000), spans);
   // Every sentence in order, with the line it came from (list items are lines).
@@ -2409,6 +2409,31 @@ function newBranchAt(indices: number[], events: StoryEvent[]): string | undefine
   return undefined;
 }
 
+/**
+ * Lines added and removed, per file summed: a file created in these edits counts what it ends with
+ * (its later edits in the same span are its own drafting), so a new file never shows removed lines.
+ */
+function netCounts(edits: StoryEdit[]): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const file of unique(edits.map((d) => d.file))) {
+    const mine = edits.filter((d) => d.file === file);
+    const a = mine.reduce((n, d) => n + d.added, 0);
+    const r = mine.reduce((n, d) => n + d.removed, 0);
+    if (mine.some((d) => d.created)) added += Math.max(0, a - r);
+    else {
+      added += a;
+      removed += r;
+    }
+  }
+  return { added, removed };
+}
+
+/** A file an earlier panel of the turn already wrote or changed: writing it again is changing it. */
+function touchedBefore(file: string, before: StoryEvent[]): boolean {
+  return before.some((e) => editsOf(e).some((d) => d.file === file));
+}
+
 /** One or two files by name ("calc.py and test_calc.py"), more by count ("3 files"). */
 const fileWords = (files: string[], noun = 'file'): string =>
   files.length && files.length <= 2 ? files.map((f) => basename(f)).join(' and ') : plural(files.length, noun);
@@ -2593,17 +2618,19 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         ...edits.map((d) => d.file),
       ]);
       panel.files = files.slice(0, 12);
-      panel.added = edits.reduce((n, e) => n + e.added, 0);
-      panel.removed = edits.reduce((n, e) => n + e.removed, 0);
+      ({ added: panel.added, removed: panel.removed } = netCounts(edits));
       if (draft.kind === 'fix') {
         const created = unique(edits.filter((e) => e.created).map((e) => e.file)).length;
         // Some files written whole (new ones), others patched: "writes README.md and changes CLAUDE.md".
-        // A file created here is written, even when Claude then edited it in the same panel.
+        // A file created here is written, even when Claude then edited it in the same panel; one an
+        // earlier panel already wrote is changed, even when this panel rewrites it whole.
+        const before = events.slice(0, Math.min(...draft.events));
         const wholeOf = (f: string) => {
           const mine = edits.filter((d) => d.file === f);
           return (
             mine.some((d) => d.created) ||
-            mine.every((d) => d.hunks.length > 0 && d.hunks.every((h) => !h.oldStart && !h.oldLines))
+            (!touchedBefore(f, before) &&
+              mine.every((d) => d.hunks.length > 0 && d.hunks.every((h) => !h.oldStart && !h.oldLines)))
           );
         };
         const wholeList = files.filter(wholeOf);
@@ -2619,7 +2646,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             ? files.length <= 2
               ? `Claude writes the new ${files.length === 1 ? 'file' : 'files'} ${fileWords(files)}.`
               : `Claude writes ${plural(created, 'new file')}.`
-            : whole && files.length
+            : whole && files.length && wholeList.length === files.length
               ? `Claude writes ${fileWords(files)}.`
               : mixed
                 ? `Claude writes ${fileWords(mixed.whole)} and changes ${fileWords(mixed.patched)}.`
@@ -2627,11 +2654,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
                   ? `Claude changes ${fileWords(files)}.`
                   : 'Claude changes a file.';
         const perFile = files.slice(0, 3).map((f) => {
-          const mine = edits.filter((e) => e.file === f);
-          return `${basename(f)} ${fmtCounts(
-            mine.reduce((n, e) => n + e.added, 0),
-            mine.reduce((n, e) => n + e.removed, 0)
-          )}`;
+          const mine = netCounts(edits.filter((e) => e.file === f));
+          return `${basename(f)} ${fmtCounts(mine.added, mine.removed)}`;
         });
         director = `${tools}${perFile.length ? ` · ${perFile.join(' · ')}` : ''}`;
       } else {
@@ -2753,7 +2777,12 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       // Whole files are written; a file it patched is changed (a later panel often patches one written earlier).
       const isWhole = (d: StoryEdit) =>
         d.created || (d.hunks.length > 0 && d.hunks.every((h) => !h.oldStart && !h.oldLines));
-      const wholeFiles = written.filter((f) => edits.filter((d) => d.file === f).every(isWhole));
+      const earlier = events.slice(0, Math.min(...draft.events));
+      const wholeFiles = written.filter(
+        (f) =>
+          edits.filter((d) => d.file === f).some((d) => d.created) ||
+          (!touchedBefore(f, earlier) && edits.filter((d) => d.file === f).every(isWhole))
+      );
       const patched = written.filter((f) => !wholeFiles.includes(f));
       const did = [
         wholeFiles.length ? `writes ${fileWords(wholeFiles)}` : '',
@@ -2890,10 +2919,13 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
                   : `Claude saves the work${inCommits}${said}.`;
       const wrote = unique(edits.map((d) => d.file));
       const startsRepo = startsRepoAt(draft.events, events);
-      const wroteWhole = wrote.filter((f) =>
-        edits
-          .filter((d) => d.file === f)
-          .every((d) => d.created || (d.hunks.length > 0 && d.hunks.every((h) => !h.oldStart && !h.oldLines)))
+      const wroteWhole = wrote.filter(
+        (f) =>
+          edits.filter((d) => d.file === f).some((d) => d.created) ||
+          (!touchedBefore(f, events.slice(0, Math.min(...draft.events))) &&
+            edits
+              .filter((d) => d.file === f)
+              .every((d) => d.hunks.length > 0 && d.hunks.every((h) => !h.oldStart && !h.oldLines)))
       );
       const wrotePatched = wrote.filter((f) => !wroteWhole.includes(f));
       const lead = [
@@ -3045,7 +3077,8 @@ function completePanel(turn: StoryTurn, page: Omit<StoryPage, 'panels'>, trailin
   // A local command answers itself: its own first line is the last word.
   const said = turn.endedBy === 'local command' ? turn.events[0]?.output?.split('\n')[0] : undefined;
   if (trailingSay) panel.balloon = { who: 'claude', text: trailingSay };
-  else if (said) panel.balloon = { who: 'claude', text: clip(said, 160) };
+  // A local command's output (/compact's "Compacted") is the CLI's own, not Claude's words: a note.
+  else if (said) panel.balloon = { who: 'note', text: clip(said, 160) };
   if (page.filesChanged) {
     panel.added = page.added;
     panel.removed = page.removed;
@@ -3083,8 +3116,7 @@ export function buildStoryPage(turn: StoryTurn): StoryPage {
     truncated,
     events,
     filesChanged: unique(edits.map((e) => e.file)).length,
-    added: edits.reduce((n, e) => n + e.added, 0),
-    removed: edits.reduce((n, e) => n + e.removed, 0),
+    ...netCounts(edits),
     // The advisor is a second opinion, not a helper that does work.
     helpers: events.filter((e) => e.helper && e.tool !== 'Advisor' && e.intent !== 'prompt').length,
     helpersRunning: events.filter((e) => e.helper?.running).length,

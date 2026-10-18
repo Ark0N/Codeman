@@ -571,6 +571,8 @@ describe('buildStoryTurns', () => {
     expect(page.panels.map((p) => p.kind)).toEqual(['mission', 'compact', 'complete']);
     expect(page.panels[0].caption.story).toBe('You run /compact.');
     expect(page.events[0]).toMatchObject({ tool: 'Command', output: 'Compacted' });
+    // The CLI's own output is a note, not Claude's words.
+    expect(page.panels.at(-1)!.balloon).toEqual({ who: 'note', text: 'Compacted' });
     // A local command like /model ends at its output too.
     const [, model] = buildStoryTurns(
       entriesOf([
@@ -1057,6 +1059,41 @@ describe('buildStoryPage', () => {
       keyKindOf('Left out on purpose: the search in the working tree belongs to another session.')
     ).toBeUndefined();
     expect(keyKindOf('Anything unknown is left out rather than guessed.')).toBeUndefined();
+  });
+
+  it('a new file counts what it ends with; a file written earlier and rewritten is changed', () => {
+    const write = (id: string, file: string, content: string) => [
+      tool(id, 'Write', { file_path: file, content }),
+      result(id, 'File created', {
+        toolUseResult: { type: 'create', filePath: file, content, structuredPatch: [] },
+      }),
+    ];
+    const page = pageOf([
+      prompt('build it'),
+      ...write('w1', '/w/run.sh', 'a\nb\nc\nd\n'),
+      ...edit('e1', '/w/run.sh', ['-b', '+B']),
+      ...edit('e2', '/w/run.sh', ['-c']),
+      ...bash('b1', 'pytest -q', 'Test', '1 passed in 0.1s'),
+      ...bash('b2', "cat > /w/run.sh <<'EOF'\na\nB\nd\nEOF\npytest -q", 'Rewrite and test', '1 passed in 0.1s'),
+      end(1000),
+    ]);
+    // Written (4 lines), then 1 line changed and 1 removed in the same panel: +3, nothing removed.
+    expect(page.panels.find((p) => p.kind === 'fix')).toMatchObject({ added: 3, removed: 0 });
+    expect(page.panels.find((p) => p.kind === 'fix')!.caption.story).toBe('Claude writes the new file run.sh.');
+    // The here-document rewrites run.sh whole, but an earlier panel wrote it: that is a change.
+    expect(page.panels.map((p) => p.caption.story)).toContain('Claude changes run.sh; the tests pass.');
+  });
+
+  it('a short ending keeps the sentence that leaves something open', () => {
+    const page = pageOf([
+      prompt('run them'),
+      said('The background test run finished and all 23 tests passed. The CHANGELOG helper is still running.'),
+      end(1000),
+    ]);
+    expect(page.panels.at(-1)!.balloon!.text).toBe(
+      'The background test run finished and all 23 tests passed. The CHANGELOG helper is still running.'
+    );
+    expect(page.openNote).toBe('note');
   });
 
   it('the first save no prompt asked for is marked, once; a new branch is named', () => {

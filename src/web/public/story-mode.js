@@ -1063,8 +1063,12 @@ const StoryArt = (() => {
         // With several files the badge counts the card in front: a total beside one file's card read as
         // that file's own. The Director's cut has every file's count.
         const front = files.length > 1 && first ? edits.filter((d) => d.file === first.file) : null;
-        const added = front ? front.reduce((n, d) => n + d.added, 0) : p.panel.added;
-        const removed = front ? front.reduce((n, d) => n + d.removed, 0) : p.panel.removed;
+        // A file created here counts what it ends with, never lines it removed from its own draft.
+        const fa = front ? front.reduce((n, d) => n + d.added, 0) : 0;
+        const fr = front ? front.reduce((n, d) => n + d.removed, 0) : 0;
+        const fresh = !!front?.some((d) => d.created);
+        const added = front ? (fresh ? Math.max(0, fa - fr) : fa) : p.panel.added;
+        const removed = front ? (fresh ? 0 : fr) : p.panel.removed;
         if (added)
           sfx(
             ctx,

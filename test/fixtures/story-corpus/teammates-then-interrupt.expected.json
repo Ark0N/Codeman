@@ -297,7 +297,7 @@
       {
         "kind": "check",
         "ok": true,
-        "story": "Claude writes 4 files; the tests pass.",
+        "story": "Claude changes 4 files; the tests pass.",
         "unaskedSave": false,
         "director": "npm test 2>&1 → ok · 8 passed · writes 4 files",
         "balloon": "Every @example output matches what the code actually returns, and 8/8 tests pass.",

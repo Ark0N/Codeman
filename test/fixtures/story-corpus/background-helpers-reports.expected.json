@@ -282,7 +282,7 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
-    "openNote": false,
+    "openNote": "note",
     "asks": false,
     "panels": [
       {
@@ -318,7 +318,7 @@
         "story": "Done in 7 seconds.",
         "unaskedSave": false,
         "director": "turn_duration · 7 s · 1 tool call",
-        "balloon": "The background test run finished and all 23 tests passed, including the new --json test.",
+        "balloon": "The background test run finished and all 23 tests passed, including the new --json test. The CHANGELOG helper is still running; I'll report when it finishes.",
         "tests": null,
         "roundsOk": null,
         "printed": null,
