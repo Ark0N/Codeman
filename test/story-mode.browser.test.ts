@@ -3,12 +3,13 @@
  * synthetic transcript (test/story-fixtures.ts) handed to the session the way Claude's hooks do it,
  * then grown while the overlay is open so the live redraw runs off real SSE events.
  */
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
+import { claudeProjectsDir } from '../src/utils/claude-transcript.js';
 import { demoTurn, resetClock } from './story-fixtures.js';
 
 const jsonl = (lines: unknown[]) => lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
@@ -18,6 +19,7 @@ describe('Story Mode in a real browser', () => {
   let browser: Browser;
   let page: Page;
   let root: string;
+  let transcriptDir: string;
   let transcript: string;
   let sessionId: string;
   let rest: unknown[];
@@ -39,7 +41,10 @@ describe('Story Mode in a real browser', () => {
   beforeAll(async () => {
     resetClock();
     root = mkdtempSync(join(homedir(), 'story-ui-'));
-    transcript = join(root, 'conversation.jsonl');
+    // Where Claude Code writes transcripts (under the test's temp HOME): the only place a hook path is read.
+    mkdirSync(claudeProjectsDir(), { recursive: true });
+    transcriptDir = mkdtempSync(join(claudeProjectsDir(), 'story-ui-'));
+    transcript = join(transcriptDir, 'conversation.jsonl');
     const turn = demoTurn();
     // The turn up to the first edit's result is "running"; the rest arrives during the test.
     writeFileSync(transcript, jsonl(turn.slice(0, 14)));
@@ -71,6 +76,7 @@ describe('Story Mode in a real browser', () => {
     if (browser) await browser.close();
     if (server) await server.stop();
     rmSync(root, { recursive: true, force: true });
+    rmSync(transcriptDir, { recursive: true, force: true });
   }, 60000);
 
   it('is off by default: no header button', async () => {

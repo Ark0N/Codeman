@@ -2,13 +2,15 @@
  * @fileoverview GET /api/sessions/:id/story (Story Mode) against invented transcripts in a temp dir,
  * plus the reader's incremental tail read. Port: N/A (app.inject()).
  */
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerStoryRoutes } from '../../src/web/routes/story-routes.js';
 import { clearStoryReaderCache, readStoryEntries } from '../../src/story-reader.js';
+import { claudeProjectsDir } from '../../src/utils/claude-transcript.js';
 import { bash, demoTurn, edit, end, prompt, read, resetClock, result, said, tool } from '../story-fixtures.js';
 
 const URL = '/api/sessions/test-session-1/story';
@@ -30,11 +32,70 @@ async function setup(opts: { hookPath?: string | null; mode?: string; remote?: u
 beforeEach(() => {
   resetClock();
   clearStoryReaderCache();
-  dir = mkdtempSync(join(tmpdir(), 'story-route-'));
+  // Where Claude Code writes transcripts (under the test's temp HOME): the only place a hook path is read.
+  mkdirSync(claudeProjectsDir(), { recursive: true });
+  dir = mkdtempSync(join(claudeProjectsDir(), 'story-route-'));
   transcript = join(dir, 'conversation.jsonl');
 });
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
+});
+
+describe('GET /api/sessions/:id/story: which file is read', () => {
+  it('a hook path outside the Claude projects folder is never read, nor a symlink out of it', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'story-outside-'));
+    try {
+      const file = join(outside, 'conversation.jsonl');
+      writeFileSync(file, jsonl([prompt('secret job'), said('Done.'), end(2000)]));
+      let { app } = await setup({ hookPath: file });
+      let body = (await app.inject({ method: 'GET', url: URL })).json();
+      expect(body.data).toMatchObject({ supported: true, turns: [], page: null });
+      const link = join(dir, 'link.jsonl');
+      symlinkSync(file, link);
+      ({ app } = await setup({ hookPath: link }));
+      body = (await app.inject({ method: 'GET', url: URL })).json();
+      expect(body.data).toMatchObject({ supported: true, turns: [], page: null });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("a FIFO in place of a helper's meta file costs nothing: the helper still draws", async () => {
+    writeFileSync(transcript, jsonl([prompt('go'), end(1000)]));
+    const sub = join(dir, 'conversation', 'subagents');
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(join(sub, 'agent-h1.jsonl'), jsonl([prompt('helper task'), said('Working.')]));
+    execFileSync('mkfifo', [join(sub, 'agent-h1.meta.json')]);
+    const { app } = await setup();
+    const started = Date.now();
+    const res = await app.inject({ method: 'GET', url: `${URL}/helpers/h1` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.helper).toEqual({ agentId: 'h1' });
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('a transcript with far more entries than are kept reads in one pass and keeps the newest', async () => {
+    const lines = [prompt('one long turn')];
+    for (let i = 0; i < 100_000; i++) lines.push(said(`step ${i}`));
+    writeFileSync(transcript, jsonl(lines));
+    const started = Date.now();
+    const read = await readStoryEntries(transcript);
+    // Trimmed with one splice per megabyte, never one shift() per entry (seconds at this size).
+    expect(Date.now() - started).toBeLessThan(4000);
+    expect(read.entries).toHaveLength(20_000);
+    expect(read.partial).toBe(true);
+  });
+
+  it('a FIFO in place of the transcript fails at once, never waiting for a writer', async () => {
+    const fifo = join(dir, 'fifo.jsonl');
+    execFileSync('mkfifo', [fifo]);
+    const { app } = await setup({ hookPath: fifo });
+    const started = Date.now();
+    const res = await app.inject({ method: 'GET', url: URL });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().errorCode).toBe('OPERATION_FAILED');
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
 });
 
 describe('GET /api/sessions/:id/story', () => {
@@ -103,11 +164,11 @@ describe('GET /api/sessions/:id/story', () => {
     expect(res.json().data).toEqual({ supported: true, turns: [], page: null });
   });
 
-  it('fails with OPERATION_FAILED when the transcript cannot be read', async () => {
+  it('a hook path that is gone falls back to the lookup by conversation id: nothing yet, not an error', async () => {
     const { app } = await setup({ hookPath: join(dir, 'missing.jsonl') });
     const res = await app.inject({ method: 'GET', url: URL });
-    expect(res.statusCode).toBe(500);
-    expect(res.json()).toMatchObject({ success: false, errorCode: 'OPERATION_FAILED' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toMatchObject({ supported: true, turns: [], page: null });
   });
 
   it('404s an unknown session', async () => {

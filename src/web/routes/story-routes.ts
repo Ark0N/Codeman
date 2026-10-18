@@ -20,8 +20,8 @@
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { readFile, stat } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { realpath } from 'node:fs/promises';
+import { basename, dirname, join, sep } from 'node:path';
 import {
   ApiErrorCode,
   createErrorResponse,
@@ -31,8 +31,8 @@ import {
 } from '../../types.js';
 import { getCli } from '../../config/cli-registry/registry.js';
 import { buildHelperPage, buildStoryPage, buildStoryTurns, summarizeTurns } from '../../story-mode.js';
-import { readStoryEntries } from '../../story-reader.js';
-import { findClaudeTranscriptPath } from '../../utils/claude-transcript.js';
+import { readSmallRegularFile, readStoryEntries, storyFileVersion } from '../../story-reader.js';
+import { claudeProjectsDir, findClaudeTranscriptPath } from '../../utils/claude-transcript.js';
 import { findSessionOrFail } from '../route-helpers.js';
 import type { ConfigPort, SessionPort } from '../ports/index.js';
 
@@ -44,10 +44,45 @@ const SERVER_EPOCH = Date.now().toString(36);
 /** A helper's `.meta.json` is a few hundred bytes; anything bigger is not one. */
 const MAX_META_BYTES = 64 * 1024;
 
-/** The hook-reported path when it looks like a transcript, else a lookup by conversation id. */
-async function resolveTranscriptPath(hookPath: string | null, conversationId: string): Promise<string | null> {
-  if (hookPath && hookPath.startsWith('/') && hookPath.endsWith('.jsonl')) return hookPath;
-  return findClaudeTranscriptPath(conversationId);
+/**
+ * Whether `path` really lies in a Claude projects folder (the session's relocated config dir, or the
+ * server's): symlinks resolved on both sides. Story Mode sends a transcript's CONTENT to the
+ * browser, so the hook-reported path is trusted only where Claude Code writes transcripts.
+ */
+async function insideClaudeProjects(path: string, configDir?: string): Promise<boolean> {
+  let real: string;
+  try {
+    real = await realpath(path);
+  } catch {
+    return false;
+  }
+  for (const root of new Set([claudeProjectsDir(configDir), claudeProjectsDir()])) {
+    let base = root;
+    try {
+      base = await realpath(root);
+    } catch {
+      // a projects folder that does not exist holds nothing
+      continue;
+    }
+    if (real.startsWith(base.endsWith(sep) ? base : base + sep)) return true;
+  }
+  return false;
+}
+
+/** The hook-reported path when it is a transcript in a projects folder, else a lookup by conversation id. */
+async function resolveTranscriptPath(
+  hookPath: string | null,
+  conversationId: string,
+  configDir?: string
+): Promise<string | null> {
+  if (
+    hookPath &&
+    hookPath.startsWith('/') &&
+    hookPath.endsWith('.jsonl') &&
+    (await insideClaudeProjects(hookPath, configDir))
+  )
+    return hookPath;
+  return findClaudeTranscriptPath(conversationId, configDir);
 }
 
 type Source = { unsupported: string } | { path: string | null };
@@ -64,15 +99,23 @@ async function storySource(ctx: SessionPort & ConfigPort, id: string, req: Fasti
         'Story Mode reads transcripts on this machine. This session keeps its transcript on another host or inside a container.',
     };
   }
-  return { path: await resolveTranscriptPath(ctx.getTranscriptPath(id), session.claudeSessionId || session.id) };
+  return {
+    path: await resolveTranscriptPath(
+      ctx.getTranscriptPath(id),
+      session.claudeSessionId || session.id,
+      session.claudeConfigDir
+    ),
+  };
 }
 
 /**
  * Sets the ETag and answers true (after sending a 304) when the browser already holds this version.
  * A live view refetches every few seconds; while the file has not changed, nothing gets built.
  */
+const etagOf = (tag: string) => `W/"story-${SERVER_EPOCH}-${tag}"`;
+
 function notModified(req: FastifyRequest, reply: FastifyReply, tag: string): boolean {
-  const etag = `W/"story-${SERVER_EPOCH}-${tag}"`;
+  const etag = etagOf(tag);
   reply.header('ETag', etag).header('Cache-Control', 'no-cache');
   if (req.headers['if-none-match'] !== etag) return false;
   reply.code(304).send();
@@ -81,8 +124,10 @@ function notModified(req: FastifyRequest, reply: FastifyReply, tag: string): boo
 
 async function readHelperMeta(path: string): Promise<{ type?: string; description?: string; finished?: boolean }> {
   try {
-    if ((await stat(path)).size > MAX_META_BYTES) return {};
-    const meta = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+    // A regular file only, read through one handle (a FIFO or a device here must not pin a worker).
+    const text = await readSmallRegularFile(path, MAX_META_BYTES);
+    if (text === null) return {};
+    const meta = JSON.parse(text) as Record<string, unknown>;
     return {
       type: typeof meta.agentType === 'string' ? meta.agentType.slice(0, 80) : undefined,
       description: typeof meta.description === 'string' ? meta.description.slice(0, 300) : undefined,
@@ -100,6 +145,12 @@ export function registerStoryRoutes(app: FastifyInstance, ctx: SessionPort & Con
     const source = await storySource(ctx, id, req);
     if ('unsupported' in source) return { success: true, data: { supported: false, reason: source.unsupported } };
     if (!source.path) return { success: true, data: { supported: true, turns: [], page: null } };
+    const turnKey = typeof turn === 'string' && turn ? turn : '';
+    const tagOf = (version: string) => `${version}-${encodeURIComponent(turnKey || 'latest')}`;
+    // An unchanged file is a 304 from a stat alone: no read, no parse, whatever the cache holds.
+    const before = await storyFileVersion(source.path);
+    if (before && req.headers['if-none-match'] === etagOf(tagOf(before)) && notModified(req, reply, tagOf(before)))
+      return;
 
     let read;
     try {
@@ -108,8 +159,7 @@ export function registerStoryRoutes(app: FastifyInstance, ctx: SessionPort & Con
       reply.code(500);
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Could not read the session transcript');
     }
-    const turnKey = typeof turn === 'string' && turn ? turn : '';
-    if (notModified(req, reply, `${read.version}-${encodeURIComponent(turnKey || 'latest')}`)) return;
+    if (notModified(req, reply, tagOf(read.version))) return;
 
     const turns = buildStoryTurns(read.entries);
     const wanted = turnKey ? turns.find((t) => t.id === turnKey) : turns[turns.length - 1];
