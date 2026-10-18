@@ -98,7 +98,9 @@ describe('Story Mode on real sessions', () => {
       ['human', true],
       ['human', true],
     ]);
-    expect(pages[3].panels.at(-1)?.story).toBe('You stop Claude here.');
+    expect(pages[3].panels.at(-1)?.story).toBe(
+      'You stop Claude here, during its step 3. Saved before the stop: 2 commits.'
+    );
   });
 
   it('a commit at the end of a test one-liner is kept, and a background helper reports back in 9 s', () => {

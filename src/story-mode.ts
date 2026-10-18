@@ -2547,8 +2547,14 @@ function completePanel(turn: StoryTurn, page: Omit<StoryPage, 'panels'>, trailin
   const laterHelpers = later.filter((e) => e.helper).length;
   const laterCommands = later.length - laterHelpers;
   const done = turn.durationMs !== undefined ? `Done in ${roughDuration(turn.durationMs)}.` : 'Done.';
+  // Where a stop landed: the step Claude last announced ("Step 3: …"), and what it had saved by then.
+  const announced = [...page.events].reverse().find((e) => e.intent === 'say' && /^\W{0,4}step \d+\b/i.test(e.label));
+  const step = announced ? /step (\d+)/i.exec(announced.label)?.[1] : undefined;
+  const savedBefore = page.events.reduce((n, e) => n + (e.commits ?? 0), 0);
   const story = turn.interrupted
-    ? 'You stop Claude here.'
+    ? `You stop Claude here${step ? `, during its step ${step}` : ''}.${
+        savedBefore ? ` Saved before the stop: ${plural(savedBefore, 'commit')}.` : ''
+      }`
     : page.noneWorked
       ? 'Nothing Claude tried worked, so the job is not done.'
       : turn.endedBy === 'next prompt'
