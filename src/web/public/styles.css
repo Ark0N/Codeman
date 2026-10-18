@@ -9726,20 +9726,30 @@ kbd {
 /* Security notice card (security-notices.json; showSecurityNotice / showUpdateNotice in
    panels-ui.js). Its own card in the toast stack, never the plain pill, and in the SAME
    container, so it shares the toasts' position and z-index. Theme tokens only, so every skin
-   reads: the light skins' --yellow is already a dark amber that holds on white, and the
-   primary button's ink is --bg-card (dark ink on the dark skins' light amber, white ink on
-   the light skins' dark amber). The entrance animates opacity and transform only, and
-   nothing moves under prefers-reduced-motion. */
+   reads. Small amber text and the primary button use --notice-ink: --yellow on the dark
+   skins, and on the light skins --yellow darkened a step, because their --yellow alone is
+   under 4.5:1 for 11-12px text on white (3.9 to 4.4 measured). The primary button's label is
+   --bg-card (dark on the dark skins' light amber, white on the light skins' dark amber). The
+   entrance animates opacity and transform only, and nothing moves under
+   prefers-reduced-motion.
+
+   The card is capped to the room below the stack's top and scrolls inside itself: the
+   container is fixed and does not scroll, so on a short screen (a phone in landscape) the
+   buttons at the bottom were otherwise off-screen and unreachable. The accent bar down the
+   left edge (amber running into red) is therefore a background layer, not a positioned
+   child: a background stays put while the content scrolls. */
 .security-notice {
-  position: relative;
+  --notice-ink: var(--yellow);
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   column-gap: 0.75rem;
   align-items: start;
   box-sizing: border-box;
-  width: min(27rem, calc(100vw - 1rem));
+  width: min(420px, calc(100vw - 1rem));
+  max-height: calc(var(--app-height, 100dvh) - var(--header-height) - 1rem);
   padding: 0.85rem 0.55rem 0.9rem 1.05rem;
   background:
+    linear-gradient(180deg, var(--yellow), var(--red)) left top / 4px 100% no-repeat,
     linear-gradient(180deg, color-mix(in srgb, var(--yellow) 9%, transparent), transparent 6rem),
     var(--bg-card);
   border: 1px solid color-mix(in srgb, var(--yellow) 32%, var(--border));
@@ -9748,7 +9758,9 @@ kbd {
   color: var(--text);
   font-size: 0.8rem;
   line-height: 1.45;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   pointer-events: auto;
   opacity: 0;
   transform: translateY(-6px) scale(0.985);
@@ -9760,15 +9772,17 @@ kbd {
   transform: none;
 }
 
-/* The accent bar: amber running into red down the left edge. */
-.security-notice::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 4px;
-  background: linear-gradient(180deg, var(--yellow), var(--red));
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) .security-notice {
+  --notice-ink: color-mix(in srgb, var(--yellow) 85%, black);
+}
+
+/* The update toast carrying a notice is still an update: its frame takes the accent colour,
+   and the amber is left to the warning section inside it. */
+.security-notice.update-notice {
+  background:
+    linear-gradient(var(--accent), var(--accent)) left top / 4px 100% no-repeat,
+    var(--bg-card);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
 }
 
 .security-notice-icon {
@@ -9778,7 +9792,7 @@ kbd {
   width: 2rem;
   height: 2rem;
   border-radius: 50%;
-  color: var(--yellow);
+  color: var(--notice-ink);
   background: color-mix(in srgb, var(--yellow) 15%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--yellow) 30%, transparent);
 }
@@ -9804,7 +9818,7 @@ kbd {
 }
 
 .security-notice-eyebrow {
-  color: var(--yellow);
+  color: var(--notice-ink);
   font-size: 0.66rem;
   font-weight: 700;
   letter-spacing: 0.09em;
@@ -9818,6 +9832,7 @@ kbd {
   font-weight: 700;
   line-height: 1.3;
   overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .security-notice-body,
@@ -9850,7 +9865,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  color: var(--yellow);
+  color: var(--notice-ink);
 }
 
 .security-notice-section-head svg {
@@ -9891,12 +9906,12 @@ kbd {
   padding: 0.45rem 0.85rem;
   border: 1px solid transparent;
   border-radius: var(--btn-radius);
-  background: var(--yellow);
+  background: var(--notice-ink);
   color: var(--bg-card);
 }
 
 .security-notice-primary:hover {
-  background: color-mix(in srgb, var(--yellow) 86%, var(--text));
+  background: color-mix(in srgb, var(--notice-ink) 86%, var(--text));
 }
 
 .security-notice-secondary {
@@ -9936,7 +9951,7 @@ kbd {
   border: none;
   border-radius: 6px;
   background: none;
-  color: var(--text-muted);
+  color: var(--text-dim);
   font-size: 1.15rem;
   line-height: 1;
   cursor: pointer;
@@ -9952,15 +9967,24 @@ kbd {
   outline-offset: 2px;
 }
 
-/* Phones: the full width minus the stack's 0.5rem gutters, and the notice's own button
-   takes the room left beside Dismiss (wrapping under it when the label is long). */
+/* Phones: the full width minus the stack's 0.5rem gutters. Every button grows to fill its
+   row (so one that wraps fills its own instead of sitting stray at the left) and is at least
+   --touch-target-min tall; the × gets a touch-sized box too, its negative margin keeping the
+   glyph where it sits on a desktop. */
 @media (max-width: 599px) {
   .security-notice {
     width: calc(100vw - 1rem);
   }
 
-  .security-notice-primary {
+  .security-notice-actions > button {
     flex: 1 1 auto;
+    min-height: var(--touch-target-min);
+  }
+
+  .security-notice-close {
+    width: var(--touch-target-min);
+    height: var(--touch-target-min);
+    margin: -0.75rem -0.5rem 0 0;
   }
 }
 
