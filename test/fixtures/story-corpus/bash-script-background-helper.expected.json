@@ -43,7 +43,7 @@
         "kind": "backup",
         "ok": null,
         "story": "Claude calls in 2 helpers.",
-        "director": "Advisor · Agent · advisor + general-purpose · 6 calls inside",
+        "director": "Advisor · Agent · a second opinion · general-purpose · 6 calls inside",
         "balloon": null,
         "tests": null,
         "events": 2

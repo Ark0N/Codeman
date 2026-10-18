@@ -115,7 +115,12 @@ export function registerStoryRoutes(app: FastifyInstance, ctx: SessionPort & Con
     const wanted = turnKey ? turns.find((t) => t.id === turnKey) : turns[turns.length - 1];
     return {
       success: true,
-      data: { supported: true, turns: summarizeTurns(turns), page: wanted ? buildStoryPage(wanted) : null },
+      data: {
+        supported: true,
+        turns: summarizeTurns(turns),
+        page: wanted ? buildStoryPage(wanted) : null,
+        ...(read.partial ? { older: true } : {}),
+      },
     };
   });
 

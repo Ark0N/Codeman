@@ -203,4 +203,10 @@ export type StoryHelperResponse =
 
 export type StoryResponse =
   | { supported: false; reason: string }
-  | { supported: true; turns: StoryTurnSummary[]; page: StoryPage | null };
+  | {
+      supported: true;
+      turns: StoryTurnSummary[];
+      page: StoryPage | null;
+      /** The transcript is longer than the part that was read: older turns are not listed. */
+      older?: boolean;
+    };

@@ -45,6 +45,15 @@ const STORY_STAGE_MAX = 680;
  * panel at display rate cost ~80% of a core with five panels on a 2x screen).
  */
 const STORY_FPS_INTRO = 30;
+/** Panel backgrounds kept for reuse (kind × size × palette). */
+const STORY_BG_CACHE = 32;
+/** Horizontal bands a new background is built in, one per frame. */
+const STORY_BG_BANDS = 4;
+const storyBgCache = new Map();
+/** Milliseconds of drawing per frame; panels past it wait for the next frame (no long tasks). */
+const STORY_FRAME_BUDGET_MS = 10;
+/** Panels drawn per frame at most: the raster cost lands at paint time, where the JS budget cannot see it. */
+const STORY_DRAWS_PER_FRAME = 2;
 const STORY_FPS_LIVE = 15;
 const STORY_FPS_SETTLED = 6;
 /** A settled panel animates this long, then holds still until the pointer wakes it again. */
@@ -123,6 +132,16 @@ const StoryArt = (() => {
     ctx.fillStyle = C.panel;
     ctx.fillRect(0, 0, W, H);
   }
+  /** While a background is built in bands (one per frame), the band being drawn: dots outside it are skipped. */
+  let band = null;
+  function inBand(top, bottom, fn) {
+    band = { top, bottom };
+    try {
+      fn();
+    } finally {
+      band = null;
+    }
+  }
   function halftone(ctx, W, H, color, fx, fy, { cell = 9, rmax = 3.6, reach = 1, alpha = 1 } = {}) {
     const diag = Math.hypot(W, H) * reach;
     const R = Math.hypot(W, H) / 2 + cell;
@@ -136,6 +155,7 @@ const StoryArt = (() => {
         const ux = gx * k - gy * k + W / 2;
         const uy = gx * k + gy * k + H / 2;
         if (ux < -cell || uy < -cell || ux > W + cell || uy > H + cell) continue;
+        if (band && (uy < band.top - cell || uy > band.bottom + cell)) continue;
         const r = rmax * (1 - Math.hypot(ux - fx, uy - fy) / diag);
         if (r < 0.4) continue;
         ctx.moveTo(ux + r, uy);
@@ -1418,7 +1438,7 @@ const StoryArt = (() => {
     },
   };
 
-  return { FPS, HERO, VH, C, readColors, spring, SCENES, takeSpeaker, editsOf };
+  return { FPS, HERO, VH, C, readColors, spring, SCENES, takeSpeaker, editsOf, inBand };
 })();
 
 /** Panel kinds as the wire's group headings name them. */
@@ -1846,10 +1866,25 @@ Object.assign(CodemanApp.prototype, {
       if (!st.open) return;
       const dt = last ? Math.min(100, t - last) : 16;
       last = t;
-      if (!reduced.matches && !document.hidden) {
-        for (const rt of st.panels) {
+      if (!document.hidden) {
+        // Clocks run for every panel; drawing is rationed per frame, because a canvas rasterizes what
+        // was drawn when the frame is painted (12 panels redrawn in one frame made 50-80 ms tasks that
+        // the JS time alone never showed). The panel served first rotates, so none starves.
+        if (!reduced.matches) for (const rt of st.panels) if (rt.visible) rt.clock += (dt / 1000) * StoryArt.FPS;
+        const start = performance.now();
+        const n = st.panels.length;
+        let drawn = 0;
+        for (let j = 0; j < n; j++) {
+          if (drawn >= STORY_DRAWS_PER_FRAME || performance.now() - start > STORY_FRAME_BUDGET_MS) break;
+          const rt = st.panels[((st.drawCursor || 0) + j) % n];
           if (!rt.visible) continue;
-          rt.clock += (dt / 1000) * StoryArt.FPS;
+          if (rt.pending) {
+            rt.pending = false;
+            this._storyDrawPanel(rt);
+            drawn++;
+            continue;
+          }
+          if (reduced.matches) continue;
           const intro = rt.clock < StoryArt.HERO;
           const fps = intro ? STORY_FPS_INTRO : rt.panel?.live ? STORY_FPS_LIVE : STORY_FPS_SETTLED;
           if (!intro && !rt.panel?.live) {
@@ -1859,7 +1894,9 @@ Object.assign(CodemanApp.prototype, {
           if (t < (rt.nextDrawAt || 0)) continue;
           rt.nextDrawAt = t + 1000 / fps - 4;
           this._storyDrawPanel(rt);
+          drawn++;
         }
+        st.drawCursor = n ? ((st.drawCursor || 0) + 1) % n : 0;
       }
       st.raf = requestAnimationFrame(loop);
     };
@@ -1982,6 +2019,13 @@ Object.assign(CodemanApp.prototype, {
         return o;
       })
     );
+    if (data?.older) {
+      const o = document.createElement('option');
+      o.disabled = true;
+      o.value = '';
+      o.textContent = '… older turns are not loaded';
+      sel.prepend(o);
+    }
     if (page) sel.value = page.id;
     sel.disabled = turns.length < 2;
     const idx = page ? turns.findIndex((t) => t.id === page.id) : -1;
@@ -2019,12 +2063,12 @@ Object.assign(CodemanApp.prototype, {
     const key = `${page.id}|${done}`;
     if (st.announced === key) return;
     const first = st.announced === undefined;
+    const newTurn = !first && !st.announced.startsWith(`${page.id}|`);
     st.announced = key;
     if (first) return;
     const last = page.panels[page.panels.length - 1];
-    box.textContent = done
-      ? `Turn finished. ${last?.caption.story || ''}`.trim()
-      : `New turn: ${page.prompt.slice(0, 140)}`;
+    const finished = `${done ? `Turn finished. ${last?.caption.story || ''}` : ''}`.trim();
+    box.textContent = newTurn ? `New turn: ${page.prompt.slice(0, 140)}${finished ? `. ${finished}` : ''}` : finished;
   },
 
   _storyRenderPanels(page) {
@@ -2067,7 +2111,7 @@ Object.assign(CodemanApp.prototype, {
       rt.el.style.setProperty('--story-span6', String(spans6[i]));
       rt.el.style.setProperty('--story-span2', String(spans2[i]));
       this._storyFillPanelText(rt, page, i);
-      this._storyDrawPanel(rt);
+      this._storyQueueDraw(rt);
     });
     for (const rt of st.panels.splice(want.length)) this._storyDropPanel(rt);
 
@@ -2093,6 +2137,7 @@ Object.assign(CodemanApp.prototype, {
     if (focusAt >= 0 && !document.contains(focused)) {
       const rt = st.panels[Math.min(focusAt, st.panels.length - 1)];
       if (rt && !rt.w) this._storySizePanel(rt);
+      if (rt) this._storyQueueDraw(rt, true); // its click regions must exist to take focus
       const target = rt && ((focusHit && rt.hitEls.get(focusHit)) || rt.hitEls.values().next().value);
       if (target) target.focus({ preventScroll: true });
       else {
@@ -2263,7 +2308,7 @@ Object.assign(CodemanApp.prototype, {
     const s = Math.round(ms / 1000);
     if (s < 60) return `${s} s`;
     const m = Math.floor(s / 60);
-    return m < 60 ? `${m} min ${s % 60} s` : `${Math.floor(m / 60)} h ${m % 60} min`;
+    return m < 60 ? `${m} min ${s % 60} s` : `${Math.floor(m / 60)} h ${m % 60} min ${s % 60} s`;
   },
 
   _storySizePanel(rt) {
@@ -2277,7 +2322,13 @@ Object.assign(CodemanApp.prototype, {
     rt.canvas.width = Math.max(1, Math.round(w * dpr));
     rt.canvas.height = Math.max(1, Math.round(h * dpr));
     rt.bgKey = '';
-    this._storyDrawPanel(rt);
+    this._storyQueueDraw(rt);
+  },
+
+  /** Draws on the next frame, within its budget (now, when the frame loop is not running). */
+  _storyQueueDraw(rt, now = false) {
+    if (now || !this._story?.raf) this._storyDrawPanel(rt);
+    else rt.pending = true;
   },
 
   _storyDrawPanel(rt) {
@@ -2288,21 +2339,48 @@ Object.assign(CodemanApp.prototype, {
     const s = rt.h / StoryArt.VH;
     const W = rt.w / s;
     const k = rt.dpr * s;
-    const key = `${rt.canvas.width}x${rt.canvas.height}|${StoryArt.C.key}`;
+    const key = `${rt.kind}|${rt.canvas.width}x${rt.canvas.height}|${StoryArt.C.key}`;
     if (rt.bgKey !== key) {
-      rt.bg ??= document.createElement('canvas');
-      rt.bg.width = rt.canvas.width;
-      rt.bg.height = rt.canvas.height;
-      const b = rt.bg.getContext('2d');
-      b.setTransform(k, 0, 0, k, 0, 0);
-      scene.bg(b, W, StoryArt.VH);
+      // A background depends only on the kind, the size and the palette: shared between panels and
+      // turns, so stepping through turns draws no halftone twice. A new one is built in horizontal
+      // bands, one per frame (a wide halftone at 2x is ~35 ms in one go, a long task that made the
+      // app drop its WebGL terminal renderer); the panel shows it as it fills in.
+      let job = storyBgCache.get(key);
+      if (!job) {
+        const canvas = document.createElement('canvas');
+        canvas.width = rt.canvas.width;
+        canvas.height = rt.canvas.height;
+        job = { canvas, next: 0, total: STORY_BG_BANDS };
+        storyBgCache.set(key, job);
+        if (storyBgCache.size > STORY_BG_CACHE) storyBgCache.delete(storyBgCache.keys().next().value);
+      }
+      rt.bg = job;
       rt.bgKey = key;
+    }
+    const job = rt.bg;
+    if (job.next < job.total) {
+      const b = job.canvas.getContext('2d');
+      // Without a frame loop (tests, a browser that never paints) the whole background at once.
+      const steps = st?.raf ? 1 : job.total - job.next;
+      for (let i = 0; i < steps && b; i++, job.next++) {
+        const top = (StoryArt.VH / job.total) * job.next;
+        const bottom = top + StoryArt.VH / job.total;
+        b.save();
+        b.setTransform(k, 0, 0, k, 0, 0);
+        b.beginPath();
+        b.rect(0, top, W, bottom - top);
+        b.clip();
+        StoryArt.inBand(top, bottom, () => scene.bg(b, W, StoryArt.VH));
+        b.restore();
+      }
+      if (!b) job.next = job.total;
+      if (job.next < job.total) rt.pending = true;
     }
     const ctx = rt.ctx;
     if (!ctx) return; // no 2D context (a browser out of canvas memory): the captions still read
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, rt.canvas.width, rt.canvas.height);
-    ctx.drawImage(rt.bg, 0, 0);
+    ctx.drawImage(job.canvas, 0, 0);
     const stageW = scene.fullWidth ? W : Math.min(W, STORY_STAGE_MAX);
     const ox = (W - stageW) / 2;
     ctx.setTransform(k, 0, 0, k, ox * k, 0);

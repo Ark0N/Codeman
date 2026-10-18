@@ -278,7 +278,7 @@ export function exactDuration(ms: number): string {
   if (s < 60) return `${s} s`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m} min ${s % 60} s`;
-  return `${Math.floor(m / 60)} h ${m % 60} min`;
+  return `${Math.floor(m / 60)} h ${m % 60} min ${s % 60} s`;
 }
 
 const fmtCounts = (added: number, removed: number): string =>
@@ -984,7 +984,10 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
     const local = /^\s*<local-command-(stdout|stderr)>([\s\S]*?)<\/local-command-\1>/.exec(blockText(content));
     if (local) {
       // eslint-disable-next-line no-control-regex
-      const text = local[2].replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').trim();
+      const text = local[2]
+        .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+        .replace(/`([^`\n]+)`/g, '$1')
+        .trim();
       return [{ k: 'local', at, text: clip(text, 2000) }];
     }
     const prompt = readPrompt(blockText(content));
@@ -1546,6 +1549,8 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
       }
     }
   }
+  // A compaction after the last turn (no turn came after it to take it) closes that turn.
+  if (pendingCompact && turns.length) turns[turns.length - 1].events.push(pendingCompact);
   return turns;
 }
 
@@ -1915,7 +1920,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             : `Claude calls in ${plural(helpers.length, 'helper')}.`
         : 'Claude sends a message to another session.';
       const inside = evs.reduce((n, e) => n + (e.helper?.toolUses ?? 0), 0);
-      director = `${tools}${helpers.length ? ` · ${unique(helpers.map((h) => h.type)).join(' + ')}` : ''}${inside ? ` · ${plural(inside, 'call')} inside` : ''}`;
+      const types = unique(helpers.map((h) => h.type).filter((t) => t !== 'advisor'));
+      director = `${tools}${advisor ? ' · a second opinion' : ''}${types.length ? ` · ${types.join(' + ')}` : ''}${inside ? ` · ${plural(inside, 'call')} inside` : ''}`;
       break;
     }
     case 'fix':
@@ -1930,12 +1936,16 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       panel.removed = edits.reduce((n, e) => n + e.removed, 0);
       if (draft.kind === 'fix') {
         const created = unique(edits.filter((e) => e.created).map((e) => e.file)).length;
+        const whole =
+          edits.length > 0 && edits.every((d) => d.created || d.hunks.every((h) => !h.oldStart && !h.oldLines));
         story =
           created && created === files.length
             ? `Claude writes ${plural(created, 'new file')}.`
-            : files.length
-              ? `Claude changes ${plural(files.length, 'file')}.`
-              : 'Claude changes a file.';
+            : whole && files.length
+              ? `Claude writes ${plural(files.length, 'file')}.`
+              : files.length
+                ? `Claude changes ${plural(files.length, 'file')}.`
+                : 'Claude changes a file.';
         const perFile = files.slice(0, 3).map((f) => {
           const mine = edits.filter((e) => e.file === f);
           return `${basename(f)} ${fmtCounts(
@@ -2100,8 +2110,18 @@ function completePanel(turn: StoryTurn, page: Omit<StoryPage, 'panels'>, trailin
   ]
     .filter(Boolean)
     .join(' · ');
-  const panel: StoryPanel = { kind: 'complete', events: [], caption: { story, director } };
+  const panel: StoryPanel = {
+    kind: 'complete',
+    events: [],
+    caption: {
+      story: turn.durationMs !== undefined && turn.durationMs < 1000 && story === done ? 'Done.' : story,
+      director,
+    },
+  };
+  // A local command answers itself: its own first line is the last word.
+  const said = turn.endedBy === 'local command' ? turn.events[0]?.output?.split('\n')[0] : undefined;
   if (trailingSay) panel.balloon = { who: 'claude', text: trailingSay };
+  else if (said) panel.balloon = { who: 'claude', text: clip(said, 160) };
   if (page.filesChanged) {
     panel.added = page.added;
     panel.removed = page.removed;

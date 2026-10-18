@@ -43,7 +43,7 @@
         "kind": "backup",
         "ok": null,
         "story": "Claude asks the advisor for a second opinion.",
-        "director": "Advisor · advisor",
+        "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
         "events": 1

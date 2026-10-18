@@ -194,6 +194,9 @@ describe('text helpers', () => {
     expect(exactDuration(432_000)).toBe('7 min 12 s');
     expect(roughDuration(4_000)).toBe('4 seconds');
     expect(roughDuration(3_900_000)).toBe('1 h 5 min');
+    // Past an hour the exact one keeps its seconds, so the two never disagree on the minute.
+    expect(roughDuration(4_179_269)).toBe('1 h 10 min');
+    expect(exactDuration(4_179_269)).toBe('1 h 9 min 39 s');
   });
 });
 
@@ -681,6 +684,22 @@ describe('buildStoryTurns', () => {
     expect(page.panels.length).toBeLessThanOrEqual(STORY_LIMITS.panelsPerPage);
     expect(page.panels[0].kind).toBe('mission');
     expect(page.panels.some((p) => /you add \d+ things?/.test(p.caption.story))).toBe(true);
+  });
+
+  it('an automatic compaction after the last turn closes that turn', () => {
+    const [turn] = buildStoryTurns(
+      entriesOf([
+        prompt('one'),
+        end(1000),
+        {
+          type: 'system',
+          subtype: 'compact_boundary',
+          timestamp: '2026-10-18T10:00:00.000Z',
+          compactMetadata: { trigger: 'auto' },
+        },
+      ])
+    );
+    expect(turn.events.map((e) => e.intent)).toEqual(['prompt', 'compact']);
   });
 
   it('an interrupt ends the turn', () => {

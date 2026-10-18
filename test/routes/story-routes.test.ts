@@ -153,6 +153,22 @@ describe('GET /api/sessions/:id/story', () => {
     expect(page.panels[0].kind).toBe('mission');
   });
 
+  it('says when older turns were not read', async () => {
+    const big = 'x'.repeat(100_000);
+    const lines: unknown[] = [prompt('an old turn')];
+    for (let i = 0; i < 90; i++) lines.push(...bash(`b${i}`, `cat big${i}.txt`, `Show file ${i}`, big));
+    lines.push(end(60_000), prompt('the newest turn'), ...bash('n1', 'ls', 'List', 'a'), end(1000));
+    writeFileSync(transcript, jsonl(lines));
+    const { app } = await setup();
+    const data = (await app.inject({ method: 'GET', url: URL })).json().data;
+    expect(data.page.prompt).toBe('the newest turn');
+    expect(data.older).toBe(true);
+
+    writeFileSync(transcript, jsonl([prompt('one'), end(1000)]));
+    const small = (await app.inject({ method: 'GET', url: URL })).json().data;
+    expect(small.older).toBeUndefined();
+  });
+
   it('a live turn grows as the transcript grows', async () => {
     writeFileSync(transcript, jsonl([prompt('go'), ...read('r1', '/w/a.ts')]));
     const { app } = await setup();

@@ -34,7 +34,7 @@
         "kind": "backup",
         "ok": null,
         "story": "Claude asks the advisor for a second opinion.",
-        "director": "Advisor · advisor",
+        "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
         "events": 1
@@ -116,7 +116,7 @@
         "ok": null,
         "story": "Done in 24 seconds.",
         "director": "local command · 24 s · 0 tool calls",
-        "balloon": null,
+        "balloon": "Compacted",
         "tests": null,
         "events": 0
       }
@@ -166,7 +166,7 @@
         "kind": "backup",
         "ok": null,
         "story": "Claude asks the advisor for a second opinion.",
-        "director": "Advisor · advisor",
+        "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
         "events": 1
