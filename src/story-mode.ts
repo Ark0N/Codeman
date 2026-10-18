@@ -139,6 +139,8 @@ export type StoryEntry =
       plan?: string;
       /** Files Claude Code says a Bash call changed ("This command modified 1 file you've previously read: a.py"). */
       modified?: string[];
+      /** A Bash call sent to the background: its result only says it started. */
+      background?: boolean;
     }
   | { k: 'end'; at: string; durationMs?: number }
   | { k: 'compact'; at: string; trigger?: string; preTokens?: number; postTokens?: number; durationMs?: number }
@@ -999,7 +1001,9 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
           const tail = clipTail(text, STORY_LIMITS.outputChars, STORY_LIMITS.outputLines);
           result.output = tail.text;
           if (tail.truncated) result.outputTruncated = true;
-          if (name === 'Bash') {
+          if (name === 'Bash' && /^\s*Command running in background with ID:/.test(text)) {
+            result.background = true;
+          } else if (name === 'Bash') {
             const tests = parseTestCounts(tail.text);
             if (tests) result.tests = tests;
             const intent = call?.input.intent;
@@ -1340,6 +1344,19 @@ function applyResult(ev: StoryEvent, r: Extract<StoryEntry, { k: 'result' }>): v
     if (todos) ev.todos = todos;
   }
   if (r.problems) ev.ok = false;
+  if (r.background) {
+    // Started, not done: its task notification says how it ended.
+    ev.running = true;
+    ev.ok = undefined;
+  }
+  // Reading a background job's output file that reports tests is a look at test results.
+  if (
+    r.tests &&
+    ev.tool === 'Bash' &&
+    (ev.intent === 'look' || ev.intent === 'run') &&
+    /\.(output|log)\b|\/tasks\//.test(ev.label)
+  )
+    ev.intent = 'test';
   if (r.modified?.length) {
     // Changed, but no diff to show: the file is listed, its lines unknown.
     const known = new Set((ev.edits ?? []).map((d) => d.file));
@@ -1414,6 +1431,14 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
       if (report.result.length >= STORY_LIMITS.helperChars) prompt.outputTruncated = true;
     }
     const ev = report.toolUseId ? helpers.get(report.toolUseId) : undefined;
+    if (ev?.running && !ev.helper) {
+      // A background command: done now, and its summary carries the exit code.
+      ev.running = undefined;
+      const code = /\(exit code (\d+)\)/.exec(prompt.label)?.[1];
+      ev.ok =
+        code !== undefined ? code === '0' : !report.status || /^(completed|done|finished|success)/i.test(report.status);
+      return;
+    }
     if (!ev?.helper) return;
     const helper: StoryHelper = { ...ev.helper, running: undefined };
     if (report.result) helper.result = report.result;
@@ -1512,11 +1537,14 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
         const ev = toolEvent(e, 'claude');
         ensure(e.at).events.push(ev);
         byId.set(e.id, ev);
-        if (ev.helper) {
+        if (ev.helper || ev.tool === 'Bash') {
+          // A helper, or a command that may turn out to run in the background: both report back later.
           helpers.set(e.id, ev);
-          if (helpers.size > 500) helpers.delete(helpers.keys().next().value as string);
-          helpersByName.set(ev.helper.name, ev);
-          if (helpersByName.size > 500) helpersByName.delete(helpersByName.keys().next().value as string);
+          if (helpers.size > 2000) helpers.delete(helpers.keys().next().value as string);
+          if (ev.helper) {
+            helpersByName.set(ev.helper.name, ev);
+            if (helpersByName.size > 500) helpersByName.delete(helpersByName.keys().next().value as string);
+          }
         }
         break;
       }
@@ -2057,7 +2085,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       panel.notes = notesOf(checks);
       const isTest = checks.some((e) => e.intent === 'test');
       const failedFirst = checks.slice(0, -1).some((e) => passed(e) === false);
-      if (ok === undefined) story = isTest ? 'Claude runs the tests.' : 'Claude runs the checks.';
+      if (lastCheck?.running)
+        story = isTest ? 'Claude starts the tests in the background.' : 'Claude starts the checks in the background.';
+      else if (ok === undefined) story = isTest ? 'Claude runs the tests.' : 'Claude runs the checks.';
       else if (!ok && tests && !tests.passed && !tests.failed && tests.errors) story = "The tests don't even load.";
       else if (!ok && tests && tests.passed && !tests.failed && !tests.errors)
         story = 'The tests pass, but another check fails.';
@@ -2098,8 +2128,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
     }
     case 'run':
       panel.notes = notesOf(evs);
-      story =
-        errors && errors === evs.length
+      story = evs.every((e) => e.running)
+        ? `Claude starts ${evs.length === 1 ? 'a command' : `${evs.length} commands`} in the background.`
+        : errors && errors === evs.length
           ? `Claude tries ${evs.length === 1 ? 'a command' : `${evs.length} commands`}, and ${
               evs.some((e) => /\bblocked\b|PreToolUse|denied/i.test(e.output ?? ''))
                 ? 'it is blocked'
@@ -2186,6 +2217,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
 
 function completePanel(turn: StoryTurn, page: Omit<StoryPage, 'panels'>, trailingSay?: string): StoryPanel {
   const running = page.helpersRunning;
+  const commands = page.events.filter((e) => e.running && !e.helper).length;
   const done = turn.durationMs !== undefined ? `Done in ${roughDuration(turn.durationMs)}.` : 'Done.';
   const story = turn.interrupted
     ? 'You stop Claude here.'
@@ -2193,10 +2225,15 @@ function completePanel(turn: StoryTurn, page: Omit<StoryPage, 'panels'>, trailin
       ? 'Nothing Claude tried worked, so the job is not done.'
       : turn.endedBy === 'next prompt'
         ? 'The trail stops here: the next prompt starts a new turn.'
-        : running
-          ? `Claude's part is done${turn.durationMs !== undefined ? ` in ${roughDuration(turn.durationMs)}` : ''}. ${
-              running === 1 ? 'A helper is' : `${running} helpers are`
-            } still working.`
+        : running || commands
+          ? `Claude's part is done${turn.durationMs !== undefined ? ` in ${roughDuration(turn.durationMs)}` : ''}. ${[
+              running ? `${running === 1 ? 'A helper is' : `${running} helpers are`} still working.` : '',
+              commands
+                ? `${commands === 1 ? 'A command is' : `${commands} commands are`} still running in the background.`
+                : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}`
           : done;
   const director = [
     turn.endedBy === 'next prompt' ? 'superseded by the next prompt' : (turn.endedBy ?? 'turn_duration'),

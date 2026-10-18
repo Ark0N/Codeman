@@ -124,6 +124,8 @@ export interface StoryEvent {
   line?: number;
   /** Claude's own short description of a Bash call ("Run the test suite"). */
   description?: string;
+  /** A command sent to the background ("Command running in background") that has not reported back. */
+  running?: boolean;
   /** A save that ships the work: `gh pr create` (`pr`) or `git push` (`push`). */
   ships?: 'pr' | 'push';
   /** How many commits a Bash call makes (`git commit` segments). */

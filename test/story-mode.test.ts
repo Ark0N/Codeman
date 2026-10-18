@@ -711,6 +711,54 @@ describe('buildStoryTurns', () => {
     expect(turn.events.map((e) => e.intent)).toEqual(['prompt', 'compact']);
   });
 
+  it('a command sent to the background is running, not passed, until its notification; its output read later is a check', () => {
+    const turns = buildStoryTurns(
+      entriesOf([
+        prompt('run the slow tests in the background'),
+        ...bash(
+          'b1',
+          'sleep 25 && pytest -q',
+          'Run slow tests',
+          'Command running in background with ID: bg1. Output is being written to: /tmp/x/tasks/bg1.output'
+        ),
+        said('The tests are running in the background.'),
+        end(1000),
+        prompt(
+          '<task-notification>\n<task-id>bg1</task-id>\n<tool-use-id>b1</tool-use-id>\n<status>completed</status>\n<summary>Background command \"Run slow tests\" completed (exit code 0)</summary>\n</task-notification>',
+          { turnOrigin: 'task_notification' }
+        ),
+        ...bash('b2', 'cat /tmp/x/tasks/bg1.output', 'Read the test output', '7 passed in 25.1s'),
+        end(1000),
+      ])
+    );
+    // Before the report the first turn said it was still running; the report settled it.
+    const first = buildStoryPage(turns[0]);
+    expect(first.events[1]).toMatchObject({ intent: 'test', ok: true });
+    expect(first.events[1].running).toBeUndefined();
+    const second = buildStoryPage(turns[1]);
+    expect(second.panels.find((p) => p.kind === 'check')).toMatchObject({
+      caption: { story: 'The tests pass.' },
+      tests: { passed: 7, failed: 0 },
+    });
+
+    const [alone] = buildStoryTurns(
+      entriesOf([
+        prompt('background'),
+        ...bash('b1', 'sleep 25 && pytest -q', 'Run slow tests', 'Command running in background with ID: bg1.'),
+        end(1000),
+      ])
+    );
+    const page = buildStoryPage(alone);
+    expect(page.events[1]).toMatchObject({ running: true });
+    expect(page.events[1].ok).toBeUndefined();
+    expect(page.panels.find((p) => p.kind === 'check')!.caption.story).toBe(
+      'Claude starts the tests in the background.'
+    );
+    expect(page.panels.at(-1)!.caption.story).toBe(
+      "Claude's part is done in 1 second. A command is still running in the background."
+    );
+  });
+
   it('an interrupt ends the turn', () => {
     const turns = buildStoryTurns(
       entriesOf([prompt('go'), ...bash('b', 'ls', 'List', 'a'), prompt('[Request interrupted by user]')])

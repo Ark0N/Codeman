@@ -2370,7 +2370,7 @@ Object.assign(CodemanApp.prototype, {
     else rt.pending = true;
   },
 
-  _storyDrawPanel(rt) {
+  _storyDrawPanel(rt, full = false) {
     const st = this._story;
     if (!rt.panel || !rt.w || !rt.h) return;
     const scene = StoryArt.SCENES[rt.kind];
@@ -2400,7 +2400,7 @@ Object.assign(CodemanApp.prototype, {
     if (job.next < job.total) {
       const b = job.canvas.getContext('2d');
       // Without a frame loop (tests, a browser that never paints) the whole background at once.
-      const steps = st?.raf ? 1 : job.total - job.next;
+      const steps = st?.raf && !full ? 1 : job.total - job.next;
       for (let i = 0; i < steps && b; i++, job.next++) {
         const top = (StoryArt.VH / job.total) * job.next;
         const bottom = top + StoryArt.VH / job.total;
@@ -2533,6 +2533,12 @@ Object.assign(CodemanApp.prototype, {
     const page = st?.data?.page;
     if (!page || !st.panels.length) return;
     await document.fonts?.ready;
+    // Every panel finished, on screen or not: on a phone the frame loop draws only what was scrolled to.
+    for (const rt of st.panels) {
+      if (!rt.w) this._storySizePanel(rt);
+      this._storyDrawPanel(rt, true);
+      rt.pending = false;
+    }
     const sheet = st.pageEl.getBoundingClientRect();
     const head = 64;
     const scale = Math.max(1, Math.min(2, 12000 / (sheet.height + head)));
@@ -2588,7 +2594,8 @@ Object.assign(CodemanApp.prototype, {
     const a = document.createElement('a');
     const name = (st.sessionLabel.textContent || 'session').replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 40);
     a.href = URL.createObjectURL(blob);
-    a.download = `story-${name}-${(page.at || '').slice(0, 10) || 'turn'}.png`;
+    const turnNo = (st.data?.turns || []).findIndex((t) => t.id === page.id) + 1;
+    a.download = `story-${name}-${turnNo ? `turn-${turnNo}-` : ''}${(page.at || '').slice(0, 10) || 'turn'}.png`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -2780,8 +2787,9 @@ Object.assign(CodemanApp.prototype, {
     label.textContent = this._storyShortPath(ev.label);
     if (label.textContent !== ev.label) label.title = ev.label;
     const tag = document.createElement('i');
-    tag.className = `story-tag story-tag--${ev.ok === false ? 'bad' : ev.pending ? 'pending' : ev.intent}`;
-    tag.textContent = ev.ok === false ? 'error' : ev.pending ? 'running' : ev.intent;
+    const waiting = ev.pending || ev.running;
+    tag.className = `story-tag story-tag--${ev.ok === false ? 'bad' : waiting ? 'pending' : ev.intent}`;
+    tag.textContent = ev.ok === false ? 'error' : ev.running ? 'in the background' : waiting ? 'running' : ev.intent;
     body.append(who, ' ', tool, ' ', label, ' ', tag);
     li.append(t, body);
     return li;
