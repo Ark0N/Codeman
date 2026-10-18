@@ -879,7 +879,15 @@ describe('buildStoryPage', () => {
         { type: 'user', timestamp: '2026-10-18T09:50:00.000Z', message: { content: '[Request interrupted by user]' } },
       ])
     );
-    expect(turns[0]).toMatchObject({ ended: true, interrupted: false });
+    expect(turns[0]).toMatchObject({ ended: true, interrupted: false, endedBy: 'next prompt' });
+    const superseded = buildStoryPage(turns[0]);
+    expect(superseded.superseded).toBe(true);
+    expect(superseded.panels[superseded.panels.length - 1].caption.story).toBe(
+      'The trail stops here: the next prompt starts a new turn.'
+    );
+    expect(superseded.panels[superseded.panels.length - 1].caption.director).toMatch(
+      /^superseded by the next prompt · /
+    );
     expect(turns[0].durationMs).toBeGreaterThan(0);
     expect(turns[1]).toMatchObject({ ended: true, interrupted: true });
     expect(turns[1].durationMs).toBeGreaterThan(0);

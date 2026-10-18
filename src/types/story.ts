@@ -170,6 +170,8 @@ export interface StoryTurnSummary {
   origin: StoryTurnOrigin;
   complete: boolean;
   interrupted: boolean;
+  /** Ended only because the next prompt started (no end marker of its own: an abandoned or crashed turn). */
+  superseded?: boolean;
   toolCalls: number;
 }
 

@@ -2220,7 +2220,11 @@ Object.assign(CodemanApp.prototype, {
           : `You chose: ${p.question.answer}`;
     }
     if (rt.splash) {
-      rt.splash.querySelector('.story-splash-title').textContent = page.interrupted ? 'Stopped!' : 'Mission complete!';
+      rt.splash.querySelector('.story-splash-title').textContent = page.interrupted
+        ? 'Stopped!'
+        : page.superseded
+          ? 'To be continued…'
+          : 'Mission complete!';
       const chips = rt.splash.querySelector('.story-chips');
       const items = [];
       if (page.durationMs !== undefined) items.push({ text: this._storyDuration(page.durationMs) });

@@ -1144,6 +1144,8 @@ export interface StoryTurn {
   durationMs?: number;
   /** Claude Code's id for the prompt that started the turn. */
   promptId?: string;
+  /** What ended the turn, for the Director's cut. */
+  endedBy?: 'turn_duration' | 'stop_hook_summary' | 'local command' | 'interrupted' | 'next prompt';
 }
 
 /** Plan mode keeps its plan in a file under `~/.claude/plans/`: writing it is planning, not changing code. */
@@ -1348,9 +1350,10 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
     }
   };
   /** Ends a turn at `at` with no duration of its own: timed by its span, when the span is known. */
-  const closeTurn = (t: StoryTurn, at: string) => {
+  const closeTurn = (t: StoryTurn, at: string, by: NonNullable<StoryTurn['endedBy']>) => {
     t.ended = true;
     t.endedAt = at;
+    t.endedBy = by;
     const span = Date.parse(at) - Date.parse(t.at);
     if (!t.partial && Number.isFinite(span) && span >= 0) t.durationMs ??= span;
   };
@@ -1420,7 +1423,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
           open.events.push(ev);
         } else {
           // Claude runs one turn at a time: a turn still open when the next one starts has ended.
-          if (open && !open.ended) closeTurn(open, e.at);
+          if (open && !open.ended) closeTurn(open, e.at, 'next prompt');
           cur = {
             id: e.id,
             at: e.at,
@@ -1479,6 +1482,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
           const known = !t.partial && Number.isFinite(span) && span >= 0;
           if (e.durationMs !== undefined) t.durationMs = known ? Math.min(e.durationMs, span) : e.durationMs;
           else if (known && t.durationMs === undefined) t.durationMs = span; // ended by the Stop hook's summary
+          t.endedBy = e.durationMs !== undefined ? 'turn_duration' : (t.endedBy ?? 'stop_hook_summary');
         }
         break;
       }
@@ -1513,7 +1517,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
         const t = cur as StoryTurn | null;
         if (t && !t.ended && t.events[0]?.tool === 'Command' && countToolCalls(t.events) === 0) {
           if (e.text) t.events[0].output = e.text;
-          closeTurn(t, e.at);
+          closeTurn(t, e.at, 'local command');
         }
         break;
       }
@@ -1528,7 +1532,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
           intent: 'interrupt',
         });
         t.interrupted = true;
-        closeTurn(t, e.at);
+        closeTurn(t, e.at, 'interrupted');
         break;
       }
     }
@@ -1547,6 +1551,7 @@ export function summarizeTurn(turn: StoryTurn): StoryTurnSummary {
     origin: turn.origin,
     complete: turn.ended && !turn.interrupted,
     interrupted: turn.interrupted,
+    ...(turn.endedBy === 'next prompt' ? { superseded: true } : {}),
     toolCalls: countToolCalls(turn.events),
   };
 }
@@ -2062,13 +2067,15 @@ function completePanel(turn: StoryTurn, page: Omit<StoryPage, 'panels'>, trailin
   const done = turn.durationMs !== undefined ? `Done in ${roughDuration(turn.durationMs)}.` : 'Done.';
   const story = turn.interrupted
     ? 'You stop Claude here.'
-    : running
-      ? `Claude's part is done${turn.durationMs !== undefined ? ` in ${roughDuration(turn.durationMs)}` : ''}. ${
-          running === 1 ? 'A helper is' : `${running} helpers are`
-        } still working.`
-      : done;
+    : turn.endedBy === 'next prompt'
+      ? 'The trail stops here: the next prompt starts a new turn.'
+      : running
+        ? `Claude's part is done${turn.durationMs !== undefined ? ` in ${roughDuration(turn.durationMs)}` : ''}. ${
+            running === 1 ? 'A helper is' : `${running} helpers are`
+          } still working.`
+        : done;
   const director = [
-    turn.interrupted ? 'interrupted' : 'turn_duration',
+    turn.endedBy === 'next prompt' ? 'superseded by the next prompt' : (turn.endedBy ?? 'turn_duration'),
     turn.durationMs !== undefined ? exactDuration(turn.durationMs) : '',
     plural(page.toolCalls, 'tool call'),
     page.filesChanged ? plural(page.filesChanged, 'file') + ' changed' : '',
