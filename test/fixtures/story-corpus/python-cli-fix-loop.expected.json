@@ -51,7 +51,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Fix and test, 2 rounds: a test run fails, then another check, then everything passes. Claude saves the work in 4 commits along the way.",
+        "story": "Fix and test, 2 rounds: a test fails and Claude fixes it, then a layout check fails and Claude fixes that; everything passes. Claude saves the work in 4 commits along the way.",
         "director": "3 checks · 5 edits · +218 −1 · last: ok",
         "balloon": "All 19 tests pass, ruff check is clean, and the output matches real wc column for column.",
         "tests": {

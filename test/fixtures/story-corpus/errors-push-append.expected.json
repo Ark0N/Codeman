@@ -73,7 +73,7 @@
       {
         "kind": "check",
         "ok": false,
-        "story": "The tests don't even load, as planned.",
+        "story": "The tests don't even load, as you asked.",
         "director": "python3 -m pytest -q → error · 0 passed, 1 error",
         "balloon": "Now the red run, once, with calc_stats.py confirmed absent:",
         "tests": {

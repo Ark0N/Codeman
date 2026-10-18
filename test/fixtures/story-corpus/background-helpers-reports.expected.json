@@ -221,7 +221,7 @@
       {
         "kind": "check",
         "ok": true,
-        "story": "The tests run in the background and pass.",
+        "story": "Claude starts the tests in the background; later they pass.",
         "director": "python3 -m pytest -q → ok",
         "balloon": null,
         "tests": null,

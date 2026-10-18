@@ -77,7 +77,7 @@ describe('Story Mode on real sessions', () => {
     expect(panel('python-cli-fix-loop', 0, 'loop')).toMatchObject({
       // The failing test was a real bug, the second failure only ruff: said apart, with the 4 commits made inside.
       story:
-        'Fix and test, 2 rounds: a test run fails, then another check, then everything passes. Claude saves the work in 4 commits along the way.',
+        'Fix and test, 2 rounds: a test fails and Claude fixes it, then a layout check fails and Claude fixes that; everything passes. Claude saves the work in 4 commits along the way.',
       roundsOk: [false, false, true],
     });
   });
@@ -131,7 +131,7 @@ describe('Story Mode on real sessions', () => {
 
   it('tests that do not load, a commit then a push in its own command, a push with a failing step after it', () => {
     const [first, second, third] = pagesOf('errors-push-append');
-    expect(first.panels.find((p) => p.kind === 'check')?.story).toBe("The tests don't even load, as planned.");
+    expect(first.panels.find((p) => p.kind === 'check')?.story).toBe("The tests don't even load, as you asked.");
     expect(second.panels.find((p) => p.kind === 'loop')).toMatchObject({
       story: 'Test first: the first run fails as planned, the second passes.',
       roundsOk: [false, true],
@@ -155,7 +155,9 @@ describe('Story Mode on real sessions', () => {
       expect(report.helpers).toBe(0);
       expect(report.panels[0].story).toBe('A background job reports back.');
     }
-    expect(pages[3].panels.map((p) => p.story)).toContain('The tests run in the background and pass.');
+    expect(pages[3].panels.map((p) => p.story)).toContain(
+      'Claude starts the tests in the background; later they pass.'
+    );
     // A python script that rewrote README.md counts as a change, beside the two files written.
     expect(pages[3].panels.map((p) => p.story)).toContain('Claude changes 3 files.');
   });

@@ -742,7 +742,7 @@ describe('buildStoryTurns', () => {
     );
     // Not tests that ran during that turn: they ran later, in the background.
     expect(first.panels.find((p) => p.kind === 'check')!.caption.story).toBe(
-      'The tests run in the background and pass.'
+      'Claude starts the tests in the background; later they pass.'
     );
     const second = buildStoryPage(turns[1]);
     expect(second.panels.find((p) => p.kind === 'check')).toMatchObject({
@@ -1194,7 +1194,7 @@ describe('buildStoryPage', () => {
     const loop = page.panels.find((p) => p.kind === 'loop')!;
     expect(loop.roundsOk).toEqual([true, false, true]);
     expect(loop.caption.story).toBe(
-      'Build and test, 2 rounds. The tests pass every time; another check fails once, then passes.'
+      'Build and test, 2 rounds. The tests pass every time; a layout check fails once, then passes.'
     );
   });
 

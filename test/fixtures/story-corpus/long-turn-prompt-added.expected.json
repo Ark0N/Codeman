@@ -73,7 +73,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Build and test, 4 rounds. The tests pass every time; another check fails once, then passes.",
+        "story": "Build and test, 4 rounds. The tests pass every time; a layout check fails once, then passes.",
         "director": "5 checks · 10 edits · +694 · last: ok",
         "balloon": "All 4 modules are done: 63 tests pass and ruff is clean.",
         "tests": {

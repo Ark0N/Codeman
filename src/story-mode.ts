@@ -2259,14 +2259,26 @@ function printableLine(line: string): string | null {
   return clip(text.replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '…@…').replace(/[A-Za-z0-9+/=_-]{32,}/g, '…'), 90);
 }
 
+/** What a check other than the tests is, by its tool, for a reader: "a layout check", "a style check". */
+function checkName(e: StoryEvent | undefined): string {
+  const cmd = e?.label ?? '';
+  if (/\b(ruff format|black|prettier|gofmt|rustfmt|isort|autopep8|biome format)\b/.test(cmd)) return 'a layout check';
+  if (/\b(ruff|eslint|flake8|pylint|clippy|shellcheck|golangci-lint|stylelint|biome)\b/.test(cmd))
+    return 'a style check';
+  if (/\b(tsc|mypy|pyright|vue-tsc)\b/.test(cmd)) return 'a type check';
+  if (/\b(build|make|cargo build|go build|webpack|vite build|esbuild)\b/.test(cmd)) return 'the build';
+  return 'another check';
+}
+
 /** You asked for a failing run first (test first), or Claude said the failure was expected. */
 const PLANNED_IN_PROMPT =
   /\b(test[- ]first|tdd|fail(s|ing)? (first|on purpose)|failing tests? first|on purpose|red first|before (the )?(code|module|function|implementation) exists)\b/i;
 const EXPECTED_BY_CLAUDE =
   /\b(as expected|as planned|as intended|expected (failure|to fail|red)|deliberately fail\w*|on purpose|test[- ]first|the red state)\b/i;
-function plannedFailure(turn: StoryTurn, events: StoryEvent[]): boolean {
+function plannedFailure(turn: StoryTurn, events: StoryEvent[]): false | 'asked' | 'planned' {
   const prompt = events.find((e) => e.intent === 'prompt')?.label ?? turn.prompt;
-  return PLANNED_IN_PROMPT.test(prompt) || events.some((e) => e.intent === 'say' && EXPECTED_BY_CLAUDE.test(e.label));
+  if (PLANNED_IN_PROMPT.test(prompt)) return 'asked';
+  return events.some((e) => e.intent === 'say' && EXPECTED_BY_CLAUDE.test(e.label)) ? 'planned' : false;
 }
 
 function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, index: number): StoryPanel {
@@ -2451,27 +2463,35 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         const n = panel.rounds;
         const testFails = fails - lintFails;
         // A failure you asked for (test first), or that Claude said it expected, is the plan working.
-        const planned = plannedFailure(turn, events) && passed(checks[0]) === false;
+        const planned = passed(checks[0]) === false ? plannedFailure(turn, events) : false;
+        // The check that failed while the tests passed, by name: "a layout check", not "another check".
+        const otherCheck = checkName(
+          failed.find((e) => !!e.tests && e.tests.passed > 0 && !e.tests.failed && !e.tests.errors)
+        );
         story =
           panel.ok === true && !fails
             ? `Build and test, ${plural(n, 'round')}. Every check passes.`
             : panel.ok === true && fails === lintFails
-              ? `Build and test, ${plural(n, 'round')}. The tests pass every time; another check fails ${fails === 1 ? 'once' : `${fails} times`}, then passes.`
-              : panel.ok === true && planned && checks.length === 2
-                ? 'Test first: the first run fails as planned, the second passes.'
-                : panel.ok === true && planned
-                  ? `Test first, ${plural(n, 'round')}: the first run fails as planned, then it passes.`
-                  : panel.ok === true && checks.length === 2 && fails === 1
-                    ? 'Fix and test: the first run fails, the second passes.'
-                    : panel.ok === true && testFails && lintFails
-                      ? `Fix and test, ${plural(n, 'round')}: ${testFails === 1 ? 'a test run fails' : `${testFails} test runs fail`}, then another check, then everything passes.`
-                      : panel.ok === true
-                        ? `Fix and test, ${plural(n, 'round')}: ${fails === 1 ? 'one run fails' : `${fails} runs fail`}, then it passes.`
-                        : panel.ok === false && tests && tests.passed && !tests.failed && !tests.errors
-                          ? `Fix and test, ${plural(n, 'round')}. The tests pass, but another check fails.`
-                          : panel.ok === false
-                            ? `Fix and test, ${plural(n, 'round')}. Still failing.`
-                            : `Fix and test, ${plural(n, 'round')}.`;
+              ? `Build and test, ${plural(n, 'round')}. The tests pass every time; ${otherCheck} fails ${fails === 1 ? 'once' : `${fails} times`}, then passes.`
+              : panel.ok === true && planned === 'asked'
+                ? checks.length === 2
+                  ? 'The first run fails on purpose, as you asked; the second passes.'
+                  : `${plural(n, 'round')}: the first run fails on purpose, as you asked, then it passes.`
+                : panel.ok === true && planned && checks.length === 2
+                  ? 'Test first: the first run fails as planned, the second passes.'
+                  : panel.ok === true && planned
+                    ? `Test first, ${plural(n, 'round')}: the first run fails as planned, then it passes.`
+                    : panel.ok === true && checks.length === 2 && fails === 1
+                      ? 'Fix and test: the first run fails, the second passes.'
+                      : panel.ok === true && testFails && lintFails
+                        ? `Fix and test, ${plural(n, 'round')}: ${testFails === 1 ? 'a test fails' : `tests fail ${testFails} times`} and Claude fixes it, then ${otherCheck} fails and Claude fixes that; everything passes.`
+                        : panel.ok === true
+                          ? `Fix and test, ${plural(n, 'round')}: ${fails === 1 ? 'one run fails' : `${fails} runs fail`}, then it passes.`
+                          : panel.ok === false && tests && tests.passed && !tests.failed && !tests.errors
+                            ? `Fix and test, ${plural(n, 'round')}. The tests pass, but another check fails.`
+                            : panel.ok === false
+                              ? `Fix and test, ${plural(n, 'round')}. Still failing.`
+                              : `Fix and test, ${plural(n, 'round')}.`;
         // Commits made inside the loop (a test one-liner that ends in one) are part of its story.
         const saved = evs.reduce((k, e) => k + (e.commits ?? 0), 0);
         if (saved) story += ` Claude saves the work${saved > 1 ? ` in ${saved} commits` : ''} along the way.`;
@@ -2491,9 +2511,11 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const failedFirst = checks.slice(0, -1).some((e) => passed(e) === false);
       if (lastCheck?.running)
         story = isTest ? 'Claude starts the tests in the background.' : 'Claude starts the checks in the background.';
-      // Finished later, in the background: not tests that ran during this turn.
+      // Finished in the background: not tests that ran during this turn, and said when it was later.
       else if (lastCheck?.background && ok !== undefined)
-        story = `The ${isTest ? 'tests' : 'checks'} run in the background and ${ok ? 'pass' : 'fail'}.`;
+        story = lastCheck.finishedLater
+          ? `Claude starts the ${isTest ? 'tests' : 'checks'} in the background; later they ${ok ? 'pass' : 'fail'}.`
+          : `The ${isTest ? 'tests' : 'checks'} run in the background and ${ok ? 'pass' : 'fail'}.`;
       else if (ok === undefined) story = isTest ? 'Claude runs the tests.' : 'Claude runs the checks.';
       else if (!ok && tests && !tests.passed && !tests.failed && tests.errors) story = "The tests don't even load.";
       else if (!ok && tests && tests.passed && !tests.failed && !tests.errors)
@@ -2506,7 +2528,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             ? `${tests.failed} tests fail.`
             : 'A test fails.'
           : 'A check fails.';
-      if (ok === false && plannedFailure(turn, events)) story = `${story.replace(/[.]$/, '')}, as planned.`;
+      const plannedCheck = ok === false ? plannedFailure(turn, events) : false;
+      if (plannedCheck)
+        story = `${story.replace(/[.]$/, '')}, ${plannedCheck === 'asked' ? 'as you asked' : 'as planned'}.`;
       // The same command with the same outcome twice in a row reads once, with a count.
       const runs: Array<{ text: string; n: number }> = [];
       for (const e of checks) {

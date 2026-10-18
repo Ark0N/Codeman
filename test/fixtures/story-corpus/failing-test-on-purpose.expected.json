@@ -51,7 +51,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Test first: the first run fails as planned, the second passes.",
+        "story": "The first run fails on purpose, as you asked; the second passes.",
         "director": "2 checks · 3 edits · +35 −1 · last: ok",
         "balloon": "All 4 pass.",
         "tests": {
@@ -133,7 +133,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Test first: the first run fails as planned, the second passes.",
+        "story": "The first run fails on purpose, as you asked; the second passes.",
         "director": "2 checks · 2 edits · +5 −1 · last: ok",
         "balloon": "All 5 pass.",
         "tests": {

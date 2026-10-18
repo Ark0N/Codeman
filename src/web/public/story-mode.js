@@ -689,6 +689,11 @@ const StoryArt = (() => {
     return { w, h };
   }
   /** A terminal card: the commands (`› …`), then, dimmer, the first lines one of them printed. */
+  /** A test board's label: "1 test", "19 tests", or "1 error" when nothing even loaded. */
+  function boardLabel(t, total) {
+    if (t && !t.passed && !t.failed && t.errors) return `${t.errors} error${t.errors === 1 ? '' : 's'}`;
+    return `${total} test${total === 1 ? '' : 's'}`;
+  }
   function terminal(ctx, x, y, w, h, lines, f, printed = []) {
     rr(ctx, x, y, w, h, 7);
     inked(ctx, C.line, 2.5);
@@ -1094,7 +1099,7 @@ const StoryArt = (() => {
           const dots = Math.min(42, total);
           const fail = bad ? Math.max(1, Math.round((bad / total) * dots)) : 0;
           const fill = running ? (f * 0.6) % (dots + 6) : Math.min(dots, (f - 4) * 1.6);
-          b = board(ctx, 16, 106, `${total} tests`, dots, fail, fill);
+          b = board(ctx, 16, 106, boardLabel(t, total), dots, fail, fill);
         } else {
           b = verdict(ctx, 16, 106, 'checks', p.panel.ok, f);
         }
@@ -1153,7 +1158,7 @@ const StoryArt = (() => {
           if (total) {
             const dots = Math.min(28, total);
             const fail = bad ? Math.max(1, Math.round((bad / total) * dots)) : 0;
-            b = board(ctx, bx, 116, `${total} tests`, dots, fail, Math.min(dots, (f - 4) * 1.6));
+            b = board(ctx, bx, 116, boardLabel(t, total), dots, fail, Math.min(dots, (f - 4) * 1.6));
           } else b = verdict(ctx, bx, 116, 'checks', p.panel.ok, f);
           hit('output', bx, 116, b.w, b.h, 'See the test output');
         }
