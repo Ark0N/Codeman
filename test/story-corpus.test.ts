@@ -193,6 +193,16 @@ describe('Story Mode on real sessions', () => {
     expect(panel).toBeTruthy();
   });
 
+  it('a helper reporting back is heard in its own words, not only "finished" (round 9)', () => {
+    const [, readme, extra] = pagesOf('background-helpers-reports');
+    expect(readme.panels[0].balloon).toBe('"Helper A: write README.md" reports: README.md');
+    // What the helper did not do is on the page, and a long path does not crowd it out.
+    expect(extra.panels[0].balloon).toMatch(
+      /^"Helper B: write extra pytest tests" reports: I wrote the file: tests\/test_extra\.py /
+    );
+    expect(extra.panels[0].balloon).toMatch(/I haven't run it against the real wordcount\.py\.$/);
+  });
+
   it('a blocked command ends a turn where nothing worked, without a celebration', () => {
     const last = pagesOf('teammates-then-interrupt')[4];
     expect(last.panels.map((p) => p.story)).toEqual([

@@ -119,7 +119,7 @@
         "ok": null,
         "story": "A background job reports back.",
         "director": "Prompt · 7 words · task",
-        "balloon": "Agent \"Write README for rename script\" finished",
+        "balloon": "\"Write README for rename script\" reports: I wrote the README at story-review-c/README.md. It covers the description, requirements, usage with dry-run, real-run and re-run sample output, name clashes, notes and limitations, and exit codes. The script wasn't there when I started, but it appeared while I was writing, so I read it (without running or editing it) and matched the README to it: it agrees with the spec, and I added the exact summary line (Done: N renamed, M skipped.), the -- option for a directory name starting with -, the…",
         "tests": null,
         "roundsOk": null,
         "printed": null,

@@ -133,7 +133,7 @@
         "ok": null,
         "story": "A background job reports back.",
         "director": "Prompt · 6 words · task",
-        "balloon": "Agent \"Write README for csvstat\" finished",
+        "balloon": "\"Write README for csvstat\" reports: I wrote README.md and committed it on its own on feat/csvstat. The README has every section you asked for and no badges.",
         "tests": null,
         "roundsOk": null,
         "printed": null,

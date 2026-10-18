@@ -2376,6 +2376,26 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
               : lines[origin];
       // Words that started the turn but are not yours are a note, not your balloon.
       if (panel.balloon && !command && origin !== 'human') panel.balloon = { ...panel.balloon, who: 'note' };
+      // A helper reporting back: its own words, not only the line saying it finished, so what it
+      // did not do ("I haven't run them against the real file") is on the page.
+      const report = origin === 'task' && evs[0]?.helper?.result?.trim();
+      if (panel.balloon && report) {
+        // A report that is only a path says which file it wrote: its name is enough.
+        const said = (
+          /^\S+$/.test(report) && report.includes('/') ? basename(report) : closingText(report, keyPointsOf(report))
+        )
+          // An absolute path is mostly room: its last two parts ("tests/test_extra.py") say which file.
+          // Run on the clipped balloon (560 characters at most), so the scan stays short.
+          .replace(/(?<![\w.~-])\/(?:[^\s/]+\/)+([^\s/]+\/[^\s/]+)/g, '$1');
+        const name = /^Agent "(.+)" (?:finished|completed)\.?$/.exec(panel.balloon.text)?.[1];
+        if (said)
+          panel.balloon = {
+            who: 'note',
+            text: name
+              ? `"${name}" reports: ${said}`
+              : `${panel.balloon.text.replace(/[.]?$/, '.')} Its report: ${said}`,
+          };
+      }
       director = command
         ? `Command · ${clip(evs[0].label, 60)}`
         : `Prompt · ${plural(words, 'word')}${origin === 'human' ? '' : ` · ${origin}`}`;
