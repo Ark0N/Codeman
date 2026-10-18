@@ -975,6 +975,46 @@ describe('buildStoryPage', () => {
     expect(heredocWrites('tee -a notes.md <<EOF\nx\nEOF', '/w').map((d) => d.file)).toEqual(['/w/notes.md']);
   });
 
+  it('an append has no line numbers it cannot know; a whole-file write starts at line 1', () => {
+    const [append] = heredocWrites("cat >> notes.md <<'EOF'\none\ntwo\nEOF", '/w');
+    expect(append.hunks[0]).toMatchObject({ atEnd: true, newStart: 0, newLines: 2 });
+    const [echoed] = heredocWrites('echo "more" >> notes.md', '/w');
+    expect(echoed.hunks[0]).toMatchObject({ atEnd: true, newStart: 0 });
+    const [whole] = heredocWrites("cat > notes.md <<'EOF'\none\nEOF", '/w');
+    expect(whole.hunks[0]).toMatchObject({ newStart: 1, newLines: 1 });
+    expect(whole.hunks[0].atEnd).toBeUndefined();
+  });
+
+  it('files a command prints are on its event, resolved against its cwd, whatever it does', () => {
+    const lines = [
+      prompt('rewrite and test'),
+      ...bash('b1', 'cat textstats.py && python3 -m pytest -q', 'Show and test', 'def f(): pass\n5 passed in 0.1s'),
+      end(1000),
+    ];
+    (lines[1] as { cwd?: string }).cwd = '/w';
+    const page = pageOf(lines);
+    expect(page.events[1]).toMatchObject({ intent: 'test', files: ['/w/textstats.py'] });
+  });
+
+  it('words that start a turn but are not yours are a note, not your balloon', () => {
+    const turns = buildStoryTurns(
+      entriesOf([
+        prompt('go'),
+        end(1000),
+        prompt(
+          '<task-notification>\n<task-id>bg1</task-id>\n<status>completed</status>\n<summary>Background command \"Run tests\" completed (exit code 0)</summary>\n</task-notification>',
+          { turnOrigin: 'task_notification' }
+        ),
+        said('All good.'),
+        end(1000),
+      ])
+    );
+    expect(buildStoryPage(turns[0]).panels[0].balloon?.who).toBe('you');
+    const report = buildStoryPage(turns[1]).panels[0];
+    expect(report.caption.story).toBe('A background job reports back.');
+    expect(report.balloon?.who).toBe('note');
+  });
+
   it('a loop keeps every run: a lint failure inside a round that passed in the end still shows', () => {
     const page = pageOf([
       prompt('build'),

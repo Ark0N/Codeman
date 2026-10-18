@@ -820,6 +820,11 @@ body.story-open .toast-container {
   background: var(--story-panel);
   border: 2px solid var(--story-ink);
 }
+.story-out-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 .story-df-head,
 .story-out-head {
   position: sticky;

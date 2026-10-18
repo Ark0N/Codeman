@@ -61,6 +61,8 @@ export interface StoryHunk {
   newStart: number;
   newLines: number;
   lines: string[];
+  /** Lines appended at the end of the file (`>>`): where they start is not known, so no line numbers. */
+  atEnd?: boolean;
 }
 
 /** What one Edit/Write call changed. Counts are exact even when `hunks` was cut to size. */
@@ -152,7 +154,8 @@ export interface StoryPanel {
   /** Indices into the page's `events`. */
   events: number[];
   caption: { story: string; director: string };
-  balloon?: { who: 'you' | 'claude'; text: string };
+  /** `note`: words that start a turn but are not yours (a background job's report, another session). */
+  balloon?: { who: 'you' | 'claude' | 'note'; text: string };
   files?: string[];
   notes?: string[];
   helpers?: Array<{ name: string; type: string; task?: string; event: number }>;

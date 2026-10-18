@@ -3243,7 +3243,13 @@ Object.assign(CodemanApp.prototype, {
     const code = el('div', 'story-code');
     for (const h of edit.hunks || []) {
       code.append(
-        el('div', 'story-ln story-ln--hunk', `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`)
+        el(
+          'div',
+          'story-ln story-ln--hunk',
+          h.atEnd
+            ? `Added at the end of the file (${h.newLines} ${h.newLines === 1 ? 'line' : 'lines'})`
+            : `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`
+        )
       );
       let o = h.oldStart;
       let n = h.newStart;
@@ -3251,8 +3257,8 @@ Object.assign(CodemanApp.prototype, {
         const mark = line[0];
         const row = el('div', `story-ln${mark === '+' ? ' story-ln--add' : mark === '-' ? ' story-ln--del' : ''}`);
         row.append(
-          el('span', 'story-ln-no', mark === '+' ? '' : String(o)),
-          el('span', 'story-ln-no', mark === '-' ? '' : String(n)),
+          el('span', 'story-ln-no', mark === '+' || h.atEnd ? '' : String(o)),
+          el('span', 'story-ln-no', mark === '-' || h.atEnd ? '' : String(n)),
           el('span', 'story-ln-mk', mark === '+' ? '+' : mark === '-' ? '−' : ''),
           el('span', 'story-ln-tx', line.slice(1) || ' ')
         );
@@ -3273,10 +3279,11 @@ Object.assign(CodemanApp.prototype, {
     const shown = this._storyShortPath(ev.label, { dot: ev.tool === 'Bash' });
     const cmd = el('span', 'story-out-cmd', `${ev.tool === 'Bash' ? '$ ' : `${ev.tool} `}${shown}`);
     if (ev.label !== shown) cmd.title = ev.label;
+    const waiting = ev.pending || ev.running;
     const status = el(
       'span',
-      `story-tag story-tag--${ev.ok === false ? 'bad' : ev.pending ? 'pending' : 'ok'}`,
-      ev.ok === false ? 'error' : ev.pending ? 'running' : 'ok'
+      `story-tag story-tag--${ev.ok === false ? 'bad' : waiting ? 'pending' : 'ok'}`,
+      ev.ok === false ? 'error' : ev.running ? 'in the background' : waiting ? 'running' : 'ok'
     );
     head.append(cmd, status);
     section.append(head);
@@ -3295,6 +3302,18 @@ Object.assign(CodemanApp.prototype, {
         b.type = 'button';
         b.dataset.storyOpen = `diff:event:${index}`;
         section.append(b);
+      }
+      // Files it printed (`cat a.py`): open them as they are now.
+      if (ev.files?.length && ev.intent !== 'look') {
+        const row = el('div', 'story-out-files');
+        for (const f of ev.files.slice(0, 4)) {
+          const b = el('button', 'story-btn-s', `Open ${f.split('/').pop()}`);
+          b.type = 'button';
+          b.title = f;
+          b.addEventListener('click', (e) => this._storyOpenFile(this._storyResolvePath(f), e.currentTarget));
+          row.append(b);
+        }
+        section.append(row);
       }
     } else if (ev.outputTruncated) {
       section.append(el('p', 'story-empty', 'This output was left out to keep a long turn fast.'));

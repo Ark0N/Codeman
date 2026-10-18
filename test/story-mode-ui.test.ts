@@ -535,6 +535,34 @@ describe('story-mode.js overlay', () => {
     expect($$('.story-ln--add').map((l) => l.textContent)).toEqual(['1+const a = 1;']);
   });
 
+  it('an append draws without line numbers, and a check offers the file it printed', async () => {
+    const lines = [
+      prompt('add and test'),
+      ...bash(
+        'b1',
+        "cat >> notes.md <<'EOF'\nmore\nEOF\ncat stats.py && pytest -q",
+        'Append, show and test',
+        'def f(): pass\n5 passed in 0.1s'
+      ),
+      end(1000),
+    ];
+    (lines[1] as { cwd?: string }).cwd = '/work/demo-shop';
+    boot(storyOf(lines));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    $('.story-panel[data-kind="check"] .story-hit')!.click();
+    const open = $$('.story-drawer-body .story-out-files button');
+    expect(open.map((b) => b.textContent)).toEqual(['Open stats.py']);
+    open[0].click();
+    expect(app.openFilePreview).toHaveBeenLastCalledWith('/work/demo-shop/stats.py', SID);
+    $$('.story-drawer-body button')
+      .find((b) => b.textContent === 'See the file it wrote')!
+      .click();
+    expect($('.story-ln--hunk')!.textContent).toBe('Added at the end of the file (1 line)');
+    expect($$('.story-ln--add').map((l) => l.textContent)).toEqual(['+more']);
+  });
+
   it('while a question waits, the pencils say so; the chosen answer is marked, not struck', async () => {
     const ask = (answered: boolean) =>
       storyOf([

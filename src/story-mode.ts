@@ -446,11 +446,12 @@ function echoWrites(command: string, cwd?: string): StoryEdit[] {
       created: false,
       hunks: [
         {
-          oldStart: m[5] === '>>' ? 1 : 0,
+          oldStart: 0,
           oldLines: 0,
-          newStart: 1,
+          newStart: m[5] === '>>' ? 0 : 1,
           newLines: lines.length,
           lines: lines.slice(0, 40).map((l) => `+${clip(l, STORY_LIMITS.lineChars)}`),
+          ...(m[5] === '>>' ? { atEnd: true } : {}),
         },
       ],
       truncated: lines.length > 40,
@@ -610,7 +611,11 @@ export function heredocWrites(command: string, cwd?: string): StoryEdit[] {
       added: body.length,
       removed: 0,
       created: false,
-      hunks: [{ oldStart: append ? 1 : 0, oldLines: 0, newStart: 1, newLines: body.length, lines: kept }],
+      hunks: [
+        append
+          ? { oldStart: 0, oldLines: 0, newStart: 0, newLines: body.length, lines: kept, atEnd: true }
+          : { oldStart: 0, oldLines: 0, newStart: 1, newLines: body.length, lines: kept },
+      ],
       truncated: kept.length < body.length,
     });
   }
@@ -814,10 +819,12 @@ function reduceInput(name: string, input: unknown, cwd?: string): ReducedInput {
         input.headline = clip(segment, 200);
       const writes = heredocWrites(full, cwd);
       if (writes.length) input.writes = writes;
-      if (intent === 'look') {
-        const reads = printedFiles(full);
-        if (reads.length) input.reads = reads;
-      }
+      // Files it prints, whatever else it does (`cat a.py && pytest`): the drawer offers them. A
+      // relative name resolves against the line's cwd (printedFiles gives none after a `cd`).
+      const reads = printedFiles(full).map((f) =>
+        f.startsWith('/') || f.startsWith('~') || !cwd ? f : `${cwd.replace(/\/+$/, '')}/${f.replace(/^\.\//, '')}`
+      );
+      if (reads.length) input.reads = reads;
       {
         // Counted whatever wins: a test run that ends in a commit still saves the work.
         const heads = commandSegments(withoutHeredocBodies(full.slice(0, 4000))).map(segmentHead);
@@ -1705,7 +1712,7 @@ const MINOR = new Set<StoryPanelKind>(['investigate', 'research', 'plan', 'run',
 interface DraftPanel {
   kind: StoryPanelKind;
   events: number[];
-  balloon?: { who: 'you' | 'claude'; text: string };
+  balloon?: { who: 'you' | 'claude' | 'note'; text: string };
   rounds?: number;
 }
 
@@ -1959,6 +1966,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             : origin === 'peer'
               ? 'Another session chimes in while Claude works.'
               : lines[origin];
+      // Words that started the turn but are not yours are a note, not your balloon.
+      if (panel.balloon && !command && origin !== 'human') panel.balloon = { ...panel.balloon, who: 'note' };
       director = command
         ? `Command · ${clip(evs[0].label, 60)}`
         : `Prompt · ${plural(words, 'word')}${origin === 'human' ? '' : ` · ${origin}`}`;
