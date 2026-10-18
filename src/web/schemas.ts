@@ -1426,6 +1426,14 @@ export const SettingsUpdateSchema = z
      */
     workspaceHooksEnabled: z.boolean().optional(),
     /**
+     * Launch every Claude session with `--name` set to its tab name (default OFF: only a
+     * name the user chose is pinned). Nothing acts on it in `PUT /api/settings`: it is read
+     * fresh from disk by readPinCliSessionNameEnabled() (hooks-config.ts) at every claude
+     * create and respawn, like readPlanUsageTelemetryEnabled(), so a toggle applies from the
+     * next spawn with no restart.
+     */
+    pinCliSessionName: z.boolean().optional(),
+    /**
      * Let browser dictation transcribe through this machine's Claude Code login,
      * the same speech-to-text service the CLI's own `/voice` mode uses
      * (docs/claude-voice-plan.md). SYNCED, default OFF: enabling it spends the

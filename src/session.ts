@@ -499,6 +499,8 @@ export class Session extends EventEmitter {
 
   private _name: string;
   private _nameSource: SessionNameSource;
+  /** `pinCliSessionName` as of the last spawn (see {@link _refreshCliNamePin}). */
+  private _pinEveryCliName = false;
   /**
    * Reconstructs the composer draft from USER keystrokes so the first real
    * prompt can name the tab. Fed only when a write says `fromUser`, and never
@@ -1806,19 +1808,31 @@ export class Session extends EventEmitter {
   }
 
   /**
-   * The name to pin on the Claude CLI as `--name`: the tab's own name, whatever its source,
-   * so the CLI's prompt-box label, `/resume` entry and terminal title (and Claude Code's
-   * remote session list) read the same as the tab. Leaving a placeholder or auto-named tab
-   * unpinned let Claude generate its own title, which then differed from the tab it was
-   * running in (`w4-myapp` in Codeman, "Fix the flaky teardown" in Claude).
+   * The name to pin on the Claude CLI as `--name`, or undefined to let Claude title the
+   * conversation itself. `--name` is the prompt-box label, the `/resume` picker entry and the
+   * terminal title all at once, and a pinned title stops Claude generating its own.
    *
-   * The cost is that every conversation of a case starts with the same `/resume` entry shape
-   * (`w1-myapp`, `w2-myapp`); the tab number keeps those distinct per tab. A rename or an
-   * auto-name reaches the CLI at the next spawn: a process started with `--name` re-appends its
-   * in-memory title after each turn (see claude-session-title.ts).
+   * By default only a name the user chose is pinned. Pinning the `w1-myapp` placeholder gave
+   * every conversation in a case the same `/resume` entry (the tab number restarts once a
+   * case's tabs are closed), and an auto name is a cut of the first prompt, which Claude's
+   * own generated title already beats.
+   *
+   * With the opt-in `pinCliSessionName` setting every non-blank tab name is pinned, so the
+   * CLI's labels read the same as the tabs, at the cost of those generated titles. A rename
+   * in Codeman then holds only until the next turn: a process started with `--name`
+   * re-appends its in-memory title (see claude-session-title.ts). The setting is re-read
+   * at each spawn and respawn by {@link _refreshCliNamePin}.
    */
   get cliPinnedName(): string | undefined {
+    if (!this._pinEveryCliName) return this._nameSource === 'manual' ? this._name : undefined;
     return this._name.trim() ? this._name : undefined;
+  }
+
+  /** Re-read `pinCliSessionName` so `cliPinnedName` decides per launch, with no server restart. */
+  private async _refreshCliNamePin(): Promise<void> {
+    // Dynamic: hooks-config -> route-helpers imports Session, so a static import would be a cycle.
+    const { readPinCliSessionNameEnabled } = await import('./hooks-config.js');
+    this._pinEveryCliName = await readPinCliSessionNameEnabled();
   }
 
   setAutoClear(enabled: boolean, threshold?: number): void {
@@ -2478,6 +2492,7 @@ export class Session extends EventEmitter {
    * still inside it and renders no local `--session-id` to collide.
    */
   private async _buildRespawnPaneOptionsWithResumePin(): Promise<import('./mux-interface.js').RespawnPaneOptions> {
+    await this._refreshCliNamePin();
     const options = this._buildRespawnPaneOptions();
     if (this._remote || this._docker) return options;
     const entry = getCli(this.mode);
@@ -2741,6 +2756,8 @@ export class Session extends EventEmitter {
     if (this._closing) {
       throw new Error('Session is being closed');
     }
+
+    await this._refreshCliNamePin();
 
     // Bounds the workspace-trust scan (see _maybeAcceptTrustDialog). Stamped here
     // rather than at PTY spawn so a slow mux attach still counts as startup.

@@ -7,10 +7,12 @@
  * used to change only the tab, so `/resume` kept listing the old name.
  *
  * Appending the row is enough for a pane that was spawned WITHOUT `--name`
- * (every placeholder- or auto-named tab, see `Session.cliPinnedName`): that
- * process holds no title of its own and never writes one back. A process that
- * WAS spawned with `--name` re-appends its in-memory title after each turn, so
- * there the new title holds from the next spawn, which pins the new name.
+ * (every placeholder- or auto-named tab, unless the opt-in `pinCliSessionName`
+ * setting is on, see `Session.cliPinnedName`): that process holds no title of
+ * its own and never writes one back. A process that WAS spawned with `--name`
+ * (every tab with `pinCliSessionName` on) re-appends its in-memory title after
+ * each turn, so there the new title holds only until the next turn, then from
+ * the next spawn, which pins the new name.
  *
  * @module claude-session-title
  */
