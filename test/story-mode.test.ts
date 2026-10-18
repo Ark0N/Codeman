@@ -1084,6 +1084,25 @@ describe('buildStoryPage', () => {
     expect(page.panels.map((p) => p.caption.story)).toContain('Claude changes run.sh; the tests pass.');
   });
 
+  it('git lookups after a save are Claude checking its save, and stay fast on a crafted command', () => {
+    const look = (saveFirst: boolean, command: string) =>
+      pageOf([
+        prompt('go'),
+        ...(saveFirst ? bash('b0', 'git commit -qm "add a"', 'Commit', '') : []),
+        ...bash('b1', command, 'Look', 'ok'),
+        end(1000),
+      ]).panels.find((p) => p.kind === 'investigate')?.caption.story;
+    expect(look(true, 'git --git-dir=origin.git log --oneline -1 master; git status -sb | head -1')).toBe(
+      'Claude checks what it saved.'
+    );
+    expect(look(false, 'git log --oneline; git status -sb | head -1')).toBe('Claude looks around the project.');
+    // The wording reads the event's display label (clipped), so a long command costs nothing; the
+    // panel's kind still comes from the whole command.
+    const start = performance.now();
+    expect(look(true, `git log ${'a '.repeat(100_000)}&& cat x`)).toBeTypeOf('string');
+    expect(performance.now() - start).toBeLessThan(1500);
+  });
+
   it('a short ending keeps the sentence that leaves something open', () => {
     const page = pageOf([
       prompt('run them'),

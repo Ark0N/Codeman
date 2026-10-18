@@ -2434,6 +2434,10 @@ function touchedBefore(file: string, before: StoryEvent[]): boolean {
   return before.some((e) => editsOf(e).some((d) => d.file === file));
 }
 
+/** A command made only of git lookups ("git log --oneline; git status -sb", "git -C origin.git log"). */
+const GIT_LOOK =
+  /^(?:(?:git (?:-C \S+ |--git-dir=\S+ )?(?:log|status|show|ls-remote|branch|remote|describe|rev-parse|diff)\b[^;&|\n]*|(?:echo|head|tail|wc|sort)\b[^;&|\n]*)\s*(?:&&|\|\||;|\||\n|$)\s*)+$/;
+
 /** One or two files by name ("calc.py and test_calc.py"), more by count ("3 files"). */
 const fileWords = (files: string[], noun = 'file'): string =>
   files.length && files.length <= 2 ? files.map((f) => basename(f)).join(' and ') : plural(files.length, noun);
@@ -2543,6 +2547,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const shown = files.filter((f) => !/(^|\/)\.codeman[-.]/.test(f));
       // A file or two by name; in a turn a report started, reading is checking what came back.
       const checking = turn.origin === 'task' || turn.origin === 'peer';
+      // Only git lookups (log, status, ls-remote) after a save in this turn: Claude checks its save.
+      const savedBefore = events.slice(0, Math.min(...draft.events)).some((e) => (e.commits ?? 0) > 0 || !!e.ships);
       const named = shown.map((f) => basename(f));
       story = evs.every((e) => e.tool === 'ToolSearch')
         ? evs.some((e) => /PlanMode/.test(e.label))
@@ -2554,7 +2560,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             ? `Claude reads ${plural(shown.length, 'file')} to find its way around.`
             : evs.every((e) => e.intent === 'search')
               ? 'Claude searches the code.'
-              : 'Claude looks around the project.';
+              : savedBefore && evs.every((e) => e.tool === 'Bash' && GIT_LOOK.test(e.label.trim()))
+                ? 'Claude checks what it saved.'
+                : 'Claude looks around the project.';
       // A tool lookup's query (`select:EnterPlanMode,ExitPlanMode`) means nothing to a reader.
       if (evs.every((e) => e.tool === 'ToolSearch')) panel.notes = [];
       break;

@@ -313,7 +313,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude looks around the project.",
+        "story": "Claude checks what it saved.",
         "unaskedSave": false,
         "director": "Bash · git log --oneline",
         "balloon": "Step 16:",

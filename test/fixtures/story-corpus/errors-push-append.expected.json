@@ -205,7 +205,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude looks around the project.",
+        "story": "Claude checks what it saved.",
         "unaskedSave": false,
         "director": "Bash · git --git-dir=origin.git log --oneline master; git status -…",
         "balloon": null,
@@ -298,7 +298,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude looks around the project.",
+        "story": "Claude checks what it saved.",
         "unaskedSave": false,
         "director": "Bash · git --git-dir=origin.git log --oneline -1 master; git statu…",
         "balloon": null,
