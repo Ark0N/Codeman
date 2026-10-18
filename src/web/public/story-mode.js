@@ -36,6 +36,17 @@ const STORY_POLL_MS = 4000;
  * art together in a centered stage instead of spreading it to both ends; the background still fills it.
  */
 const STORY_STAGE_MAX = 680;
+/**
+ * Redraw rates (frames per second). The clocks run in real time whatever the rate; only how often a
+ * panel is repainted changes. An entrance plays smoothly, the newest panel of a running turn stays
+ * lively, and a settled panel keeps its blinks and bobs at a fraction of the cost (measured: every
+ * panel at display rate cost ~80% of a core with five panels on a 2x screen).
+ */
+const STORY_FPS_INTRO = 30;
+const STORY_FPS_LIVE = 15;
+const STORY_FPS_SETTLED = 6;
+/** A settled panel animates this long, then holds still until the pointer wakes it again. */
+const STORY_SETTLED_AWAKE_MS = 20000;
 
 /**
  * The comic engine: drawing kit, the agent character and one scene per panel kind. Pure drawing;
@@ -1700,6 +1711,14 @@ Object.assign(CodemanApp.prototype, {
         for (const rt of st.panels) {
           if (!rt.visible) continue;
           rt.clock += (dt / 1000) * StoryArt.FPS;
+          const intro = rt.clock < StoryArt.HERO;
+          const fps = intro ? STORY_FPS_INTRO : rt.panel?.live ? STORY_FPS_LIVE : STORY_FPS_SETTLED;
+          if (!intro && !rt.panel?.live) {
+            rt.awakeUntil ??= t + STORY_SETTLED_AWAKE_MS;
+            if (t > rt.awakeUntil) continue; // holding still; the pointer wakes it
+          }
+          if (t < (rt.nextDrawAt || 0)) continue;
+          rt.nextDrawAt = t + 1000 / fps - 4;
           this._storyDrawPanel(rt);
         }
       }
@@ -1903,6 +1922,11 @@ Object.assign(CodemanApp.prototype, {
     liveTag.textContent = 'LIVE';
     liveTag.hidden = true;
     fig.append(canvas, cap, balloon, liveTag);
+    // A settled panel holds still after a while; pointing at it brings it back to life.
+    fig.addEventListener('pointerenter', () => {
+      const rt = this._story?.panels.find((p) => p.el === fig);
+      if (rt) rt.awakeUntil = performance.now() + STORY_SETTLED_AWAKE_MS;
+    });
     let splash = null;
     if (kind === 'complete') {
       splash = document.createElement('div');
