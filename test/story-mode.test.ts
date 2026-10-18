@@ -9,6 +9,7 @@ import {
   buildStoryPage,
   buildStoryTurns,
   classifyBashCommand,
+  closingText,
   createStoryReducer,
   exactDuration,
   firstSentence,
@@ -1101,6 +1102,29 @@ describe('buildStoryPage', () => {
     const start = performance.now();
     expect(look(true, `git log ${'a '.repeat(100_000)}&& cat x`)).toBeTypeOf('string');
     expect(performance.now() - start).toBeLessThan(1500);
+  });
+
+  it('a quoted report marks only the text it skips with "…"', () => {
+    const report = [
+      'I wrote README.md and committed it.',
+      'It covers usage and the exit codes.',
+      'It reads the file and prints the counts for each column, one line per column. '.repeat(3),
+      'One known issue: big numbers are shown rounded.',
+    ].join('\n\n');
+    // The second sentence follows the first: no mark. The issue is three paragraphs on: marked.
+    expect(
+      closingText(
+        report,
+        ['It covers usage and the exit codes.', 'One known issue: big numbers are shown rounded.'],
+        ' … '
+      )
+    ).toBe(
+      'I wrote README.md and committed it. It covers usage and the exit codes. … One known issue: big numbers are shown rounded.'
+    );
+    // Claude's own closing words are never marked.
+    expect(closingText(report, ['One known issue: big numbers are shown rounded.'])).toBe(
+      'I wrote README.md and committed it. One known issue: big numbers are shown rounded.'
+    );
   });
 
   it('a short ending keeps the sentence that leaves something open', () => {

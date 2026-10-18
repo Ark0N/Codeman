@@ -54,7 +54,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "The first run fails on purpose, as you asked; the second passes.",
+        "story": "At first the tests don't even load, as you asked; the second run passes.",
         "unaskedSave": false,
         "director": "2 checks · 4 edits · +150 · last: ok · after 1 second opinion",
         "balloon": "All 19 test cases pass (13 test functions), and ruff check and ruff format both come back clean.",

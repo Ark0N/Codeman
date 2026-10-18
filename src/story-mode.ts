@@ -411,7 +411,7 @@ function keyPointsOf(text: string): string[] {
         )?.[1];
       const lines = count ? (/^(three|3)$/i.test(count) ? 3 : 2) : 0;
       wide = lines > 0;
-      const room = lines ? 480 : 260;
+      const room = lines ? 480 : 360;
       for (
         let k = i + 1;
         k < sentences.length &&
@@ -458,13 +458,30 @@ function keyPointsOf(text: string): string[] {
  * further in (an open problem, what was or was not done), so the final panel never reads as a clean
  * finish when Claude said otherwise.
  */
-export function closingText(text: string, keyPoints: string[] = []): string {
+export function closingText(text: string, keyPoints: string[] = [], gap = ' '): string {
   const [one, two] = firstTwoSentences(text);
   // A very short first sentence ("Not done.") says too little alone.
-  const parts = [one];
-  if (two && (CAVEAT.test(two) || OUTCOME.test(two) || one.length < 24) && two.length <= 200) parts.push(two);
-  for (const point of keyPoints) if (!parts.some((p) => p.includes(point) || point.includes(p))) parts.push(point);
-  return clip(parts.join(' '), parts.length > 1 ? 560 : 300);
+  const head = [one];
+  if (two && (CAVEAT.test(two) || OUTCOME.test(two) || one.length < 24) && two.length <= 200) head.push(two);
+  const more: string[] = [];
+  for (const point of keyPoints)
+    if (![...head, ...more].some((p) => p.includes(point) || point.includes(p))) more.push(point);
+  // `gap` marks where the balloon skips ahead (" … " for a helper's report quoted in a notice): only
+  // where text was left out between two kept sentences, found in the message itself.
+  const flat = (t: string) =>
+    t
+      .replace(/[`*_#>|-]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const whole = gap === ' ' ? '' : flat(text.slice(0, 8000));
+  let out = head.join(' ');
+  let end = whole ? whole.indexOf(flat(out).slice(0, 60)) + flat(out).length : -1;
+  for (const point of more) {
+    const at = whole ? whole.indexOf(flat(point).slice(0, 60)) : -1;
+    out += at >= 0 && end >= 0 && at - end <= 2 ? ` ${point}` : `${gap}${point}`;
+    end = at >= 0 ? at + flat(point).length : -1;
+  }
+  return clip(out, head.length + more.length > 1 ? 560 : 300);
 }
 
 /** The first sentence of a message, without markdown, for a speech balloon. */
@@ -2510,7 +2527,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       if (panel.balloon && report) {
         // A report that is only a path says which file it wrote: its name is enough.
         const pathOnly = /^\S+$/.test(report) && report.includes('/');
-        const said = (pathOnly ? basename(report) : closingText(report, keyPointsOf(report)))
+        const said = (pathOnly ? basename(report) : closingText(report, keyPointsOf(report), ' … '))
           // An absolute path is mostly room: its last two parts ("tests/test_extra.py") say which file.
           // Run on the clipped balloon (560 characters at most), so the scan stays short.
           .replace(/(?<![\w.~-])\/(?:[^\s/]+\/)+([^\s/]+\/[^\s/]+)/g, '$1');
@@ -2685,6 +2702,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         ).length;
         const n = panel.rounds;
         const testFails = fails - lintFails;
+        // A run where not one test loaded (a collection error) "doesn't even load", as a check panel says it.
+        const loadsNot = (e: StoryEvent) => !!e.tests && !e.tests.passed && !e.tests.failed && !!e.tests.errors;
         // A failure you asked for (test first), or that Claude said it expected, is the plan working.
         const planned = passed(checks[0]) === false ? plannedFailure(turn, events) : false;
         // The check that failed while the tests passed, by name: "a formatting check", not "another check".
@@ -2698,7 +2717,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
               ? `Build and test, ${plural(n, 'round')}. The tests pass every time; ${otherCheck} fails ${fails === 1 ? 'once' : `${fails} times`}, then passes.`
               : panel.ok === true && planned === 'asked'
                 ? checks.length === 2
-                  ? 'The first run fails on purpose, as you asked; the second passes.'
+                  ? loadsNot(checks[0])
+                    ? "At first the tests don't even load, as you asked; the second run passes."
+                    : 'The first run fails on purpose, as you asked; the second passes.'
                   : `${plural(n, 'round')}: the first run fails on purpose, as you asked, then it passes.`
                 : panel.ok === true && planned && checks.length === 2
                   ? 'Test first: the first run fails as planned, the second passes.'

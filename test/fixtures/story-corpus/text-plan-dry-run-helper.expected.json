@@ -142,7 +142,7 @@
         "story": "A background job reports back.",
         "unaskedSave": false,
         "director": "Prompt · 6 words · task",
-        "balloon": "\"Write README for csvstat\" reports: I wrote README.md and committed it on its own on feat/csvstat. The README has every section you asked for and no badges.",
+        "balloon": "\"Write README for csvstat\" reports: I wrote README.md and committed it on its own on feat/csvstat. … The README has every section you asked for and no badges.",
         "tests": null,
         "roundsOk": null,
         "printed": null,
