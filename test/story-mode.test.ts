@@ -1041,6 +1041,11 @@ describe('buildStoryPage', () => {
       'The memory warning now fires at 90 percent.',
     ])
       expect(['problem'], closed).not.toContain(keyKindOf(closed));
+    // How things were before, and "still open" as a verb, are no open work.
+    expect(keyKindOf('Before, that early idle could end a wait while the turn was still running.')).toBeUndefined();
+    expect(keyKindOf('The old menu used to break when the list was empty.')).toBeUndefined();
+    expect(keyKindOf('JSON files still open the live log viewer, as intended.')).toBeUndefined();
+    expect(keyKindOf('Two reviews are still open.')).toBe('pending');
     // "Left out" is open work, unless Claude chose it.
     expect(keyKindOf('The README update is left out for now.')).toBe('pending');
     expect(

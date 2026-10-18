@@ -304,7 +304,7 @@ const KEY_KINDS: Array<[StoryKeyKind, RegExp]> = [
   [
     'pending',
     // "Left out" is open work, unless Claude chose it ("left out on purpose", "rather than guessed").
-    /(?<!(deliberately|intentionally|purposely) )\bleft (out|open)\b(?! (on purpose|deliberately|intentionally|rather))|\b(not yet|haven't|have not|can't tell|isn't (confirmed|committed|pushed|tested|done|checked)|not (checked|tested|verified|confirmed|committed|pushed|opened|run)|still (running|working|open|missing)|didn't (open|try|check|test|run|verify) it)\b/i,
+    /(?<!(deliberately|intentionally|purposely) )\bleft (out|open)\b(?! (on purpose|deliberately|intentionally|rather))|\b(not yet|haven't|have not|can't tell|isn't (confirmed|committed|pushed|tested|done|checked)|not (checked|tested|verified|confirmed|committed|pushed|opened|run)|still (running|working|open(?!\s+(the|a|an|in|on|it|them)\b)|missing)|didn't (open|try|check|test|run|verify) it)\b/i,
   ],
   // A step that failed, not a description of failure ("1 for a failed operation").
   ['failed', /(?<!\b(a|the|any|on) )\b(failed|fails)\b/i],
@@ -329,8 +329,15 @@ const NO_PROBLEM =
   /\b(?:no|not an?|(?:isn't|is not|wasn't|was not|aren't) an?|without (?:any|an?)|found no|(?:couldn't|could not|didn't|did not) find (?:any|an?)|none of the)\s+(?:\S+\s+){0,2}?(?:problems?|bugs?|issues?|quirks?|caveats?|limitations?|broken)\b|\b(?:never|not|n't)\s+(?:been\s+)?broken\b/i;
 const openProblem = (s: string): boolean => (NOT_FIXED.test(s) || !PROBLEM_CLOSED.test(s)) && !NO_PROBLEM.test(s);
 /** A sentence's kind: the first that matches, where a problem must still be open. */
+/** A sentence about how things were before the change ("Before, an early idle could end a wait"). */
+const HISTORY = /^(before|previously|until now|in the past|originally)\b,?|\bused to\b/i;
 const sentenceKind = (s: string): StoryKeyKind | undefined =>
-  KEY_KINDS.find(([kind, re]) => re.test(s) && (kind !== 'problem' || openProblem(s)))?.[0];
+  KEY_KINDS.find(
+    ([kind, re]) =>
+      re.test(s) &&
+      (kind !== 'problem' || openProblem(s)) &&
+      ((kind !== 'problem' && kind !== 'pending') || !HISTORY.test(s))
+  )?.[0];
 /** A sentence that only points elsewhere ("described below"): nothing a balloon can show. */
 const POINTS_ELSEWHERE = /\b(described|listed|shown|details?) below\b|\bsee below\b|\bas follows\b/i;
 /** The fix that follows a problem sentence: then the problem is not open. */
