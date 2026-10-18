@@ -2505,16 +2505,20 @@ Object.assign(CodemanApp.prototype, {
       // A call that came back with an error brought no opinion: say so, never that one was given.
       const unanswered = asked.length > 0 && asked.every((i) => page.events[i].ok === false);
       const ask = unanswered ? 'tries to ask' : 'asks';
-      rt.capNote.hidden = !p.secondOpinion;
-      rt.capNote.textContent = !p.secondOpinion
-        ? ''
-        : `${
-            before
-              ? `after ${unanswered ? 'trying to ask' : 'asking'}`
-              : trailing
-                ? `then ${ask}`
-                : `along the way, ${ask}`
-          } a stronger AI model for a second opinion${unanswered ? ' (no answer came)' : ''}`;
+      const notes = [
+        p.unaskedSave ? 'a save your prompt here did not ask for' : '',
+        p.secondOpinion
+          ? `${
+              before
+                ? `after ${unanswered ? 'trying to ask' : 'asking'}`
+                : trailing
+                  ? `then ${ask}`
+                  : `along the way, ${ask}`
+            } a stronger AI model for a second opinion${unanswered ? ' (no answer came)' : ''}`
+          : '',
+      ].filter(Boolean);
+      rt.capNote.hidden = !notes.length;
+      rt.capNote.textContent = notes.join('; ');
     }
     rt.el.classList.toggle('is-live', !!p.live);
     // Named by its place only: the caption inside is read as the panel's content, once.
@@ -2537,11 +2541,12 @@ Object.assign(CodemanApp.prototype, {
           ? 'To be continued…'
           : page.noneWorked
             ? 'Not done'
-            : page.helpersRunning || page.finishedLater || page.events.some((e) => e.running && !e.helper)
-              ? // Work was still out when the turn ended (and maybe still is): not a clean finish.
-                'Done for now'
-              : page.openNote === 'catch'
-                ? 'Done, with a catch'
+            : page.openNote === 'catch'
+              ? // A problem left beats work still out: it is what the reader must not miss.
+                'Done, with a catch'
+              : page.helpersRunning || page.finishedLater || page.events.some((e) => e.running && !e.helper)
+                ? // Work was still out when the turn ended (and maybe still is): not a clean finish.
+                  'Done for now'
                 : page.openNote
                   ? 'Done, with a note'
                   : page.asks

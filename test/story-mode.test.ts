@@ -1059,6 +1059,24 @@ describe('buildStoryPage', () => {
     expect(keyKindOf('Anything unknown is left out rather than guessed.')).toBeUndefined();
   });
 
+  it('the first save no prompt asked for is marked, once; a new branch is named', () => {
+    const saves = (ask: string) =>
+      pageOf([
+        prompt(ask),
+        ...bash('b0', 'git checkout -q -b feat/x', 'Branch', ''),
+        ...bash('b1', 'git commit -qm "add a"', 'Commit', ''),
+        ...edit('e1', '/w/a.py', ['+a = 1']),
+        ...bash('b2', 'git commit -qam "add b"', 'Commit', ''),
+        end(1000),
+      ]).panels.filter((p) => p.kind === 'save');
+    const unasked = saves('Add a.');
+    expect(unasked.map((p) => !!p.unaskedSave)).toEqual([true, false]);
+    expect(unasked[0].caption.story).toBe('Claude saves the work on a new branch (feat/x): "add a".');
+    expect(saves('Add a and commit it.').some((p) => p.unaskedSave)).toBe(false);
+    // "save its log" is no request to save the work.
+    expect(saves('Add a and save its log with tee.')[0].unaskedSave).toBe(true);
+  });
+
   it('a stop names the step Claude was on and what its to-do list still had open', () => {
     const stopped = (lines: unknown[]) =>
       pageOf([...lines, prompt('[Request interrupted by user]')]).panels.find((p) => p.kind === 'complete')!.caption

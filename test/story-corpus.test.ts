@@ -46,6 +46,7 @@ function pagesOf(name: string) {
         kind: x.kind,
         ok: x.ok ?? null,
         story: x.caption.story,
+        unaskedSave: x.unaskedSave ?? false,
         director: x.caption.director,
         balloon: x.balloon?.text ?? null,
         tests: x.tests ?? null,
@@ -108,7 +109,7 @@ describe('Story Mode on real sessions', () => {
   it('a commit at the end of a test one-liner is kept, and a background helper reports back in 9 s', () => {
     expect(panel('text-plan-dry-run-helper', 0, 'check')?.story).toBe(
       // test_csvstat.py was written a panel before and only patched here.
-      'Claude writes pyproject.toml and changes test_csvstat.py; the tests pass, then Claude starts a git repository and saves the work.'
+      'Claude writes pyproject.toml and changes test_csvstat.py; the tests pass, then Claude starts a git repository and saves the work on a new branch (feat/csvstat).'
     );
     expect(panel('text-plan-dry-run-helper', 0, 'plan')?.story).toBe('Claude writes a plan: 4 steps.');
     expect(pagesOf('text-plan-dry-run-helper')[1]).toMatchObject({ origin: 'task', durationMs: 9008 });
@@ -142,10 +143,10 @@ describe('Story Mode on real sessions', () => {
     });
     expect(second.panels.find((p) => p.kind === 'save')?.story).toBe(
       // `git describe --tags` failed after the push; `; echo "exit=$?"` hid it from the exit code, not from the output.
-      'Claude saves the work: "add calc_stats.mode with smallest-value tie-breaking" and copies it to origin.git, a folder on this computer, but a check after that fails.'
+      'Claude saves the work: "add calc_stats.mode with smallest-value tie-breaking" and copies it to origin.git, a folder on this computer, but a check after that fails, as you said it might.'
     );
     expect(third.panels.find((p) => p.kind === 'save')?.story).toBe(
-      'Claude saves the work: "add NOTES.md describing mode behavior" and copies it to origin.git, a folder on this computer, but a check after that fails.'
+      'Claude saves the work: "add NOTES.md describing mode behavior" and copies it to origin.git, a folder on this computer, but a check after that fails, as you said it might.'
     );
   });
 
@@ -202,9 +203,21 @@ describe('Story Mode on real sessions', () => {
     expect(exact.panels.at(-1)!.balloon).toMatch(/Steps 5, 10 and 15: I added a second -m/);
   });
 
+  it('the saves no prompt asked for are marked on their first panel (round 11)', () => {
+    const marked = (name: string) =>
+      pagesOf(name).flatMap((p, t) => p.panels.filter((x) => x.unaskedSave).map((x) => `T${t + 1} ${x.kind}`));
+    expect(marked('compact-then-plan-mode')).toEqual(['T1 save', 'T3 save']);
+    expect(marked('python-cli-fix-loop')).toEqual(['T1 loop']);
+    expect(marked('text-plan-dry-run-helper')).toEqual(['T1 check']);
+    // The prompt asked to commit and push: nothing to mark.
+    expect(marked('question-tests-first-push')).toEqual([]);
+  });
+
   it('a helper reporting back is heard in its own words, not only "finished" (round 9)', () => {
     const [, readme, extra] = pagesOf('background-helpers-reports');
-    expect(readme.panels[0].balloon).toBe('"Helper A: write README.md" reports: README.md');
+    expect(readme.panels[0].balloon).toBe(
+      '"Helper A: write README.md" reports back with the file it wrote: README.md.'
+    );
     // What the helper did not do is on the page, and a long path does not crowd it out.
     expect(extra.panels[0].balloon).toMatch(
       /^"Helper B: write extra pytest tests" reports: I wrote the file: tests\/test_extra\.py /

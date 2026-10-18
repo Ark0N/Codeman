@@ -2390,6 +2390,25 @@ function emptyAnswerWhat(e: StoryEvent): string {
         : 'the last search finds no match';
 }
 
+/** Words in a prompt that ask for (or mention) saving the work: then a save is no surprise. */
+const ASKS_TO_SAVE =
+  /\b(commit|commits|committed|git|push|pushed|pull request|check(ed)? in|ship|release|merge|version control)\b|\bpr\b|\b(save|saving|saved) (the |your |all |this |my |our )?(work|changes|progress|code|project)\b/i;
+
+/** The branch Claude created for this save (`git checkout -b x`, `git switch -c x`), when it is the first save on it. */
+function newBranchAt(indices: number[], events: StoryEvent[]): string | undefined {
+  const firstAt = Math.min(...indices);
+  const lastAt = Math.max(...indices);
+  for (let i = lastAt; i >= 0; i--) {
+    const m =
+      events[i].tool === 'Bash' &&
+      /\bgit (?:checkout|switch)(?:\s+-q)?\s+(?:-b|-c|--create)\s+([\w./-]+)/.exec(events[i].label);
+    if (!m) continue;
+    // Nothing committed between the branch and this panel: this is its first save.
+    return events.slice(i + 1, firstAt).some((e) => (e.commits ?? 0) > 0) ? undefined : m[1];
+  }
+  return undefined;
+}
+
 /** One or two files by name ("calc.py and test_calc.py"), more by count ("3 files"). */
 const fileWords = (files: string[], noun = 'file'): string =>
   files.length && files.length <= 2 ? files.map((f) => basename(f)).join(' and ') : plural(files.length, noun);
@@ -2461,9 +2480,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const report = origin === 'task' && evs[0]?.helper?.result?.trim();
       if (panel.balloon && report) {
         // A report that is only a path says which file it wrote: its name is enough.
-        const said = (
-          /^\S+$/.test(report) && report.includes('/') ? basename(report) : closingText(report, keyPointsOf(report))
-        )
+        const pathOnly = /^\S+$/.test(report) && report.includes('/');
+        const said = (pathOnly ? basename(report) : closingText(report, keyPointsOf(report)))
           // An absolute path is mostly room: its last two parts ("tests/test_extra.py") say which file.
           // Run on the clipped balloon (560 characters at most), so the scan stays short.
           .replace(/(?<![\w.~-])\/(?:[^\s/]+\/)+([^\s/]+\/[^\s/]+)/g, '$1');
@@ -2471,9 +2489,12 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         if (said)
           panel.balloon = {
             who: 'note',
-            text: name
-              ? `"${name}" reports: ${said}`
-              : `${panel.balloon.text.replace(/[.]?$/, '.')} Its report: ${said}`,
+            text:
+              name && pathOnly
+                ? `"${name}" reports back with the file it wrote: ${said}.`
+                : name
+                  ? `"${name}" reports: ${said}`
+                  : `${panel.balloon.text.replace(/[.]?$/, '.')} Its report: ${said}`,
           };
       }
       director = command
@@ -2576,6 +2597,20 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       panel.removed = edits.reduce((n, e) => n + e.removed, 0);
       if (draft.kind === 'fix') {
         const created = unique(edits.filter((e) => e.created).map((e) => e.file)).length;
+        // Some files written whole (new ones), others patched: "writes README.md and changes CLAUDE.md".
+        // A file created here is written, even when Claude then edited it in the same panel.
+        const wholeOf = (f: string) => {
+          const mine = edits.filter((d) => d.file === f);
+          return (
+            mine.some((d) => d.created) ||
+            mine.every((d) => d.hunks.length > 0 && d.hunks.every((h) => !h.oldStart && !h.oldLines))
+          );
+        };
+        const wholeList = files.filter(wholeOf);
+        const mixed =
+          wholeList.length && wholeList.length < files.length
+            ? { whole: wholeList, patched: files.filter((f) => !wholeList.includes(f)) }
+            : undefined;
         const whole =
           edits.length > 0 &&
           edits.every((d) => d.created || (d.hunks.length > 0 && d.hunks.every((h) => !h.oldStart && !h.oldLines)));
@@ -2586,9 +2621,11 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
               : `Claude writes ${plural(created, 'new file')}.`
             : whole && files.length
               ? `Claude writes ${fileWords(files)}.`
-              : files.length
-                ? `Claude changes ${fileWords(files)}.`
-                : 'Claude changes a file.';
+              : mixed
+                ? `Claude writes ${fileWords(mixed.whole)} and changes ${fileWords(mixed.patched)}.`
+                : files.length
+                  ? `Claude changes ${fileWords(files)}.`
+                  : 'Claude changes a file.';
         const perFile = files.slice(0, 3).map((f) => {
           const mine = edits.filter((e) => e.file === f);
           return `${basename(f)} ${fmtCounts(
@@ -2728,8 +2765,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         director += ` · ${plural(saved, 'commit')}`;
         if (ok)
           story = `${story.slice(0, -1)}, ${startsRepoAt(draft.events, events) ? 'then Claude starts a git repository and' : 'and Claude'} saves the work${
-            checks.some((e) => e.ships === 'push') ? ' and sends it up' : ''
-          }.`;
+            newBranchAt(draft.events, events) ? ` on a new branch (${newBranchAt(draft.events, events)})` : ''
+          }${checks.some((e) => e.ships === 'push') ? ' and sends it up' : ''}.`;
       }
       break;
     }
@@ -2815,7 +2852,20 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             s
           )
         );
-      const stepAfter = looksOnly ? 'a check after that fails' : 'a step after that fails';
+      // The prompt named that step and said it may fail ("git describe may fail, that is fine").
+      const asked = events
+        .filter((e) => e.intent === 'prompt')
+        .map((e) => e.label)
+        .join('\n');
+      const allowed =
+        after.some((s) => {
+          const head = s.split(/\s+/).slice(0, 2).join(' ');
+          return head.length > 3 && asked.includes(head);
+        }) &&
+        /\b(may|might|can|could|will) (fail|error)\b|\bexpected to fail\b|\b(fine|ok|okay) if it fails\b|\b(that is|that's) fine\b/i.test(
+          asked
+        );
+      const stepAfter = `${looksOnly ? 'a check after that fails' : 'a step after that fails'}${allowed ? ', as you said it might' : ''}`;
       story =
         savedAnyway || hiddenFail
           ? uploadOnly
@@ -2840,18 +2890,27 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
                   : `Claude saves the work${inCommits}${said}.`;
       const wrote = unique(edits.map((d) => d.file));
       const startsRepo = startsRepoAt(draft.events, events);
+      const wroteWhole = wrote.filter((f) =>
+        edits
+          .filter((d) => d.file === f)
+          .every((d) => d.created || (d.hunks.length > 0 && d.hunks.every((h) => !h.oldStart && !h.oldLines)))
+      );
+      const wrotePatched = wrote.filter((f) => !wroteWhole.includes(f));
       const lead = [
         startsRepo ? 'starts a git repository' : '',
-        wrote.length ? `writes ${fileWords(wrote)}` : '',
+        wroteWhole.length ? `writes ${fileWords(wroteWhole)}` : '',
+        wrotePatched.length ? `changes ${fileWords(wrotePatched)}` : '',
       ].filter(Boolean);
       if (lead.length && story.startsWith('Claude ')) {
         // "starts a git repository, saves the work and uploads it": never "and … and".
         const rest = story.slice(7);
         story =
-          lead.length === 2
+          lead.length >= 2
             ? `Claude ${lead.join(', ')}, and ${rest}`
             : `Claude ${lead[0]}${rest.replace(/"[^"]*"/g, '').includes(' and ') ? ',' : ' and'} ${rest}`;
       }
+      const branch = newBranchAt(draft.events, events);
+      if (branch && commits) story = story.replace('saves the work', `saves the work on a new branch (${branch})`);
       director = `${evs.map(shortCommand).slice(0, 2).join(' · ')}${errors ? ` · ${plural(errors, 'error')}` : ''}${
         edits.length ? ` · writes ${plural(unique(edits.map((d) => d.file)).length, 'file')}` : ''
       }`;
@@ -2888,6 +2947,14 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
     case 'complete':
       break;
   }
+  const savesHere = draft.events.some((i) => (events[i].commits ?? 0) > 0);
+  if (
+    savesHere &&
+    turn.origin === 'human' &&
+    !events.slice(0, Math.min(...draft.events)).some((e) => (e.commits ?? 0) > 0) &&
+    !events.some((e) => e.intent === 'prompt' && ASKS_TO_SAVE.test(e.label))
+  )
+    panel.unaskedSave = true;
   if (panel.secondOpinion) {
     // Asked before the step, after it (nothing following), or in the middle of a step's calls.
     const work = draft.events.filter((i) => events[i].tool !== 'Advisor');

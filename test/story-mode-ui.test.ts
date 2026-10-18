@@ -925,6 +925,29 @@ describe('story-mode.js overlay', () => {
     expect(drawnTexts).not.toContain('+5');
   });
 
+  it("the first save no prompt asked for says so in a small line; a catch beats 'Done for now'", async () => {
+    boot(
+      storyOf([
+        prompt('Add a.'),
+        ...bash('b1', 'git commit -qm "add a"', 'Commit', ''),
+        // Still running when the turn ends: the page would read "Done for now" without the catch.
+        ...bash('b2', 'sleep 60 && pytest -q', 'Slow tests', 'Command running in background with ID: b2x'),
+        said(
+          'I added a and saved it. ' +
+            'It reads the file and prints the counts for each column, one line per column. '.repeat(3) +
+            'One known issue: big numbers are shown rounded.'
+        ),
+        end(1000),
+      ])
+    );
+    app.openStoryMode(SID);
+    await settle();
+    expect($('.story-panel[data-kind="save"] .story-cap-note')!.textContent).toBe(
+      'a save your prompt here did not ask for'
+    );
+    expect($('.story-panel[data-kind="complete"] .story-splash-title')!.textContent).toBe('Done, with a catch');
+  });
+
   it('a second opinion that came back with an error says no answer came', async () => {
     const failed = {
       type: 'assistant',
