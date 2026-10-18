@@ -84,7 +84,8 @@ File paths in a session are links. That works in two places:
 
 - **In the terminal**, on any absolute path an agent prints.
 - **In the response viewer**, where paths are usually written as prose or in backticks. They
-  render as underlined monospace links.
+  render as underlined monospace links. A Markdown link whose target is a path
+  (`[report](/tmp/run/report.json)`, the way Codex cites files) opens the same way.
 
 Clicking one opens it in the preview: images and PDFs render, video and audio play with a
 working scrub bar, documents convert, text shows inline, Markdown renders and HTML opens as a

@@ -2966,6 +2966,34 @@ class CodemanApp {
     // out of the middle of rendering a message.
     if (typeof findFilePathLinks !== 'function') return;
 
+    // A markdown link whose destination is a path (`[report](/home/me/run/x.json)`,
+    // Codex's usual way of citing a file) resolved against Codeman's own origin
+    // and opened a 404 in a new tab. Give it the linkified-path shape instead;
+    // links with a scheme or `//host` keep their own behaviour.
+    for (const a of root.querySelectorAll('a[href]')) {
+      // The URL parser drops tabs and newlines, so `http&#9;://` is still http.
+      const href = (a.getAttribute('href') || '').replace(/[\t\n\r]/g, '');
+      if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('//')) continue;
+      // `#L42`, `?plain=1` and a `:42:7` suffix name a spot in the file, not the
+      // file. The suffix is cut before decoding, so an encoded `%3A` stays a name.
+      let path = href.split('#')[0].split('?')[0].replace(/:\d+(?::\d+)?$/, '');
+      try {
+        path = decodeURIComponent(path);
+      } catch {
+        /* malformed escape: keep the path as written */
+      }
+      // A bare `#fragment` (and every `.rv-path`, whose href is `#`) ends up empty.
+      if (!path) continue;
+      a.className = 'rv-path';
+      a.dataset.path = path;
+      a.dataset.linkified = '1';
+      if (path.endsWith('/') || findFilePathLinks(path).some((f) => f.folder && f.path === path)) a.dataset.folder = '1';
+      a.title = path;
+      a.setAttribute('href', '#');
+      a.removeAttribute('target');
+      a.removeAttribute('rel');
+    }
+
     // Collect first: replacing a node while the walker is positioned on it
     // invalidates the traversal.
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
