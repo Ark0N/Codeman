@@ -207,7 +207,9 @@ connected: `WS` (WebSocket, the normal case), `WS…` (connecting or reconnectin
 (the WebSocket is unavailable and input goes over HTTP). If typed or pasted input is backing
 up faster than it is acknowledged, the readout grows a suffix such as `WS · 1.2KB queued`.
 That suffix appears only after the backlog has stayed up for about a second, so a paste or a
-fast burst that clears at once does not make the pill widen and shrink.
+fast burst that clears at once does not make the pill widen and shrink. (It is part of the
+text line, so you see it in the Compact and As before header styles; Tiles hides that line and
+shows `WS live`, and phones hide it too.)
 
 There is also a watchdog for the case where the connection stops delivering without
 erroring. If the server's heartbeat stops arriving, Codeman reconnects on its own rather
