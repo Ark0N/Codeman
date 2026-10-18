@@ -183,6 +183,21 @@ describe('POST /api/cases with a custom path', () => {
     }
   });
 
+  it('creates and links a folder two levels under the cases directory (not listed as a local case)', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    mkdirSync(join(CASES_DIR(), 'parent-dir'), { recursive: true });
+    try {
+      const target = join(realpathSync(join(CASES_DIR(), 'parent-dir')), 'nested');
+      const res = await create(app, { name: 'nested', path: target });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.case).toEqual({ name: 'nested', path: target });
+      expect(linked()).toEqual({ nested: target });
+      expect(existsSync(join(target, 'CLAUDE.md'))).toBe(true);
+    } finally {
+      safeRmHomeTree(join(CASES_DIR(), 'parent-dir'));
+    }
+  });
+
   it('multi-user: a non-admin is refused (403) and nothing is created; an admin is allowed', async () => {
     process.env.CODEMAN_MULTIUSER = '1';
     const user = await createRouteTestHarness(registerCaseRoutes, { authUser: { username: 'bob', role: 'user' } });
