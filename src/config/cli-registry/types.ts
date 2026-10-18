@@ -513,8 +513,8 @@ export interface CliCapabilities {
     /** Names a PREDICT_PROFILES key. Unknown or absent degrades to 'buffer', never to broken. */
     predictProfile?: string;
   };
-  /** Forwarding the wheel to the CLI's own transcript. 'never' keeps local scrollback. */
-  wheelForward: { mode: 'never' | 'version-gated'; minVersion?: string };
+  /** Wheel forwarding policy. Every enabled policy also requires observed CLI mouse tracking. */
+  wheelForward: { mode: 'never' | 'version-gated' | 'mouse-tracking'; minVersion?: string };
   /**
    * The CLI pages its OWN transcript on PageUp/PageDown, so a wheel or touch scroll over
    * a pane with no local history can be turned into those keys instead of doing nothing
@@ -523,8 +523,8 @@ export interface CliCapabilities {
    *
    * ⚠ NOT wheel forwarding. `wheelForward` above sends SGR mouse wheel REPORTS; this sends
    * plain keys, and only when the local buffer is hollow (normal buffer, `baseY === 0`).
-   * A CLI can ignore one and honour the other: codex ignores SGR wheel reports (so its
-   * `wheelForward` stays 'never') yet pages on PageUp/PageDown.
+   * A CLI can ignore one and honour the other: Codex without observed mouse tracking
+   * uses this fallback, while fullscreen Codex 0.163.0 accepts SGR wheel reports.
    *
    * Absent means no paging, so a CLI nobody has measured keeps plain local scrolling.
    */

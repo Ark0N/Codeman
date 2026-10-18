@@ -319,11 +319,11 @@ describe('a fullscreen Claude tile forwards the wheel to the CLI as SGR reports'
 
     expect(up.preventDefault).toHaveBeenCalled();
     expect(up.stopPropagation).toHaveBeenCalled();
-    expect(ws.inputFrames()).toEqual([{ t: 'i', d: UP }]); // first report never waits for a timer
-    expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]); // no seq: never persisted
+    expect(ws.inputFrames()).toEqual([{ t: 'i', d: UP.repeat(3) }]); // first report never waits for a timer
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP.repeat(3) }]); // no seq: never persisted
 
     mount.fire('wheel', wheelLines(2, AT));
-    expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: DOWN });
+    expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: DOWN.repeat(2) });
   });
 
   it('uses fractional native scrolling for a tracked Codex tile, never PageUp', async () => {
@@ -334,14 +334,14 @@ describe('a fullscreen Claude tile forwards the wheel to the CLI as SGR reports'
     expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
   });
 
-  it('normalizes a pixel wheel event to one native tick, including accelerated deltas', async () => {
+  it('preserves coarse pixel wheel travel and caps individual accelerated events', async () => {
     const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
 
     mount.fire('wheel', wheel(-100, AT));
-    expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP.repeat(4) }]);
 
     mount.fire('wheel', wheelLines(-1000, AT));
-    expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: UP });
+    expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: UP.repeat(5) });
   });
 
   it('accumulates precision touchpad deltas and consumes a pure horizontal swipe without sending', async () => {
@@ -366,7 +366,18 @@ describe('a fullscreen Claude tile forwards the wheel to the CLI as SGR reports'
     mount.fire('wheel', wheelLines(-2, AT));
 
     mount.fire('wheel', wheelLines(-2, AT));
-    expect(ws.inputFrames()).toEqual([{ t: 'i', d: UP }]);
+    expect(ws.inputFrames()).toEqual([{ t: 'i', d: UP.repeat(2) }]);
+    expect(flushed(ws)).toEqual([
+      { t: 'i', d: UP.repeat(2) },
+      { t: 'i', d: UP.repeat(4) },
+    ]);
+  });
+
+  it('does not discard queued reports when a zero-delta wheel arrives', async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+    mount.fire('wheel', wheelLines(-1, AT));
+    mount.fire('wheel', wheelLines(-2, AT));
+    mount.fire('wheel', wheel(0, AT));
     expect(flushed(ws)).toEqual([
       { t: 'i', d: UP },
       { t: 'i', d: UP.repeat(2) },
@@ -451,14 +462,14 @@ describe('a fullscreen Claude tile forwards the wheel to the CLI as SGR reports'
     const primary = makeApp({ other: FULLSCREEN }, 'other') as App & {
       terminal: unknown;
       _sendSyntheticSgrWheel(x: number, y: number, lines: number): void;
-      _wheelScrollNativeLines(ev: unknown): number;
+      _wheelScrollLinesFloat(ev: unknown): number;
       _flushWheelSgrQueue(): void;
     };
     const sent: string[] = [];
     primary._sendInputEphemeral = (_id: string, data: string) => sent.push(data);
     primary.terminal = new FakeTerminal({});
     for (const ev of sequence) {
-      primary._sendSyntheticSgrWheel(ev.clientX, ev.clientY, primary._wheelScrollNativeLines(ev));
+      primary._sendSyntheticSgrWheel(ev.clientX, ev.clientY, primary._wheelScrollLinesFloat(ev));
       primary._flushWheelSgrQueue();
     }
 
@@ -546,11 +557,11 @@ describe('page-key travel, cap and coalescing', () => {
     FakeFit.proposed = { cols: 80, rows: 36 };
   });
 
-  it('answers sub-page travel immediately and repays it on the next event', async () => {
+  it('accumulates coarse sub-page travel before sending one page', async () => {
     const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'opencode' } }));
 
     mount.fire('wheel', wheelLines(-10));
-    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
+    expect(flushed(ws)).toEqual([]);
     mount.fire('wheel', wheelLines(-10));
 
     expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
@@ -614,6 +625,7 @@ describe("gesture handling is the primary pane's, through the shared pure helper
     clock.now = () => now;
     return (ms: number) => {
       now += ms;
+      vi.advanceTimersByTime(ms);
     };
   }
 
@@ -750,7 +762,7 @@ describe("gesture handling is the primary pane's, through the shared pure helper
       .map((f) => f.d)
       .join('');
     // One page for the slow ticks, one for the wobble's opening event, nothing more.
-    expect(tileBytes).toBe(''); // rapid reversals cancel unsent movement
+    expect(tileBytes).toBe(PAGE_UP); // the first slow tick flushed before the later wobble
 
     const primary = makeApp({ other: { mode: 'codex' } }, 'other') as App & {
       terminal: unknown;
@@ -909,7 +921,7 @@ describe('rows the tile pushed above the screen itself are not history', () => {
     const first = wheelLines(-6);
     mount.fire('wheel', first);
     expect(first.preventDefault).toHaveBeenCalled();
-    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
+    expect(flushed(ws)).toEqual([]);
     mount.fire('wheel', wheelLines(-6));
     expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
   });

@@ -295,7 +295,7 @@ const capabilitiesSchema = z
     altScreen: z.enum(['strip-full', 'strip-mux-only', 'strip-mux-and-mouse', 'preserve']),
     echo: echoSchema,
     wheelForward: z
-      .object({ mode: z.enum(['never', 'version-gated']), minVersion: z.string().max(20).optional() })
+      .object({ mode: z.enum(['never', 'version-gated', 'mouse-tracking']), minVersion: z.string().max(20).optional() })
       .strict(),
     // Whether a hollow pane's wheel/touch scroll may be turned into PageUp/PageDown for
     // the CLI to page its own transcript. Distinct from wheelForward (SGR reports).

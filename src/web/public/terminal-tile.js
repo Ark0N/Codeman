@@ -51,7 +51,7 @@
  *
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js
  * @dependency constants.js (window.CodemanTerminalFont, window.CodemanFetchDeadline, DEFAULT_SCROLLBACK, TERMINAL_TAIL_SIZE, SHELL_LOAD_BASE_QUERY, SHELL_LOAD_QUERY, TERMINAL_CHUNK_SIZE)
- * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight, CodemanTerminalInput.shouldSuppressTerminalQueryResponse/isTerminalFocusOrMouseReport/wheelDeltaLines/wheelDeltaWholeLines/sgrWheelReports/pageKeysForGesture, app._shouldForwardWheelToApp/_localScrollbackIsHollow/_terminalViewportAtBottom/_clientPointToCell/_handleDesktopTerminalClick, app.tabAlerts)
+ * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight, CodemanTerminalInput.shouldSuppressTerminalQueryResponse/isTerminalFocusOrMouseReport/wheelDeltaLines/wheelTicksForGesture/coalesceScrollBytes/sgrWheelReports/pageKeysForGesture, app._shouldForwardWheelToApp/_localScrollbackIsHollow/_terminalViewportAtBottom/_clientPointToCell/_handleDesktopTerminalClick, app.tabAlerts)
  * @dependency terminal-keycode229-recovery.js (window.CodemanKeyCode229Recovery, optional: absent, xterm's own textarea handling stands)
  * @loadorder 7.4 of 16, loaded after terminal-ui.js and before terminal-split.js
  */
@@ -1101,7 +1101,8 @@
       // SGR coordinates address the live screen, so a report from a scrolled-up
       // viewport would hit-test another row: snap home first (_forwardScrollToApp).
       if (!app._terminalViewportAtBottom?.(this.terminal)) this.terminal.scrollToBottom?.();
-      const lines = input.wheelDeltaNativeLines(ev, this.terminal.rows);
+      const lines = input.wheelDeltaLines(ev, this.terminal.rows);
+      if (!lines) return true;
       if (this._wheelTickGesture?.dir && this._wheelTickGesture.dir !== Math.sign(lines)) this._scrollBytes = '';
       const step = input.wheelTicksForGesture(this._wheelTickGesture, lines, performance.now());
       this._wheelTickGesture = step.state;
@@ -1215,8 +1216,8 @@
     }
 
     // Coalesces the scroll bytes (SGR wheel reports and page keys alike) into
-    // one send per 40 ms, bounded by report count so a fling cannot build a backlog
-    // that keeps scrolling after it stops. A narrow
+    // one send per 40 ms after the leading native report, preserving upstream
+    // report density and cancelling only unsent movement on reversal. A narrow
     // twin of the primary pane's _queueScrollBytes / _flushWheelSgrQueue
     // (terminal-ui.js; keep the two in step), which flushes to the active
     // session only. Sent ephemeral (no seq, never persisted) to THIS pane's

@@ -36,7 +36,18 @@ function loadTerminalUiHarness(
   // terminal-ui.js hangs CodemanTerminalInput off window; tests read it there.
   const windowRef: Record<string, any> = { ...windowGlobals };
   // Mutable so a test can move time (gesture gaps); defaults to a frozen clock.
-  const clock = { now: () => 1_000 };
+  const timers = new Map<number, { due: number; fn: () => void }>();
+  let timerId = 0;
+  const clock = {
+    now: () => 1_000,
+    flushTimers: () => {
+      for (const [id, timer] of timers)
+        if (timer.due <= clock.now()) {
+          timers.delete(id);
+          timer.fn();
+        }
+    },
+  };
   const context = vm.createContext({
     window: windowRef,
     CodemanApp,
@@ -44,8 +55,12 @@ function loadTerminalUiHarness(
     _crashDiag: { log: vi.fn() },
     performance: clock,
     requestAnimationFrame: (_fn: () => void) => 1,
-    setTimeout: (_fn: () => void) => 1,
-    clearTimeout: vi.fn(),
+    setTimeout: (fn: () => void, ms = 0) => {
+      const id = ++timerId;
+      timers.set(id, { due: clock.now() + ms, fn });
+      return id;
+    },
+    clearTimeout: (id: number) => timers.delete(id),
     Blob: function Blob() {},
     URL: { createObjectURL: () => 'blob:yield', revokeObjectURL: () => {} },
     Worker: function Worker(this: any) {
@@ -206,24 +221,30 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
     app._maybePageCliTranscript({ shiftKey: false }, -1); // first event: one PageUp
     app._maybePageCliTranscript({ shiftKey: false }, 1); // reversal inside the gap: accumulates, no page
     now += 200;
+    clock.flushTimers();
     app._maybePageCliTranscript({ shiftKey: false }, -1); // a reversal after the gap: a PageUp at once
     now += 1_100;
+    clock.flushTimers();
     app._maybePageCliTranscript({ shiftKey: false }, 1); // after a pause: a PageDown at once
     app._maybePageCliTranscript({ shiftKey: false }, 0.05); // sub-row jitter in the same gesture: nothing
     app._flushWheelSgrQueue();
-    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[6~' }]);
+    expect(sent).toEqual([
+      { id: 'sess-1', data: '\x1b[5~' },
+      { id: 'sess-1', data: '\x1b[6~' },
+    ]);
   });
 
-  it('answers the first wheel notch and amortizes the page over subsequent notches', () => {
-    // The first 100px notch responds immediately. Later notches repay the
-    // pre-paid page, including when they arrive past the normal gesture gap.
-    for (const gapMs of [250, 40]) {
+  it('accumulates coarse wheel notches across pauses instead of prepaying each opening', () => {
+    // Coarse events accumulate as on master, even across pauses; they do not
+    // pre-pay a full page each time a new gesture starts.
+    for (const gapMs of [250, 40, 1200]) {
       const { app, sent, clock } = hollowApp();
       let now = 1_000;
       clock.now = () => now;
       for (let i = 0; i < 5; i++) {
         expect(app._maybePageCliTranscript({ shiftKey: false, deltaY: -100 }, -4)).toBe(true);
         now += gapMs;
+        clock.flushTimers();
       }
       app._flushWheelSgrQueue();
       expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
@@ -446,7 +467,14 @@ describe('page-key gestures across slow touch drags, slow wheel ticks and jitter
       h.app._flushWheelSgrQueue();
       return h.sent.map((s) => s.data).join('');
     };
-    return { ...h, keys, advance: (ms: number) => (now += ms) };
+    return {
+      ...h,
+      keys,
+      advance: (ms: number) => {
+        now += ms;
+        h.clock.flushTimers();
+      },
+    };
   }
   const count = (keys: string, key: string) => keys.split(key).length - 1;
 
@@ -533,7 +561,7 @@ describe('page-key gestures across slow touch drags, slow wheel ticks and jitter
     }
     // The opening event is a fresh gesture and pages; no reversal inside the
     // gap pre-pays, so the wobble sends nothing after it.
-    expect(p.keys()).toBe(''); // obsolete queued direction cancelled before its flush
+    expect(p.keys()).toBe(''); // the opening report was cancelled before its 40ms flush
   });
 
   it('still pages a deliberate reversal at once after a pause', () => {
@@ -541,7 +569,7 @@ describe('page-key gestures across slow touch drags, slow wheel ticks and jitter
     p.app._maybePageCliTranscript({ shiftKey: false, deltaY: -25 }, -1);
     p.advance(200);
     p.app._maybePageCliTranscript({ shiftKey: false, deltaY: 25 }, 1);
-    expect(p.keys()).toBe(DOWN);
+    expect(p.keys()).toBe(UP + DOWN);
   });
 
   it('does not let a reversal inherit the other direction’s debt', () => {
@@ -863,26 +891,41 @@ describe('consistent scroll gesture adapters', () => {
     expect(app._wheelSgrQueue || '').toBe('');
   });
 
-  it('answers the first ordinary Codex wheel event, without paging every event', () => {
+  it('preserves accumulated coarse Codex wheel fallback travel', () => {
     const { app, sent } = hollowApp({ mode: 'codex', rows: 43 });
     app._maybePageCliTranscript({ deltaY: -100 }, -4);
     app._flushWheelSgrQueue();
-    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
+    expect(sent).toEqual([]);
     for (let i = 0; i < 5; i++) app._maybePageCliTranscript({ deltaY: -100 }, -4);
     app._flushWheelSgrQueue();
     expect(sent).toHaveLength(1);
   });
 
-  it('bounds a sustained burst and cancels obsolete direction before transport', () => {
+  it('preserves sustained report density and cancels obsolete direction before transport', () => {
     const { coalesceScrollBytes } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
     const up = '\x1b[<64;1;1M';
     const down = '\x1b[<65;1;1M';
     let queued = '';
     for (let i = 0; i < 100; i++) queued = coalesceScrollBytes(queued, up);
-    expect(queued).toBe(up.repeat(5));
+    expect(queued).toBe(up.repeat(100));
     expect(coalesceScrollBytes(queued, down)).toBe(down);
-    expect(coalesceScrollBytes('\x1b[5~'.repeat(3), '\x1b[5~')).toBe('\x1b[5~'.repeat(3));
+    expect(coalesceScrollBytes('\x1b[5~'.repeat(3), '\x1b[5~')).toBe('\x1b[5~'.repeat(4));
     expect(coalesceScrollBytes('\x1b[5~', '\x1b[6~')).toBe('\x1b[6~');
+  });
+
+  it('preserves all 120 reports of a 30-frame touch fling with real batch deadlines', () => {
+    const { app, sent, clock } = hollowApp();
+    let now = 1000;
+    clock.now = () => now;
+    app._clientPointToCell = () => ({ col: 1, row: 1 });
+    for (let frame = 0; frame < 30; frame++) {
+      app._sendSyntheticSgrWheel(0, 0, -4);
+      now += 16;
+      clock.flushTimers();
+    }
+    now += 40;
+    clock.flushTimers();
+    expect(sent.map((s) => s.data).join('')).toBe('\x1b[<64;1;1M'.repeat(120));
   });
 
   it('does not deliver a queued wheel batch to a newly selected session', () => {
@@ -939,16 +982,6 @@ describe('native Codex scrolling instead of an initial page jump', () => {
     }
   });
 
-  it('preserves the Codex dialog guard for primary and tiled routing', () => {
-    const { app } = hollowApp({ mode: 'codex', cliMouseTracking: true });
-    app.sessions.set('tile', { mode: 'codex', cliMouseTracking: true });
-    app.tabAlerts = new Map([['sess-1', 'action']]);
-    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
-    expect(app._shouldForwardWheelToApp({ shiftKey: false }, { sessionId: 'tile' })).toBe(true);
-    app.tabAlerts.set('tile', 'action');
-    expect(app._shouldForwardWheelToApp({ shiftKey: false }, { sessionId: 'tile' })).toBe(false);
-  });
-
   it('keeps local-history opt-out and native xterm mouse routing', () => {
     const { app } = hollowApp({ mode: 'codex', cliMouseTracking: true });
     app.loadAppSettingsFromStorage = () => ({ terminalWheelLocalScrollback: true });
@@ -959,9 +992,9 @@ describe('native Codex scrolling instead of an initial page jump', () => {
   });
 });
 
-describe('one native tick per wheel event', () => {
+describe('native wheel travel preserves upstream units', () => {
   it('normalizes coarse Chrome, Firefox and page-unit wheel events without guessing the device', () => {
-    const { wheelDeltaNativeLines } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
+    const { wheelDeltaLines } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
     for (const [deltaY, deltaMode] of [
       [100, 0],
       [120, 0],
@@ -969,21 +1002,25 @@ describe('one native tick per wheel event', () => {
       [3, 1],
       [1, 2],
     ]) {
-      expect(wheelDeltaNativeLines({ deltaY, deltaMode }, 43)).toBe(1);
-      expect(wheelDeltaNativeLines({ deltaY: -deltaY, deltaMode }, 43)).toBe(-1);
+      expect(wheelDeltaLines({ deltaY, deltaMode }, 43)).toBe(
+        deltaMode === 0 ? deltaY / 25 : deltaMode === 1 ? deltaY : deltaY * 43
+      );
+      expect(wheelDeltaLines({ deltaY: -deltaY, deltaMode }, 43)).toBe(
+        -(deltaMode === 0 ? deltaY / 25 : deltaMode === 1 ? deltaY : deltaY * 43)
+      );
     }
   });
 
   it('keeps fractional touchpad distance and primary/tile normalization identical', () => {
     const { app, windowRef } = hollowApp({ mode: 'codex', cliMouseTracking: true });
-    const { wheelDeltaNativeLines, wheelTicksForGesture } = windowRef.CodemanTerminalInput;
+    const { wheelDeltaLines, wheelTicksForGesture } = windowRef.CodemanTerminalInput;
     let state;
     let ticks = 0;
     for (let i = 0; i < 10; i++) {
       const ev = { deltaY: -3, deltaMode: 0 };
-      const lines = wheelDeltaNativeLines(ev, 43);
+      const lines = wheelDeltaLines(ev, 43);
       expect(lines).toBe(-0.12);
-      expect(app._wheelScrollNativeLines(ev)).toBe(lines);
+      expect(app._wheelScrollLinesFloat(ev)).toBe(lines);
       const step = wheelTicksForGesture(state, lines, i * 10);
       state = step.state;
       ticks += step.ticks;

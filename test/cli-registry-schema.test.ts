@@ -435,3 +435,12 @@ describe('capability shapes', () => {
     expect(paging.sort()).toEqual(['claude', 'codex', 'opencode']);
   });
 });
+
+describe('observed mouse-tracking wheel policy', () => {
+  it('advertises and validates tracked Codex forwarding without a fictitious minimum version', () => {
+    const codex = STOCK_CLIS.find((e) => e.id === 'codex')!;
+    expect(codex.capabilities.wheelForward).toEqual({ mode: 'mouse-tracking' });
+    expect(CliEntrySchema.safeParse(codex).success).toBe(true);
+    expect(codex.capabilities.transcriptPageKeys).toBe(true);
+  });
+});

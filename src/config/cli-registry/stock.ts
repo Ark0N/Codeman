@@ -733,8 +733,8 @@ const CODEX: CliEntry = {
     transcript: 'codex-rollout',
     altScreen: 'strip-full',
     echo: { policy: 'predict', anchor: { kind: 'cursor' }, predictProfile: 'codex' },
-    wheelForward: { mode: 'never' }, // #227: codex ignores SGR wheel reports, never forward
-    // ...but it DOES page its transcript on PageUp/PageDown. Measured on 0.157.1 (local,
+    wheelForward: { mode: 'mouse-tracking' }, // 0.163.0 fullscreen: measured SGR scrolling; require observed tracking
+    // Without observed mouse tracking, retain PageUp/PageDown fallback. Measured on 0.157.1 (local,
     // alternate screen inside tmux, so xterm holds no history) and 0.160 (remote): PageUp
     // moved the visible transcript while SGR wheel reports and local scrolling did nothing.
     // This is the page-key fallback for a hollow pane, not wheel forwarding.
