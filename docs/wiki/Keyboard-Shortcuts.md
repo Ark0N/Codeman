@@ -10,6 +10,7 @@ Press `Ctrl+?` in the app for the same list in a floating overlay.
 | ------------------------------- | --------------------------------------------------------------- |
 | `Ctrl+K` (also `Cmd+K`, `Alt+K`)| Find an open session or start a new one.                         |
 | `Ctrl+Tab`                      | Next session.                                                    |
+| `Alt+←` / `Alt+→`               | File Viewer window: back / forward between previewed files.      |
 | `Alt+[` / `Alt+]`               | Previous / next tab.                                             |
 | `Alt+1` to `Alt+9`              | Switch to tab N. Physical keys, so macOS Option layouts work.    |
 | `Ctrl+Shift+{` / `Ctrl+Shift+}` | Move the active tab left / right.                                |

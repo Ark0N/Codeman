@@ -4583,6 +4583,13 @@ Object.assign(CodemanApp.prototype, {
     // only needs to cover the call itself.
     this._filePreviewHistoryStepping = true;
     try {
+      // A folder-grid page goes through the grid so index, lastIndex and the highlighted
+      // tile follow; otherwise the next ‹ › would continue from the newer file.
+      const folderFile = e.options?.folderFile;
+      if (folderFile && folderFile.folderId === this.folderGrid?.folderId) {
+        const index = this.folderGrid.files.findIndex((f) => f.name === folderFile.name);
+        if (index !== -1) return this._openFolderGridFile(index);
+      }
       return this.openFilePreview(e.filePath, e.sessionId, e.attachmentId, e.options || {});
     } finally {
       this._filePreviewHistoryStepping = false;
@@ -4639,11 +4646,13 @@ Object.assign(CodemanApp.prototype, {
         if (!this.$('filePreviewOverlay')?.classList.contains('visible')) return;
         const t = ev.target;
         if (t && (t.isContentEditable || (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) && !t.classList?.contains('xterm-helper-textarea')))) return;
+        // Swallowed even at the ends of the list: otherwise the terminal behind the overlay
+        // types it as word-left/right, and on a header button the browser's own Alt+← goes Back.
+        ev.preventDefault();
+        ev.stopPropagation();
         const h = this.filePreviewHistory;
         const delta = ev.key === 'ArrowLeft' ? -1 : 1;
         if (!h || h.index + delta < 0 || h.index + delta >= h.entries.length) return;
-        ev.preventDefault();
-        ev.stopPropagation();
         this.stepFilePreviewHistory(delta);
       },
       true

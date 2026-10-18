@@ -2298,6 +2298,19 @@ html.mobile-init .file-browser-panel {
     border-right: none;
   }
 
+  /* Expand and the resize grip would only shrink the full-screen window (96vw x 94vh,
+     or a px size left by a drag in landscape), so a phone ignores both. */
+  .file-preview-window,
+  .file-preview-window.expanded {
+    width: 100vw !important;
+    height: var(--app-height, 100vh) !important;
+  }
+
+  #filePreviewExpandBtn,
+  .file-preview-resize {
+    display: none;
+  }
+
   .file-preview-editbar {
     padding-bottom: calc(0.4rem + var(--safe-area-bottom));
   }

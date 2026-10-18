@@ -10,7 +10,11 @@
  *   5. closing the preview clears the list and hides the buttons,
  *   6. unsaved edits ask before leaving,
  *   7. Expand toggles the window class and the pref, and is re-applied on open,
- *   8. the markup carries the buttons and the resize grip.
+ *   8. the markup carries the buttons and the resize grip,
+ *   9. stepping onto a folder-grid page moves the grid's own index with it,
+ *  10. Alt+←/→ steps, ignores other chords and text fields, and is swallowed at the ends,
+ *  11. the corner grip doubles the pointer delta and clamps the size,
+ *  12. phones ignore Expand and the grip (mobile.css).
  *
  * Loaded via `vm` against a stub app, same harness style as file-preview-detach.test.ts.
  */
@@ -50,7 +54,7 @@ function loadApp(confirmResult = true) {
     CodemanBase: { base: '', url: (p: string) => p },
     rendersAsPage: () => false,
     document: { getElementById: () => null, addEventListener: vi.fn() },
-    window: { addEventListener: vi.fn(), open: vi.fn() },
+    window: { addEventListener: vi.fn(), open: vi.fn(), innerWidth: 1000, innerHeight: 800 },
     setTimeout,
     clearTimeout,
     confirm: vi.fn(() => confirmResult),
@@ -98,7 +102,12 @@ function loadApp(confirmResult = true) {
   app.showToast = vi.fn();
   app.filePreviewContent = '';
   const confirmFn = (context as { confirm: ReturnType<typeof vi.fn> }).confirm;
-  return { app, overlay, back, fwd, expand, winClasses, store, confirmFn };
+  const keydown = () => {
+    const calls = (context as { document: { addEventListener: ReturnType<typeof vi.fn> } }).document.addEventListener
+      .mock.calls;
+    return calls.find((c: unknown[]) => c[0] === 'keydown')?.[1] as (ev: unknown) => void;
+  };
+  return { app, overlay, back, fwd, expand, winClasses, store, confirmFn, elements, overlayClasses, keydown };
 }
 
 describe('file viewer back/forward', () => {
@@ -216,5 +225,153 @@ describe('file viewer window markup', () => {
     }
     expect(indexHtml).toContain('app.stepFilePreviewHistory(-1)');
     expect(indexHtml).toContain('app.stepFilePreviewHistory(1)');
+  });
+});
+
+describe('file viewer folder paging in the history', () => {
+  it('moves the grid index with a back step, so the next page continues from there', async () => {
+    const { app } = loadApp();
+    const names = ['a', 'b', 'c', 'd'].map((n) => ({ name: `${n}.pdf`, size: 1 }));
+    app.folderGrid = {
+      folderId: 'f1',
+      path: '/ws',
+      sessionId: 's1',
+      files: names,
+      folders: [],
+      index: null,
+      lastIndex: null,
+    };
+    app._openFolderGridFile(0);
+    app._openFolderGridFile(1);
+    app._openFolderGridFile(2);
+
+    await app.stepFilePreviewHistory(-1);
+    expect(app.folderGrid.index).toBe(1);
+    expect(app.folderGrid.lastIndex).toBe(1);
+
+    app.stepFolderPreview(1);
+    const paths = app.filePreviewHistory.entries.map((e: { filePath: string }) => e.filePath);
+    expect(paths).toEqual(['/ws/a.pdf', '/ws/b.pdf', '/ws/c.pdf']);
+    expect(app.folderGrid.index).toBe(2);
+  });
+
+  it('falls back to a plain open when the entry is from another folder', async () => {
+    const { app } = loadApp();
+    app.folderGrid = {
+      folderId: 'f1',
+      path: '/ws',
+      sessionId: 's1',
+      files: [{ name: 'a.pdf', size: 1 }],
+      folders: [],
+      index: 0,
+      lastIndex: 0,
+    };
+    await app.openFilePreview('/other/x.pdf', 's1', null, { folderFile: { folderId: 'f2', name: 'x.pdf' } });
+    await app.openFilePreview('/ws/y.pdf', 's1');
+    await app.stepFilePreviewHistory(-1);
+    expect(app.filePreviewHistory.index).toBe(0);
+    expect(app.filePreviewHistory.entries).toHaveLength(2);
+  });
+});
+
+describe('file viewer Alt+arrow chord', () => {
+  const key = (over: Record<string, unknown> = {}) => ({
+    altKey: true,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    key: 'ArrowLeft',
+    target: { tagName: 'DIV' },
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+    ...over,
+  });
+
+  async function setup() {
+    const h = loadApp();
+    await h.app.openFilePreview('/ws/a.pdf', 's1');
+    await h.app.openFilePreview('/ws/b.pdf', 's1');
+    h.app._bindFilePreviewChrome();
+    const step = vi.spyOn(h.app, 'stepFilePreviewHistory');
+    return { ...h, step, fire: h.keydown() };
+  }
+
+  it('steps back and forward and swallows the chord', async () => {
+    const { fire, step } = await setup();
+    const ev = key();
+    fire(ev);
+    expect(step).toHaveBeenCalledWith(-1);
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(ev.stopPropagation).toHaveBeenCalled();
+  });
+
+  it('swallows the chord at the ends of the list without stepping', async () => {
+    const { fire, step } = await setup();
+    const fwd = key({ key: 'ArrowRight' }); // already at the newest entry
+    fire(fwd);
+    expect(step).not.toHaveBeenCalled();
+    expect(fwd.preventDefault).toHaveBeenCalled();
+    expect(fwd.stopPropagation).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a plain arrow', { altKey: false }],
+    ['Shift+Alt', { shiftKey: true }],
+    ['Ctrl+Alt', { ctrlKey: true }],
+    ['another key', { key: 'ArrowUp' }],
+    ['a textarea target', { target: { tagName: 'TEXTAREA', classList: { contains: () => false } } }],
+  ])('leaves %s alone', async (_name, over) => {
+    const { fire, step } = await setup();
+    const ev = key(over);
+    fire(ev);
+    expect(step).not.toHaveBeenCalled();
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('leaves the chord alone while the overlay is hidden', async () => {
+    const { fire, step, overlayClasses } = await setup();
+    overlayClasses.delete('visible');
+    const ev = key();
+    fire(ev);
+    expect(step).not.toHaveBeenCalled();
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+  });
+});
+
+describe('file viewer resize grip', () => {
+  function drag(to: [number, number]) {
+    const { app, elements } = loadApp();
+    const listeners: Record<string, (e: unknown) => void> = {};
+    const win = { offsetWidth: 400, offsetHeight: 300, style: {} as Record<string, string> };
+    elements.filePreviewResize = {
+      parentElement: win,
+      setPointerCapture: () => {},
+      addEventListener: (t: string, fn: (e: unknown) => void) => (listeners[t] = fn),
+      removeEventListener: () => {},
+    };
+    app._bindFilePreviewResize();
+    listeners.pointerdown({ preventDefault: () => {}, clientX: 100, clientY: 100, pointerId: 1 });
+    listeners.pointermove({ clientX: 100 + to[0], clientY: 100 + to[1] });
+    return win.style;
+  }
+
+  it('doubles the pointer delta, because the window is centred', () => {
+    expect(drag([100, 50])).toMatchObject({ width: '600px', height: '400px' });
+  });
+
+  it('clamps to the minimum and to 96% x 94% of the viewport', () => {
+    expect(drag([-500, -500])).toMatchObject({ width: '320px', height: '240px' });
+    expect(drag([900, 900])).toMatchObject({ width: '960px', height: '752px' });
+  });
+});
+
+describe('file viewer on phones', () => {
+  it('overrides Expand and any dragged size, and hides both controls, under 600px', () => {
+    const css = readFileSync(resolve(PUBLIC, 'mobile.css'), 'utf8');
+    const phone = css.slice(css.indexOf('@media (max-width: 599px)'));
+    expect(phone).toMatch(
+      /\.file-preview-window,\s*\.file-preview-window\.expanded\s*\{[^}]*width: 100vw !important;[^}]*height: var\(--app-height, 100vh\) !important;/
+    );
+    expect(phone).toMatch(/#filePreviewExpandBtn,\s*\.file-preview-resize\s*\{\s*display: none;/);
   });
 });
