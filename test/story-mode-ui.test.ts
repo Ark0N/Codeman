@@ -19,6 +19,13 @@ const SID = 'session-0001-abcdef';
 
 type Win = Window & typeof globalThis & Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
+/** The response for `?turn=<id>`: every turn listed, the page of the one asked for. */
+function storyAt(lines: unknown[], index: number) {
+  const reducer = createStoryReducer();
+  const turns = buildStoryTurns(lines.flatMap((l) => reducer.reduce(l)));
+  return { supported: true, turns: summarizeTurns(turns), page: buildStoryPage(turns[index]) };
+}
+
 function storyOf(lines: unknown[]) {
   const reducer = createStoryReducer();
   const turns = buildStoryTurns(lines.flatMap((l) => reducer.reduce(l)));
@@ -581,6 +588,66 @@ describe('story-mode.js overlay', () => {
     press('Escape');
     expect($('.story-drawer')!.hidden).toBe(true);
     expect(win.document.activeElement).toBe(twin);
+  });
+
+  it("the compact panel opens what was packed up: the compaction's numbers, not an empty output", async () => {
+    boot(
+      storyOf([
+        prompt('go'),
+        ...read('r1', '/work/demo-shop/a.ts'),
+        {
+          type: 'system',
+          subtype: 'compact_boundary',
+          timestamp: '2026-10-18T09:45:00.000Z',
+          compactMetadata: { trigger: 'auto', preTokens: 46928, postTokens: 3623, durationMs: 24014 },
+        },
+        said('Carrying on.'),
+        end(1000),
+      ])
+    );
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    const hit = $('.story-panel[data-kind="compact"] .story-hit')!;
+    expect(hit.getAttribute('aria-label')).toBe('See what was packed up');
+    hit.click();
+    expect($('.story-drawer')!.hidden).toBe(false);
+    const body = $('.story-drawer-body')!.textContent!;
+    expect(body).toMatch(/46\.9k/);
+    expect(body).toMatch(/3\.6k/);
+    expect(body).not.toMatch(/No output|nothing to show/i);
+  });
+
+  it('parked on an older turn, the poll learns about new turns without moving the reader', async () => {
+    const two = [prompt('first job'), said('Done.'), end(2000), prompt('second job'), said('Done too.'), end(2000)];
+    const three = [...two, prompt('third job'), said('All three.'), end(2000)];
+    let poll: (() => void) | undefined;
+    boot(storyOf(two));
+    win.setInterval = ((fn: () => void) => {
+      poll = fn;
+      return 1;
+    }) as never;
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    const first = app._story.data.turns[0].id;
+    responses = [{ status: 200, body: { success: true, data: storyAt(two, 0) } }];
+    app._storyPickTurn(first);
+    await settle();
+    expect(app._story.data.page.id).toBe(first);
+    const announced = $('.story-sr')!.textContent;
+    // A third turn arrives while the reader looks at the first.
+    responses = [{ status: 200, body: { success: true, data: storyAt(three, 0) } }];
+    app._story.lastIdlePoll = 0;
+    calls.length = 0;
+    poll!();
+    await settle();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain(`turn=${encodeURIComponent(first)}`);
+    expect($$('.story-turns option')).toHaveLength(3);
+    expect(app._story.data.page.id).toBe(first);
+    expect($('.story-turns')!.getAttribute('aria-label')).toBe('Turn 1 of 3');
+    expect($('.story-sr')!.textContent).toBe(announced);
   });
 
   it('while a question waits, the pencils say so; the chosen answer is marked, not struck', async () => {
