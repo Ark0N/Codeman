@@ -29,6 +29,7 @@ export type StoryIntent =
   | 'ask'
   | 'compact'
   | 'interrupt'
+  | 'notice'
   | 'tool';
 
 /** The comic panel a run of events is drawn as. */
@@ -120,6 +121,8 @@ export interface StoryEvent {
   description?: string;
   /** A save that ships the work: `gh pr create` (`pr`) or `git push` (`push`). */
   ships?: 'pr' | 'push';
+  /** Who a prompt came from (a prompt added mid-turn can come from someone other than the turn's starter). */
+  origin?: StoryTurnOrigin;
   output?: string;
   outputTruncated?: boolean;
   edit?: StoryEdit;

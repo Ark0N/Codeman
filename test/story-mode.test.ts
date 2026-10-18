@@ -358,6 +358,140 @@ describe('buildStoryTurns', () => {
     expect(second.events[0].output).toBe('I wrote README.md.');
   });
 
+  it('a prompt typed while Claude works (a queued_command attachment, no user line) joins the turn', () => {
+    const queued = (prompt: string, origin: Record<string, unknown>, mode = 'prompt') => ({
+      type: 'attachment',
+      uuid: 'att-1',
+      timestamp: '2026-10-18T09:41:30.000Z',
+      isSidechain: false,
+      attachment: { type: 'queued_command', prompt, source_uuid: 'src-1', commandMode: mode, origin, humanTurn: true },
+    });
+    const turns = buildStoryTurns(
+      entriesOf([
+        prompt('Build it'),
+        ...bash('b1', 'ls', 'List', 'a'),
+        queued('Also add a --csv option.', { kind: 'human' }),
+        ...bash('b2', 'pytest -q', 'Run tests', '3 passed in 0.1s'),
+        end(1000),
+      ])
+    );
+    expect(turns).toHaveLength(1);
+    const page = buildStoryPage(turns[0]);
+    const added = page.panels.filter((p) => p.kind === 'mission')[1];
+    expect(added.caption.story).toBe('You add something while Claude works.');
+    expect(added.balloon?.text).toBe('Also add a --csv option.');
+    expect(page.events.find((e) => e.id === 'src-1')).toMatchObject({ origin: 'human', actor: 'you' });
+  });
+
+  it("a background helper's report that lands mid-turn is a notice on the wire and joins the helper", () => {
+    const report = [
+      '<task-notification>',
+      '<tool-use-id>a1</tool-use-id>',
+      '<status>completed</status>',
+      '<summary>Agent "Docs" finished</summary>',
+      '<result>README written.</result>',
+      '</task-notification>',
+    ].join('\n');
+    const page = pageOf([
+      prompt('docs and tests'),
+      tool('a1', 'Agent', { description: 'Docs', subagent_type: 'general-purpose', prompt: 'Write docs' }),
+      result('a1', 'Async agent launched successfully.', {
+        toolUseResult: { isAsync: true, status: 'async_launched' },
+      }),
+      ...bash('b1', 'npm test', 'Run tests', ' Tests  2 passed (2)'),
+      {
+        type: 'attachment',
+        timestamp: '2026-10-18T09:42:00.000Z',
+        attachment: {
+          type: 'queued_command',
+          prompt: report,
+          commandMode: 'task-notification',
+          origin: { kind: 'task-notification', producer: 'session-task' },
+        },
+      },
+      said('Both done.'),
+      end(1000),
+    ]);
+    expect(page.panels.filter((p) => p.kind === 'mission')).toHaveLength(1);
+    const notice = page.events.find((e) => e.intent === 'notice')!;
+    expect(notice).toMatchObject({ tool: 'Report', label: 'Agent "Docs" finished', output: 'README written.' });
+    expect(page.toolCalls).toBe(2);
+    expect(page.events[1].helper).toMatchObject({ result: 'README written.' });
+    expect(page.helpersRunning).toBe(0);
+  });
+
+  it('the Stop hook summary ends a turn that never gets turn_duration, timed by its own span', () => {
+    const stop = (prevented = false) => ({
+      type: 'system',
+      subtype: 'stop_hook_summary',
+      preventedContinuation: prevented,
+      timestamp: '2026-10-18T09:45:00.000Z',
+    });
+    const [ended] = buildStoryTurns(entriesOf([prompt('one'), ...bash('b', 'ls', 'List', 'a'), stop()]));
+    expect(ended.ended).toBe(true);
+    expect(ended.durationMs).toBeGreaterThan(200_000); // 09:41:01 to 09:45:00
+    const [kept] = buildStoryTurns(entriesOf([prompt('one'), ...bash('b', 'ls', 'List', 'a'), stop(true)]));
+    expect(kept.ended).toBe(false);
+  });
+
+  it('a teammate helper (teammate_spawned) runs until its teammate message reports back by name', () => {
+    const spawned = [
+      prompt('docs please'),
+      tool('a1', 'Agent', {
+        description: 'Write README',
+        name: 'readme-writer',
+        subagent_type: 'general-purpose',
+        prompt: 'Write it',
+      }),
+      result('a1', 'Spawned successfully.', {
+        toolUseResult: { status: 'teammate_spawned', agentId: 'areadme-writer-1', name: 'readme-writer' },
+      }),
+      end(1000),
+    ];
+    expect(pageOf(spawned).events[1].helper).toMatchObject({
+      background: true,
+      running: true,
+      agentId: 'areadme-writer-1',
+    });
+    const message = [
+      'Another Claude session sent a message:',
+      '<teammate-message teammate_id="readme-writer" color="blue" summary="README done">',
+      'README written with examples.',
+      '</teammate-message>',
+      '<teammate-message teammate_id="readme-writer" color="blue">',
+      '{"type":"idle_notification","from":"readme-writer","idleReason":"available","result":"I wrote README.md."}',
+      '</teammate-message>',
+      '',
+      'This came from another Claude session.',
+    ].join('\n');
+    const turns = buildStoryTurns(
+      entriesOf([...spawned, prompt(message, { turnOrigin: undefined, promptSource: undefined })])
+    );
+    expect(turns).toHaveLength(2);
+    expect(turns[1]).toMatchObject({ origin: 'task', prompt: 'readme-writer: README done' });
+    const first = buildStoryPage(turns[0]);
+    expect(first.events[1].helper).toMatchObject({ result: 'I wrote README.md.' });
+    expect(first.helpersRunning).toBe(0);
+  });
+
+  it('a message from another session names its sender; pasted text loses its wrapper', () => {
+    const [peer] = buildStoryTurns(
+      entriesOf([
+        prompt(
+          '<cross-session-message from="uds:/x.sock" from-name="planner-2">Rebase first, please.</cross-session-message>',
+          {
+            turnOrigin: undefined,
+          }
+        ),
+      ])
+    );
+    expect(peer).toMatchObject({ origin: 'peer', prompt: 'planner-2: Rebase first, please.' });
+    const [pasted] = buildStoryTurns(
+      entriesOf([prompt('<pasted_content id="291c">\nDo these steps.\n</pasted_content>')])
+    );
+    expect(pasted.prompt).toBe('Do these steps.');
+  });
+
   it('an interrupt ends the turn', () => {
     const turns = buildStoryTurns(
       entriesOf([prompt('go'), ...bash('b', 'ls', 'List', 'a'), prompt('[Request interrupted by user]')])
@@ -431,6 +565,15 @@ describe('buildStoryPage', () => {
     const check = page.panels.find((p) => p.kind === 'check');
     expect(check).toMatchObject({ ok: false, tests: { passed: 39, failed: 3 }, live: true });
     expect(check?.caption.story).toBe('3 tests fail.');
+  });
+
+  it('a caption names a script by its first line that says something (not set -e, cd or S=...)', () => {
+    const page = pageOf([
+      prompt('commit'),
+      ...bash('b', 'set -e\nS=/tmp/x\ncd repo\ngit commit -qm "feat: a"', 'Commit', 'ok'),
+      end(1000),
+    ]);
+    expect(page.panels.find((p) => p.kind === 'save')!.caption.director).toBe('git commit -qm "feat: a"');
   });
 
   it('a test run that reports failures failed, even when a pipe hid its exit code', () => {

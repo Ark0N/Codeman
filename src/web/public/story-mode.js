@@ -735,7 +735,15 @@ const StoryArt = (() => {
       },
       draw(ctx, W, H, f, p, hit) {
         const ax = Math.max(W * 0.78, W - 104);
-        hit('prompt', ax - 56, 110, 112, 140, p.page?.origin === 'task' ? 'Read the report' : 'Read the whole prompt');
+        const from = p.page?.events[p.panel.events[0]]?.origin;
+        hit(
+          'prompt',
+          ax - 56,
+          110,
+          112,
+          140,
+          from === 'task' ? 'Read the report' : from === 'peer' ? 'Read the message' : 'Read the whole prompt'
+        );
         const a = agent(ctx, ax, 244, {
           frame: f,
           mood: 'listen',
@@ -2069,7 +2077,9 @@ Object.assign(CodemanApp.prototype, {
       rt.balloon.append(balloonSpan);
     }
     balloonSpan.textContent = balloonText || '';
-    const notice = p.kind === 'mission' && index === 0 && page.origin && page.origin !== 'human';
+    // A prompt somebody else sent (a background job, another session) is a notice, not your speech.
+    const origin = page.events[p.events[0]]?.origin ?? (index === 0 ? page.origin : 'human');
+    const notice = p.kind === 'mission' && origin && origin !== 'human';
     rt.balloon.className = `story-balloon ${
       notice
         ? 'story-balloon--note'
@@ -2646,9 +2656,16 @@ Object.assign(CodemanApp.prototype, {
       source.view === 'diff' && items.length && !items.some((x) => x.ev.edit || x.ev.pending) ? 'output' : source.view;
     if (view === 'prompt') {
       const prompts = items.filter((x) => x.ev.intent === 'prompt');
-      const task = page.origin === 'task' && prompts[0]?.ev.id === page.events[0]?.id;
-      kind = task ? 'Report' : 'Mission';
-      title = task ? 'A background job reports back' : prompts.length > 1 ? 'What you asked' : 'Your prompt';
+      const from = prompts[0]?.ev.origin ?? 'human';
+      kind = from === 'task' ? 'Report' : from === 'peer' ? 'Message' : 'Mission';
+      title =
+        from === 'task'
+          ? 'A background job reports back'
+          : from === 'peer'
+            ? 'A message from another session'
+            : prompts.length > 1
+              ? 'What you asked'
+              : 'Your prompt';
       for (const { ev } of prompts) {
         out.push(el('pre', 'story-pre story-prompt', ev.label));
         if (ev.output !== undefined) {

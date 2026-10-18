@@ -107,6 +107,8 @@ export type StoryEntry =
       queued: boolean;
       /** A background task reporting back: which call it answers, and how it went. */
       task?: StoryTaskReport;
+      /** Teammates (helpers started as a team) reporting back, matched to their helper by name. */
+      teammates?: StoryTeammateReport[];
     }
   | { k: 'text'; at: string; text: string }
   | { k: 'tool'; at: string; id: string; name: string; input: ReducedInput }
@@ -133,6 +135,13 @@ interface StoryTaskReport {
   result?: string;
   toolUses?: number;
   durationMs?: number;
+}
+
+/** One `<teammate-message>`: a helper started as a teammate, reporting back by name. */
+interface StoryTeammateReport {
+  from: string;
+  summary?: string;
+  result?: string;
 }
 
 // ========== Small helpers ==========
@@ -465,11 +474,61 @@ const SYSTEM_REMINDER_RE = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
 const LOCAL_WRAPPER_RE =
   /^\s*<(local-command-caveat|local-command-stdout|local-command-stderr|bash-input|bash-stdout|bash-stderr)>/;
 
-function readPrompt(
-  raw: string
-): { text: string; kind: 'prompt' | 'task' | 'interrupt'; task?: StoryTaskReport } | null {
-  const text = raw.replace(SYSTEM_REMINDER_RE, '').trim();
+/**
+ * Messages from teammates: `<teammate-message teammate_id="x" summary="...">body</teammate-message>`,
+ * where the body is text or a JSON notification (`{"type":"idle_notification","result":"..."}`).
+ */
+function readTeammateMessages(text: string): StoryTeammateReport[] {
+  const reports: StoryTeammateReport[] = [];
+  for (const m of text.matchAll(/<teammate-message\b([^>]*)>([\s\S]*?)<\/teammate-message>/g)) {
+    const from = /teammate_id="([^"]*)"/.exec(m[1])?.[1]?.split('@')[0];
+    if (!from) continue;
+    const summary = /summary="([^"]*)"/.exec(m[1])?.[1];
+    let body: string | undefined = m[2].trim();
+    if (body.startsWith('{')) {
+      try {
+        const note: unknown = JSON.parse(body);
+        body = isRecord(note) ? (str(note.result) ?? str(note.summary) ?? str(note.message)) : undefined;
+      } catch {
+        // not JSON after all: keep it as text
+      }
+    }
+    reports.push({
+      from: clip(from, 80),
+      summary: summary ? clip(summary, 200) : undefined,
+      result: body || undefined,
+    });
+  }
+  return reports;
+}
+
+function readPrompt(raw: string): {
+  text: string;
+  kind: 'prompt' | 'task' | 'peer' | 'interrupt';
+  task?: StoryTaskReport;
+  teammates?: StoryTeammateReport[];
+} | null {
+  const text = raw
+    .replace(SYSTEM_REMINDER_RE, '')
+    .replace(/<\/?pasted_content\b[^>]*>/g, '') // Claude Code's wrapper around pasted text
+    .replace(/^\s*Another Claude session sent a message:\s*/, '')
+    .trim();
   if (!text) return null;
+  if (/^<teammate-message\b/.test(text)) {
+    const teammates = readTeammateMessages(text);
+    const first = teammates.find((t) => t.summary || t.result) ?? teammates[0];
+    if (first)
+      return {
+        text: `${first.from}: ${first.summary || (first.result ? firstSentence(first.result, 200) : 'reports back')}`,
+        kind: 'task',
+        teammates,
+      };
+  }
+  const peer = /^<cross-session-message\b([^>]*)>([\s\S]*?)(?:<\/cross-session-message>|$)/.exec(text);
+  if (peer) {
+    const name = /from-name="([^"]*)"/.exec(peer[1])?.[1];
+    return { text: `${name ? `${name}: ` : ''}${peer[2].trim()}`, kind: 'peer' };
+  }
   if (/^\[Request interrupted/.test(text)) return { text, kind: 'interrupt' };
   if (LOCAL_WRAPPER_RE.test(text)) return null;
   const command = /<command-name>([^<]*)<\/command-name>/.exec(text);
@@ -495,10 +554,10 @@ function readPrompt(
   return { text, kind: 'prompt' };
 }
 
-function originOf(turnOrigin: unknown, kind: 'prompt' | 'task'): StoryTurnOrigin {
+function originOf(turnOrigin: unknown, kind: 'prompt' | 'task' | 'peer'): StoryTurnOrigin {
+  if (turnOrigin === 'task_notification' || turnOrigin === 'task-notification' || kind === 'task') return 'task';
+  if (turnOrigin === 'peer' || turnOrigin === 'coordinator' || kind === 'peer') return 'peer';
   if (turnOrigin === 'human') return 'human';
-  if (turnOrigin === 'task_notification' || kind === 'task') return 'task';
-  if (turnOrigin === 'peer') return 'peer';
   if (typeof turnOrigin === 'string') return 'system';
   return 'human';
 }
@@ -688,7 +747,8 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
         }
         if (name === 'Agent' || name === 'Task') {
           // A background start answers with launch notes meant for Claude only, never the helper's answer.
-          const background = extra.isAsync === true || extra.status === 'async_launched';
+          const background =
+            extra.isAsync === true || extra.status === 'async_launched' || extra.status === 'teammate_spawned';
           const answer = background ? '' : blockText(extra.content) || text;
           result.helper = {
             background: background || undefined,
@@ -721,13 +781,47 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
     const prompt = readPrompt(blockText(content));
     if (!prompt) return out;
     if (prompt.kind === 'interrupt') return [{ k: 'interrupt', at }];
+    return [
+      promptEntry(
+        prompt,
+        str(entry.uuid) ?? `prompt-${at}`,
+        at,
+        originOf(entry.turnOrigin, prompt.kind),
+        entry.promptSource === 'queued'
+      ),
+    ];
+  }
+
+  /**
+   * A prompt that arrived while Claude worked: current builds write no user line for it, only an
+   * `attachment` of type `queued_command` where Claude took it in (a typed prompt, a background
+   * task's notification, a message from another session).
+   */
+  function reduceQueuedCommand(entry: Record<string, unknown>, at: string): StoryEntry[] {
+    const a = isRecord(entry.attachment) ? entry.attachment : {};
+    if (a.type !== 'queued_command') return [];
+    const prompt = readPrompt(typeof a.prompt === 'string' ? a.prompt : blockText(a.prompt));
+    if (!prompt || prompt.kind === 'interrupt') return [];
+    const from = isRecord(a.origin) ? a.origin.kind : undefined;
+    const kind = a.commandMode === 'task-notification' && prompt.kind === 'prompt' ? 'task' : prompt.kind;
+    const id = str(a.source_uuid) ?? str(entry.uuid) ?? `queued-${at}`;
+    return [promptEntry(prompt, id, at, originOf(from ?? 'human', kind), true)];
+  }
+
+  function promptEntry(
+    prompt: NonNullable<ReturnType<typeof readPrompt>>,
+    id: string,
+    at: string,
+    origin: StoryTurnOrigin,
+    queued: boolean
+  ): Extract<StoryEntry, { k: 'prompt' }> {
     const reduced: Extract<StoryEntry, { k: 'prompt' }> = {
       k: 'prompt',
-      id: str(entry.uuid) ?? `prompt-${at}`,
+      id,
       at,
       text: clip(prompt.text, STORY_LIMITS.promptChars),
-      origin: originOf(entry.turnOrigin, prompt.kind),
-      queued: entry.promptSource === 'queued',
+      origin,
+      queued,
     };
     if (prompt.task) {
       const t = prompt.task;
@@ -739,7 +833,13 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
         durationMs: t.durationMs,
       };
     }
-    return [reduced];
+    if (prompt.teammates?.length)
+      reduced.teammates = prompt.teammates.slice(0, 8).map((t) => ({
+        from: t.from,
+        summary: t.summary,
+        result: t.result ? clip(t.result, STORY_LIMITS.helperChars) : undefined,
+      }));
+    return reduced;
   }
 
   function reduceAssistant(entry: Record<string, unknown>, at: string): StoryEntry[] {
@@ -771,8 +871,13 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
           return reduceUser(line, at);
         case 'assistant':
           return reduceAssistant(line, at);
+        case 'attachment':
+          return reduceQueuedCommand(line, at);
         case 'system':
           if (line.subtype === 'turn_duration') return [{ k: 'end', at, durationMs: num(line.durationMs) }];
+          // Some sessions never write turn_duration; the Stop hook's summary marks the same end (unless
+          // the hook kept Claude going).
+          if (line.subtype === 'stop_hook_summary' && line.preventedContinuation !== true) return [{ k: 'end', at }];
           if (line.subtype === 'compact_boundary') return [{ k: 'compact', at }];
           return [];
         default:
@@ -930,7 +1035,25 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
   const byId = new Map<string, StoryEvent>();
   /** Helper calls by tool id, across turns: a background helper reports back in a later turn. */
   const helpers = new Map<string, StoryEvent>();
+  /** The same helpers by name: a teammate reports back by name, not by call. */
+  const helpersByName = new Map<string, StoryEvent>();
   let say = 0;
+  const teammatesBack = (reports: StoryTeammateReport[], prompt: StoryEvent) => {
+    const told = reports.filter((r) => r.result || r.summary);
+    if (told.length) {
+      prompt.output = clip(
+        told.map((r) => `${r.from}: ${r.result ?? r.summary}`).join('\n\n'),
+        STORY_LIMITS.helperChars
+      );
+    }
+    for (const r of reports) {
+      const ev = helpersByName.get(r.from);
+      if (!ev?.helper) continue;
+      const helper: StoryHelper = { ...ev.helper, running: undefined };
+      if (r.result) helper.result = r.result;
+      ev.helper = helper;
+    }
+  };
   const reportBack = (report: StoryTaskReport, prompt: StoryEvent) => {
     if (report.result) {
       prompt.output = report.result;
@@ -964,9 +1087,23 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
   for (const e of entries) {
     switch (e.k) {
       case 'prompt': {
-        const ev: StoryEvent = { id: e.id, at: e.at, actor: 'you', tool: 'Prompt', label: e.text, intent: 'prompt' };
+        const ev: StoryEvent = {
+          id: e.id,
+          at: e.at,
+          actor: e.origin === 'human' ? 'you' : 'system',
+          tool: 'Prompt',
+          label: e.text,
+          intent: 'prompt',
+          origin: e.origin,
+        };
         if (e.task) reportBack(e.task, ev);
+        if (e.teammates) teammatesBack(e.teammates, ev);
         if (cur && !cur.ended && e.queued) {
+          // A report that lands while Claude works is a line on the wire, not a new mission.
+          if (e.origin === 'task') {
+            ev.intent = 'notice';
+            ev.tool = 'Report';
+          }
           cur.events.push(ev);
         } else {
           cur = {
@@ -1001,6 +1138,8 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
         if (ev.helper) {
           helpers.set(e.id, ev);
           if (helpers.size > 500) helpers.delete(helpers.keys().next().value as string);
+          helpersByName.set(ev.helper.name, ev);
+          if (helpersByName.size > 500) helpersByName.delete(helpersByName.keys().next().value as string);
         }
         break;
       }
@@ -1017,9 +1156,9 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
           // Claude Code times a turn a background task started from the prompt that started the chain;
           // a turn never takes longer than its own span, so that is the cap.
           const span = Date.parse(e.at) - Date.parse(t.at);
-          if (e.durationMs !== undefined)
-            t.durationMs =
-              !t.partial && Number.isFinite(span) && span >= 0 ? Math.min(e.durationMs, span) : e.durationMs;
+          const known = !t.partial && Number.isFinite(span) && span >= 0;
+          if (e.durationMs !== undefined) t.durationMs = known ? Math.min(e.durationMs, span) : e.durationMs;
+          else if (known && t.durationMs === undefined) t.durationMs = span; // ended by the Stop hook's summary
         }
         break;
       }
@@ -1053,7 +1192,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
   return turns;
 }
 
-const NOT_TOOL_CALLS = new Set<StoryIntent>(['prompt', 'say', 'interrupt', 'compact']);
+const NOT_TOOL_CALLS = new Set<StoryIntent>(['prompt', 'say', 'interrupt', 'compact', 'notice']);
 const countToolCalls = (events: StoryEvent[]) => events.filter((e) => !NOT_TOOL_CALLS.has(e.intent)).length;
 
 export function summarizeTurn(turn: StoryTurn): StoryTurnSummary {
@@ -1089,6 +1228,7 @@ const PANEL_FOR: Record<StoryIntent, StoryPanelKind | null> = {
   ask: 'ask',
   compact: 'compact',
   interrupt: null,
+  notice: null,
 };
 /** Kinds whose consecutive events share one panel. A prompt or a question always gets its own. */
 const MERGEABLE = new Set<StoryPanelKind>([
@@ -1244,7 +1384,13 @@ function countBy(events: StoryEvent[], key: (e: StoryEvent) => string): string {
   return [...counts].map(([k, n]) => (n > 1 ? `${k} ×${n}` : k)).join(' · ');
 }
 
-const shortCommand = (e: StoryEvent) => clip(e.label.split('\n')[0] ?? '', 60);
+/** Lines of a script that say nothing about what it does: `set -e`, a bare `cd dir`, `S=/tmp/x`, comments. */
+const NOISE_LINE = /^\s*(#.*|set\s+[-+][a-zA-Z]+(\s+\w+)?|cd\s+\S+|[A-Za-z_][A-Za-z0-9_]*=\S*)?\s*$/;
+/** A command's first line that says what it does, for a caption. */
+const shortCommand = (e: StoryEvent) => {
+  const lines = e.label.split('\n');
+  return clip(lines.find((l) => !NOISE_LINE.test(l)) ?? lines[0] ?? '', 60);
+};
 
 function montageSummary(evs: StoryEvent[]): string {
   const parts: string[] = [];
@@ -1292,8 +1438,16 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         peer: 'Another session sends a message.',
         system: 'Something automatic starts this turn.',
       };
-      story = index > 0 ? 'You add something while Claude works.' : lines[turn.origin];
-      director = `Prompt · ${plural(words, 'word')}${turn.origin === 'human' ? '' : ` · ${turn.origin}`}`;
+      const origin = evs[0]?.origin ?? turn.origin;
+      story =
+        index === 0
+          ? lines[turn.origin]
+          : origin === 'human'
+            ? 'You add something while Claude works.'
+            : origin === 'peer'
+              ? 'Another session chimes in while Claude works.'
+              : lines[origin];
+      director = `Prompt · ${plural(words, 'word')}${origin === 'human' ? '' : ` · ${origin}`}`;
       break;
     }
     case 'investigate': {
