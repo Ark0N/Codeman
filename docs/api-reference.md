@@ -1054,7 +1054,7 @@ Lists are capped (300 files and 50 commits per repository) while the counts stay
 
 `GET /api/sessions/:id/story[?turn=<id>]` is what Story Mode reads (the opt-in header button, App Settings → Header buttons → Story Mode, per device, off by default). It draws one turn of a Claude Code session as a comic page. **Experimental:** the payload shape may still change in a minor release; it is not part of the stable `/api/v1` contract yet.
 
-Read-only. The session is resolved like every session route (ownership via `findSessionOrFail`; another user's session is `404`), and the file read is the session's own transcript, never one the request names: the path the Claude hook reported for it, else `<conversation id>.jsonl` under the Claude projects directory. Only the tail of the transcript is read (8 MB), and file contents, original files and images never leave the server.
+Read-only. The session is resolved like every session route (ownership via `findSessionOrFail`; another user's session is `404`), and the file read is the session's own transcript, never one the request names: the path the Claude hook reported for it, else `<conversation id>.jsonl` under the Claude projects directory. Only the tail of the transcript is read (8 MB, widened in steps to 64 MB while that tail holds no prompt to start the turn), and file contents, original files and images never leave the server.
 
 `data` is one of:
 
@@ -1065,7 +1065,9 @@ Responses carry a weak `ETag` with `Cache-Control: no-cache`; a request with a m
 
 `GET /api/sessions/:id/story/helpers/:agentId` draws one helper (an Agent call; its `agentId` is on the main page's event as `helper.agentId`) from the helper's own transcript, `<conversation>/subagents/agent-<agentId>.jsonl` beside the session's. `data` is `{ supported: true, helper: { agentId, type?, description?, finished? }, page }`, the same page shape as above, or `page: null` while the helper has written nothing yet. `agentId` must match `[A-Za-z0-9_-]{1,64}` (`400` otherwise).
 
-A `page` carries the turn's summary fields plus `events` (one per prompt, sentence Claude wrote and tool call, with `intent`, `ok` when the call returned, `edit` hunks in Claude Code's own `structuredPatch` shape, the tail of `output`, `helper`, `tests` counts), `panels` (each `{ kind, events, caption: { story, director }, balloon?, files?, ... }`, at most 12 per page, indices into `events`), `filesChanged`, `added`, `removed`, `helpers`, `partial` (the turn began before the part that was read) and `truncated` (older outputs were dropped to keep the page small). A transcript that cannot be read is a `500` with `OPERATION_FAILED`.
+A `page` carries the turn's summary fields plus `events` (one per prompt, sentence Claude wrote and tool call, with `intent`, `ok` when the call returned, `edit` hunks in Claude Code's own `structuredPatch` shape, the tail of `output`, `helper`, `tests` counts, and `files` for the files a Bash call printed with `cat`/`head`/`tail`, as the command named them), `panels` (each `{ kind, events, caption: { story, director }, balloon?, files?, ... }`, at most 12 per page, indices into `events`), `filesChanged`, `added`, `removed`, `helpers`, `helpersRunning`, `partial` (the turn began before the part that was read) and `truncated` (older outputs were dropped to keep the page small). A transcript that cannot be read is a `500` with `OPERATION_FAILED`.
+
+A helper started in the background (`helper.background`) carries `helper.running: true` until its `<task-notification>` arrives; that notification starts a turn of its own (origin `task`), whose prompt event carries the helper's answer as `output`, and the answer, tool count and duration are joined back onto the helper in the turn that started it. Claude Code times such a turn from the prompt that started the chain; Story Mode caps a turn's `durationMs` at the turn's own span.
 
 ## Git worktrees of a case
 

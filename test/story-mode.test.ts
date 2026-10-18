@@ -12,6 +12,8 @@ import {
   exactDuration,
   firstSentence,
   parseTestCounts,
+  planFromText,
+  printedFiles,
   roughDuration,
   summarizeTurns,
   type StoryEntry,
@@ -51,11 +53,23 @@ describe('classifyBashCommand', () => {
     ['node scripts/build.mjs', 'run'],
     // Only a segment that RUNS a test is a test; naming a runner is not.
     ['which pytest', 'look'],
-    ['python3 -m pytest --version', 'run'],
+    ['python3 -m pytest --version', 'look'],
+    ['pytest --collect-only -q', 'look'],
     ['pip show pytest', 'run'],
     ['python3 -c "import pytest"', 'run'],
     ['echo "run pytest later"', 'look'],
     ['node --test', 'test'],
+    // Logging into scratch is not editing the project; a redirect into a project file is.
+    ['./rename.sh --dry-run . | tee "$S/dry.txt"', 'run'],
+    ['ls -A > /tmp/before.txt', 'look'],
+    ['ls -A > "$S/before.txt"', 'look'],
+    ['echo "a > b.txt"', 'look'],
+    ['printf "x" > notes.md', 'edit'],
+    ['printf "dist/\\n" >> .gitignore', 'edit'],
+    ['sed --in-place s/a/b/ f.txt', 'edit'],
+    // A here-document's body is data: `pytest.main()` in it runs nothing.
+    ["cat > app.py <<'EOF'\nimport pytest\npytest.main()\nEOF", 'edit'],
+    ['git commit -m "ignore pytest caches"', 'save'],
     ['node --test timer.test.mjs 2>&1 | tail -20', 'test'],
     ['timeout 60 npm test', 'test'],
     ['FOO=1 CI=true pytest -q', 'test'],
@@ -91,6 +105,23 @@ describe('parseTestCounts', () => {
   });
 });
 
+describe('parseTestCounts beyond "N passed"', () => {
+  it.each([
+    ['# tests 7\n# suites 0\n# pass 7\n# fail 0', { passed: 7, failed: 0 }],
+    ['ℹ tests 3\nℹ pass 2\nℹ fail 1', { passed: 2, failed: 1 }],
+    ['FAILED test_a.py::test_x\n===== 3 failed in 0.12s =====', { passed: 0, failed: 3 }],
+    ['==== 1 error in 0.05s ====', { passed: 0, failed: 1 }],
+    ['=== 1 failed, 18 passed, 2 errors in 0.40s ===', { passed: 18, failed: 3 }],
+    [' Tests  3 failed (3)', { passed: 0, failed: 3 }],
+  ])('%j', (output, counts) => {
+    expect(parseTestCounts(output)).toEqual(counts);
+  });
+
+  it('a line that only mentions a failure is not a summary', () => {
+    expect(parseTestCounts('The request failed twice: 2 failed attempts')).toBeNull();
+  });
+});
+
 describe('text helpers', () => {
   it('firstSentence strips markdown and stops at the first sentence', () => {
     expect(firstSentence('**Found it.** The `banner` covers [the button](http://x).')).toBe('Found it.');
@@ -104,6 +135,38 @@ describe('text helpers', () => {
     );
     expect(firstSentence('It is *really* done and _very_ fast.')).toBe('It is really done and very fast.');
     expect(firstSentence('## Summary\n- Fixed the 2*3 bug.')).toBe('Summary Fixed the 2*3 bug.');
+  });
+
+  it('firstSentence treats code spans as words and an ellipsis or e.g. as no end', () => {
+    expect(firstSentence('My `mk -- ...` helper call left a stray file named `--`. Then I removed it.')).toBe(
+      'My mk -- ... helper call left a stray file named --.'
+    );
+    expect(firstSentence('Use a flag, e.g. the dry run. Then go.')).toBe('Use a flag, e.g. the dry run.');
+    expect(firstSentence('Wait... it works now. Good.')).toBe('Wait... it works now.');
+  });
+
+  it('planFromText reads numbered lists and checkboxes, never plain bullets', () => {
+    expect(planFromText('Todo list:\n\n1. Check the layout.\n2. Write `rename.sh`.\n3) Test it')).toEqual([
+      { text: 'Check the layout.', done: false },
+      { text: 'Write rename.sh.', done: false },
+      { text: 'Test it', done: false },
+    ]);
+    expect(planFromText('- [x] **Read** the code\n- [ ] Fix it')).toEqual([
+      { text: 'Read the code', done: true },
+      { text: 'Fix it', done: false },
+    ]);
+    expect(planFromText('Done:\n- added a flag\n- fixed a bug\n- wrote docs')).toBeNull();
+    expect(planFromText('1. one\n2. two')).toBeNull();
+  });
+
+  it('printedFiles reads cat, head and tail arguments, and gives up after a cd', () => {
+    expect(printedFiles('cat README.md "src/a b.ts" && head -n 20 notes.txt | grep x')).toEqual([
+      'README.md',
+      'src/a b.ts',
+      'notes.txt',
+    ]);
+    expect(printedFiles('cat src/*.ts; tail -f "$LOG"')).toEqual([]);
+    expect(printedFiles('cd sub && cat a.txt')).toEqual([]);
   });
 
   it('formats durations for both captions', () => {
@@ -235,6 +298,66 @@ describe('buildStoryTurns', () => {
     expect(running.ok).toBeUndefined();
   });
 
+  it('judges a Bash call on its whole command, though the label is clipped', () => {
+    const long = `printf '%s' "${'x'.repeat(450)}" > /dev/null && git commit -qm "feat: add" && git push`;
+    const [turn] = buildStoryTurns(entriesOf([prompt('ship it'), ...bash('b', long, 'Commit and push', 'ok')]));
+    const ev = turn.events[1];
+    expect(ev.label.length).toBeLessThanOrEqual(STORY_LIMITS.labelChars);
+    expect(ev.intent).toBe('save');
+    expect(ev.ships).toBe('push');
+  });
+
+  it("never lets a turn outlast its own span (a task turn's duration counts from the first prompt)", () => {
+    const lines = [prompt('job'), ...bash('b', 'ls', 'List', 'a')];
+    const turns = buildStoryTurns(entriesOf([...lines, { ...end(0), durationMs: 158_267 }]));
+    expect(turns[0].durationMs).toBeLessThan(10_000);
+  });
+
+  it('a background helper stays running until its notification joins the answer back', () => {
+    const launched = [
+      prompt('Docs please'),
+      tool('a1', 'Agent', { description: 'Write README', subagent_type: 'general-purpose', prompt: 'Write it' }),
+      result('a1', 'Async agent launched successfully. (This tool result is internal metadata.) agentId: h9', {
+        toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'h9', description: 'Write README' },
+      }),
+      said('The helper is on it.'),
+      end(1000),
+    ];
+    let page = pageOf(launched);
+    const helper = page.events[1].helper!;
+    expect(helper).toMatchObject({ background: true, running: true, agentId: 'h9' });
+    expect(helper.result).toBeUndefined();
+    expect(page.helpersRunning).toBe(1);
+    expect(page.panels.find((p) => p.kind === 'backup')!.caption.story).toBe(
+      'Claude sends 1 helper off to work in the background.'
+    );
+    expect(page.panels[page.panels.length - 1].caption.story).toBe(
+      'Done in 1 second for now. A helper is still working.'
+    );
+
+    const notification = [
+      '<task-notification>',
+      '<task-id>h9</task-id>',
+      '<tool-use-id>a1</tool-use-id>',
+      '<status>completed</status>',
+      '<summary>Agent "Write README" finished</summary>',
+      '<result>I wrote README.md.</result>',
+      '<usage><tool_uses>4</tool_uses><duration_ms>9000</duration_ms></usage>',
+      '</task-notification>',
+    ].join('\n');
+    const turns = buildStoryTurns(
+      entriesOf([...launched, prompt(notification, { turnOrigin: 'task_notification' }), said('Thanks.'), end(500)])
+    );
+    expect(turns).toHaveLength(2);
+    page = buildStoryPage(turns[0]);
+    expect(page.events[1].helper).toMatchObject({ result: 'I wrote README.md.', toolUses: 4, durationMs: 9000 });
+    expect(page.events[1].helper!.running).toBeUndefined();
+    expect(page.helpersRunning).toBe(0);
+    const second = buildStoryPage(turns[1]);
+    expect(second.prompt).toBe('Agent "Write README" finished');
+    expect(second.events[0].output).toBe('I wrote README.md.');
+  });
+
   it('an interrupt ends the turn', () => {
     const turns = buildStoryTurns(
       entriesOf([prompt('go'), ...bash('b', 'ls', 'List', 'a'), prompt('[Request interrupted by user]')])
@@ -308,6 +431,68 @@ describe('buildStoryPage', () => {
     const check = page.panels.find((p) => p.kind === 'check');
     expect(check).toMatchObject({ ok: false, tests: { passed: 39, failed: 3 }, live: true });
     expect(check?.caption.story).toBe('3 tests fail.');
+  });
+
+  it('a test run that reports failures failed, even when a pipe hid its exit code', () => {
+    const page = pageOf([
+      prompt('test it'),
+      ...bash('b', 'pytest -q 2>&1 | tail -3', 'Run tests', '1 failed, 18 passed in 0.31s'),
+      end(1000),
+    ]);
+    const check = page.panels.find((p) => p.kind === 'check')!;
+    expect(check.ok).toBe(false);
+    expect(check.caption.story).toBe('A test fails.');
+    expect(check.caption.director).toContain('→ error');
+  });
+
+  it('fix, failing test, fix, passing test folds into one loop with the last word as its balloon', () => {
+    const page = pageOf([
+      prompt('add a flag'),
+      ...edit('e1', '/w/a.py', ['+x = 1']),
+      ...bash('b1', 'pytest -q | tail -1', 'Run tests', '1 failed, 3 passed in 0.1s'),
+      said('The test is right; the flag is off by one.'),
+      ...edit('e2', '/w/a.py', ['-x = 1', '+x = 2']),
+      ...bash('b2', 'pytest -q | tail -1', 'Run tests', '4 passed in 0.1s'),
+      said('All 4 tests pass now.'),
+      ...bash('b3', 'git commit -qm x', 'Commit', 'ok'),
+      said('Done.'),
+      end(1000),
+    ]);
+    const loop = page.panels.find((p) => p.kind === 'loop')!;
+    expect(loop.caption.story).toBe('Fix and test, 2 rounds. It passes in the end.');
+    expect(loop.balloon?.text).toBe('All 4 tests pass now.');
+    expect(loop.tests).toEqual({ passed: 4, failed: 0 });
+  });
+
+  it('what Claude says about a check that just ran stays on that check', () => {
+    const page = pageOf([
+      prompt('test then commit'),
+      ...bash('b1', 'node --test', 'Run tests', '# pass 7\n# fail 0'),
+      said('All 7 tests pass.'),
+      ...bash('b2', 'git commit -qm x', 'Commit', 'ok'),
+      said("Now I'll push it."),
+      ...bash('b3', 'ls', 'List', 'a'),
+      end(1000),
+    ]);
+    expect(page.panels.find((p) => p.kind === 'check')!.balloon?.text).toBe('All 7 tests pass.');
+    expect(page.panels.find((p) => p.kind === 'save')!.balloon).toBeUndefined();
+    expect(page.panels.find((p) => p.kind === 'investigate')!.balloon?.text).toBe("Now I'll push it.");
+  });
+
+  it('a numbered list Claude writes before working is a plan panel; files it cats are file cards', () => {
+    const page = pageOf([
+      prompt('plan first'),
+      said('Todo list:\n\n1. Look around.\n2. Write the script.\n3. Test it.'),
+      ...bash('b1', 'cat README.md && ls', 'Read the readme', '# demo'),
+      ...edit('e1', '/w/a.sh', ['+echo hi']),
+      said('Summary:\n1. one\n2. two\n3. three'),
+      end(1000),
+    ]);
+    expect(page.panels.map((p) => p.kind)).toEqual(['mission', 'plan', 'investigate', 'fix', 'complete']);
+    const plan = page.panels[1];
+    expect(plan.todos?.map((t) => t.text)).toEqual(['Look around.', 'Write the script.', 'Test it.']);
+    expect(plan.caption.director).toBe('written as text · 3 steps');
+    expect(page.panels[2].files).toEqual(['README.md']);
   });
 
   it('an unfinished turn has no complete panel and marks its newest panel live', () => {

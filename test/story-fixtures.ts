@@ -48,13 +48,11 @@ export const result = (
   toolUseResult: opts.toolUseResult,
 });
 
-export const end = (durationMs: number) => ({
-  type: 'system',
-  subtype: 'turn_duration',
-  durationMs,
-  isMeta: true,
-  timestamp: at(),
-});
+/** A turn's end. The clock moves on by the duration first, so the turn's own span is at least that long. */
+export const end = (durationMs: number) => {
+  clock += durationMs;
+  return { type: 'system', subtype: 'turn_duration', durationMs, isMeta: true, timestamp: at() };
+};
 
 /** An Edit call and its result, with a structuredPatch like Claude Code writes. */
 export function edit(id: string, file: string, lines: string[], oldStart = 10) {

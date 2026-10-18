@@ -70,6 +70,12 @@ export const STORY_LIMITS = Object.freeze({
 
 interface ReducedInput {
   command?: string;
+  /** A Bash call's intent, judged on the whole command before `command` is clipped for display. */
+  intent?: StoryIntent;
+  /** Files a Bash call prints (`cat`, `head`, `tail`), from the whole command. */
+  reads?: string[];
+  /** A save that ships: `gh pr create` opens a pull request, `git push` sends the work up. */
+  ships?: 'pr' | 'push';
   description?: string;
   file?: string;
   offset?: number;
@@ -92,7 +98,16 @@ interface ReducedInput {
 }
 
 export type StoryEntry =
-  | { k: 'prompt'; id: string; at: string; text: string; origin: StoryTurnOrigin; queued: boolean }
+  | {
+      k: 'prompt';
+      id: string;
+      at: string;
+      text: string;
+      origin: StoryTurnOrigin;
+      queued: boolean;
+      /** A background task reporting back: which call it answers, and how it went. */
+      task?: StoryTaskReport;
+    }
   | { k: 'text'; at: string; text: string }
   | { k: 'tool'; at: string; id: string; name: string; input: ReducedInput }
   | {
@@ -103,13 +118,22 @@ export type StoryEntry =
       output?: string;
       outputTruncated?: boolean;
       edit?: StoryEdit;
-      helper?: { result?: string; toolUses?: number; durationMs?: number; agentId?: string };
+      helper?: { result?: string; toolUses?: number; durationMs?: number; agentId?: string; background?: boolean };
       answer?: string;
       tests?: StoryTests;
     }
   | { k: 'end'; at: string; durationMs?: number }
   | { k: 'compact'; at: string }
   | { k: 'interrupt'; at: string };
+
+/** What a `<task-notification>` says about the background call it answers. */
+interface StoryTaskReport {
+  toolUseId?: string;
+  status?: string;
+  result?: string;
+  toolUses?: number;
+  durationMs?: number;
+}
 
 // ========== Small helpers ==========
 
@@ -152,21 +176,57 @@ const basename = (path: string): string => path.slice(path.replace(/\/+$/, '').l
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 const unique = <T>(items: T[]): T[] => [...new Set(items)];
 
-/** The first sentence of a message, without markdown, for a speech balloon. */
-export function firstSentence(text: string, max = 160): string {
-  // Only real markdown goes: paired emphasis and line-start markers. A bare `_` or `*` inside a word
-  // stays, or `test_wcount.py` would read `testwcount.py`.
-  const plain = text
+/**
+ * Markdown to plain text: only real markdown goes, paired emphasis and line-start markers. A bare `_`
+ * or `*` inside a word stays, or `test_wcount.py` would read `testwcount.py`. Code spans come back
+ * as placeholders (`\u0000<n>\u0000`, their text in `spans`) so nothing inside one is read as
+ * markdown or as the end of a sentence.
+ */
+function plainMarkdown(text: string, spans: string[]): string {
+  return text
     .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`([^`\n]*)`/g, '$1')
+    .replace(/`([^`\n]*)`/g, (_, code: string) => `\u0000${spans.push(code) - 1}\u0000`)
     .replace(/!?\[([^\]\n]*)\]\([^)\n]*\)/g, '$1')
     .replace(/(^|[\s(])(\*\*|__)(?=\S)([^\n]*?\S)\2(?=[\s),!?:;]|\.(?:\s|$)|$)/g, '$1$3')
     .replace(/(^|[\s(])([*_])(?=\S)([^*_\n]*?\S)\2(?=[\s),!?:;]|\.(?:\s|$)|$)/g, '$1$3')
-    .replace(/^[ \t]{0,3}(#{1,6}|>|[-*+]|\d+\.)[ \t]+/gm, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const match = /^(.+?[.!?])(\s|$)/.exec(plain);
-  return clip(match ? match[1] : plain, max);
+    .replace(/^[ \t]{0,3}(#{1,6}|>|[-*+]|\d+[.)])[ \t]+/gm, '');
+}
+
+const restoreSpans = (text: string, spans: string[]): string =>
+  text.replace(/\u0000(\d+)\u0000/g, (_, n: string) => spans[Number(n)] ?? '');
+
+/**
+ * Where a sentence ends: `.`, `!` or `?` before a space or the end, but not inside an ellipsis
+ * (`...`) and not after `e.g` or `i.e`.
+ */
+const SENTENCE_END = /^(.+?(?<!\.)(?<!\b(?:e\.g|i\.e|vs|cf))[.!?](?!\.))(?=\s|$)/;
+
+/** The first sentence of a message, without markdown, for a speech balloon. */
+export function firstSentence(text: string, max = 160): string {
+  const spans: string[] = [];
+  const plain = plainMarkdown(text, spans).replace(/\s+/g, ' ').trim();
+  const match = SENTENCE_END.exec(plain);
+  return clip(restoreSpans(match ? match[1] : plain, spans).replace(/\s+/g, ' '), max);
+}
+
+/**
+ * A plan Claude wrote as text (no plan tool): three numbered items or more, or two checkboxes or
+ * more. Plain bullets never count; a summary at the end of a turn is usually a bullet list.
+ */
+export function planFromText(text: string): StoryTodo[] | null {
+  const items: StoryTodo[] = [];
+  let numbered = 0;
+  let boxes = 0;
+  for (const line of text.split('\n')) {
+    const m = /^\s{0,3}(?:(\d+)[.)]|[-*+])\s+(\[[ xX]\]\s+)?(\S.*)$/.exec(line);
+    if (!m || (!m[1] && !m[2])) continue;
+    if (m[2]) boxes++;
+    else numbered++;
+    const spans: string[] = [];
+    const plain = restoreSpans(plainMarkdown(m[3], spans), spans).replace(/\s+/g, ' ').trim();
+    if (plain) items.push({ text: clip(plain, 120), done: /x/i.test(m[2] ?? '') });
+  }
+  return numbered >= 3 || boxes >= 2 ? items.slice(0, STORY_LIMITS.todoItems) : null;
 }
 
 export function roughDuration(ms: number): string {
@@ -245,11 +305,89 @@ const TEST_HEAD =
 const BUILD_HEAD =
   /^(npm run (build|typecheck|lint|check|format)\S*|yarn (run )?(build|lint|typecheck)\b|pnpm (run )?(build|lint|typecheck)\b|tsc\b|npx (tsc|eslint|prettier|biome)\b|eslint\b|prettier\b|biome\b|make\b|cargo (build|check|clippy)\b|go (build|vet)\b|gradlew?\b|\.\/gradlew\b|mvn\b|ruff\b|mypy\b|black\b|cmake\b|ninja\b|shellcheck\b|node --check\b)/;
 const SAVE_HEAD = /^(git (commit|push|tag|merge|rebase|cherry-pick|revert|am)\b|gh (pr|release) (create|merge)\b)/;
-const EDIT_SEGMENT = /^(sed -i\b|perl -p?i\b|cat\s*>|tee\b|patch\b|git apply\b)|(^|[^>&0-9])>\s*[\w./~-]+\.\w+\b/;
+/** Editors that change files in place. `tee` is not one: in a pipeline it keeps a log. */
+const EDIT_HEAD = /^(sed (-i|--in-place)\b|perl -p?i\b|patch\b|git apply\b)/;
+/** Where a redirect writes scratch, not the project: temp dirs, devices, and paths held in variables. */
+const SCRATCH_TARGET = /^(\/tmp\/|\/var\/tmp\/|\/dev\/|\$|~\/\.cache\/)/;
 const LOOK_HEAD =
   /^(cd|cat|head|tail|sed -n|grep|egrep|rg|find|ls|wc|awk|jq|tree|stat|file|du|df|diff|less|more|xxd|od|which|type|pwd|echo|printf|sort|uniq|cut|basename|dirname|realpath|readlink|git (status|diff|log|show|branch|blame|ls-files|rev-parse|remote)|gh (pr|issue|run|api) (view|list|diff|checks))\b/;
-/** A probe that names a test runner without running tests: `pytest --version`, `npm test --help`. */
-const PROBE = /\s--(version|help)\b|\s-[Vh]\s*$/;
+/** A probe that asks a tool about itself without running anything: `pytest --version`, `npm test --help`. */
+const PROBE = /\s--(version|help|collect-only)\b|\s-[Vh]\s*$/;
+
+/**
+ * Whether a segment writes a project file through a redirect (`> notes.md`, `>> app.log`, `cat > a.py`).
+ * Quote-aware: a `>` inside a quoted string is text. A redirect into scratch (`/tmp/x`, `"$S/out.txt"`,
+ * `/dev/null`) or onto a stream (`2>&1`) is not an edit, and the target must look like a file.
+ */
+function redirectsIntoProject(segment: string): boolean {
+  let quote = '';
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i];
+    if (quote) {
+      if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch !== '>') continue;
+    const before = segment[i - 1] ?? ' ';
+    if (/[0-9&>]/.test(before) && before !== ' ') continue; // `2>`, `&>`, the second `>` of `>>`
+    let j = i + 1;
+    if (segment[j] === '>') j++;
+    if (segment[j] === '&' || segment[j] === '(') continue; // `>&2`, `>(process)`
+    while (segment[j] === ' ' || segment[j] === '\t') j++;
+    const q = segment[j] === '"' || segment[j] === "'" ? segment[j++] : '';
+    let target = '';
+    while (j < segment.length && (q ? segment[j] !== q : !/[\s|;&<>()]/.test(segment[j]))) target += segment[j++];
+    if (target && !SCRATCH_TARGET.test(target) && /^[\w./~@+-]*\.\w+$/.test(target)) return true;
+    i = j;
+  }
+  return false;
+}
+
+/** A here-document's body is data, not commands: `cat > a.py <<'EOF' ... EOF` keeps only its first line. */
+function withoutHeredocBodies(command: string): string {
+  const out: string[] = [];
+  let end: string | null = null;
+  for (const line of command.split('\n')) {
+    if (end !== null) {
+      if (line.trim() === end) end = null;
+      continue;
+    }
+    out.push(line);
+    const m = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/.exec(line.replace(/<<</g, '   '));
+    if (m) end = m[2];
+  }
+  return out.join('\n');
+}
+
+/**
+ * Files a command prints with `cat`, `head` or `tail`, as named (maybe relative). Nothing when the
+ * command changes directory first (a relative name would point elsewhere) or names a glob or a variable.
+ */
+export function printedFiles(command: string): string[] {
+  const files: string[] = [];
+  for (const segment of commandSegments(withoutHeredocBodies(command.slice(0, 2000)))) {
+    const head = segmentHead(segment);
+    if (/^(cd|pushd)\b/.test(head)) return [];
+    const m = /^(cat|head|tail|nl|bat)\s+(.*)$/.exec(head);
+    if (!m || /[<>]/.test(m[2])) continue;
+    const words = m[2].match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+    for (let k = 0; k < words.length; k++) {
+      const w = words[k];
+      if (w.startsWith('-')) {
+        if (/^-[nc]$/.test(w)) k++; // `head -n 20 file`
+        continue;
+      }
+      const name = w.replace(/^(["'])(.*)\1$/, '$2');
+      if (!name || /[*?$`{}[\]]/.test(name) || /^\d+$/.test(name)) continue;
+      files.push(name);
+    }
+  }
+  return unique(files).slice(0, 8);
+}
 
 /**
  * Strongest first: one test in a one-liner makes the whole call a test run (its pass or fail is the
@@ -264,16 +402,18 @@ const INTENT_RANK: StoryIntent[] = ['test', 'save', 'build', 'edit', 'run', 'loo
  */
 export function classifyBashCommand(command: string): StoryIntent {
   let best = INTENT_RANK.length - 1;
-  for (const segment of commandSegments(command.slice(0, 2000))) {
+  for (const segment of commandSegments(withoutHeredocBodies(command.slice(0, 4000)))) {
     const head = segmentHead(segment);
-    const intent: StoryIntent =
-      TEST_HEAD.test(head) && !PROBE.test(head)
+    if (!head) continue;
+    const intent: StoryIntent = PROBE.test(head)
+      ? 'look'
+      : TEST_HEAD.test(head)
         ? 'test'
-        : BUILD_HEAD.test(head) && !PROBE.test(head)
+        : BUILD_HEAD.test(head)
           ? 'build'
           : SAVE_HEAD.test(head)
             ? 'save'
-            : EDIT_SEGMENT.test(head)
+            : EDIT_HEAD.test(head) || redirectsIntoProject(head)
               ? 'edit'
               : LOOK_HEAD.test(head)
                 ? 'look'
@@ -289,6 +429,14 @@ export function classifyBashCommand(command: string): StoryIntent {
  */
 export function parseTestCounts(output: string): StoryTests | null {
   const lines = output.split('\n').slice(-40).reverse();
+  // node:test (TAP `# pass 7` / spec reporter `ℹ pass 7`), with its own fail line.
+  const nodePass = lines.map((l) => /^\s*[#ℹ]\s*pass\s+(\d+)\s*$/.exec(l)).find(Boolean);
+  if (nodePass) {
+    const nodeFail = lines.map((l) => /^\s*[#ℹ]\s*fail\s+(\d+)\s*$/.exec(l)).find(Boolean);
+    return { passed: Number(nodePass[1]), failed: nodeFail ? Number(nodeFail[1]) : 0 };
+  }
+  // A run with errors (pytest's collection errors) failed as surely as one with failed tests.
+  const errorsOn = (line: string) => Number(/\b(\d+) errors?\b/i.exec(line)?.[1] ?? 0);
   for (const line of lines) {
     const passed = /\b(\d+) (passed|passing)\b/i.exec(line);
     if (!passed) continue;
@@ -298,7 +446,14 @@ export function parseTestCounts(output: string): StoryTests | null {
       const failing = lines.map((l) => /^\s*(\d+) failing\b/i.exec(l)).find(Boolean);
       if (failing) failed = Number(failing[1]);
     }
-    return { passed: Number(passed[1]), failed };
+    return { passed: Number(passed[1]), failed: failed + errorsOn(line) };
+  }
+  // Nothing passed: a summary line that only counts failures (`=== 3 failed in 0.12s ===`,
+  // `Tests  3 failed (3)`, `1 error in 0.05s`).
+  for (const line of lines) {
+    if (!/^\s*(=+ |Tests?:?\s|test result:)|\bin [\d.]+m?s\b/.test(line)) continue;
+    const failed = Number(/\b(\d+) (failed|failing)\b/i.exec(line)?.[1] ?? 0) + errorsOn(line);
+    if (failed) return { passed: 0, failed };
   }
   return null;
 }
@@ -310,7 +465,9 @@ const SYSTEM_REMINDER_RE = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
 const LOCAL_WRAPPER_RE =
   /^\s*<(local-command-caveat|local-command-stdout|local-command-stderr|bash-input|bash-stdout|bash-stderr)>/;
 
-function readPrompt(raw: string): { text: string; kind: 'prompt' | 'task' | 'interrupt' } | null {
+function readPrompt(
+  raw: string
+): { text: string; kind: 'prompt' | 'task' | 'interrupt'; task?: StoryTaskReport } | null {
   const text = raw.replace(SYSTEM_REMINDER_RE, '').trim();
   if (!text) return null;
   if (/^\[Request interrupted/.test(text)) return { text, kind: 'interrupt' };
@@ -321,8 +478,19 @@ function readPrompt(raw: string): { text: string; kind: 'prompt' | 'task' | 'int
     return { text: `${command[1].trim()} ${args.trim()}`.trim(), kind: 'prompt' };
   }
   if (/^<task-notification>/.test(text)) {
-    const summary = /<summary>([\s\S]*?)<\/summary>/.exec(text)?.[1];
-    return { text: (summary || 'A background task finished.').trim(), kind: 'task' };
+    const tag = (name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1]?.trim();
+    const count = (name: string) => {
+      const n = Number(tag(name));
+      return tag(name) !== undefined && Number.isFinite(n) ? n : undefined;
+    };
+    const task: StoryTaskReport = {
+      toolUseId: tag('tool-use-id'),
+      status: tag('status'),
+      result: tag('result'),
+      toolUses: count('tool_uses'),
+      durationMs: count('duration_ms'),
+    };
+    return { text: tag('summary') || 'A background task finished.', kind: 'task', task };
   }
   return { text, kind: 'prompt' };
 }
@@ -342,8 +510,26 @@ function reduceInput(name: string, input: unknown): ReducedInput {
     return value === undefined ? undefined : clip(value, max);
   };
   switch (name) {
-    case 'Bash':
-      return { command: s(i.command, STORY_LIMITS.labelChars), description: s(i.description, 160) };
+    case 'Bash': {
+      // Judged on the whole command: a commit or a test run often sits past the displayed part.
+      const full = str(i.command) ?? '';
+      const intent = classifyBashCommand(full);
+      const input: ReducedInput = {
+        command: s(i.command, STORY_LIMITS.labelChars),
+        description: s(i.description, 160),
+        intent,
+      };
+      if (intent === 'look') {
+        const reads = printedFiles(full);
+        if (reads.length) input.reads = reads;
+      }
+      if (intent === 'save') {
+        const ships = commandSegments(full.slice(0, 4000)).map(segmentHead);
+        if (ships.some((h) => /^gh pr create\b/.test(h))) input.ships = 'pr';
+        else if (ships.some((h) => /^git push\b/.test(h))) input.ships = 'push';
+      }
+      return input;
+    }
     case 'Read':
     case 'NotebookRead':
       return { file: s(i.file_path ?? i.notebook_path, 1000), offset: num(i.offset) };
@@ -501,8 +687,11 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
           if (edit) result.edit = edit;
         }
         if (name === 'Agent' || name === 'Task') {
-          const answer = blockText(extra.content) || text;
+          // A background start answers with launch notes meant for Claude only, never the helper's answer.
+          const background = extra.isAsync === true || extra.status === 'async_launched';
+          const answer = background ? '' : blockText(extra.content) || text;
           result.helper = {
+            background: background || undefined,
             result: answer ? clip(answer, STORY_LIMITS.helperChars) : undefined,
             toolUses: num(extra.totalToolUseCount),
             durationMs: num(extra.totalDurationMs),
@@ -532,16 +721,25 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
     const prompt = readPrompt(blockText(content));
     if (!prompt) return out;
     if (prompt.kind === 'interrupt') return [{ k: 'interrupt', at }];
-    return [
-      {
-        k: 'prompt',
-        id: str(entry.uuid) ?? `prompt-${at}`,
-        at,
-        text: clip(prompt.text, STORY_LIMITS.promptChars),
-        origin: originOf(entry.turnOrigin, prompt.kind),
-        queued: entry.promptSource === 'queued',
-      },
-    ];
+    const reduced: Extract<StoryEntry, { k: 'prompt' }> = {
+      k: 'prompt',
+      id: str(entry.uuid) ?? `prompt-${at}`,
+      at,
+      text: clip(prompt.text, STORY_LIMITS.promptChars),
+      origin: originOf(entry.turnOrigin, prompt.kind),
+      queued: entry.promptSource === 'queued',
+    };
+    if (prompt.task) {
+      const t = prompt.task;
+      reduced.task = {
+        toolUseId: t.toolUseId && /^[A-Za-z0-9_-]{1,128}$/.test(t.toolUseId) ? t.toolUseId : undefined,
+        status: t.status ? clip(t.status, 40) : undefined,
+        result: t.result ? clip(t.result, STORY_LIMITS.helperChars) : undefined,
+        toolUses: t.toolUses,
+        durationMs: t.durationMs,
+      };
+    }
+    return [reduced];
   }
 
   function reduceAssistant(entry: Record<string, unknown>, at: string): StoryEntry[] {
@@ -632,7 +830,7 @@ function intentOf(name: string, input: ReducedInput): StoryIntent {
     case 'NotebookEdit':
       return 'edit';
     case 'Bash':
-      return classifyBashCommand(input.command ?? '');
+      return input.intent ?? classifyBashCommand(input.command ?? '');
     default:
       return 'tool';
   }
@@ -677,6 +875,8 @@ function toolEvent(e: Extract<StoryEntry, { k: 'tool' }>, actor: StoryActor): St
     pending: true,
   };
   if (i.file) ev.file = i.file;
+  if (i.reads) ev.files = i.reads;
+  if (i.ships) ev.ships = i.ships;
   if (i.offset) ev.line = i.offset;
   if (e.name === 'Bash' && i.description) ev.description = i.description;
   if (e.name === 'Agent' || e.name === 'Task') {
@@ -706,6 +906,10 @@ function applyResult(ev: StoryEvent, r: Extract<StoryEntry, { k: 'result' }>): v
   if (r.tests) ev.tests = r.tests;
   if (r.helper && ev.helper) {
     const helper: StoryHelper = { ...ev.helper };
+    if (r.helper.background && !r.isError) {
+      helper.background = true;
+      helper.running = true;
+    }
     if (r.helper.result) helper.result = r.helper.result;
     if (r.helper.toolUses !== undefined) helper.toolUses = r.helper.toolUses;
     if (r.helper.durationMs !== undefined) helper.durationMs = r.helper.durationMs;
@@ -724,7 +928,23 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
   const turns: StoryTurn[] = [];
   let cur: StoryTurn | null = null;
   const byId = new Map<string, StoryEvent>();
+  /** Helper calls by tool id, across turns: a background helper reports back in a later turn. */
+  const helpers = new Map<string, StoryEvent>();
   let say = 0;
+  const reportBack = (report: StoryTaskReport, prompt: StoryEvent) => {
+    if (report.result) {
+      prompt.output = report.result;
+      if (report.result.length >= STORY_LIMITS.helperChars) prompt.outputTruncated = true;
+    }
+    const ev = report.toolUseId ? helpers.get(report.toolUseId) : undefined;
+    if (!ev?.helper) return;
+    const helper: StoryHelper = { ...ev.helper, running: undefined };
+    if (report.result) helper.result = report.result;
+    if (report.toolUses !== undefined) helper.toolUses = report.toolUses;
+    if (report.durationMs !== undefined) helper.durationMs = report.durationMs;
+    ev.helper = helper;
+    if (report.status && !/^(completed|done|finished|success)/i.test(report.status)) ev.ok = false;
+  };
   const ensure = (at: string): StoryTurn => {
     if (!cur) {
       cur = {
@@ -745,6 +965,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
     switch (e.k) {
       case 'prompt': {
         const ev: StoryEvent = { id: e.id, at: e.at, actor: 'you', tool: 'Prompt', label: e.text, intent: 'prompt' };
+        if (e.task) reportBack(e.task, ev);
         if (cur && !cur.ended && e.queued) {
           cur.events.push(ev);
         } else {
@@ -777,6 +998,10 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
         const ev = toolEvent(e, 'claude');
         ensure(e.at).events.push(ev);
         byId.set(e.id, ev);
+        if (ev.helper) {
+          helpers.set(e.id, ev);
+          if (helpers.size > 500) helpers.delete(helpers.keys().next().value as string);
+        }
         break;
       }
       case 'result': {
@@ -789,7 +1014,12 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
         if (t) {
           t.ended = true;
           t.endedAt = e.at;
-          if (e.durationMs !== undefined) t.durationMs = e.durationMs;
+          // Claude Code times a turn a background task started from the prompt that started the chain;
+          // a turn never takes longer than its own span, so that is the cap.
+          const span = Date.parse(e.at) - Date.parse(t.at);
+          if (e.durationMs !== undefined)
+            t.durationMs =
+              !t.partial && Number.isFinite(span) && span >= 0 ? Math.min(e.durationMs, span) : e.durationMs;
         }
         break;
       }
@@ -910,15 +1140,19 @@ function applyTextBudget(events: StoryEvent[]): boolean {
   return cut;
 }
 
+/** Claude reporting how a check went ("All 7 tests pass"), as opposed to announcing its next step. */
+const TALKS_RESULTS = /\b(pass(es|ed|ing)?|fail(s|ed|ing|ures?)?|green|clean)\b/i;
+const ANNOUNCES = /\b(I'll|I will|let me|let's|I'm going to|next,? I|now I)\b/i;
+
 function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?: string } {
   const panels: DraftPanel[] = [];
   let pendingSay: string | undefined;
   events.forEach((ev, idx) => {
-    if (ev.intent === 'say') {
+    if (ev.intent === 'say' && !ev.todos) {
       pendingSay ??= firstSentence(ev.label);
       return;
     }
-    const kind = PANEL_FOR[ev.intent];
+    const kind = ev.todos && ev.intent === 'say' ? 'plan' : PANEL_FOR[ev.intent];
     if (!kind) return;
     const last = panels[panels.length - 1];
     if (last && last.kind === kind && MERGEABLE.has(kind)) {
@@ -926,7 +1160,15 @@ function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?
       if (pendingSay && !last.balloon) last.balloon = { who: 'claude', text: pendingSay };
     } else {
       const panel: DraftPanel = { kind, events: [idx] };
+      // A sentence about how the check just before went belongs to that check, not to what comes next.
+      const reportsBack =
+        pendingSay &&
+        last?.kind === 'check' &&
+        !last.balloon &&
+        TALKS_RESULTS.test(pendingSay) &&
+        !ANNOUNCES.test(pendingSay);
       if (kind === 'mission') panel.balloon = { who: 'you', text: clip(ev.label, 220) };
+      else if (reportsBack && last && pendingSay) last.balloon = { who: 'claude', text: pendingSay };
       else if (pendingSay) panel.balloon = { who: 'claude', text: pendingSay };
       panels.push(panel);
     }
@@ -953,7 +1195,8 @@ function collapseLoops(panels: DraftPanel[]): DraftPanel[] {
       out.push({
         kind: 'loop',
         events: run.flatMap((p) => p.events),
-        balloon: run[0].balloon,
+        // The last word of the rounds is how they ended.
+        balloon: [...run].reverse().find((p) => p.balloon)?.balloon,
         rounds: run.filter((p) => p.kind === 'check').length,
       });
       i = j;
@@ -1023,6 +1266,14 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
   const edits = evs.filter((e) => e.edit).map((e) => e.edit as StoryEdit);
   const checks = evs.filter((e) => e.intent === 'test' || e.intent === 'build');
   const lastCheck = checks[checks.length - 1];
+  // A run that reports failed tests failed, whatever its exit code (`pytest | tail` exits 0).
+  const passed = (e: StoryEvent | undefined): boolean | undefined =>
+    e?.ok === undefined ? undefined : e.ok && !(e.tests && e.tests.failed > 0);
+  const outcome = (e: StoryEvent) => {
+    const ok = passed(e);
+    return ok === undefined ? 'running' : ok ? 'ok' : 'error';
+  };
+  const errors = evs.filter((e) => e.ok === false).length;
   const notesOf = (list: StoryEvent[]) =>
     list
       .map((e) => clip(e.description || shortCommand(e), 80))
@@ -1046,12 +1297,16 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       break;
     }
     case 'investigate': {
-      const files = unique(evs.filter((e) => e.file && e.intent === 'read').map((e) => e.file as string));
+      const files = unique(
+        evs.flatMap((e) => (e.intent === 'read' && e.file ? [e.file] : e.intent === 'look' ? (e.files ?? []) : []))
+      );
       panel.files = files.slice(0, 12);
       panel.notes = evs
         .filter((e) => e.intent !== 'read')
         .map(shortCommand)
         .slice(0, 4);
+      if (evs.every((e) => e.tool === 'Bash')) director = `${tools} · ${shortCommand(evs[0])}`;
+      if (errors) director += ` · ${plural(errors, 'error')}`;
       story = files.length
         ? `Claude reads ${plural(files.length, 'file')} to find its way around.`
         : evs.every((e) => e.intent === 'search')
@@ -1068,7 +1323,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       if (todos) panel.todos = todos;
       else panel.notes = evs.map(shortCommand).slice(0, 4);
       story = todos ? `Claude writes a plan: ${plural(todos.length, 'step')}.` : 'Claude thinks it through.';
-      if (todos) director = `${tools} · ${todos.filter((t) => t.done).length}/${todos.length} done`;
+      // A plan written as text has no progress to report; a plan tool's list does.
+      if (todos && evs.every((e) => e.tool === 'Text')) director = `written as text · ${plural(todos.length, 'step')}`;
+      else if (todos) director = `${tools} · ${todos.filter((t) => t.done).length}/${todos.length} done`;
       break;
     }
     case 'backup': {
@@ -1085,8 +1342,11 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         .filter((e) => e.intent === 'message')
         .map(shortCommand)
         .slice(0, 4);
+      const behind = evs.filter((e) => e.helper?.background).length;
       story = helpers.length
-        ? `Claude calls in ${plural(helpers.length, 'helper')}.`
+        ? behind === helpers.length
+          ? `Claude sends ${plural(helpers.length, 'helper')} off to work in the background.`
+          : `Claude calls in ${plural(helpers.length, 'helper')}.`
         : 'Claude sends a message to another session.';
       const inside = evs.reduce((n, e) => n + (e.helper?.toolUses ?? 0), 0);
       director = `${tools}${helpers.length ? ` · ${unique(helpers.map((h) => h.type)).join(' + ')}` : ''}${inside ? ` · ${plural(inside, 'call')} inside` : ''}`;
@@ -1117,10 +1377,13 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         director = `${tools}${perFile.length ? ` · ${perFile.join(' · ')}` : ''}`;
       } else {
         panel.rounds = draft.rounds ?? checks.length;
-        if (lastCheck?.ok !== undefined) panel.ok = lastCheck.ok;
+        const ok = passed(lastCheck);
+        if (ok !== undefined) panel.ok = ok;
+        const tests = lastCheck?.tests;
+        if (tests) panel.tests = tests;
         story = `Fix and test, ${plural(panel.rounds, 'round')}.${panel.ok === true ? ' It passes in the end.' : panel.ok === false ? ' Still failing.' : ''}`;
         director = `${plural(checks.length, 'check')} · ${plural(edits.length, 'edit')} · ${fmtCounts(panel.added, panel.removed)} · last: ${
-          lastCheck?.ok === undefined ? 'running' : lastCheck.ok ? 'ok' : 'error'
+          lastCheck ? outcome(lastCheck) : 'running'
         }`;
       }
       break;
@@ -1128,12 +1391,13 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
     case 'check': {
       const tests = [...checks].reverse().find((e) => e.tests)?.tests;
       if (tests) panel.tests = tests;
-      if (lastCheck?.ok !== undefined) panel.ok = lastCheck.ok;
+      const ok = passed(lastCheck);
+      if (ok !== undefined) panel.ok = ok;
       panel.notes = notesOf(checks);
       const isTest = checks.some((e) => e.intent === 'test');
-      const failedFirst = checks.slice(0, -1).some((e) => e.ok === false);
-      if (lastCheck?.ok === undefined) story = isTest ? 'Claude runs the tests.' : 'Claude runs the checks.';
-      else if (lastCheck.ok)
+      const failedFirst = checks.slice(0, -1).some((e) => passed(e) === false);
+      if (ok === undefined) story = isTest ? 'Claude runs the tests.' : 'Claude runs the checks.';
+      else if (ok)
         story = failedFirst ? 'It fails at first, then passes.' : isTest ? 'The tests pass.' : 'The checks pass.';
       else
         story = isTest
@@ -1143,7 +1407,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           : 'A check fails.';
       director = checks
         .slice(-3)
-        .map((e) => `${shortCommand(e)} → ${e.ok === undefined ? 'running' : e.ok ? 'ok' : 'error'}`)
+        .map((e) => `${shortCommand(e)} → ${outcome(e)}`)
         .join(' · ');
       if (tests) director += ` · ${tests.passed} passed${tests.failed ? `, ${tests.failed} failed` : ''}`;
       break;
@@ -1151,14 +1415,13 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
     case 'run':
       panel.notes = notesOf(evs);
       story = evs.every((e) => e.tool !== 'Bash') ? 'Claude uses a tool.' : 'Claude works in the terminal.';
-      director = `${tools} · ${shortCommand(evs[0])}`;
+      director = `${tools} · ${shortCommand(evs[0])}${errors ? ` · ${plural(errors, 'error')}` : ''}`;
       break;
     case 'save': {
       panel.notes = notesOf(evs);
-      const labels = evs.map((e) => e.label).join('\n');
-      story = /\bgh pr create\b/.test(labels)
+      story = evs.some((e) => e.ships === 'pr')
         ? 'Claude opens a pull request.'
-        : /\bgit push\b/.test(labels)
+        : evs.some((e) => e.ships === 'push')
           ? 'Claude saves the work and sends it up.'
           : 'Claude saves the work.';
       director = evs.map(shortCommand).slice(0, 2).join(' · ');
@@ -1192,17 +1455,20 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
 }
 
 function completePanel(turn: StoryTurn, page: Omit<StoryPage, 'panels'>, trailingSay?: string): StoryPanel {
+  const running = page.helpersRunning;
+  const done = turn.durationMs !== undefined ? `Done in ${roughDuration(turn.durationMs)}.` : 'Done.';
   const story = turn.interrupted
     ? 'You stop Claude here.'
-    : turn.durationMs !== undefined
-      ? `Done in ${roughDuration(turn.durationMs)}.`
-      : 'Done.';
+    : running
+      ? `${done.slice(0, -1)} for now. ${running === 1 ? 'A helper is' : `${running} helpers are`} still working.`
+      : done;
   const director = [
     turn.interrupted ? 'interrupted' : 'turn_duration',
     turn.durationMs !== undefined ? exactDuration(turn.durationMs) : '',
     plural(page.toolCalls, 'tool call'),
     page.filesChanged ? plural(page.filesChanged, 'file') + ' changed' : '',
     page.helpers ? plural(page.helpers, 'helper') : '',
+    running ? `${running} still running` : '',
   ]
     .filter(Boolean)
     .join(' · ');
@@ -1225,6 +1491,13 @@ export function buildStoryPage(turn: StoryTurn): StoryPage {
     truncated = true;
   }
   if (applyTextBudget(events)) truncated = true;
+  // Claude wrote its plan as a numbered list before starting work (no plan tool): draw it as one.
+  for (const e of events) {
+    if (e.intent === 'edit' || e.intent === 'test' || e.intent === 'build' || e.intent === 'save') break;
+    if (e.intent !== 'say') continue;
+    const todos = planFromText(e.label);
+    if (todos) e.todos = todos;
+  }
 
   const { panels: grouped, trailingSay } = groupPanels(events);
   const room = STORY_LIMITS.panelsPerPage - (turn.ended ? 1 : 0);
@@ -1241,6 +1514,7 @@ export function buildStoryPage(turn: StoryTurn): StoryPage {
     added: edits.reduce((n, e) => n + e.added, 0),
     removed: edits.reduce((n, e) => n + e.removed, 0),
     helpers: events.filter((e) => e.helper).length,
+    helpersRunning: events.filter((e) => e.helper?.running).length,
   };
   if (turn.endedAt) base.endedAt = turn.endedAt;
   if (turn.durationMs !== undefined) base.durationMs = turn.durationMs;

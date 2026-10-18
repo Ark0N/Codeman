@@ -84,6 +84,10 @@ export interface StoryHelper {
   durationMs?: number;
   /** Claude Code's id for the helper; its own steps are at `GET /api/sessions/:id/story/helpers/<agentId>`. */
   agentId?: string;
+  /** Started in the background: Claude went on working, and the answer comes later in a notification. */
+  background?: boolean;
+  /** A background helper that has not reported back yet. */
+  running?: boolean;
 }
 
 export interface StoryTests {
@@ -109,9 +113,13 @@ export interface StoryEvent {
   pending?: boolean;
   /** The one file this event concerns (Read, Edit, Write), as the transcript gave it. */
   file?: string;
+  /** Files a Bash call printed (`cat a b`, `head -n 20 c`), as the command named them (maybe relative). */
+  files?: string[];
   line?: number;
   /** Claude's own short description of a Bash call ("Run the test suite"). */
   description?: string;
+  /** A save that ships the work: `gh pr create` (`pr`) or `git push` (`push`). */
+  ships?: 'pr' | 'push';
   output?: string;
   outputTruncated?: boolean;
   edit?: StoryEdit;
@@ -164,6 +172,8 @@ export interface StoryPage extends StoryTurnSummary {
   added: number;
   removed: number;
   helpers: number;
+  /** Background helpers that had not reported back when this page was drawn. */
+  helpersRunning: number;
 }
 
 /** `GET /api/sessions/:id/story/helpers/:agentId`: one helper's own steps, as one page. */
