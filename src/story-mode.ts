@@ -290,7 +290,8 @@ export function balloonText(text: string): string {
 const KEY_KINDS: Array<[StoryKeyKind, RegExp]> = [
   [
     'problem',
-    /\b(problem|bug|broken|known (issue|quirk)s?|quirks?|caveat|limitation|heads up|warning|unfixed|left (open|unfixed|out)|still (fails?|failing|broken)|(won't|doesn't|does not|will not) (work|fix)|(isn't|is not|not) fixed|never (moves|runs|loads|works|starts|shows))\b/i,
+    // "bug-fixing" and "cron-broken-network" are names, and a bare "warning" is often one too.
+    /\b(problems?|bugs?(?!-| fix)|(?<!-)broken(?!-)|known (issue|quirk)s?|quirks?|caveats?|(?<![#/])limitations?|heads up|warning sign|be warned|watch out|unfixed|left unfixed|still (fails?|failing|broken)|(won't|doesn't|does not|will not) (work|fix)|(isn't|is not|not) fixed|never (moves|runs|loads|works|starts|shows))\b/i,
   ],
   [
     'offer',
@@ -302,7 +303,8 @@ const KEY_KINDS: Array<[StoryKeyKind, RegExp]> = [
   ],
   [
     'pending',
-    /\b(not yet|haven't|have not|can't tell|isn't (confirmed|committed|pushed|tested|done|checked)|not (checked|tested|verified|confirmed|committed|pushed|opened|run)|still (running|working|open|missing)|didn't (open|try|check|test|run|verify) it)\b/i,
+    // "Left out" is open work, unless Claude chose it ("left out on purpose", "rather than guessed").
+    /(?<!(deliberately|intentionally|purposely) )\bleft (out|open)\b(?! (on purpose|deliberately|intentionally|rather))|\b(not yet|haven't|have not|can't tell|isn't (confirmed|committed|pushed|tested|done|checked)|not (checked|tested|verified|confirmed|committed|pushed|opened|run)|still (running|working|open|missing)|didn't (open|try|check|test|run|verify) it)\b/i,
   ],
   // A step that failed, not a description of failure ("1 for a failed operation").
   ['failed', /(?<!\b(a|the|any|on) )\b(failed|fails)\b/i],
@@ -317,6 +319,18 @@ const KEY_KINDS: Array<[StoryKeyKind, RegExp]> = [
   ],
 ];
 const KEY_WEAK = /\b(didn't|did not|couldn't|could not|wasn't able|won't|doesn't)\b/i;
+/** A problem sentence that is history: "I found and fixed a bug", "is fixed by …", "the caveat is gone". */
+const PROBLEM_CLOSED =
+  /\b(?:(?:i|we|claude|and|is|are|was|were|been|be|now|got|gets?|it's|that's|already|also)\s+(?:\w+\s+)?(?:fixed|resolved)|(?:bugs?|problems?|issues?)\s+fixed|fixed (?:it|that|this|them|by|in|with|at|before|during)|(?:was|were|had been) broken|(?:was|were) the (?:\w+ )?(?:problem|bug|cause)|fixes|(?:is|are) gone|no longer|went away|works now|now (?:works|passes))\b/i;
+/** …unless it says the fix is NOT there: "is not fixed", "wasn't fixed yet". */
+const NOT_FIXED = /\b(?:not|never)\s+(?:yet\s+)?(?:fixed|resolved)\b|n't\s+(?:\w+\s+)?(?:fixed|resolved)\b/i;
+/** A negation: "found no broken links", "not a problem", "without any memory problem", "couldn't find a bug". */
+const NO_PROBLEM =
+  /\b(?:no|not an?|(?:isn't|is not|wasn't|was not|aren't) an?|without (?:any|an?)|found no|(?:couldn't|could not|didn't|did not) find (?:any|an?)|none of the)\s+(?:\S+\s+){0,2}?(?:problems?|bugs?|issues?|quirks?|caveats?|limitations?|broken)\b|\b(?:never|not|n't)\s+(?:been\s+)?broken\b/i;
+const openProblem = (s: string): boolean => (NOT_FIXED.test(s) || !PROBLEM_CLOSED.test(s)) && !NO_PROBLEM.test(s);
+/** A sentence's kind: the first that matches, where a problem must still be open. */
+const sentenceKind = (s: string): StoryKeyKind | undefined =>
+  KEY_KINDS.find(([kind, re]) => re.test(s) && (kind !== 'problem' || openProblem(s)))?.[0];
 /** A sentence that only points elsewhere ("described below"): nothing a balloon can show. */
 const POINTS_ELSEWHERE = /\b(described|listed|shown|details?) below\b|\bsee below\b|\bas follows\b/i;
 /** The fix that follows a problem sentence: then the problem is not open. */
@@ -333,7 +347,7 @@ const ASKS_YOU =
 export function keyKindOf(point: string): StoryKeyKind | undefined {
   // A problem with its fix is history, not an open problem.
   if (/\b(so i (changed|fixed)|i fixed|fixed it)\b/i.test(point)) return undefined;
-  return KEY_KINDS.find(([, re]) => re.test(point))?.[0];
+  return sentenceKind(point);
 }
 
 /**
@@ -367,7 +381,7 @@ function keyPointsOf(text: string): string[] {
     let sentence = sentences[i];
     if (sentence.length < 12 || POINTS_ELSEWHERE.test(sentence)) continue;
     // Judged on its own words (a list intro too: "Known quirks:", "Two places where I didn't…:").
-    const kind = KEY_KINDS.find(([, re]) => re.test(sentence))?.[0];
+    const kind = sentenceKind(sentence);
     if (!kind && (weak || !KEY_WEAK.test(sentence))) continue;
     // A list intro brings its first items, while short, never one that only points elsewhere.
     if (/:$/.test(sentence))

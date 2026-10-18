@@ -13,6 +13,7 @@ import {
   exactDuration,
   firstSentence,
   heredocWrites,
+  keyKindOf,
   parseTestCounts,
   reportsProblems,
   planFromText,
@@ -1002,6 +1003,43 @@ describe('buildStoryPage', () => {
     expect(run('./deploy.sh; which deploy', 'Exit code 2\nno target')).toBe('Claude tries a command, and it fails.');
     expect(run('node a.js; grep -q x a.txt', 'Exit code 1')).toBe('Claude tries a command, and it fails.');
     expect(run('git config user.name; ./deploy.sh', 'Exit code 1\nme')).toBe('Claude tries a command, and it fails.');
+  });
+
+  it('a problem in the last words is an open one: not history, not a negation, not a name', () => {
+    // Open: a catch.
+    for (const open of [
+      "Prompts sent through the API didn't submit (separate bug, not fixed).",
+      'The main problem is RAM: the box has 30 GB.',
+      "Opening the page: it won't work if you double-click index.html.",
+      'Limitation: the page does not follow the OS theme until a reload.',
+      'The bug is still on master.',
+    ])
+      expect(keyKindOf(open), open).toBe('problem');
+    // History, a negation or a name: no catch.
+    for (const closed of [
+      'I found and fixed a model bug.',
+      'Bug fixed: the server quietly rewrote a leading slash.',
+      "The bridge's model-name problem is fixed by infra-guard in commit 19081f6.",
+      'This also fixes an old bug: an HTTP error used to show the wrong toast.',
+      'The old sockets were the problem: they lacked that option.',
+      'The "don\'t write confirmed yet" caveat is gone.',
+      "The build's link check found no broken links.",
+      'Not a problem, just not the one-shot I described.',
+      "I couldn't find a real bug in any of these four.",
+      'The shutdown path was never broken.',
+      "It isn't a key problem or a wrong username.",
+      'SWE-bench is real bug-fixing in large repositories.',
+      'Requirements are listed at https://example.com/docs#limitations today.',
+      'A bug fix this round turned up.',
+      'The memory warning now fires at 90 percent.',
+    ])
+      expect(['problem'], closed).not.toContain(keyKindOf(closed));
+    // "Left out" is open work, unless Claude chose it.
+    expect(keyKindOf('The README update is left out for now.')).toBe('pending');
+    expect(
+      keyKindOf('Left out on purpose: the search in the working tree belongs to another session.')
+    ).toBeUndefined();
+    expect(keyKindOf('Anything unknown is left out rather than guessed.')).toBeUndefined();
   });
 
   it('a stop names the step Claude was on and what its to-do list still had open', () => {
