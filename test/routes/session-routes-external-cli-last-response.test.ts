@@ -14,9 +14,11 @@
  *     block without it lost the "You" badge on prompts
  *   - a pane that has produced no output reports hasContext: false rather than 404ing
  *   - Claude mode still takes the Claude path (regression guard)
+ *   - copilot (a repainting full-screen TUI) is read off the pane SCREEN via
+ *     capturePaneText, and falls back to the buffer only when there is no screen
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { createMockRouteContext, createMockSession, type MockRouteContext } from '../mocks/index.js';
@@ -152,6 +154,65 @@ describe('GET /api/sessions/:id/last-response — external CLI panes', () => {
     expect(res.statusCode).toBe(200);
     expect(body.data.text).toBe('');
     expect(body.data.hasContext).toBe(false);
+  });
+
+  describe('copilot reads the pane screen, not the stream', () => {
+    const rule = '─'.repeat(80);
+    const screenOf = (answer: string) =>
+      [
+        ' ❯ what changed   11:30',
+        ` ● ${answer}`,
+        ' /tmp/work  Session: 0 AIC used',
+        rule,
+        '❯',
+        rule,
+        ' ← open sidebar · Interactive · Manual Approval · / commands · ? help',
+      ].join('\n');
+
+    function stubCapture(result: string | null) {
+      const capturePaneText = vi.fn((_muxName: string) => result);
+      (harness.ctx.mux as unknown as { capturePaneText: typeof capturePaneText }).capturePaneText = capturePaneText;
+      return capturePaneText;
+    }
+
+    it('segments the captured screen of the session pane', async () => {
+      session.mode = 'copilot';
+      // What the stream looks like for a repainting TUI once escapes are stripped: rows fused
+      // together, so a reader of the buffer would return this run of text.
+      session.terminalBuffer = 'STREAM-ONLY fused rows that are not the answer';
+      const capture = stubCapture(screenOf('The screen answer.'));
+
+      const { res, body } = await lastResponse();
+
+      expect(res.statusCode).toBe(200);
+      expect(capture).toHaveBeenCalledWith(session.muxName);
+      expect(body.data.text).toBe('The screen answer.');
+      expect(body.data.text).not.toContain('STREAM-ONLY');
+      expect(body.data.hasContext).toBe(true);
+    });
+
+    it('falls back to the buffer when the pane has no screen to capture', async () => {
+      session.mode = 'copilot';
+      session.terminalBuffer = screenOf('The buffer answer.');
+      const capture = stubCapture(null);
+
+      const { res, body } = await lastResponse();
+
+      expect(res.statusCode).toBe(200);
+      expect(capture).toHaveBeenCalledWith(session.muxName);
+      expect(body.data.text).toBe('The buffer answer.');
+    });
+
+    it('never captures the screen for a mode that streams lines', async () => {
+      session.mode = 'opencode';
+      session.terminalBuffer = PANE;
+      const capture = stubCapture(screenOf('must not be read'));
+
+      const { body } = await lastResponse();
+
+      expect(capture).not.toHaveBeenCalled();
+      expect(body.data.text).toContain('Documented the helper in docs/retry.md');
+    });
   });
 
   it('leaves Claude mode on the Claude transcript path', async () => {

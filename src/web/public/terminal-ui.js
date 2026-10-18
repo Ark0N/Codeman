@@ -773,6 +773,9 @@ Object.assign(CodemanApp.prototype, {
         return false;
       }
 
+      // A chord the user rebound to an app action (Settings -> Shortcuts) must not also type into the PTY.
+      if (ev.type === 'keydown' && this.isUserBoundShortcutEvent?.(ev)) return false;
+
       // Command palette chord (COD-153): keep it out of the PTY. The document
       // CAPTURE handler has already opened the palette by the time xterm sees
       // this keydown, but its preventDefault() does NOT stop xterm — without
@@ -2378,15 +2381,17 @@ Object.assign(CodemanApp.prototype, {
     if (!buffer?.getLine) return false;
     const pos = this._clientPointToCell(clientX, clientY);
     if (!pos) return false;
-    const rows = Math.max(1, this.terminal.rows || 1);
-    const cursorRow = Math.max(0, Math.min(rows - 1, buffer.cursorY || 0));
-    const tappedRow = pos.row - 1;
-    if (tappedRow === cursorRow) return true;
-    let start = cursorRow;
-    while (start > 0 && buffer.getLine(buffer.viewportY + start)?.isWrapped) start--;
-    let end = cursorRow;
-    while (end + 1 < rows && buffer.getLine(buffer.viewportY + end + 1)?.isWrapped) end++;
-    return tappedRow >= start && tappedRow <= end;
+    // Compare ABSOLUTE buffer lines: cursorY is baseY-relative and the tap is
+    // viewport-relative, so they only agree while the viewport sits at the bottom
+    // (a tab switch parks it above, see scrollToLastNonEmptyLine).
+    const cursorLine = buffer.baseY + (buffer.cursorY || 0);
+    const tappedLine = buffer.viewportY + pos.row - 1;
+    let start = cursorLine;
+    while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
+    let end = cursorLine;
+    // Bounded by length: xterm's getLine wraps around its circular list past the end.
+    while (end + 1 < buffer.length && buffer.getLine(end + 1)?.isWrapped) end++;
+    return tappedLine >= start && tappedLine <= end;
   },
 
   /**
@@ -3692,6 +3697,7 @@ Object.assign(CodemanApp.prototype, {
         opencode: 'openCodeConfig',
         pi: 'piConfig',
         grok: 'grokConfig',
+        copilot: 'copilotConfig',
         omp: 'ompConfig',
       }[effectiveMode];
       // codex names a thread by an id of its own, not by Codeman's session id,
@@ -5838,6 +5844,12 @@ Object.assign(CodemanApp.prototype, {
     if (mode && mode !== 'none') return false;
     const session = this.sessions?.get(target.sessionId || this.activeSessionId);
     const sessionMode = session?.mode || 'claude';
+    // GitHub Copilot CLI scrolls its own transcript on SGR wheel reports (checked with xterm
+    // encoding them natively). Its mouse DECSETs are stripped server-side so a drag selects
+    // locally (strip-mux-and-mouse), which also means xterm no longer encodes the wheel: send the
+    // same reports by hand, but only while the CLI is actually tracking the mouse. Not gated on a
+    // version; a stale-false flag falls through to the PageUp/PageDown fallback like claude's.
+    if (sessionMode === 'copilot') return session?.cliMouseTracking === true;
     if (sessionMode !== 'claude' && sessionMode !== 'codex') return false;
     if (sessionMode === 'claude' && !this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
     // Only while Claude is actually listening for the mouse. In its default

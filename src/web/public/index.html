@@ -790,7 +790,7 @@
                 <path d="m21 15-5-5L5 21"/>
               </svg>
             </button>
-            <input type="file" class="btn-attach-mobile-input" id="attachFileInput" accept="image/*,video/*" multiple tabindex="-1" aria-hidden="true">
+            <input type="file" class="btn-attach-mobile-input" id="attachFileInput" accept="image/*,video/*,.pdf,.docx,.pptx,.xlsx,.zip,.txt,.md,.csv,.tsv,.json,.log,.yaml,.yml,.xml" multiple tabindex="-1" aria-hidden="true">
           </span>
           <button class="btn-voice-mobile" id="voiceInputBtnMobile" onclick="VoiceInput.toggle()"
                   title="Voice input" aria-label="Start voice input" aria-pressed="false">
@@ -1078,6 +1078,7 @@
                 <option value="grok">Grok</option>
                 <option value="deepseek">DeepSeek</option>
                 <option value="omp">OMP</option>
+                <option value="copilot">GitHub Copilot</option>
               </select>
             </div>
             <div class="form-row"><label>Working Directory</label><input type="text" id="schWorkingDir" placeholder="/absolute/path"></div>
@@ -1693,9 +1694,67 @@
             <span class="close-option-title" id="closeConfirmKillTitle">Kill Tmux & Claude Code</span>
             <span class="close-option-desc">Terminate the session completely</span>
           </button>
+          <!-- Shown only for a session in a Codeman-managed git worktree (requestCloseSession,
+               app.js): kill it, then `git worktree remove` without --force. -->
+          <div class="close-option-worktree" id="closeConfirmWorktree" hidden>
+            <button class="close-option close-option-danger" onclick="app.confirmCloseSession(true, { removeWorktree: true })">
+              <span class="close-option-title">Kill &amp; remove worktree <span id="closeConfirmWorktreeName" data-i18n-skip></span></span>
+              <span class="close-option-desc">git refuses while the worktree has uncommitted or untracked files; nothing is forced</span>
+            </button>
+            <label class="close-option-worktree-branch">
+              <input type="checkbox" id="closeConfirmWorktreeBranch">
+              <span>Also delete its branch (git branch -d keeps a branch that is not merged)</span>
+            </label>
+          </div>
         </div>
         <div class="modal-footer-cancel">
           <button class="btn-toolbar btn-sm" onclick="app.cancelCloseSession()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Git worktrees of a case (session-ui.js openWorktreeModal; routes/worktree-routes.ts).
+         Opened from the case picker's "Git worktrees…" row and the phone case sheet. -->
+    <div class="modal" id="worktreeModal" role="dialog" aria-modal="true" aria-labelledby="worktreeModalTitle">
+      <div class="modal-backdrop" onclick="app.closeWorktreeModal()"></div>
+      <div class="modal-content worktree-modal">
+        <div class="modal-header">
+          <h3 id="worktreeModalTitle"><span>Git worktrees</span> <span class="worktree-modal-case" id="worktreeModalCase" data-i18n-skip></span></h3>
+          <button class="modal-close" onclick="app.closeWorktreeModal()" aria-label="Close git worktrees">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="form-hint worktree-intro">Each worktree is its own checkout of the case's repository, on its own branch, in .claude/worktrees/ of the case. Agents working in parallel then never share one folder.</p>
+          <div class="worktree-status" id="worktreeStatus" role="status" aria-live="polite" hidden></div>
+          <div class="worktree-list" id="worktreeList"></div>
+          <div class="form-row worktree-mode-row">
+            <label for="worktreeMode">Start sessions with</label>
+            <select id="worktreeMode" class="form-select"></select>
+          </div>
+          <fieldset class="worktree-new">
+            <legend>New worktree</legend>
+            <div class="form-row">
+              <label for="worktreeName">Name</label>
+              <input type="text" id="worktreeName" maxlength="64" placeholder="fix-login" autocomplete="off" autocapitalize="off" spellcheck="false" onkeydown="if (event.key === 'Enter') app.createWorktreeFromModal()">
+              <span class="form-hint">New branch worktree-&lt;name&gt; from the case's current commit, unless you pick another below.</span>
+            </div>
+            <details class="worktree-advanced">
+              <summary>Branch and start point</summary>
+              <div class="form-row">
+                <label for="worktreeBranch">Branch</label>
+                <input type="text" id="worktreeBranch" maxlength="200" placeholder="worktree-<name>" autocomplete="off" autocapitalize="off" spellcheck="false">
+              </div>
+              <div class="form-row">
+                <label for="worktreeBase">Start from</label>
+                <input type="text" id="worktreeBase" maxlength="200" placeholder="HEAD" autocomplete="off" autocapitalize="off" spellcheck="false">
+                <span class="form-hint">A branch, tag or commit. Default: the case's current commit (HEAD).</span>
+              </div>
+            </details>
+            <div class="worktree-form-error" id="worktreeFormError" role="alert" hidden></div>
+          </fieldset>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="wt-btn" onclick="app.closeWorktreeModal()">Close</button>
+          <button type="button" class="wt-btn wt-btn-primary" id="worktreeCreateBtn" onclick="app.createWorktreeFromModal()">Create &amp; start session</button>
         </div>
       </div>
     </div>
@@ -2729,6 +2788,13 @@
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsWorkspaceHooks"><span class="slider"></span></label>
                   </div>
+                  <div class="set-row" data-search="pin cli session name resume title tab label">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Pin tab names on the CLI</span>
+                      <span class="set-row-desc">Launch every Claude session with its tab name, so the CLI's prompt label and /resume list match your tabs. Claude then stops generating its own titles for those sessions, and a rename in Codeman holds only until the next turn. Applies from the next session start or respawn, no server restart needed.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsPinCliSessionName"><span class="slider"></span></label>
+                  </div>
                   <div class="set-row" data-search="remote auto reconnect ssh">
                     <div class="set-row-text">
                       <span class="set-row-label">Remote auto-reconnect</span>
@@ -3400,6 +3466,7 @@
                 <option value="grok" data-cli="grok">Grok</option>
                 <option value="deepseek" data-cli="deepseek">DeepSeek</option>
                 <option value="omp" data-cli="omp">OMP</option>
+                <option value="copilot" data-cli="copilot">GitHub Copilot</option>
                 <option value="shell">Shell (no agent)</option>
               </select>
               <span class="form-hint">Which CLI to point the Run button at once the clone finishes. Changeable any time from the Run dropdown.</span>
@@ -3578,7 +3645,7 @@
             <div class="form-row docker-create-only">
               <label>Image</label>
               <input type="text" id="dockerImage" placeholder="codeman/agent:base" autocomplete="off" autocapitalize="off" spellcheck="false">
-              <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/opencode/codex/gemini/agy/pi/grok/dsh/omp + tmux.</span>
+              <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/opencode/codex/gemini/agy/pi/grok/dsh/omp/copilot + tmux.</span>
             </div>
             <div class="form-row docker-create-only">
               <label>Network</label>
@@ -3662,6 +3729,11 @@
           <button class="btn-toolbar btn-case-create-mobile" onclick="app.showCreateCaseFromMobile()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             Create New Case
+          </button>
+          <!-- The selected case's git worktrees (session-ui.js openWorktreeModal). -->
+          <button class="btn-toolbar btn-case-create-mobile btn-case-worktrees-mobile" onclick="app.showWorktreesFromMobile()">
+            <span aria-hidden="true">&#x2442;</span>
+            Worktrees
           </button>
         </div>
       </div>

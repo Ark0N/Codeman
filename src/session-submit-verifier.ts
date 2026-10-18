@@ -4,7 +4,7 @@
  *
  * Claude Code 2.1.277 (auto-installed 2026-09-18) takes typed text the moment its
  * composer paints but ignores Enter for the first 30 to 50 seconds after it, so the
- * `send-keys -l <text>` + `send-keys Enter` pair `TmuxManager.sendInput()` sends 50 ms
+ * text + `send-keys Enter` pair `TmuxManager.sendInput()` sends 50 ms
  * apart leaves the prompt sitting on the composer with `0 tokens`, and every caller
  * that then waits for the turn (send-and-wait, the agent skill, the maintainer bot,
  * cron, Ralph) burns its whole timeout on a turn that never started. Measured through

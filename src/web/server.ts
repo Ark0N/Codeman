@@ -112,6 +112,7 @@ import { sessionWaits } from './session-wait-registry.js';
 import { intentStore } from '../intent-store.js';
 import { AI_CHECK_MODEL } from '../config/ai-defaults.js';
 import { approvalInbox } from './approval-inbox.js';
+import { SCREEN_BLOCKED_SOURCE } from './screen-blocked.js';
 import { stopDeepSeekWeb } from '../deepseek-web-server.js';
 import {
   wireRespawnListeners,
@@ -191,6 +192,7 @@ import {
   registerStatusTelemetryRoutes,
   registerSystemRoutes,
   registerCaseRoutes,
+  registerWorktreeRoutes,
   registerSessionRoutes,
   registerRespawnRoutes,
   registerRalphRoutes,
@@ -962,7 +964,7 @@ export class WebServer extends EventEmitter {
       // `ServerResponse` to a `FastifyReply`, so it is `reply.header()` here and
       // NOT `res.setHeader()`. A v9-style body throws TypeError on every static
       // request, which is every page load. See the v10.0.0 release notes.
-      setHeaders: (reply) => {
+      setHeaders: (reply, filePath) => {
         // ⚠️ That same change ALSO flipped precedence, and silently. Under v9 this
         // callback wrote to the raw response and Fastify's staged reply headers then
         // overwrote it, so a route that set its own Cache-Control before .sendFile()
@@ -971,6 +973,15 @@ export class WebServer extends EventEmitter {
         // no-store` its route asks for — a service worker that can never update.
         // So: a route that already decided keeps its answer.
         if (reply.getHeader('Cache-Control') !== undefined) return;
+        // A JSON file here is DATA the page fetches at runtime (whats-new.json is rewritten every
+        // release, security-notices.json by hand, manifest.json), never content-hashed and never
+        // `?v=`-busted, so it must revalidate. Under `immutable` a browser may keep last release's
+        // copy for a year, and the page's `fetch(..., { cache: 'no-cache' })` is the only thing
+        // asking it not to; the response header is what every browser honours.
+        if (filePath.endsWith('.json')) {
+          reply.header('Cache-Control', 'no-cache');
+          return;
+        }
         reply.header('Cache-Control', 'public, max-age=31536000, immutable');
       },
     });
@@ -1153,6 +1164,7 @@ export class WebServer extends EventEmitter {
     registerStatusTelemetryRoutes(this.app, ctx);
     registerSystemRoutes(this.app, ctx);
     registerCaseRoutes(this.app, ctx);
+    registerWorktreeRoutes(this.app, ctx);
     // The registry's lifetime is the server's: it drops per-session wake state on every
     // cleanup path and resolves in-flight wakes on shutdown.
     this.remoteWake = registerSessionRoutes(this.app, ctx);
@@ -2835,6 +2847,14 @@ export class WebServer extends EventEmitter {
     } else if (event === SseEvent.HookPermissionPrompt && data.tool_name) {
       body += body ? ' ' : '';
       body += `Tool: ${String(data.tool_name)}`;
+    } else if (event === SseEvent.HookPermissionPrompt && data.source === SCREEN_BLOCKED_SOURCE && data.message) {
+      // A dialog read off a hook-less CLI's screen (web/screen-blocked.ts), whose message
+      // is built from the CLI's label, never from the screen. Keyed on the source so a
+      // Claude hook's own `message` keeps the body it always had; capped like the error
+      // text, since a hook poster holding the secret can claim the source too (as it can
+      // already claim any `tool_name` above).
+      body += body ? ' ' : '';
+      body += String(data.message).slice(0, 200);
     }
     return body;
   }
@@ -3579,6 +3599,7 @@ export class WebServer extends EventEmitter {
               antigravityConfig: muxSession.mode === 'antigravity' ? savedState?.antigravityConfig : undefined,
               piConfig: muxSession.mode === 'pi' ? savedState?.piConfig : undefined,
               grokConfig: muxSession.mode === 'grok' ? savedState?.grokConfig : undefined,
+              copilotConfig: muxSession.mode === 'copilot' ? savedState?.copilotConfig : undefined,
               deepSeekConfig: muxSession.mode === 'deepseek' ? savedState?.deepSeekConfig : undefined,
               ompConfig: muxSession.mode === 'omp' ? savedState?.ompConfig : undefined,
               envOverrides: savedEnvOverrides,

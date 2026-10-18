@@ -13,7 +13,7 @@ opening the session.
 | Desktop notification           | Another window on the same machine               | Opt-in  |
 | Push notification              | Anywhere, even with no tab open                  | Opt-in  |
 | Webhook (ntfy, Slack, Discord) | Anywhere, with no browser or subscription at all | Opt-in  |
-| Approvals Inbox                | One queue across every session                   | Opt-in  |
+| Approvals Inbox                | One queue for Claude, Codex and DeepSeek prompts | Opt-in  |
 | Phone overview                 | Phone home screen, NEEDS YOU section             | On      |
 | Away Digest                    | Afterwards, as a summary                         | Opt-in  |
 
@@ -34,8 +34,13 @@ reloading the dashboard while a permission dialog is blocking a session does not
 with a normal-looking tab.
 
 For Claude sessions, these come from Claude Code's hooks and are precise about *why* the
-session stopped; DeepSeek Harness sessions report the same states themselves. For the other
-CLIs there are no hooks, so you get the coarser output-based signal.
+session stopped; DeepSeek Harness sessions report the same states themselves. Codex has no
+hooks, but its dialogs are distinctive enough to read off the screen, so a Codex session
+waiting on an approval, a question or the "Trust this folder?" prompt turns red too, and
+clears a few seconds after you answer. For the other CLIs there are no hooks and no dialog
+reading, so you get only the coarser working and idle state: read off the screen for
+OpenCode, Gemini CLI, Pi, OMP and Antigravity, and unreliable for Grok Build, which
+declares nothing Codeman can read it from.
 
 ## Window title and OS notifications
 
@@ -109,11 +114,13 @@ Behaviour worth knowing:
 ## The Approvals Inbox
 
 **Opt-in, off by default. Claude sessions, plus DeepSeek Harness sessions, whose terminal
-front door reports its prompts to Codeman.**
+front door reports its prompts to Codeman, and Codex sessions, whose dialogs Codeman reads
+off the screen.** DeepSeek and Codex cards are alerts: they say "Answer in the terminal" and
+carry no answer buttons, because Codeman cannot verify a keystroke into those dialogs.
 
-One queue of every prompt currently waiting on a human, across all your sessions, answerable
-in place. When you have eight workers running, this is the difference between checking eight
-tabs and checking one list.
+One queue of the prompts currently waiting on a human, across all your sessions, with the
+Claude ones answerable in place. When you have eight workers running, this is the difference
+between checking eight tabs and checking one list.
 
 Turn it on in **App Settings**. Surfaces:
 
@@ -134,17 +141,20 @@ Behaviour worth knowing:
   sending, and refuses with a conflict if the dialog is no longer there. Otherwise your
   keystroke would land in the composer as stray text.
 - **Permission and question items clear only on definitive signals**: the turn ending, the
-  dialog completing, an answer, a supersede, the session exiting, or a 12 hour timeout. They
-  do not clear on a heuristic "looks busy again" signal, because that signal is wrong often
-  enough to lose a real prompt.
+  dialog completing, an answer, a supersede, the session exiting, or a 12 hour timeout. A
+  Codex item also clears a few seconds after its dialog leaves the screen, and a DeepSeek
+  Harness item when the harness reports it is working again. They do not clear on a
+  heuristic "looks busy again" signal, because that signal is wrong often enough to lose a
+  real prompt.
 - **In memory only.** Restarting the server clears the queue; the prompts themselves are
   still sitting in the sessions.
 
 ### Approve and Deny from the notification
 
-With the inbox enabled, push notifications carry **Approve** and **Deny** buttons. Those are
-handled by the service worker directly, so they work with no tab open: tap Approve on a
-locked phone and the agent continues.
+With the inbox enabled, push notifications for a Claude permission prompt carry **Approve**
+and **Deny** buttons. Those are handled by the service worker directly, so they work with no
+tab open: tap Approve on a locked phone and the agent continues. A Codex or DeepSeek Harness
+notification carries no Approve or Deny, since those dialogs are answered in the terminal.
 
 With the inbox off, the buttons are stripped from the notification payload entirely rather
 than being shown and failing.
@@ -184,8 +194,9 @@ current sessions, then past ones. Rows use the same language as the tab strip: a
 when fine, pulsing while working, yellow when waiting for input, red when a question is
 pending.
 
-Answer strips let you resolve a prompt straight from the home screen without opening the
-session.
+With the Approvals Inbox on, answer strips let you resolve a Claude permission or question
+dialog straight from the home screen without opening the session. A Codex or DeepSeek
+Harness strip offers **Answer in terminal** instead, which opens the session.
 
 ## The Away Digest
 
@@ -214,7 +225,8 @@ from the lock screen.
 - **iOS needs the home screen install.** A Safari tab will never receive push.
 - **The bell is invisible at zero.** That is deliberate, not a broken setting.
 - **Approvals need real signals.** They are built on hook events, which Claude emits and
-  DeepSeek Harness reports itself; the other CLIs do neither.
+  DeepSeek Harness reports itself, and on Codex's dialogs as its screen shows them; the
+  other CLIs give neither.
 - **A stale menu answer is refused, not sent.** If you answer a card for a dialog that has
   since gone away, Codeman declines rather than typing a digit into the composer.
 

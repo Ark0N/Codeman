@@ -151,8 +151,14 @@ describe('terminal link-provider regexes (shipped source)', () => {
       // Camera-roll video uploads the agent echoes back (VIDEO_ATTACHMENT_EXTENSIONS).
       '/home/a/.codeman-uploads/paste-1-ab.m4v',
       '/home/a/.codeman-uploads/paste-2-cd.ogv',
+      // Document uploads the agent echoes back (zip and tsv join the already-matched office/text set).
+      '/home/a/.codeman-uploads/paste-3-ef-archive.zip',
+      '/home/a/.codeman-uploads/paste-4-gh-data.tsv',
       // Longer extension of a family must win over its prefix (tsx over ts).
       '/home/a/src/App.tsx',
+      // Diffs an agent writes for review; the attachment allowlist already serves them.
+      '/tmp/claude-1000/-home-a-repo/b3de6e9f/scratchpad/resolution.diff',
+      '/home/a/repo/fix.patch',
     ];
     for (const path of cases) {
       ext.lastIndex = 0;

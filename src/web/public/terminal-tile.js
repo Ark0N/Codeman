@@ -328,6 +328,7 @@
         ) {
           return false;
         }
+        if (ev.type === 'keydown' && global.app?.isUserBoundShortcutEvent?.(ev)) return false;
         if (ev.type === 'keydown' && global.app?.shouldOpenCommandPaletteFromShortcut?.(ev)) {
           return false;
         }

@@ -40,6 +40,8 @@ interface Harness {
   pastedText: string[];
   /** Image batches handed to _uploadAndInsertImages(), one entry per call. */
   uploadedBatches: Array<Array<{ type: string }>>;
+  /** Messages handed to showToast(), one entry per call. */
+  toasts: string[];
   /** How many trap divs are still attached to the fake body. */
   attachedTraps: () => number;
   runTimers: () => void;
@@ -107,7 +109,8 @@ function loadPasteHarness(): Harness {
   app._uploadAndInsertImages = (files: Array<{ type: string }>) => {
     uploadedBatches.push(Array.from(files));
   };
-  app.showToast = () => {};
+  const toasts: string[] = [];
+  app.showToast = (message: string) => toasts.push(message);
 
   (app._handleImagePaste as () => void).call(app);
 
@@ -126,6 +129,7 @@ function loadPasteHarness(): Harness {
     },
     pastedText,
     uploadedBatches,
+    toasts,
     attachedTraps: () => attached.size,
     runTimers: () => {
       const pending = timers.splice(0, timers.length);
@@ -178,6 +182,36 @@ describe('Ctrl+V paste trap', () => {
     expect(h.uploadedBatches).toHaveLength(1);
     expect(h.uploadedBatches[0]).toEqual([{ type: 'image/png' }]);
     expect(h.pastedText).toEqual([]);
+  });
+
+  it('a paste mixing an image with a refused file uploads the image and says what it skipped', () => {
+    const h = loadPasteHarness();
+
+    h.firePaste({ text: 'shot.png', images: ['image/png', 'application/x-sh'] });
+
+    expect(h.uploadedBatches).toEqual([[{ type: 'image/png' }]]);
+    expect(h.toasts).toEqual(['1 file skipped: unsupported type']);
+  });
+
+  it('a paste whose only file is refused pastes its text instead, without a toast', () => {
+    const h = loadPasteHarness();
+
+    // Copying from a document can carry both: the text is what the user gets.
+    h.firePaste({ text: 'echo hi', images: ['application/x-sh'] });
+
+    expect(h.pastedText).toEqual(['echo hi']);
+    expect(h.uploadedBatches).toEqual([]);
+    expect(h.toasts).toEqual([]);
+  });
+
+  it('a paste of a refused file and no text says so instead of doing nothing', () => {
+    const h = loadPasteHarness();
+
+    h.firePaste({ images: ['application/x-sh'] });
+
+    expect(h.pastedText).toEqual([]);
+    expect(h.uploadedBatches).toEqual([]);
+    expect(h.toasts).toEqual(['Unsupported file type']);
   });
 
   it('removes the trap and hands focus back after the paste it accepted', () => {

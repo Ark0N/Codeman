@@ -183,6 +183,63 @@ describe('workDetect.workingLine is guarded like every other config regex', () =
       expect(compileVersionRegex(src), `${entry.id} declares an awaitingLine the guard refuses`).not.toBeNull();
     }
   });
+
+  it('holds the optional blockedLine to the same guard', () => {
+    // Run over the foot of a capture at every settle and on a timer while a dialog is
+    // up, and a clis.json override can set it.
+    for (const blockedLine of ['(a+)+b', 'a'.repeat(201), '([unclosed', '']) {
+      expectRejected(
+        (e) => {
+          (e.capabilities as Record<string, unknown>).workDetect = {
+            promptGlyph: '>',
+            workingLine: 'working',
+            blockedLine,
+          };
+        },
+        `blockedLine ${JSON.stringify(blockedLine.slice(0, 20))} must be refused at LOAD time`
+      );
+    }
+  });
+
+  it('bounds the blockedLine window and refuses one with no pattern', () => {
+    for (const blockedLines of [0, 25, 2.5]) {
+      expectRejected((e) => {
+        (e.capabilities as Record<string, unknown>).workDetect = {
+          promptGlyph: '>',
+          workingLine: 'working',
+          blockedLine: 'Press enter to confirm$',
+          blockedLines,
+        };
+      }, 'a config file must not be able to widen the search to the whole pane');
+    }
+    expectRejected((e) => {
+      (e.capabilities as Record<string, unknown>).workDetect = {
+        promptGlyph: '>',
+        workingLine: 'working',
+        blockedLines: 4,
+      };
+    }, 'a window with nothing to search is a typo whose failure is otherwise silent');
+  });
+
+  it('accepts a blockedLine with its window, and every shipped one', () => {
+    const entry = baseEntry();
+    (entry.capabilities as Record<string, unknown>).workDetect = {
+      promptGlyph: '>',
+      workingLine: 'working',
+      blockedLine: 'Press enter to confirm$',
+      blockedLines: 24,
+    };
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true);
+    let shipped = 0;
+    for (const stock of STOCK_CLIS) {
+      const src = stock.capabilities.workDetect?.blockedLine;
+      if (!src) continue;
+      shipped++;
+      expect(compileVersionRegex(src), `${stock.id} declares a blockedLine the guard refuses`).not.toBeNull();
+      expect(CliEntrySchema.safeParse(JSON.parse(JSON.stringify(stock))).success).toBe(true);
+    }
+    expect(shipped).toBeGreaterThan(0);
+  });
 });
 
 describe('no shell text can reach the command line', () => {
@@ -428,18 +485,31 @@ describe('capability shapes', () => {
     }, 'transcriptPageKeys is a boolean');
   });
 
+  it('declares which CLIs get the wheel forwarded, and whether a version gates it', () => {
+    // Claude forwards from 2.1.187 (fullscreen only); tracked Codex and Copilot
+    // forward without a version gate. Unmeasured entries stay 'never'.
+    const mode = (id: string) => STOCK_CLIS.find((e) => (e.id as string) === id)?.capabilities.wheelForward;
+    expect(mode('copilot')).toEqual({ mode: 'always' });
+    expect(mode('claude')).toEqual({ mode: 'version-gated', minVersion: '2.1.187' });
+    const forwarding = STOCK_CLIS.filter((e) => e.capabilities.wheelForward.mode !== 'never').map(
+      (e) => e.id as string
+    );
+    expect(forwarding.sort()).toEqual(['claude', 'codex', 'copilot']);
+    expect(CliEntrySchema.safeParse(baseEntry('copilot')).success).toBe(true);
+  });
+
   it('declares transcriptPageKeys for exactly the CLIs measured to page on PageUp/PageDown', () => {
-    // claude (repaint mode), codex and opencode (both on the alternate screen) were
+    // claude (repaint mode), codex, opencode and copilot (all on the alternate screen) were
     // measured paging their own transcript on PageUp/PageDown; no other stock entry has been.
     const paging = STOCK_CLIS.filter((e) => e.capabilities.transcriptPageKeys === true).map((e) => e.id as string);
-    expect(paging.sort()).toEqual(['claude', 'codex', 'opencode']);
+    expect(paging.sort()).toEqual(['claude', 'codex', 'copilot', 'opencode']);
   });
 });
 
 describe('observed mouse-tracking wheel policy', () => {
   it('advertises and validates tracked Codex forwarding without a fictitious minimum version', () => {
     const codex = STOCK_CLIS.find((e) => e.id === 'codex')!;
-    expect(codex.capabilities.wheelForward).toEqual({ mode: 'mouse-tracking' });
+    expect(codex.capabilities.wheelForward).toEqual({ mode: 'always' });
     expect(CliEntrySchema.safeParse(codex).success).toBe(true);
     expect(codex.capabilities.transcriptPageKeys).toBe(true);
   });

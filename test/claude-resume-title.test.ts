@@ -1,45 +1,110 @@
 /**
- * @fileoverview Claude's `/resume` title belongs to Claude unless the user chose one.
+ * @fileoverview The CLI's session name and the opt-in `pinCliSessionName` setting.
  *
  * `--name` sets the prompt-box label, the `/resume` picker entry and the terminal
- * title, and a pinned title stops Claude generating its own. Pinning the
- * `w1-myapp` placeholder therefore listed every conversation of a case under the
- * same name in `/resume`. Only a manual name is pinned now (`cliPinnedName`), and
- * a rename reaches the transcript as a `custom-title` row.
+ * title, and a pinned title stops Claude generating its own. By default only a name
+ * the user chose is pinned (`cliPinnedName`); with `pinCliSessionName` on, every tab's
+ * name is pinned, placeholder and auto names included, so Claude's own session list
+ * matches the tab. The setting is re-read at each spawn and respawn. A rename reaches
+ * the transcript as a `custom-title` row.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Session } from '../src/session.js';
 import { appendClaudeCustomTitle } from '../src/claude-session-title.js';
+import { SETTINGS_PATH } from '../src/web/route-helpers.js';
 
-type RespawnOptionsProbe = { _buildRespawnPaneOptions(): { name?: string; cliName?: string } };
+type RespawnOptionsProbe = {
+  _buildRespawnPaneOptions(): { name?: string; cliName?: string };
+  _buildRespawnPaneOptionsWithResumePin(): Promise<{ name?: string; cliName?: string }>;
+};
+
+const probe = (session: Session) => session as unknown as RespawnOptionsProbe;
+
+/** The respawn builder is the path every respawn takes; it re-reads the setting first. */
+const cliNameAtRespawn = async (session: Session) =>
+  (await probe(session)._buildRespawnPaneOptionsWithResumePin()).cliName;
+
+function writeSettings(settings: Record<string, unknown> | null) {
+  if (settings === null) {
+    rmSync(SETTINGS_PATH, { force: true });
+    return;
+  }
+  mkdirSync(dirname(SETTINGS_PATH), { recursive: true });
+  writeFileSync(SETTINGS_PATH, JSON.stringify(settings));
+}
 
 describe('Session.cliPinnedName', () => {
-  it('pins nothing for a placeholder, so Claude titles the conversation itself', () => {
-    const session = new Session({ workingDir: '/tmp', name: 'w1-demo' });
-    expect(session.cliPinnedName).toBeUndefined();
-    const options = (session as unknown as RespawnOptionsProbe)._buildRespawnPaneOptions();
-    // The tab keeps its name; only the CLI flag is withheld.
-    expect(options.name).toBe('w1-demo');
-    expect(options.cliName).toBeUndefined();
+  afterEach(() => writeSettings(null));
+
+  describe('pinCliSessionName off (default)', () => {
+    it.each([null, {}, { pinCliSessionName: false }])(
+      'leaves a placeholder name unpinned (settings: %j)',
+      async (settings) => {
+        writeSettings(settings);
+        const session = new Session({ workingDir: '/tmp', name: 'w1-demo' });
+        expect(await cliNameAtRespawn(session)).toBeUndefined();
+        expect(session.cliPinnedName).toBeUndefined();
+        expect(probe(session)._buildRespawnPaneOptions().name).toBe('w1-demo');
+      }
+    );
+
+    it('leaves an auto name unpinned', async () => {
+      writeSettings({ pinCliSessionName: false });
+      const session = new Session({ workingDir: '/tmp', name: 'w1-demo' });
+      expect(session.applyAutoName('w1-demo: fix the login redirect')).toBe(true);
+      expect(await cliNameAtRespawn(session)).toBeUndefined();
+    });
+
+    it('still pins a name the user chose, at creation or by a rename', async () => {
+      writeSettings({ pinCliSessionName: false });
+      expect(await cliNameAtRespawn(new Session({ workingDir: '/tmp', name: 'msgtest-worker' }))).toBe(
+        'msgtest-worker'
+      );
+
+      const renamed = new Session({ workingDir: '/tmp', name: 'w1-demo' });
+      renamed.name = '登录修复';
+      expect(await cliNameAtRespawn(renamed)).toBe('登录修复');
+    });
   });
 
-  it('pins nothing for an auto name, whose cut of the prompt Claude beats', () => {
-    const session = new Session({ workingDir: '/tmp', name: 'w1-demo' });
-    expect(session.applyAutoName('w1-demo: fix the login redirect')).toBe(true);
-    expect(session.cliPinnedName).toBeUndefined();
+  describe('pinCliSessionName on', () => {
+    it('pins the placeholder name, so the CLI session matches the tab', async () => {
+      writeSettings({ pinCliSessionName: true });
+      const session = new Session({ workingDir: '/tmp', name: 'w1-demo' });
+      expect(await cliNameAtRespawn(session)).toBe('w1-demo');
+      expect(session.cliPinnedName).toBe('w1-demo');
+    });
+
+    it('pins an auto name too, from the next spawn', async () => {
+      writeSettings({ pinCliSessionName: true });
+      const session = new Session({ workingDir: '/tmp', name: 'w1-demo' });
+      expect(session.applyAutoName('w1-demo: fix the login redirect')).toBe(true);
+      expect(await cliNameAtRespawn(session)).toBe('w1-demo: fix the login redirect');
+    });
+
+    it('pins a name the user chose', async () => {
+      writeSettings({ pinCliSessionName: true });
+      const renamed = new Session({ workingDir: '/tmp', name: 'w1-demo' });
+      renamed.name = '登录修复';
+      expect(await cliNameAtRespawn(renamed)).toBe('登录修复');
+    });
+
+    it('never pins a blank name', async () => {
+      writeSettings({ pinCliSessionName: true });
+      expect(await cliNameAtRespawn(new Session({ workingDir: '/tmp', name: '   ' }))).toBeUndefined();
+    });
   });
 
-  it('pins a name the user chose, at creation or by a rename', () => {
-    expect(new Session({ workingDir: '/tmp', name: 'msgtest-worker' }).cliPinnedName).toBe('msgtest-worker');
-
-    const renamed = new Session({ workingDir: '/tmp', name: 'w1-demo' });
-    renamed.name = '登录修复';
-    expect(renamed.cliPinnedName).toBe('登录修复');
-    expect((renamed as unknown as RespawnOptionsProbe)._buildRespawnPaneOptions().cliName).toBe('登录修复');
+  it('follows the setting on the next respawn of the same session, with no restart', async () => {
+    const session = new Session({ workingDir: '/tmp', name: 'w1-demo' });
+    writeSettings({ pinCliSessionName: true });
+    expect(await cliNameAtRespawn(session)).toBe('w1-demo');
+    writeSettings({ pinCliSessionName: false });
+    expect(await cliNameAtRespawn(session)).toBeUndefined();
   });
 });
 

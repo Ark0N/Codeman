@@ -13,6 +13,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const accessorySource = readFileSync(resolve('src/web/public/keyboard-accessory.js'), 'utf8');
 const appSource = readFileSync(resolve('src/web/public/app.js'), 'utf8');
+const imageInputSource = readFileSync(resolve('src/web/public/image-input.js'), 'utf8');
+// The real filter-and-toast helper both dialogs call (image-input.js), so these
+// tests pin the shipped wording rather than a copy of it.
+const { _admitPromptAttachments } = new Function(
+  `class CodemanApp {}\n${imageInputSource}\nreturn CodemanApp.prototype;`
+)() as { _admitPromptAttachments: (files: unknown[], options?: { textPasted?: boolean }) => unknown[] };
 
 type Timer = { callback: () => void; delay: number };
 
@@ -45,9 +51,16 @@ function loadComposer(sessionId = 'session-1') {
     _predictiveEcho: { clearPredictions: vi.fn() },
     _sendInputAsync: vi.fn(),
     _uploadAndInsertImages: vi.fn(async () => ['/tmp/image-one.png']),
-    _promptAttachKind: (file: { type: string }) =>
-      file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : null,
+    _promptAttachKind: (file: { type: string; name?: string }) =>
+      file.type.startsWith('image/')
+        ? 'image'
+        : file.type.startsWith('video/')
+          ? 'video'
+          : /\.(pdf|docx|txt|md)$/i.test(file.name || '')
+            ? 'document'
+            : null,
     showToast: vi.fn(),
+    _admitPromptAttachments,
   };
   const schedule = (callback: () => void, delay = 0) => {
     timers.push({ callback, delay });
@@ -560,7 +573,7 @@ describe('mobile prompt composer', () => {
     const pasteImage = () => {
       const item = { type: 'image/png', getAsFile: () => image };
       const event = new document.defaultView!.Event('paste', { bubbles: true, cancelable: true });
-      Object.defineProperty(event, 'clipboardData', { value: { items: [item] } });
+      Object.defineProperty(event, 'clipboardData', { value: { items: [item], getData: () => '' } });
       input.dispatchEvent(event);
     };
 
@@ -576,18 +589,66 @@ describe('mobile prompt composer', () => {
     expect((document.querySelector('.paste-send') as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('offers videos in the Image key picker and filters the pick through the shared classifier', async () => {
+  it('offers videos and documents in the Attach key picker and filters the pick through the shared classifier', async () => {
     const { app, bar, document } = loadComposer();
     bar.composePrompt();
     const fileInput = document.querySelector('.paste-file-input') as HTMLInputElement;
-    expect(fileInput.getAttribute('accept')).toBe('image/*,video/*');
+    expect(fileInput.getAttribute('accept')).toBe(
+      'image/*,video/*,.pdf,.docx,.pptx,.xlsx,.zip,.txt,.md,.csv,.tsv,.json,.log,.yaml,.yml,.xml'
+    );
+    expect((document.querySelector('.paste-image') as HTMLButtonElement).textContent).toBe('📎 Attach');
     const video = new document.defaultView!.File(['clip'], 'clip.mov', { type: 'video/quicktime' });
     const pdf = new document.defaultView!.File(['%PDF'], 'notes.pdf', { type: 'application/pdf' });
-    Object.defineProperty(fileInput, 'files', { configurable: true, value: [video, pdf] });
+    const script = new document.defaultView!.File(['#!/bin/sh'], 'run.sh', { type: 'text/x-shellscript' });
+    Object.defineProperty(fileInput, 'files', { configurable: true, value: [video, pdf, script] });
 
     fileInput.dispatchEvent(new document.defaultView!.Event('change', { bubbles: true }));
-    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video], { insert: false });
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([video, pdf], { insert: false });
+    expect(app.showToast).toHaveBeenCalledWith('1 file skipped: unsupported type', 'info');
     await vi.waitFor(() => expect(textarea(document).value).toContain('/tmp/image-one.png'));
+  });
+
+  it('says so when the Compose picker gets nothing it can upload', () => {
+    const { app, bar, document } = loadComposer();
+    bar.composePrompt();
+    const fileInput = document.querySelector('.paste-file-input') as HTMLInputElement;
+    const script = new document.defaultView!.File(['#!/bin/sh'], 'run.sh', { type: 'text/x-shellscript' });
+    Object.defineProperty(fileInput, 'files', { configurable: true, value: [script] });
+
+    fileInput.dispatchEvent(new document.defaultView!.Event('change', { bubbles: true }));
+
+    expect(app._uploadAndInsertImages).not.toHaveBeenCalled();
+    expect(app.showToast).toHaveBeenCalledWith('Unsupported file type', 'error');
+  });
+
+  it('leaves a text paste that also carries a refused file to the editor, without a toast', () => {
+    const { app, bar, document } = loadComposer();
+    bar.composePrompt();
+    const script = new document.defaultView!.File(['#!/bin/sh'], 'run.sh', { type: 'text/x-shellscript' });
+    const event = new document.defaultView!.Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: { items: [{ type: 'text/x-shellscript', getAsFile: () => script }], getData: () => 'echo hi' },
+    });
+    textarea(document).dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(app._uploadAndInsertImages).not.toHaveBeenCalled();
+    expect(app.showToast).not.toHaveBeenCalled();
+  });
+
+  it('puts an uploaded document path into the draft like a photo', async () => {
+    const { app, bar, document } = loadComposer();
+    app._uploadAndInsertImages.mockResolvedValueOnce(['/case/.codeman-uploads/paste-1-ab-notes.pdf']);
+    bar.composePrompt();
+    const input = textarea(document);
+    input.value = 'summarize';
+    input.selectionStart = input.selectionEnd = input.value.length;
+    input.dispatchEvent(new document.defaultView!.Event('input', { bubbles: true }));
+    const fileInput = document.querySelector('.paste-file-input') as HTMLInputElement;
+    const pdf = new document.defaultView!.File(['%PDF'], 'notes.pdf', { type: '' }); // no MIME: the name decides
+    Object.defineProperty(fileInput, 'files', { configurable: true, value: [pdf] });
+    fileInput.dispatchEvent(new document.defaultView!.Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(input.value).toBe('summarize /case/.codeman-uploads/paste-1-ab-notes.pdf'));
+    expect(app.terminal.paste).not.toHaveBeenCalled();
   });
 
   it('takes a video pasted into the editor through the shared classifier', () => {
@@ -602,6 +663,7 @@ describe('mobile prompt composer', () => {
           { type: 'text/plain', getAsFile: () => null },
           { type: 'video/mp4', getAsFile: () => video },
         ],
+        getData: () => '',
       },
     });
     input.dispatchEvent(event);
@@ -696,6 +758,46 @@ describe('mobile shell Paste', () => {
 
     expect(app._uploadAndInsertImages).toHaveBeenCalledWith([image], { sessionId: 'session-1' });
     expect(document.querySelector('.paste-overlay')).toBeNull();
+  });
+
+  it('uploads the admitted files of a mixed pick and says how many it skipped', () => {
+    const { app, document } = openShellPaste();
+    const fileInput = document.querySelector('.paste-overlay .paste-file-input') as HTMLInputElement;
+    const image = new document.defaultView!.File(['image'], 'shot.png', { type: 'image/png' });
+    const script = new document.defaultView!.File(['#!/bin/sh'], 'run.sh', { type: 'text/x-shellscript' });
+    Object.defineProperty(fileInput, 'files', { configurable: true, value: [image, script] });
+
+    fileInput.dispatchEvent(new document.defaultView!.Event('change', { bubbles: true }));
+
+    expect(app._uploadAndInsertImages).toHaveBeenCalledWith([image], { sessionId: 'session-1' });
+    expect(app.showToast).toHaveBeenCalledWith('1 file skipped: unsupported type', 'info');
+  });
+
+  it('keeps the dialog open and says so when the pick holds nothing it can upload', () => {
+    const { app, document } = openShellPaste();
+    const fileInput = document.querySelector('.paste-overlay .paste-file-input') as HTMLInputElement;
+    const script = new document.defaultView!.File(['#!/bin/sh'], 'run.sh', { type: 'text/x-shellscript' });
+    Object.defineProperty(fileInput, 'files', { configurable: true, value: [script] });
+
+    fileInput.dispatchEvent(new document.defaultView!.Event('change', { bubbles: true }));
+
+    expect(app._uploadAndInsertImages).not.toHaveBeenCalled();
+    expect(app.showToast).toHaveBeenCalledWith('Unsupported file type', 'error');
+    expect(document.querySelector('.paste-overlay')).not.toBeNull();
+  });
+
+  it('leaves a text paste that also carries a refused file to the textarea, without a toast', () => {
+    const { app, document, input } = openShellPaste();
+    const script = new document.defaultView!.File(['#!/bin/sh'], 'run.sh', { type: 'text/x-shellscript' });
+    const event = new document.defaultView!.Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: { items: [{ type: 'text/x-shellscript', getAsFile: () => script }], getData: () => 'echo hi' },
+    });
+    input.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(app._uploadAndInsertImages).not.toHaveBeenCalled();
+    expect(app.showToast).not.toHaveBeenCalled();
+    expect(document.querySelector('.paste-overlay')).not.toBeNull();
   });
 
   it('sends nothing for an empty paste', () => {

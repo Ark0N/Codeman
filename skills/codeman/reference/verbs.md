@@ -376,8 +376,10 @@ recovered by submitting it with `{"input":"\r"}`.
 only when the workspace actually has them, see [§5.1](#51-where-to-spawn)) **and for
 `deepseek`** — the one external CLI that reports its own lifecycle, so its `stop` is a
 real end-of-turn signal rather than a guess. On
-`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`omp`, requesting them explicitly is a
-400, and lifecycle transitions there are coarse (a short shell command may emit **no**
+`shell`/`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`omp`/`copilot`, requesting them explicitly is a
+400 (except `blocked` on `codex`, which Codeman reads off its screen when an approval,
+question or trust dialog is up; a wait for it answers at once if one already is), and
+lifecycle transitions there are coarse (a short shell command may emit **no**
 `idle` transition at all, verified live), so synchronize those with markers.
 
 ⚠️ A dsh session can still refuse them for a per-SESSION reason: `statusReporting:
@@ -428,7 +430,7 @@ from the transcript file, which is flushed slightly *after* the `stop` hook fire
 single read taken the instant send-and-wait returns comes back `""` even though the
 turn finished (verified live: empty on the first call, full text seconds later). `text`
 is also `""` before the worker's first completed turn, and always `""` for modes with
-no transcript (`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok`, `omp`; the first four
+no transcript (`shell`, `opencode`, `gemini`, `antigravity`, `pi`, `grok`, `omp`, `copilot`; the first four
 verified live, pi from the same source path), which is
 why the loop above is bounded rather than open-ended. A dsh worker lags too, for its own
 reason: the harness finalizes the assistant message just after it reports `idle`. Fall back to the terminal buffer
@@ -514,7 +516,7 @@ turn), and both better than diffing terminal samples:
 ```
 
 ⚠️ `active-tools` is parsed out of Claude's own output format, so it is **empty for
-`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`/`omp`** (those parsers are skipped wholesale) and
+`opencode`/`codex`/`gemini`/`antigravity`/`pi`/`grok`/`deepseek`/`omp`/`copilot`** (those parsers are skipped wholesale) and
 in practice empty for `shell`. Source-verified, not measured live.
 
 Only if neither helps: sample `terminal?tail=` twice a few seconds apart. A changing
@@ -697,7 +699,7 @@ The shape, each step verified live (probes, failure modes and safety detail in
    column; the row's `name [ref]` is the address. On Codeman 1.16+ with claude
    2.1.224+ a worker's peer name is its Codeman session name, so pass a DESCRIPTIVE
    `sessionName` in quick-start to pick it (a `w<N>-` placeholder-shaped name is not
-   pinned, so it lists derived); older setups list a name derived from the case folder.
+   pinned by default, so it lists derived); older setups list a name derived from the case folder.
    No row = messaging is off for that worker (it is feature-flagged even on matching
    CLI versions, observed live): fall back to the HTTP recipes without complaint.
 3. `SendMessage` the task; first contact must use the `name [ref]` form copied from

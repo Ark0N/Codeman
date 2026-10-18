@@ -677,10 +677,11 @@ const CODEX: CliEntry = {
     // which the agent writes (and while a prompt is typed, the last two). Matching the complete row raises the bar — an assistant
     // message has to end with this exact line, to the character — but nothing here makes
     // forging it impossible, so do not read the Claude comment above as applying here.
-    // What contains it is that codex declares `hooks: 'none'`: no hook event from a codex
-    // session ever reaches `notePrompt()`, so there is no idle item to pre-acknowledge
-    // and a forged label costs a wrong badge and nothing else. A CLI that gains hook
-    // signals must not keep a pattern this soft.
+    // What contains it is that codex declares `hooks: 'none'`: no IDLE prompt from a codex
+    // session ever reaches `notePrompt()` (its screen-read dialogs below open PERMISSION
+    // items, which a watching label never acknowledges), so there is no idle item to
+    // pre-acknowledge and a forged label costs a wrong badge and nothing else. A CLI that
+    // gains idle signals must not keep a pattern this soft.
     // ⚠️ Background TERMINALS are the only background work codex advertises on screen.
     // A sub-agent started without waiting outlives the turn just as a terminal does —
     // measured 2026-09-22, the sandboxed process was still running — and the pane shows
@@ -689,11 +690,45 @@ const CODEX: CliEntry = {
     // composer. So a codex session waiting on a sub-agent reads as plainly idle here.
     // Nothing is misfiled by that (codex raises no idle prompts), and there is no row to
     // match until codex pins one.
+    // Codex is the one CLI Codeman launches with its approvals on by default, and it has no
+    // hook to say it stopped for one, so its dialogs are read off the screen. Measured on a
+    // live codex-cli 0.162.0 pane on 2026-10-14 (`-a on-request -s read-only`, widths 200,
+    // 80, 60, 44 and 36): every dialog it blocks on REPLACES the composer and its footer
+    // with a numbered option list, the selected one marked `›`, over a key-hint row:
+    //   command approval (a network         `› 1. Yes, proceed (y)` ...
+    //   escalation too), edit approval
+    //                                       `  Press enter to confirm or esc to cancel`
+    //   question (request_user_input)       `  › 1. Blue  Write the color blue.` ...
+    //                                       `  tab to add notes | enter to submit answer | esc to interrupt`
+    //   (its notes field open)              `  tab or esc to clear notes | enter to submit answer`
+    //   workspace trust, at startup         `› 1. Trust and continue`
+    //                                       `  enter continue · esc quit`
+    //   (the same prompt reached after the  `  2. Back to Agent Command Center`
+    //   update prompt, 0.162.0, 2026-10-16) `  enter continue · esc back`
+    // The pattern needs both: a `› N.` option row, then the key-hint row, which must END
+    // the window. Below about 60 columns that hint wraps onto rows of its own
+    // (`  Press enter to confirm or esc to` / `  cancel`, or `tab to add notes` /
+    // `enter to submit answer` / `esc to interrupt` one per row), so the hint may run on
+    // over rows that start with two spaces and a lowercase word or arrow, and must end on
+    // one of its own closing words. The transcript can quote every one of those strings
+    // (measured: an answer that printed them verbatim) and still not match, because while
+    // no dialog is up codex keeps its composer row (`› ...`, column 0, which ends the
+    // run) and its footer below anything the agent prints. The longest option list
+    // measured, a question at 36 columns, put the `›` row 16 non-blank rows up; 20 leaves
+    // room for longer option text, and a dialog whose marker scrolls out of the window is
+    // simply not seen (the behaviour before this field). Not matched on purpose:
+    // `Implement this plan?` after a plan turn, whose `enter select · esc back` footer is
+    // the same as `/model`, `/permissions` and `/review`, menus the user opened at the
+    // keyboard; the plan turn has ended there, and the session reads idle as before.
+    // ⚠️ The question dialog's hint contains `esc to interrupt`, the working line, so
+    // such a pane read as WORKING before this field: a blocked screen now wins over it.
     workDetect: {
       promptGlyph: '›',
       workingLine: '[Ee]sc to interrupt',
       watchingLine: String.raw`^\s{0,4}(\d+ background terminals?) running · /ps to view · /stop to close$`,
       watchingLines: 4,
+      blockedLine: String.raw`(?:^|\n) {0,4}› \d\. [\s\S]*\n {2}(?:Press enter to confirm|tab (?:to add|or esc to clear) notes|enter continue)(?:[^\n]|\n {2}(?=[a-z←])){0,120}(?:cancel|interrupt|quit|back|answer|all)$`,
+      blockedLines: 20,
     },
     // The footer under the composer, measured on a live 0.147.0 pane:
     // `  gpt-5.6-terra default · ~/codeman-cases/th-scratch` (model, reasoning effort,
@@ -733,7 +768,7 @@ const CODEX: CliEntry = {
     transcript: 'codex-rollout',
     altScreen: 'strip-full',
     echo: { policy: 'predict', anchor: { kind: 'cursor' }, predictProfile: 'codex' },
-    wheelForward: { mode: 'mouse-tracking' }, // 0.163.0 fullscreen: measured SGR scrolling; require observed tracking
+    wheelForward: { mode: 'always' }, // 0.163.0 fullscreen: measured SGR scrolling; require observed tracking
     // Without observed mouse tracking, retain PageUp/PageDown fallback. Measured on 0.157.1 (local,
     // alternate screen inside tmux, so xterm holds no history) and 0.160 (remote): PageUp
     // moved the visible transcript while SGR wheel reports and local scrolling did nothing.
@@ -961,6 +996,30 @@ const ANTIGRAVITY: CliEntry = {
     ...AGENTS_DIR_SKILL,
     altScreen: 'strip-mux-only',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // Measured on a live `agy` 1.3.3 pane (capture-pane every second through a prose turn
+    // and a shell-call turn, plus the raw PTY stream, 2026-10-11). A running turn animates
+    // `⣯  Generating...` (the label also reads `Working...` and `Loading...`) one row above
+    // the composer, and the footer's left end reads `esc to cancel`; at rest the footer
+    // reads `? for shortcuts` and nothing else on screen matches. A shell call replaces the
+    // composer with a `Run this command?` list, the spinner stops, and the pane goes
+    // silent. Nothing arms the idle check while the list is up (the footer hint is drawn only
+    // at rest), so a pending approval reads as working until it is answered. That differs from
+    // gemini, whose `▀` bar comes back on every spinner repaint.
+    // ⚠️ The frames are the 8-dot braille set (`⣯ ⡿ ⣻ ⣾ ⣷ ⣟ ⢿ ⣽`), none of which is in
+    // SPINNER_PATTERN's Claude set, and this entry used to declare nothing, so no frame
+    // ever marked an antigravity tab working and it never showed the activity spinner.
+    // The composer's `>` is no arming mark: the submitted prompt is echoed as `> <text>`
+    // too. The footer hint is drawn only at rest, and the turn's last repaint carries it.
+    // The schema caps a glyph at 8 characters, so this is the head of `? for shortcuts`. It also
+    // keeps the submit verifier inert (no row starts with it and holds prompt text).
+    // The working line is anchored to the start of a row, like gemini's braille branch: the
+    // idle probe tests it against the whole pane, and an answer that QUOTES the spinner row
+    // (an agent explaining this entry) would otherwise hold the tab busy while it is on screen.
+    // Every `agy` capture draws the spinner at column 0.
+    workDetect: {
+      promptGlyph: '? for sh',
+      workingLine: String.raw`(?:^|\n)[⠀-⣿]  [A-Z][A-Za-z ]{2,30}(?:\.\.\.|…)`,
+    },
     // Like codex: an ABSENT config already defaults safe (no bypass flag), so only a
     // SENT config needs the flag forced off — nothing is materialized.
     privilegedParams: [{ param: 'dangerouslySkipPermissions', clampTo: false }],
@@ -1300,8 +1359,14 @@ const DEEPSEEK: CliEntry = {
     launcherTargetParam: 'profile',
     install: {
       command: {
-        linux: 'npm install -g @deepseek-ai/dsh',
-        darwin: 'npm install -g @deepseek-ai/dsh',
+        // pnpm rides along: `dsh plugin` spawns a literal `pnpm` with no npm fallback, so the
+        // terminal profile this CLI needs before it can run cannot be installed without it (#352).
+        // ⚠️ Only when none is on PATH. `corepack enable` puts a `pnpm` shim in node's own bin
+        // directory, which is npm's global bin for nvm and Homebrew, and `npm install -g pnpm`
+        // refuses to overwrite it (EEXIST). Asked for in the same command as dsh, that failure
+        // took dsh down with it, on exactly the machines that already had a working pnpm.
+        linux: 'npm install -g @deepseek-ai/dsh && (command -v pnpm >/dev/null || npm install -g pnpm)',
+        darwin: 'npm install -g @deepseek-ai/dsh && (command -v pnpm >/dev/null || npm install -g pnpm)',
       },
       npmPackage: '@deepseek-ai/dsh',
       docsUrl: 'https://github.com/deepseek-ai/deepseek-harness',
@@ -1611,5 +1676,236 @@ const OMP: CliEntry = {
   },
 };
 
+// GitHub Copilot CLI (`copilot`, github/copilot-cli, npm @github/copilot). Measured on a live
+// 1.0.94 pane inside tmux (capture-pane through real turns, a shell tool call and /model,
+// 2026-10-09). It is an ALTERNATE-SCREEN TUI with mouse tracking on (tmux `alternate_on=1`,
+// `mouse_any_flag=1`, `history_size=0`), so like opencode its mouse DECSETs are stripped
+// (`altScreen: 'strip-mux-and-mouse'` below): a drag selects locally and the wheel is forwarded.
+// Keystrokes sent with `tmux send-keys` reach its composer and a shell tool call completes
+// inside tmux, which github/copilot-cli#4180 (a driven PTY ignoring input) and #4223 (a shell
+// command never reported done under tmux) say they do not on 1.0.70 to 1.0.74: neither
+// reproduces on 1.0.94, and the register of `version` below is what would show a regression.
+const COPILOT: CliEntry = {
+  id: 'copilot' as CliEntry['id'],
+  label: 'GitHub Copilot',
+  shortBadge: 'CP',
+  accent: '#a371f7',
+  enabled: true,
+  stock: true,
+  order: 100,
+  kind: 'agent',
+  discovery: {
+    binaries: ['copilot'],
+    searchDirs: [HOME_DIRS.local, HOME_DIRS.usrLocal, HOME_DIRS.bunBin, HOME_DIRS.npmGlobal, HOME_DIRS.homeBin],
+    // `copilot --version` prints `GitHub Copilot CLI 1.0.94.`; anchoring on the product name
+    // keeps an unrelated `copilot` binary on PATH from passing the probe.
+    version: { arg: '--version', regex: 'GitHub Copilot CLI (\\d+\\.\\d+\\.\\d+)', requireVersionMatch: true },
+    install: {
+      command: { linux: 'npm install -g @github/copilot', darwin: 'npm install -g @github/copilot' },
+      npmPackage: '@github/copilot',
+      docsUrl: 'https://github.com/github/copilot-cli',
+    },
+  },
+  // `--yolo` (allow every tool, path and URL) is opt-in through `allowAll`, which the Run button
+  // sends like the other agent CLIs' bypass switches; an absent config spawns a bare `copilot`
+  // in its own Manual Approval mode. `--model` and `--resume=<id>` are Copilot's own flags
+  // (`copilot --help`, 1.0.94). `--resume` takes an id, id prefix or session NAME and its value
+  // is optional, so the token must be a single plain word that cannot start with `-`: a value
+  // like `--yolo` would otherwise be parsed as its own flag and get around the `allowAll` clamp.
+  launch: {
+    params: {
+      allowAll: { type: 'bool' },
+      // `model-plain`, not `model`: the leading alphanumeric keeps a flag-shaped value out.
+      model: { type: 'token', pattern: 'model-plain' },
+      // `path-segment`, not `id-dotted`: the leading alphanumeric keeps a flag-shaped value out.
+      resumeId: { type: 'token', pattern: 'path-segment' },
+      continueSession: { type: 'bool' },
+      // The tab's name, so the CLI's own session list reads the same as the tab.
+      sessionName: { type: 'engine', source: 'sessionName' },
+    },
+    variants: [
+      {
+        id: 'default',
+        args: [
+          { lit: 'copilot' },
+          { flag: '--yolo', when: { param: 'allowAll', is: true } },
+          // `--name` is refused next to `--resume` and `--continue` (copilot 1.0.95: "cannot be used
+          // with"), and a resumed session keeps the name it was created with.
+          {
+            flag: '--name',
+            valueFrom: 'sessionName',
+            quote: 'double',
+            when: {
+              allOf: [
+                { param: 'sessionName', state: 'set' },
+                { param: 'resumeId', state: 'unset' },
+                { not: { param: 'continueSession', is: true } },
+              ],
+            },
+          },
+          { flag: '--model', valueFrom: 'model', when: { param: 'model', state: 'set' } },
+          { flag: '--resume', valueFrom: 'resumeId', when: { param: 'resumeId', state: 'set' } },
+          {
+            lit: '--continue',
+            when: {
+              allOf: [
+                { param: 'continueSession', is: true },
+                { param: 'resumeId', state: 'unset' },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+    legacyConfigAliases: { resumeId: 'resumeSessionId' },
+    legacyConfigField: 'copilotConfig',
+    resumeAppend: { style: 'flag', flag: '--resume' },
+  },
+  env: {
+    exports: [{ name: 'COLORTERM', value: 'truecolor' }],
+    unset: ['NO_COLOR'],
+    // Sign-in is the CLI's own (`copilot login`, kept under ~/.copilot). A headless host sets
+    // COPILOT_GITHUB_TOKEN, which the COPILOT_ prefix already admits. GH_TOKEN / GITHUB_TOKEN are
+    // deliberately NOT allowlisted: the env allowlist is one global list with no mode context, so
+    // admitting them would make them settable on every session (see allowedEnvPrefixes()).
+    tmuxSetenvKeys: [],
+    dockerExecEnvNames: [],
+    allowedPrefixes: ['COPILOT_'],
+    allowedKeys: [],
+  },
+  capabilities: {
+    ...agentDefaults(),
+    // A full-screen TUI that turns mouse tracking on itself (measured on 1.0.94: alt screen,
+    // mouse reporting on). Kept, xterm reports a plain drag to the TUI instead of selecting, so
+    // Auto Copy and "mark text, copy on select" silently do nothing; stripped, a drag is a local
+    // selection and clicks still reach the CLI through the browser's hand-encoded tap
+    // (`cliMouseTracking`). Same shape and reason as opencode. The wheel keeps working because
+    // `_shouldForwardWheelToApp` forwards it as SGR reports while the CLI is tracking.
+    altScreen: 'strip-mux-and-mouse',
+    // Forwards the wheel as SGR reports while the CLI is tracking the mouse, at any version
+    // (`_shouldForwardWheelToApp` in terminal-ui.js has no version check for copilot).
+    wheelForward: { mode: 'always' },
+    // Pages its own transcript on PageUp/PageDown (1.0.95, measured in tmux: three PageUp moved
+    // lines 109-140 to 010-042 and PageDown returned). This is the fallback when the
+    // wheel-forward flag is stale after a server restart, so the wheel and a swipe never go dead.
+    transcriptPageKeys: true,
+    echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // What `codeman agent spawn` waits for. The composer's footer hint, NOT the `❯` glyph: the
+    // folder-trust dialog draws `❯ 1. Yes` for its selected row, so the glyph would call a worker
+    // ready while it is still asking for trust (measured on 1.0.95: the dialog's footer reads
+    // `↑/↓ to navigate`, the composer's `/ commands · ? help`).
+    composerReadyMark: '/ commands · ? help',
+    // The composer row is a `❯` between two rules, and the submitted prompt is echoed as
+    // ` ❯ <text>  <time>` above it. While a turn runs the footer's left end reads
+    // `◉ Working esc edit prompt` (the dot alternates `◉` and `◎`); at rest it reads
+    // `← open sidebar · Interactive · Manual Approval · / commands · ? help · tab next tab`.
+    // A tool call that is waiting for approval replaces the composer and the footer's
+    // `Working` goes with it, so it reads as idle (waiting on the user), like gemini.
+    workDetect: {
+      promptGlyph: '❯',
+      workingLine: String.raw`[◉◎] Working\b`,
+    },
+    // The model is the right-hand field of the last row, both at rest and mid-turn
+    // (`... tab next tab        Claude Sonnet 5.5`, `◎ Working esc edit prompt     GPT-6 Luna`).
+    // Anchored on the footer's own words so a model-looking string in the transcript cannot match.
+    modelDetect: {
+      screenLine: String.raw`(?:tab next tab|\? help|esc edit prompt|github-mcp-server) {3,}([A-Za-z0-9][\w.:/@ -]{1,60}?) *(?:\n|$)`,
+      screenLines: 2,
+    },
+    // `copilot mcp add` writes `~/.copilot/mcp-config.json`; COPILOT_HOME replaces ~/.copilot
+    // (checked: `COPILOT_HOME=<dir> copilot mcp list` reads <dir>).
+    mcpConfig: {
+      path: '.copilot/mcp-config.json',
+      format: 'copilot-json',
+      relocation: { envVar: 'COPILOT_HOME', path: 'mcp-config.json' },
+    },
+    // Every one of these matches the COPILOT_ allowedPrefix, so a non-granted multi-user owner
+    // must not be able to set it through envOverrides. Read from the 1.0.98 bundle (copilot reads
+    // far more COPILOT_* variables than `copilot help environment` lists), by what each hands back:
+    // - approval: COPILOT_ALLOW_ALL turns every tool on; COPILOT_PLAN_THEN_AUTOPILOT switches a
+    //   plan into autopilot; COPILOT_ASSISTED_APPROVAL; COPILOT_HOME restates the permission config.
+    // - code at boot or without an approval row: COPILOT_CLI_DIST_DIR runs `<dir>/index.js` in place
+    //   of the CLI, the package caches pick which CLI build runs, COPILOT_EDITOR,
+    //   COPILOT_PROVIDER_API_KEY_COMMAND and COPILOT_AHP_HOST_BIN are run as commands, skills and
+    //   provider configs are loaded from the named paths, and the hook switches widen what hooks run.
+    // - credential redirects: the Copilot and GitHub API bases receive the CLI's sign-in token, which
+    //   in multi-user mode is the operator's (every user shares the OS account and ~/.copilot), and
+    //   the BYOK provider family aims a Codeman custom endpoint elsewhere.
+    // The prefix stays because COPILOT_GITHUB_TOKEN and the harmless knobs live in it; a variable a
+    // later release adds is NOT covered until it is listed here.
+    privilegedEnvKeys: [
+      'COPILOT_HOME',
+      'COPILOT_ALLOW_ALL',
+      'COPILOT_PLAN_THEN_AUTOPILOT',
+      'COPILOT_ASSISTED_APPROVAL',
+      'COPILOT_CLI_DIST_DIR',
+      'COPILOT_CLI_RESOLVED_DIST_DIR',
+      'COPILOT_PKG_CACHE_HOME',
+      'COPILOT_CACHE_HOME',
+      'COPILOT_EDITOR',
+      'COPILOT_AHP_HOST_BIN',
+      'COPILOT_DEBUG_VOICE_ENGINE_SCRIPT',
+      'COPILOT_SKILLS_DIRS',
+      'COPILOT_PROVIDERS_CONFIG',
+      'COPILOT_HOOK_ALLOW_HTTP_AUTH_HOOKS',
+      'COPILOT_HOOK_ALLOW_LOCALHOST',
+      'COPILOT_E2E_TEST_HOOKS',
+      'COPILOT_API_URL',
+      'COPILOT_DEBUG_GITHUB_API_URL',
+      'COPILOT_GH_HOST',
+      'COPILOT_MC_BASE_URL',
+      'COPILOT_AHP_URL',
+      'COPILOT_DEBUG_ENTRA_BROKER_URL',
+      'COPILOT_CAFE_METRICS_URL',
+      'COPILOT_PROVIDER_BASE_URL',
+      'COPILOT_PROVIDER_API_KEY',
+      'COPILOT_PROVIDER_API_KEY_COMMAND',
+      'COPILOT_PROVIDER_BEARER_TOKEN',
+      'COPILOT_PROVIDER_HEADERS',
+      'COPILOT_PROVIDER_TYPE',
+      'COPILOT_PROVIDER_WIRE_MODEL',
+      'COPILOT_PROVIDER_MODEL_ID',
+      'COPILOT_PROVIDER_GHES_HOST',
+      'COPILOT_PROVIDER_GHES_TOKEN',
+      'COPILOT_MODEL',
+    ],
+    // Grok/codex-shaped clamp: a bare spawn is already Manual Approval, so the multi-user clamp
+    // only forces an EXPLICITLY-SENT `--yolo` back off; nothing is materialized when absent.
+    privilegedParams: [{ param: 'allowAll', clampTo: false }],
+    // BYOK (`copilot help environment`, 1.0.95): COPILOT_PROVIDER_BASE_URL switches the CLI to a
+    // custom provider and drops the GitHub sign-in requirement; COPILOT_PROVIDER_TYPE defaults to
+    // "openai", which is what a Codeman custom endpoint is (llama.cpp, vLLM, Ollama).
+    // COPILOT_MODEL names the model and COPILOT_PROVIDER_MODEL_ID / _WIRE_MODEL default to it.
+    // The OpenAI-style route is `<base>/v1/chat/completions`, so the base gets the `/v1` suffix
+    // the same way deepseek's does. All four already match the COPILOT_ prefix allowlist, so
+    // they are privileged env keys below: a non-granted multi-user owner must not be able to
+    // redirect the session's endpoint or credentials through plain envOverrides.
+    customModelInjection: {
+      kind: 'env',
+      baseUrlVar: 'COPILOT_PROVIDER_BASE_URL',
+      apiKeyVar: 'COPILOT_PROVIDER_API_KEY',
+      modelVars: ['COPILOT_MODEL'],
+      appendV1Suffix: true,
+    },
+  },
+  overlays: {
+    // No credStore: Docker seeding is CRED_STORES in docker-hosts.ts, which has no `.copilot` row,
+    // and the sign-in token sits in plain text in config.json on a host without a keyring, so it
+    // is not copied into a container by default. Sign in inside the container instead.
+  },
+};
+
 /** The full stock catalog, in the order the run menu shows by default. */
-export const STOCK_CLIS: CliEntry[] = [CLAUDE, SHELL, OPENCODE, CODEX, GEMINI, ANTIGRAVITY, PI, GROK, DEEPSEEK, OMP];
+export const STOCK_CLIS: CliEntry[] = [
+  CLAUDE,
+  SHELL,
+  OPENCODE,
+  CODEX,
+  GEMINI,
+  ANTIGRAVITY,
+  PI,
+  GROK,
+  DEEPSEEK,
+  OMP,
+  COPILOT,
+];

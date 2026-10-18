@@ -1,0 +1,13 @@
+{
+  "version": "1.43.0",
+  "highlights": [
+    "Security notices for the CLIs you run",
+    "GitHub Copilot CLI is a run mode (#592)",
+    "Pin tab names on the CLI (#646, optional)",
+    "Antigravity tabs show when they are working (#648)",
+    "Custom-folder cases below the cases folder (#567)",
+    "A steady WS pill (#647)",
+    "Clickable diff and patch files (#644)",
+    "Mixed uploads say what they skipped (#651)"
+  ]
+}

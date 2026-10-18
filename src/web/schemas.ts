@@ -194,7 +194,7 @@ function sessionModeSchema(): z.ZodType<SessionMode> {
 /**
  * Allowlisted env var key prefixes, contributed by the ENABLED CLIs in the registry
  * (`env.allowedPrefixes`) — `CLAUDE_CODE_`, `OPENCODE_`, `CODEX_`, `GEMINI_`, `GOOGLE_`,
- * `ANTIGRAVITY_`, `PI_`, `GROK_`, `XAI_`, `DSH_`, `DEEPSEEK_` as shipped.
+ * `ANTIGRAVITY_`, `PI_`, `GROK_`, `XAI_`, `DSH_`, `DEEPSEEK_`, `OMP_`, `COPILOT_` as shipped.
  *
  * ⚠️ Resolved AT PARSE TIME, not at module load. This used to be a frozen array computed
  * once when the module was imported, which meant a CLI enabled while the server was running
@@ -259,7 +259,7 @@ const safeEnvOverridesSchema = z
     },
     {
       message:
-        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_*, GROK_*, XAI_*, DSH_*, DEEPSEEK_*, OMP_* keys and CLAUDE_CONFIG_DIR are allowed.',
+        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_*, OPENCODE_*, CODEX_*, GEMINI_*, GOOGLE_*, ANTIGRAVITY_*, PI_*, GROK_*, XAI_*, DSH_*, DEEPSEEK_*, OMP_*, COPILOT_* keys and CLAUDE_CONFIG_DIR are allowed.',
     }
   );
 
@@ -439,6 +439,28 @@ const GrokConfigSchema = z
   })
   .optional();
 
+const CopilotConfigSchema = z
+  .object({
+    // A leading alphanumeric, like resumeSessionId below: a value like `--yolo` would otherwise be read
+    // as its own flag after `--model` (bypassing the allowAll clamp). `/` stays for provider/id.
+    model: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._\-/]*$/)
+      .optional(),
+    allowAll: z.boolean().optional(),
+    continueSession: z.boolean().optional(),
+    // A single plain word with a leading alphanumeric: --resume also matches session NAMES, so
+    // `my-feature` is accepted, but a value like `--yolo` must not be, because --resume's value is
+    // optional and the next token would be read as its own flag (bypassing the allowAll clamp).
+    resumeSessionId: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/)
+      .optional(),
+  })
+  .optional();
+
 /**
  * Schema for OMP CLI-specific configuration.
  */
@@ -596,6 +618,7 @@ export const CreateSessionSchema = z.object({
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
   grokConfig: GrokConfigSchema,
+  copilotConfig: CopilotConfigSchema,
   deepSeekConfig: DeepSeekConfigSchema,
   ompConfig: OmpConfigSchema,
   /** Resume a previous Claude conversation by its session ID (used for reboot recovery) */
@@ -707,7 +730,16 @@ export const StatusTelemetrySchema = z.object({
           miss_recache_tokens: z.number().nullish(),
           last_miss_at: z.number().nullish(),
           recache_tokens_if_cold: z.number().nullish(),
-          last_miss_cause: z.object({ causes: z.array(z.unknown()).max(20).nullish() }).nullish(),
+          // Keep the first 20 causes instead of 400-ing the whole post (which also drops the
+          // footer, the plan chip and the model report it carries) when Claude Code reports more. The
+          // preprocess slices BEFORE the array validates, so an over-long array costs one bounded
+          // slice, never per-element validation across every entry (parsePromptCache then keeps
+          // the string ones among those 20).
+          last_miss_cause: z
+            .object({
+              causes: z.preprocess((v) => (Array.isArray(v) ? v.slice(0, 20) : v), z.array(z.unknown()).nullish()),
+            })
+            .nullish(),
         })
         .nullish(),
     })
@@ -757,6 +789,34 @@ export const CloneCaseSchema = z.object({
 /** Schema for POST /api/cases/clone-preflight — ask the remote what it has, clone nothing. */
 export const ClonePreflightSchema = z.object({
   repository: z.string().min(1).max(2048),
+});
+
+// ========== Git worktrees of a case (src/git-worktrees.ts) ==========
+
+/**
+ * A worktree name: one segment of letters, digits, `.`, `_`, `-`, starting with a letter or
+ * digit, at most 64 characters (Claude Code's own `--worktree` limit). The finer rules (no `..`,
+ * no trailing `.lock`) are `worktreeNameError()`, which every route applies after this.
+ */
+const worktreeNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'Invalid worktree name. Use letters, digits, ".", "_" and "-".');
+
+/** Schema for POST /api/cases/:name/worktrees: a new worktree on a new branch. */
+export const CreateWorktreeSchema = z.object({
+  name: worktreeNameSchema,
+  /** New branch name; default `worktree-<name>`, Claude Code's convention. */
+  branch: z.string().min(1).max(200).optional(),
+  /** Start point (branch, tag or commit); default the case's current HEAD. */
+  base: z.string().min(1).max(200).optional(),
+});
+
+/** Query of DELETE /api/cases/:name/worktrees/:worktree. */
+export const RemoveWorktreeQuerySchema = z.object({
+  /** Also `git branch -d` the worktree's branch (never `-D`). */
+  deleteBranch: z.enum(['true', 'false', '1', '0']).optional(),
 });
 
 const RemoteCommandOverridesSchema = z
@@ -1139,6 +1199,13 @@ export const QuickStartSchema = z.object({
   parentSessionId: parentSessionIdSchema,
   /** Tab group to place the new session in: see tabGroupIdSchema. */
   tabGroupId: tabGroupIdSchema,
+  /**
+   * Start the session in this git worktree of the case (`<case>/.claude/worktrees/<worktree>`,
+   * created through POST /api/cases/:name/worktrees) instead of the case folder. Local cases
+   * only: refused (400) for remote and Docker cases. The worktree must be a registered worktree
+   * of the case's repository; it is never created here.
+   */
+  worktree: worktreeNameSchema.optional(),
   /** Model override written to <case>/.claude/settings.local.json (e.g. "opus[1m]").
    *  Empty string clears. Applied for local AND docker cases (the docker workspace is
    *  a real host dir, so the settings file crosses the bind mount); rejected for
@@ -1151,6 +1218,7 @@ export const QuickStartSchema = z.object({
   antigravityConfig: AntigravityConfigSchema,
   piConfig: PiConfigSchema,
   grokConfig: GrokConfigSchema,
+  copilotConfig: CopilotConfigSchema,
   deepSeekConfig: DeepSeekConfigSchema,
   ompConfig: OmpConfigSchema,
   envOverrides: safeEnvOverridesSchema,
@@ -1381,6 +1449,14 @@ export const SettingsUpdateSchema = z
      * never added — for a user who wants Codeman to leave their repos alone.
      */
     workspaceHooksEnabled: z.boolean().optional(),
+    /**
+     * Launch every Claude session with `--name` set to its tab name (default OFF: only a
+     * name the user chose is pinned). Nothing acts on it in `PUT /api/settings`: it is read
+     * fresh from disk by readPinCliSessionNameEnabled() (hooks-config.ts) at every claude
+     * create and respawn, like readPlanUsageTelemetryEnabled(), so a toggle applies from the
+     * next spawn with no restart.
+     */
+    pinCliSessionName: z.boolean().optional(),
     /**
      * Let browser dictation transcribe through this machine's Claude Code login,
      * the same speech-to-text service the CLI's own `/voice` mode uses

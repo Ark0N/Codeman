@@ -20,6 +20,7 @@
 export type TokenPattern =
   | 'model'
   | 'model-claude'
+  | 'model-plain'
   | 'model-pi'
   | 'id'
   | 'id-dotted'
@@ -43,6 +44,9 @@ const PATTERNS: Record<TokenPattern, RegExp> = {
   model: /^[a-zA-Z0-9._\-/]+$/,
   // buildSpawnCommand's claude branch — `[` and `]` for bracketed model aliases
   'model-claude': /^[a-zA-Z0-9._\-[\]]+$/,
+  // copilot --model. Same characters as `model`, but a leading alphanumeric: the value follows a
+  // flag, so `--yolo` must not pass as a model id and become its own flag (the allowAll clamp bypass).
+  'model-plain': /^[a-zA-Z0-9][a-zA-Z0-9._\-/]*$/,
   // buildPiCommand — `:` for a thinking suffix (`sonnet:high`), `/` for `provider/id`
   'model-pi': /^[a-zA-Z0-9._\-/:]+$/,
   // opencode --session, codex resume

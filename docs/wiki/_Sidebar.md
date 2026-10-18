@@ -15,6 +15,7 @@
 - [Agent CLIs](Agent-CLIs)
 - [Custom Model Endpoints](Custom-Model-Endpoints)
 - [Working With Files](Working-With-Files)
+- [Git Worktrees](Git-Worktrees)
 - [Input And Voice](Input-And-Voice)
 - [Mobile Guide](Mobile-Guide)
 - [Keyboard Shortcuts](Keyboard-Shortcuts)

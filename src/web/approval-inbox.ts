@@ -15,7 +15,9 @@
  *   `Session` import, no IO; the server injects emit callbacks (`onPending`/
  *   `onUpdated`/`onResolved`), which keeps this unit-testable and cycle-free.
  * - Items are in-memory only. A server restart drops them; the next prompt
- *   re-fires the hook. Claude-mode sessions only (hooks fire for nothing else).
+ *   re-fires the hook. Answerable items are Claude's alone; the DeepSeek status
+ *   bridge and the screen-read dialogs of a hook-less CLI (codex, see
+ *   `web/screen-blocked.ts`) open alert-only items (`answerInTerminal`).
  * - Answer flow is take-then-write: `take()` removes the item BEFORE keystrokes
  *   are sent so a double-tap cannot double-send; `restore()` re-inserts on a
  *   failed write unless a newer prompt arrived meanwhile.
@@ -24,7 +26,8 @@
  *
  * @dependencies utils (stripAnsi, CLAUDE_WORKING_LINE_PATTERN)
  * @consumedby web/routes/hook-event-routes (notePrompt/resolve), web/routes/approval-routes,
- *   web/session-listener-wiring (working/exit resolution), web/server (emit callbacks + stop)
+ *   web/session-listener-wiring (working/exit resolution), web/screen-blocked (screen-read
+ *   dialogs), web/server (emit callbacks + stop)
  *
  * @module web/approval-inbox
  */
@@ -122,6 +125,13 @@ interface NotePromptArgs {
   answerInTerminal?: boolean;
   /** Returns the raw (ANSI-bearing) pane frame, or null when unavailable. */
   capture?: () => string | null;
+  /**
+   * A frame the caller already read, kept as the card's context when there is no
+   * `capture`. Never parsed for options and never re-read: an item raised from the
+   * screen (`web/screen-blocked.ts`) belongs to the session that keeps reading it, and
+   * the option parser and staleness sweep here are shaped for Claude's dialogs.
+   */
+  context?: string;
 }
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
@@ -279,6 +289,7 @@ export class ApprovalInbox {
       item.acknowledgedAt = item.createdAt;
       item.acknowledgedReason = `watching ${args.watching}`;
     }
+    if (!args.capture && args.context) item.context = normalizeCapturedFrame(args.context);
     this.applyCapture(item, args.capture);
     this.items.set(args.sessionId, item);
     if (args.capture) this.captures.set(args.sessionId, args.capture);

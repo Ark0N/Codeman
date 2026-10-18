@@ -56,6 +56,7 @@ import {
   type AntigravityConfig,
   type PiConfig,
   type GrokConfig,
+  type CopilotConfig,
   type DeepSeekConfig,
   type OmpConfig,
   type SessionRemote,
@@ -89,7 +90,12 @@ import {
   isPaneQuiet,
   watchingLabel,
   isAwaitingWorkers,
+  isBlockedScreen,
   WATCHING_TAIL_LINES,
+  BLOCKED_TAIL_LINES,
+  BLOCKED_RECHECK_MS,
+  BLOCKED_QUIET_RECHECK_MS,
+  BLOCKED_CLEAR_READS,
   IDLE_RECHECK_MS,
   PANE_PROBE_MIN_INTERVAL_MS,
   PANE_PROBE_RECHECK_MS,
@@ -494,6 +500,8 @@ export class Session extends EventEmitter {
 
   private _name: string;
   private _nameSource: SessionNameSource;
+  /** `pinCliSessionName` as of the last spawn (see {@link _refreshCliNamePin}). */
+  private _pinEveryCliName = false;
   /**
    * Reconstructs the composer draft from USER keystrokes so the first real
    * prompt can name the tab. Fed only when a write says `fromUser`, and never
@@ -563,6 +571,7 @@ export class Session extends EventEmitter {
   private _activityStreak: ActivityStreak | null = null; // Unbroken run of PTY repaints (working detection)
   private _lastPaneProbeAt = 0; // Throttle for the tmux screen probe
   private _lastPaneProbeWorking: boolean | null = null; // Its last verdict (null = could not read)
+  private _lastPaneProbeTrustDialog = false; // Same capture showed the workspace-trust dialog (see _confirmIdle)
   /**
    * Background work the pane's own footer reports, e.g. `1 monitor`; null for none.
    *
@@ -596,6 +605,23 @@ export class Session extends EventEmitter {
   private _watchingWindow = WATCHING_TAIL_LINES;
   /** Lazily compiled `capabilities.workDetect.awaitingLine`. See _awaitingLinePattern(). */
   private _awaitingLineRe: RegExp | null | undefined = undefined;
+  /** Lazily compiled `capabilities.workDetect.blockedLine`. See _blockedLinePattern(). */
+  private _blockedLineRe: RegExp | null | undefined = undefined;
+  /** Resolved with the pattern above: how many rows at the foot of the screen it sees. */
+  private _blockedWindow = BLOCKED_TAIL_LINES;
+  /**
+   * The pane is showing a dialog the CLI blocks on, read off the screen with
+   * `capabilities.workDetect.blockedLine` (codex: an approval, a question, the trust
+   * prompt). Live state, not persisted: a restarted server re-reads it from the attach
+   * repaint the same way the watching label comes back. See `_noteBlockedReading()`.
+   */
+  private _screenBlocked = false;
+  /** Consecutive readable captures without the dialog (cleared at BLOCKED_CLEAR_READS). */
+  private _blockedGoneReads = 0;
+  /** When the last reading that SAW the dialog was taken. See `_armBlockedRecheck()`. */
+  private _blockedSeenAt = 0;
+  /** Re-reads the screen while a dialog is up, so the alert clears with it. */
+  private _blockedRecheckTimer: NodeJS.Timeout | null = null;
   /**
    * The newest model the running CLI reported for itself (its statusline, or its own
    * footer read off the probe's capture), or null when none has. Feeds `displayModel`
@@ -725,6 +751,8 @@ export class Session extends EventEmitter {
   private _piConfig: PiConfig | undefined;
   // Grok configuration (only for mode === 'grok')
   private _grokConfig: GrokConfig | undefined;
+  // GitHub Copilot configuration (only for mode === 'copilot')
+  private _copilotConfig: CopilotConfig | undefined;
 
   // DeepSeek Harness configuration (only for mode === 'deepseek')
   private _deepSeekConfig: DeepSeekConfig | undefined;
@@ -852,6 +880,7 @@ export class Session extends EventEmitter {
       piConfig?: PiConfig;
       /** Grok configuration (only for mode === 'grok') */
       grokConfig?: GrokConfig;
+      copilotConfig?: CopilotConfig;
       /** DeepSeek Harness configuration (only for mode === 'deepseek') */
       deepSeekConfig?: DeepSeekConfig;
       /** OMP configuration (only for mode === 'omp') */
@@ -1012,6 +1041,11 @@ export class Session extends EventEmitter {
     // Apply Grok configuration
     if (config.grokConfig) {
       this._grokConfig = config.grokConfig;
+    }
+
+    // Apply GitHub Copilot configuration
+    if (config.copilotConfig) {
+      this._copilotConfig = config.copilotConfig;
     }
 
     // Apply env overrides (exported at spawn, not persisted to disk).
@@ -1430,6 +1464,16 @@ export class Session extends EventEmitter {
   }
 
   /**
+   * True while the pane shows a dialog its CLI is blocked on, as read off the screen
+   * (`capabilities.workDetect.blockedLine`). Always false for a CLI that declares none,
+   * Claude included: its dialogs arrive as hook events instead. The `blocked` wait reads
+   * it so a caller that asks after the dialog appeared is answered at once.
+   */
+  get screenBlocked(): boolean {
+    return this._screenBlocked;
+  }
+
+  /**
    * Prompt-cache state of the main conversation as Claude Code last reported it on the
    * statusline (v2.1.251+), fed by `POST /api/status-telemetry`. Null until the first
    * report. It rides `toState()` for the Session Options readout and is restored on a
@@ -1773,16 +1817,31 @@ export class Session extends EventEmitter {
   }
 
   /**
-   * The name to pin on the Claude CLI as `--name`, or undefined to let Claude
-   * title the conversation itself. `--name` is the prompt-box label, the
-   * `/resume` picker entry and the terminal title all at once, and a pinned
-   * title stops Claude generating its own, so only a name the user chose is
-   * worth pinning. Pinning the `w1-myapp` placeholder gave every conversation
-   * in a case the same `/resume` entry; an auto name is a cut of the first
-   * prompt, which Claude's own generated title already beats.
+   * The name to pin on the Claude CLI as `--name`, or undefined to let Claude title the
+   * conversation itself. `--name` is the prompt-box label, the `/resume` picker entry and the
+   * terminal title all at once, and a pinned title stops Claude generating its own.
+   *
+   * By default only a name the user chose is pinned. Pinning the `w1-myapp` placeholder gave
+   * every conversation in a case the same `/resume` entry (the tab number restarts once a
+   * case's tabs are closed), and an auto name is a cut of the first prompt, which Claude's
+   * own generated title already beats.
+   *
+   * With the opt-in `pinCliSessionName` setting every non-blank tab name is pinned, so the
+   * CLI's labels read the same as the tabs, at the cost of those generated titles. A rename
+   * in Codeman then holds only until the next turn: a process started with `--name`
+   * re-appends its in-memory title (see claude-session-title.ts). The setting is re-read
+   * at each spawn and respawn by {@link _refreshCliNamePin}.
    */
   get cliPinnedName(): string | undefined {
-    return this._nameSource === 'manual' ? this._name : undefined;
+    if (!this._pinEveryCliName) return this._nameSource === 'manual' ? this._name : undefined;
+    return this._name.trim() ? this._name : undefined;
+  }
+
+  /** Re-read `pinCliSessionName` so `cliPinnedName` decides per launch, with no server restart. */
+  private async _refreshCliNamePin(): Promise<void> {
+    // Dynamic: hooks-config -> route-helpers imports Session, so a static import would be a cycle.
+    const { readPinCliSessionNameEnabled } = await import('./hooks-config.js');
+    this._pinEveryCliName = await readPinCliSessionNameEnabled();
   }
 
   setAutoClear(enabled: boolean, threshold?: number): void {
@@ -1976,6 +2035,7 @@ export class Session extends EventEmitter {
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
+      copilotConfig: this._copilotConfig,
       deepSeekConfig: this._deepSeekConfig,
       ompConfig: this._ompConfig,
       resumeSessionId: this._resumeSessionId,
@@ -2348,6 +2408,7 @@ export class Session extends EventEmitter {
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
+      copilotConfig: this._copilotConfig,
       deepSeekConfig: this._deepSeekConfig,
       // OMP resolution/pinning does NOT happen here. This object is built
       // EAGERLY — including on every boot-recovery reattach, before anyone
@@ -2442,6 +2503,7 @@ export class Session extends EventEmitter {
    * still inside it and renders no local `--session-id` to collide.
    */
   private async _buildRespawnPaneOptionsWithResumePin(): Promise<import('./mux-interface.js').RespawnPaneOptions> {
+    await this._refreshCliNamePin();
     const options = this._buildRespawnPaneOptions();
     if (this._remote || this._docker) return options;
     const entry = getCli(this.mode);
@@ -2706,11 +2768,14 @@ export class Session extends EventEmitter {
       throw new Error('Session is being closed');
     }
 
+    await this._refreshCliNamePin();
+
     // Bounds the workspace-trust scan (see _maybeAcceptTrustDialog). Stamped here
     // rather than at PTY spawn so a slow mux attach still counts as startup.
     this._interactiveStartedAt = Date.now();
     this._trustDialogAttempts = 0;
     this._lastTrustDialogScanAt = 0;
+    this._lastPaneProbeTrustDialog = false; // the last pane's verdict, not this one's
     if (this._trustDialogTimer) {
       clearTimeout(this._trustDialogTimer);
       this._trustDialogTimer = null;
@@ -2832,6 +2897,7 @@ export class Session extends EventEmitter {
             antigravityConfig: this._antigravityConfig,
             piConfig: this._piConfig,
             grokConfig: this._grokConfig,
+            copilotConfig: this._copilotConfig,
             deepSeekConfig: this._deepSeekConfig,
             ompConfig: this._ompConfig,
             resumeSessionId: this._resumeSessionId,
@@ -3081,6 +3147,10 @@ export class Session extends EventEmitter {
         this._expensiveProcessTimer = null;
       }
       this._pendingCleanData = '';
+      // Nothing reads this pane any more, so a dialog on it can no longer be seen to
+      // close: drop the state (and its timer) while the listeners are still attached.
+      // A re-attach re-reads the screen and raises it again if the dialog is still up.
+      this._clearScreenBlocked();
       // If using mux, mark the session as detached but don't kill it
       if (this._muxSession && this._mux) {
         this._mux.setAttached(this.id, false);
@@ -3143,13 +3213,24 @@ export class Session extends EventEmitter {
    * a two-marker match (isTrustDialogScreen), and an attempt cap.
    */
   private _maybeAcceptTrustDialog(): void {
-    if (this._trustDialogAccepted) return;
+    // Stopped: the kill itself produces PTY output, and the buffer tail still holds the
+    // dialog, so without this a deleted session kept "answering" it for several seconds.
+    if (this._trustDialogAccepted || this._isStopped) return;
     const now = Date.now();
     if (now - this._interactiveStartedAt > TRUST_DIALOG_WINDOW_MS) {
       this._trustDialogAccepted = true; // window closed; anything matching now is not the dialog
       return;
     }
-    if (now - this._lastTrustDialogScanAt < TRUST_DIALOG_RETRY_MS) return;
+    const sinceScan = now - this._lastTrustDialogScanAt;
+    if (sinceScan < TRUST_DIALOG_RETRY_MS) {
+      // ⚠️ Defer a throttled read, never drop it. The dialog's own paint is usually the
+      // last output a launching pane produces, and it tends to land inside the throttle
+      // of the read the blank screen before it triggered: dropped, nothing re-read the
+      // screen and the session sat on the dialog for good (2 of 12 fresh launches on
+      // Claude Code 2.1.294). A read already scheduled covers this one.
+      if (!this._trustDialogTimer) this._rescanTrustDialogIn(TRUST_DIALOG_RETRY_MS - sinceScan + 100);
+      return;
+    }
     this._lastTrustDialogScanAt = now;
 
     // Prefer the pane; fall back to the buffer tail on a direct-PTY session,
@@ -3184,14 +3265,17 @@ export class Session extends EventEmitter {
     // on a live 2.1.252 spawn: cursor moved at 6 s, then nothing). The timer is
     // one-shot and self-rearming through this same path, and every exit route
     // goes through _clearAllTimers().
-    // The +100ms puts the re-entry OUTSIDE the scan throttle above; firing at
-    // exactly the throttle boundary would let the scan return early and break
-    // the chain with the dialog still on screen.
+    // The +100ms puts the re-entry OUTSIDE the scan throttle above.
+    this._rescanTrustDialogIn(TRUST_DIALOG_RETRY_MS + 100);
+  }
+
+  /** Re-run the trust-dialog scan after `delayMs`, replacing any read already scheduled. */
+  private _rescanTrustDialogIn(delayMs: number): void {
     if (this._trustDialogTimer) clearTimeout(this._trustDialogTimer);
     this._trustDialogTimer = setTimeout(() => {
       this._trustDialogTimer = null;
       this._maybeAcceptTrustDialog();
-    }, TRUST_DIALOG_RETRY_MS + 100);
+    }, delayMs);
   }
 
   /**
@@ -3265,10 +3349,31 @@ export class Session extends EventEmitter {
     if (now - this._lastPaneProbeAt < PANE_PROBE_MIN_INTERVAL_MS) return this._lastPaneProbeWorking;
     this._lastPaneProbeAt = now;
     const text = this._mux.capturePaneText?.(this._muxSession.muxName) ?? null;
+    // A dialog the CLI is blocked on is not work, whatever else is on screen: codex's
+    // question dialog carries `esc to interrupt` in its own key hints, which is codex's
+    // working line, so without this a session waiting on the user's answer read as busy.
+    // Decided from THIS capture, never from `_screenBlocked`, which lags a vanished dialog
+    // by design (see `_noteBlockedReading`) and would otherwise call a resumed turn idle.
+    const blockedOnScreen = text === null ? null : this._paneShowsBlocked(text);
+    this._noteBlockedReading(blockedOnScreen, text);
     // A turn that ended by handing off to workers the CLI waits for is work too: the
     // composer is up and the pane is quiet, but the next turn starts without the user.
     this._lastPaneProbeWorking =
-      text === null ? null : this._workingLinePattern().test(text) || this._paneAwaitsWorkers(text);
+      text === null
+        ? null
+        : !blockedOnScreen && (this._workingLinePattern().test(text) || this._paneAwaitsWorkers(text));
+    // A capture that failed proves nothing either way, so it keeps the last answer.
+    if (text !== null) {
+      const trustDialog = isTrustDialogScreen(text);
+      if (
+        trustDialog &&
+        !this._lastPaneProbeTrustDialog &&
+        now - this._interactiveStartedAt <= TRUST_DIALOG_WINDOW_MS
+      ) {
+        console.log(`[Session] Holding idle while the workspace trust dialog is on screen: ${this.id}`);
+      }
+      this._lastPaneProbeTrustDialog = trustDialog;
+    }
     this._readWatching(text);
     this._readScreenModel(text);
     return this._lastPaneProbeWorking;
@@ -3357,6 +3462,7 @@ export class Session extends EventEmitter {
       antigravityConfig: this._antigravityConfig,
       piConfig: this._piConfig,
       grokConfig: this._grokConfig,
+      copilotConfig: this._copilotConfig,
       deepSeekConfig: this._deepSeekConfig,
       ompConfig: this._ompConfig,
     };
@@ -3463,6 +3569,111 @@ export class Session extends EventEmitter {
   }
 
   /**
+   * The regex matching the dialog this CLI blocks on, or null for a CLI whose registry
+   * entry declares none (every CLI but codex today, Claude included: its dialogs arrive
+   * as hook events). Compiled once per session through `compileVersionRegex()`, the same
+   * guard the schema applies, so a pattern it refuses yields null rather than a throw.
+   */
+  private _blockedLinePattern(): RegExp | null {
+    if (this._blockedLineRe === undefined) {
+      const detect = getCli(this.mode)?.capabilities.workDetect;
+      this._blockedLineRe = detect?.blockedLine ? compileVersionRegex(detect.blockedLine) : null;
+      this._blockedWindow = detect?.blockedLines ?? BLOCKED_TAIL_LINES;
+    }
+    return this._blockedLineRe;
+  }
+
+  /** Whether this capture shows a dialog the CLI is blocked on. See `isBlockedScreen()`. */
+  private _paneShowsBlocked(paneText: string): boolean {
+    const pattern = this._blockedLinePattern();
+    return pattern ? isBlockedScreen(paneText, pattern, this._blockedWindow) : false;
+  }
+
+  /**
+   * Fold one screen reading into the blocked state, announcing each transition with
+   * `blockedChanged` (the web server turns it into the alert and the `blocked` signal).
+   *
+   * The two directions are deliberately unequal:
+   * - RAISE on one reading. A match needs the dialog's own footer at the foot of the
+   *   screen, which is only there when the dialog is fully drawn.
+   * - CLEAR on BLOCKED_CLEAR_READS readings in a row. A single capture can land inside a
+   *   full-frame repaint, and clearing on it would re-raise a moment later and send the
+   *   alert, push and webhook twice for one dialog.
+   * A capture that could not be read (`null`) is no evidence either way and changes
+   * nothing, so a tmux hiccup can neither raise nor drop an alert. That is the opposite
+   * of `_readWatching`, and for the same reason: each degrades toward the alert.
+   *
+   * While blocked, `_blockedRecheckTimer` keeps reading, since answering resumes the turn
+   * and a busy pane never reaches the settle path that raised it.
+   *
+   * @param frame the capture the reading came from; rides the raise as the alert's context
+   */
+  private _noteBlockedReading(onScreen: boolean | null, frame: string | null): void {
+    if (onScreen === null || !this._blockedLinePattern()) return;
+    if (onScreen) {
+      this._blockedGoneReads = 0;
+      // Stamped after the capture returned: output processed later is newer than it.
+      this._blockedSeenAt = Date.now();
+      if (!this._screenBlocked) {
+        this._screenBlocked = true;
+        this.emit('blockedChanged', true, frame);
+      }
+      this._armBlockedRecheck();
+      return;
+    }
+    if (!this._screenBlocked) return;
+    if (++this._blockedGoneReads < BLOCKED_CLEAR_READS) {
+      this._armBlockedRecheck();
+      return;
+    }
+    this._clearScreenBlocked();
+  }
+
+  /** (Re)arm the while-blocked screen read. One-shot and self-rearming, like the trust scan. */
+  private _armBlockedRecheck(): void {
+    if (this._blockedRecheckTimer) clearTimeout(this._blockedRecheckTimer);
+    this._blockedRecheckTimer = setTimeout(() => {
+      this._blockedRecheckTimer = null;
+      // No pane left to read (detached): nothing can change until a re-attach, whose
+      // `_resetBuffers()` clears the state and whose repaint reads the screen afresh.
+      if (this._isStopped || !this._screenBlocked || !this._mux?.capturePaneText || !this._muxSession) return;
+      // A dialog leaves the screen only through a repaint, and tmux sends every repaint
+      // to this client as PTY output (`_markActivity`). So while the last reading saw
+      // the dialog and nothing has been drawn since, it is still up: skip the capture
+      // (synchronous, see BLOCKED_QUIET_RECHECK_MS) and look again next interval. Never
+      // once a reading has missed it: the confirming read must happen on a quiet pane
+      // too, or the clear would wait for output that may never come.
+      if (
+        this._blockedGoneReads === 0 &&
+        this._lastActivityAt < this._blockedSeenAt &&
+        Date.now() - this._blockedSeenAt < BLOCKED_QUIET_RECHECK_MS
+      ) {
+        this._armBlockedRecheck();
+        return;
+      }
+      const text = this._mux.capturePaneText(this._muxSession.muxName) ?? null;
+      // Unreadable this time: keep the state, keep looking (_noteBlockedReading ignores a null).
+      if (text === null) {
+        this._armBlockedRecheck();
+        return;
+      }
+      this._noteBlockedReading(this._paneShowsBlocked(text), text);
+    }, BLOCKED_RECHECK_MS);
+  }
+
+  /** Drop the blocked state (and its timer), announcing it when it was set. */
+  private _clearScreenBlocked(): void {
+    this._blockedGoneReads = 0;
+    if (this._blockedRecheckTimer) {
+      clearTimeout(this._blockedRecheckTimer);
+      this._blockedRecheckTimer = null;
+    }
+    if (!this._screenBlocked) return;
+    this._screenBlocked = false;
+    this.emit('blockedChanged', false, null);
+  }
+
+  /**
    * The regex matching this CLI's "a turn is running" status line.
    *
    * Compiled once per session and cached: `_probePaneWorking` runs it against a whole
@@ -3520,6 +3731,16 @@ export class Session extends EventEmitter {
     // Ask the screen before concluding, and keep asking on a slow cadence.
     if (this._probePaneWorking() === true) {
       this._markWorking();
+      this.activityTimeout = setTimeout(() => this._confirmIdle(), PANE_PROBE_RECHECK_MS);
+      return;
+    }
+    // ⚠️ The workspace-trust dialog is not a composer, although its `❯` (on "No, exit")
+    // arms this check and the dialog sits quiet. Calling it idle let an agent that waited
+    // for idle send its prompt into the dialog, and the prompt's Enter answered *exit*.
+    // Not working either, so the status stays where it is until the dialog is gone.
+    // Bounded by the auto-accept's own startup window: later on, a screen that merely
+    // quotes the dialog (an agent reading session-trust-dialog.ts) must not hold idle off.
+    if (this._lastPaneProbeTrustDialog && Date.now() - this._interactiveStartedAt <= TRUST_DIALOG_WINDOW_MS) {
       this.activityTimeout = setTimeout(() => this._confirmIdle(), PANE_PROBE_RECHECK_MS);
       return;
     }
@@ -4004,6 +4225,9 @@ export class Session extends EventEmitter {
     // into a program that never enabled tracking.
     this._cliMouseModes.clear();
     this._syncCliMouseTracking();
+    // Nor does it start inside a dialog. Announced, so a pending alert for the old
+    // pane's dialog is resolved rather than left behind it.
+    this._clearScreenBlocked();
     this._markActivity(true);
   }
 
@@ -4015,6 +4239,11 @@ export class Session extends EventEmitter {
     if (this._trustDialogTimer) {
       clearTimeout(this._trustDialogTimer);
       this._trustDialogTimer = null;
+    }
+    // Clear the while-blocked screen read (the state itself is left to its owner)
+    if (this._blockedRecheckTimer) {
+      clearTimeout(this._blockedRecheckTimer);
+      this._blockedRecheckTimer = null;
     }
 
     // Clear activity timeout to prevent memory leak
@@ -4527,7 +4756,7 @@ export class Session extends EventEmitter {
    *
    * More reliable than direct PTY write for programmatic input, especially
    * with Claude CLI which uses Ink (React for terminals).
-   * Uses tmux `send-keys -l` to inject text + Enter.
+   * Uses tmux to inject the text (one bracketed paste) + Enter.
    *
    * @param data - Input data with optional `\r` for Enter
    * @returns true if input was sent, false if no mux session or PTY
@@ -4584,7 +4813,7 @@ export class Session extends EventEmitter {
           : this._mux.capturePaneText?.(this._muxSession.muxName),
       sendEnter: () => this._mux?.sendInput(this.id, '\r'),
       // ⚠ NO fallback glyph here, unlike the screen-reading probe elsewhere in this file.
-      // Only claude, codex, pi, opencode, omp and gemini declare a promptGlyph; the other modes would fall back
+      // Only claude, codex, pi, opencode, omp, gemini and antigravity declare a promptGlyph; the other modes would fall back
       // to claude's `❯`, which is ALSO starship's default shell prompt (and pure's, and
       // spaceship's, and p10k lean's). On a shell session the line `❯ npm run build` sits
       // on screen for as long as the command runs, promptStillInComposer() reads that as

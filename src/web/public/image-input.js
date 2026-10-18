@@ -101,12 +101,8 @@ Object.assign(CodemanApp.prototype, {
       if (!this.activeSessionId) return;
       if (!e.dataTransfer || !e.dataTransfer.files.length) return;
 
-      const mediaFiles = Array.from(e.dataTransfer.files).filter((f) => this._promptAttachKind(f));
-      if (mediaFiles.length === 0) {
-        this.showToast('Only image or video files are supported', 'error');
-        return;
-      }
-      this._uploadAndInsertImages(mediaFiles);
+      const mediaFiles = this._admitPromptAttachments(Array.from(e.dataTransfer.files));
+      if (mediaFiles.length > 0) this._uploadAndInsertImages(mediaFiles);
     });
   },
 
@@ -122,11 +118,8 @@ Object.assign(CodemanApp.prototype, {
    *  Without the overlay (local echo off) there is nothing to buffer into, so the
    *  text goes straight out. The trailing space keeps the next word off the path. */
   async _attachFromToolbar(files, sessionId) {
-    const media = files.filter((f) => this._promptAttachKind(f));
-    if (media.length === 0) {
-      this.showToast('Only image or video files are supported', 'error');
-      return;
-    }
+    const media = this._admitPromptAttachments(files);
+    if (media.length === 0) return;
     if (!sessionId) return; // no captured session: refuse rather than guess at one
     const paths = await this._uploadAndInsertImages(media, { insert: false, sessionId });
     if (paths.length === 0) return;
@@ -230,15 +223,17 @@ Object.assign(CodemanApp.prototype, {
       if (pasteConsumed) return;
       pasteConsumed = true;
 
-      // Check for images or videos in clipboard items
-      var imageFiles = [];
+      // Check for images, videos or documents in clipboard items
+      var pastedFiles = [];
       var items = e.clipboardData && e.clipboardData.items;
       if (items) {
         for (var i = 0; i < items.length; i++) {
           var blob = items[i].getAsFile();
-          if (blob && self._promptAttachKind(blob)) imageFiles.push(blob);
+          if (blob) pastedFiles.push(blob);
         }
       }
+      var text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+      var imageFiles = self._admitPromptAttachments(pastedFiles, { textPasted: !!text });
 
       // Clean up the trap
       setTimeout(function() {
@@ -256,7 +251,6 @@ Object.assign(CodemanApp.prototype, {
         // via raw sendInput() strips those markers and makes pasted input
         // indistinguishable from typed input, weakening the CLI's
         // prompt-injection defenses.
-        var text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
         if (text && terminal) terminal.paste(text);
       }
     });
@@ -266,19 +260,44 @@ Object.assign(CodemanApp.prototype, {
     document.execCommand('paste');
   },
 
-  /** What a pick or a paste may upload: 'image', or 'video' for the camera
-   *  roll's clips (the server streams those to disk under their own cap), else
-   *  null. The one filter behind Attach, drop, the Compose and paste-dialog
-   *  pickers and the clipboard handlers. The MIME type decides; some Android
-   *  file managers hand over a File with none, so the name's extension is the
-   *  fallback, mirroring the server's own allowlists. */
+  /** What a pick or a paste may upload: 'image', 'video' for the camera roll's
+   *  clips (the server streams those to disk under their own cap), 'document'
+   *  for the office and text files the server admits, else null. The one filter
+   *  behind Attach, drop, the Compose and paste-dialog pickers and the clipboard
+   *  handlers. For media the MIME type decides, but a video MIME only for the
+   *  containers the server admits; some Android file managers hand over a File
+   *  with none, so the name's extension is the fallback. A document is known by
+   *  its extension alone, as on the server (the MIME a file manager gives a .md
+   *  or .csv is anyone's guess). Mirrors the server's allowlists. */
   _promptAttachKind(file) {
     if (file.type.startsWith('image/')) return 'image';
-    if (file.type.startsWith('video/')) return 'video';
+    // A video MIME counts only for the five containers the server accepts on
+    // ?kind=video (its own set in session-routes.ts); a 3gp or mkv falls to the
+    // extension check below and is refused up front, not after a 1GB upload and a 400.
+    if (/^video\/(mp4|quicktime|x-m4v|webm|ogg)$/i.test(file.type)) return 'video';
     const ext = (file.name || '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] || '';
     if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif'].includes(ext)) return 'image';
     if (['mp4', 'webm', 'mov', 'm4v', 'ogv'].includes(ext)) return 'video';
+    if (['pdf', 'docx', 'pptx', 'xlsx', 'zip', 'txt', 'md', 'csv', 'tsv', 'json', 'log', 'yaml', 'yml', 'xml'].includes(ext)) {
+      return 'document';
+    }
     return null;
+  },
+
+  /** The files of a pick, drop or paste that _promptAttachKind admits, telling the
+   *  user about any it refuses: all of them is "Unsupported file type", some of
+   *  them a count of what was skipped while the rest still upload. A clipboard
+   *  paste that also carries text passes `textPasted`: when none of its files is
+   *  admitted the text is pasted instead, so that case stays quiet. */
+  _admitPromptAttachments(files, { textPasted = false } = {}) {
+    const admitted = files.filter((f) => this._promptAttachKind(f));
+    const skipped = files.length - admitted.length;
+    if (skipped > 0 && admitted.length > 0) {
+      this.showToast(`${skipped} file${skipped > 1 ? 's' : ''} skipped: unsupported type`, 'info');
+    } else if (skipped > 0 && !textPasted) {
+      this.showToast('Unsupported file type', 'error');
+    }
+    return admitted;
   },
 
   // Max images accepted in one batch (paste / drop / mobile picker). Each is

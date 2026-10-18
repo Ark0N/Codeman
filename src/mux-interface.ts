@@ -20,6 +20,7 @@ import type {
   AntigravityConfig,
   PiConfig,
   GrokConfig,
+  CopilotConfig,
   DeepSeekConfig,
   OmpConfig,
   SessionRemote,
@@ -97,7 +98,8 @@ export interface CreateSessionOptions {
    * Name pinned on a claude spawn as `--name` (version-gated, sanitized, local only).
    * Deliberately NOT `name`: `--name` owns the prompt-box label, the `/resume` picker
    * entry and the terminal title, and a pinned title stops Claude generating its own,
-   * so only a user-chosen name belongs here (see `Session.cliPinnedName`).
+   * so by default only a user-chosen name belongs here; the opt-in `pinCliSessionName`
+   * setting pins every tab name (see `Session.cliPinnedName`).
    */
   cliName?: string;
   niceConfig?: NiceConfig;
@@ -110,6 +112,7 @@ export interface CreateSessionOptions {
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
+  copilotConfig?: CopilotConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   /** When restoring after reboot, resume a previous Claude conversation by its session ID */
@@ -141,7 +144,8 @@ export interface RespawnPaneOptions {
    * Name pinned on a respawned claude as `--name` (version-gated, sanitized, local only).
    * Deliberately NOT `name`: `--name` owns the prompt-box label, the `/resume` picker
    * entry and the terminal title, and a pinned title stops Claude generating its own,
-   * so only a user-chosen name belongs here (see `Session.cliPinnedName`).
+   * so by default only a user-chosen name belongs here; the opt-in `pinCliSessionName`
+   * setting pins every tab name (see `Session.cliPinnedName`).
    */
   cliName?: string;
   niceConfig?: NiceConfig;
@@ -154,6 +158,7 @@ export interface RespawnPaneOptions {
   antigravityConfig?: AntigravityConfig;
   piConfig?: PiConfig;
   grokConfig?: GrokConfig;
+  copilotConfig?: CopilotConfig;
   deepSeekConfig?: DeepSeekConfig;
   ompConfig?: OmpConfig;
   /** Resume a previous Claude conversation when respawning */

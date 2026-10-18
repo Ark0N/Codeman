@@ -10,8 +10,8 @@
  * only, never env values, headers or file content (a parse failure is reported by position).
  *
  * A CLI takes part when it is ENABLED in the registry, declares an `mcpConfig`, and is installed
- * or already has its config file (Copilot CLI, which is not a registry CLI, takes part when installed
- * or when its config file exists); one that is enabled but absent from the machine is reported
+ * or already has its config file (Copilot CLI declares its own `mcpConfig`; with its run mode disabled it still
+ * takes part as a sync-only tool when installed or when its config file exists); one that is enabled but absent from the machine is reported
  * `absent` and never created. Its file is located with this process's env (the env the CLIs
  * Codeman spawns inherit), so a relocation var such as `CODEX_HOME` is followed.
  */
@@ -39,8 +39,8 @@ export async function readMcpSyncEnabled(): Promise<boolean> {
 
 /**
  * Enabled CLIs that declare an MCP config file, in registry order (first definition wins), then the
- * sync-only tools (src/mcp-sync-targets.ts: Copilot CLI), which come last so a registry CLI's
- * definition wins a same-name difference.
+ * sync-only tools (src/mcp-sync-targets.ts: Copilot CLI while its run mode is disabled), which come
+ * last so a registry CLI's definition wins a same-name difference.
  */
 export function mcpSyncTargets(availability: Record<string, boolean>): McpSyncTarget[] {
   const registry = enabledClis()

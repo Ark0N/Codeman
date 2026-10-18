@@ -58,11 +58,11 @@ another device starts from its own history). The default model keeps its own **D
 in both cases, and nothing is ever auto-chosen: the promoted row is simply the one under your
 thumb.
 
-**For opencode, Codex, Gemini, Pi, Grok, DeepSeek and OMP, picking an entry launches
+**For opencode, Codex, Gemini, Pi, Grok, DeepSeek, OMP and GitHub Copilot, picking an entry launches
 straight onto the endpoint** — no restart, because the endpoint is applied before the
 session's process ever starts. **Claude still restarts the harness's process in place** —
 same tab, same conversation (`--resume`) — after a normal native launch, since that restart
-is far less jarring for Claude than for the other seven, whose own TUI can fully
+is far less jarring for Claude than for the others, whose own TUI can fully
 reinitialize on a restart. Either way, every supported harness reads its endpoint config at
 process start, never per turn, so there is no live hot-swap while a turn is running.
 
@@ -154,6 +154,7 @@ entry. "Launch anyway" is still there if you want to try regardless.
 
 | Harness                                  | Status                                                                                                                                                                                                               |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **GitHub Copilot CLI**                   | Verified at the CLI level (1.0.95) against a local OpenAI-compatible endpoint: it posts to `/v1/chat/completions` with your key and model name and needs no GitHub sign-in. Tool calls through a custom endpoint were not exercised. |
 | **Claude Code, opencode, Pi, Grok, OMP** | Verified end-to-end against a real local server.                                                                                                                                                                     |
 | **Codex**                                | Config is correct, and plain chat can work against a server that speaks the Responses API — but a real tool-call attempt comes back as inert text instead of running, so it's still not usable for real coding work. |
 | **Gemini**                               | Fails with an auth error gemini-cli raises once redirected. Unresolved; don't rely on it yet.                                                                                                                        |

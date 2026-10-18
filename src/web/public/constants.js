@@ -2047,7 +2047,7 @@ function computeRewriteScrollLine(input) {
  * a `/g` regex, so {@link absoluteFilePathPattern} mints a fresh one per call.
  */
 const FILE_PATH_LINK_PATTERN =
-  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|sql|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
+  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
 
 /** A fresh, zero-state instance of {@link FILE_PATH_LINK_PATTERN}. */
 function absoluteFilePathPattern() {
@@ -2100,7 +2100,7 @@ function previewsInFileViewer(filePath) {
  * {@link findFilePathLinks}.
  */
 const RELATIVE_FILE_PATH_LINK_PATTERN =
-  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|sql|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
+  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
 
 /** The `(?:log|txt|…)` extension group, read off the rooted pattern so it cannot drift. */
 const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LINK_PATTERN.source)[1];
@@ -3434,5 +3434,159 @@ if (typeof window !== 'undefined') {
     reconcilePtyGeometry,
     TERMINAL_MIN_COLS,
     TERMINAL_MIN_ROWS,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Security notices
+// ═══════════════════════════════════════════════════════════════
+// A security notice is a sticky warning toast about something outside Codeman that
+// its users should act on (the first: OpenCode's Console breach, October 2026). The
+// notices are DATA in the hand-maintained src/web/public/security-notices.json, never
+// in whats-new.json (`npm run version-packages` rewrites that one every release), and
+// they ship with a release. This is the pure half: which notices this browser shows, and
+// on which surface. The wiring (fetches, the seen lists) is checkWhatsNew() in settings-ui.js,
+// the cards are showSecurityNotice() / showUpdateNotice() in panels-ui.js.
+
+/** `YYYY-MM-DD`, and a real calendar day (no 2026-02-30). */
+const SECURITY_NOTICE_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+/** An https URL with a plain host: no other scheme, no userinfo, no whitespace. */
+const SECURITY_NOTICE_URL_PATTERN = /^https:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?(?:[/?#]\S*)?$/;
+
+/**
+ * The local-time bounds of one `YYYY-MM-DD` day, or null when the string is not one.
+ * Local time on purpose: a notice dated the 18th starts on the viewer's 18th.
+ */
+function securityNoticeDay(value) {
+  const match = typeof value === 'string' ? SECURITY_NOTICE_DATE_PATTERN.exec(value) : null;
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const start = new Date(year, month, day);
+  if (start.getFullYear() !== year || start.getMonth() !== month || start.getDate() !== day) return null;
+  const end = new Date(year, month, day + 1).getTime() - 1;
+  return { start: start.getTime(), end };
+}
+
+function securityNoticeText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+/**
+ * The notices to show, in file order, each as `{ id, title, message, label, url }`
+ * (`title` is '' when the entry has none).
+ *
+ * - A malformed entry is skipped, never repaired: no id, message or link label, a
+ *   link that is not https, a date that is not a real `YYYY-MM-DD` day, a `title`
+ *   that is present but not a non-blank string, or a `cli` that is not a registry
+ *   id. A repeated id shows its first entry only.
+ * - Shown from the start of the `published` day to the END of the `expires` day.
+ *   The expiry is what keeps an old notice from alarming a browser that first opens
+ *   Codeman months later.
+ * - An id in `seen` is skipped (the user closed it, or followed its link).
+ * - A notice naming a `cli` is shown ONLY when `available[cli] === true`. Absent,
+ *   unknown and false all mean "not installed" here, unlike isCliAvailable() in
+ *   settings-ui.js (which offers a launch on a doubt): a warning about software you
+ *   do not have is noise. A notice with no `cli` is for everyone.
+ * - `lang` 'zh-CN' takes the entry's `i18n['zh-CN']` title, message and label where
+ *   they exist, each falling back to the English one on its own.
+ *
+ * The CLI id is data from the JSON, compared as a key; no code here names one.
+ *
+ * @param {Array<object>} notices - `notices` from security-notices.json
+ * @param {{available?: Record<string, boolean>, seen?: Iterable<string>, now?: number, lang?: string}} [opts]
+ *   `available` is window.__codemanCliAvailable, `now` epoch milliseconds (default Date.now()).
+ * @returns {Array<{id: string, title: string, message: string, label: string, url: string}>}
+ */
+function selectSecurityNotices(notices, opts = {}) {
+  if (!Array.isArray(notices)) return [];
+  const available = opts.available && typeof opts.available === 'object' ? opts.available : {};
+  const seenSource = opts.seen;
+  const seen = new Set(
+    seenSource && typeof seenSource !== 'string' && typeof seenSource[Symbol.iterator] === 'function'
+      ? Array.from(seenSource, String)
+      : []
+  );
+  const now = typeof opts.now === 'number' && Number.isFinite(opts.now) ? opts.now : Date.now();
+  const lang = opts.lang === 'zh-CN' ? 'zh-CN' : 'en';
+  const taken = new Set();
+  const shown = [];
+  for (const entry of notices) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const id = securityNoticeText(entry.id);
+    const title = securityNoticeText(entry.title);
+    const message = securityNoticeText(entry.message);
+    const link = entry.link && typeof entry.link === 'object' ? entry.link : null;
+    const label = securityNoticeText(link?.label);
+    const url = typeof link?.url === 'string' ? link.url.trim() : '';
+    const published = securityNoticeDay(entry.published);
+    const expires = securityNoticeDay(entry.expires);
+    if (!id || !message || !label || !SECURITY_NOTICE_URL_PATTERN.test(url) || !published || !expires) continue;
+    if (entry.title !== undefined && !title) continue;
+    if (entry.cli !== undefined && (typeof entry.cli !== 'string' || !CLI_ID_PATTERN.test(entry.cli))) continue;
+    if (taken.has(id)) continue;
+    taken.add(id);
+    if (now < published.start || now > expires.end) continue;
+    if (seen.has(id)) continue;
+    if (entry.cli !== undefined && available[entry.cli] !== true) continue;
+    const localized = lang === 'en' ? null : entry.i18n?.[lang];
+    shown.push({
+      id,
+      title: securityNoticeText(localized?.title) || title,
+      message: securityNoticeText(localized?.message) || message,
+      label: securityNoticeText(localized?.label) || label,
+      url,
+    });
+  }
+  return shown;
+}
+
+/**
+ * Which surface carries each selected notice on this page load, decided together with
+ * the once-per-release update toast (checkWhatsNew in settings-ui.js) so a browser gets
+ * ONE notification, never a card and a toast for the same notice.
+ *
+ * - The update toast shows exactly as checkWhatsNew always decided: this browser saw an
+ *   older version (`seenVersion` set and different), and `notes` are this version's with
+ *   at least one highlight. Then every selected notice rides INSIDE it (`updateNotices`)
+ *   and no standalone card is shown.
+ * - Otherwise (a fresh install, a reload on the same version, notes missing or empty)
+ *   each notice gets its own card (`cards`).
+ * - `recordVersion`: store `runningVersion` as seen, as checkWhatsNew always did: on a
+ *   fresh install (so it is not greeted with "what's new") and when the toast shows.
+ *   Notes that are missing or empty record nothing, so the next load tries again.
+ *
+ * @param {{seenVersion?: string|null, runningVersion: string, notes?: object|null, notices?: Array<object>}} state
+ *   `notices` is the output of selectSecurityNotices().
+ * @returns {{recordVersion: boolean, update: boolean, updateNotices: Array<object>, cards: Array<object>}}
+ */
+function planStartupNotices(state = {}) {
+  const seenVersion = typeof state.seenVersion === 'string' && state.seenVersion ? state.seenVersion : null;
+  const runningVersion = state.runningVersion;
+  const notices = Array.isArray(state.notices) ? state.notices : [];
+  const notes = state.notes;
+  const update = Boolean(
+    seenVersion &&
+      seenVersion !== runningVersion &&
+      notes &&
+      notes.version === runningVersion &&
+      Array.isArray(notes.highlights) &&
+      notes.highlights.length > 0
+  );
+  return {
+    recordVersion: !seenVersion || update,
+    update,
+    updateNotices: update ? notices.slice() : [],
+    cards: update ? [] : notices.slice(),
+  };
+}
+
+if (typeof window !== 'undefined') {
+  window.CodemanSecurityNotices = {
+    select: selectSecurityNotices,
+    plan: planStartupNotices,
+    // The same https-only rule select() applies, for the card's link button to check again.
+    urlOk: (url) => typeof url === 'string' && SECURITY_NOTICE_URL_PATTERN.test(url),
   };
 }

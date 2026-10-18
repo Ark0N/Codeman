@@ -51,12 +51,17 @@ export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: Session
 
     const payload = data as RawStatuslinePayload | undefined;
 
+    // Only a CLI that has a statusline exporter at all speaks for its own model and
+    // prompt-cache state: both ride the SAME statusline payload the exporter POSTs, so
+    // both are gated on capabilities.statusLineTelemetry (the gate that also decides
+    // whether the exporter is injected at all, in tmux-manager._resolveStatusLine).
+    const session = ctx.sessions.get(sessionId);
+    const reportsStatusLine = !!session && !!getCli(session.mode)?.capabilities.statusLineTelemetry;
+
     // The model the CLI says it is running, for the session headers (displayModel). It
     // rides every render, so it follows an in-session `/model`; the session dedupes and
-    // broadcasts only a change. Only a CLI that has a statusline exporter at all may
-    // report one here.
-    const session = ctx.sessions.get(sessionId);
-    if (session && getCli(session.mode)?.capabilities.statusLineTelemetry) {
+    // broadcasts only a change.
+    if (session && reportsStatusLine) {
       session.noteReportedModel('statusline', payload?.model?.display_name);
     }
 
@@ -68,7 +73,7 @@ export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: Session
     // it backgrounds this POST (hooks-config.ts), so two sub-second loopback reports can
     // arrive out of order; a stale one then briefly overwrites newer state until the next
     // render corrects it. Accepted for a display-only readout rather than ordered here.
-    const promptCache = parsePromptCache(payload);
+    const promptCache = reportsStatusLine ? parsePromptCache(payload) : null;
     if (promptCache && session?.setPromptCache(promptCache)) {
       ctx.broadcast(SessionPromptCache, { sessionId, ...session.promptCache });
       // Persisted on change, like a model change, so a crash restores the latest report.

@@ -80,7 +80,7 @@ describe('tmux full-history pane capture (COD-47)', () => {
     // up from them, so the two decisions travel together: no geometry, no move,
     // and the old trim applies instead.
     expect(methodBody).toContain("rawCapture.replace(/\\n$/, '')");
-    expect(methodBody).toContain("if (!geometry) return normalizeScrollbackEol(rawCapture.replace(/\\n+$/g, ''))");
+    expect(methodBody).toContain("const trimmed = rawCapture.replace(/\\n+$/g, '')");
   });
 
   it('defers to the byte history when the pane holds nothing visible', () => {
@@ -144,7 +144,7 @@ describe('the geometry a capture reports back', () => {
     const write = methodBody.indexOf('opts.capturedGeometry = { cols: geometry.cols, rows: geometry.rows }');
     // Anchor on the REPLAY branch, not the earlier `if (fullHistory)` that only
     // sizes the exec buffer.
-    const replayBranch = methodBody.indexOf('if (!geometry) return normalizeScrollbackEol(');
+    const replayBranch = methodBody.indexOf('if (!geometry) {');
     const visibleReturn = methodBody.indexOf('if (geometry) return formatPaneSnapshot(');
     expect(write).toBeGreaterThan(-1);
     expect(replayBranch).toBeGreaterThan(-1);

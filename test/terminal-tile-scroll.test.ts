@@ -239,6 +239,15 @@ describe('a tile pages a hollow buffer through the primary pane gates', () => {
     expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: PAGE_DOWN });
   });
 
+  it('pages a copilot tile with an empty local buffer (the stale-tracking fallback)', async () => {
+    const app = makeApp({ other: { mode: 'shell' }, 's-tile': { mode: 'copilot', cliMouseTracking: false } }, 'other');
+    const { ws, mount } = await connectTile(app, { mode: 'copilot' });
+
+    mount.fire('wheel', wheelLines(-12));
+
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
+  });
+
   it("reads the TILE's session, not the active one", async () => {
     // Active session is a shell; the tile shows opencode: the tile still pages.
     const app = makeApp({ other: { mode: 'shell' }, 's-tile': { mode: 'opencode' } }, 'other');
@@ -344,8 +353,8 @@ describe('a fullscreen Claude tile forwards the wheel to the CLI as SGR reports'
     expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: UP.repeat(5) });
   });
 
-  it('forwards an isolated small wheel event and five slow clicks for Claude and tracked Codex', async () => {
-    for (const mode of ['claude', 'codex']) {
+  it('forwards an isolated small wheel event and five slow clicks for every tracked CLI', async () => {
+    for (const mode of ['claude', 'codex', 'copilot']) {
       let now = 1000;
       clock.now = () => now;
       const session = mode === 'claude' ? FULLSCREEN : { mode, cliMouseTracking: true };

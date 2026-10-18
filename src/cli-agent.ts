@@ -914,7 +914,7 @@ export function registerAgentCommands(program: Command): Command {
     )
     .option(
       '-u, --until <signals>',
-      'Comma list: stop,idle,exit,working,blocked (stop/blocked need hook signals for the session; where there are none the server answers 400, passed through)'
+      'Comma list: stop,idle,exit,working,blocked (stop needs hook signals for the session, blocked hooks or a dialog Codeman reads off the screen, as for codex; where there are none the server answers 400, passed through)'
     )
     .option(
       '-m, --match <marker>',

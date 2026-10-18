@@ -351,7 +351,7 @@ describe('TerminalTile wheel paging in a real browser', () => {
         const after = await page.evaluate(() => (window as any).app.terminal.buffer.active.viewportY);
         expect(after).toBe(before - 1); // local shell behavior matches master
       }
-      for (const mode of ['claude', 'codex']) {
+      for (const mode of ['claude', 'codex', 'copilot']) {
         await page.evaluate(
           ({ id, mode }) => {
             const a = (window as any).app;
