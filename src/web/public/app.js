@@ -533,8 +533,8 @@ const DEFAULT_SHORTCUTS = [
     group: 'Session',
     label: 'Toggle Session Sidebar',
     // Alt+B, not Ctrl+B: Ctrl+B must reach the terminal (tmux prefix,
-    // readline backward-char). The Alt block below claims only Digit1-9 and
-    // the brackets, and the registry claims Alt for KeyK and Slash only.
+    // readline backward-char). The Alt block below claims only Digit1-9; the
+    // brackets are registry entries, and the registry claims Alt for KeyK and Slash only.
     bindings: [{ modifiers: ['alt'], key: 'b', code: 'KeyB' }],
     action: 'toggleSessionSidebar',
   },
@@ -638,11 +638,22 @@ const DEFAULT_SHORTCUTS = [
     bindings: [],
     action: 'removeTile',
   },
+  // Physical key codes, so macOS Option layouts that print "“" for Option+[ still match.
   {
-    id: 'previous-next-session',
+    id: 'previous-session',
     group: 'Session',
-    label: 'Previous / Next Session',
-    displayBindings: ['Alt/Option+[', 'Alt/Option+]'],
+    label: 'Previous Session',
+    displayBindings: ['Alt/Option+['],
+    bindings: [{ modifiers: ['alt'], code: 'BracketLeft' }],
+    action: 'previousSession',
+  },
+  {
+    id: 'next-session-alt',
+    group: 'Session',
+    label: 'Next Session (alternate)',
+    displayBindings: ['Alt/Option+]'],
+    bindings: [{ modifiers: ['alt'], code: 'BracketRight' }],
+    action: 'nextSession',
   },
   {
     id: 'switch-tab-n',
@@ -1388,19 +1399,7 @@ class CodemanApp {
     // getShortcutRegistry()). The command palette chord is deliberately NOT in
     // this map — shouldOpenCommandPaletteFromShortcut() dispatches it above with
     // focus-target awareness (it must fire from the terminal but not from inputs).
-    const SHORTCUT_ACTIONS = {
-      showShortcutOverlay: () => this.showShortcutOverlay(),
-      killActiveSession: () => this.killActiveSession(),
-      nextSession: () => this.nextSession(),
-      clearTerminal: () => this.clearTerminal(),
-      restoreTerminalSize: () => this.restoreTerminalSize(),
-      increaseFontSize: () => this.increaseFontSize(),
-      decreaseFontSize: () => this.decreaseFontSize(),
-      toggleVoiceInput: () => VoiceInput.toggle(),
-      moveActiveTabLeft: () => this.moveActiveTabLeft(),
-      moveActiveTabRight: () => this.moveActiveTabRight(),
-      toggleSessionSidebar: () => this.toggleSessionSidebar(),
-    };
+    const SHORTCUT_ACTIONS = this._shortcutActions();
 
     // Use capture to handle before terminal
     document.addEventListener('keydown', (e) => {
@@ -1447,6 +1446,7 @@ class CodemanApp {
         this.closeAllPanels();
         this.closeHelp();
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();
+        this.closeWorktreeModal?.();
         this.closeSessionManager();
         this.closeCommandPalette?.();
         this.closeShortcutOverlay?.();
@@ -1463,7 +1463,8 @@ class CodemanApp {
       // Option/Alt session navigation uses physical key CODES, not e.key, so macOS
       // keyboard layouts that emit special characters under Option (Option+1 -> ¡,
       // Option+[ -> "“") still switch sessions. e.code is the physical key regardless
-      // of layout. Option+1-9 = switch by index; Option+[ / Option+] = prev / next.
+      // of layout. Option+1-9 = switch by index. Option+[ / ] (prev / next) live in the
+      // shortcut registry, so they can be rebound.
       if (e.altKey && !e.ctrlKey && !e.shiftKey) {
         const code = e.code || '';
         const digitMatch = code.match(/^Digit([1-9])$/);
@@ -1487,16 +1488,6 @@ class CodemanApp {
               this.openWebview(webId);
             }
           }
-          return;
-        }
-        if (e.code === 'BracketLeft') {
-          e.preventDefault();
-          this.prevSession();
-          return;
-        }
-        if (e.code === 'BracketRight') {
-          e.preventDefault();
-          this.nextSession();
           return;
         }
       }
@@ -4842,6 +4833,8 @@ class CodemanApp {
         headerVersionEl.title = `Codeman v${data.version}`;
       }
     }
+
+    if (data.version) this.checkWhatsNew?.(data.version);
 
     // Stop any active voice recording on reconnect
     VoiceInput.cleanup();
@@ -10336,9 +10329,10 @@ class CodemanApp {
     delete this.respawnActionLogs[sessionId];
   }
 
+  /** Resolves true once the session is gone from the server, false when it is still there. */
   async closeSession(sessionId, killMux = true) {
     // Already on its way out (a repeated click, the mux panel racing the tab).
-    if (this._closingSessions.has(sessionId)) return;
+    if (this._closingSessions.has(sessionId)) return false;
     // The tab goes FIRST and the server is asked after. The kill takes the server
     // a few hundred ms (SIGTERM grace, the process tree, tmux), and a tab that sat
     // there that long after "Kill" read as a click that did nothing. A refused
@@ -10416,7 +10410,7 @@ class CodemanApp {
       } else {
         this.showToast('Tab hidden, tmux still running', 'info');
       }
-      return;
+      return true;
     }
 
     // Still on the server (or the server is unreachable, in which case the resync
@@ -10431,6 +10425,7 @@ class CodemanApp {
       this.renderSessionTabs();
     }
     this.showToast('Failed to close session', 'error');
+    return false;
   }
 
   // Request confirmation before closing a session
@@ -10444,6 +10439,20 @@ class CodemanApp {
     const name = this.getSessionName(session);
     const sessionNameEl = document.getElementById('closeConfirmSessionName');
     sessionNameEl.textContent = name;
+
+    // A session in a Codeman-managed git worktree also offers to remove the worktree
+    // (git worktree remove, never forced) once the session is gone. Read now, before the
+    // session leaves this.sessions.
+    const worktree = this._managedWorktreeOfSession?.(session) || null;
+    this.pendingCloseWorktree = worktree;
+    const wtOption = document.getElementById('closeConfirmWorktree');
+    if (wtOption) {
+      wtOption.hidden = !worktree;
+      const wtName = document.getElementById('closeConfirmWorktreeName');
+      if (wtName) wtName.textContent = worktree ? worktree.name : '';
+      const wtBranch = document.getElementById('closeConfirmWorktreeBranch');
+      if (wtBranch) wtBranch.checked = false;
+    }
 
     // Update kill button text based on session mode
     const killTitle = document.getElementById('closeConfirmKillTitle');
@@ -10472,15 +10481,24 @@ class CodemanApp {
 
   cancelCloseSession() {
     this.pendingCloseSessionId = null;
+    this.pendingCloseWorktree = null;
     document.getElementById('closeConfirmModal').classList.remove('active');
   }
 
-  async confirmCloseSession(killMux = true) {
+  /**
+   * `removeWorktree`: Close Session's "Kill & remove worktree". The worktree is removed only
+   * after the server confirms the session is gone (a live session inside is refused anyway),
+   * and only ever through `git worktree remove` without --force.
+   */
+  async confirmCloseSession(killMux = true, { removeWorktree = false } = {}) {
     const sessionId = this.pendingCloseSessionId;
+    const worktree = removeWorktree ? this.pendingCloseWorktree : null;
+    const deleteBranch = !!document.getElementById('closeConfirmWorktreeBranch')?.checked;
     this.cancelCloseSession();
 
     if (sessionId) {
-      await this.closeSession(sessionId, killMux);
+      const gone = await this.closeSession(sessionId, killMux);
+      if (gone && worktree) await this._removeWorktreeAfterClose?.(worktree, deleteBranch);
     }
   }
 
@@ -10698,6 +10716,54 @@ class CodemanApp {
   }
 
   // ─── Shortcut Registry ───────────────────────────────────────────────────────
+  /**
+   * Action name -> handler for the shortcut registry entries the document keydown
+   * handler dispatches generically (DEFAULT_SHORTCUTS + the user's rebinds). Entries
+   * absent here (copy selection, the palette, the tile chords) have their own dispatch.
+   */
+  _shortcutActions() {
+    return {
+      showShortcutOverlay: () => this.showShortcutOverlay(),
+      killActiveSession: () => this.killActiveSession(),
+      nextSession: () => this.nextSession(),
+      previousSession: () => this.prevSession(),
+      clearTerminal: () => this.clearTerminal(),
+      restoreTerminalSize: () => this.restoreTerminalSize(),
+      increaseFontSize: () => this.increaseFontSize(),
+      decreaseFontSize: () => this.decreaseFontSize(),
+      toggleVoiceInput: () => VoiceInput.toggle(),
+      moveActiveTabLeft: () => this.moveActiveTabLeft(),
+      moveActiveTabRight: () => this.moveActiveTabRight(),
+      toggleSessionSidebar: () => this.toggleSessionSidebar(),
+    };
+  }
+
+  /**
+   * True when `e` is a chord the USER rebound to a generically dispatched action.
+   * The document handler has already run the action, but its preventDefault() does not
+   * stop xterm, so without this gate a rebind to e.g. Alt+J would also type ESC j into the
+   * session. Defaults are not covered on purpose: several (Ctrl+L) rely on reaching the PTY,
+   * and neither is a chord that matches the entry's own default (a re-capture of it).
+   */
+  isUserBoundShortcutEvent(e) {
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) return false;
+    const overrides = this.loadAppSettingsFromStorage().shortcutOverrides || {};
+    const actions = this._shortcutActions();
+    return this.getShortcutRegistry().some((shortcut) => {
+      if (shortcut.disabled || !Array.isArray(overrides[shortcut.id]?.bindings)) return false;
+      // toggleSessionSidebar has its own gate (shouldToggleSessionSidebarFromShortcut) that
+      // lets the chord through when the sidebar layout is off; swallowing it here would make a
+      // rebound sidebar key dead in the header layout.
+      if (shortcut.action === 'toggleSessionSidebar') return false;
+      if (typeof actions[shortcut.action] !== 'function') return false;
+      if (!this.matchesShortcutEvent(e, shortcut)) return false;
+      // Re-capturing the entry's own default (Ctrl+L for Clear Terminal) must keep reaching the
+      // CLI: clearTerminal() relies on ^L for the redraw.
+      const fallback = DEFAULT_SHORTCUTS.find((d) => d.id === shortcut.id);
+      return !this.matchesShortcutEvent(e, fallback);
+    });
+  }
+
   // Returns the merged shortcut list: DEFAULT_SHORTCUTS with any per-shortcut
   // overrides from settings.shortcutOverrides applied on top.
 

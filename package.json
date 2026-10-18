@@ -1,6 +1,6 @@
 {
   "name": "aicodeman",
-  "version": "1.41.1",
+  "version": "1.42.0",
   "description": "Self-hosted mission control for AI coding agents: run Claude Code, Codex, OpenCode, Gemini, DeepSeek, Grok and more 24/7 in tmux, from any device.",
   "mcpName": "io.github.Ark0N/codeman",
   "type": "module",
@@ -39,7 +39,7 @@
     "check:public-assets": "node scripts/check-public-assets.mjs",
     "capture:subagents": "node scripts/capture-subagent-screenshots.mjs",
     "changeset": "changeset",
-    "version-packages": "changeset version && node scripts/sync-plugin.mjs && npm install --package-lock-only && node scripts/check-lockfile-sync.mjs",
+    "version-packages": "changeset version && node scripts/generate-whats-new.mjs && prettier --write src/web/public/whats-new.json && node scripts/sync-plugin.mjs && npm install --package-lock-only && node scripts/check-lockfile-sync.mjs",
     "check:lockfile": "node scripts/check-lockfile-sync.mjs",
     "check:plugin": "node scripts/sync-plugin.mjs --check && claude plugin validate --strict plugins/codeman && claude plugin validate --strict .claude-plugin/marketplace.json",
     "knip": "npx --yes knip@latest --config config/knip.json",

@@ -17,7 +17,7 @@ import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } f
 import { isUnauthenticatedNetworkAcknowledged } from '../network-auth-policy.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { findUser, canUsernameRunPrivilegedCommands } from '../../user-store.js';
-import { getAuthUser, requireAdmin, canAccessOwned } from '../route-helpers.js';
+import { getAuthUser, isAdmin, requireAdmin, canAccessOwned, revokeUserSessions } from '../route-helpers.js';
 import {
   ConfigUpdateSchema,
   SettingsUpdateSchema,
@@ -144,6 +144,28 @@ export function resolveSpanUrl(hostHeader: string | undefined, fallbackPort = '3
   return `http://localhost:${port}`;
 }
 
+/**
+ * What GET /api/settings answers a NON-ADMIN in multi-user mode: settings.json minus what
+ * belongs to the server's admin rather than to the reader. `voiceSettings.apiKey` is the
+ * Deepgram key an admin saved, a credential (the reader's browser seeded it into its own
+ * voice config and dictated on the admin's account); `caseOrder` and `lastUsedCase` name the
+ * admin's cases. Everything else stays readable, because the page reads the synced feature
+ * switches from it. Writes are admin-only there (PUT /api/settings). Exported for unit testing.
+ */
+export function settingsForNonAdmin(settings: unknown): unknown {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return settings;
+  const out: Record<string, unknown> = { ...(settings as Record<string, unknown>) };
+  delete out.caseOrder;
+  delete out.lastUsedCase;
+  const voice = out.voiceSettings;
+  if (voice && typeof voice === 'object' && !Array.isArray(voice) && 'apiKey' in voice) {
+    const voiceOut: Record<string, unknown> = { ...(voice as Record<string, unknown>) };
+    delete voiceOut.apiKey;
+    out.voiceSettings = voiceOut;
+  }
+  return out;
+}
+
 export function registerSystemRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort
@@ -163,12 +185,17 @@ export function registerSystemRoutes(
 
   app.get('/api/tunnel/status', async () => ctx.tunnelManager.getStatus());
 
-  app.get('/api/tunnel/info', async () => {
+  app.get('/api/tunnel/info', async (req) => {
     const status = ctx.tunnelManager.getStatus();
     const sseClients = ctx.getSseClientCount();
     const sessions: Array<{ ip: string; ua: string; createdAt: number; method: string }> = [];
+    // Multi-user mode: a non-admin is shown only their own logins (address and browser of
+    // every other user's sessions are not theirs to read), matching what their Revoke All
+    // can revoke (POST /api/auth/revoke). null = everyone's (admin, single-user mode).
+    const onlyUser = isMultiUserMode() && !isAdmin(req) ? getAuthUser(req).username : null;
     if (ctx.authSessions) {
       for (const [, record] of ctx.authSessions) {
+        if (onlyUser !== null && record.username !== onlyUser) continue;
         sessions.push({ ip: record.ip, ua: record.ua, createdAt: record.createdAt, method: record.method });
       }
     }
@@ -300,7 +327,10 @@ export function registerSystemRoutes(
 
   // ========== QR Regeneration ==========
 
-  app.post('/api/tunnel/qr/regenerate', async () => {
+  app.post('/api/tunnel/qr/regenerate', async (req, reply) => {
+    // Clears EVERY outstanding QR login code (each user's minted one too) and rotates the
+    // server's token: admin-only in multi-user mode, like the other tunnel controls.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     ctx.tunnelManager.regenerateQrToken();
     return {};
   });
@@ -309,6 +339,19 @@ export function registerSystemRoutes(
 
   app.post('/api/auth/revoke', async (req) => {
     const result = RevokeSessionSchema.safeParse(req.body);
+    // Multi-user mode: a NON-ADMIN revokes only their own login sessions. The bare form
+    // below clears every session on the server, so for them it used to sign out every
+    // user, admins included; a named token is revoked only when it is one of theirs.
+    if (isMultiUserMode() && !isAdmin(req)) {
+      const username = getAuthUser(req).username;
+      const token = result.success ? result.data.sessionToken : undefined;
+      if (token) {
+        if (ctx.authSessions?.peek(token)?.username === username) ctx.authSessions?.delete(token);
+      } else {
+        revokeUserSessions(ctx.authSessions, username);
+      }
+      return {};
+    }
     if (result.success && result.data.sessionToken) {
       ctx.authSessions?.delete(result.data.sessionToken);
     } else {
@@ -327,6 +370,8 @@ export function registerSystemRoutes(
   // panels can be dragged across the physical monitor seam. macOS only; needs
   // the one-time "Displays have separate Spaces" OFF prerequisite (see script).
   app.post('/api/system/span-displays', async (req, reply) => {
+    // Launches a browser window on the SERVER's desktop: admin-only in multi-user mode.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     // macOS only: the launcher uses osascript + Finder desktop bounds and Chrome
     // --app geometry flags. Fail clearly elsewhere instead of spawning a bash
     // that errors out invisibly (the toast would otherwise lie "Opening…").
@@ -379,7 +424,9 @@ export function registerSystemRoutes(
 
   // Kick off a detached update to the latest release. Returns immediately; the
   // browser then polls /api/system/update/status across the service restart.
-  app.post('/api/system/update', async (_req, reply) => {
+  app.post('/api/system/update', async (req, reply) => {
+    // Updates and restarts the server under every user: admin-only in multi-user mode.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const result = await startUpdate();
     if (result.ok) {
       return { updateId: result.updateId, toTag: result.toTag, toVersion: result.toVersion };
@@ -617,13 +664,16 @@ export function registerSystemRoutes(
           // synchronous-spawn precedent this endpoint is modelled on.
           detached: true,
           // Inherit the environment: this needs a HOME to resolve $DSH_HOME
-          // against, and a PATH carrying `pnpm`. ⚠️ `dsh plugin` does NOT bundle a
+          // against, and a PATH carrying `pnpm` (see the PATH below). ⚠️ `dsh plugin` does NOT bundle a
           // package manager — it `spawnSync`s a literal `pnpm` with no npm
           // fallback, so on a host without one this exits 127 and dsh's own
           // stderr ("pnpm not found on PATH") is what reaches the caller through
           // the OPERATION_FAILED detail below. That is the same missing
           // dependency that broke the docker agent image in issue #352.
-          env: process.env,
+          // PATH leads with the directory `dsh` itself resolved to: CLI management installs
+          // `dsh` and `pnpm` into the user prefix (`~/.local/bin`), which a service's own PATH
+          // usually lacks, so `dsh plugin` could not find the `pnpm` sitting next to it.
+          env: { ...process.env, PATH: [dir, process.env.PATH].filter(Boolean).join(':') },
         });
       } catch (err) {
         resolve({ code: null, output: `spawn failed: ${getErrorMessage(err)}`, timedOut: false });
@@ -718,7 +768,10 @@ export function registerSystemRoutes(
 
   // ========== State & Lifecycle ==========
 
-  app.post('/api/cleanup-state', async () => {
+  app.post('/api/cleanup-state', async (req, reply) => {
+    // Drops every user's stale session records (and their tab-layout entries): admin-only
+    // in multi-user mode, like the other server-wide maintenance operations.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const activeSessionIds = new Set(ctx.sessions.keys());
     const result = await ctx.tabLayouts.runStaleSessionCleanup(activeSessionIds, (ids) =>
       ctx.store.cleanupSessionsByIds(ids)
@@ -866,7 +919,10 @@ export function registerSystemRoutes(
     return { config: ctx.store.getConfig() };
   });
 
-  app.put('/api/config', async (req) => {
+  app.put('/api/config', async (req, reply) => {
+    // Process-wide app config in state.json (poll interval, timeouts, the session cap,
+    // respawn defaults): admin-only in multi-user mode, like PUT /api/settings.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const configData = parseBody(ConfigUpdateSchema, req.body, 'Invalid config');
     ctx.store.setConfig(configData as Partial<ReturnType<typeof ctx.store.getConfig>>);
     return { config: ctx.store.getConfig() };
@@ -935,7 +991,7 @@ export function registerSystemRoutes(
 
   // ========== Settings ==========
 
-  app.get('/api/settings', async () => {
+  app.get('/api/settings', async (req) => {
     // A plain read. This route must NEVER write settings.json: readJsonConfig()
     // answers `{}` for ANY read failure (a parse error, EACCES, EMFILE, a read
     // that lands inside PUT's non-atomic write), not only for a missing file,
@@ -947,10 +1003,20 @@ export function registerSystemRoutes(
     // `workspaceHooksEnabled` means ON, and the client resolves its own display
     // default through planUsageChipEnabled(). Pinned by
     // test/routes/system-routes-settings-get-plan-usage-default.test.ts.
-    return readJsonConfig(SETTINGS_PATH, 'settings', {});
+    const settings = await readJsonConfig<unknown>(SETTINGS_PATH, 'settings', {});
+    // Readable by every signed-in user, but a non-admin in multi-user mode gets it without
+    // the admin's credential and case names (settingsForNonAdmin). isAdmin is always true in
+    // single-user mode, so that answer is the file as it is.
+    return isAdmin(req) ? settings : settingsForNonAdmin(settings);
   });
 
-  app.put('/api/settings', async (req) => {
+  app.put('/api/settings', async (req, reply) => {
+    // Multi-user mode: settings.json is ONE file for the whole server (feature switches,
+    // the plan-usage collection switch, run mode, respawn presets, the tunnel), so a write
+    // is admin-only, like every other server-wide setting (docs/multi-user-plan.md,
+    // Settings row). Refused FIRST: nothing is parsed, written, toggled or started for a
+    // non-admin. GET above stays readable by everyone. No-op in single-user mode.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const settings = parseBody(SettingsUpdateSchema, req.body, 'Invalid settings') as Record<string, unknown>;
 
     // COD-55: enabling the Cloudflare tunnel publishes the whole app (full terminal
@@ -1089,7 +1155,10 @@ export function registerSystemRoutes(
     return { success: true, data: settings.modelConfig || {} };
   });
 
-  app.put('/api/execution/model-config', async (req) => {
+  app.put('/api/execution/model-config', async (req, reply) => {
+    // The `modelConfig` key of the server-wide settings.json (cron's and the plan
+    // orchestrator's default model): admin-only in multi-user mode, like PUT /api/settings.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
     const modelConfig = parseBody(ModelConfigUpdateSchema, req.body, 'Invalid model config') as Record<string, unknown>;
 
     try {

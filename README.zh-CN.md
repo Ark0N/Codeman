@@ -276,10 +276,10 @@ codeman service install           # systemd/launchd 服务：重启后自动回�
 ### 4. 与智能体对话
 
 - **直接在终端输入提示** —— 即使跨越重连，输入也是精确一次送达（连接中断绝不会丢失或重复发送提示）。
-- **粘贴、拖放或附加图片和视频**，直接进入会话。它们保存在工作区里一个隐藏的 `.codeman-uploads/` 文件夹中（它在 git 里会忽略自己，7 天后被清理），文件路径会落在你的提示里，但不会自动发送。
+- **粘贴、拖放或附加图片、视频和文档**（PDF、Office 文件、zip 和纯文本），直接进入会话。它们保存在工作区里一个隐藏的 `.codeman-uploads/` 文件夹中（它在 git 里会忽略自己，7 天后被清理），文件路径会落在你的提示里，但不会自动发送。
 - **语音输入** —— `Ctrl+Shift+V`（Deepgram Nova-3，或者直接用这台机器的 Claude Code 登录、不需要任何 API key；自动静音停止）。
 - **附件** —— 注册外部文件/文档，并内联预览 Office/PDF；智能体打印出的任何文件路径都可以点击，终端里和对话视图里都行，包括 `~/` 路径、相对路径和被折成多行的路径。`.html` 报告会以真实网页打开，Markdown 会渲染后打开，文件夹则以其文件的网格打开。
-- **需要你的时候** —— 标签会变黄（等待输入）或变红（有个问题挡住了它）。**审批收件箱（Approvals Inbox）**（可选启用）把所有会话里等着你的提示排成一个队列，可以从页头的铃铛或手机首页直接作答；🧠 **Read My Mind**（可选启用）会根据这个 case 的目标和最近的工作替你起草下一条提示。
+- **需要你的时候** —— 标签会变黄（等待输入）或变红（有个问题挡住了它）。**审批收件箱（Approvals Inbox）**（可选启用）把 Claude Code、Codex 和 DeepSeek Harness 会话里等着你的提示排成一个队列。Claude 的提示可以在页头的铃铛里直接作答，Claude 的对话框也可以在手机首页作答，Claude 的权限请求还可以用推送通知上的 Approve/Deny 按钮作答；Codex 和 DeepSeek 的条目只是提醒，会告诉你去终端里作答；其他 CLI 的提示不会进入收件箱。🧠 **Read My Mind**（可选启用）会根据这个 case 的目标和最近的工作替你起草下一条提示。
 - **看到什么就能复制什么** —— `Shift+拖动` 在 CLI 接管了鼠标时也能选中文本，右键复制选中内容，自动复制（Auto Copy，可选启用）在松开鼠标的瞬间就复制。用 OSC 52 复制的程序（Claude Code 的 `/copy`、tmux 的 yank、vim）也会把文本放进你浏览器的剪贴板。
 
 ### 5. 让它自主运行
@@ -859,7 +859,7 @@ deleted 9f2d8e5f, aff9c691, be9f1f15    标签消失
 4. **响应信封。** 多数端点返回 `{ "success": true, "data": … }`（错误：`{ "success": false, "error", "errorCode" }`）。少数遗留 GET 返回裸响应体 —— **两种都要处理**（`body.data ?? body`）。
 5. **`/api/v1/*`** 是 `/api/*` 的稳定别名。
 6. **用等待代替轮询，别把超时当成错误。** 等待类端点在没等到事情发生时也以 HTTP `200` 加 `wait.timedOut: true` 应答，所以要循环调用短等待（默认 60 秒），而不是发一个超长的调用：隧道会掐断空闲连接。`wait.timeoutMs` 告诉你服务端钳制之后真正采用的超时（上限 600 秒）。
-7. **只有 `claude` 与 `deepseek` 会话会发出 `stop` 与 `blocked`。** 这两个来自 hook（Claude Code 自己的，以及 DeepSeek Harness 的状态桥接）；`shell` 与其他外部 CLI（opencode/codex/gemini/antigravity/pi/grok/omp）只接受 `idle`、`working` 与 `exit`。在这些模式上显式索要 `stop` 会得到 `400`；不传 `until` 则永远安全。⚠️ `shell` 会话的 `idle` 只在启动时触发**一次**，此后再也不会，所以在那里用「发送并等待」只能等到超时：没有 hook 的会话请用 `wait-output` 标记来同步。
+7. **只有 `claude` 与 `deepseek` 会话会发出 `stop`；`codex` 还会发出 `blocked`。** 它们来自 hook（Claude Code 自己的，以及 DeepSeek Harness 的状态桥接），codex 的 `blocked` 除外：批准、提问或信任对话框出现时，Codeman 从它的屏幕上读出这个信号（请在终端里回答）。`shell` 与其他外部 CLI（opencode/gemini/antigravity/pi/grok/omp）只接受 `idle`、`working` 与 `exit`，codex 另外接受 `blocked`。在这些模式上显式索要 `stop` 会得到 `400`；不传 `until` 则永远安全。⚠️ `shell` 会话的 `idle` 只在启动时触发**一次**，此后再也不会，所以在那里用「发送并等待」只能等到超时：没有 hook 的会话请用 `wait-output` 标记来同步。
 8. **没有任何东西会报告「就绪」，得自己显式等。** 新会话在 PID 出现之前一律回答 `{"signal":"exit","immediate":true}`（意思是*还没启动*，不是*崩了*），而全新 case 里的 `claude` 工作会话接着会停在 CLI 的信任对话框上。此时给它发提示，等待会在约 2 秒后因 `idle` 解除，看上去和一个跑完的回合一模一样，而文本其实卡在对话框里。下面的配方 2b 就是避开它的顺序。
 
 ### 常用配方

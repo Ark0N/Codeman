@@ -597,8 +597,18 @@ Object.assign(CodemanApp.prototype, {
     // Update local cache + legacy localStorage
     this._serverRespawnPresets = custom;
     localStorage.setItem('codeman-respawn-presets', JSON.stringify(custom));
-    // Persist to server (cross-device sync)
-    this._apiPut('/api/settings', { respawnPresets: custom }).catch(() => {});
+    // Persist to server (cross-device sync). Not for a non-admin in multi-user mode: the
+    // presets are a key of the server-wide settings.json there, and its PUT is admin-only
+    // (403), so they are kept as their own on this device and win over the server's on the
+    // next load (_rememberOwnSetting, settings-ui.js). A PUT refused that way (sent before the
+    // role was known) marks the page read-only for the writes after it.
+    if (this._settingsReadOnly?.()) {
+      this._rememberOwnSetting?.('respawnPresets', custom);
+      return;
+    }
+    this._apiPut('/api/settings', { respawnPresets: custom })
+      .then((res) => this._noteSettingsWriteRefusal?.(res))
+      .catch(() => {});
   },
 
   renderPresetDropdown() {

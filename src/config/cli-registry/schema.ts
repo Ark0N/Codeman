@@ -368,6 +368,22 @@ const capabilitiesSchema = z
             'awaitingLine must be a regex compileVersionRegex() accepts: at most 200 characters, no nested quantifiers'
           )
           .optional(),
+        // Same guard again: run over the foot of a pane capture every time a session
+        // settles and on a timer while a dialog is up, and ~/.codeman/clis.json can set it.
+        blockedLine: z
+          .string()
+          .min(1)
+          .refine(
+            (src) => compileVersionRegex(src) !== null,
+            'blockedLine must be a regex compileVersionRegex() accepts: at most 200 characters, no nested quantifiers'
+          )
+          .optional(),
+        // Wider than `watchingLines` because a dialog's options wrap at narrow widths (codex
+        // needs 20 at 36 columns). That is safe only for a pattern that ends on the dialog's
+        // own footer: the rows above it, which the agent may write, can then supply a
+        // marker but never the footer. Still bounded, since it is also how much text the
+        // pattern runs over.
+        blockedLines: z.number().int().min(1).max(24).optional(),
       })
       .strict()
       // A window with nothing to search is a typo, not a configuration. Refused at LOAD
@@ -377,6 +393,10 @@ const capabilitiesSchema = z
       .refine(
         (v) => v.watchingLines === undefined || v.watchingLine !== undefined,
         'watchingLines has nothing to bound without a watchingLine'
+      )
+      .refine(
+        (v) => v.blockedLines === undefined || v.blockedLine !== undefined,
+        'blockedLines has nothing to bound without a blockedLine'
       )
       .optional(),
     model: z

@@ -27,12 +27,15 @@ keystroke echo. Idle now lands a few seconds after a turn genuinely ends.
 There are several layers stacked on that: a completion message from the CLI, an AI check,
 output silence, and token stability.
 
-**For the other CLIs** it depends on what the CLI tells Codeman. Codex declares its own
-prompt glyph and working line, so it gets the same screen check Claude does (before 1.26.1
-every Codex session reported idle for its whole life). DeepSeek Harness reports idle,
-working and blocked to Codeman itself, which is as precise as hooks. Everything else is
-output stabilization: the session is idle when output stops changing. Coarser, and it is
-why the features further down this page are Claude-only.
+**For the other CLIs** it depends on what the CLI tells Codeman. Codex, OpenCode, Gemini
+CLI, Pi and OMP each declare their own prompt marker and working line, so they get the same
+screen check Claude does (before 1.26.1 every Codex session reported idle for its whole
+life). DeepSeek Harness reports its end of turn and its dialogs to Codeman itself, which is
+as precise as hooks; its working and idle display still comes from its output. Antigravity
+and Grok Build declare neither. Codeman calls a new pane of theirs idle 3 seconds after
+launch, and after that it has only generic cues to go on (Claude's `❯` prompt marker, a
+braille spinner glyph), which these CLIs may not draw, so their working and idle status is
+unreliable.
 
 ## The Respawn Controller
 
@@ -161,8 +164,10 @@ run summary and lifecycle log carry the detail.
 - **The update prompt is what makes a reset survivable.** After `/clear`, everything the
   agent knows comes from that summary and the project files. A vague update prompt produces
   a vague next cycle.
-- **Non-Claude sessions can respawn**, but with output-based idle detection and no
-  usage-limit auto-resume.
+- **Non-Claude sessions can respawn**, but with no usage-limit auto-resume, and with
+  output-based idle detection except on DeepSeek Harness, whose own end-of-turn report
+  reaches the respawn controller the way Claude's `stop` hook does while its status bridge
+  is on (a local session, by default).
 - **Do not run respawn on a session you are actively typing in.** It will send prompts
   underneath you.
 

@@ -154,6 +154,20 @@ describe('POST /api/status-telemetry', () => {
     expect(events.filter((e) => e === SessionPromptCache)).toHaveLength(1);
   });
 
+  it('keeps the first 20 miss causes instead of refusing a post that carries more', async () => {
+    const causes = Array.from({ length: 25 }, (_, i) => `cause_${i}`);
+    const res = await post({
+      sessionId: SID,
+      data: { ...REAL, prompt_cache: { warm: false, ttl: '1h', last_miss_cause: { causes } } },
+    });
+    // Accepted, not 400: an over-long causes array must not blank the whole statusline.
+    expect(res.statusCode).toBe(200);
+    const session = h.ctx.sessions.get(SID) as unknown as { promptCache: { lastMissCauses?: string[] } | null };
+    expect(session.promptCache?.lastMissCauses).toHaveLength(20);
+    expect(session.promptCache?.lastMissCauses?.[0]).toBe('cause_0');
+    expect(session.promptCache?.lastMissCauses?.[19]).toBe('cause_19');
+  });
+
   it('rejects a malformed body (missing sessionId) with 400', async () => {
     const res = await post({ data: REAL });
     expect(res.statusCode).toBe(400);
@@ -210,6 +224,20 @@ describe('POST /api/status-telemetry: the session model (displayModel)', () => {
     const session = realSession('codex', 'codex-1');
     await post({ sessionId: 'codex-1', data: { model: { display_name: 'Opus 4.8' } } });
     expect(session.toState().displayModel).toBeUndefined();
+  });
+
+  it('stores no prompt-cache from a CLI with no statusline exporter, but still broadcasts plan usage', async () => {
+    const session = realSession('codex', 'codex-cache');
+    const res = await post({
+      sessionId: 'codex-cache',
+      data: { ...REAL, prompt_cache: { warm: true, ttl: '1h', expires_at: Math.floor(Date.now() / 1000) + 3600 } },
+    });
+    expect(res.statusCode).toBe(200);
+    // Prompt cache is gated like the model report; the rest of the post still lands.
+    expect(session.toState().promptCache).toBeUndefined();
+    const events = h.ctx.broadcast.mock.calls.map(([name]) => name);
+    expect(events).not.toContain(SessionPromptCache);
+    expect(events).toContain(SessionStatusTelemetry);
   });
 
   it('broadcasts the STORED prompt-cache object, so a compaction stamp reaches the live readout', async () => {

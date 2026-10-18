@@ -265,8 +265,8 @@ siblings; no other external CLI mode qualifies. Two edges are worth repeating he
   reports a turn that never ran, and leaves the prompt in a pane that was not yet
   accepting input. Wait for the composer (`❯`) instead.
 - **Wait on `stop`, not on the default signal set.** That set also carries `idle`,
-  which for every external CLI is inferred from output stabilization; a dsh TUI
-  that repaints rarely reads as idle mid-turn.
+  which for dsh is inferred from output stabilization; a dsh TUI that repaints
+  rarely reads as idle mid-turn.
 
 ## 6. The web UI as a tab
 

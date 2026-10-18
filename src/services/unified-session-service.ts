@@ -167,6 +167,18 @@ function overwrite<K extends keyof UnifiedSessionItem>(
   if (value !== undefined) item[key] = value;
 }
 
+/** `<repo>/.claude/worktrees/<name>`: Claude Code's `--worktree` layout, which Codeman's own worktrees use too. */
+const WORKTREE_PATH = /^(.+)\/\.claude\/worktrees\/([^/]+)\/?$/;
+
+/**
+ * The worktree a working directory is, by its layout alone: `{ repo, name }` for
+ * `<repo>/.claude/worktrees/<name>` (the folder itself, not a subfolder of it), else null.
+ */
+export function worktreeFromPath(workingDir: string): { repo: string; name: string } | null {
+  const m = WORKTREE_PATH.exec(workingDir);
+  return m ? { repo: m[1], name: m[2] } : null;
+}
+
 /**
  * Merge all source views into one list, applying precedence
  * (history → lifecycle → persisted → live) and the meaningfulness floor.
@@ -324,6 +336,17 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
       } else if (item.workingDir && !hasOwnHistoryEntry) {
         const byDir = lastPromptByWorkingDir.get(item.workingDir);
         if (byDir) item.lastPrompt = byDir.prompt;
+      }
+    }
+    // A live or persisted session started in a worktree Codeman created (or Claude Code's own
+    // `--worktree`) has no transcript record naming it until claude writes one, and a codex or
+    // shell session never gets one, so its row read like any other session of the repo. The
+    // folder layout says which worktree it is; a transcript record, when there is one, still wins.
+    if (!item.worktreeName && item.workingDir) {
+      const wt = worktreeFromPath(item.workingDir);
+      if (wt) {
+        item.worktreeName = wt.name;
+        item.worktreeRepo ??= wt.repo;
       }
     }
   }

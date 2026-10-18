@@ -19,7 +19,7 @@ function loadToolbar(sessionId: string | null = 'session-1', localEcho = true, k
   const dom = new JSDOM(
     '<!DOCTYPE html><html><body><span class="btn-attach-mobile-wrap">' +
       '<button type="button" id="attachBtnMobile"></button>' +
-      '<input type="file" id="attachFileInput" accept="image/*,video/*" multiple>' +
+      '<input type="file" id="attachFileInput" accept="image/*,video/*,.pdf,.docx,.pptx,.xlsx,.zip,.txt,.md,.csv,.tsv,.json,.log,.yaml,.yml,.xml" multiple>' +
       '</span></body></html>'
   );
   const { window } = dom;
@@ -333,13 +333,13 @@ describe('phone toolbar Attach button', () => {
     expect(composerBar._insertComposerText).not.toHaveBeenCalled();
   });
 
-  it('rejects a selection with neither image nor video with a toast and no upload', async () => {
+  it('rejects a selection the server would refuse with a toast and no upload', async () => {
     const { app, window, select } = loadToolbar();
-    select([new window.File(['%PDF-'], 'doc.pdf', { type: 'application/pdf' })]);
+    select([new window.File(['#!/bin/sh'], 'run.sh', { type: 'text/x-shellscript' })]);
     await Promise.resolve();
     expect(app._uploadAndInsertImages).not.toHaveBeenCalled();
     expect(app._sendInputAsync).not.toHaveBeenCalled();
-    expect(app.showToast).toHaveBeenCalledWith('Only image or video files are supported', 'error');
+    expect(app.showToast).toHaveBeenCalledWith('Unsupported file type', 'error');
   });
 
   it('classifies a pick by its name when the file manager supplied no MIME type', () => {
@@ -348,8 +348,38 @@ describe('phone toolbar Attach button', () => {
     expect(kind('clip.ogv', '')).toBe('video');
     expect(kind('IMG_0001.MOV', '')).toBe('video');
     expect(kind('shot.heic', '')).toBe('image');
-    expect(kind('notes.pdf', '')).toBeNull();
     expect(kind('clip.ogv', 'image/jpeg')).toBe('image'); // the MIME type wins when present
+    // Documents are known by the name alone: the MIME a file manager gives them varies.
+    expect(kind('notes.pdf', 'application/pdf')).toBe('document');
+    expect(kind('Q3 report.XLSX', '')).toBe('document');
+    expect(kind('todo.md', 'text/plain')).toBe('document');
+    expect(kind('data.csv', 'application/octet-stream')).toBe('document');
+    expect(kind('run.sh', 'text/x-shellscript')).toBeNull();
+    expect(kind('page.html', 'text/html')).toBeNull();
+    expect(kind('noext', '')).toBeNull();
+  });
+
+  it('uploads a document as picked, through the image path (no re-encode, no video flag)', async () => {
+    const { app, window, fetchMock } = loadToolbar();
+    const pdf = new window.File(['%PDF-'], 'notes.pdf', { type: 'application/pdf' });
+    expect(await app._normalizeImageForUpload(pdf)).toBe(pdf);
+    await app._uploadPasteImage('session-1', pdf);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/sessions/session-1/paste-image');
+  });
+
+  it('counts a video MIME only for the containers the server admits on ?kind=video', () => {
+    const { app, window } = loadToolbar();
+    const kind = (type: string, name = 'clip') => app._promptAttachKind(new window.File(['x'], name, { type }));
+    // The five the server's ?kind=video branch accepts (session-routes.ts).
+    for (const type of ['video/mp4', 'video/quicktime', 'video/x-m4v', 'video/webm', 'video/ogg']) {
+      expect(kind(type)).toBe('video');
+    }
+    // A video MIME outside that set is refused client-side (no full upload then a
+    // 400) when the name's extension is not one the server admits either.
+    expect(kind('video/3gpp', 'clip.3gp')).toBeNull();
+    expect(kind('video/x-matroska', 'clip.mkv')).toBeNull();
+    // An admitted extension still rescues an odd MIME, as the server's path does.
+    expect(kind('video/3gpp', 'clip.mp4')).toBe('video');
   });
 
   it('flags the upload as a video by name as well as by MIME type', async () => {
