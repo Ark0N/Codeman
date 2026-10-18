@@ -44,6 +44,22 @@ function acceptDocumentExts(accept: string): string[] {
     .sort();
 }
 
+/** The non-extension tokens of an `accept=` value (MIME patterns such as `image/*`), sorted. */
+function acceptOtherTokens(accept: string): string[] {
+  return accept
+    .split(',')
+    .map((t) => t.trim())
+    .filter((t) => t && !t.startsWith('.'))
+    .sort();
+}
+
+/**
+ * The only MIME patterns a prompt picker offers. A wildcard such as `text/*` here would
+ * let the picker hand over files the extension list above never names, which the
+ * extension check alone cannot see.
+ */
+const PICKER_MIME_TOKENS = ['image/*', 'video/*'];
+
 type AttachKind = (file: { name: string; type: string }) => string | null;
 
 function loadPromptAttachKind(): { kind: AttachKind; method: string } {
@@ -71,6 +87,10 @@ describe('prompt-upload document list parity (ALLOWED_DOCUMENT_EXTS ⇄ browser 
     const { kind, method } = loadPromptAttachKind();
     const found = [...method.matchAll(/if \(\[([^\]]+)\]\.includes\(ext\)\) \{\s*return 'document';/g)];
     expect(found.length, 'expected one document extension list in image-input.js _promptAttachKind()').toBe(1);
+    // A second document branch (`if (ext === 'rtf') return 'document';`) would slip past the
+    // list check above, so the method may return 'document' from exactly one place.
+    const returns = method.match(/return 'document'/g) ?? [];
+    expect(returns.length, "image-input.js _promptAttachKind() must return 'document' from one place only").toBe(1);
     const clientExts = [...found[0][1].matchAll(/'([^']+)'/g)].map((q) => q[1]);
     // And it is the list that actually returns 'document'.
     for (const ext of clientExts) expect(kind({ name: `report.${ext}`, type: '' })).toBe('document');
@@ -80,8 +100,9 @@ describe('prompt-upload document list parity (ALLOWED_DOCUMENT_EXTS ⇄ browser 
   it('index.html #attachFileInput accept= lists exactly the server document extensions', () => {
     const input = new JSDOM(read('index.html')).window.document.getElementById('attachFileInput');
     expect(input, '#attachFileInput not found in index.html').not.toBeNull();
-    const exts = acceptDocumentExts(input!.getAttribute('accept') ?? '');
-    expect(exts, 'index.html #attachFileInput accept=').toEqual(DOCUMENT_EXTS);
+    const accept = input!.getAttribute('accept') ?? '';
+    expect(acceptDocumentExts(accept), 'index.html #attachFileInput accept=').toEqual(DOCUMENT_EXTS);
+    expect(acceptOtherTokens(accept), 'index.html #attachFileInput accept= MIME patterns').toEqual(PICKER_MIME_TOKENS);
   });
 
   it('keyboard-accessory.js: both .paste-file-input accept= list exactly the server document extensions', () => {
@@ -94,6 +115,10 @@ describe('prompt-upload document list parity (ALLOWED_DOCUMENT_EXTS ⇄ browser 
       expect(acceptDocumentExts(accept), `keyboard-accessory.js .paste-file-input #${i + 1} accept=`).toEqual(
         DOCUMENT_EXTS
       );
+      expect(
+        acceptOtherTokens(accept),
+        `keyboard-accessory.js .paste-file-input #${i + 1} accept= MIME patterns`
+      ).toEqual(PICKER_MIME_TOKENS);
     });
   });
 
