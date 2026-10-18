@@ -450,6 +450,7 @@
     'System Stats': '系统状态',
     'Lifecycle Log': '生命周期日志',
     'Response Viewer': '回复查看器',
+    'Story Mode': '故事模式',
     'Attachments Button': '附件按钮',
     'Multi-monitor Button': '多显示器按钮',
     'Session Manager Button': '会话管理器按钮',
