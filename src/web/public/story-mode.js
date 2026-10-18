@@ -2160,28 +2160,40 @@ Object.assign(CodemanApp.prototype, {
       for (const rt of st.panels.splice(0)) this._storyDropPanel(rt);
       st.shownPageId = page?.id ?? null;
     }
-    want.forEach((panel, i) => {
-      let rt = st.panels[i];
-      if (rt && rt.kind !== panel.kind) {
-        this._storyDropPanel(rt);
-        rt = null;
-      }
-      if (!rt) {
+    // A panel is the same panel while its kind and first event are: a fold into a montage near the
+    // start shifts every later index, and those panels must keep their state (no second entrance).
+    const identity = (panel) => `${panel.kind}|${page.events[panel.events[0]]?.id ?? ''}`;
+    const old = new Map(st.panels.map((rt) => [rt.identity, rt]));
+    const next = want.map((panel) => {
+      const id = identity(panel);
+      let rt = old.get(id);
+      if (rt) old.delete(id);
+      else {
         rt = this._storyCreatePanel(panel.kind, fresh);
-        const after = st.panels[i - 1]?.el;
-        if (after) after.after(rt.el);
-        else st.pageEl.prepend(rt.el);
-        st.panels[i] = rt;
         st.ro?.observe(rt.el);
         st.io?.observe(rt.el);
       }
+      rt.identity = id;
+      return rt;
+    });
+    for (const rt of old.values()) this._storyDropPanel(rt);
+    st.panels = next;
+    // In page order, moving only what is out of place (moving a node would drop its focus).
+    next.forEach((rt, i) => {
+      const prev = next[i - 1]?.el;
+      if (prev ? prev.nextElementSibling !== rt.el : st.pageEl.firstElementChild !== rt.el) {
+        if (prev) prev.after(rt.el);
+        else st.pageEl.prepend(rt.el);
+      }
+    });
+    want.forEach((panel, i) => {
+      const rt = st.panels[i];
       rt.panel = panel;
       rt.el.style.setProperty('--story-span6', String(spans6[i]));
       rt.el.style.setProperty('--story-span2', String(spans2[i]));
       this._storyFillPanelText(rt, page, i);
       this._storyQueueDraw(rt);
     });
-    for (const rt of st.panels.splice(want.length)) this._storyDropPanel(rt);
 
     // While the turn runs, a blue-pencil rough stands where the next panel will be inked.
     let pencils = st.pageEl.querySelector('.story-pencils');
@@ -2927,6 +2939,7 @@ Object.assign(CodemanApp.prototype, {
     if (!st.drawer) st.drawerReturn = trigger || null;
     st.drawer = source;
     st.drawerSeen = new Set();
+    st.drawerSig = null;
     st.drawerEl.hidden = false;
     st.root.classList.add('has-drawer');
     // On a phone the drawer is a sheet from the bottom: it starts below the bar, whatever its height.
@@ -2947,7 +2960,14 @@ Object.assign(CodemanApp.prototype, {
     st.drawerReturn = null;
     // A control rebuilt while the drawer was open: its replacement opens the same thing.
     const key = back && !document.contains(back) ? back.dataset?.storyOpen : undefined;
-    if (key) back = [...st.root.querySelectorAll('[data-story-open]')].find((n) => n.dataset.storyOpen === key);
+    if (key) {
+      const opens = [...st.root.querySelectorAll('[data-story-open]')];
+      // `diff@fix:1` opens the same view of the same panel as `diff@loop:1` once the fix became a loop.
+      const m = /^([^@]*)@[^:]*:(\d+)$/.exec(key);
+      back =
+        opens.find((n) => n.dataset.storyOpen === key) ||
+        (m && opens.find((n) => new RegExp(`^${m[1]}@[^:]*:${m[2]}$`).test(n.dataset.storyOpen)));
+    }
     if (refocus && back && document.contains(back)) back.focus({ preventScroll: true });
   },
 
@@ -2992,6 +3012,8 @@ Object.assign(CodemanApp.prototype, {
     let title = '';
     let sub = '';
     const out = [];
+    // Helper boxes, filled once the drawer knows which nodes stay: [box, agentId, working].
+    const fills = [];
     let firstNew = null;
     const isNew = (id) => !first && !st.drawerSeen.has(id);
 
@@ -3021,7 +3043,7 @@ Object.assign(CodemanApp.prototype, {
         if (ev.helper?.agentId) {
           const box = el('div', 'story-helper-steps');
           out.push(el('h4', 'story-h', 'What the helper did'), box);
-          this._storyFillHelperSteps(box, ev.helper.agentId, false);
+          fills.push([box, ev.helper.agentId, false]);
         }
       }
       if (prompts.some((x) => x.ev.label.length >= 3999))
@@ -3099,7 +3121,7 @@ Object.assign(CodemanApp.prototype, {
         if (h.agentId) {
           const box = el('div', 'story-helper-steps');
           out.push(el('h4', 'story-h', 'What the helper did'), box);
-          this._storyFillHelperSteps(box, h.agentId, working);
+          fills.push([box, h.agentId, working]);
         }
       }
     } else if (view === 'plan') {
@@ -3143,8 +3165,33 @@ Object.assign(CodemanApp.prototype, {
     st.drawerKind.textContent = kind;
     st.drawerTitle.textContent = title;
     st.drawerSub.textContent = sub;
+    // A refresh that changes nothing keeps the nodes, so focus, a text selection and the scroll
+    // stay put; only a helper still working refreshes its steps.
+    const sig = [view, kind, title, sub, ...out.map((n) => n.outerHTML)].join('\u0000');
+    if (!first && sig === st.drawerSig) {
+      for (const box of body.querySelectorAll('.story-helper-steps'))
+        if (box.dataset.working === '1') this._storyFillHelperSteps(box, box.dataset.agent, true);
+      return;
+    }
+    st.drawerSig = sig;
+    // A real change rebuilds: focus goes back to the control that does the same thing.
+    const active = document.activeElement;
+    const controls = (root) => [...root.querySelectorAll('button, a[href], [tabindex]')];
+    const was =
+      active && body.contains(active)
+        ? { open: active.dataset?.storyOpen, text: active.textContent, at: controls(body).indexOf(active) }
+        : null;
     body.replaceChildren(...out);
+    for (const [box, agentId, working] of fills) this._storyFillHelperSteps(box, agentId, working);
     for (const { ev } of items) st.drawerSeen.add(ev.id);
+    if (was) {
+      const now = controls(body);
+      const back =
+        (was.open && now.find((n) => n.dataset?.storyOpen === was.open)) ||
+        now.find((n) => n.textContent === was.text) ||
+        now[Math.min(was.at, now.length - 1)];
+      back?.focus({ preventScroll: true });
+    }
     if (first) body.scrollTop = 0;
     else if (firstNew) body.scrollTop = Math.max(0, firstNew.offsetTop - 12);
     else body.scrollTop = prevScroll;
@@ -3153,6 +3200,7 @@ Object.assign(CodemanApp.prototype, {
   /** A helper's own steps (GET …/story/helpers/:agentId), cached per helper and revalidated by ETag. */
   async _storyFillHelperSteps(box, agentId, working = false) {
     const st = this._story;
+    box.dataset.agent = agentId;
     box.dataset.working = working ? '1' : '';
     const cached = st.helperSteps?.get(agentId);
     if (cached) this._storyRenderHelperSteps(box, cached.data);
@@ -3277,7 +3325,15 @@ Object.assign(CodemanApp.prototype, {
     }
     section.append(code);
     if (edit.truncated)
-      section.append(el('p', 'story-empty', 'Some lines of this edit were left out. Open the file to see all of it.'));
+      section.append(
+        el(
+          'p',
+          'story-empty',
+          edit.hunks?.length
+            ? 'Some lines of this edit were left out. Open the file to see all of it.'
+            : 'What changed is not in the transcript: a script or another program wrote this file. Open it to see it as it is now.'
+        )
+      );
     return section;
   },
 

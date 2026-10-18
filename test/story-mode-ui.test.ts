@@ -10,7 +10,7 @@ import { JSDOM } from 'jsdom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildStoryPage, buildStoryTurns, createStoryReducer, summarizeTurns } from '../src/story-mode.js';
 import type { StoryPage, StoryPanel } from '../src/types/story.js';
-import { bash, demoTurn, end, prompt, read, resetClock, result, said, tool } from './story-fixtures.js';
+import { bash, demoTurn, edit, end, prompt, read, resetClock, result, said, tool } from './story-fixtures.js';
 
 const STORY_JS = readFileSync(new URL('../src/web/public/story-mode.js', import.meta.url), 'utf-8');
 // The real path matcher (findFilePathLinks / resolveLinkedFilePath) the terminal uses.
@@ -258,6 +258,83 @@ describe('story-mode.js overlay', () => {
     expect($('.story-panel[data-kind="check"]')!.classList.contains('story-fresh')).toBe(true);
     expect($('.story-panel[data-kind="investigate"]')!.classList.contains('story-fresh')).toBe(false);
     expect($('.story-pencils')).toBeNull();
+  });
+
+  it('a fold near the start keeps every later panel as it was: no second entrance', async () => {
+    const data = storyOf(demoTurn());
+    boot(data);
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    const before = new Map(app._story.panels.map((rt: { kind: string }) => [rt.kind, rt]));
+    const folded = JSON.parse(JSON.stringify(data));
+    const ps = folded.page.panels;
+    ps.splice(1, 2, { ...ps[1], kind: 'montage', events: [...ps[1].events, ...ps[2].events] });
+    responses = [{ status: 200, body: { success: true, data: folded } }];
+    await app._storyRefresh();
+    await settle();
+    expect($$('.story-panel').map((p) => p.dataset.kind)).toEqual([
+      'mission',
+      'montage',
+      'backup',
+      'loop',
+      'save',
+      'complete',
+    ]);
+    for (const kind of ['mission', 'backup', 'loop', 'save', 'complete']) {
+      const rt = app._story.panels.find((r: { kind: string }) => r.kind === kind);
+      expect(rt).toBe(before.get(kind));
+    }
+    expect($('.story-panel[data-kind="montage"]')!.classList.contains('story-fresh')).toBe(true);
+    expect($('.story-panel[data-kind="loop"]')!.classList.contains('story-fresh')).toBe(false);
+  });
+
+  it('a refresh that changes nothing keeps the open drawer as it is, focus included', async () => {
+    const data = storyOf(demoTurn());
+    boot(data);
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    $('.story-panel[data-kind="loop"] .story-hit')!.click();
+    const btn = $('.story-drawer-body button')!;
+    btn.focus();
+    responses = [{ status: 200, body: { success: true, data: JSON.parse(JSON.stringify(data)) } }];
+    await app._storyRefresh();
+    await settle();
+    expect(win.document.contains(btn)).toBe(true);
+    expect(win.document.activeElement).toBe(btn);
+  });
+
+  it('a fix that folds into a loop under an open drawer: Escape gives focus to the loop', async () => {
+    const lines = [prompt('fix it'), ...edit('e1', '/work/demo-shop/a.py', ['+a = 1'])];
+    boot(storyOf(lines));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    const hit = $$('.story-panel[data-kind="fix"] .story-hit').find((h) => h.dataset.storyOpen?.startsWith('diff@'))!;
+    hit.focus();
+    hit.click();
+    responses = [
+      {
+        status: 200,
+        body: {
+          success: true,
+          data: storyOf([
+            ...lines,
+            ...bash('b1', 'pytest -q', 'Run tests', '1 failed, 2 passed in 0.1s'),
+            ...edit('e2', '/work/demo-shop/a.py', ['-a = 1', '+a = 2']),
+            ...bash('b2', 'pytest -q', 'Run tests', '3 passed in 0.1s'),
+          ]),
+        },
+      },
+    ];
+    await app._storyRefresh();
+    await settle();
+    sizeAndDraw();
+    expect($('.story-panel[data-kind="loop"]')).toBeTruthy();
+    press('Escape');
+    expect($('.story-drawer')!.hidden).toBe(true);
+    expect((win.document.activeElement as HTMLElement).dataset.storyOpen).toMatch(/^diff@loop:/);
   });
 
   it('activity for this session refreshes, activity for another does not', async () => {
