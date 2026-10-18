@@ -360,17 +360,28 @@ function parseDialectTranscript(cleaned: string, dialect: PaneDialect): Response
     }
   }
   const isComposerRow = (i: number) => i === composerIndex;
+  const isComposerRule = (i: number) => composerIndex !== -1 && (i === composerIndex - 1 || i === composerIndex + 1);
   const hasPrompt = rows.some((row, i) => dialect.prompt.test(row) && !isComposerRow(i));
   const startupVisible = rows.some((row) => dialect.startup.some((re) => re.test(row)));
   let sawPrompt = !hasPrompt && !startupVisible;
+  // A rule drawn INSIDE an answer (a markdown `---`, a quoted passage between two rules) is part
+  // of the answer, so it must not end the block, or `agent read` returns only the text after the
+  // last rule. It is held until more of the same answer follows, so a rule that only separates
+  // the answer from the footer never trails it. The composer's own two rules stay boundaries.
+  let pendingRule = false;
 
   const flush = () => {
     if (sawPrompt) pushBlock(blocks, kind, current);
     kind = null;
     current = [];
+    pendingRule = false;
   };
 
   for (const [index, line] of rows.entries()) {
+    if (kind === 'response' && isDividerOnlyLine(line) && !isComposerRule(index)) {
+      pendingRule = true;
+      continue;
+    }
     if (isDividerOnlyLine(line) || isComposerRow(index) || dialect.ignore.some((re) => re.test(line))) {
       flush();
       continue;
@@ -407,6 +418,10 @@ function parseDialectTranscript(cleaned: string, dialect: PaneDialect): Response
       continue;
     }
     if (!kind) kind = 'response';
+    if (pendingRule) {
+      current.push('', '---', '');
+      pendingRule = false;
+    }
     current.push(line);
   }
   flush();

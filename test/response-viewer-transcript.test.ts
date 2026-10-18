@@ -551,8 +551,31 @@ describe('GitHub Copilot pane dialect', () => {
       ...tail,
     ].join('\n');
     expect(getLastTranscriptResponse(parseExternalCliTranscript(screen, 'copilot'))).toBe(
-      'Quoted passage between two rules.'
+      'Here it is:\n\n---\n\nQuoted passage between two rules.'
     );
+  });
+
+  it('keeps an answer whole across a rule inside it, so agent read never returns only its tail', () => {
+    const screen = [
+      ' ❯ summarize the change   11:22',
+      ' ● Summary',
+      '',
+      '   One line of summary.',
+      rule,
+      '   Details',
+      '',
+      '   The longer explanation.',
+      ...tail,
+    ].join('\n');
+    const blocks = parseExternalCliTranscript(screen, 'copilot');
+    expect(blocks.filter((b) => b.kind === 'response')).toHaveLength(1);
+    const answer = getLastTranscriptResponse(blocks);
+    expect(answer).toContain('Summary');
+    expect(answer).toContain('One line of summary.');
+    expect(answer).toContain('Details');
+    expect(answer).toContain('The longer explanation.');
+    // The rule before the footer separates the answer from the chrome and never trails it.
+    expect(answer.endsWith('---')).toBe(false);
   });
 
   it('answers nothing for a session that has only drawn its banner or a trust dialog', () => {
