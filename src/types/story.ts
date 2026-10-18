@@ -167,6 +167,8 @@ export interface StoryPanel {
   balloon?: { who: 'you' | 'claude' | 'note'; text: string };
   files?: string[];
   notes?: string[];
+  /** What a run panel's last command printed, for its terminal card: the first lines, the last ones when it failed. */
+  printed?: string[];
   helpers?: Array<{ name: string; type: string; task?: string; event: number }>;
   added?: number;
   removed?: number;

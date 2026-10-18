@@ -22,6 +22,7 @@
         "balloon": "Build a tiny Python module calc_stats.py with mean(xs) and median(xs), strictly test-first: FIRST write tests/test_calc_stats.py that imports calc_stats, THEN run python3 -m pytest -q once while calc_stats.py does not exist yet (it must error at collection), THEN write calc_stats.py and run python3 -m pytest -q again until it passes. Install nothing, stay in this folder.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -32,6 +33,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 3
       },
       {
@@ -42,6 +44,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -52,6 +55,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -62,6 +66,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -76,6 +81,7 @@
           "errors": 1
         },
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -86,6 +92,7 @@
         "balloon": "Red as expected: collection error, exit code 2.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -96,6 +103,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -109,6 +117,7 @@
           "failed": 0
         },
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -119,6 +128,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -129,6 +139,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -139,6 +150,7 @@
         "balloon": "I built it test-first: the suite failed at collection before calc_stats.py existed, then passed once the module was written. I didn't push, didn't touch origin.git/ and didn't create a README, since none existed to keep in sync.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 0
       }
     ]
@@ -166,6 +178,7 @@
         "balloon": "Add mode(xs) to calc_stats.py (ValueError on empty input, ties return the smallest value) in two separate steps without committing in between and without consulting the advisor: first add mode tests to tests/test_calc_stats.py and run python3 -m pytest -q (it should fail because mode is missing), then implement mode in calc_stats.py and run python3 -m pytest -q again until green; only then git co…",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -182,6 +195,7 @@
           false,
           true
         ],
+        "printed": null,
         "events": 5
       },
       {
@@ -192,6 +206,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 2
       },
       {
@@ -202,6 +217,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -212,6 +228,7 @@
         "balloon": "mode(xs) is in calc_stats.py, committed once after the tests went green, and pushed. I didn't use the advisor, gh or the network.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 0
       }
     ]
@@ -239,6 +256,7 @@
         "balloon": "In ONE Bash command, append exactly two lines to NOTES.md with cat >> NOTES.md <<'EOF' (two short lines about mode) EOF and then cat calc_stats.py; next run python3 -m pytest -q; then git add NOTES.md and commit it, and push with exactly this command, run as written with nothing appended: git push && git describe --tags (it is expected to fail after pushing; just report it).",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -249,6 +267,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -262,6 +281,7 @@
           "failed": 0
         },
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -272,6 +292,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 2
       },
       {
@@ -282,6 +303,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -292,6 +314,7 @@
         "balloon": "NOTES.md has the two lines and is committed and pushed. As you expected, git describe --tags then failed because the repo has no tags.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 0
       }
     ]
@@ -319,6 +342,7 @@
         "balloon": "Reply with just the word ok, use no tools.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -329,6 +353,7 @@
         "balloon": "ok",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 0
       }
     ]

@@ -688,7 +688,8 @@ const StoryArt = (() => {
     }
     return { w, h };
   }
-  function terminal(ctx, x, y, w, h, lines, f) {
+  /** A terminal card: the commands (`› …`), then, dimmer, the first lines one of them printed. */
+  function terminal(ctx, x, y, w, h, lines, f, printed = []) {
     rr(ctx, x, y, w, h, 7);
     inked(ctx, C.line, 2.5);
     ctx.fillStyle = C.balloonInk;
@@ -708,10 +709,21 @@ const StoryArt = (() => {
       ctx.fillStyle = i === Math.min(rows, lines.length) - 1 ? C.yellow : C.balloon;
       ctx.fillText(text.slice(0, shown), x + 9, y + 30 + i * 14);
     });
-    if (f % 30 < 15) {
-      const n = Math.min(rows, lines.length);
+    const n = Math.min(rows, lines.length);
+    const out = printed.slice(0, Math.max(0, rows - n));
+    out.forEach((line, i) => {
+      const text = fitText(ctx, line, w - 18);
+      const at = 8 + (n + i) * 12;
+      const shown = Math.floor(interpolate(f, [at, at + 10], [0, text.length]));
+      ctx.save();
+      ctx.globalAlpha = 0.72;
       ctx.fillStyle = C.balloon;
-      ctx.fillRect(x + 9, y + 22 + n * 14, 6, 10);
+      ctx.fillText(text.slice(0, shown), x + 9, y + 30 + (n + i) * 14);
+      ctx.restore();
+    });
+    if (f % 30 < 15) {
+      ctx.fillStyle = C.balloon;
+      ctx.fillRect(x + 9, y + 22 + (n + out.length) * 14, 6, 10);
     }
   }
   function globe(ctx, cx, cy, r, f) {
@@ -1248,7 +1260,7 @@ const StoryArt = (() => {
       draw(ctx, W, H, f, p, hit) {
         const tw = Math.min(W * 0.62, 260);
         const notes = p.panel.notes?.length ? p.panel.notes : ['…'];
-        terminal(ctx, 14, 92, tw, 140, notes, f);
+        terminal(ctx, 14, 92, tw, 140, notes.slice(0, p.panel.printed?.length ? 3 : 8), f, p.panel.printed || []);
         hit('output', 14, 92, tw, 140, 'See the commands and their output');
         agent(ctx, W - 48, 250, {
           frame: f,

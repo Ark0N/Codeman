@@ -22,6 +22,7 @@
         "balloon": "First reply with a numbered plan of exactly 4 steps (as text, not a tool). Then build csvstat.py, a Python CLI that prints row count and per-column min/max/mean of a CSV, with pytest tests. Do a dry run on a sample CSV and save its log with `| tee /tmp/csvstat-dryrun.log`. Start ONE helper with the Agent tool, run_in_background: true and WITHOUT a name parameter, to write README.md; do not wait f…",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -32,6 +33,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -42,6 +44,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 2
       },
       {
@@ -52,6 +55,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -62,6 +66,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 4
       },
       {
@@ -75,6 +80,7 @@
           "failed": 0
         },
         "roundsOk": null,
+        "printed": null,
         "events": 2
       },
       {
@@ -85,6 +91,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -95,6 +102,11 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": [
+          "rows: 5",
+          "column      min     max     mean",
+          "city        -       -       -"
+        ],
         "events": 1
       },
       {
@@ -105,6 +117,7 @@
         "balloon": "I've built csvstat.py, a command-line tool that prints a CSV's row count and the min, max and mean of each column. A background helper is writing README.md; I didn't wait for it, so it isn't confirmed yet. The population mean shows a problem, described below.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 0
       }
     ]
@@ -132,6 +145,7 @@
         "balloon": "Agent \"Write README for csvstat\" finished",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -142,6 +156,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -152,6 +167,7 @@
         "balloon": "The background helper has finished README.md, and I've checked its work. Rounding: the README now explains that numbers are shown to 6 significant digits, so the population mean of 214574.2 appears as 214574. That note makes the current behaviour clear, but it doesn't fix it.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 0
       }
     ]

@@ -22,6 +22,7 @@
         "balloon": "Build a small Python command-line tool wcount.py in this folder that prints the line, word and character counts of the files given as arguments, like wc, with a --json flag that prints the counts as JSON, plus pytest tests in test_wcount.py; run pytest and fix anything that fails until all tests pass.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -32,6 +33,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 2
       },
       {
@@ -42,6 +44,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -59,6 +62,7 @@
           false,
           true
         ],
+        "printed": null,
         "events": 7
       },
       {
@@ -69,6 +73,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -79,6 +84,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -89,6 +95,11 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": [
+          "wcount: nope: No such file or directory",
+          "wcount: nope2: No such file or directory",
+          "0 0 0 total"
+        ],
         "events": 1
       },
       {
@@ -99,6 +110,7 @@
         "balloon": "I built wcount.py and test_wcount.py. With a missing file plus a readable one, the total row didn't appear because the code counted files that could be read rather than files that were named.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 0
       }
     ]

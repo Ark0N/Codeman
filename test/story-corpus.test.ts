@@ -49,6 +49,7 @@ function pagesOf(name: string) {
         balloon: x.balloon?.text ?? null,
         tests: x.tests ?? null,
         roundsOk: x.roundsOk ?? null,
+        printed: x.printed ?? null,
         events: x.events.length,
       })),
     };

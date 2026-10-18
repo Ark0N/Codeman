@@ -1034,6 +1034,24 @@ describe('buildStoryPage', () => {
     );
   });
 
+  it("a run panel's terminal card shows what the command printed, never what looks like a secret", () => {
+    const page = pageOf([
+      prompt('dry run please'),
+      ...bash(
+        'b1',
+        './rename.sh --dry-run samples/',
+        'Dry run',
+        'a.jpg -> holiday_2024-05-01.jpg\nAPI_TOKEN=abc123\nauthor: me@example.com\nb.jpg -> holiday_2024-05-02.jpg'
+      ),
+      end(1000),
+    ]);
+    expect(page.panels.find((p) => p.kind === 'run')!.printed).toEqual([
+      'a.jpg -> holiday_2024-05-01.jpg',
+      'author: …@…',
+      'b.jpg -> holiday_2024-05-02.jpg',
+    ]);
+  });
+
   it('a helper messaged twice reads as one finished run, not as superseded', () => {
     const r = createStoryReducer({ sidechain: true });
     const lines = [prompt('write it'), said('Done.'), prompt('also the tests'), said('Done too.')].map((l) => ({

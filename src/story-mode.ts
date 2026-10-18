@@ -2164,6 +2164,19 @@ function montageSummary(evs: StoryEvent[]): string {
   return parts.length ? parts.join(', ') : 'a few more steps';
 }
 
+/**
+ * One output line as the terminal card may show it. The card is drawn on the canvas, so it goes into a
+ * saved image someone may share: a line that looks like a secret is left out, addresses and long
+ * token-like strings are masked, and Claude Code's own markers go.
+ */
+function printableLine(line: string): string | null {
+  const text = line.replace(/<\/?[a-z_]+>/g, '').trim();
+  if (!text || /^\(Bash completed with no output\)$/.test(text)) return null;
+  // Anywhere in the line, inside identifiers too (`API_TOKEN=`, `db_password:`): losing a harmless line is cheap.
+  if (/token|secret|passw(or)?d|api[_-]?key|authorization|bearer|private[_ -]?key|credential/i.test(text)) return null;
+  return clip(text.replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '…@…').replace(/[A-Za-z0-9+/=_-]{32,}/g, '…'), 90);
+}
+
 /** You asked for a failing run first (test first), or Claude said the failure was expected. */
 const PLANNED_IN_PROMPT =
   /\b(test[- ]first|tdd|fail(s|ing)? (first|on purpose)|failing tests? first|on purpose|red first|before (the )?(code|module|function|implementation) exists)\b/i;
@@ -2439,8 +2452,18 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       }
       break;
     }
-    case 'run':
+    case 'run': {
       panel.notes = notesOf(evs);
+      // What it printed, so a dry run or a listing you asked to see is on the page, not only in the drawer.
+      const lastOut = [...evs].reverse().find((e) => e.output?.trim() && !e.running);
+      if (lastOut?.output) {
+        const lines = lastOut.output
+          .split('\n')
+          .map(printableLine)
+          .filter((l): l is string => !!l);
+        const picked = lastOut.ok === false ? lines.slice(-2) : lines.slice(0, 3);
+        if (picked.length) panel.printed = picked;
+      }
       story = evs.every((e) => e.running)
         ? `Claude starts ${evs.length === 1 ? 'a command' : `${evs.length} commands`} in the background.`
         : errors && errors === evs.length
@@ -2456,6 +2479,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             : 'Claude works in the terminal.';
       director = `${tools} · ${shortCommand(evs[0])}${errors ? ` · ${plural(errors, 'error')}` : ''}`;
       break;
+    }
     case 'save': {
       panel.notes = notesOf(evs);
       const last = evs[evs.length - 1];

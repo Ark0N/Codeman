@@ -22,6 +22,7 @@
         "balloon": "Create a small JavaScript ES module slugify.mjs exporting slugify(str) (lowercase, trim, spaces and punctuation to single hyphens, no leading or trailing hyphens) plus slugify.test.mjs with 4 node:test tests; on purpose make ONE test expectation wrong so the first run of node --test fails, run it, then fix that expectation, rerun until all pass, then git init if needed and git commit both files w…",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -32,6 +33,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 2
       },
       {
@@ -42,6 +44,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -58,6 +61,7 @@
           false,
           true
         ],
+        "printed": null,
         "events": 5
       },
       {
@@ -68,6 +72,10 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": [
+          "Initialized empty Git repository in /work/cases/story-r3-c/.git/",
+          "name= email=…@…"
+        ],
         "events": 1
       },
       {
@@ -78,6 +86,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -88,6 +97,7 @@
         "balloon": "slugify.mjs and its test file are written, all 4 tests pass, and both files are committed.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 0
       }
     ]
@@ -115,6 +125,7 @@
         "balloon": "Add a fifth node:test test for slugify('') to slugify.test.mjs that on purpose expects 'x' so the first run fails, run node --test, then fix that expectation to the empty string, rerun until all pass, and commit the change.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -131,6 +142,7 @@
           false,
           true
         ],
+        "printed": null,
         "events": 4
       },
       {
@@ -141,6 +153,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -151,6 +164,7 @@
         "balloon": "I added a fifth test for slugify('').",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 0
       }
     ]

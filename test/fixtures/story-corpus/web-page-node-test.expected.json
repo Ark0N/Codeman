@@ -22,6 +22,7 @@
         "balloon": "Build a tiny single-page pomodoro timer in this folder: index.html with inline CSS, timer.js exporting the timer logic as plain functions, and timer.test.mjs using node:test that covers start, pause and reset; run the tests with node --test until they pass, then git init and commit everything with a short message, with no remote and no push.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -32,6 +33,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 2
       },
       {
@@ -42,6 +44,10 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": [
+          "['hooks'] {'hooks': ['Notification', 'Stop', 'UserPromptSubmit', 'SubagentStop', 'Teammat…",
+          "…@…"
+        ],
         "events": 1
       },
       {
@@ -52,6 +58,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -62,6 +69,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 3
       },
       {
@@ -75,6 +83,7 @@
           "failed": 0
         },
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -85,6 +94,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -95,6 +105,7 @@
         "balloon": null,
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 1
       },
       {
@@ -105,6 +116,7 @@
         "balloon": "I built the pomodoro timer. Opening the page: it won't work if you double-click index.html. The page loads timer.js as a module, and Chrome and Firefox block that for local files, so you'd get a timer that never moves.",
         "tests": null,
         "roundsOk": null,
+        "printed": null,
         "events": 0
       }
     ]
