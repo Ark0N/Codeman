@@ -543,6 +543,10 @@ export interface CliCapabilities {
    * Forwarding the wheel to the CLI's own transcript. 'never' keeps local scrollback;
    * 'version-gated' forwards from `minVersion` on; 'always' forwards at any version. Either
    * forwarding mode applies only while the CLI has mouse tracking on (`cliMouseTracking`).
+   *
+   * ⚠️ Declared only: nothing reads this field yet (see DECLARED-FOR-LATER below). The browser's
+   * gate is `_shouldForwardWheelToApp` in terminal-ui.js, which keeps its own hand-written
+   * per-CLI rules, so changing a value here changes nothing until that gate is changed too.
    */
   wheelForward: { mode: 'never' | 'version-gated' | 'always'; minVersion?: string };
   /**

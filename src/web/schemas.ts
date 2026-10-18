@@ -194,7 +194,7 @@ function sessionModeSchema(): z.ZodType<SessionMode> {
 /**
  * Allowlisted env var key prefixes, contributed by the ENABLED CLIs in the registry
  * (`env.allowedPrefixes`) — `CLAUDE_CODE_`, `OPENCODE_`, `CODEX_`, `GEMINI_`, `GOOGLE_`,
- * `ANTIGRAVITY_`, `PI_`, `GROK_`, `XAI_`, `DSH_`, `DEEPSEEK_` as shipped.
+ * `ANTIGRAVITY_`, `PI_`, `GROK_`, `XAI_`, `DSH_`, `DEEPSEEK_`, `OMP_`, `COPILOT_` as shipped.
  *
  * ⚠️ Resolved AT PARSE TIME, not at module load. This used to be a frozen array computed
  * once when the module was imported, which meant a CLI enabled while the server was running
