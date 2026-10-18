@@ -1116,7 +1116,8 @@ const StoryArt = (() => {
         }
         // The cycle arrow between the page and the board.
         const ax = 12 + pw + 17;
-        const spin = (f / 20) % TAU;
+        // It turns while the rounds are still going; on a finished page it rests.
+        const spin = p.panel.live || f < HERO ? (f / 20) % TAU : 0.4;
         ctx.save();
         ctx.translate(ax, 164);
         ctx.rotate(spin);
@@ -1128,6 +1129,16 @@ const StoryArt = (() => {
         ctx.strokeStyle = C.yellow;
         ctx.lineWidth = 3;
         ctx.stroke();
+        // The arrowhead at the arc's end.
+        const end = TAU - 0.6;
+        const hx = Math.cos(end) * 14;
+        const hy = Math.sin(end) * 14;
+        ctx.beginPath();
+        ctx.moveTo(hx + 7, hy - 3);
+        ctx.lineTo(hx - 1, hy + 7);
+        ctx.lineTo(hx - 6, hy - 6);
+        ctx.closePath();
+        inked(ctx, C.yellow, 2);
         ctx.restore();
         // Rounds and verdict stack under the top corner, which the balloon may take.
         sfx(
@@ -1274,12 +1285,18 @@ const StoryArt = (() => {
         halftone(ctx, W, H, C.yellow, W / 2, H / 2, { rmax: 3.4 });
       },
       draw(ctx, W, H, f, p, hit) {
+        // One cell per kind of step the montage folded, in this order, at most four.
+        const evs = p.panel.events.map((i) => p.page.events[i]).filter(Boolean);
+        const has = (...intents) => evs.some((e) => intents.includes(e.intent));
         const cells = [
-          { icon: 'look', label: 'reads' },
-          { icon: 'run', label: 'runs' },
-          { icon: 'edit', label: 'edits' },
-          { icon: 'check', label: 'checks' },
-        ];
+          has('read', 'search', 'look', 'web') && { icon: 'look' },
+          has('run', 'tool', 'message', 'helper', 'plan') && { icon: 'run' },
+          has('edit') && { icon: 'edit' },
+          has('test', 'build') && { icon: 'check' },
+          has('save') && { icon: 'save' },
+        ]
+          .filter(Boolean)
+          .slice(0, 4);
         const size = Math.min(70, (W - 120) / 2);
         const x0 = 16;
         const y0 = 92;
@@ -1298,7 +1315,12 @@ const StoryArt = (() => {
           else if (c.icon === 'run') terminal(ctx, x + 8, y + 12, size - 16, size - 24, ['…'], HERO);
           else if (c.icon === 'edit')
             pencil(ctx, [cx + size * 0.3, cy - size * 0.3], [cx - size * 0.2, cy + size * 0.2]);
-          else star4(ctx, cx, cy, size * 0.3, C.go);
+          else if (c.icon === 'save') {
+            rr(ctx, cx - size * 0.3, cy - size * 0.12, size * 0.6, size * 0.38, 3);
+            inked(ctx, C.yellow, 2.5);
+            rr(ctx, cx - size * 0.34, cy - size * 0.26, size * 0.68, size * 0.14, 3);
+            inked(ctx, C.yellow, 2.5);
+          } else star4(ctx, cx, cy, size * 0.3, C.go);
           ctx.restore();
         });
         hit('list', x0, y0, size * 2 + 10, size * 2 + 10, 'See every step');

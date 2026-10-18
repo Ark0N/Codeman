@@ -483,7 +483,8 @@ body.story-open {
   display: none;
 }
 .story-splash-title {
-  margin: 0;
+  /* Room for the tilt: rotated about its bottom-left corner, its right end rises. */
+  margin: 0.4em 0 0;
   font: 400 clamp(28px, 4.4cqi, 44px) / 0.92 var(--story-display);
   color: var(--story-yellow);
   -webkit-text-stroke: 2.5px var(--story-line);
@@ -791,6 +792,7 @@ body.story-open {
 .story-df-path,
 .story-out-cmd {
   flex: 1 1 220px;
+  white-space: pre-wrap;
   font: 500 12.5px/1.35 var(--story-mono);
   font-variant-ligatures: none;
   overflow-wrap: anywhere;

@@ -13,6 +13,7 @@ import {
   firstSentence,
   heredocWrites,
   parseTestCounts,
+  reportsProblems,
   planFromText,
   printedFiles,
   roughDuration,
@@ -71,6 +72,10 @@ describe('classifyBashCommand', () => {
     // A here-document's body is data: `pytest.main()` in it runs nothing.
     ["cat > app.py <<'EOF'\nimport pytest\npytest.main()\nEOF", 'edit'],
     ['git commit -m "ignore pytest caches"', 'save'],
+    // Shell structure is not a command; read-only probes are looking.
+    ['for t in ruff flake8; do $t --version; done', 'look'],
+    ['command -v ruff; git config --get user.name', 'look'],
+    ['if pytest -q; then echo ok; fi', 'test'],
     ['node --test timer.test.mjs 2>&1 | tail -20', 'test'],
     ['timeout 60 npm test', 'test'],
     ['FOO=1 CI=true pytest -q', 'test'],
@@ -116,6 +121,14 @@ describe('parseTestCounts beyond "N passed"', () => {
     [' Tests  3 failed (3)', { passed: 0, failed: 3 }],
   ])('%j', (output, counts) => {
     expect(parseTestCounts(output)).toEqual(counts);
+  });
+
+  it('reportsProblems reads linters, formatters and type checkers', () => {
+    expect(reportsProblems('Found 3 errors.\n[*] 2 fixable')).toBe(true);
+    expect(reportsProblems('1 file would be reformatted, 4 files already formatted')).toBe(true);
+    expect(reportsProblems('✖ 5 problems (3 errors, 2 warnings)')).toBe(true);
+    expect(reportsProblems("src/a.ts(3,1): error TS2322: Type 'x' is not assignable")).toBe(true);
+    expect(reportsProblems('All checks passed!\n5 files already formatted\nFound 0 errors.')).toBe(false);
   });
 
   it('a line that only mentions a failure is not a summary', () => {
@@ -724,6 +737,45 @@ describe('buildStoryPage', () => {
     ]);
     expect(page.panels.find((p) => p.kind === 'check')!.balloon?.text).toBe('All 8 tests pass.');
     expect(page.panels.find((p) => p.kind === 'save')!.balloon).toBeUndefined();
+  });
+
+  it('a check whose output reports lint problems failed, though a trailing ls hid the exit code', () => {
+    const page = pageOf([
+      prompt('check'),
+      ...bash(
+        'b1',
+        'pytest -q | tail -1; ruff format --check .; ls',
+        'Tests and format',
+        '6 passed in 0.1s\n1 file would be reformatted\nREADME.md'
+      ),
+      end(1000),
+    ]);
+    const check = page.panels.find((p) => p.kind === 'check')!;
+    expect(check.ok).toBe(false);
+    expect(check.caption.story).toBe('The tests pass, but another check fails.');
+  });
+
+  it('a save counts its commits, and a montage names what it folded, commits included', () => {
+    const page = pageOf([
+      prompt('commit'),
+      ...bash('b1', 'git add a && git commit -qm a && git add b && git commit -qm b && git push', 'Commit twice', 'ok'),
+      end(1000),
+    ]);
+    expect(page.panels.find((p) => p.kind === 'save')!.caption.story).toBe(
+      'Claude saves the work in 2 commits and sends it up.'
+    );
+    const lines: unknown[] = [prompt('many steps')];
+    for (let i = 0; i < 14; i++) {
+      lines.push(...read(`r${i}`, `/w/f${i}.ts`));
+      lines.push(...bash(`c${i}`, `git commit -qm step${i}`, `Commit ${i}`, 'ok'));
+    }
+    lines.push(end(60_000));
+    const long = pageOf(lines);
+    const montages = long.panels.filter((p) => p.kind === 'montage');
+    expect(montages.length).toBeGreaterThan(0);
+    expect(montages.some((p) => /saves the work/.test(p.caption.story))).toBe(true);
+    // The newest panels keep their place: folding starts at the oldest.
+    expect(long.panels[long.panels.length - 2].kind).not.toBe('montage');
   });
 
   it('a loop ends at its last check; writes after it are a panel of their own', () => {

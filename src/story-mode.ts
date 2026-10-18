@@ -78,6 +78,8 @@ interface ReducedInput {
   ships?: 'pr' | 'push';
   /** The segment of a Bash one-liner that decided its intent. */
   headline?: string;
+  /** How many commits a save makes, when more than one. */
+  commits?: number;
   /** Files a Bash call writes through here-documents. */
   writes?: StoryEdit[];
   description?: string;
@@ -127,6 +129,8 @@ export type StoryEntry =
       helper?: { result?: string; toolUses?: number; durationMs?: number; agentId?: string; background?: boolean };
       answer?: string;
       tests?: StoryTests;
+      /** A check whose output reports problems (lint, format, types). */
+      problems?: boolean;
     }
   | { k: 'end'; at: string; durationMs?: number }
   | { k: 'compact'; at: string }
@@ -301,8 +305,12 @@ function commandSegments(command: string): string[] {
 /** A segment's command with what only wraps it removed: env assignments, `sudo`, `timeout 60`, `( ...`. */
 function segmentHead(segment: string): string {
   let s = segment.replace(/^[({\s]+/, '');
+  // Shell structure is not a command: `for x in a b`, `done`, `fi`; `do`/`then`/`if` only wrap one.
+  if (/^(for\s+\w+(\s+in\b.*)?|done|fi|esac|else|[{}])\s*$/.test(s)) return '';
+  if (/^command\s+-[vV]\b/.test(s)) return 'which';
   for (let k = 0; k < 6; k++) {
     const next = s
+      .replace(/^(do|then|else|if|elif|while|until|!)\s+/, '')
       .replace(/^[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|'[^']*'|\S*)\s+/, '')
       .replace(/^(sudo|command|exec|time|nice|nohup|env|xargs)\s+/, '')
       .replace(/^timeout\s+(-\S+\s+)*\S+\s+/, '');
@@ -323,7 +331,7 @@ const EDIT_HEAD = /^(sed (-i|--in-place)\b|perl -p?i\b|patch\b|git apply\b)/;
 /** Where a redirect writes scratch, not the project: temp dirs, devices, and paths held in variables. */
 const SCRATCH_TARGET = /^(\/tmp\/|\/var\/tmp\/|\/dev\/|\$|~\/\.cache\/)/;
 const LOOK_HEAD =
-  /^(cd|cat|head|tail|sed -n|grep|egrep|rg|find|ls|wc|awk|jq|tree|stat|file|du|df|diff|less|more|xxd|od|which|type|pwd|echo|printf|sort|uniq|cut|basename|dirname|realpath|readlink|git (status|diff|log|show|branch|blame|ls-files|rev-parse|remote)|gh (pr|issue|run|api) (view|list|diff|checks))\b/;
+  /^(cd|cat|head|tail|sed -n|grep|egrep|rg|find|ls|wc|awk|jq|tree|stat|file|du|df|diff|less|more|xxd|od|which|type|pwd|echo|printf|sort|uniq|cut|basename|dirname|realpath|readlink|git (status|diff|log|show|branch|blame|ls-files|rev-parse|remote|config (--get|-l|--list))|gh (pr|issue|run|api) (view|list|diff|checks))\b/;
 /** A probe that asks a tool about itself without running anything: `pytest --version`, `npm test --help`. */
 const PROBE = /\s--(version|help|collect-only)\b|\s-[Vh]\s*$/;
 
@@ -503,6 +511,21 @@ export function heredocWrites(command: string, cwd?: string): StoryEdit[] {
 }
 
 /**
+ * Whether a linter, formatter or type checker reported problems (`Found 3 errors.`, `1 file would be
+ * reformatted`, `✖ 5 problems`, `error TS2322:`). Read when a trailing command (`; ls`) hid the exit code.
+ */
+export function reportsProblems(output: string): boolean {
+  return [
+    /\bFound [1-9]\d* errors?\b/,
+    /\b[1-9]\d* files? would be reformatted\b/,
+    /^would reformat /m,
+    /✖ [1-9]\d* problems?\b/,
+    /\[warn\] Code style issues found/,
+    /\berror TS\d+:/,
+  ].some((re) => re.test(output));
+}
+
+/**
  * Passed/failed counts from a test runner's summary line (vitest, jest, pytest, mocha, cargo...).
  * Scans the last lines only; returns null when no summary is recognisable.
  */
@@ -660,9 +683,11 @@ function reduceInput(name: string, input: unknown, cwd?: string): ReducedInput {
         if (reads.length) input.reads = reads;
       }
       if (intent === 'save') {
-        const ships = commandSegments(full.slice(0, 4000)).map(segmentHead);
-        if (ships.some((h) => /^gh pr create\b/.test(h))) input.ships = 'pr';
-        else if (ships.some((h) => /^git push\b/.test(h))) input.ships = 'push';
+        const heads = commandSegments(withoutHeredocBodies(full.slice(0, 4000))).map(segmentHead);
+        if (heads.some((h) => /^gh pr create\b/.test(h))) input.ships = 'pr';
+        else if (heads.some((h) => /^git push\b/.test(h))) input.ships = 'push';
+        const commits = heads.filter((h) => /^git commit\b/.test(h)).length;
+        if (commits > 1) input.commits = commits;
       }
       return input;
     }
@@ -852,6 +877,8 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
           if (name === 'Bash') {
             const tests = parseTestCounts(tail.text);
             if (tests) result.tests = tests;
+            const intent = call?.input.intent;
+            if ((intent === 'build' || intent === 'test') && reportsProblems(tail.text)) result.problems = true;
           }
         }
         out.push(result);
@@ -1087,6 +1114,7 @@ function toolEvent(e: Extract<StoryEntry, { k: 'tool' }>, actor: StoryActor): St
   if (i.reads) ev.files = i.reads;
   if (i.ships) ev.ships = i.ships;
   if (i.headline) ev.headline = i.headline;
+  if (i.commits) ev.commits = i.commits;
   if (i.writes) ev.edits = i.writes;
   if (i.offset) ev.line = i.offset;
   if (e.name === 'Bash' && i.description) ev.description = i.description;
@@ -1121,6 +1149,7 @@ function applyResult(ev: StoryEvent, r: Extract<StoryEntry, { k: 'result' }>): v
     ev.edit = r.edit;
     ev.file = r.edit.file;
   }
+  if (r.problems) ev.ok = false;
   if (r.tests) {
     ev.tests = r.tests;
     // A run that reports failed tests failed, whatever its exit code (`pytest | tail` exits 0).
@@ -1369,7 +1398,7 @@ const MERGEABLE = new Set<StoryPanelKind>([
   'compact',
 ]);
 /** Kinds that may be folded into a montage when a page has too many panels. */
-const MINOR = new Set<StoryPanelKind>(['investigate', 'research', 'plan', 'run', 'compact', 'save', 'montage']);
+const MINOR = new Set<StoryPanelKind>(['investigate', 'research', 'plan', 'run', 'compact', 'montage']);
 
 interface DraftPanel {
   kind: StoryPanelKind;
@@ -1483,27 +1512,38 @@ function collapseLoops(panels: DraftPanel[]): DraftPanel[] {
   return out;
 }
 
-/** Folds the smallest neighbouring pair into a montage until the page fits. */
+/**
+ * Folds neighbouring panels into montages until the page fits. Quiet kinds fold first, and the
+ * oldest pair first, growing a montage already there when it can: so on a live page, the panels
+ * the reader is watching keep their place, and the newest panel is never the one folded while
+ * another choice exists.
+ */
 function capPanels(panels: DraftPanel[], max: number): DraftPanel[] {
   const out = [...panels];
   const firstMergeable = out[0]?.kind === 'mission' ? 1 : 0;
   while (out.length > max) {
     let best = -1;
-    let bestSize = Infinity;
-    for (const strict of [true, false]) {
-      for (let k = firstMergeable; k < out.length - 1; k++) {
-        const a = out[k];
-        const b = out[k + 1];
-        const ok = strict
-          ? MINOR.has(a.kind) && MINOR.has(b.kind)
-          : ![a.kind, b.kind].some((kind) => kind === 'mission' || kind === 'ask');
-        const size = a.events.length + b.events.length;
-        if (ok && size < bestSize) {
-          best = k;
-          bestSize = size;
+    search: for (const strict of [true, false]) {
+      for (const lastStart of [out.length - 3, out.length - 2]) {
+        let oldest = -1;
+        for (let k = firstMergeable; k <= lastStart; k++) {
+          const a = out[k];
+          const b = out[k + 1];
+          const ok = strict
+            ? MINOR.has(a.kind) && MINOR.has(b.kind)
+            : ![a.kind, b.kind].some((kind) => kind === 'mission' || kind === 'ask');
+          if (!ok) continue;
+          if (a.kind === 'montage' || b.kind === 'montage') {
+            best = k;
+            break search;
+          }
+          if (oldest < 0) oldest = k;
+        }
+        if (oldest >= 0) {
+          best = oldest;
+          break search;
         }
       }
-      if (best >= 0) break;
     }
     if (best < 0) break;
     const a = out[best];
@@ -1538,6 +1578,8 @@ function montageSummary(evs: StoryEvent[]): string {
   if (evs.some((e) => e.intent === 'web')) parts.push('checks the web');
   if (evs.some((e) => e.intent === 'edit')) parts.push('changes files');
   if (evs.some((e) => e.intent === 'test' || e.intent === 'build')) parts.push('runs checks');
+  const commits = evs.reduce((n, e) => n + (e.commits ?? (e.intent === 'save' ? 1 : 0)), 0);
+  if (commits) parts.push(commits > 1 ? `saves the work in ${commits} commits` : 'saves the work');
   return parts.length ? parts.join(', ') : 'a few more steps';
 }
 
@@ -1682,7 +1724,15 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         story =
           neverFailed && panel.ok === true
             ? `Build and test, ${plural(panel.rounds, 'round')}. Every check passes.`
-            : `Fix and test, ${plural(panel.rounds, 'round')}.${panel.ok === true ? ' It passes in the end.' : panel.ok === false ? ' Still failing.' : ''}`;
+            : `Fix and test, ${plural(panel.rounds, 'round')}.${
+                panel.ok === true
+                  ? ' It passes in the end.'
+                  : panel.ok === false && tests && tests.passed && !tests.failed && !tests.errors
+                    ? ' The tests pass, but another check fails.'
+                    : panel.ok === false
+                      ? ' Still failing.'
+                      : ''
+              }`;
         director = `${plural(checks.length, 'check')} · ${plural(edits.length, 'edit')} · ${fmtCounts(panel.added, panel.removed)} · last: ${
           lastCheck ? outcome(lastCheck) : 'running'
         }`;
@@ -1699,6 +1749,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const failedFirst = checks.slice(0, -1).some((e) => passed(e) === false);
       if (ok === undefined) story = isTest ? 'Claude runs the tests.' : 'Claude runs the checks.';
       else if (!ok && tests && !tests.passed && !tests.failed && tests.errors) story = "The tests don't even load.";
+      else if (!ok && tests && tests.passed && !tests.failed && !tests.errors)
+        story = 'The tests pass, but another check fails.';
       else if (ok)
         story = failedFirst ? 'It fails at first, then passes.' : isTest ? 'The tests pass.' : 'The checks pass.';
       else
@@ -1728,6 +1780,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const last = evs[evs.length - 1];
       if (last?.ok !== undefined) panel.ok = last.ok;
       const ships = evs.some((e) => e.ships === 'pr') ? 'pr' : evs.some((e) => e.ships === 'push') ? 'push' : '';
+      const commits = evs.reduce((n, e) => n + (e.commits ?? (e.intent === 'save' ? 1 : 0)), 0);
+      const inCommits = commits > 1 ? ` in ${commits} commits` : '';
       story =
         panel.ok === false
           ? ships === 'pr'
@@ -1738,8 +1792,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           : ships === 'pr'
             ? 'Claude opens a pull request.'
             : ships === 'push'
-              ? 'Claude saves the work and sends it up.'
-              : 'Claude saves the work.';
+              ? `Claude saves the work${inCommits} and sends it up.`
+              : `Claude saves the work${inCommits}.`;
       director = `${evs.map(shortCommand).slice(0, 2).join(' · ')}${errors ? ` · ${plural(errors, 'error')}` : ''}${
         edits.length ? ` · writes ${plural(unique(edits.map((d) => d.file)).length, 'file')}` : ''
       }`;

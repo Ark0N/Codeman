@@ -126,6 +126,8 @@ export interface StoryEvent {
   description?: string;
   /** A save that ships the work: `gh pr create` (`pr`) or `git push` (`push`). */
   ships?: 'pr' | 'push';
+  /** How many commits a Bash call makes (`git commit` segments). */
+  commits?: number;
   /** Who a prompt came from (a prompt added mid-turn can come from someone other than the turn's starter). */
   origin?: StoryTurnOrigin;
   output?: string;
