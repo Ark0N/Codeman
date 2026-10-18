@@ -10,7 +10,7 @@ import { JSDOM } from 'jsdom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildStoryPage, buildStoryTurns, createStoryReducer, summarizeTurns } from '../src/story-mode.js';
 import type { StoryPage, StoryPanel } from '../src/types/story.js';
-import { bash, demoTurn, end, prompt, read, resetClock, said } from './story-fixtures.js';
+import { bash, demoTurn, end, prompt, read, resetClock, result, said, tool } from './story-fixtures.js';
 
 const STORY_JS = readFileSync(new URL('../src/web/public/story-mode.js', import.meta.url), 'utf-8');
 // The real path matcher (findFilePathLinks / resolveLinkedFilePath) the terminal uses.
@@ -56,6 +56,7 @@ function boot(initial: unknown) {
   dom = new JSDOM(
     `<!doctype html><body>
       <button class="btn-story-header btn-story-header--hidden"></button>
+      <button id="sessionOptionsStoryBtn" hidden></button>
       <div class="file-preview-overlay" id="filePreviewOverlay"></div>
       <div class="folder-grid-overlay" id="folderGridOverlay"></div>
     </body>`,
@@ -334,6 +335,80 @@ describe('story-mode.js overlay', () => {
     expect($('.story-note')!.textContent).toBe('Session not found');
   });
 
+  it('a turn a background task started gets a notice, not your speech balloon', async () => {
+    boot(
+      storyOf([
+        prompt('<task-notification><summary>Agent "Docs" finished</summary></task-notification>', {
+          turnOrigin: 'task_notification',
+        }),
+        said('Nice.'),
+        end(1000),
+      ])
+    );
+    app.openStoryMode(SID);
+    await settle();
+    const balloon = $('.story-panel[data-kind="mission"] .story-balloon')!;
+    expect(balloon.className).toContain('story-balloon--note');
+    expect(balloon.textContent).toBe('Agent "Docs" finished');
+  });
+
+  it("the helper drawer fetches and lists the helper's own steps", async () => {
+    const lines = [
+      prompt('Docs please'),
+      tool('a1', 'Agent', { description: 'Write README', subagent_type: 'general-purpose', prompt: 'Write it' }),
+      result('a1', 'ok', {
+        toolUseResult: { agentId: 'h1', content: [{ type: 'text', text: 'Written.' }], totalToolUseCount: 2 },
+      }),
+      end(3000),
+    ];
+    boot(storyOf(lines));
+    const helperPage = storyOf([prompt('Write it'), ...read('r1', '/work/demo-shop/a.md')]).page;
+    const base = app._api;
+    app._api = async (path: string) => {
+      if (path.includes('/story/helpers/h1')) {
+        calls.push(path);
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async () => ({
+            success: true,
+            data: { supported: true, helper: { agentId: 'h1', finished: true }, page: helperPage },
+          }),
+        };
+      }
+      return base(path);
+    };
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    $('.story-panel[data-kind="backup"] .story-hit')!.click();
+    await settle();
+    expect($('.story-drawer-title')!.textContent).toBe('Write README');
+    expect($('.story-drawer-sub')!.textContent).toContain('general-purpose');
+    expect(calls).toContain(`/api/sessions/${SID}/story/helpers/h1`);
+    const steps = $('.story-helper-steps')!;
+    expect(steps.textContent).toContain('1 step');
+    // Paths inside the session's folder are shown short; the click still opens the full path.
+    const link = steps.querySelector('.story-link') as HTMLElement;
+    expect(link.textContent).toBe('a.md');
+    link.click();
+    expect(app.openFilePreview).toHaveBeenLastCalledWith('/work/demo-shop/a.md', SID);
+  });
+
+  it('Tab stays inside the overlay', async () => {
+    boot(storyOf(demoTurn()));
+    app.openStoryMode(SID);
+    await settle();
+    // JSDOM has no layout (offsetParent is always null), so give every control one.
+    for (const el of $$('#storyOverlay button, #storyOverlay select'))
+      Object.defineProperty(el, 'offsetParent', { get: () => win.document.body });
+    const controls = $$('#storyOverlay button, #storyOverlay select').filter((n) => !(n as HTMLButtonElement).disabled);
+    controls[controls.length - 1].focus();
+    press('Tab');
+    expect(win.document.activeElement).toBe(controls[0]);
+  });
+
   it('turning the setting off hides the button and closes an open story', async () => {
     boot(storyOf(demoTurn()));
     app.openStoryMode(SID);
@@ -341,7 +416,11 @@ describe('story-mode.js overlay', () => {
     app.loadAppSettingsFromStorage = () => ({ showStoryButton: false });
     app.applyStoryButtonVisibility();
     expect($('.btn-story-header')!.classList.contains('btn-story-header--hidden')).toBe(true);
+    expect($('#sessionOptionsStoryBtn')!.hidden).toBe(true);
     expect($('#storyOverlay')!.hidden).toBe(true);
+    app.loadAppSettingsFromStorage = () => ({ showStoryButton: true });
+    app.applyStoryButtonVisibility();
+    expect($('#sessionOptionsStoryBtn')!.hidden).toBe(false);
   });
 });
 

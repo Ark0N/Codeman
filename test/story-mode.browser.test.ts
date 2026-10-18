@@ -3,7 +3,7 @@
  * synthetic transcript (test/story-fixtures.ts) handed to the session the way Claude's hooks do it,
  * then grown while the overlay is open so the live redraw runs off real SSE events.
  */
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -95,7 +95,9 @@ describe('Story Mode in a real browser', () => {
   it('redraws live when the transcript grows and a hook fires', async () => {
     appendFileSync(transcript, jsonl(rest));
     await hook('stop');
-    await page.waitForFunction(() => document.querySelector('.story-panel[data-kind="complete"]'), null, { timeout: 15000 });
+    await page.waitForFunction(() => document.querySelector('.story-panel[data-kind="complete"]'), null, {
+      timeout: 15000,
+    });
     expect(await kinds()).toEqual(['mission', 'investigate', 'plan', 'backup', 'loop', 'save', 'complete']);
     expect(await page.locator('.story-pencils').count()).toBe(0);
     expect(await page.locator('.story-panel.story-fresh').count()).toBeGreaterThan(0);
@@ -111,6 +113,20 @@ describe('Story Mode in a real browser', () => {
     expect(await page.locator('#storyOverlay').isVisible()).toBe(true);
     await page.keyboard.press('Escape');
     expect(await page.locator('#storyOverlay').isHidden()).toBe(true);
+  });
+
+  it('Session Options opens the story, and Save image downloads the page as a PNG', async () => {
+    await page.evaluate((sid) => (window as any).app.openSessionOptions(sid), sessionId);
+    await page.locator('#sessionOptionsStoryBtn').click();
+    await page.waitForFunction(() => document.querySelectorAll('.story-panel').length > 0);
+    expect(await page.locator('#storyOverlay').isVisible()).toBe(true);
+    const [download] = await Promise.all([page.waitForEvent('download'), page.locator('.story-save').click()]);
+    expect(download.suggestedFilename()).toMatch(/^story-story-browser-.*\.png$/);
+    const path = await download.path();
+    const head = readFileSync(path!).subarray(0, 24);
+    expect(head.subarray(1, 4).toString()).toBe('PNG');
+    expect(head.readUInt32BE(16)).toBeGreaterThan(1000); // width, at 2x
+    await page.keyboard.press('Escape');
   });
 
   it('fits a phone-width viewport without sideways scrolling', async () => {

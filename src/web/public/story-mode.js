@@ -31,6 +31,11 @@
 const STORY_REFRESH_DEBOUNCE_MS = 800;
 /** While a turn runs, refresh this often even without events (text lines raise none). */
 const STORY_POLL_MS = 4000;
+/**
+ * Widest stage a scene is drawn on, in virtual units. A panel stretched across a whole row keeps its
+ * art together in a centered stage instead of spreading it to both ends; the background still fills it.
+ */
+const STORY_STAGE_MAX = 680;
 
 /**
  * The comic engine: drawing kit, the agent character and one scene per panel kind. Pure drawing;
@@ -920,7 +925,7 @@ const StoryArt = (() => {
         const files = p.panel.files || [];
         codePage(ctx, x0, y0, pw, ph, f, baseName(first?.file || files[0] || 'file'), lines, files.length - 1);
         hit('diff', x0, y0, pw, ph, "See Claude's changes");
-        const ax = W - 50;
+        const ax = Math.min(W - 50, x0 + pw + 200);
         const tip = [x0 + pw - 14, y0 + ph * 0.5];
         const hp = [tip[0] + 20 + Math.sin(f / 2.6) * 3, tip[1] - 28 + Math.cos(f / 3.1) * 2.5];
         const a = agent(ctx, ax, 248, { frame: f, mood: 'focus', l: [hp[0] - ax, hp[1] - 248], r: [30, -42] });
@@ -1194,6 +1199,7 @@ const StoryArt = (() => {
       },
     },
     complete: {
+      fullWidth: true,
       bg(ctx, W, H) {
         base(ctx, W, H);
         rays(ctx, W, H, W > 420 ? W * 0.72 : W / 2, 200, 30, C.cyan, 0.32);
@@ -1331,7 +1337,18 @@ Object.assign(CodemanApp.prototype, {
   applyStoryButtonVisibility() {
     const on = this.isStoryButtonEnabled();
     document.querySelector('.btn-story-header')?.classList.toggle('btn-story-header--hidden', !on);
+    // Session Options carries a Story button too: the way in on phones, where the header has no room.
+    const optionsBtn = document.getElementById('sessionOptionsStoryBtn');
+    if (optionsBtn) optionsBtn.hidden = !on;
     if (!on) this.closeStoryMode();
+  },
+
+  /** Session Options → Story: this session's story, whichever tab is active. */
+  openStoryFromOptions() {
+    const id = this.editingSessionId;
+    if (!id) return;
+    this.closeSessionOptions?.();
+    this.openStoryMode(id);
   },
 
   toggleStoryMode() {
@@ -1351,6 +1368,8 @@ Object.assign(CodemanApp.prototype, {
     st.turnId = null;
     st.data = null;
     st.error = null;
+    st.etag = null;
+    st.helperSteps = new Map();
     st.epoch++;
     st.first = true;
     st.drawer = null;
@@ -1380,6 +1399,8 @@ Object.assign(CodemanApp.prototype, {
     st.pageEl.replaceChildren();
     st.wireList.replaceChildren();
     st.data = null;
+    st.etag = null;
+    st.helperSteps = null;
     const back = st.returnFocus;
     st.returnFocus = null;
     if (back && document.contains(back)) back.focus({ preventScroll: true });
@@ -1448,8 +1469,10 @@ Object.assign(CodemanApp.prototype, {
     const live = el('span', 'story-live');
     live.append(el('i'), el('span', null, 'LIVE'));
     live.hidden = true;
+    const saveBtn = btn('story-btn story-save', 'Save image', 'Save this page as an image');
+    saveBtn.title = 'Save this page as a PNG to share';
     const closeBtn = btn('story-btn story-close', '×', 'Close Story Mode');
-    bar.append(brand, nav, seg, live, closeBtn);
+    bar.append(brand, nav, seg, live, saveBtn, closeBtn);
 
     const main = el('div', 'story-main');
     const note = el('p', 'story-note');
@@ -1538,6 +1561,7 @@ Object.assign(CodemanApp.prototype, {
     this._story = st;
 
     closeBtn.addEventListener('click', () => this.closeStoryMode());
+    saveBtn.addEventListener('click', () => this.saveStoryImage());
     drawerClose.addEventListener('click', () => this._storyCloseDrawer());
     storyBtn.addEventListener('click', () => this._storySetDirector(false));
     dirBtn.addEventListener('click', () => this._storySetDirector(true));
@@ -1580,6 +1604,7 @@ Object.assign(CodemanApp.prototype, {
     const turns = st.data?.turns || [];
     st.turnId = id && id !== turns[turns.length - 1]?.id ? id : null;
     st.first = true;
+    st.etag = null;
     st.epoch++;
     this._storyCloseDrawer({ refocus: false });
     this._storyRefresh();
@@ -1616,6 +1641,10 @@ Object.assign(CodemanApp.prototype, {
       const qs = st.turnId ? `?turn=${encodeURIComponent(st.turnId)}` : '';
       const res = await this._api(`/api/sessions/${encodeURIComponent(st.sessionId)}/story${qs}`);
       if (epoch !== st.epoch || !st.open) return;
+      // The route sends an ETag and no-cache, so the browser revalidates and an unchanged page comes
+      // back from its cache with the same tag: nothing to parse, nothing to redraw.
+      const etag = res?.ok ? res.headers?.get?.('etag') || null : null;
+      if (etag && etag === st.etag && !st.error) return;
       let body = null;
       try {
         body = res ? await res.json() : null;
@@ -1629,6 +1658,7 @@ Object.assign(CodemanApp.prototype, {
       } else {
         st.error = null;
         st.data = body.data;
+        st.etag = etag;
       }
       this._storyRender();
     } finally {
@@ -1682,7 +1712,12 @@ Object.assign(CodemanApp.prototype, {
       if (!page || !page.complete) this._storyRefresh();
     }, STORY_POLL_MS);
     st.keyHandler = (e) => {
-      if (e.key !== 'Escape' || !st.open) return;
+      if (!st.open) return;
+      if (e.key === 'Tab') {
+        this._storyTrapTab(e);
+        return;
+      }
+      if (e.key !== 'Escape') return;
       // A folder grid on top steps back by itself (preview, then grid), and a preview in edit mode
       // keeps its keys. A plain file preview has no Escape of its own outside the grid, so Story
       // closes it: one Escape per layer, the preview first.
@@ -1708,6 +1743,28 @@ Object.assign(CodemanApp.prototype, {
         this._storyDrawPanel(rt);
       }
     });
+  },
+
+  /** The overlay is a modal dialog: Tab and Shift+Tab cycle inside it (not when a preview is on top). */
+  _storyTrapTab(e) {
+    const st = this._story;
+    if (document.getElementById('filePreviewOverlay')?.classList.contains('visible')) return;
+    if (document.getElementById('folderGridOverlay')?.classList.contains('visible')) return;
+    const items = [...st.root.querySelectorAll('button, select, a[href], [tabindex]:not([tabindex="-1"])')].filter(
+      (n) => !n.disabled && n.offsetParent !== null
+    );
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    const inside = st.root.contains(active);
+    if (e.shiftKey && (active === first || !inside)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (active === last || !inside)) {
+      e.preventDefault();
+      first.focus();
+    }
   },
 
   _storyStopRuntime() {
@@ -1901,7 +1958,14 @@ Object.assign(CodemanApp.prototype, {
     const balloonText = p.kind === 'ask' && p.question?.text ? p.question.text : p.balloon?.text;
     rt.balloon.hidden = !balloonText;
     rt.balloon.textContent = balloonText || '';
-    rt.balloon.className = `story-balloon ${p.kind === 'mission' || p.balloon?.who === 'you' ? 'story-balloon--you' : 'story-balloon--claude'}`;
+    const notice = p.kind === 'mission' && index === 0 && page.origin && page.origin !== 'human';
+    rt.balloon.className = `story-balloon ${
+      notice
+        ? 'story-balloon--note'
+        : p.kind === 'mission' || p.balloon?.who === 'you'
+          ? 'story-balloon--you'
+          : 'story-balloon--claude'
+    }`;
     rt.liveTag.hidden = !p.live;
     rt.el.classList.toggle('is-live', !!p.live);
     rt.el.setAttribute('aria-label', `Panel ${index + 1}: ${p.caption.story}`);
@@ -1977,13 +2041,23 @@ Object.assign(CodemanApp.prototype, {
       rt.bgKey = key;
     }
     const ctx = rt.ctx;
+    if (!ctx) return; // no 2D context (a browser out of canvas memory): the captions still read
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, rt.canvas.width, rt.canvas.height);
     ctx.drawImage(rt.bg, 0, 0);
-    ctx.setTransform(k, 0, 0, k, 0, 0);
+    const stageW = scene.fullWidth ? W : Math.min(W, STORY_STAGE_MAX);
+    const ox = (W - stageW) / 2;
+    ctx.setTransform(k, 0, 0, k, ox * k, 0);
     const hits = [];
-    const hit = (id, x, y, w, h, label) => hits.push({ id, x, y, w, h, label });
-    scene.draw(ctx, W, StoryArt.VH, rt.clock, { panel: rt.panel, page: st.data?.page, director: st.director }, hit);
+    const hit = (id, x, y, w, h, label) => hits.push({ id, x: x + ox, y, w, h, label });
+    scene.draw(
+      ctx,
+      stageW,
+      StoryArt.VH,
+      rt.clock,
+      { panel: rt.panel, page: st.data?.page, director: st.director },
+      hit
+    );
     this._storySyncHits(rt, hits, s);
   },
 
@@ -2019,6 +2093,167 @@ Object.assign(CodemanApp.prototype, {
         rt.hitEls.delete(id);
       }
     }
+  },
+
+  // ── Save as image ──
+
+  /**
+   * The page as one PNG to share: each panel's canvas, then its captions, balloons and chips redrawn
+   * from their computed style and on-screen box (DOM text cannot be rasterized with self-hosted fonts
+   * reliably). Text is the page's own, so the image says exactly what the screen says.
+   */
+  async saveStoryImage() {
+    const st = this._story;
+    const page = st?.data?.page;
+    if (!page || !st.panels.length) return;
+    await document.fonts?.ready;
+    const sheet = st.pageEl.getBoundingClientRect();
+    const head = 64;
+    const scale = Math.max(1, Math.min(2, 12000 / (sheet.height + head)));
+    const out = document.createElement('canvas');
+    out.width = Math.round(sheet.width * scale);
+    out.height = Math.round((sheet.height + head) * scale);
+    const g = out.getContext('2d');
+    if (!g) return;
+    g.scale(scale, scale);
+    const tok = (n) => getComputedStyle(st.root).getPropertyValue(`--story-${n}`).trim();
+    g.fillStyle = tok('sheet');
+    g.fillRect(0, 0, sheet.width, sheet.height + head);
+
+    // Title strip: the word STORY, the session and the prompt.
+    g.textBaseline = 'middle';
+    g.font = `30px 'Codeman Story Display', Impact, sans-serif`;
+    g.lineWidth = 4;
+    g.strokeStyle = tok('line');
+    g.strokeText('STORY', 16, head / 2);
+    g.fillStyle = tok('yellow');
+    g.fillText('STORY', 16, head / 2);
+    const titleW = g.measureText('STORY').width;
+    g.font = `500 12px 'JetBrains Mono', monospace`;
+    g.fillStyle = tok('muted');
+    const when = new Date(page.at);
+    const meta = `${st.sessionLabel.textContent} · ${Number.isNaN(when.getTime()) ? '' : when.toLocaleString()}`;
+    g.fillText(this._storyFit(g, meta, sheet.width - titleW - 48), titleW + 32, head / 2 - 9);
+    g.fillStyle = tok('ink');
+    g.fillText(this._storyFit(g, page.prompt || 'Earlier work', sheet.width - titleW - 48), titleW + 32, head / 2 + 9);
+    g.translate(0, head);
+
+    for (const rt of st.panels) {
+      const r = rt.el.getBoundingClientRect();
+      const x = r.left - sheet.left;
+      const y = r.top - sheet.top;
+      const bw = parseFloat(getComputedStyle(rt.el).borderTopWidth) || 3;
+      g.drawImage(rt.canvas, x + bw, y + bw, r.width - bw * 2, r.height - bw * 2);
+      g.lineWidth = bw;
+      g.strokeStyle = getComputedStyle(rt.el).borderTopColor;
+      g.strokeRect(x + bw / 2, y + bw / 2, r.width - bw, r.height - bw);
+      g.save();
+      g.beginPath();
+      g.rect(x, y, r.width, r.height);
+      g.clip();
+      const boxes = rt.el.querySelectorAll(
+        '.story-splash-title, .story-cap, .story-balloon, .story-chips li > *, .story-answer, .story-live-tag'
+      );
+      for (const el of boxes) this._storyPaintBox(g, el, sheet);
+      g.restore();
+    }
+    const blob = await new Promise((resolve) => out.toBlob(resolve, 'image/png'));
+    if (!blob) return;
+    const a = document.createElement('a');
+    const name = (st.sessionLabel.textContent || 'session').replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 40);
+    a.href = URL.createObjectURL(blob);
+    a.download = `story-${name}-${(page.at || '').slice(0, 10) || 'turn'}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  },
+
+  _storyFit(g, text, maxW) {
+    if (g.measureText(text).width <= maxW) return text;
+    let lo = 0;
+    let hi = text.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (g.measureText(`${text.slice(0, mid)}…`).width <= maxW) lo = mid;
+      else hi = mid - 1;
+    }
+    return `${text.slice(0, lo)}…`;
+  },
+
+  /** One caption, balloon or chip, redrawn where and how the page shows it. */
+  _storyPaintBox(g, el, sheet) {
+    if (el.hidden || el.closest('[hidden]')) return;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return;
+    const x = r.left - sheet.left;
+    const y = r.top - sheet.top;
+    const isTitle = el.classList.contains('story-splash-title');
+    if (!isTitle) {
+      const radius = Math.min(parseFloat(cs.borderTopLeftRadius) || 0, r.height / 2);
+      g.beginPath();
+      if (g.roundRect) g.roundRect(x, y, r.width, r.height, radius);
+      else g.rect(x, y, r.width, r.height);
+      if (cs.backgroundColor && cs.backgroundColor !== 'rgba(0, 0, 0, 0)') {
+        g.fillStyle = cs.backgroundColor;
+        g.fill();
+      }
+      const bw = parseFloat(cs.borderTopWidth) || 0;
+      if (bw) {
+        g.lineWidth = bw;
+        g.strokeStyle = cs.borderTopColor;
+        g.setLineDash(cs.borderTopStyle === 'dashed' ? [6, 4] : []);
+        g.stroke();
+        g.setLineDash([]);
+      }
+    }
+    // The text the reader sees (hidden spans, like the other reading level, are left out).
+    const text = (el.innerText || el.textContent || '').trim();
+    if (!text) return;
+    const size = parseFloat(cs.fontSize) || 14;
+    const lh = parseFloat(cs.lineHeight) || size * 1.15;
+    g.font = `${cs.fontWeight} ${size}px ${cs.fontFamily}`;
+    g.textBaseline = 'top';
+    const padL = parseFloat(cs.paddingLeft) + (parseFloat(cs.borderLeftWidth) || 0);
+    const padT = parseFloat(cs.paddingTop) + (parseFloat(cs.borderTopWidth) || 0);
+    const maxW = r.width - padL - parseFloat(cs.paddingRight) - (parseFloat(cs.borderRightWidth) || 0) + 1;
+    const lines = [];
+    for (const para of text.split('\n')) {
+      let line = '';
+      for (const word of para.split(/\s+/)) {
+        const next = line ? `${line} ${word}` : word;
+        if (g.measureText(next).width > maxW && line) {
+          lines.push(line);
+          line = word;
+        } else line = next;
+      }
+      lines.push(line);
+    }
+    if (isTitle) {
+      g.save();
+      // Rotated about its bottom-left corner: draw from there, with the element's own height (the
+      // bounding box of a rotated element is taller than the text block).
+      const h0 = el.offsetHeight || r.height;
+      g.translate(x, y + r.height);
+      g.rotate((-3 * Math.PI) / 180);
+      g.lineJoin = 'round';
+      lines.forEach((l, i) => {
+        const ly = -h0 + i * lh;
+        g.fillStyle = getComputedStyle(this._story.root).getPropertyValue('--story-line').trim();
+        g.fillText(l, 4, ly + 4);
+        g.lineWidth = 5;
+        g.strokeStyle = g.fillStyle;
+        g.strokeText(l, 0, ly);
+        g.fillStyle = cs.color;
+        g.fillText(l, 0, ly);
+      });
+      g.restore();
+      return;
+    }
+    g.fillStyle = cs.color;
+    lines.forEach((l, i) => g.fillText(l, x + padL, y + padT + i * lh));
   },
 
   // ── The wire ──
@@ -2078,13 +2313,25 @@ Object.assign(CodemanApp.prototype, {
     } else {
       label = document.createElement('span');
     }
-    label.textContent = ev.label;
+    label.textContent = this._storyShortPath(ev.label);
+    if (label.textContent !== ev.label) label.title = ev.label;
     const tag = document.createElement('i');
     tag.className = `story-tag story-tag--${ev.ok === false ? 'bad' : ev.pending ? 'pending' : ev.intent}`;
     tag.textContent = ev.ok === false ? 'error' : ev.pending ? 'running' : ev.intent;
     body.append(who, ' ', tool, ' ', label, ' ', tag);
     li.append(t, body);
     return li;
+  },
+
+  /**
+   * A label as the reader wants it: paths inside the session's folder lose that prefix. Display only;
+   * clicks keep the full path.
+   */
+  _storyShortPath(text) {
+    const dir = this.sessions?.get(this._story?.sessionId)?.workingDir;
+    if (!dir || dir === '/' || !text) return text;
+    const prefix = dir.endsWith('/') ? dir : `${dir}/`;
+    return text.split(prefix).join('');
   },
 
   /** What a click on an event opens, as a `data-story-open` target, or null. */
@@ -2238,10 +2485,11 @@ Object.assign(CodemanApp.prototype, {
     } else if (source.view === 'helper') {
       const ev = items[0]?.ev;
       kind = 'Helper';
-      title = ev?.helper ? `${ev.helper.name} (${ev.helper.type})` : 'Helper';
+      title = ev?.helper ? ev.helper.task || ev.helper.name : 'Helper';
       const h = ev?.helper;
       sub = h
         ? [
+            h.name && h.name !== h.type ? `${h.name}, ${h.type}` : h.type,
             h.toolUses !== undefined ? `${h.toolUses} tool calls` : '',
             h.durationMs !== undefined ? this._storyDuration(h.durationMs) : '',
             ev.pending ? 'still working' : '',
@@ -2255,6 +2503,11 @@ Object.assign(CodemanApp.prototype, {
           el('h4', 'story-h', 'The helper answered'),
           this._storyLinkifiedPre(h.result || (ev.pending ? 'Still working…' : '(no answer)'))
         );
+        if (h.agentId) {
+          const box = el('div', 'story-helper-steps');
+          out.push(el('h4', 'story-h', 'What the helper did'), box);
+          this._storyFillHelperSteps(box, h.agentId);
+        }
       }
     } else if (source.view === 'plan') {
       const ev = [...items].reverse().find((x) => x.ev.todos)?.ev;
@@ -2293,6 +2546,82 @@ Object.assign(CodemanApp.prototype, {
     if (first) body.scrollTop = 0;
     else if (firstNew) body.scrollTop = Math.max(0, firstNew.offsetTop - 12);
     else body.scrollTop = prevScroll;
+  },
+
+  /** A helper's own steps (GET …/story/helpers/:agentId), cached per helper and revalidated by ETag. */
+  async _storyFillHelperSteps(box, agentId) {
+    const st = this._story;
+    const cached = st.helperSteps?.get(agentId);
+    if (cached) this._storyRenderHelperSteps(box, cached.data);
+    else {
+      const p = document.createElement('p');
+      p.className = 'story-empty';
+      p.textContent = 'Reading its steps…';
+      box.replaceChildren(p);
+    }
+    const res = await this._api(
+      `/api/sessions/${encodeURIComponent(st.sessionId)}/story/helpers/${encodeURIComponent(agentId)}`
+    );
+    if (!box.isConnected || !st.open) return;
+    const etag = res?.ok ? res.headers?.get?.('etag') || null : null;
+    if (cached && etag && etag === cached.etag) return;
+    let body = null;
+    try {
+      body = res?.ok ? await res.json() : null;
+    } catch {
+      body = null;
+    }
+    if (!box.isConnected || !st.open) return;
+    if (!body?.success) {
+      if (!cached) box.firstChild.textContent = 'Its steps could not be read.';
+      return;
+    }
+    st.helperSteps?.set(agentId, { etag, data: body.data });
+    this._storyRenderHelperSteps(box, body.data);
+  },
+
+  _storyRenderHelperSteps(box, data) {
+    const el = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    };
+    const page = data?.page;
+    if (!page) {
+      box.replaceChildren(el('p', 'story-empty', 'No steps written yet.'));
+      return;
+    }
+    const steps = page.events.filter((e) => e.intent !== 'prompt' && e.intent !== 'say');
+    const summary = [
+      `${steps.length} step${steps.length === 1 ? '' : 's'}`,
+      page.filesChanged ? `${page.filesChanged} file${page.filesChanged === 1 ? '' : 's'} changed` : '',
+      data.helper?.finished === false ? 'still working' : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    const list = el('ol', 'story-helper-list');
+    for (const ev of steps) {
+      const li = el('li', 'story-ev');
+      li.dataset.actor = 'helper';
+      const body = el('span', 'story-ev-body');
+      const shown = this._storyShortPath(ev.label);
+      const label = ev.file ? el('button', 'story-link', shown) : el('span', null, shown);
+      if (shown !== ev.label) label.title = ev.label;
+      if (ev.file) {
+        label.type = 'button';
+        label.addEventListener('click', () => this.openFilePreview?.(ev.file, this._story.sessionId));
+      }
+      const tag = el(
+        'i',
+        `story-tag story-tag--${ev.ok === false ? 'bad' : ev.pending ? 'pending' : ev.intent}`,
+        ev.ok === false ? 'error' : ev.pending ? 'running' : ev.intent
+      );
+      body.append(el('b', null, ev.tool), ' ', label, ' ', tag);
+      li.append(body);
+      list.append(li);
+    }
+    box.replaceChildren(el('p', 'story-out-desc', summary), list);
   },
 
   _storyDiffSection(ev, el) {

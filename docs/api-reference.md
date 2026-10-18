@@ -1061,6 +1061,10 @@ Read-only. The session is resolved like every session route (ownership via `find
 - `{ supported: false, reason }`: the session's CLI does not write a Claude Code transcript (registry `capabilities.transcript` is not `claude-jsonl`), or the session is remote or Docker, whose transcript is not on this host.
 - `{ supported: true, turns, page }`: `turns` lists up to 60 turns, oldest first (`{ id, at, prompt, origin, complete, interrupted, toolCalls }`; `origin` is `human`, `task`, `peer` or `system`). `page` is the newest turn, or the one `turn=<id>` names, or `null` when there is none (an unknown id included).
 
+Responses carry a weak `ETag` with `Cache-Control: no-cache`; a request with a matching `If-None-Match` gets a `304` without the page being rebuilt, which is what keeps a live view's frequent refetches cheap.
+
+`GET /api/sessions/:id/story/helpers/:agentId` draws one helper (an Agent call; its `agentId` is on the main page's event as `helper.agentId`) from the helper's own transcript, `<conversation>/subagents/agent-<agentId>.jsonl` beside the session's. `data` is `{ supported: true, helper: { agentId, type?, description?, finished? }, page }`, the same page shape as above, or `page: null` while the helper has written nothing yet. `agentId` must match `[A-Za-z0-9_-]{1,64}` (`400` otherwise).
+
 A `page` carries the turn's summary fields plus `events` (one per prompt, sentence Claude wrote and tool call, with `intent`, `ok` when the call returned, `edit` hunks in Claude Code's own `structuredPatch` shape, the tail of `output`, `helper`, `tests` counts), `panels` (each `{ kind, events, caption: { story, director }, balloon?, files?, ... }`, at most 12 per page, indices into `events`), `filesChanged`, `added`, `removed`, `helpers`, `partial` (the turn began before the part that was read) and `truncated` (older outputs were dropped to keep the page small). A transcript that cannot be read is a `500` with `OPERATION_FAILED`.
 
 ## Git worktrees of a case

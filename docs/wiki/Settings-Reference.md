@@ -69,8 +69,9 @@ Ultracode Windows, Cron.
 draws the active Claude Code session as a comic: one page per prompt, panels for what Claude
 did (reading, planning, helpers, edits, tests, saving), and plain captions anyone can follow.
 The **Director's cut** switch names every tool call instead. Click a file to open it, the code
-page for the exact diff, a test board for the output. An unfinished turn redraws as Claude
-works.
+page for the exact diff, a test board for the output, a helper for what it was asked and what
+it did. An unfinished turn redraws as Claude works, and **Save image** downloads the page as a
+PNG to share. On phones, open it from the session's Session Options (the Story button there).
 
 **Bottom bar** (below the chips): **Git status** shows a small indicator at the right of the
 bottom bar, off by default and per device. It reads `● N` uncommitted files, `↑ N` commits not

@@ -538,6 +538,14 @@ const DEFAULT_SHORTCUTS = [
     bindings: [{ modifiers: ['alt'], key: 'b', code: 'KeyB' }],
     action: 'toggleSessionSidebar',
   },
+  {
+    id: 'toggle-story-mode',
+    group: 'Panels',
+    label: 'Story Mode',
+    // No default chord: every free one is some CLI's key. Bind one in App Settings → Shortcuts.
+    bindings: [],
+    action: 'toggleStoryMode',
+  },
   // Tile grid (tile-grid.js). Dispatched by tileShortcutFor()/runTileShortcut()
   // and deliberately absent from SHORTCUT_ACTIONS: each applies only in some
   // states (the focus chords only while the grid is open), and outside them the
@@ -10740,6 +10748,7 @@ class CodemanApp {
       nextSession: () => this.nextSession(),
       previousSession: () => this.prevSession(),
       clearTerminal: () => this.clearTerminal(),
+      toggleStoryMode: () => this.toggleStoryMode?.(),
       restoreTerminalSize: () => this.restoreTerminalSize(),
       increaseFontSize: () => this.increaseFontSize(),
       decreaseFontSize: () => this.decreaseFontSize(),
