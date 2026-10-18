@@ -950,6 +950,22 @@ describe('buildStoryPage', () => {
     expect(page.filesChanged).toBe(2);
   });
 
+  it('a commit then a push in its own command is one commit, named; a push alone only uploads', () => {
+    const save = (lines: unknown[]) => pageOf(lines).panels.find((p) => p.kind === 'save')!.caption.story;
+    expect(
+      save([
+        prompt('ship it'),
+        ...bash('b1', 'git commit -qm "feat: add mode()"', 'Commit', ''),
+        ...bash('b2', 'git push origin main', 'Push', 'To ./origin.git\n   f80bb31..3e0fb80  main -> main'),
+        end(1000),
+      ])
+    ).toBe('Claude saves the work and uploads it: "feat: add mode()".');
+    expect(save([prompt('push'), ...bash('b1', 'git push', 'Push', 'Everything up-to-date'), end(1000)])).toBe(
+      'Claude uploads the work.'
+    );
+    expect(pageOf([prompt('c'), ...bash('b1', 'git commit -qm x', 'Commit', ''), end(1000)]).events[1].commits).toBe(1);
+  });
+
   it('a python or node script fed by a here-document: the files it opens for writing, never guessed', () => {
     const files = (command: string) => heredocWrites(command, '/w').map((d) => d.file);
     expect(

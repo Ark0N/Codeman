@@ -78,7 +78,7 @@ interface ReducedInput {
   ships?: 'pr' | 'push';
   /** The segment of a Bash one-liner that decided its intent. */
   headline?: string;
-  /** How many commits a save makes, when more than one. */
+  /** How many commits the command makes (`git commit` segments), when any. */
   commits?: number;
   /** The first commit's message, when the command spells it out. */
   subject?: string;
@@ -879,7 +879,8 @@ function reduceInput(name: string, input: unknown, cwd?: string): ReducedInput {
         if (heads.some((h) => /^gh pr create\b/.test(h))) input.ships = 'pr';
         else if (heads.some((h) => /^git push\b/.test(h))) input.ships = 'push';
         const commits = heads.filter((h) => /^git commit\b/.test(h)).length;
-        if (commits > 1 || (commits && intent !== 'save')) input.commits = commits;
+        // Counted on every command that commits: a save can also be a push or a tag that makes none.
+        if (commits) input.commits = commits;
         if (commits) {
           const subject = commitSubject(full);
           if (subject) input.subject = subject;
@@ -1964,8 +1965,9 @@ function montageSummary(evs: StoryEvent[]): string {
   if (evs.some((e) => e.intent === 'web')) parts.push('checks the web');
   if (evs.some((e) => e.intent === 'edit')) parts.push('changes files');
   if (evs.some((e) => e.intent === 'test' || e.intent === 'build')) parts.push('runs checks');
-  const commits = evs.reduce((n, e) => n + (e.commits ?? (e.intent === 'save' ? 1 : 0)), 0);
-  if (commits) parts.push(commits > 1 ? `saves the work in ${commits} commits` : 'saves the work');
+  const commits = evs.reduce((n, e) => n + (e.commits ?? 0), 0);
+  if (commits || evs.some((e) => e.intent === 'save'))
+    parts.push(commits > 1 ? `saves the work in ${commits} commits` : 'saves the work');
   return parts.length ? parts.join(', ') : 'a few more steps';
 }
 
@@ -2238,15 +2240,19 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           ? /\[new branch\]|\S+\.\.\S+\s+\S+\s+->|\bset up to track\b|Everything up-to-date/.test(out)
           : /^\[[^\]\n]+ [0-9a-f]{7,}\]/m.test(out));
       if (savedAnyway) panel.ok = true;
-      const commits = evs.reduce((n, e) => n + (e.commits ?? (e.intent === 'save' ? 1 : 0)), 0);
+      const commits = evs.reduce((n, e) => n + (e.commits ?? 0), 0);
       const inCommits = commits > 1 ? ` in ${commits} commits` : '';
+      // A push of commits made earlier: nothing is saved here, only uploaded.
+      const uploadOnly = ships === 'push' && !commits;
       // One commit: its message says what was saved.
       const subject = commits === 1 ? evs.find((e) => e.subject)?.subject : undefined;
       const said = subject ? `: "${clip(subject, 60).replace(/[.]$/, '')}"` : '';
       story = savedAnyway
-        ? ships === 'push'
-          ? `Claude saves the work${inCommits} and uploads it, but a step after that fails.`
-          : `Claude saves the work${inCommits}, but a step after that fails.`
+        ? uploadOnly
+          ? 'Claude uploads the work, but a step after that fails.'
+          : ships === 'push'
+            ? `Claude saves the work${inCommits} and uploads it, but a step after that fails.`
+            : `Claude saves the work${inCommits}, but a step after that fails.`
         : panel.ok === false
           ? ships === 'pr'
             ? 'Claude tries to open a pull request, and the command fails.'
@@ -2255,9 +2261,11 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
               : 'Claude tries to save the work, and the command fails.'
           : ships === 'pr'
             ? 'Claude opens a pull request.'
-            : ships === 'push'
-              ? `Claude saves the work${inCommits} and uploads it${said}.`
-              : `Claude saves the work${inCommits}${said}.`;
+            : uploadOnly
+              ? 'Claude uploads the work.'
+              : ships === 'push'
+                ? `Claude saves the work${inCommits} and uploads it${said}.`
+                : `Claude saves the work${inCommits}${said}.`;
       const wrote = unique(edits.map((d) => d.file)).length;
       if (wrote && story.startsWith('Claude ')) story = `Claude writes ${plural(wrote, 'file')} and ${story.slice(7)}`;
       director = `${evs.map(shortCommand).slice(0, 2).join(' · ')}${errors ? ` · ${plural(errors, 'error')}` : ''}${

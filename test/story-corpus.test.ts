@@ -116,7 +116,8 @@ describe('Story Mode on real sessions', () => {
   it('a push that went through, with a step after it that failed, says both', () => {
     expect(panel('question-tests-first-push', 0, 'save')).toMatchObject({
       ok: true,
-      story: 'Claude saves the work in 2 commits and uploads it, but a step after that fails.',
+      // One commit, then a push in a command of its own: one commit, not two.
+      story: 'Claude saves the work and uploads it, but a step after that fails.',
     });
   });
 
