@@ -851,6 +851,21 @@ describe('story-mode.js overlay', () => {
     expect($$('.story-ln--add').map((l) => l.textContent)).toEqual(['+more']);
   });
 
+  it('a turn whose last words name an open problem ends "Done, with a catch", not "Mission complete!"', async () => {
+    const words = [
+      'I built the pomodoro timer and its tests, and all of them pass.',
+      'It keeps the time in memory and redraws the clock every second while it runs. '.repeat(3),
+      "Opening the page: it won't work if you double-click index.html.",
+    ].join(' ');
+    boot(storyOf([prompt('build it'), ...edit('e1', '/work/demo-shop/t.js', ['+x']), said(words), end(1000)]));
+    app.openStoryMode(SID);
+    await settle();
+    expect($('.story-panel[data-kind="complete"] .story-splash-title')!.textContent).toBe('Done, with a catch');
+    expect($('.story-panel[data-kind="complete"] .story-balloon-text')!.textContent).toMatch(
+      /won't work if you double-click/
+    );
+  });
+
   it('the final panel counts the commits of the whole turn, and says when the work was uploaded', async () => {
     boot(
       storyOf([

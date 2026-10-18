@@ -12,6 +12,7 @@
     "helpers": 2,
     "helpersRunning": 0,
     "finishedLater": 2,
+    "openNote": true,
     "panels": [
       {
         "kind": "mission",
@@ -81,6 +82,7 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
+    "openNote": false,
     "panels": [
       {
         "kind": "mission",
@@ -127,6 +129,7 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
+    "openNote": false,
     "panels": [
       {
         "kind": "mission",
@@ -176,6 +179,7 @@
     "helpers": 1,
     "helpersRunning": 0,
     "finishedLater": 2,
+    "openNote": true,
     "panels": [
       {
         "kind": "mission",
@@ -242,6 +246,7 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
+    "openNote": false,
     "panels": [
       {
         "kind": "mission",
@@ -291,6 +296,7 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
+    "openNote": false,
     "panels": [
       {
         "kind": "mission",
@@ -337,6 +343,7 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
+    "openNote": false,
     "panels": [
       {
         "kind": "mission",
@@ -396,6 +403,7 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
+    "openNote": false,
     "panels": [
       {
         "kind": "mission",
@@ -432,6 +440,7 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
+    "openNote": false,
     "panels": [
       {
         "kind": "mission",

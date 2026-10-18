@@ -210,6 +210,8 @@ export interface StoryPage extends StoryTurnSummary {
   helpersRunning: number;
   /** Helpers and background commands of this turn that finished only after it ended. */
   finishedLater?: number;
+  /** Claude's last words name an open problem or something not done or checked: no clean finish. */
+  openNote?: boolean;
   /** Every tool call of the turn failed (a blocked command, nothing that worked): no celebration. */
   noneWorked?: boolean;
 }

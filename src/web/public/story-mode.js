@@ -1436,7 +1436,14 @@ const StoryArt = (() => {
           }
           return;
         }
-        if (p.page.noneWorked) {
+        // Not a clean finish (nothing worked, work still out, or Claude named an open problem): no party.
+        const calm =
+          p.page.noneWorked ||
+          p.page.helpersRunning ||
+          p.page.finishedLater ||
+          p.page.openNote ||
+          p.page.events.some((e) => e.running && !e.helper);
+        if (calm) {
           agent(ctx, ax, 250, { frame: f, scale: sc, mood: 'neutral', l: [-34, -48], r: [34, -48] });
           return;
         }
@@ -2484,7 +2491,9 @@ Object.assign(CodemanApp.prototype, {
             : page.helpersRunning || page.finishedLater || page.events.some((e) => e.running && !e.helper)
               ? // Work was still out when the turn ended (and maybe still is): not a clean finish.
                 'Done for now'
-              : 'Mission complete!';
+              : page.openNote
+                ? 'Done, with a catch'
+                : 'Mission complete!';
       const chips = rt.splash.querySelector('.story-chips');
       const items = [];
       if (page.durationMs !== undefined) items.push({ text: this._storyDuration(page.durationMs) });

@@ -12,6 +12,7 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
+    "openNote": false,
     "panels": [
       {
         "kind": "mission",
@@ -160,6 +161,7 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
+    "openNote": false,
     "panels": [
       {
         "kind": "mission",

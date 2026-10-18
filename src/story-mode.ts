@@ -275,9 +275,14 @@ export function balloonText(text: string): string {
  * expected, a correction of an earlier warning. WEAK: a bare negation ("I didn't push"), kept only when
  * nothing strong is there.
  */
+/** The open-problem part of a key point: something wrong, not done, not checked, or still out. */
+const OPEN_PROBLEM = new RegExp(
+  String.raw`\b(problem|known (issue|quirk)s?|quirks?|caveat|limitation|heads up|warning|not yet|haven't|have not|never|unfixed|left (open|unfixed|out)|still (fails?|failing|broken|missing|open|running|working)|must be (served|run)|(won't|doesn't|does not|will not) (work|fix)|(isn't|is not|not) fixed|can't tell|isn't (confirmed|committed|pushed|tested|done|checked)|not (checked|tested|verified|confirmed|committed|pushed|opened))\b`,
+  'i'
+);
 const KEY_POINT_STRONG = new RegExp(
   [
-    String.raw`\b(problem|known (issue|quirk)s?|quirks?|caveat|limitation|heads up|warning|not yet|haven't|have not|never|unfixed|left (open|unfixed|out)|still (fails?|failing|broken|missing|open|running|working)|must be (served|run)|(won't|doesn't|does not|will not) work|can't tell|isn't (confirmed|committed|pushed|tested|done|checked)|not (checked|tested|verified|confirmed|committed|pushed|opened))\b`,
+    OPEN_PROBLEM.source,
     String.raw`\b(as you (asked|expected|said|wanted|suggested)|you asked|your (--?[\w-]+|request|option|flag|change))\b`,
     String.raw`\b(out of date|looked too early|turned out|was wrong)\b`,
   ].join('|'),
@@ -1991,7 +1996,7 @@ const REPORT_TALK: Partial<Record<StoryPanelKind, RegExp>> = {
 };
 const ANNOUNCES = /\b(I'll|I will|let me|let's|I'm going to|next,? I|now I)\b/i;
 
-function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?: string } {
+function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?: string; openNote?: boolean } {
   const panels: DraftPanel[] = [];
   let pendingSay: string | undefined;
   let lastSaid: StoryEvent | undefined;
@@ -2037,7 +2042,12 @@ function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?
     pendingSay = undefined;
   });
   // The closing words keep a caveat that follows them ("Nothing is committed: this is no git repo.").
-  return { panels, trailingSay: lastSaid !== undefined ? closingText(lastSaid.label, lastSaid.keyPoints) : pendingSay };
+  return {
+    panels,
+    trailingSay: lastSaid !== undefined ? closingText(lastSaid.label, lastSaid.keyPoints) : pendingSay,
+    // Claude's last words name an open problem: the final panel is not a celebration.
+    openNote: !!lastSaid?.keyPoints?.some((k) => OPEN_PROBLEM.test(k)),
+  };
 }
 
 /** Fix → check → fix → check (4 panels or more) is one "loop" panel: try, test, repeat. */
@@ -2611,7 +2621,7 @@ export function buildStoryPage(turn: StoryTurn): StoryPage {
     if (todos) e.todos = todos;
   }
 
-  const { panels: grouped, trailingSay } = groupPanels(events);
+  const { panels: grouped, trailingSay, openNote } = groupPanels(events);
   const room = STORY_LIMITS.panelsPerPage - (turn.ended ? 1 : 0);
   const drafts = capPanels(collapseLoops(grouped), room);
   const panels = drafts.map((d, i) => decorate(d, events, turn, i));
@@ -2628,6 +2638,7 @@ export function buildStoryPage(turn: StoryTurn): StoryPage {
     // The advisor is a second opinion, not a helper that does work.
     helpers: events.filter((e) => e.helper && e.tool !== 'Advisor' && e.intent !== 'prompt').length,
     helpersRunning: events.filter((e) => e.helper?.running).length,
+    ...(openNote && turn.ended && !turn.interrupted ? { openNote: true } : {}),
     ...(events.some((e) => e.finishedLater && e.intent !== 'prompt')
       ? { finishedLater: events.filter((e) => e.finishedLater && e.intent !== 'prompt').length }
       : {}),
