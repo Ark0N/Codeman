@@ -193,7 +193,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"add calc_stats.mode with smallest-value tie-breaking\" and copies it to origin.git, a folder on this computer, but a check after that fails, as you said it might.",
+        "story": "Claude saves the work: \"add calc_stats.mode with smallest-value tie-breaking\" and copies it to origin.git, a folder on this computer, but the version-tag lookup after that fails (there are no tags yet), as you said it might.",
         "unaskedSave": false,
         "director": "git commit -q -F - · git push -u origin HEAD",
         "balloon": null,
@@ -286,7 +286,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"add NOTES.md describing mode behavior\" and copies it to origin.git, a folder on this computer, but a check after that fails, as you said it might.",
+        "story": "Claude saves the work: \"add NOTES.md describing mode behavior\" and copies it to origin.git, a folder on this computer, but the version-tag lookup after that fails (there are no tags yet), as you said it might.",
         "unaskedSave": false,
         "director": "git commit -q -F - · git push · 1 error",
         "balloon": null,

@@ -78,16 +78,16 @@
       {
         "kind": "run",
         "ok": null,
-        "story": "Claude works in the terminal.",
+        "story": "Claude does the dry run you asked for: it shows what would happen, changing nothing.",
         "unaskedSave": false,
         "director": "Bash ×5 · rm -- ./-- && S=/tmp/claude/-work-cases-story-review-c/740e…",
         "balloon": "My mk -- ... helper call left a stray file named --. I'll remove it, then run the dry run and save a listing to confirm nothing changed.",
         "tests": null,
         "roundsOk": null,
         "printed": [
-          "--bogus exit=2",
-          "two dirs exit=2",
-          "-- two dirs exit=2"
+          "[dry-run] 2022-07-04_120000.jpg -> 2020-01-01_000000.jpg",
+          "[dry-run] a.jpg -> 2024-05-01_093000.jpg",
+          "[dry-run] b.jpg -> 2024-05-01_093000_1.jpg"
         ],
         "events": 5
       },
@@ -230,16 +230,16 @@
       {
         "kind": "run",
         "ok": null,
-        "story": "Claude works in the terminal.",
+        "story": "Claude does the dry run you asked for: it shows what would happen, changing nothing.",
         "unaskedSave": false,
         "director": "Bash ×2 · bash -n \"$P/rename_by_date.sh\" && echo \"syntax ok\"",
         "balloon": "Here's the dry run you asked for on the samples, plus a check that nothing on disk changed:",
         "tests": null,
         "roundsOk": null,
         "printed": [
-          "--- missing value",
-          "exit=2 error: --prefix needs a value",
-          "--- slash"
+          "[dry-run] 2020-01-01_000000.jpg -> holiday_2020-01-01_000000.jpg",
+          "[dry-run] 2021-02-03_040506.jpg -> holiday_2021-02-03_040506.jpg",
+          "[dry-run] 2022-07-04_120000.jpg -> holiday_2022-07-04_120000.jpg"
         ],
         "events": 2
       },

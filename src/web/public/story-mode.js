@@ -2514,7 +2514,11 @@ Object.assign(CodemanApp.prototype, {
       const unanswered = asked.length > 0 && asked.every((i) => page.events[i].ok === false);
       const ask = unanswered ? 'tries to ask' : 'asks';
       const notes = [
-        p.unaskedSave ? 'a save your prompt here did not ask for' : '',
+        p.unaskedSave === 'rule'
+          ? "a save your prompt here did not ask for; your project's rules do"
+          : p.unaskedSave
+            ? 'a save your prompt here did not ask for'
+            : '',
         p.secondOpinion
           ? `${
               before

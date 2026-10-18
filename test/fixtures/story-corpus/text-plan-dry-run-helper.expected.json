@@ -93,7 +93,7 @@
       {
         "kind": "run",
         "ok": null,
-        "story": "Claude works in the terminal.",
+        "story": "Claude does the dry run you asked for: it shows what would happen, changing nothing.",
         "unaskedSave": false,
         "director": "Bash · set -o pipefail && python3 csvstat.py sample.csv | tee /tmp…",
         "balloon": null,

@@ -127,7 +127,7 @@ export type StoryEntry =
       /** Teammates (helpers started as a team) reporting back, matched to their helper by name. */
       teammates?: StoryTeammateReport[];
     }
-  | { k: 'text'; at: string; text: string; keyPoints?: string[] }
+  | { k: 'text'; at: string; text: string; keyPoints?: string[]; citesSaveRule?: boolean }
   | { k: 'tool'; at: string; id: string; name: string; input: ReducedInput }
   | {
       k: 'result';
@@ -1493,7 +1493,15 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
     const content = message.content;
     const textEntry = (text: string): StoryEntry => {
       const keyPoints = keyPointsOf(text);
-      return { k: 'text', at, text: clip(text, STORY_LIMITS.textChars), ...(keyPoints.length ? { keyPoints } : {}) };
+      // Read on the whole message: the label keeps only its start.
+      const rule = RULE_SAVE.test(text.slice(0, 8000));
+      return {
+        k: 'text',
+        at,
+        text: clip(text, STORY_LIMITS.textChars),
+        ...(keyPoints.length ? { keyPoints } : {}),
+        ...(rule ? { citesSaveRule: true } : {}),
+      };
     };
     if (typeof content === 'string') return content.trim() ? [textEntry(content)] : [];
     if (!Array.isArray(content)) return [];
@@ -1933,6 +1941,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
           label: e.text,
           intent: 'say',
           ...(e.keyPoints ? { keyPoints: e.keyPoints } : {}),
+          ...(e.citesSaveRule ? { citesSaveRule: true } : {}),
         });
         break;
       case 'tool': {
@@ -2411,6 +2420,10 @@ function emptyAnswerWhat(e: StoryEvent): string {
 const ASKS_TO_SAVE =
   /\b(commit|commits|committed|git|push|pushed|pull request|check(ed)? in|ship|release|merge|version control)\b|\bpr\b|\b(save|saving|saved) (the |your |all |this |my |our )?(work|changes|progress|code|project)\b/i;
 
+/** Claude saying a project rule asks for the commits ("CLAUDE.md says to commit after every change"). */
+const RULE_SAVE =
+  /\b(CLAUDE\.md|project('s)? (rules|notes|instructions)|house rules)\b[^.\n]{0,120}\bcommit|\bcommit[^.\n]{0,120}\b(CLAUDE\.md|project('s)? (rules|notes|instructions)|house rules)\b/i;
+
 /** The branch Claude created for this save (`git checkout -b x`, `git switch -c x`), when it is the first save on it. */
 function newBranchAt(indices: number[], events: StoryEvent[]): string | undefined {
   const firstAt = Math.min(...indices);
@@ -2454,6 +2467,9 @@ function touchedBefore(file: string, before: StoryEvent[]): boolean {
 /** A command made only of git lookups ("git log --oneline; git status -sb", "git -C origin.git log"). */
 const GIT_LOOK =
   /^(?:(?:git (?:-C \S+ |--git-dir=\S+ )?(?:log|status|show|ls-remote|branch|remote|describe|rev-parse|diff)\b[^;&|\n]*|(?:echo|head|tail|wc|sort)\b[^;&|\n]*)\s*(?:&&|\|\||;|\||\n|$)\s*)+$/;
+
+/** A dry run: a command that shows what it would do without doing it. */
+const DRY_RUN = /\bdry[- ]?run\b|--dry-run\b|--what-if\b/i;
 
 /** One or two files by name ("calc.py and test_calc.py"), more by count ("3 files"). */
 const fileWords = (files: string[], noun = 'file'): string =>
@@ -2831,13 +2847,19 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
     case 'run': {
       panel.notes = notesOf(evs);
       // What it printed, so a dry run or a listing you asked to see is on the page, not only in the drawer.
-      const lastOut = [...evs].reverse().find((e) => e.output?.trim() && !e.running);
+      // A dry run in the panel is what the card shows, whatever ran after it (edge cases, a clean-up).
+      const dryRun = evs.find(
+        (e) => e.output?.trim() && !e.running && e.ok !== false && DRY_RUN.test(`${e.description ?? ''} ${e.label}`)
+      );
+      const lastOut = dryRun ?? [...evs].reverse().find((e) => e.output?.trim() && !e.running);
       if (lastOut?.output) {
         const lines = lastOut.output
           .split('\n')
           .map(printableLine)
           .filter((l): l is string => !!l);
-        const picked = lastOut.ok === false ? lines.slice(-2) : lines.slice(0, 3);
+        // Of a dry run, the lines that show what it would do ("a.jpg -> holiday_a.jpg").
+        const shows = dryRun ? lines.filter((l) => /->|→|\bwould\b|dry[- ]?run\]/i.test(l)) : [];
+        const picked = shows.length ? shows.slice(0, 3) : lastOut.ok === false ? lines.slice(-2) : lines.slice(0, 3);
         if (picked.length) panel.printed = picked;
       }
       story = evs.every((e) => e.running)
@@ -2854,7 +2876,11 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
               }.`
             : evs.every((e) => e.tool !== 'Bash')
               ? 'Claude uses a tool.'
-              : 'Claude works in the terminal.';
+              : dryRun
+                ? events.some((e) => e.intent === 'prompt' && DRY_RUN.test(e.label))
+                  ? 'Claude does the dry run you asked for: it shows what would happen, changing nothing.'
+                  : 'Claude does a dry run: it shows what would happen, changing nothing.'
+                : 'Claude works in the terminal.';
       director = `${tools} · ${shortCommand(evs[0])}${errors ? ` · ${plural(errors, 'error')}` : ''}`;
       break;
     }
@@ -2923,7 +2949,15 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         /\b(may|might|can|could|will) (fail|error)\b|\bexpected to fail\b|\b(fine|ok|okay) if it fails\b|\b(that is|that's) fine\b/i.test(
           asked
         );
-      const stepAfter = `${looksOnly ? 'a check after that fails' : 'a step after that fails'}${allowed ? ', as you said it might' : ''}`;
+      // `git describe` with no tags: a lookup of a version name, not a check of the work.
+      const noTags = /No names found, cannot describe anything|No tags can describe/.test(out);
+      const stepAfter = `${
+        noTags
+          ? 'the version-tag lookup after that fails (there are no tags yet)'
+          : looksOnly
+            ? 'a check after that fails'
+            : 'a step after that fails'
+      }${allowed ? ', as you said it might' : ''}`;
       story =
         savedAnyway || hiddenFail
           ? uploadOnly
@@ -3009,13 +3043,21 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       break;
   }
   const savesHere = draft.events.some((i) => (events[i].commits ?? 0) > 0);
+  // A plan you approved that has a commit step asked for the save too ("Verify and commit").
+  const planAsked = events.some(
+    (e) =>
+      e.tool === 'ExitPlanMode' &&
+      e.question?.answer === 'Approved' &&
+      (ASKS_TO_SAVE.test(e.label) || !!e.todos?.some((t) => ASKS_TO_SAVE.test(t.text)))
+  );
   if (
     savesHere &&
     turn.origin === 'human' &&
+    !planAsked &&
     !events.slice(0, Math.min(...draft.events)).some((e) => (e.commits ?? 0) > 0) &&
     !events.some((e) => e.intent === 'prompt' && ASKS_TO_SAVE.test(e.label))
   )
-    panel.unaskedSave = true;
+    panel.unaskedSave = events.some((e) => e.intent === 'say' && e.citesSaveRule) ? 'rule' : true;
   if (panel.secondOpinion) {
     // Asked before the step, after it (nothing following), or in the middle of a step's calls.
     const work = draft.events.filter((i) => events[i].tool !== 'Advisor');

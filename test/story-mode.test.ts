@@ -1127,6 +1127,25 @@ describe('buildStoryPage', () => {
     );
   });
 
+  it('the dry run you asked for is what the terminal card shows, whatever ran after it', () => {
+    const page = pageOf([
+      prompt('add --prefix and show me a dry run on the samples'),
+      ...bash(
+        'b1',
+        './rename.sh --dry-run --prefix x_',
+        'Dry run',
+        'syntax ok\n[dry-run] a.jpg -> x_a.jpg\n[dry-run] b.jpg -> x_b.jpg'
+      ),
+      ...bash('b2', './rename.sh --prefix', 'Edge cases', '--- missing value\nexit=2 error: --prefix needs a value'),
+      end(1000),
+    ]);
+    const run = page.panels.find((p) => p.kind === 'run')!;
+    expect(run.printed).toEqual(['[dry-run] a.jpg -> x_a.jpg', '[dry-run] b.jpg -> x_b.jpg']);
+    expect(run.caption.story).toBe(
+      'Claude does the dry run you asked for: it shows what would happen, changing nothing.'
+    );
+  });
+
   it('a short ending keeps the sentence that leaves something open', () => {
     const page = pageOf([
       prompt('run them'),
@@ -1331,7 +1350,7 @@ describe('buildStoryPage', () => {
       end(1000),
     ]);
     expect(page.panels.find((p) => p.kind === 'save')!.caption.story).toBe(
-      'Claude saves the work: "add a" and copies it to origin.git, a folder on this computer, but a check after that fails.'
+      'Claude saves the work: "add a" and copies it to origin.git, a folder on this computer, but the version-tag lookup after that fails (there are no tags yet).'
     );
     expect(page.toolCalls).toBe(2);
   });
@@ -1384,8 +1403,8 @@ describe('buildStoryPage', () => {
       prompt('dry run please'),
       ...bash(
         'b1',
-        './rename.sh --dry-run samples/',
-        'Dry run',
+        './rename.sh --list samples/',
+        'List the renames',
         'a.jpg -> holiday_2024-05-01.jpg\nAPI_TOKEN=abc123\nauthor: me@example.com\nb.jpg -> holiday_2024-05-02.jpg'
       ),
       end(1000),

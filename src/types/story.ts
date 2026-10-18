@@ -137,6 +137,8 @@ export interface StoryEvent {
    * not taken, what you asked for. From the whole message, past the clip of `label`.
    */
   keyPoints?: string[];
+  /** Claude says a project rule asks for its commits ("CLAUDE.md's commit-after-each-change rule"). */
+  citesSaveRule?: boolean;
   /** A save that ships the work: `gh pr create` (`pr`) or `git push` (`push`). */
   ships?: 'pr' | 'push';
   /** How many commits a Bash call makes (`git commit` segments). */
@@ -174,8 +176,11 @@ export interface StoryPanel {
   removed?: number;
   ok?: boolean;
   rounds?: number;
-  /** The turn's first save, when no prompt of the turn asked for one (a project rule, or Claude's own idea). */
-  unaskedSave?: boolean;
+  /**
+   * The turn's first save, when no prompt of the turn (nor a plan you approved) asked for one: `rule`
+   * when Claude said a project rule asks for it, `true` otherwise.
+   */
+  unaskedSave?: true | 'rule';
   /** Second opinions (the advisor) Claude asked for right before this step: not a step of their own. */
   secondOpinion?: number;
   /** A loop's test runs in order: whether each passed, `null` for one still running. */

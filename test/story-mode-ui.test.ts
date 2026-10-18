@@ -948,6 +948,22 @@ describe('story-mode.js overlay', () => {
     expect($('.story-panel[data-kind="complete"] .story-splash-title')!.textContent).toBe('Done, with a catch');
   });
 
+  it("an unasked save that Claude says the project's rules ask for says so", async () => {
+    boot(
+      storyOf([
+        prompt('Add a.'),
+        ...bash('b1', 'git commit -qm "add a"', 'Commit', ''),
+        said("I added a. I committed it to follow CLAUDE.md's commit-after-each-change rule."),
+        end(1000),
+      ])
+    );
+    app.openStoryMode(SID);
+    await settle();
+    expect($('.story-panel[data-kind="save"] .story-cap-note')!.textContent).toBe(
+      "a save your prompt here did not ask for; your project's rules do"
+    );
+  });
+
   it('a second opinion that came back with an error says no answer came', async () => {
     const failed = {
       type: 'assistant',

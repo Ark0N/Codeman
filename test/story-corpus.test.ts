@@ -143,10 +143,10 @@ describe('Story Mode on real sessions', () => {
     });
     expect(second.panels.find((p) => p.kind === 'save')?.story).toBe(
       // `git describe --tags` failed after the push; `; echo "exit=$?"` hid it from the exit code, not from the output.
-      'Claude saves the work: "add calc_stats.mode with smallest-value tie-breaking" and copies it to origin.git, a folder on this computer, but a check after that fails, as you said it might.'
+      'Claude saves the work: "add calc_stats.mode with smallest-value tie-breaking" and copies it to origin.git, a folder on this computer, but the version-tag lookup after that fails (there are no tags yet), as you said it might.'
     );
     expect(third.panels.find((p) => p.kind === 'save')?.story).toBe(
-      'Claude saves the work: "add NOTES.md describing mode behavior" and copies it to origin.git, a folder on this computer, but a check after that fails, as you said it might.'
+      'Claude saves the work: "add NOTES.md describing mode behavior" and copies it to origin.git, a folder on this computer, but the version-tag lookup after that fails (there are no tags yet), as you said it might.'
     );
   });
 
@@ -206,7 +206,10 @@ describe('Story Mode on real sessions', () => {
   it('the saves no prompt asked for are marked on their first panel (round 11)', () => {
     const marked = (name: string) =>
       pagesOf(name).flatMap((p, t) => p.panels.filter((x) => x.unaskedSave).map((x) => `T${t + 1} ${x.kind}`));
-    expect(marked('compact-then-plan-mode')).toEqual(['T1 save', 'T3 save']);
+    // T3's save was a step of the plan you approved ("Verify and commit"): asked for.
+    expect(marked('compact-then-plan-mode')).toEqual(['T1 save']);
+    // Claude said why: the project's rules ask for a commit after each change.
+    expect(pagesOf('teammates-then-interrupt')[0].panels.find((x) => x.unaskedSave)?.unaskedSave).toBe('rule');
     expect(marked('python-cli-fix-loop')).toEqual(['T1 loop']);
     expect(marked('text-plan-dry-run-helper')).toEqual(['T1 check']);
     // The prompt asked to commit and push: nothing to mark.

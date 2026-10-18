@@ -43,7 +43,7 @@
         "kind": "save",
         "ok": true,
         "story": "Claude starts a git repository, writes package.json and index.js, and saves the work: \"add package.json and index.js with add and slugify\".",
-        "unaskedSave": true,
+        "unaskedSave": "rule",
         "director": "git commit -q -m \"feat: add package.json and index.js with… · writes 2 files · after 1 second opinion",
         "balloon": null,
         "tests": null,
