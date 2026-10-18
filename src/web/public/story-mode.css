@@ -731,10 +731,10 @@ body.story-open .toast-container {
     padding-right: max(16px, env(safe-area-inset-right, 0px));
   }
   .story-drawer {
-    top: auto;
+    top: calc(var(--story-bar-h, 18vh) + 6px);
     left: 0;
     width: auto;
-    height: 82vh;
+    height: auto;
     border-left: 0;
     border-top: 3px solid var(--story-ink);
     padding-left: env(safe-area-inset-left, 0px);
@@ -931,6 +931,42 @@ body.story-open .toast-container {
 }
 .story-todos .is-chosen::before {
   content: '✓ ';
+}
+
+/* Touch screens: every control a finger can hit (44 px), and the small type a little larger. */
+@media (pointer: coarse) {
+  .story-btn,
+  .story-drawer-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .story-seg-btn,
+  .story-save,
+  .story-btn-s,
+  .story-chips li > * {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+  .story-link {
+    padding-block: 6px;
+  }
+  .story-cap-dir,
+  .story-ev,
+  .story-code,
+  .story-pre {
+    font-size: 13px;
+  }
+}
+/* A phone on its side: the sheet's head takes less of the little height there is. */
+@media (max-height: 480px) {
+  .story-drawer-head {
+    gap: 2px;
+    padding-block: 6px;
+  }
+  .story-drawer-sub {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

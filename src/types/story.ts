@@ -130,6 +130,8 @@ export interface StoryEvent {
   ships?: 'pr' | 'push';
   /** How many commits a Bash call makes (`git commit` segments). */
   commits?: number;
+  /** The first commit's message, when the command spells it out (`-m "..."` or a here-document). */
+  subject?: string;
   /** Who a prompt came from (a prompt added mid-turn can come from someone other than the turn's starter). */
   origin?: StoryTurnOrigin;
   output?: string;

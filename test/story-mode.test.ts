@@ -794,7 +794,7 @@ describe('buildStoryPage', () => {
     expect(byKind.backup.caption.director).toContain('3 calls inside');
     expect(byKind.loop).toMatchObject({ rounds: 2, ok: true, added: 2, removed: 1 });
     expect(byKind.loop.caption.story).toBe('Fix and test: the first run fails, the second passes.');
-    expect(byKind.save.caption.story).toBe('Claude saves the work.');
+    expect(byKind.save.caption.story).toBe('Claude saves the work: "fix: banner".');
     expect(byKind.complete.caption.story).toBe('Done in 7 minutes.');
     expect(byKind.complete.caption.director).toContain('7 min 12 s');
   });

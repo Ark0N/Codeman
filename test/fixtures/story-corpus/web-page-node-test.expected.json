@@ -72,7 +72,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work.",
+        "story": "Claude saves the work: \"feat: add pomodoro timer with tests\".",
         "director": "git commit -q -m \"feat: add pomodoro timer with tests\" -m \"…",
         "balloon": null,
         "tests": null,

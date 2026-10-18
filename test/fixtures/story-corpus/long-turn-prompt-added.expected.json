@@ -180,7 +180,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work.",
+        "story": "Claude saves the work: \"docs: changelog\".",
         "director": "git commit -m \"docs: changelog\" -m \"Co-Authored-By: Claude…",
         "balloon": "Step 10:",
         "tests": null,
@@ -228,7 +228,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work.",
+        "story": "Claude saves the work: \"docs: changelog entry\".",
         "director": "git commit -am \"docs: changelog entry\" -m \"Co-Authored-By:…",
         "balloon": "Step 15:",
         "tests": null,

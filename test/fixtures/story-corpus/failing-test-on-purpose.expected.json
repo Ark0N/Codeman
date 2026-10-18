@@ -63,7 +63,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work.",
+        "story": "Claude saves the work: \"feat: add slugify module with node:test suite\".",
         "director": "git commit -q -F -",
         "balloon": null,
         "tests": null,
@@ -117,7 +117,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work.",
+        "story": "Claude saves the work: \"test: cover empty-string input for slugify\".",
         "director": "git commit -q -F -",
         "balloon": null,
         "tests": null,

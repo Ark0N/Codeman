@@ -1702,6 +1702,18 @@ Object.assign(CodemanApp.prototype, {
     drawer.hidden = true;
     drawer.setAttribute('role', 'dialog');
     const drawerHead = el('header', 'story-drawer-head');
+    // A sheet comes down the way it went up: drag its head down to close it.
+    let dragFrom = null;
+    drawerHead.addEventListener('touchstart', (e) => (dragFrom = e.touches[0]?.clientY ?? null), { passive: true });
+    drawerHead.addEventListener(
+      'touchend',
+      (e) => {
+        const y = e.changedTouches[0]?.clientY;
+        if (dragFrom !== null && y !== undefined && y - dragFrom > 70) this._storyCloseDrawer();
+        dragFrom = null;
+      },
+      { passive: true }
+    );
     const drawerKind = el('span', 'story-drawer-kind');
     const drawerLive = el('span', 'story-live story-drawer-live');
     drawerLive.append(el('i'), el('span', null, 'LIVE'));
@@ -1808,6 +1820,7 @@ Object.assign(CodemanApp.prototype, {
 
   _storyPickTurn(id) {
     const st = this._story;
+    st.picked = true; // a turn you chose is not news to announce
     const turns = st.data?.turns || [];
     st.turnId = id && id !== turns[turns.length - 1]?.id ? id : null;
     st.first = true;
@@ -1947,7 +1960,8 @@ Object.assign(CodemanApp.prototype, {
       }
       // A finished newest page: look again now and then (a local command like /compact raises no
       // hook). An unchanged page is a 304.
-      if (!st.turnId && Date.now() - (st.lastIdlePoll || 0) > STORY_IDLE_POLL_MS) {
+      // Parked on an older turn: the turn list still learns about new turns now and then.
+      if (Date.now() - (st.lastIdlePoll || 0) > STORY_IDLE_POLL_MS) {
         st.lastIdlePoll = Date.now();
         this._storyRefresh();
       }
@@ -2066,6 +2080,7 @@ Object.assign(CodemanApp.prototype, {
     if (page) sel.value = page.id;
     sel.disabled = turns.length < 2;
     const idx = page ? turns.findIndex((t) => t.id === page.id) : -1;
+    sel.setAttribute('aria-label', idx >= 0 ? `Turn ${idx + 1} of ${turns.length}` : 'Turn');
     st.prev.disabled = idx <= 0;
     st.next.disabled = idx < 0 || idx >= turns.length - 1;
     st.live.hidden = !(page && !page.complete && !page.interrupted && !st.turnId);
@@ -2102,7 +2117,9 @@ Object.assign(CodemanApp.prototype, {
     const first = st.announced === undefined;
     const newTurn = !first && !st.announced.startsWith(`${page.id}|`);
     st.announced = key;
-    if (first) return;
+    const picked = st.picked;
+    st.picked = false;
+    if (first || (picked && newTurn)) return;
     const last = page.panels[page.panels.length - 1];
     const finished = `${done ? `Turn finished. ${last?.caption.story || ''}` : ''}`.trim();
     box.textContent = newTurn ? `New turn: ${page.prompt.slice(0, 140)}${finished ? `. ${finished}` : ''}` : finished;
@@ -2893,6 +2910,9 @@ Object.assign(CodemanApp.prototype, {
     st.drawerSeen = new Set();
     st.drawerEl.hidden = false;
     st.root.classList.add('has-drawer');
+    // On a phone the drawer is a sheet from the bottom: it starts below the bar, whatever its height.
+    const bar = st.root.querySelector('.story-bar');
+    if (bar) st.root.style.setProperty('--story-bar-h', `${bar.offsetHeight}px`);
     this._storyRenderDrawer(true);
     st.drawerEl.querySelector('.story-drawer-close')?.focus({ preventScroll: true });
   },
@@ -3251,6 +3271,17 @@ Object.assign(CodemanApp.prototype, {
     if (ev.output !== undefined) {
       section.append(this._storyLinkifiedPre(ev.output));
       if (ev.outputTruncated) section.append(el('p', 'story-empty', 'Only the end of this output is kept.'));
+      // A command that also wrote files (a here-document) offers the change, not only what it printed.
+      if (ev.edits?.length) {
+        const b = el(
+          'button',
+          'story-btn-s',
+          `See the ${ev.edits.length === 1 ? 'file' : `${ev.edits.length} files`} it wrote`
+        );
+        b.type = 'button';
+        b.dataset.storyOpen = `diff:event:${index}`;
+        section.append(b);
+      }
     } else if (ev.outputTruncated) {
       section.append(el('p', 'story-empty', 'This output was left out to keep a long turn fast.'));
     } else if (target && !target.startsWith('output:')) {

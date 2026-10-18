@@ -63,7 +63,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work.",
+        "story": "Claude saves the work: \"feat: add clamp() with pytest coverage\".",
         "director": "git commit -q -F -",
         "balloon": null,
         "tests": null,
@@ -213,7 +213,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work.",
+        "story": "Claude saves the work: \"feat: add wrap() for modular wrapping into a range\".",
         "director": "git commit -q -F -",
         "balloon": null,
         "tests": null,

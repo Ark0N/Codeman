@@ -80,6 +80,8 @@ interface ReducedInput {
   headline?: string;
   /** How many commits a save makes, when more than one. */
   commits?: number;
+  /** The first commit's message, when the command spells it out. */
+  subject?: string;
   /** Files a Bash call writes through here-documents. */
   writes?: StoryEdit[];
   description?: string;
@@ -458,6 +460,21 @@ function echoWrites(command: string, cwd?: string): StoryEdit[] {
   return out;
 }
 
+/**
+ * The first commit's message in a command: `-m "..."` / `-m '...'`, or the first line of the
+ * here-document a `git commit -F -` reads.
+ */
+function commitSubject(command: string): string | undefined {
+  // `-m`, a combined `-am` / `-qm`, or `--message`; a trailer (`Co-Authored-By:`) is never the subject.
+  const m = /\bgit\b[^\n;&|]*\bcommit\b[^\n;&|]*?\s-(?:[a-zA-Z]*m|-message=?)\s*(["'])((?:(?!\1)[\s\S])*)\1/.exec(
+    command
+  );
+  const first = m?.[2].split('\n')[0].trim();
+  if (first && !/^[\w-]+-By:/i.test(first)) return clip(first, 100);
+  const f = /\bgit\b[^\n;&|]*\bcommit\b[^\n]*\s-F\s*-[^\n]*<<-?\s*(['"]?)(\w+)\1[^\n]*\n([^\n]*)/.exec(command);
+  return f && f[3].trim() && f[3].trim() !== f[2] ? clip(f[3].trim(), 100) : undefined;
+}
+
 /** A here-document's body is data, not commands: `cat > a.py <<'EOF' ... EOF` keeps only its first line. */
 function withoutHeredocBodies(command: string): string {
   const out: string[] = [];
@@ -632,7 +649,8 @@ export function reportsProblems(output: string): boolean {
  * Scans the last lines only; returns null when no summary is recognisable.
  */
 export function parseTestCounts(output: string): StoryTests | null {
-  const lines = output.split('\n').slice(-40).reverse();
+  // The newest summary wins; a long output is searched from its end (the last 2,000 lines).
+  const lines = output.split('\n').slice(-2000).reverse();
   // node:test (TAP `# pass 7` / spec reporter `ℹ pass 7`), with its own fail line.
   const nodePass = lines.map((l) => /^\s*[#ℹ]\s*pass\s+(\d+)\s*$/.exec(l)).find(Boolean);
   if (nodePass) {
@@ -807,6 +825,10 @@ function reduceInput(name: string, input: unknown, cwd?: string): ReducedInput {
         else if (heads.some((h) => /^git push\b/.test(h))) input.ships = 'push';
         const commits = heads.filter((h) => /^git commit\b/.test(h)).length;
         if (commits > 1 || (commits && intent !== 'save')) input.commits = commits;
+        if (commits) {
+          const subject = commitSubject(full);
+          if (subject) input.subject = subject;
+        }
       }
       return input;
     }
@@ -1004,7 +1026,8 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
           if (name === 'Bash' && /^\s*Command running in background with ID:/.test(text)) {
             result.background = true;
           } else if (name === 'Bash') {
-            const tests = parseTestCounts(tail.text);
+            // Counted on the whole output: a later command's lines can push the summary out of the tail.
+            const tests = parseTestCounts(text);
             if (tests) result.tests = tests;
             const intent = call?.input.intent;
             if ((intent === 'build' || intent === 'test') && reportsProblems(tail.text)) result.problems = true;
@@ -1299,6 +1322,7 @@ function toolEvent(e: Extract<StoryEntry, { k: 'tool' }>, actor: StoryActor): St
   if (i.ships) ev.ships = i.ships;
   if (i.headline) ev.headline = i.headline;
   if (i.commits) ev.commits = i.commits;
+  if (i.subject) ev.subject = i.subject;
   if (i.writes) ev.edits = i.writes;
   if (i.offset) ev.line = i.offset;
   if (e.name === 'Bash' && i.description) ev.description = i.description;
@@ -2159,6 +2183,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       if (savedAnyway) panel.ok = true;
       const commits = evs.reduce((n, e) => n + (e.commits ?? (e.intent === 'save' ? 1 : 0)), 0);
       const inCommits = commits > 1 ? ` in ${commits} commits` : '';
+      // One commit: its message says what was saved.
+      const subject = commits === 1 ? evs.find((e) => e.subject)?.subject : undefined;
+      const said = subject ? `: "${clip(subject, 60).replace(/[.]$/, '')}"` : '';
       story = savedAnyway
         ? ships === 'push'
           ? `Claude saves the work${inCommits} and uploads it, but a step after that fails.`
@@ -2172,8 +2199,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           : ships === 'pr'
             ? 'Claude opens a pull request.'
             : ships === 'push'
-              ? `Claude saves the work${inCommits} and uploads it.`
-              : `Claude saves the work${inCommits}.`;
+              ? `Claude saves the work${inCommits} and uploads it${said}.`
+              : `Claude saves the work${inCommits}${said}.`;
       const wrote = unique(edits.map((d) => d.file)).length;
       if (wrote && story.startsWith('Claude ')) story = `Claude writes ${plural(wrote, 'file')} and ${story.slice(7)}`;
       director = `${evs.map(shortCommand).slice(0, 2).join(' · ')}${errors ? ` · ${plural(errors, 'error')}` : ''}${
