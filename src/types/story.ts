@@ -82,6 +82,8 @@ export interface StoryHelper {
   result?: string;
   toolUses?: number;
   durationMs?: number;
+  /** Claude Code's id for the helper; its own steps are at `GET /api/sessions/:id/story/helpers/<agentId>`. */
+  agentId?: string;
 }
 
 export interface StoryTests {
@@ -163,6 +165,15 @@ export interface StoryPage extends StoryTurnSummary {
   removed: number;
   helpers: number;
 }
+
+/** `GET /api/sessions/:id/story/helpers/:agentId`: one helper's own steps, as one page. */
+export type StoryHelperResponse =
+  | { supported: false; reason: string }
+  | {
+      supported: true;
+      helper: { agentId: string; type?: string; description?: string; finished?: boolean };
+      page: StoryPage | null;
+    };
 
 export type StoryResponse =
   | { supported: false; reason: string }

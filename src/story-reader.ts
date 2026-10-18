@@ -36,6 +36,7 @@ const MAX_CHARS = 6_000_000;
 const MAX_TRANSCRIPTS = 6;
 
 interface CacheEntry {
+  sidechain: boolean;
   size: number;
   mtimeMs: number;
   /** Byte offset up to which complete lines were consumed. */
@@ -121,10 +122,11 @@ function ingest(entry: CacheEntry, buf: Buffer, startsMidLine: boolean): void {
   }
 }
 
-async function load(path: string): Promise<StoryEntriesResult> {
+async function load(path: string, sidechain: boolean): Promise<StoryEntriesResult> {
   const info = await stat(path);
   if (!info.isFile()) throw new Error('Transcript is not a regular file');
-  const cached = cache.get(path);
+  const key = sidechain ? `${path}#sidechain` : path;
+  const cached = cache.get(key);
   const version = versionOf(info.size, info.mtimeMs);
   if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) {
     return { entries: cached.entries, partial: cached.partial, version };
@@ -140,7 +142,7 @@ async function load(path: string): Promise<StoryEntriesResult> {
     ingest(cached, buf, false);
     cached.size = info.size;
     cached.mtimeMs = info.mtimeMs;
-    cache.set(path, cached);
+    cache.set(key, cached);
     return { entries: cached.entries, partial: cached.partial, version };
   }
   // First read, a rewrite, or more appended than a tail holds: start over from the tail, and take a
@@ -150,30 +152,36 @@ async function load(path: string): Promise<StoryEntriesResult> {
   for (const tail of TAIL_STEPS) {
     const start = Math.max(0, info.size - tail);
     fresh = {
+      sidechain,
       size: info.size,
       mtimeMs: info.mtimeMs,
       offset: start,
       entries: [],
       chars: 0,
-      reducer: createStoryReducer(),
+      reducer: createStoryReducer({ sidechain }),
       partial: start > 0,
     };
     ingest(fresh, await readRange(path, start, info.size), start > 0);
     if (start === 0 || hasTurnStart(fresh.entries)) break;
   }
   const done = fresh as CacheEntry;
-  cache.set(path, done);
+  cache.set(key, done);
   return { entries: done.entries, partial: done.partial, version };
 }
 
 /**
- * Reduced entries for the transcript at `path`, newest last. Throws when the file cannot be read;
- * the caller turns that into an error response.
+ * Reduced entries for the transcript at `path`, newest last. `sidechain` reads a helper's own
+ * transcript (every line there is a sidechain line). Throws when the file cannot be read; the caller
+ * turns that into an error response.
  */
-export function readStoryEntries(path: string): Promise<StoryEntriesResult> {
-  const running = inFlight.get(path);
+export function readStoryEntries(
+  path: string,
+  { sidechain = false }: { sidechain?: boolean } = {}
+): Promise<StoryEntriesResult> {
+  const key = sidechain ? `${path}#sidechain` : path;
+  const running = inFlight.get(key);
   if (running) return running;
-  const promise = load(path).finally(() => inFlight.delete(path));
-  inFlight.set(path, promise);
+  const promise = load(path, sidechain).finally(() => inFlight.delete(key));
+  inFlight.set(key, promise);
   return promise;
 }

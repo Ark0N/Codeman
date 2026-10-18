@@ -2,14 +2,14 @@
  * @fileoverview GET /api/sessions/:id/story (Story Mode) against invented transcripts in a temp dir,
  * plus the reader's incremental tail read. Port: N/A (app.inject()).
  */
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerStoryRoutes } from '../../src/web/routes/story-routes.js';
 import { clearStoryReaderCache, readStoryEntries } from '../../src/story-reader.js';
-import { bash, demoTurn, end, prompt, read, resetClock, said } from '../story-fixtures.js';
+import { bash, demoTurn, edit, end, prompt, read, resetClock, result, said, tool } from '../story-fixtures.js';
 
 const URL = '/api/sessions/test-session-1/story';
 const jsonl = (lines: unknown[]) => lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
@@ -164,6 +164,95 @@ describe('GET /api/sessions/:id/story', () => {
     const after = (await app.inject({ method: 'GET', url: URL })).json().data.page;
     expect(after.panels.map((p: { kind: string }) => p.kind)).toEqual(['mission', 'investigate', 'check', 'complete']);
     expect(after.complete).toBe(true);
+  });
+});
+
+describe('GET /api/sessions/:id/story/helpers/:agentId', () => {
+  const side = (lines: unknown[]) => lines.map((l) => ({ ...(l as object), isSidechain: true }));
+
+  it("draws a helper's own steps, and the main page carries its agentId", async () => {
+    writeFileSync(
+      transcript,
+      jsonl([
+        prompt('Write the docs with a helper'),
+        tool('a1', 'Agent', {
+          description: 'Write README',
+          subagent_type: 'general-purpose',
+          prompt: 'Write README.md',
+        }),
+        result('a1', 'Done', {
+          toolUseResult: {
+            status: 'completed',
+            agentId: 'abc123',
+            content: [{ type: 'text', text: 'README written.' }],
+            totalToolUseCount: 2,
+          },
+        }),
+        end(5000),
+      ])
+    );
+    const sub = join(dir, 'conversation', 'subagents');
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(
+      join(sub, 'agent-abc123.jsonl'),
+      jsonl(
+        side([
+          prompt('Write README.md for the script'),
+          ...read('r1', '/w/script.sh'),
+          ...edit('e1', '/w/README.md', ['+# Script', '+Usage'], 1),
+        ])
+      )
+    );
+    writeFileSync(
+      join(sub, 'agent-abc123.meta.json'),
+      JSON.stringify({ agentType: 'general-purpose', description: 'Write README', finished: true })
+    );
+    const { app } = await setup();
+
+    const main = (await app.inject({ method: 'GET', url: URL })).json().data.page;
+    expect(main.events.find((e: { helper?: unknown }) => e.helper).helper).toMatchObject({
+      agentId: 'abc123',
+      toolUses: 2,
+    });
+
+    const res = await app.inject({ method: 'GET', url: `${URL}/helpers/abc123` });
+    const data = res.json().data;
+    expect(data.helper).toEqual({
+      agentId: 'abc123',
+      type: 'general-purpose',
+      description: 'Write README',
+      finished: true,
+    });
+    expect(data.page.prompt).toBe('Write README.md for the script');
+    expect(data.page.panels.map((p: { kind: string }) => p.kind)).toEqual([
+      'mission',
+      'investigate',
+      'fix',
+      'complete',
+    ]);
+    expect(res.headers.etag).toMatch(/^W\/"story-/);
+    const again = await app.inject({
+      method: 'GET',
+      url: `${URL}/helpers/abc123`,
+      headers: { 'if-none-match': res.headers.etag as string },
+    });
+    expect(again.statusCode).toBe(304);
+  });
+
+  it('answers page null for a helper that has not written anything yet', async () => {
+    writeFileSync(transcript, jsonl(demoTurn()));
+    const { app } = await setup();
+    const data = (await app.inject({ method: 'GET', url: `${URL}/helpers/notyet1` })).json().data;
+    expect(data).toEqual({ supported: true, helper: { agentId: 'notyet1' }, page: null });
+  });
+
+  it('refuses an id that could leave the subagents folder', async () => {
+    const { app } = await setup();
+    for (const bad of ['..', '..%2F..%2Fsecret', 'a.b', 'x'.repeat(65)]) {
+      const res = await app.inject({ method: 'GET', url: `${URL}/helpers/${bad}` });
+      // `..` never reaches the route (the URL is normalized first: 404); the rest hit the id check (400).
+      expect([400, 404], bad).toContain(res.statusCode);
+    }
   });
 });
 

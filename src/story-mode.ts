@@ -103,7 +103,7 @@ export type StoryEntry =
       output?: string;
       outputTruncated?: boolean;
       edit?: StoryEdit;
-      helper?: { result?: string; toolUses?: number; durationMs?: number };
+      helper?: { result?: string; toolUses?: number; durationMs?: number; agentId?: string };
       answer?: string;
       tests?: StoryTests;
     }
@@ -466,8 +466,10 @@ export interface StoryReducer {
 /**
  * A reducer remembers each tool call's name and input until its result arrives, since the result line
  * does not repeat them. Bounded: a call whose result never comes is forgotten after 4,000 newer calls.
+ * `sidechain` reads a helper's own transcript, where every line is a sidechain line; the main
+ * transcript skips them.
  */
-export function createStoryReducer(): StoryReducer {
+export function createStoryReducer({ sidechain = false }: { sidechain?: boolean } = {}): StoryReducer {
   const calls = new Map<string, { name: string; input: ReducedInput }>();
   const remember = (id: string, name: string, input: ReducedInput) => {
     calls.set(id, { name, input });
@@ -504,6 +506,10 @@ export function createStoryReducer(): StoryReducer {
             result: answer ? clip(answer, STORY_LIMITS.helperChars) : undefined,
             toolUses: num(extra.totalToolUseCount),
             durationMs: num(extra.totalDurationMs),
+            agentId:
+              typeof extra.agentId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(extra.agentId)
+                ? extra.agentId
+                : undefined,
           };
         } else if (name === 'AskUserQuestion' && isRecord(extra.answers)) {
           const first = Object.values(extra.answers).find((v): v is string => typeof v === 'string');
@@ -560,7 +566,7 @@ export function createStoryReducer(): StoryReducer {
 
   return {
     reduce(line: unknown): StoryEntry[] {
-      if (!isRecord(line) || line.isSidechain === true) return [];
+      if (!isRecord(line) || (line.isSidechain === true && !sidechain)) return [];
       const at = str(line.timestamp) ?? '';
       switch (line.type) {
         case 'user':
@@ -703,6 +709,7 @@ function applyResult(ev: StoryEvent, r: Extract<StoryEntry, { k: 'result' }>): v
     if (r.helper.result) helper.result = r.helper.result;
     if (r.helper.toolUses !== undefined) helper.toolUses = r.helper.toolUses;
     if (r.helper.durationMs !== undefined) helper.durationMs = r.helper.durationMs;
+    if (r.helper.agentId) helper.agentId = r.helper.agentId;
     ev.helper = helper;
   }
   if (r.answer && ev.question) ev.question = { ...ev.question, answer: r.answer };
@@ -1245,6 +1252,25 @@ export function buildStoryPage(turn: StoryTurn): StoryPage {
     if (trailingSay && !last.balloon) last.balloon = { who: 'claude', text: trailingSay };
   }
   return { ...base, panels };
+}
+
+/**
+ * A helper's own transcript as one page. Its first prompt is the job Claude gave it; a later prompt
+ * (Claude messaging it again) continues the same page. `finished` comes from the helper's metadata,
+ * since a helper's transcript has no `turn_duration` of its own.
+ */
+export function buildHelperPage(turns: StoryTurn[], finished?: boolean): StoryPage | null {
+  if (!turns.length) return null;
+  const first = turns[0];
+  const last = turns[turns.length - 1];
+  return buildStoryPage({
+    ...first,
+    events: turns.flatMap((t) => t.events),
+    ended: finished ?? last.ended,
+    interrupted: false,
+    endedAt: last.endedAt,
+    durationMs: undefined,
+  });
 }
 
 /** The turn list for the page picker, newest last, capped. */
