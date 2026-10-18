@@ -1225,6 +1225,8 @@
     _queueScrollBytes(data) {
       if (!data || this._destroyed) return;
       this._scrollBytes = global.CodemanTerminalInput.coalesceScrollBytes(this._scrollBytes, data);
+      // Tiles have a fixed session: the leading report is once per connect(),
+      // unlike the primary pane, which resets it on every tab selection.
       if (data.startsWith('\x1b[<') && !this._wheelNativeStarted) {
         this._wheelNativeStarted = true;
         if (this._scrollFlushTimer) clearTimeout(this._scrollFlushTimer);

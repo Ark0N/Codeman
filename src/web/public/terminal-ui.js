@@ -137,15 +137,20 @@
     return `\x1b[<${btn};${pos.col};${pos.row}M`.repeat(ticks);
   }
 
-  // Fractional travel belongs to one direction and one recent gesture. Unlike
-  // rounding every event up, splitting 25px into ten touchpad events still sends
-  // one tick. Excess fling travel is discarded, never replayed after the finger
-  // stops. Both the primary pane (including touch) and tiles use this adapter.
+  // A deliberate opening event pre-pays a tick, so a lone small mouse click
+  // responds immediately. The signed remainder is debt repaid by subsequent
+  // same-direction travel: ten 0.1-line events still total one tick. Debt and
+  // fractions expire with a 150ms gesture gap or reversal; a reversal within
+  // the gesture accumulates without another pre-payment (like page gestures).
   function wheelTicksForGesture(state, lines, now) {
     if (!Number.isFinite(lines) || !lines) return { state: state || {}, ticks: 0 };
     const dir = Math.sign(lines);
-    const fresh = !state || state.dir !== dir || now - state.lastAt > PAGE_KEY_GESTURE_GAP_MS;
-    const total = (fresh ? 0 : state.pending || 0) + lines;
+    const fresh = !state || typeof state.lastAt !== 'number' || now - state.lastAt > PAGE_KEY_GESTURE_GAP_MS;
+    const reversed = state?.dir && state.dir !== dir;
+    if (fresh && Math.abs(lines) >= PAGE_KEY_MIN_START_ROWS && Math.abs(lines) < 1) {
+      return { state: { dir, lastAt: now, pending: lines - dir }, ticks: dir };
+    }
+    const total = (fresh || reversed ? 0 : state.pending || 0) + lines;
     const whole = Math.trunc(total + Math.sign(total) * 1e-9);
     return {
       state: { dir, lastAt: now, pending: Math.abs(total - whole) < 1e-9 ? 0 : total - whole },
@@ -414,6 +419,7 @@
     pageKeysForGesture,
     PAGE_KEY_GESTURE_GAP_MS,
     PAGE_KEY_MIN_START_ROWS,
+    PAGE_KEY_IMMEDIATE_MAX_ROWS,
     PAGE_KEY_DEBT_MS,
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
     MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR,
@@ -1113,7 +1119,7 @@ Object.assign(CodemanApp.prototype, {
     // and stops propagation, keeping xterm's scroller out of it entirely.
     // Local scrolling goes through terminal.scrollLines() — buffer-level, so
     // it keeps working after resets — with our own deltaMode normalization
-    // (_wheelScrollLines) covering Firefox's line-unit wheels. Two cases still
+    // (_wheelScrollLinesFloat) covering Firefox's line-unit wheels. Two cases still
     // belong to xterm and are passed through untouched:
     //  - mouseTrackingMode active: xterm's own encoder forwards the wheel to
     //    the PTY (htop/vim with mouse on in a shell pane);
@@ -1128,8 +1134,8 @@ Object.assign(CodemanApp.prototype, {
         if (this.terminal?.buffer?.active?.type === 'alternate') return;
         ev.preventDefault();
         ev.stopPropagation();
-        if (ev.ctrlKey || (!ev.shiftKey && Math.abs(ev.deltaX) > Math.abs(ev.deltaY))) return;
         if (this._shouldForwardWheelToApp(ev)) {
+          if (ev.ctrlKey || Math.abs(ev.deltaX || 0) > Math.abs(ev.deltaY || 0)) return;
           this._logScrollRouting('forward-sgr');
           this._forwardScrollToApp(ev.clientX, ev.clientY, this._wheelScrollLinesFloat(ev));
           return;
@@ -5867,9 +5873,9 @@ Object.assign(CodemanApp.prototype, {
   // trackpad emits dozens of wheel events per second and each send becomes a
   // tmux send-keys on the server — unbatched, a single flick would spawn a
   // process storm. Per-event tick count is capped (Claude applies its own
-  // scroll-speed multiplier and acceleration on top), and the queue is bounded
-  // so a wild scroll can't build a backlog that keeps scrolling after the finger
-  // stops. Flushed via _sendInputEphemeral — loss-tolerant, off the durable queue.
+  // scroll-speed multiplier and acceleration on top). Batching is bounded by
+  // the 40ms window and the per-event cap, not an aggregate byte/tick limit.
+  // Flushed via _sendInputEphemeral — loss-tolerant, off the durable queue.
   // The encoding is the pure CodemanTerminalInput.sgrWheelReports, which a
   // TerminalTile calls with its own cell (TerminalTile._maybeForwardWheelToCli).
   _sendSyntheticSgrWheel(clientX, clientY, lines) {

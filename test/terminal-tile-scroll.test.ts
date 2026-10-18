@@ -344,11 +344,33 @@ describe('a fullscreen Claude tile forwards the wheel to the CLI as SGR reports'
     expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: UP.repeat(5) });
   });
 
+  it('forwards an isolated small wheel event and five slow clicks for Claude and tracked Codex', async () => {
+    for (const mode of ['claude', 'codex']) {
+      let now = 1000;
+      clock.now = () => now;
+      const session = mode === 'claude' ? FULLSCREEN : { mode, cliMouseTracking: true };
+      const { ws, mount } = await connectTile(makeApp({ 's-tile': session }), { mode });
+      mount.fire('wheel', wheel(-4, AT));
+      expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
+      for (let i = 1; i < 5; i++) {
+        now += 300;
+        vi.advanceTimersByTime(300);
+        mount.fire('wheel', wheel(-4, AT));
+        flushed(ws);
+      }
+      expect(ws.inputFrames().map((f) => f.d)).toEqual(Array(5).fill(UP));
+      // Separate pane/visit: ten 2.5px events produce only the pre-paid tick.
+      const fine = await connectTile(makeApp({ 's-tile': session }), { mode });
+      for (let i = 0; i < 10; i++) fine.mount.fire('wheel', wheel(-2.5, AT));
+      expect(flushed(fine.ws)).toEqual([{ t: 'i', d: UP }]);
+    }
+  });
+
   it('accumulates precision touchpad deltas and consumes a pure horizontal swipe without sending', async () => {
     const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
 
-    mount.fire('wheel', wheel(-3, AT)); // 0.12 of a line must not round up
-    expect(flushed(ws)).toEqual([]);
+    mount.fire('wheel', wheel(-3, AT)); // pre-pay one tick, then repay it
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
     for (let i = 0; i < 8; i++) mount.fire('wheel', wheel(-3, AT));
     expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
 

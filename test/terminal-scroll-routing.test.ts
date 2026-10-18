@@ -559,8 +559,8 @@ describe('page-key gestures across slow touch drags, slow wheel ticks and jitter
       p.app._maybePageCliTranscript({ shiftKey: false, deltaY: dy }, dy / 25);
       p.advance(16);
     }
-    // The opening event is a fresh gesture and pages; no reversal inside the
-    // gap pre-pays, so the wobble sends nothing after it.
+    // A reversal inside the 40ms batch window cancels the unsent opening
+    // PageUp; subsequent in-gesture reversals do not pre-pay another page.
     expect(p.keys()).toBe(''); // the opening report was cancelled before its 40ms flush
   });
 
@@ -857,6 +857,44 @@ describe('scroll routing diagnostic (issue #205 round 2)', () => {
 });
 
 describe('consistent scroll gesture adapters', () => {
+  it('keeps the shared paging opening threshold exported', () => {
+    expect(loadTerminalUiHarness().windowRef.CodemanTerminalInput.PAGE_KEY_IMMEDIATE_MAX_ROWS).toBe(2);
+  });
+
+  it('pre-pays an isolated deliberate opening tick and repays its signed debt', () => {
+    const { wheelTicksForGesture } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
+    const opening = wheelTicksForGesture(null, -0.16, 0); // a 4px mouse click
+    expect(opening.ticks).toBe(-1);
+    expect(opening.state.pending).toBeCloseTo(0.84);
+    const continued = wheelTicksForGesture(opening.state, -0.16, 20);
+    expect(continued.ticks).toBe(0);
+    expect(continued.state.pending).toBeCloseTo(0.68);
+    expect(wheelTicksForGesture(null, 0.04, 0).ticks).toBe(0); // sub-threshold jitter
+  });
+
+  it('sends each slow 4px click, in either direction, while ten 2.5px events total one tick', () => {
+    const { wheelTicksForGesture } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
+    for (const direction of [-1, 1]) {
+      let slowState;
+      const slowTicks = [];
+      for (let i = 0; i < 5; i++) {
+        const step = wheelTicksForGesture(slowState, direction * 0.16, i * 300);
+        slowState = step.state;
+        slowTicks.push(step.ticks);
+      }
+      expect(slowTicks).toEqual(Array(5).fill(direction));
+      let fineState;
+      const fineTicks = [];
+      for (let i = 0; i < 10; i++) {
+        const step = wheelTicksForGesture(fineState, direction * 0.1, i * 8);
+        fineState = step.state;
+        fineTicks.push(step.ticks);
+      }
+      expect(fineTicks).toEqual([direction, ...Array(9).fill(0)]);
+      expect(fineState.pending).toBe(0);
+    }
+  });
+
   it('makes ten small Claude deltas equal one combined delta', () => {
     const { wheelTicksForGesture } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
     let state;
@@ -882,13 +920,17 @@ describe('consistent scroll gesture adapters', () => {
     const { wheelTicksForGesture } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
     const state = wheelTicksForGesture(null, 0.9, 0).state;
     expect(wheelTicksForGesture(state, -0.2, 10).ticks).toBe(0);
-    expect(wheelTicksForGesture(state, 0.2, 200).ticks).toBe(0);
-    const { app } = hollowApp();
+    expect(wheelTicksForGesture(state, 0.2, 200).ticks).toBe(1);
+    const { app, sent } = hollowApp();
     app._clientPointToCell = () => ({ col: 1, row: 1 });
     app._sendSyntheticSgrWheel(0, 0, 0.9);
     app.activeSessionId = 'other';
     app._sendSyntheticSgrWheel(0, 0, 0.2);
-    expect(app._wheelSgrQueue || '').toBe('');
+    expect(sent).toEqual([
+      { id: 'sess-1', data: '\x1b[<65;1;1M' },
+      { id: 'other', data: '\x1b[<65;1;1M' },
+    ]);
+    expect(app._wheelTickGesture.pending).toBeCloseTo(-0.8);
   });
 
   it('preserves accumulated coarse Codex wheel fallback travel', () => {
