@@ -2104,11 +2104,7 @@ function groupPanels(events: StoryEvent[]): {
     const kind = ev.todos && ev.intent === 'say' ? 'plan' : PANEL_FOR[ev.intent];
     if (!kind) return;
     const last = panels[panels.length - 1];
-    const advisorMix =
-      kind === 'backup' &&
-      last?.kind === 'backup' &&
-      (events[last.events[0]].tool === 'Advisor') !== (ev.tool === 'Advisor');
-    if (last && last.kind === kind && MERGEABLE.has(kind) && !advisorMix) {
+    if (last && last.kind === kind && MERGEABLE.has(kind)) {
       last.events.push(idx);
       takeOpinions(last);
       if (pendingSay && !last.balloon) last.balloon = { who: 'claude', text: pendingSay };
@@ -2424,8 +2420,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       break;
     }
     case 'backup': {
+      // A second opinion riding on this panel is no helper of its own.
       const helpers = draft.events
-        .filter((i) => events[i].helper)
+        .filter((i) => events[i].helper && (!panel.secondOpinion || events[i].tool !== 'Advisor'))
         .map((i) => ({
           name: (events[i].helper as StoryHelper).name,
           type: (events[i].helper as StoryHelper).type,

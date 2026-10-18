@@ -1312,6 +1312,32 @@ describe('buildStoryPage', () => {
     );
   });
 
+  it('a second opinion in front of two helpers neither splits them nor counts as one', () => {
+    const advisor = {
+      type: 'assistant',
+      timestamp: '2026-10-18T09:41:20.000Z',
+      message: {
+        content: [
+          { type: 'server_tool_use', id: 'srv1', name: 'advisor', input: {} },
+          { type: 'advisor_tool_result', tool_use_id: 'srv1', content: { type: 'advisor_redacted_result' } },
+        ],
+      },
+    };
+    const page = pageOf([
+      prompt('go'),
+      advisor,
+      tool('a1', 'Agent', { description: 'A', subagent_type: 'general-purpose', prompt: 'x' }),
+      result('a1', 'done A'),
+      tool('a2', 'Agent', { description: 'B', subagent_type: 'general-purpose', prompt: 'y' }),
+      result('a2', 'done B'),
+      end(1000),
+    ]);
+    const backups = page.panels.filter((p) => p.kind === 'backup');
+    expect(backups).toHaveLength(1);
+    expect(backups[0]).toMatchObject({ secondOpinion: 1, caption: { story: 'Claude calls in 2 helpers.' } });
+    expect(backups[0].helpers?.map((h) => h.task)).toEqual(['A', 'B']);
+  });
+
   it('the advisor (a server tool) is a helper giving a second opinion', () => {
     const page = pageOf([
       prompt('think hard'),

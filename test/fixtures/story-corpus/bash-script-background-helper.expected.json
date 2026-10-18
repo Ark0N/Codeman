@@ -51,7 +51,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude calls in 2 helpers.",
+        "story": "Claude sends 1 helper off to work in the background.",
         "director": "Agent · general-purpose · 6 calls inside · after 1 second opinion",
         "balloon": null,
         "tests": null,
