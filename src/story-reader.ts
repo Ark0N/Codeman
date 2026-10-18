@@ -3,8 +3,9 @@
  *
  * Reads the TAIL of a Claude Code transcript, never the whole file: transcripts reach tens of MB
  * (Write/Edit results carry whole files). The first read takes the last `STORY_TAIL_BYTES` and drops
- * the partial first line; later reads, while the file only grows, read just the appended bytes. A line
- * that is still being written (no newline yet) is left for the next read.
+ * the partial first line, and takes a bigger tail (up to 64 MB) only when that window holds no prompt;
+ * later reads, while the file only grows, read just the appended bytes. A line that is still being
+ * written (no newline yet) is left for the next read.
  *
  * Each transcript's reduced entries are cached (`createStoryReducer()` already dropped file contents,
  * images and long outputs), bounded per transcript by entry count and character budget, and across
@@ -21,6 +22,12 @@ import { createStoryReducer, type StoryEntry, type StoryReducer } from './story-
 
 /** How much of the file's end a first read takes. */
 export const STORY_TAIL_BYTES = 8 * 1024 * 1024;
+/**
+ * Larger tails, tried in order only while the window holds no prompt at all: one long turn can be
+ * bigger than 8 MB on its own (tool results carry whole files; measured ~60 KB per result line on
+ * large local transcripts), and its page would then lose its first panels.
+ */
+const TAIL_STEPS = [STORY_TAIL_BYTES, 24 * 1024 * 1024, 64 * 1024 * 1024];
 /** Entries kept per transcript (the oldest go first). */
 const MAX_ENTRIES = 20_000;
 /** Approximate characters kept per transcript across all entries. */
@@ -43,7 +50,13 @@ interface CacheEntry {
 export interface StoryEntriesResult {
   entries: StoryEntry[];
   partial: boolean;
+  /** Changes whenever the file does (size and mtime); the route builds its ETag from it. */
+  version: string;
 }
+
+const versionOf = (size: number, mtimeMs: number) => `${size}-${Math.trunc(mtimeMs)}`;
+/** A turn starts inside the window: a prompt that was not queued into a running turn. */
+const hasTurnStart = (entries: StoryEntry[]) => entries.some((e) => e.k === 'prompt' && !e.queued);
 
 const cache = new LRUMap<string, CacheEntry>({ maxSize: MAX_TRANSCRIPTS });
 const inFlight = new Map<string, Promise<StoryEntriesResult>>();
@@ -112,8 +125,9 @@ async function load(path: string): Promise<StoryEntriesResult> {
   const info = await stat(path);
   if (!info.isFile()) throw new Error('Transcript is not a regular file');
   const cached = cache.get(path);
+  const version = versionOf(info.size, info.mtimeMs);
   if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) {
-    return { entries: cached.entries, partial: cached.partial };
+    return { entries: cached.entries, partial: cached.partial, version };
   }
   if (
     cached &&
@@ -127,23 +141,29 @@ async function load(path: string): Promise<StoryEntriesResult> {
     cached.size = info.size;
     cached.mtimeMs = info.mtimeMs;
     cache.set(path, cached);
-    return { entries: cached.entries, partial: cached.partial };
+    return { entries: cached.entries, partial: cached.partial, version };
   }
-  // First read, a rewrite, or more appended than a tail holds: start over from the tail.
-  const start = Math.max(0, info.size - STORY_TAIL_BYTES);
-  const fresh: CacheEntry = {
-    size: info.size,
-    mtimeMs: info.mtimeMs,
-    offset: start,
-    entries: [],
-    chars: 0,
-    reducer: createStoryReducer(),
-    partial: start > 0,
-  };
-  const buf = await readRange(path, start, info.size);
-  ingest(fresh, buf, start > 0);
-  cache.set(path, fresh);
-  return { entries: fresh.entries, partial: fresh.partial };
+  // First read, a rewrite, or more appended than a tail holds: start over from the tail, and take a
+  // bigger one while the window has no turn start in it. Each step re-reads from scratch with a
+  // fresh reducer, because a result can only be read once its tool call has been seen.
+  let fresh: CacheEntry | null = null;
+  for (const tail of TAIL_STEPS) {
+    const start = Math.max(0, info.size - tail);
+    fresh = {
+      size: info.size,
+      mtimeMs: info.mtimeMs,
+      offset: start,
+      entries: [],
+      chars: 0,
+      reducer: createStoryReducer(),
+      partial: start > 0,
+    };
+    ingest(fresh, await readRange(path, start, info.size), start > 0);
+    if (start === 0 || hasTurnStart(fresh.entries)) break;
+  }
+  const done = fresh as CacheEntry;
+  cache.set(path, done);
+  return { entries: done.entries, partial: done.partial, version };
 }
 
 /**

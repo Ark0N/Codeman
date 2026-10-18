@@ -23,6 +23,12 @@ import { findClaudeTranscriptPath } from '../../utils/claude-transcript.js';
 import { findSessionOrFail } from '../route-helpers.js';
 import type { ConfigPort, SessionPort } from '../ports/index.js';
 
+/**
+ * Part of every ETag, so a server restart (possibly with a new page format) never answers 304 for a
+ * page an older server built.
+ */
+const SERVER_EPOCH = Date.now().toString(36);
+
 /** The hook-reported path when it looks like a transcript, else a lookup by conversation id. */
 async function resolveTranscriptPath(hookPath: string | null, conversationId: string): Promise<string | null> {
   if (hookPath && hookPath.startsWith('/') && hookPath.endsWith('.jsonl')) return hookPath;
@@ -59,11 +65,21 @@ export function registerStoryRoutes(app: FastifyInstance, ctx: SessionPort & Con
     if (!transcriptPath) return { success: true, data: { supported: true, turns: [], page: null } };
 
     let entries;
+    let version;
     try {
-      ({ entries } = await readStoryEntries(transcriptPath));
+      ({ entries, version } = await readStoryEntries(transcriptPath));
     } catch {
       reply.code(500);
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Could not read the session transcript');
+    }
+
+    // A live view refetches every few seconds; while the transcript has not changed, answer 304
+    // before building anything. `no-cache` makes the browser revalidate every time.
+    const etag = `W/"story-${SERVER_EPOCH}-${version}-${encodeURIComponent(typeof turn === 'string' && turn ? turn : 'latest')}"`;
+    reply.header('ETag', etag).header('Cache-Control', 'no-cache');
+    if (req.headers['if-none-match'] === etag) {
+      reply.code(304);
+      return reply.send();
     }
 
     const turns = buildStoryTurns(entries);

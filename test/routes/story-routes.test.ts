@@ -116,6 +116,43 @@ describe('GET /api/sessions/:id/story', () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it('answers 304 to a matching If-None-Match until the transcript changes', async () => {
+    writeFileSync(transcript, jsonl(demoTurn()));
+    const { app } = await setup();
+    const first = await app.inject({ method: 'GET', url: URL });
+    const etag = first.headers.etag as string;
+    expect(etag).toMatch(/^W\/"story-/);
+    expect(first.headers['cache-control']).toBe('no-cache');
+    const again = await app.inject({ method: 'GET', url: URL, headers: { 'if-none-match': etag } });
+    expect(again.statusCode).toBe(304);
+    expect(again.body).toBe('');
+    appendFileSync(transcript, jsonl([prompt('next job')]));
+    const changed = await app.inject({ method: 'GET', url: URL, headers: { 'if-none-match': etag } });
+    expect(changed.statusCode).toBe(200);
+    expect(changed.headers.etag).not.toBe(etag);
+    // Another turn of the same file is another page, so another tag.
+    const other = await app.inject({
+      method: 'GET',
+      url: `${URL}?turn=x`,
+      headers: { 'if-none-match': changed.headers.etag as string },
+    });
+    expect(other.statusCode).toBe(200);
+  });
+
+  it('reads further back when a long turn does not fit the first tail', async () => {
+    // A prompt, then ~10 MB of tool results (Read results carry whole files), then the turn's end.
+    const big = 'x'.repeat(100_000);
+    const lines: unknown[] = [prompt('a turn longer than eight megabytes')];
+    for (let i = 0; i < 100; i++) lines.push(...bash(`b${i}`, `cat big${i}.txt`, `Show file ${i}`, big));
+    lines.push(end(60_000));
+    writeFileSync(transcript, jsonl(lines));
+    const { app } = await setup();
+    const page = (await app.inject({ method: 'GET', url: URL })).json().data.page;
+    expect(page).toMatchObject({ prompt: 'a turn longer than eight megabytes', partial: false, complete: true });
+    expect(page.toolCalls).toBe(100);
+    expect(page.panels[0].kind).toBe('mission');
+  });
+
   it('a live turn grows as the transcript grows', async () => {
     writeFileSync(transcript, jsonl([prompt('go'), ...read('r1', '/w/a.ts')]));
     const { app } = await setup();
