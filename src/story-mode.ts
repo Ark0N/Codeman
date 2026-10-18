@@ -25,7 +25,8 @@
  *    (72 of 3,334, most starting "Exit code"). 92% of Bash calls carry Claude's own
  *    `description` ("Run the test suite"), which is what the plain captions use.
  *  - Bash is 78% of all tool calls, so a Bash call is sorted by what its command does
- *    (`classifyBashCommand`), not by its tool name.
+ *    (`classifyBashCommand`), not by its tool name. Across all 1,309 local transcripts (3,856
+ *    turns, 44,008 tool calls) it is 87%, and 91% of those calls carry a `description`.
  *
  * Everything here is untrusted text written by the agent. Nothing is interpreted: no path is
  * opened, no command run, no regex built from transcript content.
