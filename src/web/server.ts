@@ -964,7 +964,7 @@ export class WebServer extends EventEmitter {
       // `ServerResponse` to a `FastifyReply`, so it is `reply.header()` here and
       // NOT `res.setHeader()`. A v9-style body throws TypeError on every static
       // request, which is every page load. See the v10.0.0 release notes.
-      setHeaders: (reply) => {
+      setHeaders: (reply, filePath) => {
         // ⚠️ That same change ALSO flipped precedence, and silently. Under v9 this
         // callback wrote to the raw response and Fastify's staged reply headers then
         // overwrote it, so a route that set its own Cache-Control before .sendFile()
@@ -973,6 +973,15 @@ export class WebServer extends EventEmitter {
         // no-store` its route asks for — a service worker that can never update.
         // So: a route that already decided keeps its answer.
         if (reply.getHeader('Cache-Control') !== undefined) return;
+        // A JSON file here is DATA the page fetches at runtime (whats-new.json is rewritten every
+        // release, security-notices.json by hand, manifest.json), never content-hashed and never
+        // `?v=`-busted, so it must revalidate. Under `immutable` a browser may keep last release's
+        // copy for a year, and the page's `fetch(..., { cache: 'no-cache' })` is the only thing
+        // asking it not to; the response header is what every browser honours.
+        if (filePath.endsWith('.json')) {
+          reply.header('Cache-Control', 'no-cache');
+          return;
+        }
         reply.header('Cache-Control', 'public, max-age=31536000, immutable');
       },
     });
