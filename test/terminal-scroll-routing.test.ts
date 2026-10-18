@@ -877,3 +877,38 @@ describe('scroll routing diagnostic (issue #205 round 2)', () => {
     expect(logs[0]).toContain('cliVersion=unknown');
   });
 });
+
+describe('touch scrolling when xterm owns native mouse tracking', () => {
+  it.each(['vt200', 'drag', 'any'])('forwards touch for %s tracking even for a shell session', (mode) => {
+    const { app } = hollowApp({ mode: 'shell' });
+    app.terminal.modes.mouseTrackingMode = mode;
+    app.terminal._core = { coreMouseService: { activeEncoding: 'SGR' } };
+    app.terminal.buffer.active.type = 'alternate';
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+    expect(app._shouldForwardTouchToApp()).toBe(true);
+  });
+
+  it('does not send SGR to a legacy-protocol or X10 application', () => {
+    const { app } = hollowApp({ mode: 'shell' });
+    app.terminal.modes.mouseTrackingMode = 'vt200';
+    app.terminal._core = { coreMouseService: { activeEncoding: 'DEFAULT' } };
+    expect(app._shouldForwardTouchToApp()).toBe(false);
+    app.terminal._core.coreMouseService.activeEncoding = 'SGR';
+    app.terminal.modes.mouseTrackingMode = 'x10';
+    expect(app._shouldForwardTouchToApp()).toBe(false);
+  });
+
+  it('keeps the explicit local-history preference for touch', () => {
+    const { app } = hollowApp({ mode: 'shell' });
+    app.terminal.modes.mouseTrackingMode = 'any';
+    app.loadAppSettingsFromStorage = () => ({ terminalWheelLocalScrollback: true });
+    expect(app._shouldForwardTouchToApp()).toBe(false);
+  });
+
+  it('uses normal CLI routing when xterm mouse tracking is off', () => {
+    const { app } = hollowApp({ cliVersion: '2.1.187', cliMouseTracking: true });
+    expect(app._shouldForwardTouchToApp()).toBe(true);
+    app.sessions.get('sess-1').cliMouseTracking = false;
+    expect(app._shouldForwardTouchToApp()).toBe(false);
+  });
+});

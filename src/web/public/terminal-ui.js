@@ -1168,7 +1168,7 @@ Object.assign(CodemanApp.prototype, {
           // Momentum phase — convert pixel velocity to lines
           const lines = Math.round(velocity / cellHeight());
           if (lines !== 0) {
-            if (this._shouldForwardWheelToApp({ shiftKey: false })) {
+            if (this._shouldForwardTouchToApp()) {
               // Flick momentum keeps feeding the CLI's transcript from the last
               // touch point; the 40ms coalescer batches the per-frame reports.
               this._forwardScrollToApp(touchLastX, touchLastY, lines);
@@ -1347,7 +1347,7 @@ Object.assign(CodemanApp.prototype, {
             const ch = cellHeight();
             const lines = Math.trunc(pixelAccum / ch);
             if (lines !== 0) {
-              if (this._shouldForwardWheelToApp({ shiftKey: false })) {
+              if (this._shouldForwardTouchToApp()) {
                 this._logScrollRouting('forward-sgr');
                 this._forwardScrollToApp(touchLastX, touchLastY, lines);
               } else if (!this._maybePageCliTranscript({ shiftKey: false, touchId: touchContactId }, lines)) {
@@ -5833,6 +5833,18 @@ Object.assign(CodemanApp.prototype, {
   // `target` ({ terminal, sessionId }) asks the question for a TerminalTile:
   // its own terminal's tracking mode and its own session, never the active one.
   // Either field left out means the primary pane's.
+  // xterm encodes native wheel events when mouse tracking is enabled, but
+  // our touch listeners consume finger drags themselves. Forward those
+  // explicitly: local scrollLines() cannot move an alternate-screen buffer.
+  _shouldForwardTouchToApp() {
+    if (this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback) return false;
+    const mode = this.terminal?.modes?.mouseTrackingMode;
+    // The existing synthetic sender uses SGR; tracking alone does not imply
+    // that encoding (legacy/X10 applications must not receive SGR bytes).
+    const sgr = this.terminal?._core?.coreMouseService?.activeEncoding === 'SGR';
+    return !!(mode && mode !== 'none' && mode !== 'x10' && sgr) || this._shouldForwardWheelToApp({ shiftKey: false });
+  },
+
   _shouldForwardWheelToApp(ev, target = {}) {
     if (ev.shiftKey) return false;
     // Opt-out (App Settings → Input → "Wheel scrolls local history"): pin the
