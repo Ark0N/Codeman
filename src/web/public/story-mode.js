@@ -3448,7 +3448,9 @@ Object.assign(CodemanApp.prototype, {
           'story-empty',
           edit.hunks?.length
             ? 'Some lines of this edit were left out. Open the file to see all of it.'
-            : 'What changed is not in the transcript: a script or another program wrote this file. Open it to see it as it is now.'
+            : edit.added || edit.removed
+              ? 'The lines of this edit were left out to keep a long turn fast. Open the file to see it as it is now.'
+              : 'What changed is not in the transcript: a script or another program wrote this file. Open it to see it as it is now.'
         )
       );
     return section;

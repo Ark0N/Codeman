@@ -61,8 +61,12 @@ export const STORY_LIMITS = Object.freeze({
   todoItems: 12,
   eventsPerPage: 800,
   panelsPerPage: 12,
-  /** Characters of output, hunk and helper text per page; older events give theirs up first. */
-  pageTextBudget: 400_000,
+  /**
+   * Characters of output, hunk and helper text per page; older events give theirs up first. Sized on
+   * 3,855 local turns: 94% never reach it, and the longest live page went from 157 KB to 74 KB
+   * gzipped (it is refetched every few seconds while it changes).
+   */
+  pageTextBudget: 120_000,
   turnsListed: 60,
 });
 
