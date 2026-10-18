@@ -1046,6 +1046,8 @@ describe('buildStoryPage', () => {
     expect(keyKindOf('The old menu used to break when the list was empty.')).toBeUndefined();
     expect(keyKindOf('JSON files still open the live log viewer, as intended.')).toBeUndefined();
     expect(keyKindOf('Two reviews are still open.')).toBe('pending');
+    expect(keyKindOf("I sent the request, but the box hasn't answered yet.")).toBe('pending');
+    expect(keyKindOf('One thing worth flagging: the PR went conflicting because of my push.')).toBe('problem');
     // "Left out" is open work, unless Claude chose it.
     expect(keyKindOf('The README update is left out for now.')).toBe('pending');
     expect(

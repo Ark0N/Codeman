@@ -291,7 +291,7 @@ const KEY_KINDS: Array<[StoryKeyKind, RegExp]> = [
   [
     'problem',
     // "bug-fixing" and "cron-broken-network" are names, and a bare "warning" is often one too.
-    /\b(problems?|bugs?(?!-| fix)|(?<!-)broken(?!-)|known (issue|quirk)s?|quirks?|caveats?|(?<![#/])limitations?|heads up|warning sign|be warned|watch out|unfixed|left unfixed|still (fails?|failing|broken)|(won't|doesn't|does not|will not) (work|fix)|(isn't|is not|not) fixed|never (moves|runs|loads|works|starts|shows))\b/i,
+    /\b(problems?|bugs?(?!-| fix)|(?<!-)broken(?!-)|known (issue|quirk)s?|quirks?|caveats?|(?<![#/])limitations?|heads up|warning sign|be warned|watch out|worth flagging|i want to flag|unfixed|left unfixed|still (fails?|failing|broken)|(won't|doesn't|does not|will not) (work|fix)|(isn't|is not|not) fixed|never (moves|runs|loads|works|starts|shows))\b/i,
   ],
   [
     'offer',
@@ -304,7 +304,7 @@ const KEY_KINDS: Array<[StoryKeyKind, RegExp]> = [
   [
     'pending',
     // "Left out" is open work, unless Claude chose it ("left out on purpose", "rather than guessed").
-    /(?<!(deliberately|intentionally|purposely) )\bleft (out|open)\b(?! (on purpose|deliberately|intentionally|rather))|\b(not yet|haven't|have not|can't tell|isn't (confirmed|committed|pushed|tested|done|checked)|not (checked|tested|verified|confirmed|committed|pushed|opened|run)|still (running|working|open(?!\s+(the|a|an|in|on|it|them)\b)|missing)|didn't (open|try|check|test|run|verify) it)\b/i,
+    /(?<!(deliberately|intentionally|purposely) )\bleft (out|open)\b(?! (on purpose|deliberately|intentionally|rather))|\b(not yet|haven't|have not|(hasn't|has not) (answered|replied|finished|started|run|been (run|tested|checked|merged|pushed))|can't tell|isn't (confirmed|committed|pushed|tested|done|checked)|not (checked|tested|verified|confirmed|committed|pushed|opened|run)|still (running|working|open(?!\s+(the|a|an|in|on|it|them)\b)|missing)|didn't (open|try|check|test|run|verify) it)\b/i,
   ],
   // A step that failed, not a description of failure ("1 for a failed operation").
   ['failed', /(?<!\b(a|the|any|on) )\b(failed|fails)\b/i],
