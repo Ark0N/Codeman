@@ -1570,7 +1570,9 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
     const st = this._storyState();
-    st.returnFocus = document.activeElement;
+    // Opened again while open (another session): one runtime, never two frame loops and polls.
+    if (st.open) this._storyStopRuntime();
+    else st.returnFocus = document.activeElement;
     st.open = true;
     st.sessionId = sessionId;
     st.turnId = null;
@@ -1703,6 +1705,7 @@ Object.assign(CodemanApp.prototype, {
     bar.append(brand, nav, seg, live, saveBtn, closeBtn);
     // What a screen reader hears as the page changes: a new turn, a finished one.
     const announcer = el('p', 'story-sr');
+    announcer.dataset.i18nSkip = ''; // it reads out the agent's prompts
     announcer.setAttribute('role', 'status');
     announcer.setAttribute('aria-live', 'polite');
 
@@ -1846,7 +1849,8 @@ Object.assign(CodemanApp.prototype, {
     st.dirBtn.setAttribute('aria-pressed', String(on));
     st.wire.hidden = !on;
     if (on) this._storyRenderWire();
-    for (const rt of st.panels) this._storyDrawPanel(rt);
+    // Within the frame budget, never every panel in one task.
+    for (const rt of st.panels) this._storyQueueDraw(rt);
   },
 
   _storyPickTurn(id) {
@@ -2040,10 +2044,13 @@ Object.assign(CodemanApp.prototype, {
     st.pollTimer = setInterval(() => {
       const page = st.data?.page;
       if (!st.open || document.hidden) return;
-      if (!st.turnId && (!page || !page.complete)) {
+      // A session Story Mode cannot draw does not change that by itself: nothing to poll.
+      if (st.data && st.data.supported === false) return;
+      if (!st.turnId && page && !page.complete && !page.interrupted) {
         this._storyRefresh();
         return;
       }
+      // Nothing drawn yet (no transcript), a finished page or one parked on: now and then only.
       // A finished newest page: look again now and then (a local command like /compact raises no
       // hook). An unchanged page is a 304.
       // Parked on an older turn: the turn list still learns about new turns now and then.
@@ -2082,14 +2089,14 @@ Object.assign(CodemanApp.prototype, {
     window.addEventListener('keydown', st.keyHandler, true);
     st.skinObserver = new MutationObserver(() => {
       this._storyApplyTheme();
-      for (const rt of st.panels) this._storyDrawPanel(rt);
+      for (const rt of st.panels) this._storyQueueDraw(rt);
     });
     st.skinObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-skin', 'class'] });
     document.fonts?.ready?.then(() => {
       if (!st.open) return;
       for (const rt of st.panels) {
         rt.bgKey = '';
-        this._storyDrawPanel(rt);
+        this._storyQueueDraw(rt);
       }
     });
   },
@@ -3114,7 +3121,8 @@ Object.assign(CodemanApp.prototype, {
       const m = /^([^@]*)@[^:]*:(\d+)$/.exec(key);
       back =
         opens.find((n) => n.dataset.storyOpen === key) ||
-        (m && opens.find((n) => new RegExp(`^${m[1]}@[^:]*:${m[2]}$`).test(n.dataset.storyOpen)));
+        (m &&
+          opens.find((n) => n.dataset.storyOpen.startsWith(`${m[1]}@`) && n.dataset.storyOpen.endsWith(`:${m[2]}`)));
     }
     if (refocus && back && document.contains(back)) back.focus({ preventScroll: true });
   },
@@ -3362,10 +3370,14 @@ Object.assign(CodemanApp.prototype, {
       p.textContent = 'Reading its steps…';
       box.replaceChildren(p);
     }
+    // One request per helper at a time, and only the newest one's answer is drawn.
+    st.helperSeq ??= new Map();
+    const seq = (st.helperSeq.get(agentId) || 0) + 1;
+    st.helperSeq.set(agentId, seq);
     const res = await this._api(
       `/api/sessions/${encodeURIComponent(st.sessionId)}/story/helpers/${encodeURIComponent(agentId)}`
     );
-    if (!box.isConnected || !st.open) return;
+    if (!box.isConnected || !st.open || st.helperSeq.get(agentId) !== seq) return;
     const etag = res?.ok ? res.headers?.get?.('etag') || null : null;
     if (cached && etag && etag === cached.etag) return;
     let body = null;
@@ -3376,7 +3388,10 @@ Object.assign(CodemanApp.prototype, {
     }
     if (!box.isConnected || !st.open) return;
     if (!body?.success) {
-      if (!cached) box.firstChild.textContent = 'Its steps could not be read.';
+      // Only over the placeholder: never over steps another answer already drew.
+      const only = box.firstElementChild;
+      if (box.childElementCount === 1 && only?.classList.contains('story-empty'))
+        only.textContent = 'Its steps could not be read.';
       return;
     }
     st.helperSteps?.set(agentId, { etag, data: body.data });
@@ -3569,6 +3584,25 @@ Object.assign(CodemanApp.prototype, {
           )
         : [];
     const workingDir = this.sessions?.get(this._story.sessionId)?.workingDir;
+    // The `ls` header (`some/dir:`) in force on each line: the newest one above it in its paragraph.
+    // One pass over the lines (a search per link over the text before it was quadratic).
+    const lineDirs = [];
+    const lineEnds = [];
+    {
+      let dir = null;
+      let at = 0;
+      for (const line of value.split('\n')) {
+        lineDirs.push(dir);
+        at += line.length + 1;
+        lineEnds.push(at);
+        if (!line.trim()) dir = null;
+        else {
+          const m = /^([^\s:][^:]*):[ \t]*$/.exec(line);
+          if (m) dir = m[1];
+        }
+      }
+    }
+    let lineNo = 0;
     let last = 0;
     for (const link of links) {
       pre.append(document.createTextNode(this._storyShortPath(value.slice(last, link.index))));
@@ -3579,15 +3613,9 @@ Object.assign(CodemanApp.prototype, {
       if (b.textContent !== link.path) b.title = link.path;
       // A bare name listed under an `ls` header (`some/dir:`) lives in that directory.
       let target = link.path;
-      if (!target.includes('/')) {
-        const block =
-          value
-            .slice(0, link.index)
-            .split(/\n\s*\n/)
-            .pop() || '';
-        const header = /(?:^|\n)([^\s:][^\n:]*):[ \t]*\n(?![\s\S]*\n[^\s:][^\n:]*:[ \t]*\n)/.exec(block);
-        if (header) target = `${header[1].replace(/\/+$/, '')}/${target}`;
-      }
+      while (lineNo < lineEnds.length - 1 && lineEnds[lineNo] <= link.index) lineNo++;
+      const dir = lineDirs[lineNo];
+      if (!target.includes('/') && dir) target = `${dir.replace(/\/+$/, '')}/${target}`;
       const resolved = typeof resolveLinkedFilePath === 'function' ? resolveLinkedFilePath(target, workingDir) : target;
       b.addEventListener('click', (e) => this._storyOpenFile(resolved, e.currentTarget));
       pre.append(b);

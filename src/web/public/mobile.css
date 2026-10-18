@@ -590,8 +590,8 @@ html.mobile-init .file-browser-panel {
      (inline approve/deny in mobile-overview.js); the bell would only crowd the
      header it was designed to stay out of. */
   .btn-icon-header.btn-approvals,
-  /* Story Mode: opt-in and desktop-first for now; the overlay itself is responsive, a phone
-     entry point is a follow-up rather than one more icon in this header. */
+  /* Story Mode: phones open it from Session Options (#sessionOptionsStoryBtn), not one more icon
+     in this header; the overlay itself is responsive. */
   .btn-icon-header.btn-story-header {
     display: none !important;
   }

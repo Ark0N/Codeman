@@ -666,6 +666,22 @@ describe('story-mode.js overlay', () => {
     expect($('.story-sr')!.textContent).toBe('');
   });
 
+  it('a session Story Mode cannot draw is not polled', async () => {
+    let poll: (() => void) | undefined;
+    boot({ supported: false, reason: 'A shell session.' });
+    win.setInterval = ((fn: () => void) => {
+      poll = fn;
+      return 1;
+    }) as never;
+    app.openStoryMode(SID);
+    await settle();
+    app._story.lastIdlePoll = 0;
+    calls.length = 0;
+    poll!();
+    await settle();
+    expect(calls).toHaveLength(0);
+  });
+
   it('Tab stays inside the overlay', async () => {
     boot(storyOf(demoTurn()));
     app.openStoryMode(SID);

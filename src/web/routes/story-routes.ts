@@ -32,7 +32,12 @@ import {
 import { getCli } from '../../config/cli-registry/registry.js';
 import { STORY_LIMITS, buildHelperPage, buildStoryPage, buildStoryTurns, summarizeTurns } from '../../story-mode.js';
 import { readSmallRegularFile, readStoryEntries, storyFileVersion } from '../../story-reader.js';
-import { claudeProjectsDir, findClaudeTranscriptPath } from '../../utils/claude-transcript.js';
+import {
+  claudeProjectsDir,
+  findClaudeTranscriptPath,
+  findRestoredClaudeTranscriptPath,
+} from '../../utils/claude-transcript.js';
+import { LRUMap } from '../../utils/lru-map.js';
 import { findSessionOrFail } from '../route-helpers.js';
 import type { ConfigPort, SessionPort } from '../ports/index.js';
 
@@ -69,10 +74,40 @@ async function insideClaudeProjects(path: string, configDir?: string): Promise<b
   return false;
 }
 
-/** The hook-reported path when it is a transcript in a projects folder, else a lookup by conversation id. */
+/**
+ * Transcripts found by id, briefly: a lookup reads every project folder, and a view without a hook
+ * path (normal after a server restart) asks every few seconds. A miss is kept shorter, so a session
+ * whose first prompt is on its way finds its transcript soon.
+ */
+const lookups = new LRUMap<string, { path: string | null; at: number }>({ maxSize: 200 });
+const LOOKUP_HIT_MS = 30_000;
+const LOOKUP_MISS_MS = 4_000;
+
+/** For tests: forget the transcripts found by id. */
+export function clearStoryLookupCache(): void {
+  lookups.clear();
+}
+
+/** The transcript by conversation id, then by Codeman id, then a recovered session's, as last-response finds it. */
+async function lookUpTranscript(ids: string[], codemanId: string, configDir?: string): Promise<string | null> {
+  const key = `${ids.join('|')}|${configDir ?? ''}`;
+  const hit = lookups.get(key);
+  if (hit && Date.now() - hit.at < (hit.path ? LOOKUP_HIT_MS : LOOKUP_MISS_MS)) return hit.path;
+  let path: string | null = null;
+  for (const id of ids) {
+    path = await findClaudeTranscriptPath(id, configDir);
+    if (path) break;
+  }
+  path ??= await findRestoredClaudeTranscriptPath(codemanId, configDir);
+  lookups.set(key, { path, at: Date.now() });
+  return path;
+}
+
+/** The hook-reported path when it is a transcript in a projects folder, else a lookup by id. */
 async function resolveTranscriptPath(
   hookPath: string | null,
-  conversationId: string,
+  ids: string[],
+  codemanId: string,
   configDir?: string
 ): Promise<string | null> {
   if (
@@ -82,7 +117,7 @@ async function resolveTranscriptPath(
     (await insideClaudeProjects(hookPath, configDir))
   )
     return hookPath;
-  return findClaudeTranscriptPath(conversationId, configDir);
+  return lookUpTranscript(ids, codemanId, configDir);
 }
 
 type Source = { unsupported: string } | { path: string | null };
@@ -102,7 +137,8 @@ async function storySource(ctx: SessionPort & ConfigPort, id: string, req: Fasti
   return {
     path: await resolveTranscriptPath(
       ctx.getTranscriptPath(id),
-      session.claudeSessionId || session.id,
+      [...new Set([session.claudeSessionId, session.id].filter((v): v is string => !!v))],
+      session.id,
       session.claudeConfigDir
     ),
   };
@@ -145,7 +181,7 @@ export function registerStoryRoutes(app: FastifyInstance, ctx: SessionPort & Con
     const source = await storySource(ctx, id, req);
     if ('unsupported' in source) return { success: true, data: { supported: false, reason: source.unsupported } };
     if (!source.path) return { success: true, data: { supported: true, turns: [], page: null } };
-    const turnKey = typeof turn === 'string' && turn ? turn : '';
+    const turnKey = typeof turn === 'string' && turn ? turn.slice(0, 200) : '';
     const tagOf = (version: string) => `${version}-${encodeURIComponent(turnKey || 'latest')}`;
     // An unchanged file is a 304 from a stat alone: no read, no parse, whatever the cache holds.
     const before = await storyFileVersion(source.path);

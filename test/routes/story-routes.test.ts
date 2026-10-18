@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createRouteTestHarness } from './_route-test-utils.js';
-import { registerStoryRoutes } from '../../src/web/routes/story-routes.js';
+import { clearStoryLookupCache, registerStoryRoutes } from '../../src/web/routes/story-routes.js';
 import { clearStoryReaderCache, readStoryEntries } from '../../src/story-reader.js';
 import { claudeProjectsDir } from '../../src/utils/claude-transcript.js';
 import { bash, demoTurn, edit, end, prompt, read, resetClock, result, said, tool } from '../story-fixtures.js';
@@ -32,6 +32,7 @@ async function setup(opts: { hookPath?: string | null; mode?: string; remote?: u
 beforeEach(() => {
   resetClock();
   clearStoryReaderCache();
+  clearStoryLookupCache();
   // Where Claude Code writes transcripts (under the test's temp HOME): the only place a hook path is read.
   mkdirSync(claudeProjectsDir(), { recursive: true });
   dir = mkdtempSync(join(claudeProjectsDir(), 'story-route-'));
@@ -200,6 +201,14 @@ describe('GET /api/sessions/:id/story', () => {
     const res = await app.inject({ method: 'GET', url: URL });
     expect(res.statusCode).toBe(200);
     expect(res.json().data).toMatchObject({ supported: true, turns: [], page: null });
+  });
+
+  it('with no hook path, finds the transcript by the Codeman id too (as last-response does)', async () => {
+    const byId = join(dir, 'test-session-1.jsonl');
+    writeFileSync(byId, jsonl(demoTurn()));
+    const { app } = await setup({ hookPath: null });
+    const body = (await app.inject({ method: 'GET', url: URL })).json();
+    expect(body.data.page?.panels.length).toBeGreaterThan(0);
   });
 
   it('says when the list leaves turns out past the 60 it shows, even in a small file', async () => {

@@ -48,6 +48,44 @@ export function claudeProjectsDir(configDir?: string): string {
 }
 
 /**
+ * The one top-level transcript a recovered session (`restored-<first 8+ hex of its uuid>`, how
+ * reconcileSessions() names a session whose mux record was lost) belongs to, or null when none or
+ * more than one matches. The same recovery `last-response` makes (session-routes.ts).
+ */
+export async function findRestoredClaudeTranscriptPath(
+  codemanSessionId: string,
+  configDir?: string
+): Promise<string | null> {
+  const restored = /^restored-([a-f0-9]{8,})$/i.exec(codemanSessionId);
+  if (!restored) return null;
+  const fragment = restored[1].toLowerCase();
+  const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+  const projectsDir = claudeProjectsDir(configDir);
+  let projectDirs: string[];
+  try {
+    projectDirs = await readdir(projectsDir);
+  } catch {
+    return null;
+  }
+  const found = new Map<string, string>();
+  for (const projectDir of projectDirs) {
+    let files: string[];
+    try {
+      files = await readdir(join(projectsDir, projectDir));
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      const id = file.endsWith('.jsonl') ? file.slice(0, -'.jsonl'.length) : '';
+      if (!id.toLowerCase().startsWith(fragment) || !uuid.test(id)) continue;
+      const path = join(projectsDir, projectDir, file);
+      if ((await stat(path).catch(() => null))?.isFile()) found.set(id, path);
+    }
+  }
+  return found.size === 1 ? [...found.values()][0] : null;
+}
+
+/**
  * Path of the transcript for `conversationId` under any project directory, or null. Unlike
  * {@link claudeTranscriptExists} it answers with the file (Story Mode reads it), so the id is
  * checked against a strict charset before it is joined into a path, and only a regular file counts.

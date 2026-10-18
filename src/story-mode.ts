@@ -1860,10 +1860,10 @@ interface DraftPanel {
   rounds?: number;
 }
 
-/** Keeps the newest outputs, hunks and helper texts within the page budget. */
 /** Every edit an event made: an Edit/Write call's one, or the files a Bash call wrote. */
 const editsOf = (e: StoryEvent): StoryEdit[] => (e.edit ? [e.edit] : (e.edits ?? []));
 
+/** Keeps the newest outputs, hunks and helper texts within the page budget; true when it cut any. */
 function applyTextBudget(events: StoryEvent[]): boolean {
   let used = 0;
   let cut = false;
@@ -2000,9 +2000,10 @@ function capPanels(panels: DraftPanel[], max: number): DraftPanel[] {
   const firstMergeable = out[0]?.kind === 'mission' ? 1 : 0;
   while (out.length > max) {
     let best = -1;
-    // Three passes: quiet kinds; then anything but a prompt or a question; then, as a last resort, a
-    // prompt you added mid-turn (the turn's own prompt and a question to you are never folded).
-    search: for (const pass of [0, 1, 2]) {
+    // Four passes: quiet kinds; then anything but a prompt or a question; then a prompt you added
+    // mid-turn; then, only so the page keeps its 12 panels, a question too (the turn's own prompt
+    // is never folded).
+    search: for (const pass of [0, 1, 2, 3]) {
       for (const lastStart of [out.length - 3, out.length - 2]) {
         let oldest = -1;
         for (let k = firstMergeable; k <= lastStart; k++) {
@@ -2013,7 +2014,10 @@ function capPanels(panels: DraftPanel[], max: number): DraftPanel[] {
               ? MINOR.has(a.kind) && MINOR.has(b.kind)
               : pass === 1
                 ? ![a.kind, b.kind].some((kind) => kind === 'mission' || kind === 'ask')
-                : ![a, b].some((d) => d.kind === 'ask' || (d.kind === 'mission' && d.events[0] === out[0]?.events[0]));
+                : ![a, b].some(
+                    (d) =>
+                      (pass === 2 && d.kind === 'ask') || (d.kind === 'mission' && d.events[0] === out[0]?.events[0])
+                  );
           if (!ok) continue;
           if (a.kind === 'montage' || b.kind === 'montage') {
             best = k;

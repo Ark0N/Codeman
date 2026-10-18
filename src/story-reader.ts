@@ -244,7 +244,8 @@ async function loadFrom(
     info.size - cached.offset <= STORY_TAIL_BYTES &&
     info.size >= cached.size
   ) {
-    // The file only grew: read what was appended since the last complete line.
+    // The file only grew: read what was appended since the last complete line. (A file rewritten to
+    // a larger size would read as an append; transcripts are append-only, so it never is.)
     const buf = await readRange(handle, cached.offset, info.size);
     await ingest(cached, buf, false);
     cached.size = info.size;

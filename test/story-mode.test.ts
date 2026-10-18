@@ -984,17 +984,35 @@ describe('buildStoryPage', () => {
     const prompt1 = (content: string) => () => buildStoryTurns(entriesOf([prompt(content), said('ok'), end(1000)]));
     const bashOut = (command: string, output: string) => () =>
       pageOf([prompt('go'), ...bash('b1', command, 'x', output), end(1000)]);
+    // At these sizes the old code took 6 to 29 s per shape and the new one takes under 10 ms: the
+    // bound sits two orders of magnitude from both, so a loaded runner cannot flake it.
     const shapes: Array<[string, () => unknown]> = [
-      ['teammate openers', prompt1(rep('<teammate-message teammate_id="a">x ', 400_000))],
-      ['system-reminder openers', prompt1('hi ' + rep('<system-reminder>x ', 400_000))],
-      ['task-notification field openers', prompt1('<task-notification>\n' + rep('<summary>x ', 400_000))],
-      ['git commit tokens', bashOut(rep('git commit ', 8000), 'ok')],
+      ['teammate openers', prompt1(rep('<teammate-message teammate_id="a">x ', 1_000_000))],
+      ['system-reminder openers', prompt1('hi ' + rep('<system-reminder>x ', 1_000_000))],
+      ['task-notification field openers', prompt1('<task-notification>\n' + rep('<summary>x ', 1_000_000))],
+      ['git commit tokens', bashOut(rep('git commit ', 16_000), 'ok')],
       [
         'modified-note phrases',
-        bashOut('python3 x.py', rep("This command modified 1 file you've previously read: a", 400_000)),
+        bashOut('python3 x.py', rep("This command modified 1 file you've previously read: a", 1_000_000)),
       ],
     ];
-    for (const [name, fn] of shapes) expect([name, ms(fn) < 250]).toEqual([name, true]);
+    for (const [name, fn] of shapes) expect([name, ms(fn) < 1500]).toEqual([name, true]);
+  });
+
+  it('a turn of many questions still keeps to 12 panels: the oldest questions fold last', () => {
+    const lines: unknown[] = [prompt('ask me a lot')];
+    for (let i = 0; i < 14; i++) {
+      lines.push(
+        tool(`q${i}`, 'AskUserQuestion', { questions: [{ question: `Question ${i}?`, options: [{ label: 'Yes' }] }] }),
+        result(`q${i}`, 'ok', { toolUseResult: { answers: { [`Question ${i}?`]: 'Yes' } } }),
+        ...read(`r${i}`, `/w/f${i}.ts`)
+      );
+    }
+    lines.push(end(1000));
+    const page = pageOf(lines);
+    expect(page.panels.length).toBeLessThanOrEqual(12);
+    expect(page.panels[0].kind).toBe('mission');
+    expect(page.panels.at(-1)!.kind).toBe('complete');
   });
 
   it('a helper messaged twice reads as one finished run, not as superseded', () => {
