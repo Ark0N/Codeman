@@ -154,11 +154,15 @@ const unique = <T>(items: T[]): T[] => [...new Set(items)];
 
 /** The first sentence of a message, without markdown, for a speech balloon. */
 export function firstSentence(text: string, max = 160): string {
+  // Only real markdown goes: paired emphasis and line-start markers. A bare `_` or `*` inside a word
+  // stays, or `test_wcount.py` would read `testwcount.py`.
   const plain = text
     .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`([^`]*)`/g, '$1')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/[*_#>]+/g, '')
+    .replace(/`([^`\n]*)`/g, '$1')
+    .replace(/!?\[([^\]\n]*)\]\([^)\n]*\)/g, '$1')
+    .replace(/(^|[\s(])(\*\*|__)(?=\S)([^\n]*?\S)\2(?=[\s),!?:;]|\.(?:\s|$)|$)/g, '$1$3')
+    .replace(/(^|[\s(])([*_])(?=\S)([^*_\n]*?\S)\2(?=[\s),!?:;]|\.(?:\s|$)|$)/g, '$1$3')
+    .replace(/^[ \t]{0,3}(#{1,6}|>|[-*+]|\d+\.)[ \t]+/gm, '')
     .replace(/\s+/g, ' ')
     .trim();
   const match = /^(.+?[.!?])(\s|$)/.exec(plain);
@@ -188,32 +192,95 @@ const fmtCounts = (added: number, removed: number): string =>
 
 // ========== Bash commands and test counts ==========
 
-/** Ordered: the first match wins, so `npm test > out.log` is a test, not an edit. */
-const BASH_INTENTS: Array<[StoryIntent, RegExp]> = [
-  [
-    'test',
-    /(^|[\s;&|(])(npm (run )?test\b|npx (vitest|jest|mocha|playwright test)\b|vitest\b|jest\b|pytest\b|python3? -m pytest\b|go test\b|cargo test\b|bun test\b|yarn test\b|pnpm (run )?test\b|deno test\b|rspec\b|phpunit\b|mix test\b|dotnet test\b)/,
-  ],
-  [
-    'build',
-    /(^|[\s;&|(])(npm run (build|typecheck|lint|check|format)\S*|tsc\b|npx (tsc|eslint|prettier)\b|eslint\b|prettier\b|make\b|cargo (build|check|clippy)\b|go (build|vet)\b|gradlew?\b|mvn\b|ruff\b|mypy\b|cmake\b|ninja\b)/,
-  ],
-  ['save', /\bgit (commit|push|tag|merge|rebase|cherry-pick|revert|am)\b|\bgh (pr|release) (create|merge)\b/],
-  [
-    'edit',
-    /\bsed -i\b|\bperl -p?i\b|(^|[\s;&|])cat\s+>|\btee\b|(^|[^>&2])>\s*[\w./~-]+\.\w+\b|\bpatch\b|\bgit apply\b/,
-  ],
-  [
-    'look',
-    /^\s*(cd\s+\S+\s*(&&|;)\s*)?(command\s+)?(cat|head|tail|sed -n|grep|rg|find|ls|wc|awk|jq|tree|stat|file|du|diff|less|xxd|od|git (status|diff|log|show|branch|blame|ls-files|rev-parse|remote)|gh (pr|issue|run|api) (view|list|diff|checks))\b/,
-  ],
-];
+/**
+ * Splits a command line into its simple commands at `&&`, `||`, `;`, `|` and newlines, outside quotes.
+ * Not a shell parser: just enough to see what each part of a one-liner starts with.
+ */
+function commandSegments(command: string): string[] {
+  const segments: string[] = [];
+  let cur = '';
+  let quote = '';
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote) {
+      if (ch === quote) quote = '';
+      else if (ch === '\\' && quote === '"') cur += command[++i] ?? '';
+      cur += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    if (ch === ';' || ch === '\n' || ch === '|' || (ch === '&' && command[i + 1] === '&')) {
+      if (ch === '&' || (ch === '|' && command[i + 1] === '|')) i++;
+      segments.push(cur);
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  segments.push(cur);
+  return segments.map((x) => x.trim()).filter(Boolean);
+}
 
-/** What a Bash command does, from the command text alone. Never executes or parses it as shell. */
+/** A segment's command with what only wraps it removed: env assignments, `sudo`, `timeout 60`, `( ...`. */
+function segmentHead(segment: string): string {
+  let s = segment.replace(/^[({\s]+/, '');
+  for (let k = 0; k < 6; k++) {
+    const next = s
+      .replace(/^[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|'[^']*'|\S*)\s+/, '')
+      .replace(/^(sudo|command|exec|time|nice|nohup|env|xargs)\s+/, '')
+      .replace(/^timeout\s+(-\S+\s+)*\S+\s+/, '');
+    if (next === s) break;
+    s = next;
+  }
+  // `git -c k=v -C dir commit`: drop git's own options so the subcommand comes next.
+  return s.replace(/^git((\s+-[cC]\s+\S+)|(\s+--\S+))*\s+/, 'git ');
+}
+
+const TEST_HEAD =
+  /^(npm (run )?test\b|npm run test:\S+|yarn (run )?test\b|pnpm (run )?test\b|bun test\b|npx (vitest|jest|mocha|playwright test)\b|vitest\b|jest\b|mocha\b|pytest\b|py\.test\b|python3? -m (pytest|unittest)\b|node --test\b|deno test\b|go test\b|cargo (test|nextest)\b|make (test|check)\b|rspec\b|phpunit\b|mix test\b|dotnet test\b|ctest\b|tox\b)/;
+const BUILD_HEAD =
+  /^(npm run (build|typecheck|lint|check|format)\S*|yarn (run )?(build|lint|typecheck)\b|pnpm (run )?(build|lint|typecheck)\b|tsc\b|npx (tsc|eslint|prettier|biome)\b|eslint\b|prettier\b|biome\b|make\b|cargo (build|check|clippy)\b|go (build|vet)\b|gradlew?\b|\.\/gradlew\b|mvn\b|ruff\b|mypy\b|black\b|cmake\b|ninja\b|shellcheck\b|node --check\b)/;
+const SAVE_HEAD = /^(git (commit|push|tag|merge|rebase|cherry-pick|revert|am)\b|gh (pr|release) (create|merge)\b)/;
+const EDIT_SEGMENT = /^(sed -i\b|perl -p?i\b|cat\s*>|tee\b|patch\b|git apply\b)|(^|[^>&0-9])>\s*[\w./~-]+\.\w+\b/;
+const LOOK_HEAD =
+  /^(cd|cat|head|tail|sed -n|grep|egrep|rg|find|ls|wc|awk|jq|tree|stat|file|du|df|diff|less|more|xxd|od|which|type|pwd|echo|printf|sort|uniq|cut|basename|dirname|realpath|readlink|git (status|diff|log|show|branch|blame|ls-files|rev-parse|remote)|gh (pr|issue|run|api) (view|list|diff|checks))\b/;
+/** A probe that names a test runner without running tests: `pytest --version`, `npm test --help`. */
+const PROBE = /\s--(version|help)\b|\s-[Vh]\s*$/;
+
+/**
+ * Strongest first: one test in a one-liner makes the whole call a test run (its pass or fail is the
+ * news), and a commit outranks the build or lint that ran before it.
+ */
+const INTENT_RANK: StoryIntent[] = ['test', 'save', 'build', 'edit', 'run', 'look'];
+
+/**
+ * What a Bash command does, from the command text alone. Never executes it, and never parses it as
+ * shell beyond splitting it into simple commands: each part is judged by what it starts with (after
+ * env assignments and wrappers like `timeout`), and the strongest intent of any part wins.
+ */
 export function classifyBashCommand(command: string): StoryIntent {
-  const cmd = command.slice(0, 2000);
-  for (const [intent, pattern] of BASH_INTENTS) if (pattern.test(cmd)) return intent;
-  return 'run';
+  let best = INTENT_RANK.length - 1;
+  for (const segment of commandSegments(command.slice(0, 2000))) {
+    const head = segmentHead(segment);
+    const intent: StoryIntent =
+      TEST_HEAD.test(head) && !PROBE.test(head)
+        ? 'test'
+        : BUILD_HEAD.test(head) && !PROBE.test(head)
+          ? 'build'
+          : SAVE_HEAD.test(head)
+            ? 'save'
+            : EDIT_SEGMENT.test(head)
+              ? 'edit'
+              : LOOK_HEAD.test(head)
+                ? 'look'
+                : 'run';
+    best = Math.min(best, INTENT_RANK.indexOf(intent));
+  }
+  return INTENT_RANK[best];
 }
 
 /**

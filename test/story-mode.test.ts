@@ -49,6 +49,27 @@ describe('classifyBashCommand', () => {
     ['ls 2>/dev/null', 'look'],
     ['curl -s localhost:3000/api/status', 'run'],
     ['node scripts/build.mjs', 'run'],
+    // Only a segment that RUNS a test is a test; naming a runner is not.
+    ['which pytest', 'look'],
+    ['python3 -m pytest --version', 'run'],
+    ['pip show pytest', 'run'],
+    ['python3 -c "import pytest"', 'run'],
+    ['echo "run pytest later"', 'look'],
+    ['node --test', 'test'],
+    ['node --test timer.test.mjs 2>&1 | tail -20', 'test'],
+    ['timeout 60 npm test', 'test'],
+    ['FOO=1 CI=true pytest -q', 'test'],
+    ['cd app && make test', 'test'],
+    ['python3 -m unittest discover', 'test'],
+    ['make', 'build'],
+    ['shellcheck rename.sh', 'build'],
+    ['node --check app.js && git init -q && git add -A && git commit -qm "init"', 'save'],
+    ['git -c user.name=a -c user.email=b commit -m x', 'save'],
+    ['git -C repo push', 'save'],
+    ['git init && git add .', 'run'],
+    ['mkdir -p samples && touch samples/a.jpg', 'run'],
+    ['grep -n "a|b" file.txt', 'look'],
+    ["printf 'x' > out.txt", 'edit'],
   ])('%s → %s', (command, intent) => {
     expect(classifyBashCommand(command)).toBe(intent);
   });
@@ -74,6 +95,15 @@ describe('text helpers', () => {
   it('firstSentence strips markdown and stops at the first sentence', () => {
     expect(firstSentence('**Found it.** The `banner` covers [the button](http://x).')).toBe('Found it.');
     expect(firstSentence('No full stop here')).toBe('No full stop here');
+  });
+
+  it('firstSentence keeps underscores and stars that are not markdown', () => {
+    expect(firstSentence('I built wcount.py and test_wcount.py.')).toBe('I built wcount.py and test_wcount.py.');
+    expect(firstSentence('Renamed rename_by_date.sh to __init__.py style.')).toBe(
+      'Renamed rename_by_date.sh to __init__.py style.'
+    );
+    expect(firstSentence('It is *really* done and _very_ fast.')).toBe('It is really done and very fast.');
+    expect(firstSentence('## Summary\n- Fixed the 2*3 bug.')).toBe('Summary Fixed the 2*3 bug.');
   });
 
   it('formats durations for both captions', () => {
