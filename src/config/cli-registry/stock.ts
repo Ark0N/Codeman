@@ -1012,9 +1012,13 @@ const ANTIGRAVITY: CliEntry = {
     // too. The footer hint is drawn only at rest, and the turn's last repaint carries it.
     // The schema caps a glyph at 8 characters, so this is the head of `? for shortcuts`. It also
     // keeps the submit verifier inert (no row starts with it and holds prompt text).
+    // The working line is anchored to the start of a row, like gemini's braille branch: the
+    // idle probe tests it against the whole pane, and an answer that QUOTES the spinner row
+    // (an agent explaining this entry) would otherwise hold the tab busy while it is on screen.
+    // Every `agy` capture draws the spinner at column 0.
     workDetect: {
       promptGlyph: '? for sh',
-      workingLine: String.raw`[⠀-⣿]  [A-Z][A-Za-z ]{2,30}(?:\.\.\.|…)`,
+      workingLine: String.raw`(?:^|\n)[⠀-⣿]  [A-Z][A-Za-z ]{2,30}(?:\.\.\.|…)`,
     },
     // Like codex: an ABSENT config already defaults safe (no bypass flag), so only a
     // SENT config needs the flag forced off — nothing is materialized.

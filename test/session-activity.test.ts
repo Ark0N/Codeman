@@ -1018,6 +1018,8 @@ describe("antigravity's work-detection descriptor", () => {
     expect(working().test(AGY_AT_REST)).toBe(false);
     expect(working().test(AGY_CONFIRM)).toBe(false);
     expect(working().test('Loading... is what the spinner label reads\n')).toBe(false);
+    // An answer that quotes the spinner row mid-line must not hold the tab busy.
+    expect(working().test(`  ok\n  it matches \`⣯  Generating...\` in the pane\n${AGY_RULE}\n>\n`)).toBe(false);
   });
 
   it('names the footer hint the turn end carries, and no working repaint does', () => {
