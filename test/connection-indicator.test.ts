@@ -203,6 +203,19 @@ describe('connection indicator — a brief burst does not widen the pill', () =>
     app._updateConnectionIndicator(); // cancels it
   });
 
+  it('shows the count by itself once the hold elapses, and the timer is spent', async () => {
+    // A real wait, on purpose: the vm context runs on its own Date and the real setTimeout, so this
+    // exercises the shipped timer callback rather than a manual re-render.
+    const { app, els } = makeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 40 });
+    app._updateConnectionIndicator();
+    expect(els.connectionText.textContent).toBe('WS');
+    await new Promise((r) => setTimeout(r, 1400));
+    expect(els.connectionText.textContent).toBe('WS · 40B queued');
+    expect((app as unknown as { _backlogHoldTimer: unknown })._backlogHoldTimer).toBeNull();
+    app._pendingDeliveries.clear();
+    app._updateConnectionIndicator();
+  });
+
   it('shows the count once the same backlog has stayed up past the hold', () => {
     const { app, els } = makeApp({ activeSessionId: 's1', _wsState: 'connected', queuedBytes: 40 });
     app._updateConnectionIndicator();
