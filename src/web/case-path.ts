@@ -12,8 +12,10 @@
  *     its symlink-resolved form, against both the given and the symlink-resolved roots (a home reached
  *     through a link, macOS's `/etc` -> `/private/etc`), so a link into a blocked tree is not a way
  *     around it;
- *   - it must not be, or be inside, a cases directory: a case there is a plain Create New, and the same
- *     folder listed both as a local case and as a linked one would make deleting it remove files;
+ *   - it must not be a cases directory or a direct child of one: those are what `GET /api/cases` lists
+ *     as local cases, so a case there is a plain Create New, and the same folder listed both as a local
+ *     case and as a linked one would make deleting it remove files. A folder further down is not
+ *     listed and is allowed;
  *   - its parent must already exist (one folder is created, never a whole chain), and the folder
  *     itself must not exist or must be an EMPTY directory (a folder with contents is Link Existing's
  *     job, and silently scaffolding into someone's project is the one thing this must never do);
