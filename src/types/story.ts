@@ -109,7 +109,10 @@ export interface StoryEvent {
   tool: string;
   label: string;
   intent: StoryIntent;
-  /** False when the tool result was flagged as an error; absent while the call is still running. */
+  /**
+   * False when the call failed: its result was flagged as an error, or it reported failed tests (an
+   * exit code a pipe hid). Absent while the call is still running.
+   */
   ok?: boolean;
   pending?: boolean;
   /** The one file this event concerns (Read, Edit, Write), as the transcript gave it. */

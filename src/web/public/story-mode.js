@@ -1180,25 +1180,34 @@ const StoryArt = (() => {
         ctx.fillStyle = C.line;
         ctx.fillRect(bx + 44, by + 18, 32, 8);
         hit('output', bx - 6, by - 14, 132, 104, 'See what was saved');
-        const sp = spring(f - 28, { damping: 8, stiffness: 160 });
+        // The stamp says how it went: SAVED, or ERROR when the command failed; none while it runs.
+        const failed = p.panel.ok === false;
+        const stamp = failed ? 'ERROR' : 'SAVED';
+        const sp = p.panel.ok === undefined ? 0 : spring(f - 28, { damping: 8, stiffness: 160 });
         if (sp > 0.01) {
           ctx.save();
           ctx.translate(bx + 60, by + 56);
-          ctx.rotate(-0.18);
+          ctx.rotate(failed ? 0.14 : -0.18);
           ctx.scale(sp, sp);
           ctx.font = `20px ${DISPLAY}`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          const w = ctx.measureText('SAVED').width + 18;
+          const w = ctx.measureText(stamp).width + 18;
           rr(ctx, -w / 2, -15, w, 30, 4);
           ctx.strokeStyle = C.magenta;
           ctx.lineWidth = 3;
           ctx.stroke();
           ctx.fillStyle = C.magenta;
-          ctx.fillText('SAVED', 0, 1);
+          ctx.fillText(stamp, 0, 1);
           ctx.restore();
         }
-        agent(ctx, W - 50, 250, { frame: f, mood: 'happy', scale: 0.8, l: [-30, -52], r: [26, -128] });
+        agent(ctx, W - 50, 250, {
+          frame: f,
+          mood: failed ? 'shock' : p.panel.ok === undefined ? 'focus' : 'happy',
+          scale: 0.8,
+          l: [-30, -52],
+          r: failed ? [30, -60] : [26, -128],
+        });
       },
     },
     ask: {

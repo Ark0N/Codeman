@@ -1008,7 +1008,11 @@ function applyResult(ev: StoryEvent, r: Extract<StoryEntry, { k: 'result' }>): v
     ev.edit = r.edit;
     ev.file = r.edit.file;
   }
-  if (r.tests) ev.tests = r.tests;
+  if (r.tests) {
+    ev.tests = r.tests;
+    // A run that reports failed tests failed, whatever its exit code (`pytest | tail` exits 0).
+    if (r.tests.failed > 0) ev.ok = false;
+  }
   if (r.helper && ev.helper) {
     const helper: StoryHelper = { ...ev.helper };
     if (r.helper.background && !r.isError) {
@@ -1330,6 +1334,8 @@ function collapseLoops(panels: DraftPanel[]): DraftPanel[] {
     ) {
       j++;
     }
+    // A loop ends at a check: writes after the last check (docs, config) are their own panel.
+    while (j > i && panels[j - 1].kind === 'fix') j--;
     const run = panels.slice(i, j);
     if (run.length >= 4) {
       out.push({
@@ -1573,12 +1579,22 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       break;
     case 'save': {
       panel.notes = notesOf(evs);
-      story = evs.some((e) => e.ships === 'pr')
-        ? 'Claude opens a pull request.'
-        : evs.some((e) => e.ships === 'push')
-          ? 'Claude saves the work and sends it up.'
-          : 'Claude saves the work.';
-      director = evs.map(shortCommand).slice(0, 2).join(' · ');
+      const last = evs[evs.length - 1];
+      if (last?.ok !== undefined) panel.ok = last.ok;
+      const ships = evs.some((e) => e.ships === 'pr') ? 'pr' : evs.some((e) => e.ships === 'push') ? 'push' : '';
+      story =
+        panel.ok === false
+          ? ships === 'pr'
+            ? 'Claude tries to open a pull request, and the command fails.'
+            : ships === 'push'
+              ? 'Claude tries to send the work up, and the command fails.'
+              : 'Claude tries to save the work, and the command fails.'
+          : ships === 'pr'
+            ? 'Claude opens a pull request.'
+            : ships === 'push'
+              ? 'Claude saves the work and sends it up.'
+              : 'Claude saves the work.';
+      director = `${evs.map(shortCommand).slice(0, 2).join(' · ')}${errors ? ` · ${plural(errors, 'error')}` : ''}`;
       break;
     }
     case 'ask': {

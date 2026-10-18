@@ -607,6 +607,34 @@ describe('buildStoryPage', () => {
     expect(loop.tests).toEqual({ passed: 4, failed: 0 });
   });
 
+  it('a failed save says so; the failing run is marked failed on the event itself', () => {
+    const page = pageOf([
+      prompt('ship'),
+      ...bash('b1', 'pytest -q; echo "exit=$?"', 'Run tests', '1 error in 0.22s\nexit=2'),
+      ...bash('b2', 'git push -u origin main && git -C remote.git log', 'Push', 'fatal: bad object', true),
+      end(1000),
+    ]);
+    expect(page.events[1]).toMatchObject({ ok: false, tests: { passed: 0, failed: 1 } });
+    const save = page.panels.find((p) => p.kind === 'save')!;
+    expect(save.ok).toBe(false);
+    expect(save.caption.story).toBe('Claude tries to send the work up, and the command fails.');
+    expect(save.caption.director).toContain('1 error');
+  });
+
+  it('a loop ends at its last check; writes after it are a panel of their own', () => {
+    const page = pageOf([
+      prompt('tdd'),
+      ...edit('e1', '/w/test_a.py', ['+def test_a(): ...']),
+      ...bash('b1', 'pytest -q', 'Run tests', '1 failed in 0.1s'),
+      ...edit('e2', '/w/a.py', ['+a = 1']),
+      ...bash('b2', 'pytest -q', 'Run tests', '1 passed in 0.1s'),
+      ...edit('e3', '/w/README.md', ['+# a']),
+      end(1000),
+    ]);
+    expect(page.panels.map((p) => p.kind)).toEqual(['mission', 'loop', 'fix', 'complete']);
+    expect(page.panels[2].files).toEqual(['/w/README.md']);
+  });
+
   it('what Claude says about a check that just ran stays on that check', () => {
     const page = pageOf([
       prompt('test then commit'),
