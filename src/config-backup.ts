@@ -25,6 +25,7 @@ import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -33,7 +34,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 
 /**
@@ -55,6 +56,7 @@ export const CONFIG_BACKUP_FILES = [
   'intents.json',
   'linked-cases.json',
   'remote-hosts.json',
+  'remote-cases.json',
   'docker-hosts.json',
   'docker-cases.json',
   'webviews.json',
@@ -94,6 +96,8 @@ export interface ConfigBackupManifest {
   appVersion: string;
   /** Digest of the set of files, so an unchanged state is not snapshotted twice. */
   hash: string;
+  /** Host and data dir that made it, so instances sharing one folder keep to their own snapshots. */
+  origin?: string;
   files: ConfigBackupFile[];
 }
 
@@ -152,6 +156,9 @@ export function resolveConfigBackupDir(settings: ConfigBackupSettings, dataDir: 
   return dir;
 }
 
+/** Who owns a snapshot: this machine's name plus the data dir (prod and a beta differ by the latter). */
+export const configBackupOrigin = (dataDir: string): string => `${hostname()}:${resolve(dataDir)}`;
+
 const sha256 = (data: Buffer | string): string => createHash('sha256').update(data).digest('hex');
 
 /**
@@ -196,21 +203,25 @@ function stamp(now: number): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-function readManifest(dir: string, id: string): ConfigBackupManifest | null {
+function readManifest(dir: string, id: string, origin?: string): ConfigBackupManifest | null {
   if (!SNAPSHOT_ID_RE.test(id)) return null;
   try {
     const m = JSON.parse(readFileSync(join(dir, id, MANIFEST), 'utf8')) as ConfigBackupManifest;
     if (!m || m.id !== id || !Array.isArray(m.files) || typeof m.createdAt !== 'number' || typeof m.hash !== 'string') {
       return null;
     }
+    if (origin !== undefined && m.origin !== origin) return null;
     return m;
   } catch {
     return null;
   }
 }
 
-/** Snapshots this module made in `dir`, newest first. Foreign folders and files are ignored. */
-export function listConfigBackups(dir: string): ConfigBackupSummary[] {
+/**
+ * Snapshots this module made in `dir`, newest first. Foreign folders and files are ignored, and so
+ * are other instances' snapshots when `origin` is given (see {@link configBackupOrigin}).
+ */
+export function listConfigBackups(dir: string, origin?: string): ConfigBackupSummary[] {
   let names: string[];
   try {
     names = readdirSync(dir);
@@ -219,7 +230,7 @@ export function listConfigBackups(dir: string): ConfigBackupSummary[] {
   }
   const out: ConfigBackupSummary[] = [];
   for (const id of names) {
-    const m = readManifest(dir, id);
+    const m = readManifest(dir, id, origin);
     if (!m) continue;
     const files = m.files.map((f) => ({ name: f.name, bytes: f.bytes }));
     out.push({
@@ -267,9 +278,10 @@ export function createConfigBackup(opts: CreateConfigBackupOptions): ConfigBacku
   if (present.length === 0) return { status: 'empty' };
 
   const hash = sha256(present.map((f) => `${f.name}\0${f.change}`).join('\n'));
-  const existing = listConfigBackups(opts.backupDir);
+  const origin = configBackupOrigin(opts.dataDir);
+  const existing = listConfigBackups(opts.backupDir, origin);
   if (!opts.force && existing[0]) {
-    const latest = readManifest(opts.backupDir, existing[0].id);
+    const latest = readManifest(opts.backupDir, existing[0].id, origin);
     if (latest && latest.hash === hash) return { status: 'unchanged', id: latest.id };
   }
 
@@ -288,6 +300,7 @@ export function createConfigBackup(opts: CreateConfigBackupOptions): ConfigBacku
       reason: opts.reason,
       appVersion: opts.appVersion ?? '',
       hash,
+      origin,
       files: present.map((f) => ({ name: f.name, bytes: f.data.length, sha256: f.sha })),
     };
     for (const f of present) writeFileSync(join(tmp, f.name), f.data, { mode: 0o600 });
@@ -305,9 +318,26 @@ export function createConfigBackup(opts: CreateConfigBackupOptions): ConfigBacku
   return { status: 'created', id, files: present.length, bytes: present.reduce((n, f) => n + f.data.length, 0) };
 }
 
+/** Remove `.tmp-cfg-*` build folders a crashed snapshot left behind (older than an hour, so a live one on a shared folder is safe). */
+export function sweepConfigBackupTemps(dir: string, now: number = Date.now()): void {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const n of names) {
+    if (!/^\.tmp-cfg-\d{8}-\d{6}(?:-\d{1,3})?-\d+$/.test(n)) continue;
+    const st = lstatSync(join(dir, n), { throwIfNoEntry: false });
+    if (st && now - st.mtimeMs > 3_600_000) rmSync(join(dir, n), { recursive: true, force: true });
+  }
+}
+
 export interface PruneOptions {
   keepCount: number;
   keepDays: number;
+  /** Only this instance's snapshots are pruned; omitted = every snapshot in the folder. */
+  origin?: string;
   now?: number;
 }
 
@@ -317,7 +347,7 @@ export interface PruneOptions {
  */
 export function pruneConfigBackups(dir: string, opts: PruneOptions): string[] {
   const now = opts.now ?? Date.now();
-  const all = listConfigBackups(dir);
+  const all = listConfigBackups(dir, opts.origin);
   const cutoff = opts.keepDays > 0 ? now - opts.keepDays * 86_400_000 : null;
   const removed: string[] = [];
   all.forEach((b, index) => {
@@ -343,6 +373,8 @@ export class ConfigBackupCorruptError extends Error {}
 
 export interface RestoreResult {
   restored: string[];
+  /** Tracked files present now that the snapshot did not hold; a restore leaves them as they are. */
+  untouched: string[];
   /** The snapshot taken of the live files before they were overwritten. */
   safetySnapshot: string | null;
 }
@@ -359,7 +391,7 @@ export function restoreConfigBackup(opts: {
   appVersion?: string;
   now?: number;
 }): RestoreResult {
-  const manifest = readManifest(opts.backupDir, opts.id);
+  const manifest = readManifest(opts.backupDir, opts.id, configBackupOrigin(opts.dataDir));
   if (!manifest) throw new ConfigBackupNotFoundError(`No config backup named ${opts.id}`);
 
   const allowed = new Set<string>(CONFIG_BACKUP_FILES);
@@ -392,11 +424,20 @@ export function restoreConfigBackup(opts: {
   for (const f of loaded) {
     const target = join(opts.dataDir, f.name);
     const tmp = `${target}.restore-${process.pid}`;
-    writeFileSync(tmp, f.data, { mode: 0o600 });
-    renameSync(tmp, target);
+    try {
+      writeFileSync(tmp, f.data, { mode: 0o600 });
+      renameSync(tmp, target);
+    } catch (err) {
+      rmSync(tmp, { force: true });
+      throw err;
+    }
     restored.push(f.name);
   }
-  return { restored, safetySnapshot: safety.status === 'created' ? safety.id : null };
+  // A restore never deletes: tracked files the snapshot did not hold stay as they are.
+  const untouched = CONFIG_BACKUP_FILES.filter(
+    (n) => !restored.includes(n) && lstatSync(join(opts.dataDir, n), { throwIfNoEntry: false })?.isFile()
+  );
+  return { restored, untouched, safetySnapshot: safety.status === 'created' ? safety.id : null };
 }
 
 /** The live files in the data dir, as a side of a diff. */
@@ -436,7 +477,13 @@ const MAX_DIFF_CHANGES = 200;
 const MAX_DIFF_VALUE_CHARS = 200;
 
 /** Files whose every value is a credential or key: only names are ever shown. */
-const REDACT_ALL_FILES: ReadonlySet<string> = new Set(['.env', 'users.json', 'push-keys.json']);
+const REDACT_ALL_FILES: ReadonlySet<string> = new Set([
+  '.env',
+  'users.json',
+  'push-keys.json',
+  'webhook.json',
+  'intents.json',
+]);
 /** Elsewhere a value is hidden when its own key looks like a credential. */
 const SECRET_KEY_RE = /(token|secret|passw|credential|auth|key$)/i;
 
@@ -478,6 +525,19 @@ function leavesOf(name: string, data: Buffer): Leaves | null {
   }
 }
 
+/** A URL value loses its userinfo, query and fragment: they carry passwords and tokens. */
+function scrubUrl(jsonText: string): string {
+  try {
+    const v = JSON.parse(jsonText) as unknown;
+    if (typeof v !== 'string' || !/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) return jsonText;
+    const u = new URL(v);
+    if (!u.username && !u.password && !u.search && !u.hash) return jsonText;
+    return JSON.stringify(`${u.protocol}//${u.host}${u.pathname}`);
+  } catch {
+    return jsonText;
+  }
+}
+
 const clip = (s: string): string => (s.length > MAX_DIFF_VALUE_CHARS ? `${s.slice(0, MAX_DIFF_VALUE_CHARS)}…` : s);
 
 function diffLeaves(name: string, a: Leaves, b: Leaves): { changes: ConfigDiffChange[]; truncated: boolean } {
@@ -494,8 +554,8 @@ function diffLeaves(name: string, a: Leaves, b: Leaves): { changes: ConfigDiffCh
       changes.push({
         path,
         kind,
-        ...(before !== undefined && { before: clip(before) }),
-        ...(after !== undefined && { after: clip(after) }),
+        ...(before !== undefined && { before: clip(scrubUrl(before)) }),
+        ...(after !== undefined && { after: clip(scrubUrl(after)) }),
       });
     }
   }
@@ -516,7 +576,7 @@ function loadDiffSide(side: string, dataDir: string, backupDir: string): Map<str
     }
     return out;
   }
-  const manifest = readManifest(backupDir, side);
+  const manifest = readManifest(backupDir, side, configBackupOrigin(dataDir));
   if (!manifest) throw new ConfigBackupNotFoundError(`No config backup named ${side}`);
   const allowed = new Set<string>(CONFIG_BACKUP_FILES);
   for (const f of manifest.files) {

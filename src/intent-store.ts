@@ -108,6 +108,11 @@ export class IntentStore {
 
   // ----- Public API -----
 
+  /** Drop the in-memory copy so the next call re-reads intents.json (after a config restore replaced it). */
+  reload(): void {
+    this.profiles = null;
+  }
+
   /**
    * The profile for a session's case. Never persists on read: an absent
    * profile returns an empty transient one (`updatedAt: 0`).

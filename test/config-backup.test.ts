@@ -30,6 +30,8 @@ import {
   readConfigBackupSettings,
   resolveConfigBackupDir,
   restoreConfigBackup,
+  configBackupOrigin,
+  sweepConfigBackupTemps,
 } from '../src/config-backup.js';
 
 let root: string;
@@ -335,6 +337,21 @@ describe('diffConfigBackups', () => {
     expect(diff(a, a).changed).toBe(0);
   });
 
+  it('never returns a webhook URL, captured prompts, or URL userinfo and query', () => {
+    put('webhook.json', JSON.stringify({ url: 'https://hooks.slack.com/services/T0/B0/oldsecret' }));
+    put('intents.json', JSON.stringify({ profiles: [{ key: 'k', prompts: ['my password is pw1'] }] }));
+    put('settings.json', JSON.stringify({ baseUrl: 'https://user:pw@host/p?token=t1#f' }));
+    const a = snap(T0);
+    put('webhook.json', JSON.stringify({ url: 'https://hooks.slack.com/services/T0/B0/newsecret' }));
+    put('intents.json', JSON.stringify({ profiles: [{ key: 'k', prompts: ['my password is pw2'] }] }));
+    put('settings.json', JSON.stringify({ baseUrl: 'https://user:pw@host/p?token=t2#f' }));
+    const d = diff(a, 'current');
+    const json = JSON.stringify(d);
+    for (const s of ['secret', 'pw1', 'pw2', 'user:pw', 'token=', 'hooks.slack']) expect(json).not.toContain(s);
+    expect(file(d, 'webhook.json').changes.every((c) => c.redacted)).toBe(true);
+    expect(file(d, 'intents.json').changes.every((c) => c.redacted)).toBe(true);
+  });
+
   it('never returns a credential value, only that it differs', () => {
     put('.env', 'SECRET_ONE=hunter2\nOTHER=abc\n');
     put('users.json', JSON.stringify({ admin: { name: 'root' } }));
@@ -386,5 +403,45 @@ describe('diffConfigBackups', () => {
     expect(() => diff('../etc', 'current')).toThrow(ConfigBackupNotFoundError);
     writeFileSync(join(backups, a, 'settings.json'), '{"a":99}');
     expect(() => diff(a, 'current')).toThrow(ConfigBackupCorruptError);
+  });
+});
+
+describe('instances sharing one backup folder', () => {
+  it('keeps to its own snapshots: no churn, no prune, no restore of the other', () => {
+    const other = join(root, 'other-data');
+    mkdirSync(other, { recursive: true });
+    put('settings.json', '{"a":1}');
+    writeFileSync(join(other, 'settings.json'), '{"b":2}');
+    const mine = createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 });
+    const theirs = createConfigBackup({ dataDir: other, backupDir: backups, reason: 'auto', now: T0 + 1000 });
+    expect(theirs.status).toBe('created');
+    // Each side's change check compares with its own newest snapshot, so a second tick is a no-op.
+    expect(createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 + 2000 }).status).toBe(
+      'unchanged'
+    );
+    expect(createConfigBackup({ dataDir: other, backupDir: backups, reason: 'auto', now: T0 + 3000 }).status).toBe(
+      'unchanged'
+    );
+    expect(listConfigBackups(backups, configBackupOrigin(data))).toHaveLength(1);
+    expect(
+      pruneConfigBackups(backups, { keepCount: 1, keepDays: 1, now: T0 + 999 * DAY, origin: configBackupOrigin(data) })
+    ).toEqual([]);
+    expect(listConfigBackups(backups)).toHaveLength(2);
+    const theirId = (theirs as { id: string }).id;
+    expect(() => restoreConfigBackup({ dataDir: data, backupDir: backups, id: theirId })).toThrow(
+      ConfigBackupNotFoundError
+    );
+    expect((mine as { id: string }).id).not.toBe(theirId);
+  });
+
+  it('a restore reports tracked files it left alone, and sweeps only old temp folders', () => {
+    put('settings.json', '{"a":1}');
+    const made = createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 }) as { id: string };
+    put('webhook.json', '{"url":"u"}');
+    expect(restoreConfigBackup({ dataDir: data, backupDir: backups, id: made.id }).untouched).toEqual(['webhook.json']);
+    const stale = join(backups, '.tmp-cfg-20200101-000000-99999');
+    mkdirSync(stale);
+    sweepConfigBackupTemps(backups, Date.now() + 2 * 3_600_000);
+    expect(existsSync(stale)).toBe(false);
   });
 });

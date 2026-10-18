@@ -20,6 +20,9 @@ import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } 
 import { isAdmin, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { getDataDir } from '../../config/instance.js';
+import { intentStore } from '../../intent-store.js';
+import { describeUnknownPath, probePathKind } from '../../utils/bounded-path-probe.js';
+import { dirname } from 'node:path';
 import {
   CONFIG_BACKUP_FILES,
   CONFIG_DIFF_CURRENT,
@@ -33,6 +36,8 @@ import {
   readConfigBackupSettings,
   resolveConfigBackupDir,
   restoreConfigBackup,
+  configBackupOrigin,
+  sweepConfigBackupTemps,
   type ConfigBackupResult,
   type ConfigBackupSettings,
   type ConfigBackupSummary,
@@ -49,7 +54,7 @@ const APP_VERSION: string = (() => {
 })();
 
 /** Files whose running-process copy only reloads on restart (the rest are read per request). */
-const RESTART_REQUIRED = new Set<string>(['clis.json', 'users.json', '.env', 'push-keys.json']);
+const RESTART_REQUIRED = new Set<string>(['clis.json', 'users.json', '.env', 'push-keys.json', 'settings.json']);
 
 export interface ConfigBackupStatus {
   settings: ConfigBackupSettings;
@@ -65,6 +70,29 @@ export async function readEffectiveBackupSettings(): Promise<{ settings: ConfigB
   return { settings, dir: resolveConfigBackupDir(settings, getDataDir()) };
 }
 
+/** A user-chosen backup folder that is not safe to touch (bounded probe, as for case paths, #516). */
+export class BackupDirUnavailableError extends Error {}
+
+/**
+ * Probe a custom backup folder without blocking the event loop on a dead mount. The default folder
+ * needs no probe. Returns whether the folder exists; throws when it did not answer, or is not a
+ * folder. A missing custom folder is only creatable when its parent is present.
+ */
+export async function probeBackupDir(settings: ConfigBackupSettings, dir: string): Promise<boolean> {
+  if (!settings.dir || dir === defaultConfigBackupDir(getDataDir())) return true;
+  const kind = await probePathKind(dir, { pastCap: true });
+  if (kind === 'unknown')
+    throw new BackupDirUnavailableError(describeUnknownPath('Backup folder', dir, { pastCap: true }));
+  if (kind === 'file') throw new BackupDirUnavailableError(`Backup folder is a file, not a folder: ${dir}`);
+  if (kind === 'directory') return true;
+  const parent = await probePathKind(dirname(dir), { pastCap: true });
+  if (parent === 'unknown') {
+    throw new BackupDirUnavailableError(describeUnknownPath('Backup folder', dirname(dir), { pastCap: true }));
+  }
+  if (parent !== 'directory') throw new BackupDirUnavailableError(`Backup folder's parent is missing: ${dirname(dir)}`);
+  return false;
+}
+
 /** Snapshot (when changed) and apply retention; shared by the timer and the manual route. */
 export async function runConfigBackup(
   reason: string,
@@ -72,6 +100,8 @@ export async function runConfigBackup(
 ): Promise<{ result: ConfigBackupResult; removed: string[] } | null> {
   const { settings, dir } = await readEffectiveBackupSettings();
   if (!settings.enabled && !opts.force) return null;
+  await probeBackupDir(settings, dir);
+  sweepConfigBackupTemps(dir);
   const result = createConfigBackup({
     dataDir: getDataDir(),
     backupDir: dir,
@@ -79,7 +109,11 @@ export async function runConfigBackup(
     appVersion: APP_VERSION,
     force: opts.force,
   });
-  const removed = pruneConfigBackups(dir, { keepCount: settings.keepCount, keepDays: settings.keepDays });
+  const removed = pruneConfigBackups(dir, {
+    keepCount: settings.keepCount,
+    keepDays: settings.keepDays,
+    origin: configBackupOrigin(getDataDir()),
+  });
   return { result, removed };
 }
 
@@ -96,6 +130,13 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
     const denied = deny(req, reply);
     if (denied) return denied;
     const { settings, dir } = await readEffectiveBackupSettings();
+    let present: boolean;
+    try {
+      present = await probeBackupDir(settings, dir);
+    } catch (err) {
+      reply.code(503);
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+    }
     return {
       success: true,
       data: {
@@ -103,7 +144,7 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
         dir,
         defaultDir: defaultConfigBackupDir(getDataDir()),
         tracked: CONFIG_BACKUP_FILES,
-        backups: listConfigBackups(dir),
+        backups: present ? listConfigBackups(dir, configBackupOrigin(getDataDir())) : [],
       },
     };
   });
@@ -115,7 +156,7 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
       const out = await runConfigBackup('manual', { force: true });
       return { success: true, data: { ...out!.result, removed: out!.removed } };
     } catch (err) {
-      reply.code(500);
+      reply.code(err instanceof BackupDirUnavailableError ? 503 : 500);
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Backup failed: ${getErrorMessage(err)}`);
     }
   });
@@ -129,7 +170,8 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, '`from` is required (a backup id or "current")');
     }
     try {
-      const { dir } = await readEffectiveBackupSettings();
+      const { settings, dir } = await readEffectiveBackupSettings();
+      await probeBackupDir(settings, dir);
       const data = diffConfigBackups({
         dataDir: getDataDir(),
         backupDir: dir,
@@ -146,7 +188,7 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
         reply.code(409);
         return createErrorResponse(ApiErrorCode.CONFLICT, err.message);
       }
-      reply.code(500);
+      reply.code(err instanceof BackupDirUnavailableError ? 503 : 500);
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Diff failed: ${getErrorMessage(err)}`);
     }
   });
@@ -156,12 +198,16 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
     if (denied) return denied;
     const { id } = req.params as { id: string };
     try {
-      const { dir } = await readEffectiveBackupSettings();
+      const { settings, dir } = await readEffectiveBackupSettings();
+      await probeBackupDir(settings, dir);
       const out = restoreConfigBackup({ dataDir: getDataDir(), backupDir: dir, id, appVersion: APP_VERSION });
+      // IntentStore caches the file and rewrites it whole on the next prompt, which would undo the restore.
+      if (out.restored.includes('intents.json')) intentStore.reload();
       return {
         success: true,
         data: {
           restored: out.restored,
+          untouched: out.untouched,
           safetySnapshot: out.safetySnapshot,
           restartRequired: out.restored.filter((n) => RESTART_REQUIRED.has(n)),
         },
@@ -175,7 +221,7 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
         reply.code(409);
         return createErrorResponse(ApiErrorCode.CONFLICT, `${err.message}. Nothing was changed.`);
       }
-      reply.code(500);
+      reply.code(err instanceof BackupDirUnavailableError ? 503 : 500);
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Restore failed: ${getErrorMessage(err)}`);
     }
   });

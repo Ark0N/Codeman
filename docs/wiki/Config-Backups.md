@@ -17,7 +17,7 @@ A fixed list of files from the data directory (`~/.codeman/`, or the directory o
 | `webhook.json` | Webhook notification target. |
 | `intents.json` | Read My Mind per-case profiles. |
 | `linked-cases.json` | Registered cases. |
-| `remote-hosts.json`, `docker-hosts.json`, `docker-cases.json` | Remote SSH and Docker overlay configuration. |
+| `remote-hosts.json`, `remote-cases.json`, `docker-hosts.json`, `docker-cases.json` | Remote SSH and Docker overlay configuration. |
 | `webviews.json` | Saved dashboard URLs. |
 | `push-keys.json` | Web-push keys (regenerating them drops every device's subscription). |
 | `users.json` | Multi-user accounts. **Holds password hashes.** |
@@ -122,7 +122,14 @@ Only the tracked names are ever written, whatever a manifest lists.
 
 Settings are re-read on the next request, so reload the page. `clis.json`, `users.json`,
 `.env` and `push-keys.json` are read once per process: **restart Codeman** for those to take
-effect (the response lists which). A restore does not touch running sessions.
+effect (the response lists which). Restoring `settings.json` also does not re-run the switches
+that saving in Settings applies at once (file watchers and the like), so those apply after a
+restart, and `settings.json` is listed with the restart-required files. A restore does not touch
+running sessions.
+
+When the backup folder is shared (a synced folder used by two machines, or prod and a beta),
+each snapshot records the host and data directory that made it, and every instance only
+snapshots, lists, prunes, compares and restores its own.
 
 You can also restore by hand: the files in a backup folder are the originals, so copying one back
 over the file in the data directory is equivalent (stop Codeman first if you are replacing
@@ -133,7 +140,8 @@ over the file in the data directory is equivalent (stop Codeman first if you are
 Before you restore, or to find out what changed and when, use **Compare** in the list:
 
 - **Compare with current** on a backup shows what differs between that backup and the config
-  running now, which is also what a restore of it would undo.
+  running now. A restore puts back the files the backup holds; files created since are left as
+  they are, and the restore response names them (`untouched`).
 - **Changes in this backup** shows what differs between the backup before it and this one.
 - The **Compare … with … Show changes** pickers compare any two backups, or a backup with the
   current config.
@@ -144,9 +152,10 @@ that are the same are listed on one line. A file that is not JSON shows only tha
 a file with more than 200 changes is cut short, so use the files themselves for a full diff. A
 self-refreshed discovery timestamp in `custom-model-hosts.json` is not counted as a change.
 
-**Credential values are never shown.** `.env`, `users.json` and `push-keys.json` list only the
-names that changed, and in every other file a key that looks like a token, secret, password,
-credential or key is shown as "changed" without its value.
+**Credential values are never shown.** `.env`, `users.json`, `push-keys.json`, `webhook.json` (the
+URL is a bearer secret) and `intents.json` (captured prompts) list only the names that changed, and in every other file a key that looks like a token, secret, password,
+credential or key is shown as "changed" without its value. URL values lose any `user:password@`,
+query and fragment.
 
 ## Security
 

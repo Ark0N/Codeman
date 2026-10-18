@@ -1364,13 +1364,13 @@ Object.assign(CodemanApp.prototype, {
    * wired to `codeman:me` for the same late-resolving role as the groups above.
    */
   _applyDoctorAdminGate() {
-    const group = document.getElementById('doctorGroup');
-    if (!group) return;
     const me = window.__codemanUser || {};
-    group.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+    for (const id of ['doctorGroup', 'configBackupGroup']) {
+      const group = document.getElementById(id);
+      if (group) group.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+    }
   },
 
-  /** Preview (apply=false) or run (apply=true) the MCP server sync across enabled CLIs. */
   // ── Config backups ──────────────────────────────────────────────────────────
   // Server-side files, so these read the SAVED settings: a folder or retention edit applies after Save.
 
@@ -1496,6 +1496,7 @@ Object.assign(CodemanApp.prototype, {
     this.loadConfigBackups();
   },
 
+  /** Preview (apply=false) or run (apply=true) the MCP server sync across enabled CLIs. */
   async mcpSync(apply) {
     const out = this.$('mcpSyncResult');
     const show = (html, hint = '') => {
@@ -2871,7 +2872,7 @@ Object.assign(CodemanApp.prototype, {
       configBackupEnabled: document.getElementById('appSettingsConfigBackup').checked,
       configBackupDir: document.getElementById('appSettingsConfigBackupDir').value.trim(),
       configBackupKeepCount: Math.min(500, Math.max(1, parseInt(document.getElementById('appSettingsConfigBackupKeepCount').value, 10) || 20)),
-      configBackupKeepDays: Math.min(3650, Math.max(0, parseInt(document.getElementById('appSettingsConfigBackupKeepDays').value, 10) || 0)),
+      configBackupKeepDays: Math.min(3650, Math.max(0, Number.isNaN(parseInt(document.getElementById('appSettingsConfigBackupKeepDays').value, 10)) ? 30 : parseInt(document.getElementById('appSettingsConfigBackupKeepDays').value, 10))),
       readMyMindEnabled: document.getElementById('appSettingsReadMyMind').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,

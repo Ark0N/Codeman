@@ -13,6 +13,7 @@ import { registerConfigBackupRoutes } from '../../src/web/routes/config-backup-r
 import { SETTINGS_PATH } from '../../src/web/route-helpers.js';
 import { getDataDir } from '../../src/config/instance.js';
 import { defaultConfigBackupDir } from '../../src/config-backup.js';
+import { intentStore } from '../../src/intent-store.js';
 
 let custom: string;
 const settings = (extra: Record<string, unknown> = {}) => {
@@ -84,9 +85,33 @@ describe('/api/config-backups', () => {
     const d = res.json().data;
     expect(d.restored).toEqual(expect.arrayContaining(['settings.json', 'clis.json']));
     expect(d.restartRequired).toContain('clis.json');
-    expect(d.restartRequired).not.toContain('settings.json');
+    expect(d.restartRequired).toContain('settings.json'); // its watcher toggles are not re-run by a restore
     expect(d.safetySnapshot).toBeTruthy();
     expect(JSON.parse(readFileSync(SETTINGS_PATH, 'utf8')).displayName).toBe('before');
+  });
+
+  it('a restored intents.json is not reverted by the next captured prompt', async () => {
+    const { app } = await createRouteTestHarness(registerConfigBackupRoutes);
+    const dir = mkdtempSync(join(tmpdir(), 'cfg-backup-intent-'));
+    try {
+      intentStore.recordPrompt(undefined, dir, 's1', 'first prompt about the build pipeline');
+      const id = (await app.inject({ method: 'POST', url: '/api/config-backups' })).json().data.id;
+      intentStore.recordPrompt(undefined, dir, 's1', 'second prompt about the build pipeline');
+      await app.inject({ method: 'POST', url: `/api/config-backups/${id}/restore` });
+      intentStore.recordPrompt(undefined, dir, 's1', 'third prompt about the build pipeline');
+      expect(intentStore.getProfile(undefined, dir).recentPrompts).toHaveLength(2);
+    } finally {
+      intentStore.deleteProfile(undefined, dir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a custom folder whose parent is missing instead of creating it', async () => {
+    settings({ configBackupDir: join(custom, 'no', 'such', 'dir') });
+    const { app } = await createRouteTestHarness(registerConfigBackupRoutes);
+    const res = await app.inject({ method: 'POST', url: '/api/config-backups' });
+    expect(res.statusCode).toBe(503);
+    expect(existsSync(join(custom, 'no'))).toBe(false);
   });
 
   it('answers 404 for an unknown backup and 404 for a traversal attempt', async () => {
