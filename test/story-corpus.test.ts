@@ -107,7 +107,7 @@ describe('Story Mode on real sessions', () => {
 
   it('a commit at the end of a test one-liner is kept, and a background helper reports back in 9 s', () => {
     expect(panel('text-plan-dry-run-helper', 0, 'check')?.story).toBe(
-      'Claude writes test_csvstat.py and pyproject.toml; the tests pass, and Claude starts a git repository and saves the work.'
+      'Claude writes test_csvstat.py and pyproject.toml; the tests pass, then Claude starts a git repository and saves the work.'
     );
     expect(panel('text-plan-dry-run-helper', 0, 'plan')?.story).toBe('Claude writes a plan: 4 steps.');
     expect(pagesOf('text-plan-dry-run-helper')[1]).toMatchObject({ origin: 'task', durationMs: 9008 });

@@ -62,7 +62,7 @@
       {
         "kind": "check",
         "ok": true,
-        "story": "Claude writes test_csvstat.py and pyproject.toml; the tests pass, and Claude starts a git repository and saves the work.",
+        "story": "Claude writes test_csvstat.py and pyproject.toml; the tests pass, then Claude starts a git repository and saves the work.",
         "director": "python3 -m pytest -q 2>&1 → ok ×2 · 17 passed · writes 2 files · 1 commit",
         "balloon": "Code and tests are committed.",
         "tests": {

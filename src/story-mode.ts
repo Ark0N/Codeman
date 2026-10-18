@@ -2713,7 +2713,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       if (saved) {
         director += ` · ${plural(saved, 'commit')}`;
         if (ok)
-          story = `${story.slice(0, -1)}, and Claude ${startsRepoAt(draft.events, events) ? 'starts a git repository and ' : ''}saves the work${
+          story = `${story.slice(0, -1)}, ${startsRepoAt(draft.events, events) ? 'then Claude starts a git repository and' : 'and Claude'} saves the work${
             checks.some((e) => e.ships === 'push') ? ' and sends it up' : ''
           }.`;
       }
