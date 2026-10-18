@@ -28,14 +28,13 @@ There are several layers stacked on that: a completion message from the CLI, an 
 output silence, and token stability.
 
 **For the other CLIs** it depends on what the CLI tells Codeman. Codex, OpenCode, Gemini
-CLI, Pi and OMP each declare their own prompt marker and working line, so they get the same
-screen check Claude does (before 1.26.1 every Codex session reported idle for its whole
-life). DeepSeek Harness reports its end of turn and its dialogs to Codeman itself, which is
-as precise as hooks; its working and idle display still comes from its output. Antigravity
-and Grok Build declare neither. Codeman calls a new pane of theirs idle 3 seconds after
-launch, and after that it has only generic cues to go on (Claude's `❯` prompt marker, a
-braille spinner glyph), which these CLIs may not draw, so their working and idle status is
-unreliable.
+CLI, Pi, OMP and Antigravity each declare their own prompt marker and working line, so they
+get the same screen check Claude does (before 1.26.1 every Codex session reported idle for
+its whole life). DeepSeek Harness reports its end of turn and its dialogs to Codeman itself,
+which is as precise as hooks; its working and idle display still comes from its output.
+Grok Build declares neither. Codeman calls a new grok pane idle 3 seconds after launch, and
+after that it has only generic cues to go on (Claude's `❯` prompt marker, a braille spinner
+glyph), which grok may not draw, so its working and idle status is unreliable.
 
 ## The Respawn Controller
 

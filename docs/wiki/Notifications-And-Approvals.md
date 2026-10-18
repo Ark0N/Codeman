@@ -39,8 +39,8 @@ hooks, but its dialogs are distinctive enough to read off the screen, so a Codex
 waiting on an approval, a question or the "Trust this folder?" prompt turns red too, and
 clears a few seconds after you answer. For the other CLIs there are no hooks and no dialog
 reading, so you get only the coarser working and idle state: read off the screen for
-OpenCode, Gemini CLI, Pi and OMP, and unreliable for Antigravity and Grok Build, which
-declare nothing Codeman can read it from.
+OpenCode, Gemini CLI, Pi, OMP and Antigravity, and unreliable for Grok Build, which
+declares nothing Codeman can read it from.
 
 ## Window title and OS notifications
 

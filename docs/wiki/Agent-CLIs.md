@@ -69,7 +69,7 @@ output. The other CLIs expose no equivalent.
 | Respawn cycling and unattended runs               | Yes    | Yes                                                  |
 | Cron jobs                                         | Yes    | Yes                                                  |
 | Docker cases, remote SSH cases                    | Yes    | Yes                                                  |
-| Precise idle detection                            | Yes    | Codex, Pi, OpenCode, OMP and Gemini: same screen check, via their own prompt and working line. DeepSeek: reports its end of turn itself. Antigravity and Grok: generic cues only, unreliable |
+| Precise idle detection                            | Yes    | Codex, Pi, OpenCode, OMP, Gemini and Antigravity: same screen check, via their own prompt and working line. DeepSeek: reports its end of turn itself. Grok: generic cues only, unreliable |
 | Auto-resume when a usage limit resets             | Yes    | No                                                   |
 | Plan usage chip                                   | Yes    | No                                                   |
 | Approvals Inbox                                   | Yes    | DeepSeek and Codex as alerts (answer in the terminal); others no |
@@ -183,6 +183,17 @@ working for good after its first turn.
 Google's successor to the consumer Gemini CLI, invoked as `agy`. It keeps all of its state
 in `~/.gemini/antigravity-cli/`, so the credential handling that applies to Gemini applies
 to it as well.
+
+- **Work detection reads its spinner row.** While a turn runs, `agy` animates an 8-dot braille
+  frame and a label one row above the composer (`⣯  Generating...`; `Working...` and
+  `Loading...` too), and its footer reads `esc to cancel`. Codeman matches that row, which is
+  what puts the activity indicator on the tab. The frames are not the braille set Claude and
+  Gemini use, which is why the tab used to look idle through a whole turn.
+- **At rest the footer hint is the idle mark.** The composer's `>` is no good for that, since
+  the submitted prompt is echoed as `> <text>` as well. `? for shortcuts` is drawn only at
+  rest, and the turn's last repaint carries it. A shell call that waits for approval replaces
+  the composer and the footer hint is not drawn there, so the tab keeps reading as working
+  until you answer.
 
 ### Pi
 

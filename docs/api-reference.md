@@ -217,7 +217,7 @@ runs no agent, and the external CLIs render their own TUIs and post no hooks
 is `blocked` on `codex`: Codeman reads codex's approval, question and trust dialogs off
 its screen and raises `blocked` for them (see [Signals](#signals)). For every other mode
 only `idle`, `working` and `exit` are accepted. `exit` is dependable everywhere; `idle` and
-`working` are screen-checked for `opencode`, `gemini`, `pi` and `omp` (as for `claude` and
+`working` are screen-checked for `opencode`, `gemini`, `pi`, `omp` and `antigravity` (as for `claude` and
 `codex`) and not guaranteed elsewhere: see the caveats under [Signals](#signals) before
 building on `idle`.
 Requesting a signal the session can never emit **explicitly** is a `400` (`stop` on
@@ -246,8 +246,8 @@ contract is a **marker unique to each call** (`MARK="DONE_$RANDOM"`, send
 
 | Signal | Source | Actually fires for |
 |--------|--------|--------------------|
-| `idle` | the session's own `idle` event | `claude`: yes, on ❯-prompt detection after activity. `codex`, `opencode`, `gemini`, `pi`, `omp`: yes, the same screen check through the prompt marker and working line each declares (`capabilities.workDetect`). `shell`: **once only**, ~500 ms after start, and never again. Other external CLIs (`antigravity`, `grok`, `deepseek`): not guaranteed (they render their own TUIs and readiness is output stabilization) |
-| `working` | the session's own `working` event | `claude`, plus `codex`, `opencode`, `gemini`, `pi` and `omp` through the working line each declares. Elsewhere not guaranteed: it rests on generic output heuristics such as a braille spinner glyph |
+| `idle` | the session's own `idle` event | `claude`: yes, on ❯-prompt detection after activity. `codex`, `opencode`, `gemini`, `pi`, `omp`, `antigravity`: yes, the same screen check through the prompt marker and working line each declares (`capabilities.workDetect`); an `antigravity` session waiting on a shell-command approval stays `working` until it is answered. `shell`: **once only**, ~500 ms after start, and never again. Other external CLIs (`grok`, `deepseek`): not guaranteed (they render their own TUIs and readiness is output stabilization) |
+| `working` | the session's own `working` event | `claude`, plus `codex`, `opencode`, `gemini`, `pi`, `omp` and `antigravity` through the working line each declares. Elsewhere not guaranteed: it rests on generic output heuristics such as a braille spinner glyph |
 | `stop` | the Claude Code `stop` hook, the definitive end-of-turn signal | `claude` (and `deepseek`) only |
 | `blocked` | a `permission_prompt` or `elicitation_dialog` hook; on `codex`, a dialog read off its screen | `claude`, `deepseek` and `codex`; on `claude` rarer than it looks: see below |
 | `exit` | no process is behind the session | every mode |
