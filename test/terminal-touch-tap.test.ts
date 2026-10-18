@@ -1096,6 +1096,63 @@ describe('terminal link tap', () => {
     expect(sent).toHaveLength(1); // the tap still positions the caret via the mouse report
   });
 
+  it('finds the caret line from the absolute cursor row while the viewport is parked above the bottom', () => {
+    // A tab switch parks the viewport above baseY when the frame keeps trailing blank
+    // rows (scrollToLastNonEmptyLine). cursorY is baseY-relative, so read as a screen
+    // row it points 2 rows too high here: at the history URL, not the composer.
+    const history = 'docs at https://example.com/guide';
+    const composer = '❯ summarize https://example.com/typed for me';
+    const lines = ['', '', '', 'older', 'old', history, 'more', composer, '', ''];
+    const { app, windowRef } = linkHarness(lines);
+    Object.assign(app.terminal, { rows: 4 });
+    Object.assign(app.terminal.buffer.active, { baseY: 6, viewportY: 4, cursorY: 1 });
+
+    // Screen row 3 is absolute line 7, the composer: the typed URL stays editable.
+    expect(app._handleMobileTerminalTap(at(composer.indexOf('https'), 3), true, 'history')).toBe('history');
+    expect(windowRef.open).not.toHaveBeenCalled();
+
+    // Screen row 1 is absolute line 5, scrollback: its URL opens.
+    expect(app._handleMobileTerminalTap(at(history.indexOf('https'), 1), true, 'history')).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledWith('https://example.com/guide', '_blank', 'noopener,noreferrer');
+  });
+
+  it('walks a soft-wrapped composer through absolute lines while the viewport is parked', () => {
+    // The composer spans absolute lines 2-3 (3 is its soft-wrapped tail, where the caret
+    // sits); the viewport is parked one row above the bottom, so screen row 1 is the
+    // composer's FIRST row and screen row 0 is scrollback.
+    const history = 'docs at https://example.com/guide';
+    const composer = '❯ summarize https://example.com/typed';
+    const lines = ['older', history, composer, ' for me', '', ''];
+    const { app, windowRef } = linkHarness(lines);
+    Object.assign(app.terminal, { rows: 3 });
+    Object.assign(app.terminal.buffer.active, { baseY: 3, viewportY: 1, cursorY: 0 });
+    const getLine = app.terminal.buffer.active.getLine;
+    app.terminal.buffer.active.getLine = (row: number) => {
+      const line = getLine(row);
+      return line && row === 3 ? { ...line, isWrapped: true } : line;
+    };
+
+    // The composer's first row is on the caret's logical line: its typed URL stays editable.
+    expect(app._handleMobileTerminalTap(at(composer.indexOf('https'), 1), true, 'history')).toBe('history');
+    expect(windowRef.open).not.toHaveBeenCalled();
+    // Screen row 0 is absolute line 1, scrollback: its URL opens.
+    expect(app._handleMobileTerminalTap(at(history.indexOf('https'), 0), true, 'history')).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledWith('https://example.com/guide', '_blank', 'noopener,noreferrer');
+  });
+
+  it('stops the caret-line wrap walk at the buffer end even when every row is wrapped', () => {
+    // xterm's getLine indexes its circular list modulo capacity, so past the last row it
+    // returns earlier rows again; with all of them soft-wrapped an unbounded walk never ends.
+    const { app } = linkHarness(['❯ a', 'b', 'c'], 2);
+    let reads = 0;
+    app.terminal.buffer.active.getLine = (row: number) => {
+      if (++reads > 1000) throw new Error('wrap walk did not stop');
+      return { isWrapped: true, translateToString: () => ['❯ a', 'b', 'c'][((row % 3) + 3) % 3] };
+    };
+
+    expect(app._tapIsOnCaretLine(at(0, 2).clientX, at(0, 2).clientY)).toBe(true);
+  });
+
   it('activates a link in a plain shell session, where every tap classifies as input', () => {
     // A shell has no TUI to own taps, so _classifyMobileTerminalTap short-circuits to
     // 'input' for the whole screen — gating link taps on the intent would leave every URL
