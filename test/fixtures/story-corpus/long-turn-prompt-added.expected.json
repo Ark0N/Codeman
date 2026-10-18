@@ -1,0 +1,257 @@
+[
+  {
+    "prompt": "Build a small Python package inventory/ (a CLI to add, list and remove items kept in a JSON file) sp",
+    "origin": "human",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 385054,
+    "toolCalls": 26,
+    "filesChanged": 13,
+    "added": 798,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You give Claude a job.",
+        "director": "Prompt · 96 words",
+        "balloon": "Build a small Python package inventory/ (a CLI to add, list and remove items kept in a JSON file) split into at least 4 modules (for example storage.py, models.py, commands.py, cli.py), with a pytest suite of at least 2…",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "montage",
+        "ok": null,
+        "story": "Claude keeps going: runs 4 commands.",
+        "director": "Bash ×4",
+        "balloon": null,
+        "tests": null,
+        "events": 4
+      },
+      {
+        "kind": "backup",
+        "ok": null,
+        "story": "Claude asks the advisor for a second opinion.",
+        "director": "Advisor · advisor",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "fix",
+        "ok": null,
+        "story": "Claude changes 3 files.",
+        "director": "Bash · pyproject.toml +11 · .gitignore +11 · __init__.py +3",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You add something while Claude works.",
+        "director": "Prompt · 11 words",
+        "balloon": "Also add a --csv option to the list command, with tests.",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "loop",
+        "ok": false,
+        "story": "Fix and test, 4 rounds. The tests pass, but another check fails.",
+        "director": "5 checks · 10 edits · +694 · last: error",
+        "balloon": "All 4 modules are done: 63 tests pass and ruff is clean.",
+        "tests": {
+          "passed": 63,
+          "failed": 0
+        },
+        "events": 14
+      },
+      {
+        "kind": "fix",
+        "ok": null,
+        "story": "Claude writes 1 new file.",
+        "director": "Write · README.md +79",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "run",
+        "ok": null,
+        "story": "Claude works in the terminal.",
+        "director": "Bash ×2 · D=/tmp/claude/-work-cases-story-r2-a/94066c8e-0855-4c6b-a14…",
+        "balloon": "README examples match the real output.",
+        "tests": null,
+        "events": 2
+      },
+      {
+        "kind": "save",
+        "ok": true,
+        "story": "Claude saves the work in 6 commits.",
+        "director": "git commit -q -m \"chore: scaffold inventory package\" -m \"Ad…",
+        "balloon": "Commits are in.",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests pass.",
+        "director": "python3 -m pytest -q -p no:cacheprovider 2>&1 → ok · 63 passed",
+        "balloon": null,
+        "tests": {
+          "passed": 63,
+          "failed": 0
+        },
+        "events": 1
+      },
+      {
+        "kind": "backup",
+        "ok": null,
+        "story": "Claude asks the advisor for a second opinion.",
+        "director": "Advisor · advisor",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 6 minutes.",
+        "director": "turn_duration · 6 min 25 s · 26 tool calls · 13 files changed",
+        "balloon": "The inventory/ package is built and committed.",
+        "tests": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "Now do these 15 small steps strictly one at a time, each as its own separate tool call, in exactly t",
+    "origin": "human",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 76340,
+    "toolCalls": 16,
+    "filesChanged": 2,
+    "added": 5,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You give Claude a job.",
+        "director": "Prompt · 188 words",
+        "balloon": "Now do these 15 small steps strictly one at a time, each as its own separate tool call, in exactly this order, never combining two steps into one call and without extra steps in between: 1) Read inventory/models.py with…",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "montage",
+        "ok": null,
+        "story": "Claude keeps going: reads 1 file, runs 2 commands, changes files, runs checks, saves the work.",
+        "director": "Read · Edit · Bash ×4",
+        "balloon": "Step 1:",
+        "tests": null,
+        "events": 6
+      },
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You add something while Claude works.",
+        "director": "Prompt · 15 words",
+        "balloon": "Also, as a 16th step at the very end, run git log --oneline in Bash.",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "montage",
+        "ok": null,
+        "story": "Claude keeps going: runs 1 command, changes files, runs checks.",
+        "director": "Write · Bash ×2",
+        "balloon": "Noted, I'll add step 16 at the end.",
+        "tests": null,
+        "events": 3
+      },
+      {
+        "kind": "save",
+        "ok": true,
+        "story": "Claude saves the work.",
+        "director": "git commit -m \"docs: changelog\" -m \"Co-Authored-By: Claude…",
+        "balloon": "Step 10:",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "investigate",
+        "ok": null,
+        "story": "Claude reads 1 file to find its way around.",
+        "director": "Read",
+        "balloon": "Step 11:",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "fix",
+        "ok": null,
+        "story": "Claude changes 1 file.",
+        "director": "Edit · CHANGELOG.md +2",
+        "balloon": "Step 12:",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests pass.",
+        "director": "python3 -m pytest -q → ok · 63 passed",
+        "balloon": "Step 13:",
+        "tests": {
+          "passed": 63,
+          "failed": 0
+        },
+        "events": 1
+      },
+      {
+        "kind": "run",
+        "ok": null,
+        "story": "Claude works in the terminal.",
+        "director": "Bash · uname -m",
+        "balloon": "Step 14:",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "save",
+        "ok": true,
+        "story": "Claude saves the work.",
+        "director": "git commit -am \"docs: changelog entry\" -m \"Co-Authored-By:…",
+        "balloon": "Step 15:",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "investigate",
+        "ok": null,
+        "story": "Claude looks around the project.",
+        "director": "Bash · git log --oneline",
+        "balloon": "Step 16:",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 1 minute.",
+        "director": "turn_duration · 1 min 16 s · 16 tool calls · 2 files changed",
+        "balloon": "I ran all 16 steps in order, one tool call each.",
+        "tests": null,
+        "events": 0
+      }
+    ]
+  }
+]

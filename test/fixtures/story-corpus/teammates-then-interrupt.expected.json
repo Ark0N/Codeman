@@ -1,0 +1,323 @@
+[
+  {
+    "prompt": "Create a tiny node project here: package.json (type module) and index.js exporting two functions add",
+    "origin": "human",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 103688,
+    "toolCalls": 8,
+    "filesChanged": 3,
+    "added": 73,
+    "removed": 0,
+    "helpers": 2,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You give Claude a job.",
+        "director": "Prompt · 77 words",
+        "balloon": "Create a tiny node project here: package.json (type module) and index.js exporting two functions add(a,b) and slugify(s). Then start TWO helpers with the Agent tool IN THE BACKGROUND (run_in_background: true): one write…",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "investigate",
+        "ok": null,
+        "story": "Claude reads 1 file to find its way around.",
+        "director": "Bash ×2 · ls -la && git log --oneline -3 2>&1; node --version · 1 error",
+        "balloon": null,
+        "tests": null,
+        "events": 2
+      },
+      {
+        "kind": "backup",
+        "ok": null,
+        "story": "Claude asks the advisor for a second opinion.",
+        "director": "Advisor · advisor",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "save",
+        "ok": true,
+        "story": "Claude saves the work.",
+        "director": "git commit -q -m \"feat: add package.json and index.js with… · writes 2 files",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "backup",
+        "ok": null,
+        "story": "Claude sends 2 helpers off to work in the background.",
+        "director": "Agent ×2 · general-purpose",
+        "balloon": null,
+        "tests": null,
+        "events": 2
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests pass.",
+        "director": "node --test index.test.mjs → ok · 8 passed · writes 1 file",
+        "balloon": null,
+        "tests": {
+          "passed": 8,
+          "failed": 0
+        },
+        "events": 1
+      },
+      {
+        "kind": "save",
+        "ok": true,
+        "story": "Claude saves the work.",
+        "director": "git commit -q -m \"test: add node:test suite for add and slu…",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 2 minutes.",
+        "director": "stop_hook_summary · 1 min 44 s · 8 tool calls · 3 files changed · 2 helpers",
+        "balloon": "I've set up the project, started both helpers, and the tests pass: node --test index.test.mjs ran 8 tests, 8 passed, 0 failed.",
+        "tests": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "contributing-writer: I wrote /work/cases/story-r2-b/CONTRIBUTING.md covering setup, tests, code styl",
+    "origin": "task",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 15426,
+    "toolCalls": 2,
+    "filesChanged": 0,
+    "added": 0,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "A background job reports back.",
+        "director": "Prompt · 26 words · task",
+        "balloon": "contributing-writer: I wrote /work/cases/story-r2-b/CONTRIBUTING.md covering setup, tests, code style, commits, README sync and PRs; it isn't committed because git was off-limits, and index.test.mjs and README.md, which…",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "investigate",
+        "ok": null,
+        "story": "Claude reads 1 file to find its way around.",
+        "director": "Bash · ls -la && git status --short && cat CONTRIBUTING.md",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "save",
+        "ok": true,
+        "story": "Claude saves the work.",
+        "director": "git commit -q -m \"docs: add CONTRIBUTING.md",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 15 seconds.",
+        "director": "stop_hook_summary · 15 s · 2 tool calls",
+        "balloon": "The CONTRIBUTING.md helper has finished, and I've committed its file (docs: add CONTRIBUTING.md).",
+        "tests": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "readme-writer: README done, test file missing",
+    "origin": "task",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 16162,
+    "toolCalls": 2,
+    "filesChanged": 0,
+    "added": 0,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "A background job reports back.",
+        "director": "Prompt · 6 words · task",
+        "balloon": "readme-writer: README done, test file missing",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "investigate",
+        "ok": null,
+        "story": "Claude reads 1 file to find its way around.",
+        "director": "Bash · cat README.md && ls index.test.mjs",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests pass, and Claude saves the work.",
+        "director": "npm test 2>&1 → ok · 8 passed · 1 commit",
+        "balloon": null,
+        "tests": {
+          "passed": 8,
+          "failed": 0
+        },
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 16 seconds.",
+        "director": "stop_hook_summary · 16 s · 2 tool calls",
+        "balloon": "The project is done: both helpers finished, and I checked their files and committed them.",
+        "tests": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "Big refactor: split index.js into three modules under lib/ (lib/add.js, lib/slugify.js, lib/util.js ",
+    "origin": "human",
+    "complete": false,
+    "interrupted": true,
+    "durationMs": 161073,
+    "toolCalls": 5,
+    "filesChanged": 4,
+    "added": 148,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You give Claude a job.",
+        "director": "Prompt · 56 words",
+        "balloon": "Big refactor: split index.js into three modules under lib/ (lib/add.js, lib/slugify.js, lib/util.js with shared helpers), keep index.js as a re-export barrel, add full JSDoc to every function, add at least 15 more node:…",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "backup",
+        "ok": null,
+        "story": "Claude asks the advisor for a second opinion.",
+        "director": "Advisor · advisor",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests pass.",
+        "director": "npm test 2>&1 → ok · 8 passed · writes 4 files",
+        "balloon": "All 8 tests pass, the README examples give the same outputs, and the barrel exports only add and slugify.",
+        "tests": {
+          "passed": 8,
+          "failed": 0
+        },
+        "events": 1
+      },
+      {
+        "kind": "save",
+        "ok": true,
+        "story": "Claude saves the work.",
+        "director": "git commit -q -m \"refactor: split index.js into lib/ module…",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests pass.",
+        "director": "npm test 2>&1 → ok · 8 passed · writes 4 files",
+        "balloon": "Every @example output matches what the code actually returns, and 8/8 tests pass.",
+        "tests": {
+          "passed": 8,
+          "failed": 0
+        },
+        "events": 1
+      },
+      {
+        "kind": "save",
+        "ok": true,
+        "story": "Claude saves the work.",
+        "director": "git commit -q -m \"docs: add full JSDoc to every function an…",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "You stop Claude here.",
+        "director": "interrupted · 2 min 41 s · 5 tool calls · 4 files changed",
+        "balloon": "Step 3: new tests under test/.",
+        "tests": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "Probe turn, no other work: run the shell command sleep 65 with Bash (foreground, not background), th",
+    "origin": "human",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 6019,
+    "toolCalls": 1,
+    "filesChanged": 0,
+    "added": 0,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You give Claude a job.",
+        "director": "Prompt · 23 words",
+        "balloon": "Probe turn, no other work: run the shell command sleep 65 with Bash (foreground, not background), then reply with just the word done.",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "run",
+        "ok": null,
+        "story": "Claude works in the terminal.",
+        "director": "Bash · sleep 65 · 1 error",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 6 seconds.",
+        "director": "stop_hook_summary · 6 s · 1 tool call",
+        "balloon": "Not done.",
+        "tests": null,
+        "events": 0
+      }
+    ]
+  }
+]

@@ -1,0 +1,143 @@
+[
+  {
+    "prompt": "First reply with a numbered plan of exactly 4 steps (as text, not a tool). Then build csvstat.py, a ",
+    "origin": "human",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 163647,
+    "toolCalls": 11,
+    "filesChanged": 5,
+    "added": 255,
+    "removed": 0,
+    "helpers": 1,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You give Claude a job.",
+        "director": "Prompt · 81 words",
+        "balloon": "First reply with a numbered plan of exactly 4 steps (as text, not a tool). Then build csvstat.py, a Python CLI that prints row count and per-column min/max/mean of a CSV, with pytest tests. Do a dry run on a sample CSV…",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "plan",
+        "ok": null,
+        "story": "Claude writes a plan: 4 steps.",
+        "director": "written as text · 4 steps",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "investigate",
+        "ok": null,
+        "story": "Claude reads 1 file to find its way around.",
+        "director": "Bash ×2 · ls -la && git status && git branch -a && git log --oneline… · 1 error",
+        "balloon": null,
+        "tests": null,
+        "events": 2
+      },
+      {
+        "kind": "backup",
+        "ok": null,
+        "story": "Claude asks the advisor for a second opinion.",
+        "director": "Advisor · advisor",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "fix",
+        "ok": null,
+        "story": "Claude writes 4 new files.",
+        "director": "Write ×4 · csvstat.py +115 · sample.csv +6 · test_csvstat.py +129",
+        "balloon": null,
+        "tests": null,
+        "events": 4
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests pass, and Claude saves the work.",
+        "director": "python3 -m pytest -q 2>&1 → ok ×2 · 17 passed · writes 2 files · 1 commit",
+        "balloon": "Code and tests are committed.",
+        "tests": {
+          "passed": 17,
+          "failed": 0
+        },
+        "events": 2
+      },
+      {
+        "kind": "backup",
+        "ok": null,
+        "story": "Claude sends 1 helper off to work in the background.",
+        "director": "Agent · general-purpose · 7 calls inside",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "run",
+        "ok": null,
+        "story": "Claude works in the terminal.",
+        "director": "Bash · set -o pipefail && python3 csvstat.py sample.csv | tee /tmp…",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 3 minutes.",
+        "director": "turn_duration · 2 min 44 s · 11 tool calls · 5 files changed · 1 helper",
+        "balloon": "I've built csvstat.py, a command-line tool that prints a CSV's row count and the min, max and mean of each column.",
+        "tests": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "Agent \"Write README for csvstat\" finished",
+    "origin": "task",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 9008,
+    "toolCalls": 1,
+    "filesChanged": 0,
+    "added": 0,
+    "removed": 0,
+    "helpers": 1,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "A background job reports back.",
+        "director": "Prompt · 6 words · task",
+        "balloon": "Agent \"Write README for csvstat\" finished",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "investigate",
+        "ok": null,
+        "story": "Claude looks around the project.",
+        "director": "Bash · git log --oneline && git status --short && git show --stat…",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 9 seconds.",
+        "director": "turn_duration · 9 s · 1 tool call · 1 helper",
+        "balloon": "The background helper has finished README.md, and I've checked its work.",
+        "tests": null,
+        "events": 0
+      }
+    ]
+  }
+]

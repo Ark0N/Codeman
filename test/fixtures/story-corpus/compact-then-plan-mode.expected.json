@@ -1,0 +1,233 @@
+[
+  {
+    "prompt": "Write mathx.py with a function clamp(value, low, high) that returns value limited to the range low..",
+    "origin": "human",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 72474,
+    "toolCalls": 7,
+    "filesChanged": 2,
+    "added": 37,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You give Claude a job.",
+        "director": "Prompt · 41 words",
+        "balloon": "Write mathx.py with a function clamp(value, low, high) that returns value limited to the range low..high and raises ValueError when low > high, then write test_mathx.py with exactly 5 pytest tests for it, and run them w…",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "investigate",
+        "ok": null,
+        "story": "Claude reads 1 file to find its way around.",
+        "director": "Bash ×2 · ls -la && git status && git log --oneline -5 2>&1; python3… · 1 error",
+        "balloon": null,
+        "tests": null,
+        "events": 2
+      },
+      {
+        "kind": "backup",
+        "ok": null,
+        "story": "Claude asks the advisor for a second opinion.",
+        "director": "Advisor · advisor",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "fix",
+        "ok": null,
+        "story": "Claude writes 2 new files.",
+        "director": "Write ×2 · mathx.py +11 · test_mathx.py +26",
+        "balloon": null,
+        "tests": null,
+        "events": 2
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests pass.",
+        "director": "python3 -m pytest -q → ok · 5 passed",
+        "balloon": null,
+        "tests": {
+          "passed": 5,
+          "failed": 0
+        },
+        "events": 1
+      },
+      {
+        "kind": "save",
+        "ok": true,
+        "story": "Claude saves the work.",
+        "director": "git commit -q -F -",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 1 minute.",
+        "director": "turn_duration · 1 min 12 s · 7 tool calls · 2 files changed",
+        "balloon": "I wrote clamp and its five tests, and all five pass.",
+        "tests": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "/compact",
+    "origin": "human",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 24164,
+    "toolCalls": 0,
+    "filesChanged": 0,
+    "added": 0,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You run /compact.",
+        "director": "Command · /compact",
+        "balloon": "/compact",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "compact",
+        "ok": null,
+        "story": "Claude packs up its notes to free memory.",
+        "director": "manual · 46.9k → 3.6k tokens · 24 s",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 24 seconds.",
+        "director": "local command · 24 s · 0 tool calls",
+        "balloon": null,
+        "tests": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "Call your EnterPlanMode tool to enter plan mode, then write a short 3-step plan for adding a wrap(va",
+    "origin": "human",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 66973,
+    "toolCalls": 10,
+    "filesChanged": 2,
+    "added": 31,
+    "removed": 1,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You give Claude a job.",
+        "director": "Prompt · 50 words",
+        "balloon": "Call your EnterPlanMode tool to enter plan mode, then write a short 3-step plan for adding a wrap(value, low, high) function (modular wrap into the range) to mathx.py with 3 more pytest tests, and present that plan with…",
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "investigate",
+        "ok": null,
+        "story": "Claude looks around the project.",
+        "director": "ToolSearch",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "plan",
+        "ok": null,
+        "story": "Claude switches to plan mode to think it through.",
+        "director": "EnterPlanMode",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "backup",
+        "ok": null,
+        "story": "Claude asks the advisor for a second opinion.",
+        "director": "Advisor · advisor",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "plan",
+        "ok": null,
+        "story": "Claude writes a plan: 3 steps.",
+        "director": "Write · plan file · 3 steps",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "ask",
+        "ok": null,
+        "story": "Claude shows you its plan, and you approve it.",
+        "director": "ExitPlanMode · answer: Approved",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "fix",
+        "ok": null,
+        "story": "Claude changes 2 files.",
+        "director": "Edit ×3 · mathx.py +11 · test_mathx.py +20 −1",
+        "balloon": null,
+        "tests": null,
+        "events": 3
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests pass.",
+        "director": "python3 -m pytest -q → ok · 8 passed",
+        "balloon": null,
+        "tests": {
+          "passed": 8,
+          "failed": 0
+        },
+        "events": 1
+      },
+      {
+        "kind": "save",
+        "ok": true,
+        "story": "Claude saves the work.",
+        "director": "git commit -q -F -",
+        "balloon": null,
+        "tests": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 1 minute.",
+        "director": "turn_duration · 1 min 7 s · 10 tool calls · 2 files changed",
+        "balloon": "I added wrap() as planned, with 3 new tests.",
+        "tests": null,
+        "events": 0
+      }
+    ]
+  }
+]
