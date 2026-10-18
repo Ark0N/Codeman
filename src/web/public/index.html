@@ -1334,7 +1334,18 @@
                       <div class="set-row-text">
                         <span class="set-row-label">Status</span>
                         <span class="set-row-desc" id="promptCacheStatus" data-i18n-skip>Not reported yet.</span>
+                        <span class="set-row-desc" id="keepWarmStatus" data-i18n-skip hidden></span>
                       </div>
+                    </div>
+                    <!-- Per-session opt-in for the keep-alive nudge (prompt-cache-keepwarm.ts);
+                         the default for sessions that have not chosen lives in App Settings →
+                         Automation. Its status shares the Status row above: session-ui.js updateKeepWarmStatus. -->
+                    <div class="set-row">
+                      <div class="set-row-text">
+                        <span class="set-row-label">Keep the cache warm while idle</span>
+                        <span class="set-row-desc">Sends a one-line keep-alive just before the cache expires, so your next prompt still reads from cache. Runs only while idle, up to the limit in App Settings &rarr; System &rarr; Automation; switch on before launch to also stop Claude Code's own idle compaction.</span>
+                      </div>
+                      <label class="switch switch-sm"><input type="checkbox" id="modalKeepWarmEnabled" onchange="app.autoSaveKeepWarm()"><span class="slider"></span></label>
                     </div>
                   </div>
                 </div>
@@ -3251,6 +3262,23 @@
                       <span class="set-row-desc">Detect and pop up new images found in session directories.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsImageWatcherEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="prompt cache keep warm keep-alive nudge idle expire">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Keep prompt caches warm</span>
+                      <span class="set-row-desc">Default for Claude sessions that have not chosen on their Respawn tab (a session an agent started needs its own switch): shortly before an idle session's prompt cache would expire, send a one-line keep-alive turn so the next prompt still reads the conversation from cache instead of re-processing it.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsPromptCacheKeepWarm"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="prompt cache keep warm hours limit cap window">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Keep warm for at most</span>
+                      <span class="set-row-desc">Hours after your last prompt in a session during which keep-alives are sent; past that the cache is left to expire. A keep-alive costs a small fraction of the re-write it prevents, so a few hours of them pay off, an overnight gap does not.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <input type="number" id="appSettingsPromptCacheKeepWarmMaxHours" class="set-num" min="0.5" max="24" step="0.5" value="2">
+                      <span class="set-unit">hours</span>
+                    </div>
                   </div>
                 </div>
               </div>

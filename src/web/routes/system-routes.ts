@@ -51,7 +51,15 @@ import { SseEvent } from '../sse-events.js';
 import { getInstallInfo, checkForUpdate, startUpdate, getUpdateStatusForApi } from '../self-update.js';
 
 import { getRepositoryStatus } from '../repo-status.js';
-import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort, TabLayoutPort } from '../ports/index.js';
+import type {
+  SessionPort,
+  EventPort,
+  ConfigPort,
+  InfraPort,
+  AuthPort,
+  TabLayoutPort,
+  KeepWarmPort,
+} from '../ports/index.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import { QR_AUTH_FAILURE_MAX } from '../../config/tunnel-config.js';
 import { AUTH_SESSION_TTL_MS } from '../../config/auth-config.js';
@@ -168,7 +176,7 @@ export function settingsForNonAdmin(settings: unknown): unknown {
 
 export function registerSystemRoutes(
   app: FastifyInstance,
-  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort
+  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort & KeepWarmPort
 ): void {
   const windowStatesPath = dataPath('subagent-window-states.json');
   const parentMapPath = dataPath('subagent-parents.json');
@@ -1103,6 +1111,11 @@ export function registerSystemRoutes(
       // drift. Same convention as the tmuxHistoryLimit block above.
       // Handle subagent tracking toggle dynamically
       toggleService((merged.subagentTrackingEnabled as boolean) ?? true, subagentWatcher, 'Subagent watcher');
+      // The prompt-cache keep-warm reads its default and cap fresh on every decision; a changed
+      // default or cap re-evaluates every session now rather than at its next cache report.
+      if ('promptCacheKeepWarm' in settingsToStore || 'promptCacheKeepWarmMaxHours' in settingsToStore) {
+        ctx.keepWarm.rescheduleAll();
+      }
 
       // Handle ultracode/workflow run watcher toggle dynamically (default OFF).
       // Either the docked panel OR the floating windows keep the watcher running.

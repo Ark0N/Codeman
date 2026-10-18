@@ -1152,6 +1152,16 @@ Result (`data`):
 
 The result carries server **names** only, never `env` values, `headers` or file content. Each changed file keeps its previous content as `<file>.codeman-bak` (overwritten by each sync); a file that receives servers carrying `env` or `headers` is left mode `0600`.
 
+## Prompt-cache keep-warm
+
+Claude Code reports the main conversation's prompt-cache state on its statusline (v2.1.251+); the exporter keeps it per session as `promptCache` on `GET /api/sessions` (`{ warm, ttl, expiresAt, recacheTokensIfCold, misses, lastMissCauses }`, epoch ms). The keep-warm sends one keep-alive turn shortly before an idle session's cache would expire; `keepWarmEnabled` (absent = the app-wide `promptCacheKeepWarm` setting applies, which a session spawned by another session does not inherit), the live `keepWarm` status and `lastRealPromptAt` (epoch ms of the last submit that was not a keep-alive, the cap's clock) ride the same session state. A keep-alive is a submit, so it moves `lastSubmitAt` like any prompt. A claude launch with keep-warm on also carries `"idleCompaction": false` in its `--settings` JSON (Claude Code 2.1.290 or newer).
+
+| Method | Path                               | Body                                 | Notes |
+| ------ | ---------------------------------- | ------------------------------------ | ----- |
+| `POST` | `/api/v1/sessions/:id/keep-warm`   | `{ "enabled": true \| false \| null }` | Sets the session's choice; `null` clears it so the app-wide default applies. `200` with `{ keepWarm: { enabled, status } }`. `400 INVALID_INPUT` for a CLI that reports no cache telemetry on its statusline (anything but Claude today). |
+
+`status` is `{ enabled, idleCompactionOff, state, nextCheckAt?, reason?, nudges, lastNudgeAt?, budgetEndsAt? }` (`idleCompactionOff`: whether the session's current launch carries that opt-out) with `state` one of `off`, `armed` (waiting for the due time), `waiting` (due, deferred by a guard named in `reason`), `nudged` (sent, waiting for the next cache report) or `stopped` (`reason` says why). Two SSE events carry changes: `session:promptCache` (`{ sessionId, ...promptCache }`) and `session:keepWarm` (`{ sessionId, ...status }`), both change-only. The keep-alive turn's `hook:stop` and `hook:idle_prompt` broadcasts carry `acknowledgedReason: "cache keep-alive"`, and no push is sent for them.
+
 ## Webhook notifications
 
 Posts the Web Push events to ntfy, Slack, Discord or a generic JSON URL (Settings → Notifications). Off by default. The webhook URL is a bearer secret (anyone holding a Slack/Discord URL can post as it), so it lives in `~/.codeman/webhook.json` (0600), is **never returned**, and is kept out of `settings.json`. All three routes answer `403` for a non-admin in multi-user mode.

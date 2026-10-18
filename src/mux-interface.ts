@@ -62,6 +62,11 @@ export interface MuxSession {
   /** Whether the current launch carries the statusLine exporter; set on every create and respawn. */
   statusLine?: StatusLineExporter;
   /**
+   * Whether the current launch carries `idleCompaction: false` in its `--settings` JSON (keep-warm
+   * on at launch, the exporter injected, Claude Code new enough); set on every create and respawn.
+   */
+  idleCompactionOff?: boolean;
+  /**
    * This record was rebuilt from the tmux socket rather than from Codeman's own
    * bookkeeping, so everything on it but the name and the pid is a guess. Its
    * synthetic `restored-<fragment>` id cannot find the session's `state.json`
@@ -123,6 +128,10 @@ export interface CreateSessionOptions {
   effort?: EffortLevel;
   /** Claude advisor model, merged into the same `--settings` JSON (overridable via /advisor in-session) */
   advisorModel?: string;
+  /** The session's own prompt-cache keep-warm choice (undefined = app default); decides the `idleCompaction` opt-out. */
+  keepWarm?: boolean;
+  /** Spawned by another session: it does not inherit the keep-warm app default (`keepWarmOn`). */
+  spawnedByAgent?: boolean;
   /** tmux history-limit (scrollback lines) allocated when this session is created. */
   historyLimit?: number;
   /** Remote execution metadata for local tmux sessions wrapping SSH */
@@ -176,6 +185,10 @@ export interface RespawnPaneOptions {
   effort?: EffortLevel;
   /** Claude advisor model (preserved across respawns, merged into the same `--settings` JSON) */
   advisorModel?: string;
+  /** The session's own prompt-cache keep-warm choice, re-read at every relaunch (see CreateSessionOptions). */
+  keepWarm?: boolean;
+  /** Spawned by another session (see CreateSessionOptions). */
+  spawnedByAgent?: boolean;
   /** Original tmux history-limit retained for config parity; respawn cannot resize the existing pane. */
   historyLimit?: number;
   /** Remote execution metadata for local tmux sessions wrapping SSH */

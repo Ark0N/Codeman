@@ -65,6 +65,8 @@ import {
   type SessionWriteOptions,
   type PaneExit,
   type PromptCacheStatus,
+  type StatusLineExporter,
+  type KeepWarmStatus,
 } from './types.js';
 import { resolveAndClaimOmpSessionId } from './utils/omp-session-resolver.js';
 import { claudeTranscriptExists } from './utils/claude-transcript.js';
@@ -127,6 +129,7 @@ import { DEFAULT_TMUX_HISTORY_LIMIT } from './config/terminal-history.js';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 import { getCli } from './config/cli-registry/registry.js';
 import { SubmitVerifier } from './session-submit-verifier.js';
+import { KEEP_WARM_NUDGE } from './prompt-cache-keepwarm.js';
 import { compileVersionRegex } from './config/cli-registry/patterns.js';
 import { resolveSessionCliVersion } from './utils/cli-resolver.js';
 import {
@@ -597,6 +600,16 @@ export class Session extends EventEmitter {
   private _watching: string | null = null;
   /** Last `prompt_cache` report from the statusline exporter; null until Claude sends one. */
   private _promptCache: PromptCacheStatus | null = null;
+  /** Prompt-cache keep-warm opt-in; undefined = follow the app-wide default. Persisted. */
+  private _keepWarmEnabled: boolean | undefined;
+  /** Last status the keep-warm service published for this session; ephemeral. */
+  private _keepWarm: KeepWarmStatus | null = null;
+  /** Until when the current turn counts as Codeman's own keep-alive (hooks open pre-acknowledged). */
+  private _keepAliveTurnUntil = 0;
+  /** Last keystroke a person sent through a `fromUser` write. */
+  private _lastHumanInputAt = 0;
+  /** Last submit that was not the keep-alive's own; the keep-warm cap's clock. Persisted. */
+  private _lastRealPromptAt = 0;
   /** Lazily compiled `capabilities.workDetect.workingLine`. See _workingLinePattern(). */
   private _workingLineRe: RegExp | undefined = undefined;
   /** Lazily compiled `capabilities.workDetect.watchingLine`. See _watchingLinePattern(). */
@@ -804,7 +817,7 @@ export class Session extends EventEmitter {
 
   // The session that spawned this one (tab lineage lines). Resolved by the create
   // route before it reaches here, so this is always either an id that existed at
-  // create time or undefined. Decoration only — see SessionState.parentSessionId.
+  // create time or undefined. Decoration only (plus the keep-warm default); see SessionState.parentSessionId.
   private readonly _parentSessionId?: string;
 
   // Session color for visual differentiation
@@ -899,6 +912,10 @@ export class Session extends EventEmitter {
       attachmentHistory?: SessionAttachmentHistoryItem[];
       /** Restored wall-clock ms of the pane's last Enter (see `lastSubmitAt`). */
       lastSubmitAt?: number;
+      /** Restored last non-keep-alive submit (see `lastRealPromptAt`). */
+      lastRealPromptAt?: number;
+      /** Restored prompt-cache keep-warm choice (see `keepWarmEnabled`). */
+      keepWarmEnabled?: boolean;
       /** Restored conversation chain, oldest first (see `claudeSessionChain`). */
       claudeSessionChain?: string[];
       /** Restored agent-exit observation for this session's pane (see `paneExit`). */
@@ -975,6 +992,9 @@ export class Session extends EventEmitter {
     // response viewer re-derive the live conversation without waiting for the
     // user to type again.
     this._lastSubmitAt = config.lastSubmitAt ?? 0;
+    // Restored so a restart neither reopens the keep-warm window nor drops the choice.
+    this._lastRealPromptAt = config.lastRealPromptAt ?? 0;
+    this._keepWarmEnabled = config.keepWarmEnabled;
     // Restored chain: its tail is the conversation the CLI was actually on when
     // the server stopped, which outranks the launch id seeded just above. The
     // FIRST-HAND flag is deliberately NOT restored — a persisted claim is not a
@@ -1479,10 +1499,15 @@ export class Session extends EventEmitter {
    * report. It rides `toState()` for the Session Options readout and is restored on a
    * Codeman restart (constructor `promptCache`) so the row is not blank until the pane's
    * next render; the readout is time-aware, so a value whose `expiresAt` has passed renders
-   * as cold rather than as a stale warm.
+   * as cold rather than as a stale warm, and a future one lets the keep-warm re-arm without a turn.
    */
   get promptCache(): PromptCacheStatus | null {
     return this._promptCache;
+  }
+
+  /** Whether the current launch carries the statusLine exporter (`MuxSession.statusLine`); undefined when unknown. */
+  get statusLineExporter(): StatusLineExporter | undefined {
+    return this._muxSession?.statusLine;
   }
 
   /**
@@ -1511,6 +1536,60 @@ export class Session extends EventEmitter {
     const changed = JSON.stringify(next) !== JSON.stringify(prev);
     this._promptCache = next;
     return changed;
+  }
+
+  /** Prompt-cache keep-warm opt-in; undefined means the app-wide default applies. */
+  get keepWarmEnabled(): boolean | undefined {
+    return this._keepWarmEnabled;
+  }
+
+  setKeepWarmEnabled(enabled: boolean | undefined): void {
+    this._keepWarmEnabled = enabled;
+  }
+
+  /** What the keep-warm service last published for this session, or null before its first evaluation. */
+  get keepWarm(): KeepWarmStatus | null {
+    return this._keepWarm;
+  }
+
+  /** Replace the keep-warm status; true when it differs from the previous one. */
+  setKeepWarmStatus(status: KeepWarmStatus): boolean {
+    const changed = JSON.stringify(status) !== JSON.stringify(this._keepWarm);
+    this._keepWarm = status;
+    return changed;
+  }
+
+  /**
+   * True while the running turn is Codeman's own keep-alive nudge: its stop hook and idle
+   * prompt open pre-acknowledged, and its submit moves `lastSubmitAt` (it IS a submit, and the
+   * response viewer's conversation correlation needs it) but not `lastRealPromptAt`. Any
+   * `fromUser` write ends it early, so a person's prompt right after a nudge counts and alerts normally.
+   */
+  get keepAliveTurnActive(): boolean {
+    return Date.now() < this._keepAliveTurnUntil;
+  }
+
+  beginKeepAliveTurn(windowMs: number): void {
+    this._keepAliveTurnUntil = Date.now() + windowMs;
+  }
+
+  /** Last keystroke a person sent (`fromUser` write), epoch ms; 0 when none this process. */
+  get lastHumanInputAt(): number {
+    return this._lastHumanInputAt;
+  }
+
+  /**
+   * Last submit that was not the keep-alive's own, from any writer or the UserPromptSubmit hook
+   * (a person typing in an attached tmux client reaches Codeman only through the hook); epoch
+   * ms, 0 if none. The keep-warm cap counts from it; persisted so a restart keeps it.
+   */
+  get lastRealPromptAt(): number {
+    return this._lastRealPromptAt;
+  }
+
+  /** Whether this launch carries `idleCompaction: false` (`MuxSession.idleCompactionOff`). */
+  get idleCompactionOptOut(): boolean {
+    return this._muxSession?.idleCompactionOff === true;
   }
 
   /**
@@ -2008,7 +2087,9 @@ export class Session extends EventEmitter {
       autoResumeEnabled: this._autoOps.autoResumeEnabled,
       autoResumeAt: this._autoOps.autoResumeAt ?? undefined,
       promptCache: this._promptCache ?? undefined,
-      statusLineExporter: this._muxSession?.statusLine,
+      statusLineExporter: this.statusLineExporter,
+      keepWarmEnabled: this._keepWarmEnabled,
+      keepWarm: this._keepWarm ?? undefined,
       imageWatcherEnabled: this._imageWatcherEnabled,
       pinned: this._pinned || undefined,
       pinnedAt: this._pinned ? (this._pinnedAt ?? undefined) : undefined,
@@ -2057,6 +2138,7 @@ export class Session extends EventEmitter {
       paneExit: this._paneExit ?? undefined,
       attachmentHistory: this.attachmentHistory.length > 0 ? this.attachmentHistory : undefined,
       lastSubmitAt: this._lastSubmitAt || undefined,
+      lastRealPromptAt: this._lastRealPromptAt || undefined,
       // Only a chain the CLI's own hooks vouched for is persisted, and only when
       // the pane actually moved conversation. Its LAST entry is the live one, so
       // it is also what restores `claudeSessionId` across a restart — `start()`
@@ -2425,6 +2507,8 @@ export class Session extends EventEmitter {
       unsetEnvKeys: this._pendingEnvUnsets.size > 0 ? [...this._pendingEnvUnsets] : undefined,
       effort: this._effort,
       advisorModel: this._advisorModel,
+      keepWarm: this._keepWarmEnabled,
+      spawnedByAgent: !!this._parentSessionId,
       historyLimit: this._tmuxHistoryLimit,
       remote: this._remote,
       docker: this._docker,
@@ -2904,6 +2988,8 @@ export class Session extends EventEmitter {
             envOverrides: this._envOverrides,
             effort: this._effort,
             advisorModel: this._advisorModel,
+            keepWarm: this._keepWarmEnabled,
+            spawnedByAgent: !!this._parentSessionId,
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
@@ -4650,9 +4736,13 @@ export class Session extends EventEmitter {
    */
   private _trackSubmit(data: string, options: SessionWriteOptions): string[] {
     const submitted = options.fromUser && this._acceptsPrompts ? this._submittedPromptTracker.feed(data) : [];
-    if (data.includes('\r') || data.includes('\n')) {
-      this._lastSubmitAt = Date.now();
+    const hasEnter = data.includes('\r') || data.includes('\n');
+    if (options.fromUser) {
+      this._lastHumanInputAt = Date.now();
+      // A person is here: whatever turn follows is theirs, not the keep-alive's.
+      this._keepAliveTurnUntil = 0;
     }
+    if (hasEnter) this._stampSubmit();
     return submitted;
   }
 
@@ -4678,9 +4768,20 @@ export class Session extends EventEmitter {
    * `_trackSubmit` only sees input that flows through Codeman's write path, so
    * a pane the user drives by attaching to tmux directly never stamped this and
    * `lastSubmitAt` stayed 0 for its whole life.
+   *
+   * `prompt` is the hook's own prompt text: anything but the keep-alive's ends the keep-alive
+   * window, because a person typing in an attached tmux client reaches Codeman only here, and
+   * their prompt must count as real and alert normally.
    */
-  markPromptSubmitted(): void {
+  markPromptSubmitted(prompt?: string): void {
+    if (prompt !== undefined && prompt.trim() !== KEEP_WARM_NUDGE) this._keepAliveTurnUntil = 0;
+    this._stampSubmit();
+  }
+
+  /** Every submit moves `lastSubmitAt`; only one outside a keep-alive turn moves `lastRealPromptAt`. */
+  private _stampSubmit(): void {
     this._lastSubmitAt = Date.now();
+    if (!this.keepAliveTurnActive) this._lastRealPromptAt = this._lastSubmitAt;
   }
 
   /**

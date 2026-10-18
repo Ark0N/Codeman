@@ -194,6 +194,7 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.SESSION_CLI_INFO, '_onSessionCliInfo'],
   [SSE_EVENTS.SESSION_STATUS_TELEMETRY, '_onSessionStatusTelemetry'],
   [SSE_EVENTS.SESSION_PROMPT_CACHE, '_onSessionPromptCache'],
+  [SSE_EVENTS.SESSION_KEEP_WARM, '_onSessionKeepWarm'],
 
   // Scheduled runs
   [SSE_EVENTS.SCHEDULED_CREATED, '_onScheduledCreated'],

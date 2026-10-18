@@ -5,10 +5,10 @@
  * and referenced by the frontend (`SSE_EVENTS` in `constants.js`).
  * Both files MUST be kept in sync.
  *
- * 162 event constants organized by category:
+ * 163 event constants organized by category:
  * - **Core** (1): init
  * - **Transport** (1): sse:heartbeat
- * - **Session lifecycle** (24): created, updated, deleted, terminal, idle, working, ...
+ * - **Session lifecycle** (25): created, updated, deleted, terminal, idle, working, ...
  * - **Session: Ralph** (6): ralphLoopUpdate, todoUpdate, completionDetected, ...
  * - **Session: Bash tools** (3): bashToolStart, bashToolEnd, bashToolsUpdate
  * - **Session: Plan** (4): planTaskUpdate, planCheckpoint, planRollback, planTaskAdded
@@ -122,6 +122,8 @@ export const SessionRunning = 'session:running' as const;
 export const SessionStatusTelemetry = 'session:statusTelemetry' as const;
 /** Prompt-cache state of one session's main conversation changed (`{ sessionId, ...PromptCacheStatus }`). */
 export const SessionPromptCache = 'session:promptCache' as const;
+/** The prompt-cache keep-warm's status for one session changed (`{ sessionId, ...KeepWarmStatus }`). */
+export const SessionKeepWarm = 'session:keepWarm' as const;
 
 // ─── Session: Ralph ──────────────────────────────────────────────────────────
 
@@ -534,6 +536,7 @@ export const SseEvent = {
   SessionRunning,
   SessionStatusTelemetry,
   SessionPromptCache,
+  SessionKeepWarm,
 
   // Session: Ralph
   SessionRalphLoopUpdate,

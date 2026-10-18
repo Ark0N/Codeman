@@ -93,6 +93,12 @@ interface SessionListenerDeps {
   updateSessionName(sessionId: string, name: string): boolean;
   /** The synced `autoNameSessions` setting, read fresh so a flip applies to the next prompt. */
   isAutoNameEnabled(): Promise<boolean>;
+  /**
+   * Re-evaluate the prompt-cache keep-warm when the session goes idle: a turn just ended
+   * (its cache report may already be in), and after a restart this is the first moment the
+   * recovered pane is attached, so the restored report can arm its timer.
+   */
+  keepWarmSchedule?(sessionId: string): void;
 }
 
 /**
@@ -262,6 +268,7 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
       sessionWaits.notifySignal(session.id, 'idle');
       deps.broadcast(SseEvent.SessionIdle, { id: session.id });
       deps.broadcastSessionStateDebounced(session.id);
+      deps.keepWarmSchedule?.(session.id);
       const tracker = deps.getRunSummaryTracker(session.id);
       if (tracker) {
         tracker.recordIdle();

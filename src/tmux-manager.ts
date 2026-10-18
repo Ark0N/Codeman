@@ -67,12 +67,15 @@ import { missingCliMessage, resolveCliBinDir } from './utils/cli-resolver.js';
 import {
   buildSpawnCommandFromRegistry,
   configSetenvValues,
+  launchGatePasses,
   legacyConfigForMode,
 } from './session-cli-registry-bridge.js';
+import { keepWarmOn } from './prompt-cache-keepwarm.js';
 import type { CliEntry } from './config/cli-registry/types.js';
 import {
   resolveStatusLineCliCommand,
   readPlanUsageTelemetryEnabled,
+  readKeepWarmSettings,
   findEffectiveUserStatusLineCommand,
 } from './hooks-config.js';
 import {
@@ -1070,6 +1073,28 @@ export function buildCodexCommand(config?: CodexConfig): string {
   return buildSpawnCommandFromRegistry(entry, { mode: 'codex', sessionId: '', codexConfig: config }) ?? 'codex';
 }
 
+/**
+ * Whether a launch carries `idleCompaction: false` in its one `--settings` JSON: keep-warm on
+ * at launch (`keepWarmOn`), the statusLine exporter injected (without its `prompt_cache` reports
+ * keep-warm cannot run, and the opt-out alone would only cost the user Claude Code's own idle
+ * compaction), and the CLI's `idleCompactionSetting` gate passed, fail-closed like `--name`:
+ * an unknown version means no key. Pure; `claudeCliVersion` as in buildSpawnCommand.
+ */
+export function decideIdleCompactionOptOut(o: {
+  mode: SessionMode;
+  statusLine: StatusLineExporter | undefined;
+  keepWarm: boolean | undefined;
+  keepWarmDefault: boolean;
+  spawnedByAgent: boolean | undefined;
+  claudeCliVersion?: string | null;
+}): boolean {
+  return (
+    o.statusLine === 'injected' &&
+    keepWarmOn(o.keepWarm, o.keepWarmDefault, !!o.spawnedByAgent) &&
+    launchGatePasses(o.mode, 'idleCompactionSetting', o.claudeCliVersion)
+  );
+}
+
 export function buildSpawnCommand(options: {
   mode: SessionMode;
   sessionId: string;
@@ -1091,6 +1116,8 @@ export function buildSpawnCommand(options: {
   advisorModel?: string;
   /** Resolved by resolveStatusLineCliCommand (hooks-config.ts) — undefined skips the exporter. Claude only. */
   statusLineCommand?: string;
+  /** Add `idleCompaction: false` to the launch's one `--settings` JSON (see decideIdleCompactionOptOut). */
+  idleCompactionOff?: boolean;
   /** Name pinned on claude as `--name` (version-gated, sanitized; local spawns only). By default only a user-chosen name; `pinCliSessionName` pins every tab name: see `Session.cliPinnedName`. */
   sessionName?: string;
   /**
@@ -2267,6 +2294,28 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * Whether this launch carries `idleCompaction: false` (decideIdleCompactionOptOut), with the
+   * keep-warm app default read fresh like the plan-usage switch above. Logged when keep-warm is
+   * on but the version gate keeps the key off, so a session that may still idle-compact says why.
+   */
+  private async _resolveIdleCompactionOptOut(
+    mode: SessionMode,
+    statusLine: StatusLineExporter | undefined,
+    keepWarm: boolean | undefined,
+    spawnedByAgent: boolean | undefined
+  ): Promise<boolean> {
+    if (statusLine !== 'injected') return false; // no settings read for a launch that can never carry it
+    const { keepWarmDefault } = await readKeepWarmSettings();
+    const off = decideIdleCompactionOptOut({ mode, statusLine, keepWarm, keepWarmDefault, spawnedByAgent });
+    if (!off && keepWarmOn(keepWarm, keepWarmDefault, !!spawnedByAgent)) {
+      console.log(
+        `[TmuxManager] Keep-warm is on but Claude Code's version is unknown or predates the idleCompaction setting; launching without the opt-out`
+      );
+    }
+    return off;
+  }
+
+  /**
    * Export the user's own REAL statusLine command (found by
    * findEffectiveUserStatusLineCommand) via tmux setenv, so the shared
    * exporter script (statusLineExporterScriptContent in hooks-config.ts) can
@@ -2326,6 +2375,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       envOverrides,
       effort,
       advisorModel,
+      keepWarm,
+      spawnedByAgent,
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
       remote,
       docker,
@@ -2389,6 +2440,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       workingDir,
       !!(remote || docker)
     );
+    const idleCompactionOff = await this._resolveIdleCompactionOptOut(mode, statusLine, keepWarm, spawnedByAgent);
     // The user's own REAL statusLine, if any (walked via Claude Code's own
     // settings precedence) — exported below so the shared exporter script
     // can wrap it. Only worth discovering when we're actually injecting.
@@ -2413,6 +2465,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       effort,
       advisorModel,
       statusLineCommand,
+      idleCompactionOff,
       sessionName: cliName,
     });
 
@@ -2554,6 +2607,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         attached: false,
         name,
         statusLine,
+        idleCompactionOff,
       };
 
       this.sessions.set(sessionId, session);
@@ -2664,6 +2718,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       unsetEnvKeys,
       effort,
       advisorModel,
+      keepWarm,
+      spawnedByAgent,
       remote,
       docker,
       cliName,
@@ -2684,6 +2740,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       workingDir,
       !!(remote || docker)
     );
+    const idleCompactionOff = await this._resolveIdleCompactionOptOut(mode, statusLine, keepWarm, spawnedByAgent);
     const userStatusLineCommand = statusLineCommand ? await findEffectiveUserStatusLineCommand(workingDir) : undefined;
 
     const baseCmd = buildSpawnCommand({
@@ -2705,6 +2762,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       effort,
       advisorModel,
       statusLineCommand,
+      idleCompactionOff,
       sessionName: cliName,
     });
     const config = niceConfig || DEFAULT_NICE_CONFIG;
@@ -2747,8 +2805,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       this.clearPaneExit(muxName);
       const pid = this.getPanePid(muxName);
       if (pid) session.pid = pid;
-      if (session.statusLine !== statusLine) {
+      if (session.statusLine !== statusLine || session.idleCompactionOff !== idleCompactionOff) {
         session.statusLine = statusLine;
+        session.idleCompactionOff = idleCompactionOff;
         this.saveSessions();
       }
       return pid;

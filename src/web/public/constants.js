@@ -733,7 +733,7 @@ function computeConnectionLossUi(input) {
 // it says why instead of "not reported yet" forever.
 const PROMPT_CACHE_NOT_COLLECTED = {
   'collection-off':
-    'Not collected: Plan Usage was off when this session started. Turn it on in App Settings; sessions started after that report it.',
+    'Not collected: Plan Usage was off when this session started. Turn it on in App Settings → Header & Panels, then start a new session; this one cannot pick it up.',
   'workspace-statusline':
     "Not collected: this workspace's .claude/settings.local.json sets its own statusLine, which Codeman never replaces.",
   remote: 'Not collected for remote and Docker sessions.',
@@ -761,6 +761,45 @@ function formatPromptCacheStatus(cache, now, statusLine) {
   if (Number.isFinite(cache.hitRatio)) parts.push(`${Math.round(cache.hitRatio * 100)}% cache hit rate.`);
   if (cache.lastMissCauses && cache.lastMissCauses.length) parts.push(`Last miss: ${cache.lastMissCauses.join(', ')}.`);
   return parts.join(' ');
+}
+
+// Session Options → Respawn → Prompt cache → Status: the keep-warm line under the cache
+// readout, saying what the keep-warm service is doing (`session.keepWarm`, published by the
+// server on `session:keepWarm`), compact and dot-separated. Empty when there is nothing to
+// say: switched off, not published yet, or a launch without the statusLine exporter, where
+// the readout's own "Not collected" sentence on the same row already says why and
+// session-ui.js greys the switch. Pure: no DOM, `now` is passed in.
+function formatKeepWarmStatus(status, now, statusLine) {
+  if (PROMPT_CACHE_NOT_COLLECTED[statusLine]) return '';
+  if (!status || typeof status.state !== 'string') return '';
+  const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const window = Number.isFinite(status.budgetEndsAt)
+    ? status.budgetEndsAt > now
+      ? `stops ${clock(status.budgetEndsAt)}`
+      : 'window closed'
+    : '';
+  // Keep-warm switched on after launch: the `idleCompaction` opt-out rides only a launch.
+  const idleCompaction =
+    status.enabled && status.idleCompactionOff === false ? 'idle compaction on until relaunch' : '';
+  let parts;
+  switch (status.state) {
+    case 'off':
+      if (!status.reason || status.reason === 'off') return '';
+      parts = ['off', status.reason];
+      break;
+    case 'armed':
+      parts = [`next ${clock(status.nextCheckAt)}`, window, idleCompaction];
+      break;
+    case 'waiting':
+      parts = ['waiting', status.reason || 'retrying', `retry ${clock(status.nextCheckAt)}`, window, idleCompaction];
+      break;
+    case 'nudged':
+      parts = [`sent ${clock(status.lastNudgeAt)} (${status.nudges}\u00d7)`, window, idleCompaction];
+      break;
+    default:
+      parts = ['stopped', status.reason || 'nothing to do', idleCompaction];
+  }
+  return `Keep-alive: ${parts.filter(Boolean).join(' \u00b7 ')}`;
 }
 
 // SSE staleness policy: is this stream a zombie?
@@ -1503,6 +1542,8 @@ if (typeof window !== 'undefined') {
   };
   window.CodemanPromptCache = {
     format: formatPromptCacheStatus,
+    formatKeepWarm: formatKeepWarmStatus,
+    keepWarmUnavailable: (statusLine) => !!PROMPT_CACHE_NOT_COLLECTED[statusLine],
   };
   window.CodemanSessionOrder = {
     RANK: SESSION_ACTIVITY_RANK,
@@ -1699,6 +1740,7 @@ const SSE_EVENTS = {
   SESSION_RUNNING: 'session:running',
   SESSION_STATUS_TELEMETRY: 'session:statusTelemetry',
   SESSION_PROMPT_CACHE: 'session:promptCache',
+  SESSION_KEEP_WARM: 'session:keepWarm',
 
   // Scheduled runs
   SCHEDULED_CREATED: 'scheduled:created',

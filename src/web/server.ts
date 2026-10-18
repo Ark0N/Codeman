@@ -96,7 +96,12 @@ import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator } from '../plan-orchestrator.js';
 import { OrchestratorLoop } from '../orchestrator-loop.js';
 import { getLifecycleLog } from '../session-lifecycle-log.js';
-import { applyWorkspaceHooks, pruneAgentSessionPreambles, removeAgentSessionPreamble } from '../hooks-config.js';
+import {
+  applyWorkspaceHooks,
+  pruneAgentSessionPreambles,
+  readKeepWarmSettings,
+  removeAgentSessionPreamble,
+} from '../hooks-config.js';
 import { PushSubscriptionStore } from '../push-store.js';
 import webpush from 'web-push';
 import { SseStreamManager } from './sse-stream-manager.js';
@@ -113,6 +118,9 @@ import { intentStore } from '../intent-store.js';
 import { AI_CHECK_MODEL } from '../config/ai-defaults.js';
 import { approvalInbox } from './approval-inbox.js';
 import { SCREEN_BLOCKED_SOURCE } from './screen-blocked.js';
+import { PromptCacheKeepWarmService } from '../prompt-cache-keepwarm.js';
+import { composerIsEmpty } from '../session-submit-verifier.js';
+import { detectUsageLimitPause } from '../usage-limit-patterns.js';
 import { stopDeepSeekWeb } from '../deepseek-web-server.js';
 import {
   wireRespawnListeners,
@@ -317,6 +325,49 @@ export class WebServer extends EventEmitter {
   private _customModelDisplacedNotified: Set<string> = new Set();
   /** Cron service (assigned in setupRoutes). */
   private cronService!: CronService;
+  // Prompt-cache keep-warm (prompt-cache-keepwarm.ts): the rulebook and timers live in the
+  // service; the server only lends it the facts a decision needs. A field initializer, not a
+  // setupRoutes() step: cleanup and listener wiring reach it on servers that never set up routes
+  // (the pane-exit and discard tests build a bare WebServer), and every port reads `this.*` lazily.
+  private readonly keepWarmService = new PromptCacheKeepWarmService({
+    getSession: (id) => this.sessions.get(id),
+    sessionIds: () => this.sessions.keys(),
+    readSettings: readKeepWarmSettings,
+    isAutomationActive: (id) => {
+      const session = this.sessions.get(id);
+      if (!session) return true;
+      return (
+        (this.respawnControllers.get(id)?.isRunning ?? false) ||
+        session.ralphTracker.loopState.active ||
+        session.currentTaskId !== null ||
+        sessionWaits.signalWaiterCount(id) > 0
+      );
+    },
+    hasPendingApproval: (id) =>
+      approvalInbox.listPending().some((item) => item.sessionId === id && item.kind !== 'idle'),
+    readPane: (view) => {
+      const session = view as Session;
+      const muxName = session.muxName;
+      // `capture-pane -p`: the visible frame as plain text.
+      const text = muxName ? (this.mux.capturePaneText?.(muxName) ?? null) : null;
+      if (!text) return { composerEmpty: null, limitShown: false };
+      const limit = detectUsageLimitPause(text);
+      return {
+        composerEmpty: composerIsEmpty(text, getCli(session.mode)?.capabilities.workDetect?.promptGlyph ?? '') ?? null,
+        limitShown: limit !== null && limit.resetAt > Date.now(),
+      };
+    },
+    publish: (id, status) => {
+      const session = this.sessions.get(id);
+      if (!session?.setKeepWarmStatus(status)) return;
+      this.broadcast(SseEvent.SessionKeepWarm, { sessionId: id, ...status });
+      // Change-only, so one line per transition names whichever guard holds it now.
+      if (status.state !== 'off' || status.reason !== 'off') {
+        console.log(`[KeepWarm] ${id.slice(0, 8)}: ${status.state}${status.reason ? ` (${status.reason})` : ''}`);
+      }
+    },
+    log: (message) => console.log(message),
+  });
   /**
    * Wake-on-LAN registry, returned by `registerSessionRoutes`. Held for its LIFETIME
    * only — `drop()` on session cleanup, `stop()` on shutdown. Waking from here would
@@ -747,6 +798,7 @@ export class WebServer extends EventEmitter {
     return {
       // SessionPort
       sessions: this.sessions as ReadonlyMap<string, Session>,
+      keepWarm: this.keepWarmService,
       addSession: this.registerSessionWithLayout.bind(this),
       tabLayouts: this.tabLayouts,
       cleanupSession: this.cleanupSession.bind(this),
@@ -1416,6 +1468,7 @@ export class WebServer extends EventEmitter {
     coordinateLayout = true
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
+    this.keepWarmService.remove(sessionId);
     const pinned = session?.pinned === true || this.store.getSession(sessionId)?.pinned === true;
     if (coordinateLayout && session && killMux && !pinned) {
       return this.tabLayouts.runSessionDeletion([{ id: sessionId, owner: session.owner }], () =>
@@ -1886,6 +1939,9 @@ export class WebServer extends EventEmitter {
   }
 
   private async setupSessionListeners(session: Session): Promise<void> {
+    // First keep-warm evaluation: publishes the effective opt-in for the Session Options
+    // readout even before any cache report arrives.
+    void this.keepWarmService.schedule(session.id);
     // Idempotent: the wiring exit handler detaches ALL listeners on every PTY exit
     // (removeSessionListenerRefs), so the re-attach routes (/interactive,
     // /interactive-respawn, /shell) call this again to restore observability
@@ -1918,6 +1974,7 @@ export class WebServer extends EventEmitter {
   private buildSessionListenerDeps() {
     return {
       broadcast: this.broadcast.bind(this),
+      keepWarmSchedule: (id: string) => void this.keepWarmService.schedule(id),
       batchTerminalData: this.batchTerminalData.bind(this),
       batchTaskUpdate: this.batchTaskUpdate.bind(this),
       broadcastSessionStateDebounced: this.broadcastSessionStateDebounced.bind(this),
@@ -3611,6 +3668,10 @@ export class WebServer extends EventEmitter {
               // the launch conversation until the user types again, even though
               // the re-attached CLI is on a post-`/clear` one.
               lastSubmitAt: savedState?.lastSubmitAt,
+              // The keep-warm choice and its cap's clock; with the restored `promptCache`
+              // below, a future `expiresAt` re-arms the timer once the pane is attached.
+              lastRealPromptAt: savedState?.lastRealPromptAt,
+              keepWarmEnabled: savedState?.keepWarmEnabled,
               // Conversations this pane provably owned, oldest first. Its tail is
               // the conversation the CLI was on when the server stopped, which is
               // what a re-attach must point the viewer at instead of the launch id.
@@ -4063,6 +4124,7 @@ export class WebServer extends EventEmitter {
     // response), so without this a 10-minute wait holds shutdown open.
     sessionWaits.cancelEverything();
     approvalInbox.stop();
+    this.keepWarmService.stop();
     // Same reason as `cancelEverything` above: an in-flight wake is awaited by a request,
     // and `app.close()` (the last line of this method) does not abort in-flight requests —
     // so without this a restart during a wake waits out the readiness poll.

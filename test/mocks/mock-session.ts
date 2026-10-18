@@ -4,7 +4,13 @@
  */
 import { EventEmitter } from 'node:events';
 import { vi } from 'vitest';
-import type { PromptCacheStatus, SessionAttachmentHistoryItem, SessionStatus, SessionRemote } from '../../src/types.js';
+import type {
+  KeepWarmStatus,
+  PromptCacheStatus,
+  SessionAttachmentHistoryItem,
+  SessionStatus,
+  SessionRemote,
+} from '../../src/types.js';
 
 /**
  * Enhanced mock session for testing RespawnController.
@@ -48,6 +54,18 @@ export class MockSession extends EventEmitter {
     this.promptCache = status;
     return changed;
   }
+  /** Mirrors the prompt-cache keep-warm surface on Session (prompt-cache-keepwarm.ts). */
+  keepAliveTurnActive = false;
+  keepWarmEnabled: boolean | undefined = undefined;
+  setKeepWarmEnabled(enabled: boolean | undefined): void {
+    this.keepWarmEnabled = enabled;
+  }
+  keepWarm: KeepWarmStatus | null = null;
+  setKeepWarmStatus(status: KeepWarmStatus): boolean {
+    const changed = JSON.stringify(status) !== JSON.stringify(this.keepWarm);
+    this.keepWarm = status;
+    return changed;
+  }
   private _activeChildProcesses: { pid: number; command: string }[] = [];
   ralphTracker: null = null;
   writeBuffer: string[] = [];
@@ -76,8 +94,10 @@ export class MockSession extends EventEmitter {
     this.claudeSessionId = newId;
   }
 
-  /** Mirrors Session.markPromptSubmitted. */
-  markPromptSubmitted(): void {
+  /** Mirrors Session.markPromptSubmitted; records the hook's prompt text it was handed. */
+  submittedPrompts: Array<string | undefined> = [];
+  markPromptSubmitted(prompt?: string): void {
+    this.submittedPrompts.push(prompt);
     this.lastSubmitAt = Date.now();
   }
 

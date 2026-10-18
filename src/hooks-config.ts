@@ -41,6 +41,7 @@ import { HOOK_TIMEOUT_SECONDS } from './config/auth-config.js';
 import { dataPath } from './config/instance.js';
 import { readJsonConfig, SETTINGS_PATH } from './web/route-helpers.js';
 import { isNearStalledPath, probePath } from './utils/index.js';
+import { DEFAULT_KEEP_WARM_MAX_HOURS, type KeepWarmSettings } from './prompt-cache-keepwarm.js';
 
 /**
  * Existence check for a WRITER. Unlike the bounded read-side probe (`probePath`),
@@ -1142,6 +1143,21 @@ export async function readPlanUsageTelemetryEnabled(): Promise<boolean> {
 export async function readPinCliSessionNameEnabled(): Promise<boolean> {
   const settings = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {});
   return settings.pinCliSessionName === true;
+}
+
+/**
+ * The prompt-cache keep-warm's app-wide default (`promptCacheKeepWarm`, absent = OFF) and its
+ * cap (`promptCacheKeepWarmMaxHours`, hours after the last real prompt). Read FRESH like
+ * {@link readPinCliSessionNameEnabled}: by the service on every evaluation, and at every claude
+ * create and respawn, which decides the launch's `idleCompaction` opt-out.
+ */
+export async function readKeepWarmSettings(): Promise<KeepWarmSettings> {
+  const settings = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {});
+  const hours = settings.promptCacheKeepWarmMaxHours;
+  return {
+    keepWarmDefault: settings.promptCacheKeepWarm === true,
+    maxHours: typeof hours === 'number' && Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_KEEP_WARM_MAX_HOURS,
+  };
 }
 
 /**

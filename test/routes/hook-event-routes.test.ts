@@ -17,6 +17,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
+import { approvalInbox } from '../../src/web/approval-inbox.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
 import { registerHookEventRoutes } from '../../src/web/routes/hook-event-routes.js';
@@ -98,6 +99,34 @@ describe('hook-event-routes', () => {
       );
     });
 
+    /**
+     * The prompt-cache keep-warm's own turn (prompt-cache-keepwarm.ts) ends with the same stop
+     * hook and idle prompt as a real one. While the session marks the turn as its keep-alive,
+     * both open pre-acknowledged: the broadcast says why, and nothing is pushed.
+     */
+    it('opens the stop and idle prompt of a keep-alive turn pre-acknowledged and pushes nothing', async () => {
+      harness.ctx._session.keepAliveTurnActive = true;
+      for (const event of ['stop', 'idle_prompt']) {
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: '/api/hook-event',
+          payload: { event, sessionId: harness.ctx._sessionId, data: null },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(harness.ctx.broadcast).toHaveBeenCalledWith(
+          `hook:${event}`,
+          expect.objectContaining({ sessionId: harness.ctx._sessionId, acknowledgedReason: 'cache keep-alive' })
+        );
+      }
+      expect(harness.ctx.sendPushNotifications).not.toHaveBeenCalled();
+      // The inbox item is what a reload seeds tab alerts from, so it must open acknowledged too.
+      const item = approvalInbox.getForSession(harness.ctx._sessionId);
+      approvalInbox.resolveForSession(harness.ctx._sessionId, 'dismissed');
+      expect(item?.acknowledgedReason).toBe('cache keep-alive');
+      // acknowledgedAt is what approvals-ui.js reads to skip the alert on a reload.
+      expect(item?.acknowledgedAt).toBe(item?.createdAt);
+    });
+
     it('sends push notifications for hook events', async () => {
       const res = await harness.app.inject({
         method: 'POST',
@@ -142,6 +171,27 @@ describe('hook-event-routes', () => {
       expect(session.claudeSessionChain).toEqual(['conv-1']);
       expect(session.lastSubmitAt).toBeGreaterThan(before);
       expect(harness.ctx.persistSessionState).toHaveBeenCalledWith(session);
+    });
+
+    /**
+     * The hook's prompt text is what tells a person typing in an attached tmux client apart
+     * from the prompt-cache keep-alive (Session.markPromptSubmitted ends the keep-alive window
+     * for anything but the nudge), so the route must hand it over, and nothing else.
+     */
+    it("hands the prompt_submitted hook's prompt text to the session", async () => {
+      const session = harness.ctx._session;
+      for (const data of [
+        { session_id: 'conv-1', prompt: 'fix the login bug' },
+        { session_id: 'conv-1', prompt: 42 },
+        { session_id: 'conv-1' },
+      ]) {
+        await harness.app.inject({
+          method: 'POST',
+          url: '/api/hook-event',
+          payload: { event: 'prompt_submitted', sessionId: harness.ctx._sessionId, data },
+        });
+      }
+      expect(session.submittedPrompts).toEqual(['fix the login bug', undefined, undefined]);
     });
 
     it('records a /clear successor in the chain and persists it, without duplicating a repeat', async () => {

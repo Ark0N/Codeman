@@ -24,6 +24,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { dataPath } from './config/instance.js';
+import { KEEP_WARM_NUDGE } from './prompt-cache-keepwarm.js';
 import type { IntentProfile, IntentPromptEntry } from './types/index.js';
 
 // ========== Limits ==========
@@ -62,6 +63,9 @@ export function isCapturablePrompt(text: string): boolean {
   if (text.startsWith('<system-reminder>')) return false;
   if (text.startsWith('Caveat: The messages below')) return false;
   if (text.startsWith('[Request interrupted')) return false;
+  // Codeman's own prompt-cache keep-alive turn is not something the user meant. The exact
+  // text, so a prompt of the user's that merely mentions it is still captured.
+  if (text.trim() === KEEP_WARM_NUDGE) return false;
   return true;
 }
 

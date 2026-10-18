@@ -143,7 +143,8 @@ export function registerHookEventRoutes(
         // bumped only by input that flowed through Codeman's own write path, so
         // it read 0 forever for those panes and every consumer of "when did this
         // pane last submit" silently degraded.
-        session?.markPromptSubmitted();
+        // The prompt text tells a person's prompt from the keep-alive's (prompt-cache-keepwarm.ts).
+        session?.markPromptSubmitted(typeof data.prompt === 'string' ? data.prompt : undefined);
       }
       // Persist when the conversation actually moved: `/clear` emits no
       // completion event, so without this the successor id is lost on restart
@@ -183,6 +184,11 @@ export function registerHookEventRoutes(
     // seeds from /api/approvals), and it suppresses the push: an alert nobody can answer
     // is worth even less on a phone than in a tab.
     let acknowledgedReason: string | undefined;
+    // A turn Codeman started itself (the prompt-cache keep-alive, prompt-cache-keepwarm.ts)
+    // ends with the same stop hook and idle prompt as a real one. Both open pre-acknowledged,
+    // so no tab, toast or push asks a person to look at a session that wants nothing from them.
+    const keepAliveReason =
+      session?.keepAliveTurnActive && (event === 'stop' || event === 'idle_prompt') ? 'cache keep-alive' : undefined;
     const approvalKind = APPROVAL_KIND_BY_EVENT[event];
     if (session && hooksAvailableForMode(session.mode, sessionHookOptions(session))) {
       if (approvalKind) {
@@ -209,6 +215,7 @@ export function registerHookEventRoutes(
           // session that is watching its own work opens acknowledged, so it never arms an
           // alert nobody can answer; notePrompt() carries the whole reasoning.
           watching: session.watching,
+          preAcknowledged: keepAliveReason,
           // Visible tmux frame first (it IS the dialog); raw byte-buffer tail as
           // the fallback for direct-PTY sessions and the no-op test mux.
           capture: () => {
@@ -223,6 +230,8 @@ export function registerHookEventRoutes(
         approvalInbox.resolveForSession(sessionId, 'resolved_in_terminal');
       }
     }
+
+    acknowledgedReason ??= keepAliveReason;
 
     ctx.broadcast(`hook:${event}`, {
       sessionId,

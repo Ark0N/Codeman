@@ -65,6 +65,28 @@ export function promptStillInComposer(screen: string, prompt: string, glyph: str
   return head.length > 0 && composer.startsWith(head);
 }
 
+/**
+ * Whether the composer holds nothing: the LAST `glyph` line after the glyph, and every
+ * continuation line below it down to the composer's bottom rule (a draft that opens with a
+ * newline leaves the glyph line itself blank). Undefined when there is no composer line or no
+ * rule under it to bound the read (a shell, a dialog, a direct-PTY session): nothing can be
+ * said. The prompt-cache keep-warm refuses to type unless this is true: `send-keys -l` would
+ * append its nudge to whatever draft sits there, and the Enter would submit both.
+ */
+export function composerIsEmpty(screen: string, glyph: string): boolean | undefined {
+  if (!glyph) return undefined;
+  // The structure is read at column 0, before any trimming: Claude Code draws the glyph line and
+  // both rules there and indents every continuation line, so a draft line that holds the glyph or
+  // starts with a rule (`  ❯`, `  ───`) can never pass for the composer's own edges.
+  const lines = stripAnsi(screen).split('\n');
+  let at = lines.length - 1;
+  while (at >= 0 && !lines[at].startsWith(glyph)) at--;
+  if (at < 0) return undefined;
+  const end = lines.findIndex((l, i) => i > at && l.startsWith('\u2500'));
+  if (end < 0) return undefined;
+  return compact(lines[at].slice(glyph.length) + lines.slice(at + 1, end).join('')).length === 0;
+}
+
 export interface SubmitVerifierDeps {
   /** The rendered pane, or null when there is none to read. */
   capture: () => string | null | undefined;
