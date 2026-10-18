@@ -1883,8 +1883,12 @@ Object.assign(CodemanApp.prototype, {
     st.dirBtn.setAttribute('aria-pressed', String(on));
     st.wire.hidden = !on;
     if (on) this._storyRenderWire();
-    // Within the frame budget, never every panel in one task.
-    for (const rt of st.panels) this._storyQueueDraw(rt);
+    // The other caption has another height: the panels refit to it. Within the frame budget, never
+    // every panel in one task.
+    for (const rt of st.panels) {
+      this._storyFitCaption(rt);
+      this._storyQueueDraw(rt);
+    }
   },
 
   _storyPickTurn(id) {
@@ -2524,6 +2528,7 @@ Object.assign(CodemanApp.prototype, {
       rt.capNote.hidden = !notes.length;
       rt.capNote.textContent = notes.join('; ');
     }
+    this._storyFitCaption(rt);
     rt.el.classList.toggle('is-live', !!p.live);
     // Named by its place only: the caption inside is read as the panel's content, once.
     rt.el.setAttribute('aria-label', `Panel ${index + 1} of ${page.panels.length}`);
@@ -2628,15 +2633,16 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _storySizePanel(rt) {
+    this._storyFitCaption(rt);
     const w = rt.el.clientWidth;
     const h = rt.el.clientHeight;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     if (w === rt.w && h === rt.h && dpr === rt.dpr) return;
     rt.w = w;
     rt.h = h;
-    // A final panel its words made taller keeps its scene at the usual size, standing at the bottom:
-    // the stage is the panel's minimum height (inside its border), the rest is background.
-    const minH = rt.splash ? parseFloat(getComputedStyle(rt.el).minHeight) || 0 : 0;
+    // A panel its words made taller (a long caption, the final panel's ending) keeps its scene at the
+    // usual size, standing at the bottom: the stage is the panel's usual height inside its border.
+    const minH = parseFloat(getComputedStyle(rt.el).getPropertyValue('--story-panel-min')) || 0;
     const border = rt.el.offsetHeight - rt.el.clientHeight;
     rt.stageH = minH > border ? Math.min(h, minH - border) : h;
     rt.dpr = dpr;
@@ -2644,6 +2650,23 @@ Object.assign(CodemanApp.prototype, {
     rt.canvas.height = Math.max(1, Math.round(h * dpr));
     rt.bgKey = '';
     this._storyQueueDraw(rt);
+  },
+
+  /**
+   * A caption taller than the band above the art makes its panel taller by the difference, and the
+   * scene stands below it (`rt.stageH`): a long caption never covers a test board or a code page.
+   */
+  _storyFitCaption(rt) {
+    if (rt.splash) return;
+    const cap = rt.capStory.parentElement;
+    const base = parseFloat(getComputedStyle(rt.el).getPropertyValue('--story-panel-min')) || 0;
+    if (!cap || !base) return;
+    const border = rt.el.offsetHeight - rt.el.clientHeight;
+    // The art starts about 88 scene units down (a terminal at 92, a code page at 104, a board at 106).
+    const room = (88 * (base - border)) / StoryArt.VH;
+    const need = cap.offsetTop + cap.offsetHeight - room;
+    const grow = need > 2 ? `${Math.ceil(base + need)}px` : '';
+    if (rt.el.style.minHeight !== grow) rt.el.style.minHeight = grow;
   },
 
   /** Draws on the next frame, within its budget (now, when the frame loop is not running). */
@@ -2721,7 +2744,7 @@ Object.assign(CodemanApp.prototype, {
       hit
     );
     this._storySyncHits(rt, hits, s);
-    this._storyPlaceBalloon(rt, StoryArt.takeSpeaker(), ox, s);
+    this._storyPlaceBalloon(rt, StoryArt.takeSpeaker(), ox, s, oy);
   },
 
   /**
@@ -2730,7 +2753,7 @@ Object.assign(CodemanApp.prototype, {
    * the caption box: narrower beside it, or below it when there is no room. Recomputed only when
    * the panel's size, the text or the head's column changes.
    */
-  _storyPlaceBalloon(rt, head, ox, s) {
+  _storyPlaceBalloon(rt, head, ox, s, oy = 0) {
     const b = rt.balloon;
     if (!b || b.hidden || rt.splash) return;
     const placed = !!head && rt.kind !== 'ask' && b.classList.contains('story-balloon--claude');
@@ -2770,7 +2793,7 @@ Object.assign(CodemanApp.prototype, {
     const pad = b.offsetHeight - text.offsetHeight;
     // The loop's "head" is its board: down to one line rather than over the test count.
     const least = rt.kind === 'loop' ? 1 : placed ? 3 : 2;
-    const limit = placed ? Math.max(b.offsetTop + pad + least * lh, head.top * s - 22) : rt.h - 12;
+    const limit = placed ? Math.max(b.offsetTop + pad + least * lh, (head.top + oy) * s - 22) : rt.h - 12;
     if (b.offsetHeight && b.offsetTop + b.offsetHeight > limit)
       text.style.setProperty(
         '--story-lines',

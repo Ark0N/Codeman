@@ -316,8 +316,12 @@ body.story-open {
 
 /* Panels */
 .story-panel {
+  /* The panel's usual height, read back as its scene's stage: a long caption or ending makes the
+     panel taller (inline min-height), and the scene then stands at the bottom, never scaled up. */
+  --story-panel-min: 270px;
   position: relative;
   margin: 0;
+  min-height: var(--story-panel-min);
   overflow: hidden;
   grid-column: span var(--story-span6, 2);
   background: var(--story-panel);
@@ -547,8 +551,6 @@ body.story-open .toast-container {
    taller instead of being cut off at its edge. */
 .story-panel[data-kind='complete'] {
   display: flex;
-  /* The row's own height, read back as the scene's stage when the words make the panel taller. */
-  min-height: 270px;
 }
 .story-splash {
   position: relative;
@@ -663,11 +665,15 @@ body.story-open .toast-container {
   .story-panel,
   .story-pencils {
     grid-column: auto;
+  }
+  .story-panel {
+    --story-panel-min: 300px;
+  }
+  .story-pencils {
     height: 300px;
   }
   .story-panel[data-kind='complete'] {
-    height: auto;
-    min-height: 430px;
+    --story-panel-min: 430px;
   }
   .story-splash {
     flex: 1 1 auto;

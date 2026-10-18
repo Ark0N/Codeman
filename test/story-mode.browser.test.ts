@@ -166,6 +166,23 @@ describe('Story Mode in a real browser', () => {
     expect(overflow).toBe(0);
     // The final panel grows to its words and chips: nothing of them is cut off at its edge.
     expect(await finalPanelHoldsItsWords()).toBe(true);
+    // A caption longer than the band above the art makes its panel taller, so it covers no art.
+    const fit = await page.evaluate(async () => {
+      const st = (window as any).app._story;
+      const rt = st.panels.find((p: { kind: string; splash: unknown }) => !p.splash && p.kind !== 'mission');
+      rt.capStory.textContent = 'Claude writes three files, runs the tests twice and saves the work. '.repeat(4);
+      (window as any).app._storyFitCaption(rt);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const cap = rt.capStory.parentElement as HTMLElement;
+      const base = parseFloat(getComputedStyle(rt.el).getPropertyValue('--story-panel-min'));
+      const border = rt.el.offsetHeight - rt.el.clientHeight;
+      return {
+        grew: rt.el.offsetHeight > base + 10,
+        clear:
+          cap.offsetTop + cap.offsetHeight <= rt.el.clientHeight - (rt.stageH ?? 0) + (88 * (base - border)) / 260 + 3,
+      };
+    });
+    expect(fit).toEqual({ grew: true, clear: true });
     // The bar keeps to three rows, and a panel below the fold gets its buttons without a scroll.
     expect(await page.evaluate(() => (document.querySelector('.story-bar') as HTMLElement).offsetHeight)).toBeLessThan(
       190
