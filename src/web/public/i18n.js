@@ -848,6 +848,9 @@
     'Settings saved': '设置已保存',
     // The once-per-release toast (settings-ui.js checkWhatsNew); its highlights stay English.
     "See what's new": '查看更新内容',
+    // The security-notice cards' own eyebrow (panels-ui.js showSecurityNotice/showUpdateNotice);
+    // each notice's title, message and link label carry their own zh-CN text and are skipped.
+    'Security notice': '安全提示',
     'Settings applied': '设置已应用',
     'Save and keep Settings open': '保存并保持设置打开',
     'Settings saved locally': '设置已保存到本机',
