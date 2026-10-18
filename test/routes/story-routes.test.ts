@@ -41,6 +41,37 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+describe('Story routes: multi-user scoping', () => {
+  let saved: string | undefined;
+  beforeEach(() => {
+    saved = process.env.CODEMAN_MULTIUSER;
+    process.env.CODEMAN_MULTIUSER = '1';
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env.CODEMAN_MULTIUSER;
+    else process.env.CODEMAN_MULTIUSER = saved;
+  });
+
+  it("another user's session is a 404 on both routes, its owner's a page", async () => {
+    writeFileSync(transcript, jsonl(demoTurn()));
+    const as = async (username: string) => {
+      const h = await createRouteTestHarness((app, ctx) => registerStoryRoutes(app, ctx), {
+        authUser: { username, role: 'user' },
+      });
+      (h.ctx._session as unknown as { owner?: string }).owner = 'alice';
+      h.ctx.getTranscriptPath.mockReturnValue(transcript);
+      return h.app;
+    };
+    const bob = await as('bob');
+    expect((await bob.inject({ method: 'GET', url: URL })).statusCode).toBe(404);
+    expect((await bob.inject({ method: 'GET', url: `${URL}/helpers/abc123` })).statusCode).toBe(404);
+    const alice = await as('alice');
+    const res = await alice.inject({ method: 'GET', url: URL });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.page.panels.length).toBeGreaterThan(0);
+  });
+});
+
 describe('GET /api/sessions/:id/story: which file is read', () => {
   it('a hook path outside the Claude projects folder is never read, nor a symlink out of it', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'story-outside-'));
