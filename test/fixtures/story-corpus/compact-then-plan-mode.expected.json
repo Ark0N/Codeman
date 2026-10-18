@@ -38,26 +38,15 @@
         "events": 2
       },
       {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
-      },
-      {
         "kind": "fix",
         "ok": null,
         "story": "Claude writes 2 new files.",
-        "director": "Write ×2 · mathx.py +11 · test_mathx.py +26",
+        "director": "Write ×2 · mathx.py +11 · test_mathx.py +26 · after 1 second opinion",
         "balloon": null,
         "tests": null,
         "roundsOk": null,
         "printed": null,
-        "events": 2
+        "events": 3
       },
       {
         "kind": "check",
@@ -189,35 +178,13 @@
       {
         "kind": "plan",
         "ok": null,
-        "story": "Claude switches to plan mode to think it through.",
-        "director": "EnterPlanMode",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
-      },
-      {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
-      },
-      {
-        "kind": "plan",
-        "ok": null,
         "story": "Claude writes a plan: 3 steps.",
-        "director": "Write · plan file · 3 steps",
+        "director": "EnterPlanMode · Write · plan file · 3 steps · after 1 second opinion",
         "balloon": null,
         "tests": null,
         "roundsOk": null,
         "printed": null,
-        "events": 1
+        "events": 3
       },
       {
         "kind": "ask",

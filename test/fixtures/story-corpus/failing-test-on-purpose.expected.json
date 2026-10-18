@@ -38,21 +38,10 @@
         "events": 2
       },
       {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
-      },
-      {
         "kind": "loop",
         "ok": true,
         "story": "The first run fails on purpose, as you asked; the second passes.",
-        "director": "2 checks · 3 edits · +35 −1 · last: ok",
+        "director": "2 checks · 3 edits · +35 −1 · last: ok · after 1 second opinion",
         "balloon": "All 4 pass.",
         "tests": {
           "passed": 4,
@@ -63,7 +52,7 @@
           true
         ],
         "printed": null,
-        "events": 5
+        "events": 6
       },
       {
         "kind": "run",

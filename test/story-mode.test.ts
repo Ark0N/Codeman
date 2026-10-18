@@ -1256,8 +1256,10 @@ describe('buildStoryPage', () => {
       },
       end(1000),
     ]);
-    const backup = page.panels.find((p) => p.kind === 'backup')!;
-    expect(backup.caption.story).toBe('Claude asks a stronger AI model for a second opinion.');
+    // Not a step of its own: it rides on the panel before it, here the mission (nothing follows).
+    expect(page.panels.map((p) => p.kind)).toEqual(['mission', 'complete']);
+    expect(page.panels[0]).toMatchObject({ secondOpinion: 1 });
+    expect(page.panels[0].caption.director).toMatch(/then 1 second opinion$/);
     expect(page.events[1]).toMatchObject({ tool: 'Advisor', ok: true, helper: { name: 'advisor' } });
     expect(page.events[1].helper!.result).toMatch(/encrypted/);
     expect(page.helpers).toBe(0);

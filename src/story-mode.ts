@@ -2082,7 +2082,19 @@ function groupPanels(events: StoryEvent[]): {
   const panels: DraftPanel[] = [];
   let pendingSay: string | undefined;
   let lastSaid: StoryEvent | undefined;
+  // A second opinion (the advisor) is not a step of its own (its answer is not readable anyway): it
+  // rides on the panel of the step after it, or the last one when nothing follows.
+  let opinions: number[] = [];
+  const takeOpinions = (panel: DraftPanel) => {
+    if (!opinions.length) return;
+    panel.events = [...panel.events, ...opinions].sort((a, b) => a - b);
+    opinions = [];
+  };
   events.forEach((ev, idx) => {
+    if (ev.tool === 'Advisor') {
+      opinions.push(idx);
+      return;
+    }
     if (ev.intent === 'say' && !ev.todos) {
       pendingSay ??= balloonText(ev.label);
       lastSaid ??= ev;
@@ -2098,6 +2110,7 @@ function groupPanels(events: StoryEvent[]): {
       (events[last.events[0]].tool === 'Advisor') !== (ev.tool === 'Advisor');
     if (last && last.kind === kind && MERGEABLE.has(kind) && !advisorMix) {
       last.events.push(idx);
+      takeOpinions(last);
       if (pendingSay && !last.balloon) last.balloon = { who: 'claude', text: pendingSay };
     } else {
       const panel: DraftPanel = { kind, events: [idx] };
@@ -2119,10 +2132,16 @@ function groupPanels(events: StoryEvent[]): {
       if (kind === 'mission') panel.balloon = { who: 'you', text: clip(ev.label, 400) };
       else if (reportsBack && last && pendingSay) last.balloon = { who: 'claude', text: pendingSay };
       else if (pendingSay) panel.balloon = { who: 'claude', text: pendingSay };
+      takeOpinions(panel);
       panels.push(panel);
     }
     pendingSay = undefined;
   });
+  if (opinions.length) {
+    const last = panels[panels.length - 1];
+    if (last) takeOpinions(last);
+    else panels.push({ kind: 'backup', events: opinions });
+  }
   // The closing words keep a caveat that follows them ("Nothing is committed: this is no git repo.").
   return {
     panels,
@@ -2282,8 +2301,12 @@ function plannedFailure(turn: StoryTurn, events: StoryEvent[]): false | 'asked' 
 }
 
 function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, index: number): StoryPanel {
-  const evs = draft.events.map((i) => events[i]);
+  const all = draft.events.map((i) => events[i]);
+  // Second opinions riding on this step are counted, never part of its story.
+  const opinions = all.filter((e) => e.tool === 'Advisor').length;
+  const evs = opinions && opinions < all.length ? all.filter((e) => e.tool !== 'Advisor') : all;
   const panel: StoryPanel = { kind: draft.kind, events: draft.events, caption: { story: '', director: '' } };
+  if (evs !== all) panel.secondOpinion = opinions;
   if (draft.balloon) panel.balloon = draft.balloon;
   const edits = evs.flatMap(editsOf);
   const checks = evs.filter((e) => e.intent === 'test' || e.intent === 'build');
@@ -2665,6 +2688,12 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
     }
     case 'complete':
       break;
+  }
+  if (panel.secondOpinion) {
+    // Asked before the step, or (nothing following) after the last one.
+    const lastWork = Math.max(...draft.events.filter((i) => events[i].tool !== 'Advisor'));
+    const trailing = draft.events.some((i) => events[i].tool === 'Advisor' && i > lastWork);
+    director += ` · ${trailing ? 'then' : 'after'} ${plural(panel.secondOpinion, 'second opinion')}`;
   }
   panel.caption = { story, director };
   return panel;

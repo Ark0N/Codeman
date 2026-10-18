@@ -49,26 +49,15 @@
         "events": 2
       },
       {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
-      },
-      {
         "kind": "fix",
         "ok": null,
         "story": "Claude writes 4 new files.",
-        "director": "Write ×4 · csvstat.py +115 · sample.csv +6 · test_csvstat.py +129",
+        "director": "Write ×4 · csvstat.py +115 · sample.csv +6 · test_csvstat.py +129 · after 1 second opinion",
         "balloon": null,
         "tests": null,
         "roundsOk": null,
         "printed": null,
-        "events": 4
+        "events": 5
       },
       {
         "kind": "check",

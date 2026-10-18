@@ -38,26 +38,15 @@
         "events": 2
       },
       {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
-      },
-      {
         "kind": "save",
         "ok": true,
         "story": "Claude writes 2 files and saves the work: \"add package.json and index.js with add and slugify\".",
-        "director": "git commit -q -m \"feat: add package.json and index.js with… · writes 2 files",
+        "director": "git commit -q -m \"feat: add package.json and index.js with… · writes 2 files · after 1 second opinion",
         "balloon": null,
         "tests": null,
         "roundsOk": null,
         "printed": null,
-        "events": 1
+        "events": 2
       },
       {
         "kind": "backup",
@@ -263,21 +252,10 @@
         "events": 1
       },
       {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
-      },
-      {
         "kind": "check",
         "ok": true,
         "story": "Claude writes 4 files; the tests pass.",
-        "director": "npm test 2>&1 → ok · 8 passed · writes 4 files",
+        "director": "npm test 2>&1 → ok · 8 passed · writes 4 files · after 1 second opinion",
         "balloon": "All 8 tests pass, the README examples give the same outputs, and the barrel exports only add and slugify.",
         "tests": {
           "passed": 8,
@@ -285,7 +263,7 @@
         },
         "roundsOk": null,
         "printed": null,
-        "events": 1
+        "events": 2
       },
       {
         "kind": "save",

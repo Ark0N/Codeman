@@ -174,6 +174,8 @@ export interface StoryPanel {
   removed?: number;
   ok?: boolean;
   rounds?: number;
+  /** Second opinions (the advisor) Claude asked for right before this step: not a step of their own. */
+  secondOpinion?: number;
   /** A loop's test runs in order: whether each passed, `null` for one still running. */
   roundsOk?: (boolean | null)[];
   tests?: StoryTests;

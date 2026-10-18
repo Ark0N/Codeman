@@ -2375,7 +2375,11 @@ Object.assign(CodemanApp.prototype, {
     capStory.className = 'story-cap-story';
     const capDir = document.createElement('span');
     capDir.className = 'story-cap-dir';
-    cap.append(capStory, capDir);
+    // A second opinion Claude asked for before this step: a line, not a panel of its own.
+    const capNote = document.createElement('span');
+    capNote.className = 'story-cap-note';
+    capNote.hidden = true;
+    cap.append(capStory, capDir, capNote);
     const balloon = document.createElement('p');
     balloon.className = 'story-balloon';
     balloon.hidden = true;
@@ -2415,6 +2419,7 @@ Object.assign(CodemanApp.prototype, {
       panel: null,
       capStory,
       capDir,
+      capNote,
       balloon,
       liveTag,
       splash,
@@ -2484,6 +2489,15 @@ Object.assign(CodemanApp.prototype, {
           : 'story-balloon--claude'
     }`;
     rt.liveTag.hidden = !p.live;
+    if (rt.capNote) {
+      // Asked before this step, or after it when nothing followed.
+      const work = p.events.filter((i) => page.events[i]?.tool !== 'Advisor');
+      const trailing = p.events.some((i) => page.events[i]?.tool === 'Advisor' && i > Math.max(...work));
+      rt.capNote.hidden = !p.secondOpinion;
+      rt.capNote.textContent = p.secondOpinion
+        ? `${trailing ? 'then asks' : 'after asking'} a stronger AI model for a second opinion`
+        : '';
+    }
     rt.el.classList.toggle('is-live', !!p.live);
     // Named by its place only: the caption inside is read as the panel's content, once.
     rt.el.setAttribute('aria-label', `Panel ${index + 1} of ${page.panels.length}`);

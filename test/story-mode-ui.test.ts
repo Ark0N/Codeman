@@ -866,6 +866,26 @@ describe('story-mode.js overlay', () => {
     );
   });
 
+  it("a second opinion is a line in the next panel's caption, not a panel of its own", async () => {
+    const advisor = {
+      type: 'assistant',
+      timestamp: '2026-10-18T09:41:20.000Z',
+      message: {
+        content: [
+          { type: 'server_tool_use', id: 'srv1', name: 'advisor', input: {} },
+          { type: 'advisor_tool_result', tool_use_id: 'srv1', content: { type: 'advisor_redacted_result' } },
+        ],
+      },
+    };
+    boot(storyOf([prompt('fix it'), advisor, ...edit('e1', '/work/demo-shop/a.py', ['+a = 1']), end(1000)]));
+    app.openStoryMode(SID);
+    await settle();
+    expect($$('.story-panel').map((p) => p.dataset.kind)).toEqual(['mission', 'fix', 'complete']);
+    const note = $('.story-panel[data-kind="fix"] .story-cap-note')!;
+    expect(note.hidden).toBe(false);
+    expect(note.textContent).toBe('after asking a stronger AI model for a second opinion');
+  });
+
   it('the final panel counts the commits of the whole turn, and says when the work was uploaded', async () => {
     boot(
       storyOf([

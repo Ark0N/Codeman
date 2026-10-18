@@ -27,37 +27,41 @@
         "events": 1
       },
       {
-        "kind": "montage",
+        "kind": "investigate",
         "ok": null,
-        "story": "Claude gets started: runs 4 commands.",
-        "director": "Bash ×4",
+        "story": "Claude looks around the project.",
+        "director": "Bash ×2 · ls -la && git status 2>&1 | head; git log --oneline 2>&1 |… · 1 error",
         "balloon": null,
         "tests": null,
         "roundsOk": null,
         "printed": null,
-        "events": 4
+        "events": 2
       },
       {
-        "kind": "backup",
+        "kind": "run",
         "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
+        "story": "Claude works in the terminal.",
+        "director": "Bash ×2 · for t in ruff flake8 pyflakes pycodestyle pylint mypy black…",
         "balloon": null,
         "tests": null,
         "roundsOk": null,
-        "printed": null,
-        "events": 1
+        "printed": [
+          "name rc=1",
+          "…@…",
+          "email rc=0"
+        ],
+        "events": 2
       },
       {
         "kind": "fix",
         "ok": null,
         "story": "Claude writes 3 files.",
-        "director": "Bash · pyproject.toml +11 · .gitignore +11 · __init__.py +3",
+        "director": "Bash · pyproject.toml +11 · .gitignore +11 · __init__.py +3 · after 1 second opinion",
         "balloon": null,
         "tests": null,
         "roundsOk": null,
         "printed": null,
-        "events": 1
+        "events": 2
       },
       {
         "kind": "mission",
@@ -131,7 +135,7 @@
         "kind": "check",
         "ok": true,
         "story": "The tests pass.",
-        "director": "python3 -m pytest -q -p no:cacheprovider 2>&1 → ok · 63 passed",
+        "director": "python3 -m pytest -q -p no:cacheprovider 2>&1 → ok · 63 passed · then 1 second opinion",
         "balloon": null,
         "tests": {
           "passed": 63,
@@ -139,18 +143,7 @@
         },
         "roundsOk": null,
         "printed": null,
-        "events": 1
-      },
-      {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
+        "events": 2
       },
       {
         "kind": "complete",

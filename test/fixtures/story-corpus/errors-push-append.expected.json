@@ -27,37 +27,26 @@
         "events": 1
       },
       {
-        "kind": "montage",
+        "kind": "investigate",
         "ok": null,
-        "story": "Claude gets started: runs 3 commands.",
-        "director": "Bash ×3",
+        "story": "Claude looks around the project.",
+        "director": "Bash ×2 · ls -la && git log --oneline -5 2>&1; git status; python3 --…",
         "balloon": null,
         "tests": null,
         "roundsOk": null,
         "printed": null,
-        "events": 3
-      },
-      {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
+        "events": 2
       },
       {
         "kind": "run",
         "ok": null,
         "story": "Claude works in the terminal.",
-        "director": "Bash · mkdir -p /work/cases/story-r6-a/tests",
+        "director": "Bash ×2 · python3 -c \"import calc_stats\" 2>&1 | tail -1; ls pytest.in… · after 1 second opinion",
         "balloon": null,
         "tests": null,
         "roundsOk": null,
         "printed": null,
-        "events": 1
+        "events": 3
       },
       {
         "kind": "fix",
@@ -125,23 +114,12 @@
         "kind": "save",
         "ok": true,
         "story": "Claude saves the work: \"implement calc_stats mean and median\".",
-        "director": "git commit -q -F -",
+        "director": "git commit -q -F - · then 1 second opinion",
         "balloon": null,
         "tests": null,
         "roundsOk": null,
         "printed": null,
-        "events": 1
-      },
-      {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
+        "events": 2
       },
       {
         "kind": "complete",

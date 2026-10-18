@@ -38,21 +38,10 @@
         "events": 2
       },
       {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
-      },
-      {
         "kind": "loop",
         "ok": true,
         "story": "Fix and test, 2 rounds: a test fails and Claude fixes it, then a layout check fails and Claude fixes that; everything passes. Claude saves the work in 4 commits along the way.",
-        "director": "3 checks · 5 edits · +218 −1 · last: ok",
+        "director": "3 checks · 5 edits · +218 −1 · last: ok · after 1 second opinion",
         "balloon": "All 19 tests pass, ruff check is clean, and the output matches real wc column for column.",
         "tests": {
           "passed": 19,
@@ -64,7 +53,7 @@
           true
         ],
         "printed": null,
-        "events": 7
+        "events": 8
       },
       {
         "kind": "save",
@@ -78,21 +67,10 @@
         "events": 1
       },
       {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
-      },
-      {
         "kind": "run",
         "ok": null,
         "story": "Claude works in the terminal.",
-        "director": "Bash · python3 wcount.py nope nope2; echo \"exit=$?\"; wc nope nope2…",
+        "director": "Bash · python3 wcount.py nope nope2; echo \"exit=$?\"; wc nope nope2… · after 1 second opinion",
         "balloon": null,
         "tests": null,
         "roundsOk": null,
@@ -101,7 +79,7 @@
           "wcount: nope2: No such file or directory",
           "0 0 0 total"
         ],
-        "events": 1
+        "events": 2
       },
       {
         "kind": "complete",

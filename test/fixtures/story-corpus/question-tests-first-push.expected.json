@@ -49,21 +49,10 @@
         "events": 2
       },
       {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
-      },
-      {
         "kind": "loop",
         "ok": true,
         "story": "Test first: the first run fails as planned, the second passes.",
-        "director": "2 checks · 4 edits · +151 −1 · last: ok",
+        "director": "2 checks · 4 edits · +151 −1 · last: ok · after 1 second opinion",
         "balloon": "All 19 test cases pass (13 test functions), and ruff check and ruff format both come back clean.",
         "tests": {
           "passed": 19,
@@ -74,7 +63,7 @@
           true
         ],
         "printed": null,
-        "events": 6
+        "events": 7
       },
       {
         "kind": "fix",
@@ -117,7 +106,7 @@
         "kind": "check",
         "ok": true,
         "story": "The tests pass.",
-        "director": "python3 -m pytest -q -p no:cacheprovider) → ok · 19 passed",
+        "director": "python3 -m pytest -q -p no:cacheprovider) → ok · 19 passed · then 1 second opinion",
         "balloon": null,
         "tests": {
           "passed": 19,
@@ -125,18 +114,7 @@
         },
         "roundsOk": null,
         "printed": null,
-        "events": 1
-      },
-      {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
+        "events": 2
       },
       {
         "kind": "complete",

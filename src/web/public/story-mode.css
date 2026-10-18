@@ -340,6 +340,19 @@ body.story-open {
   border-radius: 6px;
   background: transparent;
 }
+.story-cap-note {
+  display: block;
+  margin-top: 3px;
+  font: 600 10.5px/1.25 var(--story-mono);
+  letter-spacing: 0.01em;
+  text-transform: none;
+  color: var(--story-cap-ink);
+  opacity: 0.78;
+}
+.story-cap-note[hidden],
+.story-overlay.is-director .story-cap-note {
+  display: none;
+}
 .story-hit:hover,
 .story-hit:focus-visible {
   outline: 3px dashed var(--story-magenta) !important;

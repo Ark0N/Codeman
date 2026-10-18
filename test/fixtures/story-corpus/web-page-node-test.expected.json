@@ -52,26 +52,15 @@
         "events": 1
       },
       {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
-      },
-      {
         "kind": "fix",
         "ok": null,
         "story": "Claude writes 3 new files.",
-        "director": "Write ×3 · timer.js +42 · timer.test.mjs +74 · index.html +120",
+        "director": "Write ×3 · timer.js +42 · timer.test.mjs +74 · index.html +120 · after 1 second opinion",
         "balloon": null,
         "tests": null,
         "roundsOk": null,
         "printed": null,
-        "events": 3
+        "events": 4
       },
       {
         "kind": "check",
@@ -91,23 +80,12 @@
         "kind": "save",
         "ok": true,
         "story": "Claude saves the work: \"add pomodoro timer with tests\".",
-        "director": "git commit -q -m \"feat: add pomodoro timer with tests\" -m \"…",
+        "director": "git commit -q -m \"feat: add pomodoro timer with tests\" -m \"… · then 1 second opinion",
         "balloon": null,
         "tests": null,
         "roundsOk": null,
         "printed": null,
-        "events": 1
-      },
-      {
-        "kind": "backup",
-        "ok": null,
-        "story": "Claude asks a stronger AI model for a second opinion.",
-        "director": "Advisor · a second opinion",
-        "balloon": null,
-        "tests": null,
-        "roundsOk": null,
-        "printed": null,
-        "events": 1
+        "events": 2
       },
       {
         "kind": "complete",
