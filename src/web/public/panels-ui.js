@@ -6298,10 +6298,9 @@ Object.assign(CodemanApp.prototype, {
     main.append(this._noticeEl('div', 'security-notice-eyebrow', 'Security notice'));
     main.append(...this._noticeTextBlock(notice));
     const actions = this._noticeEl('div', 'security-notice-actions');
-    actions.append(
-      this._noticeLinkButton(notice, () => card.close('link')),
-      this._noticeButton('security-notice-quiet', 'Dismiss', () => card.close('dismiss'))
-    );
+    const link = this._noticeLinkButton(notice, card, () => card.close('link'));
+    if (link) actions.append(link);
+    actions.append(this._noticeButton('security-notice-quiet', 'Dismiss', () => card.close('dismiss')));
     main.append(actions);
     card.el.append(this._noticeIcon('shield', 'security-notice-icon'), main, card.closeButton);
     card.mount();
@@ -6336,10 +6335,15 @@ Object.assign(CodemanApp.prototype, {
       head.append(this._noticeIcon('shield'), this._noticeEl('span', 'security-notice-eyebrow', 'Security notice'));
       section.append(head, ...this._noticeTextBlock(notice));
       main.append(section);
-      actions.append(this._noticeLinkButton(notice, () => { seen(notice.id); card.close('link'); }));
+      const link = this._noticeLinkButton(notice, card, () => { seen(notice.id); card.close('link'); });
+      if (link) actions.append(link);
     }
     actions.append(
-      this._noticeButton('security-notice-secondary', "See what's new", () => window.open(releaseUrl, '_blank', 'noopener'))
+      this._noticeButton(
+        'security-notice-secondary',
+        "See what's new",
+        card.act(() => window.open(releaseUrl, '_blank', 'noopener,noreferrer'))
+      )
     );
     main.append(actions);
     card.el.append(this._noticeIcon('update', 'security-notice-icon update-notice-icon'), main, card.closeButton);
@@ -6347,7 +6351,12 @@ Object.assign(CodemanApp.prototype, {
     return { dismiss: () => card.close(null) };
   },
 
-  /** The shell both notice cards share: role=alert, the ×, mount and a once-only close. */
+  /**
+   * The shell both notice cards share: role=alert, the ×, mount and a once-only close.
+   * A closing card stays in the DOM for its 200 ms fade, so close() also makes it inert, and
+   * `act(fn)` wraps a button's handler to do nothing once the card is closing (a double click
+   * on a link used to open it twice; the × and Dismiss go through close(), already once-only).
+   */
   _noticeCard(className, onUserClose) {
     const el = this._noticeEl('div', className);
     el.setAttribute('role', 'alert');
@@ -6356,6 +6365,7 @@ Object.assign(CodemanApp.prototype, {
     const close = (reason) => {
       if (closed) return;
       closed = true;
+      el.inert = true;
       el.classList.remove('show');
       setTimeout(() => el.remove(), 200);
       if (reason && typeof onUserClose === 'function') {
@@ -6368,7 +6378,8 @@ Object.assign(CodemanApp.prototype, {
       this._toastStack().appendChild(el);
       requestAnimationFrame(() => el.classList.add('show'));
     };
-    return { el, closeButton, close, mount };
+    const act = (fn) => () => { if (!closed) fn(); };
+    return { el, closeButton, close, mount, act };
   },
 
   /** The notice's own title (when it has one) and message: textContent, never translated. */
@@ -6379,11 +6390,20 @@ Object.assign(CodemanApp.prototype, {
     return parts;
   },
 
-  _noticeLinkButton(notice, after) {
+  /**
+   * The notice's link as the primary button, or null when the link is not https.
+   * selectSecurityNotices() already drops such a notice; the URL is checked again here, at the
+   * sink, because showSecurityNotice/showUpdateNotice take any object. Opened with noopener
+   * AND noreferrer: noopener alone still sends this instance's origin (a tailnet name, a tunnel
+   * URL) to the linked site as the Referer.
+   */
+  _noticeLinkButton(notice, card, after) {
+    const url = notice.url;
+    if (!window.CodemanSecurityNotices?.urlOk?.(url)) return null;
     return this._noticeButton(
       'security-notice-primary',
       notice.label,
-      () => { window.open(notice.url, '_blank', 'noopener'); after(); },
+      card.act(() => { window.open(url, '_blank', 'noopener,noreferrer'); after(); }),
       true
     );
   },

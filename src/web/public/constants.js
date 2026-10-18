@@ -3583,5 +3583,10 @@ function planStartupNotices(state = {}) {
 }
 
 if (typeof window !== 'undefined') {
-  window.CodemanSecurityNotices = { select: selectSecurityNotices, plan: planStartupNotices };
+  window.CodemanSecurityNotices = {
+    select: selectSecurityNotices,
+    plan: planStartupNotices,
+    // The same https-only rule select() applies, for the card's link button to check again.
+    urlOk: (url) => typeof url === 'string' && SECURITY_NOTICE_URL_PATTERN.test(url),
+  };
 }

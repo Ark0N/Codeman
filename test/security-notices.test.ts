@@ -434,8 +434,12 @@ const PLAIN_UPDATE_TOAST =
 
 type Reply = { ok: boolean; body?: unknown } | 'throw';
 type WiredApp = {
+  isSoloWindow?: boolean;
   checkWhatsNew(version: string): Promise<void>;
   showSecurityNotice(notice: Shown, opts?: { onClose?: (reason: string) => void }): { dismiss(): void };
+  showUpdateNotice(opts: { text: string; releaseUrl: string; notices: Shown[]; onNoticeSeen?: (id: string) => void }): {
+    dismiss(): void;
+  };
 };
 
 const windows: Array<{ close(): void }> = [];
@@ -455,6 +459,8 @@ interface BootOpts {
   base?: string;
   lang?: 'zh-CN';
   i18n?: boolean;
+  /** A detached session window (/session/:id), rendered without __codemanCliAvailable. */
+  solo?: boolean;
 }
 
 /** constants.js, i18n.js (optional), settings-ui.js and panels-ui.js in one JSDOM page. */
@@ -467,6 +473,10 @@ function boot(opts: BootOpts = {}) {
   const win = dom.window as unknown as Window &
     typeof globalThis & { eval(src: string): void; __App: { prototype: object }; [key: string]: unknown };
   windows.push(win);
+  // The page's own clock, pinned inside the fixtures' date window: JSDOM gives the window its
+  // own Date (vi.setSystemTime never reaches it), and on the real clock every test that expects
+  // a card would fail once the fixture's notice expired (2027-01-01).
+  win.eval(`Date.now = () => ${NOW};`);
   if (opts.seenIds !== undefined) win.localStorage.setItem(SEEN_KEY, JSON.stringify(opts.seenIds));
   if (opts.seenVersion !== undefined) win.localStorage.setItem(VERSION_KEY, opts.seenVersion);
   if (opts.storage === 'blocked') {
@@ -506,6 +516,7 @@ function boot(opts: BootOpts = {}) {
   );
   if (opts.i18n) (win.CodemanI18n as { start(): void }).start();
   const app = Object.create(win.__App.prototype) as WiredApp;
+  if (opts.solo) app.isSoloWindow = true;
   const doc = win.document;
   const cards = () => Array.from(doc.querySelectorAll<HTMLElement>('.security-notice:not(.update-notice)'));
   const updateCards = () => Array.from(doc.querySelectorAll<HTMLElement>('.security-notice.update-notice'));
@@ -602,7 +613,7 @@ describe('a browser with no update toast this load: the standalone card', () => 
       await first.app.checkWhatsNew(RUNNING);
       const card = first.cards()[0];
       first.button(card, cls).click();
-      first.button(card, cls).click(); // a double click while it fades: recorded once
+      first.button(card, cls).click(); // a double click while it fades
       expect(first.seenIds()).toEqual(['cli-notice']);
       await afterClose();
       expect(first.cards()).toEqual([]);
@@ -613,11 +624,41 @@ describe('a browser with no update toast this load: the standalone card', () => 
     });
   }
 
-  it('opens the link with noopener, records the notice and closes the card', async () => {
+  it('reports a close once, however many times the card is clicked while it fades', async () => {
+    for (const cls of ['security-notice-close', 'security-notice-quiet', 'security-notice-primary']) {
+      const { app, cards, button, opened } = boot();
+      const onClose = vi.fn();
+      app.showSecurityNotice(
+        { id: 'x', title: '', message: 'm', label: 'Go', url: 'https://example.com/' },
+        { onClose }
+      );
+      const card = cards()[0];
+      button(card, cls).click();
+      button(card, cls).click();
+      button(card, 'security-notice-close').click();
+      expect(onClose, cls).toHaveBeenCalledTimes(1);
+      // A double click on the link opens it once, not twice.
+      expect(opened, cls).toHaveLength(cls === 'security-notice-primary' ? 1 : 0);
+    }
+  });
+
+  it('draws no link button for a link that is not https, whoever calls it', async () => {
+    const { app, cards, opened } = boot();
+    const onClose = vi.fn();
+    app.showSecurityNotice({ id: 'x', title: '', message: 'm', label: 'Go', url: 'javascript:alert(1)' }, { onClose });
+    const card = cards()[0];
+    expect(card.querySelector('.security-notice-primary')).toBeNull();
+    expect(Array.from(card.querySelectorAll('.security-notice-actions button')).map((b) => b.textContent)).toEqual([
+      'Dismiss',
+    ]);
+    expect(opened).toEqual([]);
+  });
+
+  it('opens the link with noopener and noreferrer, records the notice and closes the card', async () => {
     const { app, cards, button, opened, seenIds } = boot({ seenIds: ['older-notice'] });
     await app.checkWhatsNew(RUNNING);
     button(cards()[0], 'security-notice-primary').click();
-    expect(opened).toEqual([['https://example.com/notice', '_blank', 'noopener']]);
+    expect(opened).toEqual([['https://example.com/notice', '_blank', 'noopener,noreferrer']]);
     expect(seenIds()).toEqual(['older-notice', 'cli-notice']);
     await afterClose();
     expect(cards()).toEqual([]);
@@ -704,7 +745,8 @@ describe('an existing install that sees a new version: the notice rides inside t
     const { app, updateCards, button, opened, seenIds } = boot({ seenVersion: '1.42.0' });
     await app.checkWhatsNew(RUNNING);
     button(updateCards()[0], 'security-notice-primary').click();
-    expect(opened).toEqual([['https://example.com/notice', '_blank', 'noopener']]);
+    button(updateCards()[0], 'security-notice-primary').click(); // a double click while it fades
+    expect(opened).toEqual([['https://example.com/notice', '_blank', 'noopener,noreferrer']]);
     expect(seenIds()).toEqual(['cli-notice']);
     await afterClose();
     expect(updateCards()).toEqual([]);
@@ -724,7 +766,7 @@ describe('an existing install that sees a new version: the notice rides inside t
     const labels = Array.from(card.querySelectorAll('.security-notice-actions button')).map((b) => b.textContent);
     expect(labels).toEqual(['First', 'Second', "See what's new"]);
     card.querySelectorAll<HTMLButtonElement>('.security-notice-primary')[1].click();
-    expect(opened).toEqual([['https://example.com/2', '_blank', 'noopener']]);
+    expect(opened).toEqual([['https://example.com/2', '_blank', 'noopener,noreferrer']]);
     // The other notice was never answered, so it comes back next load (as a card).
     expect(seenIds()).toEqual(['second']);
   });
@@ -733,10 +775,24 @@ describe('an existing install that sees a new version: the notice rides inside t
     const { app, updateCards, button, opened, seenIds } = boot({ seenVersion: '1.42.0' });
     await app.checkWhatsNew(RUNNING);
     button(updateCards()[0], 'security-notice-secondary').click();
-    expect(opened).toEqual([[RELEASE_URL, '_blank', 'noopener']]);
+    expect(opened).toEqual([[RELEASE_URL, '_blank', 'noopener,noreferrer']]);
     expect(seenIds()).toBeNull();
     await afterClose();
     expect(updateCards()).toHaveLength(1);
+  });
+
+  it('reports each notice once, and opens nothing, once the card is closing', async () => {
+    const { app, updateCards, button, opened } = boot();
+    const onNoticeSeen = vi.fn();
+    const one = { id: 'x', title: '', message: 'm', label: 'Go', url: 'https://example.com/' };
+    app.showUpdateNotice({ text: 'Updated', releaseUrl: RELEASE_URL, notices: [one], onNoticeSeen });
+    const card = updateCards()[0];
+    button(card, 'security-notice-close').click();
+    button(card, 'security-notice-close').click();
+    button(card, 'security-notice-primary').click();
+    button(card, 'security-notice-secondary').click();
+    expect(onNoticeSeen.mock.calls).toEqual([['x']]);
+    expect(opened).toEqual([]);
   });
 
   it('keeps the update toast exactly as it was when no notice is selected', async () => {
@@ -807,6 +863,58 @@ describe('the gates every surface shares', () => {
   });
 });
 
+describe('a detached session window (/session/:id), rendered without CLI availability', () => {
+  it('leaves a pending notice and the update toast to the dashboard, recording nothing', async () => {
+    for (const seenVersion of ['1.42.0', RUNNING, undefined]) {
+      const {
+        app,
+        cards,
+        updateCards,
+        plainToasts,
+        seenIds,
+        seenVersion: version,
+      } = boot({
+        solo: true,
+        available: null,
+        seenVersion,
+      });
+      await app.checkWhatsNew(RUNNING);
+      expect([...cards(), ...updateCards(), ...plainToasts()], String(seenVersion)).toEqual([]);
+      expect(version()).toBe(seenVersion ?? null);
+      expect(seenIds()).toBeNull();
+    }
+  });
+
+  it('then lets the dashboard carry the notice inside its update toast', async () => {
+    const { win, app, updateCards, cards } = boot({ solo: true, available: null, seenVersion: '1.42.0' });
+    await app.checkWhatsNew(RUNNING);
+    // The dashboard's load: same browser storage, availability injected.
+    const dashboard = Object.create(Object.getPrototypeOf(app)) as WiredApp;
+    win.__codemanCliAvailable = { somecli: true };
+    await dashboard.checkWhatsNew(RUNNING);
+    expect(cards()).toEqual([]);
+    expect(updateCards()).toHaveLength(1);
+  });
+
+  it('shows the plain update toast as before when no notice is pending', async () => {
+    for (const variant of [{ seenIds: ['cli-notice'] }, { notices: { ok: false } as Reply }] as BootOpts[]) {
+      const { app, plainToasts, cards, seenVersion } = boot({
+        solo: true,
+        available: null,
+        seenVersion: '1.42.0',
+        ...variant,
+      });
+      await app.checkWhatsNew(RUNNING);
+      expect(
+        plainToasts().map((t) => t.outerHTML),
+        JSON.stringify(variant)
+      ).toEqual([PLAIN_UPDATE_TOAST]);
+      expect(cards()).toEqual([]);
+      expect(seenVersion()).toBe(RUNNING);
+    }
+  });
+});
+
 describe('zh-CN', () => {
   it("shows the card in the notice's own Chinese and translates the card's own copy", async () => {
     const { app, cards, text, button } = boot({ lang: 'zh-CN', i18n: true });
@@ -868,5 +976,20 @@ describe('the card styles', () => {
 
   it('fills a phone width minus the stack gutters', () => {
     expect(block).toMatch(/@media \(max-width: 599px\) \{\s*\.security-notice \{\s*width: calc\(100vw - 1rem\);/);
+  });
+
+  it('caps its height and scrolls inside itself, since the fixed stack cannot scroll', () => {
+    const rule = block.slice(0, block.indexOf('}'));
+    expect(rule).toContain('max-height: calc(var(--app-height, 100dvh) - var(--header-height) - 1rem);');
+    expect(rule).toContain('overflow-y: auto;');
+    // A positioned accent bar would scroll away with the content.
+    expect(block).not.toContain('.security-notice::before');
+  });
+
+  it('darkens the amber ink on the light skins only', () => {
+    expect(block).toContain('--notice-ink: var(--yellow);');
+    expect(block).toMatch(
+      /html:is\(\[data-skin="paper-gray"\], \[data-skin="solarized-light"\], \[data-skin="catppuccin-latte"\], \[data-skin="rose-pine-dawn"\]\) \.security-notice \{\s*--notice-ink: color-mix\(in srgb, var\(--yellow\) 85%, black\);/
+    );
   });
 });

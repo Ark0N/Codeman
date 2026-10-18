@@ -386,6 +386,14 @@ Object.assign(CodemanApp.prototype, {
    * fresh install or a reload on the same version (showSecurityNotice). With no notice
    * selected the update toast is the plain one it always was. Storage blocked shows neither:
    * nothing could remember a close.
+   *
+   * ⚠️ A detached session window (/session/:id) is rendered without __codemanCliAvailable, so
+   * it can never select a notice naming a CLI. Were it to take the update toast anyway, it
+   * would record the version and the dashboard would later show that notice as a separate
+   * card, not inside the update toast. So while any notice is pending (_loadSecurityNotices
+   * counts every CLI the file names as installed there), a solo window shows and records
+   * nothing and leaves both to the dashboard; with none pending it shows the plain update
+   * toast as it always did.
    */
   async checkWhatsNew(runningVersion) {
     if (this._whatsNewChecked) return;
@@ -398,6 +406,7 @@ Object.assign(CodemanApp.prototype, {
       seen && seen !== runningVersion ? this._fetchWhatsNewNotes() : null,
       this._loadSecurityNotices(),
     ]);
+    if (this.isSoloWindow && notices.length) return;
     const plan = window.CodemanSecurityNotices.plan({ seenVersion: seen, runningVersion, notes, notices });
     if (plan.recordVersion) remember();
     if (plan.update) {
@@ -443,7 +452,9 @@ Object.assign(CodemanApp.prototype, {
    * CodemanSecurityNotices.select() in constants.js: dates, the seen list, and for a notice
    * naming a CLI, `window.__codemanCliAvailable[cli] === true` only (unknown means not
    * installed). [] on any failure, and when storage is blocked (a close could not be
-   * remembered, so the card would return on every load).
+   * remembered, so the card would return on every load). In a solo window every CLI the file
+   * names counts as installed: there the answer only decides whether to leave the release to
+   * the dashboard (see checkWhatsNew), and is never shown.
    */
   async _loadSecurityNotices() {
     let seen;
@@ -452,8 +463,12 @@ Object.assign(CodemanApp.prototype, {
       const res = await fetch(CodemanBase.url('/security-notices.json'), { cache: 'no-cache' });
       if (!res.ok) return [];
       const data = await res.json();
+      const list = Array.isArray(data?.notices) ? data.notices : [];
+      const available = this.isSoloWindow
+        ? Object.fromEntries(list.filter((entry) => typeof entry?.cli === 'string').map((entry) => [entry.cli, true]))
+        : window.__codemanCliAvailable;
       return window.CodemanSecurityNotices.select(data?.notices, {
-        available: window.__codemanCliAvailable,
+        available,
         seen,
         now: Date.now(),
         lang: window.CodemanI18n?.language || window.__codemanLanguage,
