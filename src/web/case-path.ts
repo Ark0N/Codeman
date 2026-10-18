@@ -105,8 +105,11 @@ export function blockedReason(
   // perfectly good linked case: with CODEMAN_CASES_PATH pointing at a broad root such as /mnt/user/Scripts,
   // refusing everything below it blocked most of the tree.
   for (const dir of ctx.casesDirs ?? []) {
-    if (absPath === dir || dirname(absPath) === dir) {
-      return `That folder is in the cases folder (${dir}), where it is already listed as a case; create it there with plain Create New (no custom folder)`;
+    if (absPath === dir) {
+      return `That is the cases folder itself (${dir}); create a case inside it with plain Create New (no custom folder)`;
+    }
+    if (dirname(absPath) === dir) {
+      return `That folder is directly in the cases folder (${dir}), where it is listed as a local case; create it there with plain Create New (no custom folder)`;
     }
   }
   return null;

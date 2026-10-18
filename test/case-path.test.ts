@@ -59,6 +59,11 @@ describe('blockedReason', () => {
     expect(blockedReason('/home/u/codeman-cases', withCases)).toMatch(/plain Create New/);
     expect(blockedReason('/home/u/codeman-cases/foo', withCases)).toMatch(/plain Create New/);
     expect(blockedReason('/home/u/codeman-cases/foo', withCases)).toContain('/home/u/codeman-cases');
+    // Two messages: the cases folder is not "in" itself, and a child that does not exist yet is not
+    // "already" listed.
+    expect(blockedReason('/home/u/codeman-cases', withCases)).toMatch(/cases folder itself/);
+    expect(blockedReason('/home/u/codeman-cases/foo', withCases)).toMatch(/directly in the cases folder/);
+    expect(blockedReason('/home/u/codeman-cases/foo', withCases)).not.toMatch(/already/);
     expect(blockedReason('/home/u/codeman-cases-old/foo', withCases)).toBeNull();
     expect(blockedReason('/home/u/codeman-cases/foo', c)).toBeNull();
   });
