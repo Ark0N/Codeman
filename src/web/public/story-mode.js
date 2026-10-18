@@ -312,8 +312,14 @@ const StoryArt = (() => {
     }
   }
   /** The agent: a terminal-headed character. (x, y) is the point between its feet. */
+  /** Every edit an event made: an Edit/Write call's one, or the files a Bash here-document wrote. */
+  const editsOf = (e) => (e?.edit ? [e.edit] : e?.edits || []);
   /** Where Claude's head was last drawn (stage units): the speech balloon is placed over it. */
   let speaker = null;
+  /** A scene with no Claude in it names the spot its balloon should point at. */
+  function aim(x, top) {
+    speaker = { x, top };
+  }
   function takeSpeaker() {
     const s = speaker;
     speaker = null;
@@ -991,8 +997,8 @@ const StoryArt = (() => {
         halftone(ctx, W, H, C.cyan, 0, H, { rmax: 3.6 });
       },
       draw(ctx, W, H, f, p, hit) {
-        const edits = p.panel.events.map((i) => p.page.events[i]).filter((e) => e && e.edit);
-        const first = edits[0]?.edit;
+        const edits = p.panel.events.flatMap((i) => editsOf(p.page.events[i]));
+        const first = edits[0];
         const lines = first?.hunks?.[0]?.lines || [];
         const pw = Math.min(W * 0.56, 196);
         const ph = 128;
@@ -1037,12 +1043,13 @@ const StoryArt = (() => {
       },
       draw(ctx, W, H, f, p, hit) {
         const t = p.panel.tests;
-        const total = t ? t.passed + t.failed : 0;
+        const bad = t ? t.failed + (t.errors || 0) : 0;
+        const total = t ? t.passed + bad : 0;
         const running = p.panel.ok === undefined;
         let b;
         if (total) {
           const dots = Math.min(42, Math.max(7, total));
-          const fail = t.failed ? Math.max(1, Math.round((t.failed / total) * dots)) : 0;
+          const fail = bad ? Math.max(1, Math.round((bad / total) * dots)) : 0;
           const fill = running ? (f * 0.6) % (dots + 6) : Math.min(dots, (f - 4) * 1.6);
           b = board(ctx, 16, 106, `${total} checks`, dots, fail, fill);
         } else {
@@ -1086,8 +1093,10 @@ const StoryArt = (() => {
         halftone(ctx, W, H, C.magenta, W, 0, { cell: 8, rmax: 3.6 });
       },
       draw(ctx, W, H, f, p, hit) {
-        const edits = p.panel.events.map((i) => p.page.events[i]).filter((e) => e && e.edit);
-        const last = edits[edits.length - 1]?.edit;
+        const edits = p.panel.events.flatMap((i) => editsOf(p.page.events[i]));
+        const last = edits[edits.length - 1];
+        // No Claude here: the balloon points at the verdict, above the board and the rounds.
+        aim(W - 60, 128);
         const pw = Math.min(W * 0.36, 150);
         codePage(ctx, 12, 108, pw, 112, f, baseName(last?.file || 'file'), last?.hunks?.[0]?.lines || [], 0);
         hit('diff', 12, 108, pw, 112, "See Claude's changes");
@@ -1095,11 +1104,12 @@ const StoryArt = (() => {
         if (bx + 127 < W - 10) {
           // The last run's real counts, or one verdict when it reported none.
           const t = p.panel.tests;
-          const total = t ? t.passed + t.failed : 0;
+          const bad = t ? t.failed + (t.errors || 0) : 0;
+          const total = t ? t.passed + bad : 0;
           let b;
           if (total) {
             const dots = Math.min(28, Math.max(7, total));
-            const fail = t.failed ? Math.max(1, Math.round((t.failed / total) * dots)) : 0;
+            const fail = bad ? Math.max(1, Math.round((bad / total) * dots)) : 0;
             b = board(ctx, bx, 116, `${total} checks`, dots, fail, Math.min(dots, (f - 4) * 1.6));
           } else b = verdict(ctx, bx, 116, 'checks', p.panel.ok, f);
           hit('output', bx, 116, b.w, b.h, 'See the test output');
@@ -1375,7 +1385,7 @@ const StoryArt = (() => {
     },
   };
 
-  return { FPS, HERO, VH, C, readColors, spring, SCENES, takeSpeaker };
+  return { FPS, HERO, VH, C, readColors, spring, SCENES, takeSpeaker, editsOf };
 })();
 
 /** Panel kinds as the wire's group headings name them. */
@@ -1988,10 +1998,13 @@ Object.assign(CodemanApp.prototype, {
       const word = document.createElement('span');
       word.textContent = 'Pencils';
       const small = document.createElement('small');
-      small.textContent = 'Claude is working…';
       pencils.append(word, small);
     }
     if (working) {
+      // A question still open means Claude is waiting on you, not working.
+      const waiting = page.events.some((e) => e.question && e.pending);
+      pencils.querySelector('small').textContent = waiting ? 'Waiting for your answer…' : 'Claude is working…';
+      pencils.classList.toggle('is-waiting', waiting);
       pencils.style.setProperty('--story-span6', String(spans6[want.length]));
       pencils.style.setProperty('--story-span2', String(spans2[want.length]));
       st.pageEl.append(pencils);
@@ -2211,7 +2224,8 @@ Object.assign(CodemanApp.prototype, {
     const hx = placed ? (head.x + ox) * s : 0;
     const cap = rt.capStory.parentElement;
     const capW = cap?.offsetWidth || 0;
-    const key = `${rt.w}x${rt.h}|${placed ? Math.round(hx / 6) : '-'}|${capW}|${b.className}|${b.textContent}`;
+    const live = !rt.liveTag.hidden;
+    const key = `${rt.w}x${rt.h}|${placed ? Math.round(hx / 6) : '-'}|${capW}|${live}|${b.className}|${b.textContent}`;
     if (key === rt.balloonKey) return;
     rt.balloonKey = key;
     if (placed) {
@@ -2223,6 +2237,9 @@ Object.assign(CodemanApp.prototype, {
       const besideCap = rt.w - right - capRight - 10;
       if (besideCap >= 150) maxW = Math.min(maxW, besideCap);
       else top = capBottom + 8;
+      // The LIVE tag sits in the top-right corner: start below it when the balloon reaches that far.
+      if (live && right < rt.w - rt.liveTag.offsetLeft)
+        top = Math.max(top, rt.liveTag.offsetTop + rt.liveTag.offsetHeight + 6);
       b.style.left = 'auto';
       b.style.right = `${Math.round(right)}px`;
       b.style.top = `${Math.round(top)}px`;
@@ -2526,13 +2543,16 @@ Object.assign(CodemanApp.prototype, {
   _storyShortPath(text) {
     const dir = this.sessions?.get(this._story?.sessionId)?.workingDir;
     if (!dir || dir === '/' || !text) return text;
-    const prefix = dir.endsWith('/') ? dir : `${dir}/`;
-    return text.split(prefix).join('');
+    const base = dir.replace(/\/+$/, '');
+    return text
+      .split(`${base}/`)
+      .join('')
+      .replace(new RegExp(`${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[\\s'"\`:;,)])`, 'g'), '.');
   },
 
   /** What a click on an event opens, as a `data-story-open` target, or null. */
   _storyEventTarget(ev, index) {
-    if (ev.edit) return `diff:event:${index}`;
+    if (ev.edit || ev.edits?.length) return `diff:event:${index}`;
     if (ev.helper) return `helper:event:${index}`;
     if (ev.output !== undefined || ev.outputTruncated) return `output:event:${index}`;
     if (ev.file) return `file:event:${index}`;
@@ -2662,7 +2682,9 @@ Object.assign(CodemanApp.prototype, {
 
     // Changes made from the terminal (`sed -i`, a redirect) have no diff to show: show what ran.
     const view =
-      source.view === 'diff' && items.length && !items.some((x) => x.ev.edit || x.ev.pending) ? 'output' : source.view;
+      source.view === 'diff' && items.length && !items.some((x) => StoryArt.editsOf(x.ev).length || x.ev.pending)
+        ? 'output'
+        : source.view;
     if (view === 'prompt') {
       const prompts = items.filter((x) => x.ev.intent === 'prompt');
       const from = prompts[0]?.ev.origin ?? 'human';
@@ -2682,20 +2704,22 @@ Object.assign(CodemanApp.prototype, {
           if (ev.outputTruncated) out.push(el('p', 'story-empty', 'The report is cut here.'));
         }
       }
-      if (prompts.some((x) => x.ev.label.length >= 599))
+      if (prompts.some((x) => x.ev.label.length >= 3999))
         out.push(el('p', 'story-empty', 'A long prompt is cut here; the terminal has all of it.'));
     } else if (view === 'diff') {
-      const edits = items.filter((x) => x.ev.edit);
+      const edits = items.flatMap((x) =>
+        StoryArt.editsOf(x.ev).map((d, k) => ({ ev: x.ev, edit: d, key: `${x.ev.id}#${k}` }))
+      );
       kind = live ? 'Live diff' : 'Diff';
-      const added = edits.reduce((n, x) => n + x.ev.edit.added, 0);
-      const removed = edits.reduce((n, x) => n + x.ev.edit.removed, 0);
-      const files = new Set(edits.map((x) => x.ev.edit.file)).size;
-      title = files === 1 ? edits[0].ev.edit.file : `${files} files`;
+      const added = edits.reduce((n, x) => n + x.edit.added, 0);
+      const removed = edits.reduce((n, x) => n + x.edit.removed, 0);
+      const files = new Set(edits.map((x) => x.edit.file)).size;
+      title = files === 1 ? this._storyShortPath(edits[0].edit.file) : `${files} files`;
       const counts = [added ? `+${added}` : '', removed ? `−${removed}` : ''].filter(Boolean).join(' ') || '±0';
       sub = `${edits.length} edit${edits.length === 1 ? '' : 's'} · ${counts}${live ? ' · new edits slide in as Claude makes them' : ''}`;
       if (!edits.length) out.push(el('p', 'story-empty', 'No changes in this part of the turn yet.'));
-      for (const { ev } of edits) {
-        const section = this._storyDiffSection(ev, el);
+      for (const { ev, edit } of edits) {
+        const section = this._storyDiffSection(edit, el);
         if (isNew(ev.id)) {
           section.classList.add('story-arrive');
           firstNew ??= section;
@@ -2775,7 +2799,7 @@ Object.assign(CodemanApp.prototype, {
       title = ev?.question?.text || 'Question';
       if (ev?.question?.options?.length) {
         const ul = el('ul', 'story-todos');
-        for (const o of ev.question.options) ul.append(el('li', o === ev.question.answer ? 'is-done' : '', o));
+        for (const o of ev.question.options) ul.append(el('li', o === ev.question.answer ? 'is-chosen' : '', o));
         out.push(ul);
       }
       out.push(
@@ -2873,11 +2897,11 @@ Object.assign(CodemanApp.prototype, {
     box.replaceChildren(el('p', 'story-out-desc', summary), list);
   },
 
-  _storyDiffSection(ev, el) {
-    const edit = ev.edit;
+  _storyDiffSection(edit, el) {
     const section = el('section', 'story-df');
     const head = el('div', 'story-df-head');
-    const name = el('span', 'story-df-path', edit.file);
+    const name = el('span', 'story-df-path', this._storyShortPath(edit.file));
+    if (name.textContent !== edit.file) name.title = edit.file;
     const cnt = el('span', 'story-cnt');
     cnt.append(
       el('span', 'story-cnt-a', edit.added ? `+${edit.added}` : ''),
@@ -2921,7 +2945,12 @@ Object.assign(CodemanApp.prototype, {
   _storyOutputSection(ev, index, el) {
     const section = el('section', 'story-out');
     const head = el('div', 'story-out-head');
-    const cmd = el('span', 'story-out-cmd', `${ev.tool === 'Bash' ? '$ ' : `${ev.tool} `}${ev.label}`);
+    const cmd = el(
+      'span',
+      'story-out-cmd',
+      `${ev.tool === 'Bash' ? '$ ' : `${ev.tool} `}${this._storyShortPath(ev.label)}`
+    );
+    if (ev.label !== this._storyShortPath(ev.label)) cmd.title = ev.label;
     const status = el(
       'span',
       `story-tag story-tag--${ev.ok === false ? 'bad' : ev.pending ? 'pending' : 'ok'}`,
@@ -2937,7 +2966,11 @@ Object.assign(CodemanApp.prototype, {
     } else if (ev.outputTruncated) {
       section.append(el('p', 'story-empty', 'This output was left out to keep a long turn fast.'));
     } else if (target && !target.startsWith('output:')) {
-      const b = el('button', 'story-btn-s', ev.edit ? 'See the change' : ev.file ? 'Open file' : 'Open');
+      const b = el(
+        'button',
+        'story-btn-s',
+        ev.edit || ev.edits?.length ? 'See the change' : ev.file ? 'Open file' : 'Open'
+      );
       b.type = 'button';
       b.dataset.storyOpen = target;
       section.append(b);
@@ -2974,8 +3007,18 @@ Object.assign(CodemanApp.prototype, {
       b.className = 'story-link';
       b.textContent = this._storyShortPath(link.path);
       if (b.textContent !== link.path) b.title = link.path;
-      const resolved =
-        typeof resolveLinkedFilePath === 'function' ? resolveLinkedFilePath(link.path, workingDir) : link.path;
+      // A bare name listed under an `ls` header (`some/dir:`) lives in that directory.
+      let target = link.path;
+      if (!target.includes('/')) {
+        const block =
+          value
+            .slice(0, link.index)
+            .split(/\n\s*\n/)
+            .pop() || '';
+        const header = /(?:^|\n)([^\s:][^\n:]*):[ \t]*\n(?![\s\S]*\n[^\s:][^\n:]*:[ \t]*\n)/.exec(block);
+        if (header) target = `${header[1].replace(/\/+$/, '')}/${target}`;
+      }
+      const resolved = typeof resolveLinkedFilePath === 'function' ? resolveLinkedFilePath(target, workingDir) : target;
       b.addEventListener('click', () => this.openFilePreview?.(resolved, this._story.sessionId));
       pre.append(b);
       last = link.index + link.path.length;

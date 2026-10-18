@@ -905,6 +905,14 @@ body.story-open {
   color: var(--story-go);
   text-decoration: line-through;
 }
+/* The answer you picked: chosen, not crossed off. */
+.story-todos .is-chosen {
+  color: var(--story-go);
+  font-weight: 650;
+}
+.story-todos .is-chosen::before {
+  content: '✓ ';
+}
 
 @media (prefers-reduced-motion: reduce) {
   .story-fresh *,

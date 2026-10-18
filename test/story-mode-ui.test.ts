@@ -515,6 +515,70 @@ describe('story-mode.js overlay', () => {
     expect($('.story-panel[data-kind="investigate"] .story-hit')!.title).toBe('Open rename_by_date.sh');
   });
 
+  it('files written through a here-document open as a diff from the wire, with short paths', async () => {
+    const lines = [
+      prompt('write'),
+      ...bash('b1', "cat > app.js <<'EOF'\nconst a = 1;\nEOF\nnode --test", 'Write and test', '# pass 1\n# fail 0'),
+      end(1000),
+    ];
+    (lines[1] as { cwd?: string }).cwd = '/work/demo-shop';
+    boot(storyOf(lines));
+    app.openStoryMode(SID);
+    await settle();
+    app._storySetDirector(true);
+    const link = $$('.story-wire .story-link').find((l) => l.dataset.storyOpen?.startsWith('diff:'))!;
+    link.click();
+    expect($('.story-drawer-kind')!.textContent).toBe('Diff');
+    expect($('.story-drawer-title')!.textContent).toBe('app.js');
+    expect($('.story-df-path')!.textContent).toBe('app.js');
+    expect($('.story-df-path')!.title).toBe('/work/demo-shop/app.js');
+    expect($$('.story-ln--add').map((l) => l.textContent)).toEqual(['1+const a = 1;']);
+  });
+
+  it('while a question waits, the pencils say so; the chosen answer is marked, not struck', async () => {
+    const ask = (answered: boolean) =>
+      storyOf([
+        prompt('pick'),
+        tool('q1', 'AskUserQuestion', {
+          questions: [{ question: 'Which name?', options: [{ label: 'slugify' }, { label: 'kebab' }] }],
+        }),
+        ...(answered ? [result('q1', 'kebab', { toolUseResult: { answers: { 'Which name?': 'kebab' } } })] : []),
+      ]);
+    boot(ask(false));
+    app.openStoryMode(SID);
+    await settle();
+    expect($('.story-pencils small')!.textContent).toBe('Waiting for your answer…');
+    responses = [{ status: 200, body: { success: true, data: ask(true) } }];
+    await app._storyRefresh();
+    await settle();
+    sizeAndDraw();
+    $('.story-panel[data-kind="ask"] .story-hit')!.click();
+    const chosen = $('.story-drawer-body .is-chosen')!;
+    expect(chosen.textContent).toBe('kebab');
+    expect($('.story-drawer-body .is-done')).toBeNull();
+    expect($('.story-pencils small')!.textContent).toBe('Claude is working…');
+  });
+
+  it('a bare name under an ls header links into that folder; the session folder reads as "."', async () => {
+    boot(
+      storyOf([
+        prompt('look'),
+        ...bash('b1', 'ls /work/demo-shop && ls -R /work/demo-shop/clone', 'List the clone', 'clone/src:\nkebab.py\n\nnotes.md'),
+        end(1000),
+      ])
+    );
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    $('.story-panel[data-kind="investigate"] .story-hit')!.click();
+    expect($('.story-out-cmd')!.textContent).toBe('$ ls . && ls -R clone');
+    const links = $$('.story-drawer-body .story-link');
+    links.find((l) => l.textContent === 'kebab.py')!.click();
+    expect(app.openFilePreview).toHaveBeenLastCalledWith('/work/demo-shop/clone/src/kebab.py', SID);
+    links.find((l) => l.textContent === 'notes.md')!.click();
+    expect(app.openFilePreview).toHaveBeenLastCalledWith('/work/demo-shop/notes.md', SID);
+  });
+
   it('turning the setting off hides the button and closes an open story', async () => {
     boot(storyOf(demoTurn()));
     app.openStoryMode(SID);

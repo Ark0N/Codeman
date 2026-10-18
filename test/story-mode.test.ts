@@ -11,6 +11,7 @@ import {
   createStoryReducer,
   exactDuration,
   firstSentence,
+  heredocWrites,
   parseTestCounts,
   planFromText,
   printedFiles,
@@ -110,8 +111,8 @@ describe('parseTestCounts beyond "N passed"', () => {
     ['# tests 7\n# suites 0\n# pass 7\n# fail 0', { passed: 7, failed: 0 }],
     ['ℹ tests 3\nℹ pass 2\nℹ fail 1', { passed: 2, failed: 1 }],
     ['FAILED test_a.py::test_x\n===== 3 failed in 0.12s =====', { passed: 0, failed: 3 }],
-    ['==== 1 error in 0.05s ====', { passed: 0, failed: 1 }],
-    ['=== 1 failed, 18 passed, 2 errors in 0.40s ===', { passed: 18, failed: 3 }],
+    ['==== 1 error in 0.05s ====', { passed: 0, failed: 0, errors: 1 }],
+    ['=== 1 failed, 18 passed, 2 errors in 0.40s ===', { passed: 18, failed: 1, errors: 2 }],
     [' Tests  3 failed (3)', { passed: 0, failed: 3 }],
   ])('%j', (output, counts) => {
     expect(parseTestCounts(output)).toEqual(counts);
@@ -614,11 +615,115 @@ describe('buildStoryPage', () => {
       ...bash('b2', 'git push -u origin main && git -C remote.git log', 'Push', 'fatal: bad object', true),
       end(1000),
     ]);
-    expect(page.events[1]).toMatchObject({ ok: false, tests: { passed: 0, failed: 1 } });
+    expect(page.events[1]).toMatchObject({ ok: false, tests: { passed: 0, failed: 0, errors: 1 } });
+    const check = page.panels.find((p) => p.kind === 'check')!;
+    expect(check.caption.story).toBe("The tests don't even load.");
+    expect(check.caption.director).toContain('0 passed, 1 error');
     const save = page.panels.find((p) => p.kind === 'save')!;
     expect(save.ok).toBe(false);
     expect(save.caption.story).toBe('Claude tries to send the work up, and the command fails.');
     expect(save.caption.director).toContain('1 error');
+  });
+
+  it('files written through a here-document are edits: on the event, in the counts, out of the label', () => {
+    const command = [
+      "cat > index.js <<'EOF'",
+      'export const add = (a, b) => a + b;',
+      'test(1 > 2)',
+      'EOF',
+      'cat <<EOF > /tmp/scratch.txt',
+      'scratch',
+      'EOF',
+      'node --test && git add -A && git commit -qm "feat: add"',
+    ].join('\n');
+    const lines = [prompt('write it'), ...bash('b1', command, 'Write, test, commit', '# pass 3\n# fail 0'), end(1000)];
+    (lines[1] as { cwd?: string }).cwd = '/work/app';
+    const page = pageOf(lines);
+    const ev = page.events[1];
+    expect(ev.intent).toBe('test');
+    expect(ev.edits?.map((d) => [d.file, d.added])).toEqual([['/work/app/index.js', 2]]);
+    expect(ev.edits?.[0].hunks[0].lines).toEqual(['+export const add = (a, b) => a + b;', '+test(1 > 2)']);
+    expect(ev.label).not.toContain('export const add');
+    expect(ev.headline).toBe('node --test');
+    expect(page.filesChanged).toBe(1);
+    const check = page.panels.find((p) => p.kind === 'check')!;
+    expect(check.caption.director).toMatch(/^node --test → ok · 3 passed · writes 1 file$/);
+  });
+
+  it('heredocWrites skips scratch, stdin bodies and relative paths after a cd', () => {
+    expect(heredocWrites("python3 - <<'EOF'\nprint(1)\nEOF", '/w')).toEqual([]);
+    expect(heredocWrites('cat > "$S/x.txt" <<EOF\nx\nEOF', '/w')).toEqual([]);
+    expect(heredocWrites('cd sub && cat > a.txt <<EOF\nx\nEOF', '/w').map((d) => d.file)).toEqual(['a.txt']);
+    expect(heredocWrites('tee -a notes.md <<EOF\nx\nEOF', '/w').map((d) => d.file)).toEqual(['/w/notes.md']);
+  });
+
+  it('checks that all pass from the start read as building, not fixing', () => {
+    const page = pageOf([
+      prompt('build it'),
+      ...edit('e1', '/w/a.py', ['+a = 1']),
+      ...bash('b1', 'pytest -q', 'Run tests', '3 passed in 0.1s'),
+      ...edit('e2', '/w/b.py', ['+b = 1']),
+      ...bash('b2', 'pytest -q', 'Run tests', '6 passed in 0.1s'),
+      end(1000),
+    ]);
+    expect(page.panels.find((p) => p.kind === 'loop')!.caption.story).toBe(
+      'Build and test, 2 rounds. Every check passes.'
+    );
+  });
+
+  it('the advisor (a server tool) is a helper giving a second opinion', () => {
+    const page = pageOf([
+      prompt('think hard'),
+      {
+        type: 'assistant',
+        timestamp: '2026-10-18T09:41:20.000Z',
+        message: {
+          content: [
+            { type: 'server_tool_use', id: 'srv1', name: 'advisor', input: {} },
+            {
+              type: 'advisor_tool_result',
+              tool_use_id: 'srv1',
+              content: { type: 'advisor_redacted_result', encrypted_content: 'xx' },
+            },
+          ],
+        },
+      },
+      end(1000),
+    ]);
+    const backup = page.panels.find((p) => p.kind === 'backup')!;
+    expect(backup.caption.story).toBe('Claude asks the advisor for a second opinion.');
+    expect(page.events[1]).toMatchObject({ tool: 'Advisor', ok: true, helper: { name: 'advisor' } });
+    expect(page.events[1].helper!.result).toMatch(/encrypted/);
+    expect(page.helpers).toBe(0);
+  });
+
+  it('a turn left open when the next prompt starts has ended; an interrupted turn is timed', () => {
+    const turns = buildStoryTurns(
+      entriesOf([
+        prompt('one'),
+        ...bash('b', 'ls', 'List', 'a'),
+        prompt('two'),
+        ...bash('c', 'ls', 'List', 'a'),
+        { type: 'user', timestamp: '2026-10-18T09:50:00.000Z', message: { content: '[Request interrupted by user]' } },
+      ])
+    );
+    expect(turns[0]).toMatchObject({ ended: true, interrupted: false });
+    expect(turns[0].durationMs).toBeGreaterThan(0);
+    expect(turns[1]).toMatchObject({ ended: true, interrupted: true });
+    expect(turns[1].durationMs).toBeGreaterThan(0);
+  });
+
+  it('a result remark replaces a step announcement on its check', () => {
+    const page = pageOf([
+      prompt('steps'),
+      said('Step 1: split the module.'),
+      ...bash('b1', 'node --test', 'Run tests', '# pass 8\n# fail 0'),
+      said('All 8 tests pass.'),
+      ...bash('b2', 'git commit -qm x', 'Commit', 'ok'),
+      end(1000),
+    ]);
+    expect(page.panels.find((p) => p.kind === 'check')!.balloon?.text).toBe('All 8 tests pass.');
+    expect(page.panels.find((p) => p.kind === 'save')!.balloon).toBeUndefined();
   });
 
   it('a loop ends at its last check; writes after it are a panel of their own', () => {

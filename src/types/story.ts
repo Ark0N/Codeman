@@ -94,6 +94,8 @@ export interface StoryHelper {
 export interface StoryTests {
   passed: number;
   failed: number;
+  /** Errors outside the tests (pytest's collection errors): the run failed although no test did. */
+  errors?: number;
 }
 
 export interface StoryTodo {
@@ -129,6 +131,10 @@ export interface StoryEvent {
   output?: string;
   outputTruncated?: boolean;
   edit?: StoryEdit;
+  /** Files a Bash call wrote through a here-document (`cat > f <<'EOF'`), each as a whole-file edit. */
+  edits?: StoryEdit[];
+  /** The part of a Bash one-liner that decided its intent (the test run, the commit), for captions. */
+  headline?: string;
   helper?: StoryHelper;
   tests?: StoryTests;
   todos?: StoryTodo[];
