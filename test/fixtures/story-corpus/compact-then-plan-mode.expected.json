@@ -238,7 +238,7 @@
         "ok": null,
         "story": "Done in 1 minute.",
         "director": "turn_duration · 1 min 7 s · 10 tool calls · 2 files changed",
-        "balloon": "I added wrap() as planned, with 3 new tests.",
+        "balloon": "I added wrap() as planned, with 3 new tests. All 8 tests pass and ruff reports no problems.",
         "tests": null,
         "roundsOk": null,
         "printed": null,

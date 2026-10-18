@@ -886,6 +886,29 @@ describe('story-mode.js overlay', () => {
     expect(note.textContent).toBe('after asking a stronger AI model for a second opinion');
   });
 
+  it('a second opinion that came back with an error says no answer came', async () => {
+    const failed = {
+      type: 'assistant',
+      timestamp: '2026-10-18T09:41:20.000Z',
+      message: {
+        content: [
+          { type: 'server_tool_use', id: 'srv1', name: 'advisor', input: {} },
+          {
+            type: 'advisor_tool_result',
+            tool_use_id: 'srv1',
+            content: { type: 'advisor_tool_result_error', error_code: 'unavailable' },
+          },
+        ],
+      },
+    };
+    boot(storyOf([prompt('fix it'), failed, ...edit('e1', '/work/demo-shop/a.py', ['+a = 1']), end(1000)]));
+    app.openStoryMode(SID);
+    await settle();
+    expect($('.story-panel[data-kind="fix"] .story-cap-note')!.textContent).toBe(
+      'after trying to ask a stronger AI model for a second opinion (no answer came)'
+    );
+  });
+
   it('the final panel counts the commits of the whole turn, and says when the work was uploaded', async () => {
     const chipsFor = async (to: string) => {
       boot(

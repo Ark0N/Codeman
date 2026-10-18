@@ -94,7 +94,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude starts a git repository, saves the work and copies it to remote.git, a folder on this computer, but a step after that fails.",
+        "story": "Claude starts a git repository, saves the work and copies it to remote.git, a folder on this computer, but a check after that fails.",
         "director": "git commit -q -F - · git push -u origin main · 1 error",
         "balloon": null,
         "tests": null,
@@ -105,7 +105,7 @@
       {
         "kind": "check",
         "ok": true,
-        "story": "The tests pass.",
+        "story": "The tests pass in a fresh copy made from remote.git.",
         "director": "python3 -m pytest -q -p no:cacheprovider) → ok · 19 passed · then 1 second opinion",
         "balloon": null,
         "tests": {

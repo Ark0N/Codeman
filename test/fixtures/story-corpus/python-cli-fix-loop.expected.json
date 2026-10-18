@@ -86,7 +86,7 @@
         "ok": null,
         "story": "Done in 3 minutes.",
         "director": "turn_duration · 3 min 13 s · 13 tool calls · 3 files changed",
-        "balloon": "I built wcount.py and test_wcount.py. What failed and how I fixed it: one test failed on the first run.",
+        "balloon": "I built wcount.py and test_wcount.py. All 19 tests pass (19 passed in 0.46s) and ruff check . is clean. What failed and how I fixed it: one test failed on the first run.",
         "tests": null,
         "roundsOk": null,
         "printed": null,

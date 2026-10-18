@@ -2492,11 +2492,16 @@ Object.assign(CodemanApp.prototype, {
     if (rt.capNote) {
       // Asked before this step, or after it when nothing followed.
       const work = p.events.filter((i) => page.events[i]?.tool !== 'Advisor');
-      const trailing = p.events.some((i) => page.events[i]?.tool === 'Advisor' && i > Math.max(...work));
+      const asked = p.events.filter((i) => page.events[i]?.tool === 'Advisor');
+      const trailing = asked.some((i) => i > Math.max(...work));
+      // A call that came back with an error brought no opinion: say so, never that one was given.
+      const unanswered = asked.length > 0 && asked.every((i) => page.events[i].ok === false);
       rt.capNote.hidden = !p.secondOpinion;
-      rt.capNote.textContent = p.secondOpinion
-        ? `${trailing ? 'then asks' : 'after asking'} a stronger AI model for a second opinion`
-        : '';
+      rt.capNote.textContent = !p.secondOpinion
+        ? ''
+        : unanswered
+          ? `${trailing ? 'then tries to ask' : 'after trying to ask'} a stronger AI model for a second opinion (no answer came)`
+          : `${trailing ? 'then asks' : 'after asking'} a stronger AI model for a second opinion`;
     }
     rt.el.classList.toggle('is-live', !!p.live);
     // Named by its place only: the caption inside is read as the panel's content, once.

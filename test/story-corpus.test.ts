@@ -127,7 +127,7 @@ describe('Story Mode on real sessions', () => {
       // One commit, then a push in a command of its own: one commit, not two.
       // The folder had no repository: the first save starts one, and the reader is told.
       story:
-        'Claude starts a git repository, saves the work and copies it to remote.git, a folder on this computer, but a step after that fails.',
+        'Claude starts a git repository, saves the work and copies it to remote.git, a folder on this computer, but a check after that fails.',
     });
   });
 
@@ -142,7 +142,7 @@ describe('Story Mode on real sessions', () => {
       'Claude saves the work: "add calc_stats.mode with smallest-value tie-breaking", then copies it to origin.git, a folder on this computer.'
     );
     expect(third.panels.find((p) => p.kind === 'save')?.story).toBe(
-      'Claude saves the work and copies it to origin.git, a folder on this computer, but a step after that fails.'
+      'Claude saves the work and copies it to origin.git, a folder on this computer, but a check after that fails.'
     );
   });
 

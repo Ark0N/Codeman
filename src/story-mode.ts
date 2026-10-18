@@ -263,6 +263,10 @@ const REPORTS_PROBLEM = /\b(left|stray|broke|broken|fail(s|ed)?|error|missing|wr
 const CAVEAT =
   /^(but|however|note|nothing|no\b|none|one (caveat|gap|thing)|heads up|caveat|warning|i (didn't|did not|couldn't|could not|haven't|have not|wasn't|left)|it (isn't|is not|wasn't|was not)|this (isn't|is not)|the (only|one) )/i;
 
+/** A sentence that says how it ended: the tests, the save. Kept in Claude's last words after the first. */
+const OUTCOME =
+  /\b(all \d+ (tests? )?(now )?pass|tests? (now )?pass|(is|are|was) (now )?committed|committed (it|them|the)|pushed|nothing is (lost|committed))\b/i;
+
 /** What a speech balloon says: the first sentence, and the next when the first reports a problem. */
 export function balloonText(text: string): string {
   const [one, two] = firstTwoSentences(text);
@@ -295,7 +299,7 @@ const KEY_KINDS: Array<[StoryKeyKind, RegExp]> = [
   ],
   [
     'offer',
-    /\b(want me to|should i|shall i|do you want|if you want|whenever you want|let me know|say if you want|i can (add|fix|change|do|update|make|run|commit))\b/i,
+    /\b(want me to|should i|shall i|do you want|if you want|whenever you want|let me know|say if you want|i can (add|fix|change|do|update|make|run|commit)|you (may|might) want to (change|revisit|undo|review)|decisions? (you|for you)|worth a second look)\b/i,
   ],
   [
     'howto',
@@ -307,7 +311,7 @@ const KEY_KINDS: Array<[StoryKeyKind, RegExp]> = [
     /(?<!(deliberately|intentionally|purposely) )\bleft (out|open)\b(?! (on purpose|deliberately|intentionally|rather))|\b(not yet|haven't|have not|(hasn't|has not) (answered|replied|finished|started|run|been (run|tested|checked|merged|pushed))|can't tell|isn't (confirmed|committed|pushed|tested|done|checked)|not (checked|tested|verified|confirmed|committed|pushed|opened|run)|still (running|working|open(?!\s+(the|a|an|in|on|it|them)\b)|missing)|didn't (open|try|check|test|run|verify) it)\b/i,
   ],
   // A step that failed, not a description of failure ("1 for a failed operation").
-  ['failed', /(?<!\b(a|the|any|on) )\b(failed|fails)\b/i],
+  ['failed', /(?<!\b(a|the|any|on) )(?<!\d )\b(failed|fails)\b/i],
   [
     'asked',
     /\b(as you (asked|expected|said|wanted|suggested)|you asked|your (--?[\w-]+|request|option|flag|change))\b/i,
@@ -338,6 +342,8 @@ const sentenceKind = (s: string): StoryKeyKind | undefined =>
       (kind !== 'problem' || openProblem(s)) &&
       ((kind !== 'problem' && kind !== 'pending') || !HISTORY.test(s))
   )?.[0];
+/** A sentence whose "it" or "that" is further back: "would fix it", "That's the cause". */
+const POINTS_BACK = /^(that|this|it)\b|\b(fix|solve|change|handle|avoid|prevent|add) (it|that|this|them)\b/i;
 /** A sentence that only points elsewhere ("described below"): nothing a balloon can show. */
 const POINTS_ELSEWHERE = /\b(described|listed|shown|details?) below\b|\bsee below\b|\bas follows\b/i;
 /** The fix that follows a problem sentence: then the problem is not open. */
@@ -371,13 +377,18 @@ function keyPointsOf(text: string): string[] {
   const plain = plainMarkdown(text.slice(0, 8000), spans);
   // Every sentence in order, with the line it came from (list items are lines).
   const sentences: string[] = [];
+  const lineOf: number[] = [];
+  let lineNo = 0;
   for (const line of plain.split('\n')) {
     const trimmed = line.trim();
+    if (!trimmed) continue;
+    lineNo++;
     if (trimmed.startsWith('|') || (trimmed.match(/\|/g)?.length ?? 0) >= 2) continue; // a table row
     let rest = trimmed.replace(/^[-*•]\s+/, '').replace(/\s+/g, ' ');
     while (rest) {
       const m = SENTENCE_END.exec(rest);
       sentences.push((m ? m[1] : rest).trim());
+      lineOf.push(lineNo);
       rest = m ? rest.slice(m[1].length).trim() : '';
     }
   }
@@ -390,20 +401,46 @@ function keyPointsOf(text: string): string[] {
     // Judged on its own words (a list intro too: "Known quirks:", "Two places where I didn't…:").
     const kind = sentenceKind(sentence);
     if (!kind && (weak || !KEY_WEAK.test(sentence))) continue;
-    // A list intro brings its first items, while short, never one that only points elsewhere.
-    if (/:$/.test(sentence))
-      for (let k = i + 1; k <= i + 2 && k < sentences.length && sentence.length + sentences[k].length < 260; k++)
+    // A list intro brings its first items, while short, never one that only points elsewhere. One that
+    // announces how many ("Two places where I didn't follow your wording:") brings that many lines.
+    let wide = false;
+    if (/:$/.test(sentence)) {
+      const count =
+        /\b(two|three|2|3)\s+(places|things|points|changes|issues|differences|deviations|items|notes|decisions|quirks|caveats)\b/i.exec(
+          sentence
+        )?.[1];
+      const lines = count ? (/^(three|3)$/i.test(count) ? 3 : 2) : 0;
+      wide = lines > 0;
+      const room = lines ? 480 : 260;
+      for (
+        let k = i + 1;
+        k < sentences.length &&
+        (lines ? lineOf[k] <= lineOf[i] + lines : k <= i + 2) &&
+        sentence.length + sentences[k].length < room;
+        k++
+      )
         if (!POINTS_ELSEWHERE.test(sentences[k])) sentence = `${sentence} ${sentences[k]}`;
+    }
     // "That's out of date" needs what "that" was, and so does "Want me to add that?".
     // ("It doesn't mention…" is a sentence of its own: only "that"/"this" point back.)
     const refersBack =
       /^(that|this)\b/i.test(sentence) ||
       (kind === 'offer' && sentence.length < 80 && /\b(that|this|it|them)\b/i.test(sentence));
-    const before = refersBack && i > 1 ? `${sentences[i - 1]} ` : '';
+    let before = refersBack && i > 1 ? `${sentences[i - 1]} ` : '';
+    // "…would fix it for up to 10 files. Want me to add that?": what "it" is sits further back, at the
+    // start of that paragraph ("Suffix swap: the two files … would trade their _1 suffix.").
+    if (before && kind === 'offer' && i > 2 && POINTS_BACK.test(sentences[i - 1])) {
+      let start = i - 1;
+      while (start > 1 && lineOf[start - 1] === lineOf[i - 1]) start--;
+      if (start < i - 1) before = `${sentences[start]}${start < i - 2 ? ' …' : ''} ${before}`;
+    }
     // A problem reported with its fix right after it: both, so it never reads as still open.
     const fix =
       kind === 'problem' && sentences[i + 1] && FIX_FOLLOWS.test(sentences[i + 1]) ? ` ${sentences[i + 1]}` : '';
-    const shown = clip(restoreSpans(before + sentence + fix, spans), before || fix ? 360 : 300);
+    const shown = clip(
+      restoreSpans(before + sentence + fix, spans),
+      before.includes(' …') || wide ? 480 : before || fix ? 360 : 300
+    );
     if (kind) candidates.push({ at: i, text: shown, kind });
     else weak = { at: i, text: shown };
   }
@@ -425,9 +462,9 @@ export function closingText(text: string, keyPoints: string[] = []): string {
   const [one, two] = firstTwoSentences(text);
   // A very short first sentence ("Not done.") says too little alone.
   const parts = [one];
-  if (two && (CAVEAT.test(two) || one.length < 24) && two.length <= 200) parts.push(two);
+  if (two && (CAVEAT.test(two) || OUTCOME.test(two) || one.length < 24) && two.length <= 200) parts.push(two);
   for (const point of keyPoints) if (!parts.some((p) => p.includes(point) || point.includes(p))) parts.push(point);
-  return clip(parts.join(' '), parts.length > 2 ? 560 : 300);
+  return clip(parts.join(' '), parts.length > 1 ? 560 : 300);
 }
 
 /** The first sentence of a message, without markdown, for a speech balloon. */
@@ -2634,6 +2671,13 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           tests.errors ? `, ${plural(tests.errors, 'error')}` : ''
         }`;
       if (edits.length) director += ` · writes ${plural(unique(edits.map((d) => d.file)).length, 'file')}`;
+      // Tests run in a fresh copy (`git clone remote.git "$C" && (cd "$C" && pytest)`): the copy is what passed.
+      const cloned = /\bgit clone\b(?:\s+-{1,2}[\w-]+)*\s+["']?([^\s"';&|]+)/.exec(lastCheck?.label ?? '')?.[1];
+      if (cloned && /^The (tests|checks) (pass|fail)\w*/.test(story))
+        story = story.replace(
+          /^The (tests|checks) (pass|fail)(\w*)/,
+          `The $1 $2$3 in a fresh copy made from ${basename(cloned.replace(/\/+$/, ''))}`
+        );
       const written = unique(edits.map((d) => d.file));
       if (written.length) story = `Claude writes ${fileWords(written)}; ${story[0].toLowerCase()}${story.slice(1)}`;
       const saved = checks.reduce((n, e) => n + (e.commits ?? 0), 0);
@@ -2704,12 +2748,31 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       // Its conventional prefix (`feat:`, `chore(deps):`) is for git, not for the reader.
       const plainSubject = subject?.replace(/^[a-z]+(\([^)]*\))?!?:\s*/i, '');
       const said = plainSubject ? `: "${clip(plainSubject, 60).replace(/[.]$/, '')}"` : '';
+      // What came after the save in that command: only looking ("git log", "git status") makes it a check.
+      const ship = (last?.label ?? '').search(ships === 'push' ? /\bgit push\b/ : /\bgit commit\b/);
+      const after =
+        ship < 0
+          ? []
+          : (last?.label ?? '')
+              .slice(ship)
+              .split(/&&|\|\||;|\n/)
+              .slice(1)
+              .map((s) => s.trim())
+              .filter(Boolean);
+      const looksOnly =
+        after.length > 0 &&
+        after.every((s) =>
+          /^(echo|printf|ls|cat|head|tail|wc|git (-C \S+ )?(log|status|remote|ls-remote|show|diff|branch|rev-parse|describe))\b/.test(
+            s
+          )
+        );
+      const stepAfter = looksOnly ? 'a check after that fails' : 'a step after that fails';
       story = savedAnyway
         ? uploadOnly
-          ? `Claude ${uploads('the work')}, but a step after that fails.`
+          ? `Claude ${uploads('the work')}, but ${stepAfter}.`
           : ships === 'push'
-            ? `Claude saves the work${inCommits} and ${uploads('it')}, but a step after that fails.`
-            : `Claude saves the work${inCommits}, but a step after that fails.`
+            ? `Claude saves the work${inCommits} and ${uploads('it')}, but ${stepAfter}.`
+            : `Claude saves the work${inCommits}, but ${stepAfter}.`
         : panel.ok === false
           ? ships === 'pr'
             ? 'Claude tries to open a pull request, and the command fails.'
@@ -2783,7 +2846,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
     // Asked before the step, or (nothing following) after the last one.
     const lastWork = Math.max(...draft.events.filter((i) => events[i].tool !== 'Advisor'));
     const trailing = draft.events.some((i) => events[i].tool === 'Advisor' && i > lastWork);
-    director += ` · ${trailing ? 'then' : 'after'} ${plural(panel.secondOpinion, 'second opinion')}`;
+    const unanswered = draft.events.every((i) => events[i].tool !== 'Advisor' || events[i].ok === false);
+    director += ` · ${trailing ? 'then' : 'after'} ${plural(panel.secondOpinion, 'second opinion')}${unanswered ? ' (no answer)' : ''}`;
   }
   panel.caption = { story, director };
   return panel;

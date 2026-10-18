@@ -172,7 +172,7 @@
         "ok": null,
         "story": "Done in 11 seconds.",
         "director": "turn_duration · 11 s · 1 tool call",
-        "balloon": "Both helpers have finished.",
+        "balloon": "Both helpers have finished. Against the real wordcount.py, all 22 tests pass: my 4 in tests/test_basic.py and helper B's 18 in tests/test_extra.py.",
         "tests": null,
         "roundsOk": null,
         "printed": null,

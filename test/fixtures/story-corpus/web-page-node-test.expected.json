@@ -92,7 +92,7 @@
         "ok": null,
         "story": "Done in 3 minutes.",
         "director": "turn_duration · 2 min 39 s · 10 tool calls · 3 files changed",
-        "balloon": "I built the pomodoro timer. Opening the page: it won't work if you double-click index.html. Serve the folder instead, for example with python3 -m http.server in the folder, then open http://localhost:8000. I didn't open it in a browser; I only checked that its script is valid.",
+        "balloon": "I built the pomodoro timer. All 7 tests pass under node --test, and everything is committed on main as c4e7b0b feat: add pomodoro timer with tests. Opening the page: it won't work if you double-click index.html. Serve the folder instead, for example with python3 -m http.server in the folder, then open http://localhost:8000. I didn't open it in a browser; I only checked that its script is valid.",
         "tests": null,
         "roundsOk": null,
         "printed": null,

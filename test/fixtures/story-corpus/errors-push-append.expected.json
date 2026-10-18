@@ -268,7 +268,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work and copies it to origin.git, a folder on this computer, but a step after that fails.",
+        "story": "Claude saves the work and copies it to origin.git, a folder on this computer, but a check after that fails.",
         "director": "git commit -q -F - · git push · 1 error",
         "balloon": null,
         "tests": null,

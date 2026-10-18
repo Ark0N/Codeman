@@ -1163,6 +1163,75 @@ describe('buildStoryPage', () => {
     expect(page).toMatchObject({ openNote: 'catch', asks: true });
   });
 
+  it('the closing balloon keeps the outcome, the items a list announces and what an offer points back to (round 10)', () => {
+    const last = (text: string) => pageOf([prompt('go'), said(text), end(1000)]).panels.at(-1)!.balloon!.text;
+    const filler = 'It reads the file and prints the counts for each column, one line per column. '.repeat(3);
+    // The outcome after the first sentence, and a test count ("1 failed") is no failed step.
+    expect(
+      last(
+        [
+          'I added a fifth test.',
+          'All 5 tests now pass, and the change is committed.',
+          filler,
+          '- First run: the result was 4 passed, 1 failed.',
+        ].join('\n')
+      )
+    ).toBe('I added a fifth test. All 5 tests now pass, and the change is committed.');
+    // "Two places…:" brings both list lines, not only the first.
+    expect(
+      last(
+        [
+          'I ran all 16 steps in order, one tool call each.',
+          filler,
+          "Two places where I didn't follow your wording exactly:",
+          '- Step 6: there is no Grep tool, so I ran grep through Bash. It found the same matches.',
+          '- Steps 5 and 10: I added a co-author line to each commit.',
+        ].join('\n')
+      )
+    ).toBe(
+      "I ran all 16 steps in order, one tool call each. Two places where I didn't follow your wording exactly: Step 6: there is no Grep tool, so I ran grep through Bash. It found the same matches. Steps 5 and 10: I added a co-author line to each commit."
+    );
+    // An offer whose "it" is further back brings the start of its paragraph.
+    expect(
+      last(
+        [
+          'I added a --prefix option.',
+          filler,
+          'Suffix swap: the two files with the same time would trade their _1 suffix. This was already in the script before. Sorting byte by byte would fix it. Want me to add that?',
+        ].join('\n')
+      )
+    ).toBe(
+      'I added a --prefix option. Suffix swap: the two files with the same time would trade their _1 suffix. … Sorting byte by byte would fix it. Want me to add that?'
+    );
+    // A decision left to you is something for you.
+    expect(keyKindOf('Decisions you may want to change: I committed CLAUDE.md.')).toBe('offer');
+  });
+
+  it('a check after a push is named a check, and tests in a fresh copy say so', () => {
+    const page = pageOf([
+      prompt('ship it'),
+      ...bash('b1', 'git commit -qm "add a"', 'Commit', ''),
+      ...bash(
+        'b2',
+        'git push -u origin main && git remote -v && git -C remote.git log --oneline',
+        'Push',
+        'Exit code 128\nTo ./remote.git\n * [new branch]      main -> main\nfatal: your current branch does not have any commits yet',
+        true
+      ),
+      ...bash(
+        'b3',
+        'C=/tmp/x && git clone -q remote.git "$C" && (cd "$C" && python3 -m pytest -q)',
+        'Fresh copy',
+        '19 passed in 0.11s'
+      ),
+      end(1000),
+    ]);
+    expect(page.panels.find((p) => p.kind === 'save')!.caption.story).toMatch(/, but a check after that fails\.$/);
+    expect(page.panels.find((p) => p.kind === 'check')!.caption.story).toBe(
+      'The tests pass in a fresh copy made from remote.git.'
+    );
+  });
+
   it("a run panel's terminal card shows what the command printed, never what looks like a secret", () => {
     const page = pageOf([
       prompt('dry run please'),
