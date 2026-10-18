@@ -2086,7 +2086,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             ? `Build and test, ${plural(n, 'round')}. Every check passes.`
             : panel.ok === true && fails === lintFails
               ? `Build and test, ${plural(n, 'round')}. A check fails ${fails === 1 ? 'once' : `${fails} times`}, then everything passes.`
-              : panel.ok === true && n === 2
+              : panel.ok === true && checks.length === 2 && fails === 1
                 ? 'Fix and test: the first run fails, the second passes.'
                 : panel.ok === true
                   ? `Fix and test, ${plural(n, 'round')}: ${fails === 1 ? 'one run fails' : `${fails} runs fail`}, then it passes.`

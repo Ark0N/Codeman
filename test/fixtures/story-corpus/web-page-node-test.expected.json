@@ -19,6 +19,7 @@
         "director": "Prompt · 56 words",
         "balloon": "Build a tiny single-page pomodoro timer in this folder: index.html with inline CSS, timer.js exporting the timer logic as plain functions, and timer.test.mjs using node:test that covers start, pause and reset; run the tests with node --test until they pass, then git init and commit everything with a short message, with no remote and no push.",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -28,6 +29,7 @@
         "director": "Bash ×2 · ls -la && git status 2>&1 | head; git log --oneline 2>&1 |…",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 2
       },
       {
@@ -37,6 +39,7 @@
         "director": "Bash · grep -oE '\"(permissions|env|allow|deny)\"|[A-Za-z_]*(TOKEN|K… · 1 error",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -46,6 +49,7 @@
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -55,6 +59,7 @@
         "director": "Write ×3 · timer.js +42 · timer.test.mjs +74 · index.html +120",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 3
       },
       {
@@ -67,6 +72,7 @@
           "passed": 7,
           "failed": 0
         },
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -76,6 +82,7 @@
         "director": "git commit -q -m \"feat: add pomodoro timer with tests\" -m \"…",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -85,6 +92,7 @@
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -94,6 +102,7 @@
         "director": "turn_duration · 2 min 39 s · 10 tool calls · 3 files changed",
         "balloon": "I built the pomodoro timer.",
         "tests": null,
+        "roundsOk": null,
         "events": 0
       }
     ]

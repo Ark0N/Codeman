@@ -19,6 +19,7 @@
         "director": "Prompt · 67 words",
         "balloon": "Create a small JavaScript ES module slugify.mjs exporting slugify(str) (lowercase, trim, spaces and punctuation to single hyphens, no leading or trailing hyphens) plus slugify.test.mjs with 4 node:test tests; on purpose make ONE test expectation wrong so the first run of node --test fails, run it, then fix that expectation, rerun until all pass, then git init if needed and git commit both files w…",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -28,6 +29,7 @@
         "director": "Bash ×2 · ls -la && git status && git log --oneline -5 2>&1; node --v…",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 2
       },
       {
@@ -37,6 +39,7 @@
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -49,6 +52,10 @@
           "passed": 4,
           "failed": 0
         },
+        "roundsOk": [
+          false,
+          true
+        ],
         "events": 5
       },
       {
@@ -58,6 +65,7 @@
         "director": "Bash · git init -b main && echo \"name=$(git config user.name) emai…",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -67,6 +75,7 @@
         "director": "git commit -q -F -",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -76,6 +85,7 @@
         "director": "turn_duration · 1 min 24 s · 10 tool calls · 2 files changed",
         "balloon": "slugify.mjs and its test file are written, all 4 tests pass, and both files are committed.",
         "tests": null,
+        "roundsOk": null,
         "events": 0
       }
     ]
@@ -100,6 +110,7 @@
         "director": "Prompt · 38 words",
         "balloon": "Add a fifth node:test test for slugify('') to slugify.test.mjs that on purpose expects 'x' so the first run fails, run node --test, then fix that expectation to the empty string, rerun until all pass, and commit the change.",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -112,6 +123,10 @@
           "passed": 5,
           "failed": 0
         },
+        "roundsOk": [
+          false,
+          true
+        ],
         "events": 4
       },
       {
@@ -121,6 +136,7 @@
         "director": "git commit -q -F -",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -130,6 +146,7 @@
         "director": "turn_duration · 21 s · 5 tool calls · 1 file changed",
         "balloon": "I added a fifth test for slugify('').",
         "tests": null,
+        "roundsOk": null,
         "events": 0
       }
     ]

@@ -46,6 +46,7 @@ function pagesOf(name: string) {
         director: x.caption.director,
         balloon: x.balloon?.text ?? null,
         tests: x.tests ?? null,
+        roundsOk: x.roundsOk ?? null,
         events: x.events.length,
       })),
     };
@@ -68,9 +69,11 @@ describe('Story Mode on real sessions', () => {
   const panel = (name: string, turn: number, kind: string) => pagesOf(name)[turn].panels.find((p) => p.kind === kind);
 
   it('a fix, a failing test (exit code hidden by a pipe), a fix and a pass fold into one loop', () => {
-    expect(panel('python-cli-fix-loop', 0, 'loop')?.story).toBe(
-      'Fix and test: the first run fails, the second passes.'
-    );
+    // Three runs in two rounds: the failing test asked for, then ruff, then a pass (the marks: ✗ ✗ ✓).
+    expect(panel('python-cli-fix-loop', 0, 'loop')).toMatchObject({
+      story: 'Fix and test, 2 rounds: 2 runs fail, then it passes.',
+      roundsOk: [false, false, true],
+    });
   });
 
   it('a prompt typed mid-turn (a queued_command attachment) is drawn where Claude took it in', () => {

@@ -19,6 +19,7 @@
         "director": "Prompt · 65 words",
         "balloon": "First write a short todo list for this job, then build a bash script rename_by_date.sh in this folder that renames *.jpg files to their modification time as YYYY-MM-DD_HHMMSS.jpg with a --dry-run flag, and while you do that use the Agent tool to have one helper agent write README.md for the script; finally test it on a few sample files you create in a samples folder.",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -28,6 +29,7 @@
         "director": "written as text · 5 steps",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -37,6 +39,7 @@
         "director": "Bash ×2 · ls -la && git log --oneline | head; which shellcheck; bash…",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 2
       },
       {
@@ -46,6 +49,7 @@
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -55,6 +59,7 @@
         "director": "Agent · general-purpose · 6 calls inside",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -64,6 +69,7 @@
         "director": "Write · Edit ×3 · Bash · rename_by_date.sh +95 −3 · -dash.jpg +1",
         "balloon": "Now I'll create the samples and run the dry run.",
         "tests": null,
+        "roundsOk": null,
         "events": 5
       },
       {
@@ -73,6 +79,7 @@
         "director": "Bash ×5 · rm -- ./-- && S=/tmp/claude/-work-cases-story-review-c/740e…",
         "balloon": "My mk -- ... helper call left a stray file named --. I'll remove it, then run the dry run and save a listing to confirm nothing changed.",
         "tests": null,
+        "roundsOk": null,
         "events": 5
       },
       {
@@ -82,6 +89,7 @@
         "director": "turn_duration · 2 min 1 s · 14 tool calls · 2 files changed · 1 helper",
         "balloon": "All the script tests pass.",
         "tests": null,
+        "roundsOk": null,
         "events": 0
       }
     ]
@@ -106,6 +114,7 @@
         "director": "Prompt · 7 words · task",
         "balloon": "Agent \"Write README for rename script\" finished",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -115,6 +124,7 @@
         "director": "Read",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -124,6 +134,7 @@
         "director": "Bash · mkdir -p \"$S/ro\" && printf x > \"$S/ro/q.jpg\" && chmod a-w \"…",
         "balloon": "The README matches the script.",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -133,6 +144,7 @@
         "director": "turn_duration · 21 s · 2 tool calls · 1 helper",
         "balloon": "I built rename_by_date.sh, the helper agent wrote README.md, and the script passed every test I ran on sample files in samples/. Nothing is committed because this folder isn't a git repository, even though the session context said it was.",
         "tests": null,
+        "roundsOk": null,
         "events": 0
       }
     ]
@@ -157,6 +169,7 @@
         "director": "Prompt · 26 words",
         "balloon": "Add a --prefix option to rename_by_date.sh that puts a given text in front of the new names, and show me a dry run on the samples.",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -166,6 +179,7 @@
         "director": "Read",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -175,6 +189,7 @@
         "director": "Edit ×3 · rename_by_date.sh +21 −6",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 3
       },
       {
@@ -184,6 +199,7 @@
         "director": "Bash ×2 · bash -n \"$P/rename_by_date.sh\" && echo \"syntax ok\"",
         "balloon": "Here's the dry run you asked for on the samples, plus a check that nothing on disk changed:",
         "tests": null,
+        "roundsOk": null,
         "events": 2
       },
       {
@@ -193,6 +209,7 @@
         "director": "Edit ×3 · README.md +18 −2",
         "balloon": "All passing.",
         "tests": null,
+        "roundsOk": null,
         "events": 3
       },
       {
@@ -202,6 +219,7 @@
         "director": "turn_duration · 1 min 14 s · 9 tool calls · 2 files changed",
         "balloon": "I added a --prefix option to rename_by_date.sh.",
         "tests": null,
+        "roundsOk": null,
         "events": 0
       }
     ]

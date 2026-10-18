@@ -19,6 +19,7 @@
         "director": "Prompt · 81 words",
         "balloon": "First reply with a numbered plan of exactly 4 steps (as text, not a tool). Then build csvstat.py, a Python CLI that prints row count and per-column min/max/mean of a CSV, with pytest tests. Do a dry run on a sample CSV and save its log with `| tee /tmp/csvstat-dryrun.log`. Start ONE helper with the Agent tool, run_in_background: true and WITHOUT a name parameter, to write README.md; do not wait f…",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -28,6 +29,7 @@
         "director": "written as text · 4 steps",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -37,6 +39,7 @@
         "director": "Bash ×2 · ls -la && git status && git branch -a && git log --oneline… · 1 error",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 2
       },
       {
@@ -46,6 +49,7 @@
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -55,6 +59,7 @@
         "director": "Write ×4 · csvstat.py +115 · sample.csv +6 · test_csvstat.py +129",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 4
       },
       {
@@ -67,6 +72,7 @@
           "passed": 17,
           "failed": 0
         },
+        "roundsOk": null,
         "events": 2
       },
       {
@@ -76,6 +82,7 @@
         "director": "Agent · general-purpose · 7 calls inside",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -85,6 +92,7 @@
         "director": "Bash · set -o pipefail && python3 csvstat.py sample.csv | tee /tmp…",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -94,6 +102,7 @@
         "director": "turn_duration · 2 min 44 s · 11 tool calls · 5 files changed · 1 helper",
         "balloon": "I've built csvstat.py, a command-line tool that prints a CSV's row count and the min, max and mean of each column.",
         "tests": null,
+        "roundsOk": null,
         "events": 0
       }
     ]
@@ -118,6 +127,7 @@
         "director": "Prompt · 6 words · task",
         "balloon": "Agent \"Write README for csvstat\" finished",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -127,6 +137,7 @@
         "director": "Bash · git log --oneline && git status --short && git show --stat…",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -136,6 +147,7 @@
         "director": "turn_duration · 9 s · 1 tool call · 1 helper",
         "balloon": "The background helper has finished README.md, and I've checked its work.",
         "tests": null,
+        "roundsOk": null,
         "events": 0
       }
     ]

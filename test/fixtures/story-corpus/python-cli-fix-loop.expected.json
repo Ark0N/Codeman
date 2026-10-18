@@ -19,6 +19,7 @@
         "director": "Prompt · 52 words",
         "balloon": "Build a small Python command-line tool wcount.py in this folder that prints the line, word and character counts of the files given as arguments, like wc, with a --json flag that prints the counts as JSON, plus pytest tests in test_wcount.py; run pytest and fix anything that fails until all tests pass.",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -28,6 +29,7 @@
         "director": "Bash ×2 · ls -la && git log --oneline -5 2>&1; git branch -a; python3… · 1 error",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 2
       },
       {
@@ -37,18 +39,24 @@
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
         "kind": "loop",
         "ok": true,
-        "story": "Fix and test: the first run fails, the second passes.",
+        "story": "Fix and test, 2 rounds: 2 runs fail, then it passes.",
         "director": "3 checks · 5 edits · +218 −1 · last: ok",
         "balloon": "All 19 tests pass, ruff check is clean, and the output matches real wc column for column.",
         "tests": {
           "passed": 19,
           "failed": 0
         },
+        "roundsOk": [
+          false,
+          false,
+          true
+        ],
         "events": 7
       },
       {
@@ -58,6 +66,7 @@
         "director": "git commit -q -m \"chore: ignore Python and pytest caches · writes 1 file",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -67,6 +76,7 @@
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -76,6 +86,7 @@
         "director": "Bash · python3 wcount.py nope nope2; echo \"exit=$?\"; wc nope nope2…",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -85,6 +96,7 @@
         "director": "turn_duration · 3 min 13 s · 13 tool calls · 3 files changed",
         "balloon": "I built wcount.py and test_wcount.py.",
         "tests": null,
+        "roundsOk": null,
         "events": 0
       }
     ]

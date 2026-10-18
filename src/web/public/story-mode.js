@@ -1894,12 +1894,16 @@ Object.assign(CodemanApp.prototype, {
 
   _storyStartRuntime() {
     const st = this._story;
+    const bar = st.root.querySelector('.story-bar');
     st.ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
+        // The bar's height places the phone drawer below it, and changes when the phone turns.
+        if (entry.target === bar) st.root.style.setProperty('--story-bar-h', `${bar.offsetHeight}px`);
         const rt = st.panels.find((p) => p.el === entry.target);
         if (rt) this._storySizePanel(rt);
       }
     });
+    if (bar) st.ro.observe(bar);
     st.io = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         const rt = st.panels.find((p) => p.el === entry.target);
@@ -1947,6 +1951,16 @@ Object.assign(CodemanApp.prototype, {
           drawn++;
         }
         st.drawCursor = n ? ((st.drawCursor || 0) + 1) % n : 0;
+        // A quiet frame draws a panel out of view (one band of it), so its buttons exist for the
+        // keyboard and a screen reader before anyone scrolls to it. Its clock waits, so the entrance
+        // still plays when it comes into view.
+        if (!drawn) {
+          const off = st.panels.find((p) => !p.visible && p.pending);
+          if (off) {
+            off.pending = false;
+            this._storyDrawPanel(off);
+          }
+        }
       }
       st.raf = requestAnimationFrame(loop);
     };

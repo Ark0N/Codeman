@@ -218,6 +218,37 @@ body.story-open {
   }
 }
 
+/* A phone: three rows (title and close, the turn, the view and Save image), not four with the
+   close button alone at the bottom. Tab order stays the DOM's; focus starts on close anyway. */
+@media (max-width: 600px) {
+  .story-bar {
+    gap: 8px 10px;
+    padding-block: 8px;
+  }
+  .story-brand {
+    order: 0;
+    flex: 1 1 0;
+  }
+  .story-title {
+    font-size: 24px;
+  }
+  .story-close {
+    order: 1;
+  }
+  .story-nav {
+    order: 2;
+    flex: 1 1 100%;
+  }
+  .story-turns {
+    max-width: none;
+  }
+  .story-seg,
+  .story-live,
+  .story-save {
+    order: 3;
+  }
+}
+
 /* Main: the sheet and the wire */
 .story-main {
   overflow: auto;
@@ -731,7 +762,7 @@ body.story-open .toast-container {
     padding-right: max(16px, env(safe-area-inset-right, 0px));
   }
   .story-drawer {
-    top: calc(var(--story-bar-h, 18vh) + 6px);
+    top: var(--story-bar-h, 18vh);
     left: 0;
     width: auto;
     height: auto;

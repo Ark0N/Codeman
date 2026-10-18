@@ -19,6 +19,7 @@
         "director": "Prompt · 96 words",
         "balloon": "Build a small Python package inventory/ (a CLI to add, list and remove items kept in a JSON file) split into at least 4 modules (for example storage.py, models.py, commands.py, cli.py), with a pytest suite of at least 25 tests in total; build it one module at a time, and after EACH module write its tests and run pytest, fixing any failures before moving on to the next module; then git init the fo…",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -28,6 +29,7 @@
         "director": "Bash ×4",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 4
       },
       {
@@ -37,6 +39,7 @@
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -46,6 +49,7 @@
         "director": "Bash · pyproject.toml +11 · .gitignore +11 · __init__.py +3",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -55,6 +59,7 @@
         "director": "Prompt · 11 words",
         "balloon": "Also add a --csv option to the list command, with tests.",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -67,6 +72,13 @@
           "passed": 63,
           "failed": 0
         },
+        "roundsOk": [
+          true,
+          true,
+          true,
+          false,
+          true
+        ],
         "events": 14
       },
       {
@@ -76,6 +88,7 @@
         "director": "Write · README.md +79",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -85,6 +98,7 @@
         "director": "Bash ×2 · D=/tmp/claude/-work-cases-story-r2-a/94066c8e-0855-4c6b-a14…",
         "balloon": "README examples match the real output.",
         "tests": null,
+        "roundsOk": null,
         "events": 2
       },
       {
@@ -94,6 +108,7 @@
         "director": "git commit -q -m \"chore: scaffold inventory package\" -m \"Ad…",
         "balloon": "Commits are in.",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -106,6 +121,7 @@
           "passed": 63,
           "failed": 0
         },
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -115,6 +131,7 @@
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -124,6 +141,7 @@
         "director": "turn_duration · 6 min 25 s · 26 tool calls · 13 files changed",
         "balloon": "The inventory/ package is built and committed.",
         "tests": null,
+        "roundsOk": null,
         "events": 0
       }
     ]
@@ -148,6 +166,7 @@
         "director": "Prompt · 188 words",
         "balloon": "Now do these 15 small steps strictly one at a time, each as its own separate tool call, in exactly this order, never combining two steps into one call and without extra steps in between: 1) Read inventory/models.py with the Read tool; 2) with the Edit tool add the line 'Version 0.1.0.' at the end of README.md; 3) run 'python3 -m pytest -q' in Bash; 4) run 'uname -s' in Bash; 5) run 'git add -A &&…",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -157,6 +176,7 @@
         "director": "Read · Edit · Bash ×4",
         "balloon": "Step 1:",
         "tests": null,
+        "roundsOk": null,
         "events": 6
       },
       {
@@ -166,6 +186,7 @@
         "director": "Prompt · 15 words",
         "balloon": "Also, as a 16th step at the very end, run git log --oneline in Bash.",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -175,6 +196,7 @@
         "director": "Write · Bash ×2",
         "balloon": "Noted, I'll add step 16 at the end.",
         "tests": null,
+        "roundsOk": null,
         "events": 3
       },
       {
@@ -184,6 +206,7 @@
         "director": "git commit -m \"docs: changelog\" -m \"Co-Authored-By: Claude…",
         "balloon": "Step 10:",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -193,6 +216,7 @@
         "director": "Read",
         "balloon": "Step 11:",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -202,6 +226,7 @@
         "director": "Edit · CHANGELOG.md +2",
         "balloon": "Step 12:",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -214,6 +239,7 @@
           "passed": 63,
           "failed": 0
         },
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -223,6 +249,7 @@
         "director": "Bash · uname -m",
         "balloon": "Step 14:",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -232,6 +259,7 @@
         "director": "git commit -am \"docs: changelog entry\" -m \"Co-Authored-By:…",
         "balloon": "Step 15:",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -241,6 +269,7 @@
         "director": "Bash · git log --oneline",
         "balloon": "Step 16:",
         "tests": null,
+        "roundsOk": null,
         "events": 1
       },
       {
@@ -250,6 +279,7 @@
         "director": "turn_duration · 1 min 16 s · 16 tool calls · 2 files changed",
         "balloon": "I ran all 16 steps in order, one tool call each.",
         "tests": null,
+        "roundsOk": null,
         "events": 0
       }
     ]

@@ -138,6 +138,19 @@ describe('Story Mode in a real browser', () => {
       return main.scrollWidth - main.clientWidth;
     });
     expect(overflow).toBe(0);
+    // The bar keeps to three rows, and a panel below the fold gets its buttons without a scroll.
+    expect(await page.evaluate(() => (document.querySelector('.story-bar') as HTMLElement).offsetHeight)).toBeLessThan(
+      190
+    );
+    await page.waitForFunction(
+      () => {
+        const p = document.querySelector('.story-panel[data-kind="loop"]') as HTMLElement;
+        const main = document.querySelector('.story-main') as HTMLElement;
+        return p.getBoundingClientRect().top > main.getBoundingClientRect().bottom && !!p.querySelector('.story-hit');
+      },
+      null,
+      { timeout: 10000 }
+    );
     await page.evaluate(() => (window as any).app.closeStoryMode());
     await page.setViewportSize({ width: 1400, height: 950 });
   });
