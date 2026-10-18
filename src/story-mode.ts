@@ -210,13 +210,20 @@ const unique = <T>(items: T[]): T[] => [...new Set(items)];
  * markdown or as the end of a sentence.
  */
 function plainMarkdown(text: string, spans: string[]): string {
-  return text
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`([^`\n]*)`/g, (_, code: string) => `\u0000${spans.push(code) - 1}\u0000`)
-    .replace(/!?\[([^\]\n]*)\]\([^)\n]*\)/g, '$1')
-    .replace(/(^|[\s(])(\*\*|__)(?=\S)([^\n]*?\S)\2(?=[\s),!?:;]|\.(?:\s|$)|$)/g, '$1$3')
-    .replace(/(^|[\s(])([*_])(?=\S)([^*_\n]*?\S)\2(?=[\s),!?:;]|\.(?:\s|$)|$)/g, '$1$3')
-    .replace(/^[ \t]{0,3}(#{1,6}|>|[-*+]|\d+[.)])[ \t]+/gm, '');
+  return (
+    text
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/`([^`\n]*)`/g, (_, code: string) => `\u0000${spans.push(code) - 1}\u0000`)
+      .replace(/!?\[([^\]\n]*)\]\([^)\n]*\)/g, '$1')
+      .replace(/(^|[\s(])(\*\*|__)(?=\S)([^\n]*?\S)\2(?=[\s),!?:;]|\.(?:\s|$)|$)/g, '$1$3')
+      .replace(/(^|[\s(])([*_])(?=\S)([^*_\n]*?\S)\2(?=[\s),!?:;]|\.(?:\s|$)|$)/g, '$1$3')
+      // A heading ends at its line. A short one (`## Summary`) is a label and goes; a longer one
+      // (`# Plan: add wrap to mathx.py`) is a sentence of its own.
+      .replace(/^[ \t]{0,3}#{1,6}[ \t]+(.*?)[ \t]*$/gm, (_, h: string) =>
+        h.split(/\s+/).length <= 3 ? '' : /[.!?:]$/.test(h) ? h : `${h}.`
+      )
+      .replace(/^[ \t]{0,3}(>|[-*+]|\d+[.)])[ \t]+/gm, '')
+  );
 }
 
 const restoreSpans = (text: string, spans: string[]): string =>
@@ -629,8 +636,9 @@ function readTeammateMessages(text: string): StoryTeammateReport[] {
   for (const m of text.matchAll(/<teammate-message\b([^>]*)>([\s\S]*?)<\/teammate-message>/g)) {
     const from = /teammate_id="([^"]*)"/.exec(m[1])?.[1]?.split('@')[0];
     if (!from) continue;
-    const summary = /summary="([^"]*)"/.exec(m[1])?.[1];
-    let body: string | undefined = m[2].trim();
+    const rawSummary = /summary="([^"]*)"/.exec(m[1])?.[1];
+    const summary = rawSummary === undefined ? undefined : unescapeXml(rawSummary);
+    let body: string | undefined = unescapeXml(m[2].trim());
     if (body.startsWith('{')) {
       try {
         const note: unknown = JSON.parse(body);
@@ -647,6 +655,13 @@ function readTeammateMessages(text: string): StoryTeammateReport[] {
   }
   return reports;
 }
+
+/** Claude Code escapes a notification's text (`&lt;noreply@anthropic.com&gt;`); undo the five it uses. */
+const unescapeXml = (s: string): string =>
+  s.replace(
+    /&(lt|gt|quot|apos|amp);/g,
+    (_, e: string) => ({ lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' })[e] ?? _
+  );
 
 function readPrompt(raw: string): {
   text: string;
@@ -685,7 +700,10 @@ function readPrompt(raw: string): {
     return { text: `${command[1].trim()} ${args.trim()}`.trim(), kind: 'prompt', slash: true };
   }
   if (/^<task-notification>/.test(text)) {
-    const tag = (name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1]?.trim();
+    const tag = (name: string) => {
+      const value = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1]?.trim();
+      return value === undefined ? undefined : unescapeXml(value);
+    };
     const count = (name: string) => {
       const n = Number(tag(name));
       return tag(name) !== undefined && Number.isFinite(n) ? n : undefined;
@@ -1348,6 +1366,8 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
     if (report.toolUses !== undefined) helper.toolUses = report.toolUses;
     if (report.durationMs !== undefined) helper.durationMs = report.durationMs;
     ev.helper = helper;
+    // The report's own turn links back to the helper: its drawer shows what the helper did.
+    prompt.helper = { ...helper };
     if (report.status && !/^(completed|done|finished|success)/i.test(report.status)) ev.ok = false;
   };
   const ensure = (at: string): StoryTurn => {
@@ -1950,9 +1970,17 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             ? `${tests.failed} tests fail.`
             : 'A test fails.'
           : 'A check fails.';
-      director = checks
+      // The same command with the same outcome twice in a row reads once, with a count.
+      const runs: Array<{ text: string; n: number }> = [];
+      for (const e of checks) {
+        const text = `${shortCommand(e)} → ${outcome(e)}`;
+        const prev = runs[runs.length - 1];
+        if (prev?.text === text) prev.n++;
+        else runs.push({ text, n: 1 });
+      }
+      director = runs
         .slice(-3)
-        .map((e) => `${shortCommand(e)} → ${outcome(e)}`)
+        .map((r) => (r.n > 1 ? `${r.text} ×${r.n}` : r.text))
         .join(' · ');
       if (tests)
         director += ` · ${tests.passed} passed${tests.failed ? `, ${tests.failed} failed` : ''}${
@@ -2035,7 +2063,9 @@ function completePanel(turn: StoryTurn, page: Omit<StoryPage, 'panels'>, trailin
   const story = turn.interrupted
     ? 'You stop Claude here.'
     : running
-      ? `${done.slice(0, -1)} for now. ${running === 1 ? 'A helper is' : `${running} helpers are`} still working.`
+      ? `Claude's part is done${turn.durationMs !== undefined ? ` in ${roughDuration(turn.durationMs)}` : ''}. ${
+          running === 1 ? 'A helper is' : `${running} helpers are`
+        } still working.`
       : done;
   const director = [
     turn.interrupted ? 'interrupted' : 'turn_duration',

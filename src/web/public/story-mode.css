@@ -342,6 +342,23 @@ body.story-open {
 .story-balloon[hidden] {
   display: none;
 }
+.story-panel[data-kind='mission'] .story-balloon {
+  cursor: pointer;
+}
+/* Spoken, not shown: the status region a screen reader announces from. */
+.story-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* App toasts move to the bottom while Story Mode is open: at the top they cover its bar. */
+body.story-open .toast-container {
+  top: auto;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
+}
 /* story-mode.js sets --story-lines when a balloon would leave its panel or cover Claude's head. */
 .story-balloon-text {
   display: -webkit-box;

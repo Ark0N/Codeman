@@ -84,7 +84,7 @@ describe('GET /api/sessions/:id/story', () => {
     const { app } = await setup({ mode: 'codex' });
     const data = (await app.inject({ method: 'GET', url: URL })).json().data;
     expect(data.supported).toBe(false);
-    expect(data.reason).toMatch(/different CLI/);
+    expect(data.reason).toMatch(/shell or another CLI/);
   });
 
   it('answers unsupported for remote and Docker sessions, whose transcript is not on this host', async () => {

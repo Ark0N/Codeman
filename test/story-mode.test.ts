@@ -148,7 +148,13 @@ describe('text helpers', () => {
       'Renamed rename_by_date.sh to __init__.py style.'
     );
     expect(firstSentence('It is *really* done and _very_ fast.')).toBe('It is really done and very fast.');
-    expect(firstSentence('## Summary\n- Fixed the 2*3 bug.')).toBe('Summary Fixed the 2*3 bug.');
+    expect(firstSentence('## Summary\n- Fixed the 2*3 bug.')).toBe('Fixed the 2*3 bug.');
+  });
+
+  it('firstSentence ends a heading at its line', () => {
+    expect(firstSentence('# Plan: add `wrap` to mathx.py\n\n**Context:** it has clamp().')).toBe(
+      'Plan: add wrap to mathx.py.'
+    );
   });
 
   it('firstSentence treats code spans as words and an ellipsis or e.g. as no end', () => {
@@ -347,7 +353,7 @@ describe('buildStoryTurns', () => {
       'Claude sends 1 helper off to work in the background.'
     );
     expect(page.panels[page.panels.length - 1].caption.story).toBe(
-      'Done in 1 second for now. A helper is still working.'
+      "Claude's part is done in 1 second. A helper is still working."
     );
 
     const notification = [
@@ -371,6 +377,8 @@ describe('buildStoryTurns', () => {
     const second = buildStoryPage(turns[1]);
     expect(second.prompt).toBe('Agent "Write README" finished');
     expect(second.events[0].output).toBe('I wrote README.md.');
+    // The report's turn links back to the helper it answers.
+    expect(second.events[0].helper).toMatchObject({ agentId: 'h9', result: 'I wrote README.md.' });
   });
 
   it('a prompt typed while Claude works (a queued_command attachment, no user line) joins the turn', () => {
@@ -487,6 +495,29 @@ describe('buildStoryTurns', () => {
     const first = buildStoryPage(turns[0]);
     expect(first.events[1].helper).toMatchObject({ result: 'I wrote README.md.' });
     expect(first.helpersRunning).toBe(0);
+  });
+
+  it('a report written HTML-escaped reads as text', () => {
+    const [turn] = buildStoryTurns(
+      entriesOf([
+        prompt(
+          '<task-notification>\n<summary>Agent &quot;Docs&quot; finished</summary>\n<result>Co-Authored-By: A &lt;a@b.c&gt; &amp; more</result>\n</task-notification>',
+          { turnOrigin: 'task_notification' }
+        ),
+      ])
+    );
+    expect(turn.prompt).toBe('Agent "Docs" finished');
+    expect(turn.events[0].output).toBe('Co-Authored-By: A <a@b.c> & more');
+  });
+
+  it('a check run twice the same way reads once, with a count', () => {
+    const page = pageOf([
+      prompt('test twice'),
+      ...bash('b1', 'pytest -q', 'Run tests', '3 passed in 0.1s'),
+      ...bash('b2', 'pytest -q', 'Run tests again', '3 passed in 0.1s'),
+      end(1000),
+    ]);
+    expect(page.panels.find((p) => p.kind === 'check')!.caption.director).toBe('pytest -q → ok ×2 · 3 passed');
   });
 
   it('a message from another session names its sender; pasted text loses its wrapper', () => {

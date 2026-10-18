@@ -56,7 +56,7 @@ type Source = { unsupported: string } | { path: string | null };
 async function storySource(ctx: SessionPort & ConfigPort, id: string, req: FastifyRequest): Promise<Source> {
   const session = findSessionOrFail(ctx, id, req);
   if (getCli(session.mode)?.capabilities.transcript !== 'claude-jsonl') {
-    return { unsupported: 'Story Mode draws Claude Code sessions. This session runs a different CLI.' };
+    return { unsupported: 'Story Mode draws Claude Code sessions, and this one runs a shell or another CLI.' };
   }
   if (session.remote || session.docker) {
     return {
