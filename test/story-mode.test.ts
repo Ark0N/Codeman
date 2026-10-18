@@ -1003,6 +1003,13 @@ describe('buildStoryPage', () => {
     expect(run('./deploy.sh; which deploy', 'Exit code 2\nno target')).toBe('Claude tries a command, and it fails.');
     expect(run('node a.js; grep -q x a.txt', 'Exit code 1')).toBe('Claude tries a command, and it fails.');
     expect(run('git config user.name; ./deploy.sh', 'Exit code 1\nme')).toBe('Claude tries a command, and it fails.');
+    // A usage message or an error from that last step is not an empty answer.
+    expect(
+      run('node a.js; git config --nope', "Exit code 1\nok\nerror: unknown option `nope'\nusage: git config")
+    ).toBe('Claude tries a command, and it fails.');
+    expect(run('node a.js; grep x missing.txt', 'Exit code 1\nok\ngrep: missing.txt: No such file or directory')).toBe(
+      'Claude tries a command, and it fails.'
+    );
   });
 
   it('a problem in the last words is an open one: not history, not a negation, not a name', () => {
@@ -1082,7 +1089,7 @@ describe('buildStoryPage', () => {
     expect(
       save([
         prompt('start'),
-        ...bash('b1', 'git init --bare ../origin.git', 'Remote', ''),
+        ...bash('b1', 'git init -q --bare ../origin.git', 'Remote', ''),
         ...bash('b2', 'git commit -qm "add a"', 'Commit', ''),
         end(1000),
       ])

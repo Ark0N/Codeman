@@ -2307,7 +2307,13 @@ function checkName(e: StoryEvent | undefined): string {
 const EMPTY_ANSWER_STEP = /(?:^|[;&|]\s*)(?:e?grep|fgrep|rg|git config|test|\[|which|command -v)\s[^;&|]*$/;
 const emptyAnswer = (e: StoryEvent): boolean => {
   const out = e.output ?? '';
-  return e.ok === false && /^Exit code 1\n\s*\S/.test(out) && EMPTY_ANSWER_STEP.test(e.label.trim());
+  // A usage message or an error is a step that went wrong, not an empty answer.
+  return (
+    e.ok === false &&
+    /^Exit code 1\n\s*\S/.test(out) &&
+    !/^\s*(usage|error|fatal|grep):/im.test(out) &&
+    EMPTY_ANSWER_STEP.test(e.label.trim())
+  );
 };
 
 /** One or two files by name ("calc.py and test_calc.py"), more by count ("3 files"). */
@@ -2717,7 +2723,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const earlier = events.slice(0, firstAt);
       const startsRepo =
         !earlier.some((e) => (e.commits ?? 0) > 0) &&
-        [...earlier, ...evs].some((e) => e.tool === 'Bash' && /\bgit init\b(?!\s+--bare)/.test(e.label));
+        [...earlier, ...evs].some((e) => e.tool === 'Bash' && /\bgit init\b(?![^;&|\n]*\s--bare\b)/.test(e.label));
       const lead = [
         startsRepo ? 'starts a git repository' : '',
         wrote.length ? `writes ${fileWords(wrote)}` : '',
