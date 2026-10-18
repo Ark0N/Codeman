@@ -66,6 +66,8 @@ export const CONFIG_BACKUP_FILES = [
 ] as const;
 
 export const CONFIG_BACKUP_DEFAULTS = { enabled: true, keepCount: 20, keepDays: 30 } as const;
+/** 1 would delete the state before every change, so a bad write could never be undone. */
+export const CONFIG_BACKUP_MIN_KEEP_COUNT = 2;
 export const CONFIG_BACKUP_MAX_KEEP_COUNT = 500;
 export const CONFIG_BACKUP_MAX_KEEP_DAYS = 3650;
 
@@ -77,7 +79,7 @@ export interface ConfigBackupSettings {
   enabled: boolean;
   /** Absolute folder, or null for the default (`<data dir>/backups/config`). */
   dir: string | null;
-  /** Keep at most this many snapshots (newest first). 1–500. */
+  /** Keep at most this many snapshots (newest first). 2–500. */
   keepCount: number;
   /** Also drop snapshots older than this many days; 0 = no age limit. */
   keepDays: number;
@@ -134,7 +136,12 @@ export function readConfigBackupSettings(raw: Record<string, unknown> | null | u
     // Absent means ON: the feature protects against an event nobody schedules.
     enabled: s.configBackupEnabled !== false,
     dir: normalizeBackupDir(s.configBackupDir),
-    keepCount: intIn(s.configBackupKeepCount, 1, CONFIG_BACKUP_MAX_KEEP_COUNT, CONFIG_BACKUP_DEFAULTS.keepCount),
+    keepCount: intIn(
+      s.configBackupKeepCount,
+      CONFIG_BACKUP_MIN_KEEP_COUNT,
+      CONFIG_BACKUP_MAX_KEEP_COUNT,
+      CONFIG_BACKUP_DEFAULTS.keepCount
+    ),
     keepDays: intIn(s.configBackupKeepDays, 0, CONFIG_BACKUP_MAX_KEEP_DAYS, CONFIG_BACKUP_DEFAULTS.keepDays),
   };
 }
@@ -197,6 +204,11 @@ const sha256 = (data: Buffer | string): string => createHash('sha256').update(da
  */
 const VOLATILE_KEYS: Readonly<Record<string, readonly string[]>> = {
   'custom-model-hosts.json': ['lastDiscoveredAt'],
+  // Rewritten by activity, not by anything the user set: a Basic-auth login (at most once a minute
+  // per user), a session started in another case, and every captured prompt.
+  'users.json': ['lastLoginAt'],
+  'settings.json': ['lastUsedCase'],
+  'intents.json': ['recentPrompts', 'updatedAt'],
 };
 
 function withoutKeys(value: unknown, drop: ReadonlySet<string>): unknown {
@@ -378,7 +390,9 @@ export function pruneConfigBackups(dir: string, opts: PruneOptions): string[] {
   all.forEach((b, index) => {
     if (index === 0) return;
     const tooMany = index >= Math.max(1, opts.keepCount);
-    const tooOld = cutoff !== null && b.createdAt < cutoff;
+    // A snapshot's state was live until the next one was made: age it from then. Aging by its own
+    // createdAt deleted the last good copy on the first change after a quiet month.
+    const tooOld = cutoff !== null && all[index - 1].createdAt < cutoff;
     if (!tooMany && !tooOld) return;
     // listConfigBackups already proved this is one of ours (name pattern + manifest).
     const target = join(dir, b.id);

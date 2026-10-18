@@ -60,7 +60,7 @@ describe('settings', () => {
     const s = readConfigBackupSettings({ configBackupKeepCount: 9999, configBackupKeepDays: -3 });
     expect(s.keepCount).toBe(500);
     expect(s.keepDays).toBe(0);
-    expect(readConfigBackupSettings({ configBackupKeepCount: 0 }).keepCount).toBe(1);
+    expect(readConfigBackupSettings({ configBackupKeepCount: 0 }).keepCount).toBe(2);
     expect(readConfigBackupSettings({ configBackupKeepCount: 'abc' }).keepCount).toBe(20);
     expect(readConfigBackupSettings({ configBackupKeepCount: 7.9 }).keepCount).toBe(7);
   });
@@ -147,6 +147,28 @@ describe('createConfigBackup', () => {
     expect(readFileSync(join(backups, (third as { id: string }).id, 'custom-model-hosts.json'), 'utf8')).toBe(edited);
   });
 
+  it.each([
+    ['users.json', (n: number) => JSON.stringify({ users: [{ name: 'a', role: 'admin', lastLoginAt: n }] }), 'role'],
+    ['settings.json', (n: number) => JSON.stringify({ displayName: 'x', lastUsedCase: `case-${n}` }), 'displayName'],
+    [
+      'intents.json',
+      (n: number) => JSON.stringify({ profiles: [{ key: 'k', goals: 'g', updatedAt: n, recentPrompts: [`p${n}`] }] }),
+      'goals',
+    ],
+  ])('does not count activity in %s as a change, but does count an edit next to it', (name, make, editKey) => {
+    put(name, make(1));
+    const first = createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 });
+    put(name, make(2));
+    expect(createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 + 1000 })).toEqual({
+      status: 'unchanged',
+      id: (first as { id: string }).id,
+    });
+    put(name, make(3).replace(new RegExp(`"${editKey}":"[^"]*"`), `"${editKey}":"edited"`));
+    expect(createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 + 2000 }).status).toBe(
+      'created'
+    );
+  });
+
   it('compares a tracked file that is not valid JSON by its bytes', () => {
     put('custom-model-hosts.json', 'not json lastDiscoveredAt 1');
     createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 });
@@ -217,10 +239,24 @@ describe('retention', () => {
     makeN(5);
     expect(pruneConfigBackups(backups, { keepCount: 50, keepDays: 0, now: T0 + 999 * DAY })).toEqual([]);
     const removed = pruneConfigBackups(backups, { keepCount: 4, keepDays: 3, now: T0 + 5 * DAY });
-    // Newest first: T0+4d, +3d, +2d, +1d, T0. The oldest is over the count AND past the cutoff
-    // (T0+2d); T0+1d is past the cutoff; T0+2d sits exactly on it and is kept.
-    expect(removed.length).toBe(2);
-    expect(listConfigBackups(backups).map((b) => b.createdAt)).toEqual([T0 + 4 * DAY, T0 + 3 * DAY, T0 + 2 * DAY]);
+    // Newest first: T0+4d, +3d, +2d, +1d, T0. A snapshot ages from its successor: T0+1d was live
+    // until T0+2d, which sits exactly on the cutoff (kept); only T0 is over the count.
+    expect(removed.length).toBe(1);
+    expect(listConfigBackups(backups).map((b) => b.createdAt)).toEqual([
+      T0 + 4 * DAY,
+      T0 + 3 * DAY,
+      T0 + 2 * DAY,
+      T0 + DAY,
+    ]);
+  });
+
+  it('keeps the last good copy when the first change comes after a quiet month', () => {
+    put('settings.json', '{"theme":"good"}');
+    createConfigBackup({ dataDir: data, backupDir: backups, reason: 'startup', now: T0 });
+    put('settings.json', '{}'); // the bad write, 40 days later
+    createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 + 40 * DAY });
+    pruneConfigBackups(backups, { keepCount: 20, keepDays: 30, now: T0 + 40 * DAY });
+    expect(listConfigBackups(backups).map((b) => b.createdAt)).toEqual([T0 + 40 * DAY, T0]);
   });
 
   it('never deletes a folder it did not make', () => {

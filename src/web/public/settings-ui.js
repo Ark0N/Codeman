@@ -2880,7 +2880,7 @@ Object.assign(CodemanApp.prototype, {
       mcpSyncEnabled: document.getElementById('appSettingsMcpSync').checked,
       configBackupEnabled: document.getElementById('appSettingsConfigBackup').checked,
       configBackupDir: document.getElementById('appSettingsConfigBackupDir').value.trim(),
-      configBackupKeepCount: Math.min(500, Math.max(1, parseInt(document.getElementById('appSettingsConfigBackupKeepCount').value, 10) || 20)),
+      configBackupKeepCount: Math.min(500, Math.max(2, parseInt(document.getElementById('appSettingsConfigBackupKeepCount').value, 10) || 20)),
       configBackupKeepDays: Math.min(3650, Math.max(0, Number.isNaN(parseInt(document.getElementById('appSettingsConfigBackupKeepDays').value, 10)) ? 30 : parseInt(document.getElementById('appSettingsConfigBackupKeepDays').value, 10))),
       readMyMindEnabled: document.getElementById('appSettingsReadMyMind').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,

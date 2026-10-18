@@ -1530,7 +1530,7 @@ export const SettingsUpdateSchema = z
     /** Absolute folder (a leading `~` is expanded); empty or absent = the default folder. */
     configBackupDir: z.string().max(1024).optional(),
     /** Keep at most this many snapshots. */
-    configBackupKeepCount: z.number().int().min(1).max(500).optional(),
+    configBackupKeepCount: z.number().int().min(2).max(500).optional(),
     /** Also drop snapshots older than this many days; 0 = no age limit. */
     configBackupKeepDays: z.number().int().min(0).max(3650).optional(),
     /**

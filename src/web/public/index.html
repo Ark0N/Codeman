@@ -3262,9 +3262,9 @@
                   <div class="set-row has-field" data-search="config backup retention keep count snapshots">
                     <div class="set-row-text">
                       <span class="set-row-label">Keep this many backups</span>
-                      <span class="set-row-desc">1 to 500. The newest backup is always kept.</span>
+                      <span class="set-row-desc">2 to 500 (with 1, every change would delete the state before it). The newest backup is always kept.</span>
                     </div>
-                    <input type="number" id="appSettingsConfigBackupKeepCount" class="set-input" min="1" max="500" step="1" placeholder="20">
+                    <input type="number" id="appSettingsConfigBackupKeepCount" class="set-input" min="2" max="500" step="1" placeholder="20">
                   </div>
                   <div class="set-row has-field" data-search="config backup retention keep days age">
                     <div class="set-row-text">

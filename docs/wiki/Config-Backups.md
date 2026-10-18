@@ -81,8 +81,8 @@ Two limits, applied after every backup:
 
 | Setting | Range | Default | Meaning |
 | ------- | ----- | ------- | ------- |
-| **Keep this many backups** (`configBackupKeepCount`) | 1 – 500 | 20 | Keep the newest N; older ones are removed. |
-| **Delete backups older than (days)** (`configBackupKeepDays`) | 0 – 3650 | 30 | Also remove anything older than this. `0` means no age limit. |
+| **Keep this many backups** (`configBackupKeepCount`) | 2 – 500 | 20 | Keep the newest N; older ones are removed. (1 is not offered: every change would delete the state before it.) |
+| **Delete backups older than (days)** (`configBackupKeepDays`) | 0 – 3650 | 30 | Also remove a backup once it has been replaced for longer than this. `0` means no age limit. |
 
 Both apply together. Three guarantees:
 
@@ -90,6 +90,10 @@ Both apply together. Three guarantees:
   go back to.
 - **Only folders Codeman made are ever removed**, never anything else that happens to live in a
   custom folder.
+- **Age counts from when a backup was replaced**, not from when it was made. Backups are made on
+  change, so a config that stays the same for months has one backup whose own date keeps
+  ageing; it is the copy you need the day something goes wrong, so it stays until a newer one
+  has existed for longer than the limit.
 - Because backups are made on change, 20 backups reach back across 20 *changes*, however long
   that took, not 20 timer ticks.
 
@@ -120,10 +124,9 @@ From the list, press **Restore** on a backup and confirm. Codeman then:
 
 Only the tracked names are ever written, whatever a manifest lists.
 
-Settings are re-read on the next request, so reload the page. `clis.json`, `users.json`,
-`.env` and `push-keys.json` are read once per process: **restart Codeman** for those to take
-effect (the response lists which). `clis.json` is reloaded by the restore itself and `users.json`
-is re-read within a second. Restoring `settings.json` also does not re-run the switches
+Settings are re-read on the next request, so reload the page. `.env` and `push-keys.json` are
+read once per process: **restart Codeman** for those to take effect (the response lists which).
+`clis.json` is reloaded by the restore itself and `users.json` is re-read within a second. Restoring `settings.json` also does not re-run the switches
 that saving in Settings applies at once (file watchers and the like), so those apply after a
 restart, and `settings.json` is listed with the restart-required files. A restore does not touch
 running sessions.
