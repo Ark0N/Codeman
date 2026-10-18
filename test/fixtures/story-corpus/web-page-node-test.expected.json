@@ -40,7 +40,7 @@
       {
         "kind": "run",
         "ok": null,
-        "story": "Claude tries a command, and it fails.",
+        "story": "Claude checks a few things; the last check finds nothing.",
         "director": "Bash · grep -oE '\"(permissions|env|allow|deny)\"|[A-Za-z_]*(TOKEN|K… · 1 error",
         "balloon": null,
         "tests": null,

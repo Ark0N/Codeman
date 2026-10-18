@@ -2289,6 +2289,17 @@ function checkName(e: StoryEvent | undefined): string {
   return 'another check';
 }
 
+/**
+ * A command whose LAST step answers "no" with exit code 1: grep finds nothing, a git setting is unset,
+ * `test` is false, a program is not installed. What it printed before that is the answer Claude was
+ * after, so the panel says so instead of "it fails". Anchored on a separator, so linear.
+ */
+const EMPTY_ANSWER_STEP = /(?:^|[;&|]\s*)(?:e?grep|fgrep|rg|git config|test|\[|which|command -v)\s[^;&|]*$/;
+const emptyAnswer = (e: StoryEvent): boolean => {
+  const out = e.output ?? '';
+  return e.ok === false && /^Exit code 1\n\s*\S/.test(out) && EMPTY_ANSWER_STEP.test(e.label.trim());
+};
+
 /** One or two files by name ("calc.py and test_calc.py"), more by count ("3 files"). */
 const fileWords = (files: string[], noun = 'file'): string =>
   files.length && files.length <= 2 ? files.map((f) => basename(f)).join(' and ') : plural(files.length, noun);
@@ -2603,17 +2614,19 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       }
       story = evs.every((e) => e.running)
         ? `Claude starts ${evs.length === 1 ? 'a command' : `${evs.length} commands`} in the background.`
-        : errors && errors === evs.length
-          ? `Claude tries ${evs.length === 1 ? 'a command' : `${evs.length} commands`}, and ${
-              evs.some((e) => /\bblocked\b|PreToolUse|denied/i.test(e.output ?? ''))
-                ? 'it is blocked'
-                : evs.length === 1
-                  ? 'it fails'
-                  : 'they fail'
-            }.`
-          : evs.every((e) => e.tool !== 'Bash')
-            ? 'Claude uses a tool.'
-            : 'Claude works in the terminal.';
+        : errors && errors === evs.length && evs.every(emptyAnswer)
+          ? `Claude checks ${evs.length === 1 ? 'a few things' : 'several things'}; the last check finds nothing.`
+          : errors && errors === evs.length
+            ? `Claude tries ${evs.length === 1 ? 'a command' : `${evs.length} commands`}, and ${
+                evs.some((e) => /\bblocked\b|PreToolUse|denied/i.test(e.output ?? ''))
+                  ? 'it is blocked'
+                  : evs.length === 1
+                    ? 'it fails'
+                    : 'they fail'
+              }.`
+            : evs.every((e) => e.tool !== 'Bash')
+              ? 'Claude uses a tool.'
+              : 'Claude works in the terminal.';
       director = `${tools} · ${shortCommand(evs[0])}${errors ? ` · ${plural(errors, 'error')}` : ''}`;
       break;
     }
@@ -2855,7 +2868,8 @@ export function buildStoryPage(turn: StoryTurn): StoryPage {
       : {}),
   };
   const calls = events.filter((e) => !NOT_TOOL_CALLS.has(e.intent));
-  if (calls.length && calls.every((e) => e.ok === false)) base.noneWorked = true;
+  // A check that found nothing answered its question: it did not fail to work.
+  if (calls.length && calls.every((e) => e.ok === false && !emptyAnswer(e))) base.noneWorked = true;
   if (turn.endedAt) base.endedAt = turn.endedAt;
   if (turn.durationMs !== undefined) base.durationMs = turn.durationMs;
   if (turn.ended) {

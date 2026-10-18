@@ -218,7 +218,10 @@ export interface StoryPage extends StoryTurnSummary {
   openNote?: 'catch' | 'note';
   /** Claude's last words ask you something or offer more: the next move is yours. */
   asks?: boolean;
-  /** Every tool call of the turn failed (a blocked command, nothing that worked): no celebration. */
+  /**
+   * Every tool call of the turn failed (a blocked command, nothing that worked): no celebration. A
+   * command whose last check found nothing (grep, `git config`, exit code 1 after its answer) answered.
+   */
   noneWorked?: boolean;
 }
 

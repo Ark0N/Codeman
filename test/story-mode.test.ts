@@ -984,6 +984,26 @@ describe('buildStoryPage', () => {
     expect(pageOf([prompt('c'), ...bash('b1', 'git commit -qm x', 'Commit', ''), end(1000)]).events[1].commits).toBe(1);
   });
 
+  it('a command whose last check finds nothing (exit code 1 after its answers) is not a failure', () => {
+    const pageFor = (command: string, output: string) =>
+      pageOf([prompt('look'), ...bash('b1', command, 'Look', output, true), end(1000)]);
+    const run = (command: string, output: string) =>
+      pageFor(command, output).panels.find((p) => p.kind === 'run')!.caption.story;
+    // It answered its question: the page does not call the job a failure either.
+    expect(pageFor('cat .env.example | wc -l; git config user.name', 'Exit code 1\n4').noneWorked).toBeUndefined();
+    expect(pageFor('./deploy.sh; which deploy', 'Exit code 2\nno target').noneWorked).toBe(true);
+    expect(run('cat .env.example | wc -l; git config user.name', 'Exit code 1\n4')).toBe(
+      'Claude checks a few things; the last check finds nothing.'
+    );
+    expect(run('node scripts/count.js && grep -c TODO src/a.js', 'Exit code 1\n12 files\n0')).toBe(
+      'Claude checks a few things; the last check finds nothing.'
+    );
+    // A real failure, or one with nothing printed before it, still fails.
+    expect(run('./deploy.sh; which deploy', 'Exit code 2\nno target')).toBe('Claude tries a command, and it fails.');
+    expect(run('node a.js; grep -q x a.txt', 'Exit code 1')).toBe('Claude tries a command, and it fails.');
+    expect(run('git config user.name; ./deploy.sh', 'Exit code 1\nme')).toBe('Claude tries a command, and it fails.');
+  });
+
   it('a stop names the step Claude was on and what its to-do list still had open', () => {
     const stopped = (lines: unknown[]) =>
       pageOf([...lines, prompt('[Request interrupted by user]')]).panels.find((p) => p.kind === 'complete')!.caption
