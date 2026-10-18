@@ -338,7 +338,14 @@ const TEXT_UPLOAD_EXTS = new Set(['.txt', '.md', '.csv', '.tsv', '.json', '.log'
  * imageMagicMatchesExt (signature, or UTF-8 without NUL for text). The browser
  * keeps its own copies (test/upload-document-list-parity.test.ts pins them).
  */
-export const ALLOWED_DOCUMENT_EXTS = new Set(['.pdf', '.docx', '.pptx', '.xlsx', '.zip', ...TEXT_UPLOAD_EXTS]);
+export const ALLOWED_DOCUMENT_EXTS: ReadonlySet<string> = new Set([
+  '.pdf',
+  '.docx',
+  '.pptx',
+  '.xlsx',
+  '.zip',
+  ...TEXT_UPLOAD_EXTS,
+]);
 
 /**
  * Validate upload bytes against a declared extension. Sniffs the first ~12 bytes
