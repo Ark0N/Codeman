@@ -12,7 +12,8 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
-    "openNote": false,
+    "openNote": "catch",
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -156,7 +157,7 @@
         "ok": null,
         "story": "Done in 6 minutes.",
         "director": "turn_duration · 6 min 25 s · 26 tool calls · 13 files changed",
-        "balloon": "The inventory/ package is built and committed. --csv is part of the CLI commit rather than its own commit, because you asked for it before that module existed.",
+        "balloon": "The inventory/ package is built and committed. --csv is part of the CLI commit rather than its own commit, because you asked for it before that module existed. Known quirks: remove pear prints the name as you typed it, not as it was stored (\"Pear\"). Because of how the temporary file is created, the saved JSON file is readable only by its owner (permissions 0600).",
         "tests": null,
         "roundsOk": null,
         "printed": null,
@@ -178,6 +179,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -310,7 +312,7 @@
         "ok": null,
         "story": "Done in 1 minute.",
         "director": "turn_duration · 1 min 16 s · 16 tool calls · 2 files changed",
-        "balloon": "I ran all 16 steps in order, one tool call each. I didn't re-run ruff, because only README.md and CHANGELOG.md changed, and ruff doesn't check Markdown.",
+        "balloon": "I ran all 16 steps in order, one tool call each. Two places where I didn't follow your wording exactly: Step 6: this session has no Grep tool, so I ran grep -rn 'def ' inventory/ through Bash instead. It found the same matches.",
         "tests": null,
         "roundsOk": null,
         "printed": null,

@@ -41,6 +41,7 @@ function pagesOf(name: string) {
       helpersRunning: p.helpersRunning,
       finishedLater: p.finishedLater ?? 0,
       openNote: p.openNote ?? false,
+      asks: p.asks ?? false,
       panels: p.panels.map((x) => ({
         kind: x.kind,
         ok: x.ok ?? null,
@@ -164,7 +165,7 @@ describe('Story Mode on real sessions', () => {
     // An open problem, said further into the final message than its first sentence.
     expect(last('web-page-node-test', 0).balloon).toMatch(/won't work if you double-click index\.html/);
     // ...and the turn is not drawn as a clean finish.
-    expect(pagesOf('web-page-node-test')[0].openNote).toBe(true);
+    expect(pagesOf('web-page-node-test')[0].openNote).toBe('catch');
     expect(last('text-plan-dry-run-helper', 1).balloon).toMatch(/doesn't fix it/);
     // What you expected, and what you asked for mid-turn.
     expect(last('errors-push-append', 2).balloon).toMatch(/As you expected, git describe --tags then failed/);

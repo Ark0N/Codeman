@@ -13,6 +13,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -107,7 +108,7 @@
         "ok": null,
         "story": "Done in 3 minutes.",
         "director": "turn_duration · 3 min 13 s · 13 tool calls · 3 files changed",
-        "balloon": "I built wcount.py and test_wcount.py. With a missing file plus a readable one, the total row didn't appear because the code counted files that could be read rather than files that were named.",
+        "balloon": "I built wcount.py and test_wcount.py. What failed and how I fixed it: one test failed on the first run.",
         "tests": null,
         "roundsOk": null,
         "printed": null,

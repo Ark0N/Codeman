@@ -1019,7 +1019,7 @@ describe('buildStoryPage', () => {
     expect(page.panels.at(-1)!.kind).toBe('complete');
   });
 
-  it('the closing balloon keeps an open problem from far into the message, never a table row or a question', () => {
+  it('the closing balloon keeps an open problem and a question to you from far into the message, never a table row', () => {
     const long = [
       'I built the csvstat tool for your CSV files.',
       'It reads the file and prints the counts for each column, one line per column. '.repeat(4),
@@ -1028,10 +1028,12 @@ describe('buildStoryPage', () => {
       'Want me to add a --json flag?',
       'One known issue: big numbers are shown rounded.',
     ].join('\n');
-    const balloon = pageOf([prompt('build it'), said(long), end(1000)]).panels.at(-1)!.balloon!.text;
-    expect(balloon).toBe(
-      'I built the csvstat tool for your CSV files. One known issue: big numbers are shown rounded.'
+    const page = pageOf([prompt('build it'), said(long), end(1000)]);
+    // In the order Claude wrote them; the question is the sentence aimed at you, so it stays.
+    expect(page.panels.at(-1)!.balloon!.text).toBe(
+      'I built the csvstat tool for your CSV files. Want me to add a --json flag? One known issue: big numbers are shown rounded.'
     );
+    expect(page).toMatchObject({ openNote: 'catch', asks: true });
   });
 
   it("a run panel's terminal card shows what the command printed, never what looks like a secret", () => {

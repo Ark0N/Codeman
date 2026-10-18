@@ -13,6 +13,7 @@
     "helpersRunning": 0,
     "finishedLater": 2,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -120,7 +121,8 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
-    "openNote": true,
+    "openNote": "note",
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -182,6 +184,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": true,
     "panels": [
       {
         "kind": "mission",
@@ -224,7 +227,7 @@
         "ok": null,
         "story": "Done in 16 seconds.",
         "director": "stop_hook_summary · 16 s · 2 tool calls",
-        "balloon": "The project is done: both helpers finished, and I checked their files and committed them. Both helpers warned that index.test.mjs didn't exist, but they had looked before I created it, so the README's Testing section is correct.",
+        "balloon": "The project is done: both helpers finished, and I checked their files and committed them. Both helpers warned that index.test.mjs didn't exist, but they had looked before I created it, so the README's Testing section is correct. Say if you want CLAUDE.md committed too.",
         "tests": null,
         "roundsOk": null,
         "printed": null,
@@ -246,6 +249,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -346,6 +350,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",

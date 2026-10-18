@@ -13,6 +13,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -94,7 +95,7 @@
         "ok": null,
         "story": "Done in 1 minute.",
         "director": "turn_duration · 1 min 24 s · 10 tool calls · 2 files changed",
-        "balloon": "slugify.mjs and its test file are written, all 4 tests pass, and both files are committed.",
+        "balloon": "slugify.mjs and its test file are written, all 4 tests pass, and both files are committed. First run (deliberately failing): the \"strips leading and trailing hyphens\" test expected '-hello-world'. That's wrong against the spec, and the run ended with 3 passed, 1 failed, exit code 1. Set git config user.name if you want a different name on future commits.",
         "tests": null,
         "roundsOk": null,
         "printed": null,
@@ -116,6 +117,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -161,7 +163,7 @@
         "ok": null,
         "story": "Done in 21 seconds.",
         "director": "turn_duration · 21 s · 5 tool calls · 1 file changed",
-        "balloon": "I added a fifth test for slugify('').",
+        "balloon": "I added a fifth test for slugify(''). The result was 4 passed, 1 failed, exit code 1.",
         "tests": null,
         "roundsOk": null,
         "printed": null,

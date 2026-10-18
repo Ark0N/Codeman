@@ -12,7 +12,8 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
-    "openNote": true,
+    "openNote": "note",
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -142,7 +143,7 @@
         "ok": null,
         "story": "Done in 5 minutes.",
         "director": "turn_duration · 4 min 57 s · 20 tool calls · 6 files changed",
-        "balloon": "I've built the kebab slug tool in this folder, committed it, and pushed it to the new bare repo remote.git. Not tested: the README says pip install . gives you a kebab command.",
+        "balloon": "I've built the kebab slug tool in this folder, committed it, and pushed it to the new bare repo remote.git. If you want a different author, run git commit --amend --reset-author and push again. Not tested: the README says pip install . gives you a kebab command.",
         "tests": null,
         "roundsOk": null,
         "printed": null,

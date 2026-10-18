@@ -13,6 +13,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -169,6 +170,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -225,7 +227,7 @@
         "ok": null,
         "story": "Done in 37 seconds.",
         "director": "turn_duration · 37 s · 8 tool calls · 2 files changed",
-        "balloon": "mode(xs) is in calc_stats.py, committed once after the tests went green, and pushed. I didn't use the advisor, gh or the network.",
+        "balloon": "mode(xs) is in calc_stats.py, committed once after the tests went green, and pushed. git describe --tags failed because the repo has no tags.",
         "tests": null,
         "roundsOk": null,
         "printed": null,
@@ -247,6 +249,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -333,6 +336,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",

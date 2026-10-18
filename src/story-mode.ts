@@ -275,60 +275,124 @@ export function balloonText(text: string): string {
  * expected, a correction of an earlier warning. WEAK: a bare negation ("I didn't push"), kept only when
  * nothing strong is there.
  */
-/** The open-problem part of a key point: something wrong, not done, not checked, or still out. */
-const OPEN_PROBLEM = new RegExp(
-  String.raw`\b(problem|known (issue|quirk)s?|quirks?|caveat|limitation|heads up|warning|not yet|haven't|have not|never|unfixed|left (open|unfixed|out)|still (fails?|failing|broken|missing|open|running|working)|must be (served|run)|(won't|doesn't|does not|will not) (work|fix)|(isn't|is not|not) fixed|can't tell|isn't (confirmed|committed|pushed|tested|done|checked)|not (checked|tested|verified|confirmed|committed|pushed|opened))\b`,
-  'i'
-);
-const KEY_POINT_STRONG = new RegExp(
+/**
+ * What a sentence in Claude's last words is, for a reader who must not lose it (round 8 and 9 of the
+ * cold-reader reviews): kinds in the order they are kept when there is no room for all.
+ *  - `problem`: something wrong or left broken ("it won't work if you double-click", "doesn't fix it").
+ *  - `offer`: Claude asks you or offers more ("Want me to add that?", "I can fix it whenever you want").
+ *  - `howto`: how to use what was built ("serve the folder with python3 -m http.server").
+ *  - `pending`: not done, checked or confirmed yet ("I haven't opened it in a browser").
+ *  - `failed`: a step that failed, reported ("git describe --tags failed: no tags").
+ *  - `asked`: a word on what you asked for or expected ("--csv is part of the CLI commit").
+ *  - `correction`: an earlier warning that turned out wrong ("That's out of date").
+ * A bare negation ("I didn't push") is kept only when nothing else is there.
+ */
+const KEY_KINDS: Array<[StoryKeyKind, RegExp]> = [
   [
-    OPEN_PROBLEM.source,
-    String.raw`\b(as you (asked|expected|said|wanted|suggested)|you asked|your (--?[\w-]+|request|option|flag|change))\b`,
-    String.raw`\b(out of date|looked too early|turned out|was wrong)\b`,
-  ].join('|'),
-  'i'
-);
-const KEY_POINT_WEAK = /\b(didn't|did not|couldn't|could not|wasn't able|won't|doesn't)\b/i;
+    'problem',
+    /\b(problem|bug|broken|known (issue|quirk)s?|quirks?|caveat|limitation|heads up|warning|unfixed|left (open|unfixed|out)|still (fails?|failing|broken)|(won't|doesn't|does not|will not) (work|fix)|(isn't|is not|not) fixed|never (moves|runs|loads|works|starts|shows))\b/i,
+  ],
+  [
+    'offer',
+    /\b(want me to|should i|shall i|do you want|if you want|whenever you want|let me know|say if you want|i can (add|fix|change|do|update|make|run|commit))\b/i,
+  ],
+  [
+    'howto',
+    /\b(to (use|run|open|try) it|serve (the|this) folder|http\.server|open https?:\/\/\S+|you('ll)? need to (run|open|serve|install|set)|instead,? (run|open|serve|use))\b/i,
+  ],
+  [
+    'pending',
+    /\b(not yet|haven't|have not|can't tell|isn't (confirmed|committed|pushed|tested|done|checked)|not (checked|tested|verified|confirmed|committed|pushed|opened|run)|still (running|working|open|missing)|didn't (open|try|check|test|run|verify) it)\b/i,
+  ],
+  // A step that failed, not a description of failure ("1 for a failed operation").
+  ['failed', /(?<!\b(a|the|any|on) )\b(failed|fails)\b/i],
+  [
+    'asked',
+    /\b(as you (asked|expected|said|wanted|suggested)|you asked|your (--?[\w-]+|request|option|flag|change))\b/i,
+  ],
+  // A warning or report that turned out wrong: what resolves a worry an earlier panel raised.
+  [
+    'correction',
+    /\b(out of date|looked too early|(had )?looked before|turned out|was wrong|were wrong|is correct after all)\b/i,
+  ],
+];
+const KEY_WEAK = /\b(didn't|did not|couldn't|could not|wasn't able|won't|doesn't)\b/i;
+/** A sentence that only points elsewhere ("described below"): nothing a balloon can show. */
+const POINTS_ELSEWHERE = /\b(described|listed|shown|details?) below\b|\bsee below\b|\bas follows\b/i;
+/** The fix that follows a problem sentence: then the problem is not open. */
+const FIX_FOLLOWS =
+  /^(so i (changed|fixed|made|updated)|i (fixed|changed|corrected|updated) (it|that|this|the)|fixed\b|now it\b)/i;
+
+export type StoryKeyKind = 'problem' | 'offer' | 'howto' | 'pending' | 'failed' | 'asked' | 'correction';
+
+/** A key point that waits on you: a question, or an offer to do more (not an optional tip). */
+const ASKS_YOU =
+  /\?$|\b(want me to|should i|shall i|say if you want|let me know|tell me)\b|\bi can\b.{0,100}\b(if|whenever) you want\b/i;
+
+/** The kind of a key point already chosen (its words say it), for the final panel's title. */
+export function keyKindOf(point: string): StoryKeyKind | undefined {
+  // A problem with its fix is history, not an open problem.
+  if (/\b(so i (changed|fixed)|i fixed|fixed it)\b/i.test(point)) return undefined;
+  return KEY_KINDS.find(([, re]) => re.test(point))?.[0];
+}
 
 /**
- * Sentences from further into a long message that carry a key point, at most two strong ones (or one
- * weak one when none is strong), in order. Read on the whole message (the event's label is clipped),
- * its first 8,000 characters. Table rows, list intros ending in `:` and questions are skipped: none of
- * them reads on its own in a balloon.
+ * Sentences from further into a long message that a reader must not lose, at most three, picked by
+ * kind (one of each, in KEY_KINDS order) and shown in the order Claude wrote them; a bare negation
+ * only when none of those is there. Read on the whole message (the event's label is clipped), its
+ * first 8,000 characters. A table row is skipped; a list intro ending in `:` brings its first item; a
+ * sentence starting with "that"/"this"/"it" brings the one before it; a problem brings the fix that
+ * follows it.
  */
 function keyPointsOf(text: string): string[] {
   if (text.length <= 160) return [];
   const spans: string[] = [];
   const plain = plainMarkdown(text.slice(0, 8000), spans);
-  const strong: string[] = [];
-  let weak: string | undefined;
-  let first = true;
-  let previous = '';
+  // Every sentence in order, with the line it came from (list items are lines).
+  const sentences: string[] = [];
   for (const line of plain.split('\n')) {
-    if (strong.length >= 2) break;
     const trimmed = line.trim();
     if (trimmed.startsWith('|') || (trimmed.match(/\|/g)?.length ?? 0) >= 2) continue; // a table row
-    let rest = trimmed.replace(/\s+/g, ' ');
-    while (rest && strong.length < 2) {
+    let rest = trimmed.replace(/^[-*•]\s+/, '').replace(/\s+/g, ' ');
+    while (rest) {
       const m = SENTENCE_END.exec(rest);
-      const sentence = (m ? m[1] : rest).trim();
+      sentences.push((m ? m[1] : rest).trim());
       rest = m ? rest.slice(m[1].length).trim() : '';
-      // The first sentence is the balloon's anyway.
-      if (first) {
-        first = false;
-        continue;
-      }
-      const before = previous;
-      previous = sentence;
-      if (sentence.length < 12 || /[:?]$/.test(sentence)) continue;
-      // "That's out of date" needs what "that" was: the sentence before comes along.
-      const context = /^(that|this|it)\b/i.test(sentence) && before && !strong.includes(before) ? `${before} ` : '';
-      const shown = clip(restoreSpans(context + sentence, spans), context ? 300 : 180);
-      if (KEY_POINT_STRONG.test(sentence)) strong.push(shown);
-      else if (!weak && KEY_POINT_WEAK.test(sentence)) weak = shown;
     }
   }
-  return strong.length ? strong : weak ? [weak] : [];
+  type Pick = { at: number; text: string; kind?: StoryKeyKind };
+  const candidates: Pick[] = [];
+  let weak: Pick | undefined;
+  for (let i = 1; i < sentences.length && candidates.length < 24; i++) {
+    let sentence = sentences[i];
+    if (sentence.length < 12 || POINTS_ELSEWHERE.test(sentence)) continue;
+    // Judged on its own words (a list intro too: "Known quirks:", "Two places where I didn't…:").
+    const kind = KEY_KINDS.find(([, re]) => re.test(sentence))?.[0];
+    if (!kind && (weak || !KEY_WEAK.test(sentence))) continue;
+    // A list intro brings its first items, while short, never one that only points elsewhere.
+    if (/:$/.test(sentence))
+      for (let k = i + 1; k <= i + 2 && k < sentences.length && sentence.length + sentences[k].length < 260; k++)
+        if (!POINTS_ELSEWHERE.test(sentences[k])) sentence = `${sentence} ${sentences[k]}`;
+    // "That's out of date" needs what "that" was, and so does "Want me to add that?".
+    // ("It doesn't mention…" is a sentence of its own: only "that"/"this" point back.)
+    const refersBack =
+      /^(that|this)\b/i.test(sentence) ||
+      (kind === 'offer' && sentence.length < 80 && /\b(that|this|it|them)\b/i.test(sentence));
+    const before = refersBack && i > 1 ? `${sentences[i - 1]} ` : '';
+    // A problem reported with its fix right after it: both, so it never reads as still open.
+    const fix =
+      kind === 'problem' && sentences[i + 1] && FIX_FOLLOWS.test(sentences[i + 1]) ? ` ${sentences[i + 1]}` : '';
+    const shown = clip(restoreSpans(before + sentence + fix, spans), before || fix ? 360 : 300);
+    if (kind) candidates.push({ at: i, text: shown, kind });
+    else weak = { at: i, text: shown };
+  }
+  const picked: Pick[] = [];
+  for (const [kind] of KEY_KINDS) {
+    const c = candidates.find((p) => p.kind === kind);
+    if (c && picked.length < 3) picked.push(c);
+  }
+  if (!picked.length && weak) picked.push(weak);
+  return picked.sort((a, b) => a.at - b.at).map((p) => p.text);
 }
 
 /**
@@ -342,7 +406,7 @@ export function closingText(text: string, keyPoints: string[] = []): string {
   const parts = [one];
   if (two && (CAVEAT.test(two) || one.length < 24) && two.length <= 200) parts.push(two);
   for (const point of keyPoints) if (!parts.some((p) => p.includes(point) || point.includes(p))) parts.push(point);
-  return clip(parts.join(' '), parts.length > 2 ? 420 : 300);
+  return clip(parts.join(' '), parts.length > 2 ? 560 : 300);
 }
 
 /** The first sentence of a message, without markdown, for a speech balloon. */
@@ -1996,7 +2060,25 @@ const REPORT_TALK: Partial<Record<StoryPanelKind, RegExp>> = {
 };
 const ANNOUNCES = /\b(I'll|I will|let me|let's|I'm going to|next,? I|now I)\b/i;
 
-function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?: string; openNote?: boolean } {
+/** What Claude's last words leave open: a catch (a problem), a note (something pending), a question. */
+function closingKinds(points: string[] = []): { openNote?: 'catch' | 'note'; asks?: boolean } {
+  const kinds = new Set(points.map(keyKindOf));
+  return {
+    ...(kinds.has('problem')
+      ? { openNote: 'catch' as const }
+      : kinds.has('pending')
+        ? { openNote: 'note' as const }
+        : {}),
+    ...(points.some((p) => keyKindOf(p) === 'offer' && ASKS_YOU.test(p)) ? { asks: true } : {}),
+  };
+}
+
+function groupPanels(events: StoryEvent[]): {
+  panels: DraftPanel[];
+  trailingSay?: string;
+  openNote?: 'catch' | 'note';
+  asks?: boolean;
+} {
   const panels: DraftPanel[] = [];
   let pendingSay: string | undefined;
   let lastSaid: StoryEvent | undefined;
@@ -2045,8 +2127,8 @@ function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?
   return {
     panels,
     trailingSay: lastSaid !== undefined ? closingText(lastSaid.label, lastSaid.keyPoints) : pendingSay,
-    // Claude's last words name an open problem: the final panel is not a celebration.
-    openNote: !!lastSaid?.keyPoints?.some((k) => OPEN_PROBLEM.test(k)),
+    // Claude's last words name an open problem, or something not done or checked: no celebration.
+    ...closingKinds(lastSaid?.keyPoints),
   };
 }
 
@@ -2651,7 +2733,7 @@ export function buildStoryPage(turn: StoryTurn): StoryPage {
     if (todos) e.todos = todos;
   }
 
-  const { panels: grouped, trailingSay, openNote } = groupPanels(events);
+  const { panels: grouped, trailingSay, openNote, asks } = groupPanels(events);
   const room = STORY_LIMITS.panelsPerPage - (turn.ended ? 1 : 0);
   const drafts = capPanels(collapseLoops(grouped), room);
   const panels = drafts.map((d, i) => decorate(d, events, turn, i));
@@ -2668,7 +2750,8 @@ export function buildStoryPage(turn: StoryTurn): StoryPage {
     // The advisor is a second opinion, not a helper that does work.
     helpers: events.filter((e) => e.helper && e.tool !== 'Advisor' && e.intent !== 'prompt').length,
     helpersRunning: events.filter((e) => e.helper?.running).length,
-    ...(openNote && turn.ended && !turn.interrupted ? { openNote: true } : {}),
+    ...(openNote && turn.ended && !turn.interrupted ? { openNote } : {}),
+    ...(asks && turn.ended && !turn.interrupted ? { asks: true } : {}),
     ...(events.some((e) => e.finishedLater && e.intent !== 'prompt')
       ? { finishedLater: events.filter((e) => e.finishedLater && e.intent !== 'prompt').length }
       : {}),

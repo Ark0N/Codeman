@@ -2503,9 +2503,13 @@ Object.assign(CodemanApp.prototype, {
             : page.helpersRunning || page.finishedLater || page.events.some((e) => e.running && !e.helper)
               ? // Work was still out when the turn ended (and maybe still is): not a clean finish.
                 'Done for now'
-              : page.openNote
+              : page.openNote === 'catch'
                 ? 'Done, with a catch'
-                : 'Mission complete!';
+                : page.openNote
+                  ? 'Done, with a note'
+                  : page.asks
+                    ? 'Done, with a question'
+                    : 'Mission complete!';
       const chips = rt.splash.querySelector('.story-chips');
       const items = [];
       if (page.durationMs !== undefined) items.push({ text: this._storyDuration(page.durationMs) });

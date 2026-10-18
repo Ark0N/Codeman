@@ -12,7 +12,8 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
-    "openNote": true,
+    "openNote": "catch",
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -113,7 +114,7 @@
         "ok": null,
         "story": "Done in 3 minutes.",
         "director": "turn_duration · 2 min 39 s · 10 tool calls · 3 files changed",
-        "balloon": "I built the pomodoro timer. Opening the page: it won't work if you double-click index.html. The page loads timer.js as a module, and Chrome and Firefox block that for local files, so you'd get a timer that never moves.",
+        "balloon": "I built the pomodoro timer. Opening the page: it won't work if you double-click index.html. Serve the folder instead, for example with python3 -m http.server in the folder, then open http://localhost:8000. I didn't open it in a browser; I only checked that its script is valid.",
         "tests": null,
         "roundsOk": null,
         "printed": null,

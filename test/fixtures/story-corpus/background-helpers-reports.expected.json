@@ -12,7 +12,8 @@
     "helpers": 2,
     "helpersRunning": 0,
     "finishedLater": 2,
-    "openNote": true,
+    "openNote": "note",
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -88,6 +89,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": true,
     "panels": [
       {
         "kind": "mission",
@@ -116,7 +118,7 @@
         "ok": null,
         "story": "Done in 14 seconds.",
         "director": "turn_duration · 14 s · 1 tool call",
-        "balloon": "Helper A has finished writing README.md, and I checked it against the code. It describes the command-line usage, count(text) and how to run the tests correctly, and its example ((2, 4, 24)) is right. It doesn't mention that running the tool without exactly one file prints a usage message and exits…",
+        "balloon": "Helper A has finished writing README.md, and I checked it against the code. It doesn't mention that running the tool without exactly one file prints a usage message and exits with code 2; I can add that line if you want it.",
         "tests": null,
         "roundsOk": null,
         "printed": null,
@@ -138,6 +140,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -190,7 +193,8 @@
     "helpers": 1,
     "helpersRunning": 0,
     "finishedLater": 2,
-    "openNote": true,
+    "openNote": "note",
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -263,6 +267,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -316,6 +321,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -366,6 +372,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -430,6 +437,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -469,6 +477,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",

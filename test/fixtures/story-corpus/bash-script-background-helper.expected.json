@@ -13,6 +13,7 @@
     "helpersRunning": 0,
     "finishedLater": 1,
     "openNote": false,
+    "asks": false,
     "panels": [
       {
         "kind": "mission",
@@ -122,6 +123,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": true,
     "panels": [
       {
         "kind": "mission",
@@ -165,7 +167,7 @@
         "ok": null,
         "story": "Done in 21 seconds.",
         "director": "turn_duration · 21 s · 2 tool calls",
-        "balloon": "I built rename_by_date.sh, the helper agent wrote README.md, and the script passed every test I ran on sample files in samples/. Nothing is committed because this folder isn't a git repository, even though the session context said it was. Only lowercase .jpg is matched, as you asked.",
+        "balloon": "I built rename_by_date.sh, the helper agent wrote README.md, and the script passed every test I ran on sample files in samples/. Nothing is committed because this folder isn't a git repository, even though the session context said it was. Say if you want me to run git init and commit. Only lowercase .jpg is matched, as you asked.",
         "tests": null,
         "roundsOk": null,
         "printed": null,
@@ -187,6 +189,7 @@
     "helpersRunning": 0,
     "finishedLater": 0,
     "openNote": false,
+    "asks": true,
     "panels": [
       {
         "kind": "mission",
@@ -252,7 +255,7 @@
         "ok": null,
         "story": "Done in 1 minute.",
         "director": "turn_duration · 1 min 14 s · 9 tool calls · 2 files changed",
-        "balloon": "I added a --prefix option to rename_by_date.sh. The samples folder didn't change.",
+        "balloon": "I added a --prefix option to rename_by_date.sh. Making the script sort file names the plain byte-by-byte way would fix it for up to 10 files with the same time. Want me to add that?",
         "tests": null,
         "roundsOk": null,
         "printed": null,
