@@ -22,7 +22,7 @@
  * recoverable pane into the collision this module exists to prevent.
  *
  * @dependencies none
- * @consumedby session (relaunch resume pinning)
+ * @consumedby session (relaunch resume pinning), web/routes/story-routes (Story Mode transcript lookup)
  *
  * @module utils/claude-transcript
  */
@@ -45,6 +45,31 @@ import { join } from 'node:path';
 export function claudeProjectsDir(configDir?: string): string {
   const fromEnv = typeof process.env.CLAUDE_CONFIG_DIR === 'string' && process.env.CLAUDE_CONFIG_DIR.trim();
   return join(configDir || fromEnv || join(homedir(), '.claude'), 'projects');
+}
+
+/**
+ * Path of the transcript for `conversationId` under any project directory, or null. Unlike
+ * {@link claudeTranscriptExists} it answers with the file (Story Mode reads it), so the id is
+ * checked against a strict charset before it is joined into a path, and only a regular file counts.
+ */
+export async function findClaudeTranscriptPath(conversationId: string, configDir?: string): Promise<string | null> {
+  if (!/^[a-zA-Z0-9._-]+$/.test(conversationId) || conversationId.startsWith('.')) return null;
+  const projectsDir = claudeProjectsDir(configDir);
+  let projectDirs: string[];
+  try {
+    projectDirs = await readdir(projectsDir);
+  } catch {
+    return null;
+  }
+  for (const projectDir of projectDirs) {
+    const candidate = join(projectsDir, projectDir, `${conversationId}.jsonl`);
+    try {
+      if ((await stat(candidate)).isFile()) return candidate;
+    } catch {
+      // Not in this project directory; keep looking.
+    }
+  }
+  return null;
 }
 
 /**

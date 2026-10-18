@@ -1584,6 +1584,7 @@ export const SettingsUpdateSchema = z
     showCost: z.boolean().optional(),
     showLifecycleLog: z.boolean().optional(),
     showResponseViewer: z.boolean().optional(),
+    showStoryButton: z.boolean().optional(),
     showMonitor: z.boolean().optional(),
     showProjectInsights: z.boolean().optional(),
     showFileBrowser: z.boolean().optional(),

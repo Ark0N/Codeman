@@ -1,0 +1,169 @@
+/**
+ * @fileoverview Story Mode types: one Claude Code turn drawn as a comic page.
+ *
+ * Produced by the pure core in `src/story-mode.ts` and served by
+ * `GET /api/sessions/:id/story` (`src/web/routes/story-routes.ts`). The shape is
+ * EXPERIMENTAL (docs/api-reference.md), not part of the stable `/api/v1` contract yet.
+ *
+ * Every string in here comes from a transcript the agent wrote, so it is untrusted
+ * text: the browser renders it with `textContent` only, and a file path in here is
+ * opened through the existing file preview, never fetched directly.
+ */
+
+/** What one transcript event means, read from the tool name and, for Bash, the command. */
+export type StoryIntent =
+  | 'prompt'
+  | 'read'
+  | 'search'
+  | 'look'
+  | 'web'
+  | 'plan'
+  | 'say'
+  | 'helper'
+  | 'message'
+  | 'edit'
+  | 'test'
+  | 'build'
+  | 'run'
+  | 'save'
+  | 'ask'
+  | 'compact'
+  | 'interrupt'
+  | 'tool';
+
+/** The comic panel a run of events is drawn as. */
+export type StoryPanelKind =
+  | 'mission'
+  | 'investigate'
+  | 'research'
+  | 'plan'
+  | 'backup'
+  | 'fix'
+  | 'check'
+  | 'loop'
+  | 'run'
+  | 'save'
+  | 'ask'
+  | 'compact'
+  | 'montage'
+  | 'complete';
+
+export type StoryActor = 'you' | 'claude' | 'helper' | 'system';
+
+/** Who started a turn: you, a background task reporting back, another session, or a schedule/SDK. */
+export type StoryTurnOrigin = 'human' | 'task' | 'peer' | 'system';
+
+/** One hunk of an edit, in the shape of Claude Code's `structuredPatch` (lines keep their ` `/`+`/`-` prefix). */
+export interface StoryHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+}
+
+/** What one Edit/Write call changed. Counts are exact even when `hunks` was cut to size. */
+export interface StoryEdit {
+  file: string;
+  added: number;
+  removed: number;
+  created: boolean;
+  hunks: StoryHunk[];
+  truncated: boolean;
+}
+
+/** A helper (Agent/Task/Workflow call): what it was asked and what it answered. */
+export interface StoryHelper {
+  name: string;
+  type: string;
+  /** Claude's short description of the job ("Write a phone-size test"). */
+  task?: string;
+  prompt: string;
+  result?: string;
+  toolUses?: number;
+  durationMs?: number;
+}
+
+export interface StoryTests {
+  passed: number;
+  failed: number;
+}
+
+export interface StoryTodo {
+  text: string;
+  done: boolean;
+}
+
+/** One row of "the wire": a prompt, a sentence Claude said, or one tool call with its result. */
+export interface StoryEvent {
+  id: string;
+  at: string;
+  actor: StoryActor;
+  tool: string;
+  label: string;
+  intent: StoryIntent;
+  /** False when the tool result was flagged as an error; absent while the call is still running. */
+  ok?: boolean;
+  pending?: boolean;
+  /** The one file this event concerns (Read, Edit, Write), as the transcript gave it. */
+  file?: string;
+  line?: number;
+  /** Claude's own short description of a Bash call ("Run the test suite"). */
+  description?: string;
+  output?: string;
+  outputTruncated?: boolean;
+  edit?: StoryEdit;
+  helper?: StoryHelper;
+  tests?: StoryTests;
+  todos?: StoryTodo[];
+  question?: { text: string; options: string[]; answer?: string };
+}
+
+export interface StoryPanel {
+  kind: StoryPanelKind;
+  /** Indices into the page's `events`. */
+  events: number[];
+  caption: { story: string; director: string };
+  balloon?: { who: 'you' | 'claude'; text: string };
+  files?: string[];
+  notes?: string[];
+  helpers?: Array<{ name: string; type: string; task?: string; event: number }>;
+  added?: number;
+  removed?: number;
+  ok?: boolean;
+  rounds?: number;
+  tests?: StoryTests;
+  todos?: StoryTodo[];
+  question?: { text: string; answer?: string };
+  /** The turn is still running and this is its newest panel. */
+  live?: boolean;
+}
+
+export interface StoryTurnSummary {
+  id: string;
+  at: string;
+  prompt: string;
+  origin: StoryTurnOrigin;
+  complete: boolean;
+  interrupted: boolean;
+  toolCalls: number;
+}
+
+export interface StoryPage extends StoryTurnSummary {
+  endedAt?: string;
+  durationMs?: number;
+  /** The turn began before the part of the transcript that was read. */
+  partial: boolean;
+  /** Older events, outputs or hunks were dropped to keep the page small. */
+  truncated: boolean;
+  panels: StoryPanel[];
+  events: StoryEvent[];
+  filesChanged: number;
+  added: number;
+  removed: number;
+  helpers: number;
+}
+
+export type StoryResponse =
+  | { supported: false; reason: string }
+  | { supported: true; turns: StoryTurnSummary[]; page: StoryPage | null };

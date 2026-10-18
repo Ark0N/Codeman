@@ -2197,6 +2197,18 @@ class CodemanApp {
       addListener(event, () => this._onSessionListMaybeChanged());
     }
 
+    // Story Mode (story-mode.js): any sign of transcript activity refreshes an open story for that
+    // session. Extra listeners like the ones above, so the handler map stays one method per event.
+    // No transcript `complete` event: interactive transcripts carry no `result` entry to raise it.
+    for (const event of [
+      SSE_EVENTS.TRANSCRIPT_TOOL_START,
+      SSE_EVENTS.TRANSCRIPT_TOOL_END,
+      SSE_EVENTS.HOOK_STOP,
+      SSE_EVENTS.HOOK_PROMPT_SUBMITTED,
+    ]) {
+      addListener(event, (e) => this._storyOnActivity?.(e));
+    }
+
     // Docker export/import: toast + refresh the Manage-tab exports list on completion.
     addListener(SSE_EVENTS.DOCKER_EXPORT_COMPLETE, (e) => {
       try {

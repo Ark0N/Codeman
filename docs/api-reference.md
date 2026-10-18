@@ -1050,6 +1050,19 @@ Both routes accept two optional query parameters, which the UI sends from its pe
 
 Lists are capped (300 files and 50 commits per repository) while the counts stay exact. A branch with no upstream reports the commits no remote has (`HEAD --not --remotes`); a repository with no remote reports `unpushedCount: 0`, since there is nothing to push to. Concurrent polls of one folder share a single git invocation; `?fresh=1` (what the panel's Refresh button and opening the panel send) skips the short-lived caches, though it still joins a computation already running.
 
+## Story Mode (experimental)
+
+`GET /api/sessions/:id/story[?turn=<id>]` is what Story Mode reads (the opt-in header button, App Settings → Header buttons → Story Mode, per device, off by default). It draws one turn of a Claude Code session as a comic page. **Experimental:** the payload shape may still change in a minor release; it is not part of the stable `/api/v1` contract yet.
+
+Read-only. The session is resolved like every session route (ownership via `findSessionOrFail`; another user's session is `404`), and the file read is the session's own transcript, never one the request names: the path the Claude hook reported for it, else `<conversation id>.jsonl` under the Claude projects directory. Only the tail of the transcript is read (8 MB), and file contents, original files and images never leave the server.
+
+`data` is one of:
+
+- `{ supported: false, reason }`: the session's CLI does not write a Claude Code transcript (registry `capabilities.transcript` is not `claude-jsonl`), or the session is remote or Docker, whose transcript is not on this host.
+- `{ supported: true, turns, page }`: `turns` lists up to 60 turns, oldest first (`{ id, at, prompt, origin, complete, interrupted, toolCalls }`; `origin` is `human`, `task`, `peer` or `system`). `page` is the newest turn, or the one `turn=<id>` names, or `null` when there is none (an unknown id included).
+
+A `page` carries the turn's summary fields plus `events` (one per prompt, sentence Claude wrote and tool call, with `intent`, `ok` when the call returned, `edit` hunks in Claude Code's own `structuredPatch` shape, the tail of `output`, `helper`, `tests` counts), `panels` (each `{ kind, events, caption: { story, director }, balloon?, files?, ... }`, at most 12 per page, indices into `events`), `filesChanged`, `added`, `removed`, `helpers`, `partial` (the turn began before the part that was read) and `truncated` (older outputs were dropped to keep the page small). A transcript that cannot be read is a `500` with `OPERATION_FAILED`.
+
 ## Git worktrees of a case
 
 A local case whose folder is the top of a git repository can keep **worktrees** at `<case>/.claude/worktrees/<name>`, each on its own branch, so several agents on one repository never share a checkout. This is the layout Claude Code's own `claude --worktree <name>` uses (branch `worktree-<name>`), so either tool finds the other's worktrees. Remote (SSH) and Docker cases are refused with `400 INVALID_INPUT` before git runs, and so is a local case whose folder is at or inside a Docker case workspace: `git worktree add` runs the repository's post-checkout hook and checkout filters on this machine, and a container can write there. A case folder that is not a repository, is a bare repository, or sits below the repository's top level is `400` too. The case resolves the way quick-start resolves it (a linked case is admin-only in multi-user mode, everything else is the caller's own case space; another user's case is `404`), and a case folder on a mount that does not answer is `422 OPERATION_FAILED`, never `404`.

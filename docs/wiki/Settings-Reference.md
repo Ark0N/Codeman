@@ -60,10 +60,17 @@ supervised by systemd or launchd; npm installs report as non-updatable. See
 
 Chips for every optional header control, with a live preview of the resulting header:
 
-Run, Font Size, System Stats, Redraw Terminal, Response Viewer, Away Digest, Session
+Run, Font Size, System Stats, Redraw Terminal, Response Viewer, Story Mode, Away Digest, Session
 Manager, Attachments, File Viewer, Multi-monitor, Split, Tiles, Plan Usage, Lifecycle Log, Monitor,
 Project Insights, File Browser, Subagents, Approvals Inbox, Read My Mind, Ultracode Agents,
 Ultracode Windows, Cron.
+
+**Story Mode** (off by default, per device, desktop and tablet) adds a header button that
+draws the active Claude Code session as a comic: one page per prompt, panels for what Claude
+did (reading, planning, helpers, edits, tests, saving), and plain captions anyone can follow.
+The **Director's cut** switch names every tool call instead. Click a file to open it, the code
+page for the exact diff, a test board for the output. An unfinished turn redraws as Claude
+works.
 
 **Bottom bar** (below the chips): **Git status** shows a small indicator at the right of the
 bottom bar, off by default and per device. It reads `● N` uncommitted files, `↑ N` commits not

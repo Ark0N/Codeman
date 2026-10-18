@@ -13257,6 +13257,15 @@ kbd {
   display: none !important;
 }
 
+/* "Story Mode" header toggle (story-mode.js, App Settings → Header buttons), opt-in. Same marker
+   pattern as the Response Viewer; mobile.css keeps it off phones. */
+.btn-story-header {
+  display: inline-flex !important;
+}
+.btn-story-header.btn-story-header--hidden {
+  display: none !important;
+}
+
 /* "Approvals" header bell: appears ONLY while prompts are pending (JS toggles
    the marker class on count changes), so it ships hidden and stays out of the
    default header. Same marker pattern as the attachments button. */
