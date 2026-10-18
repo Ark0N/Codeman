@@ -2358,19 +2358,24 @@ Object.assign(CodemanApp.prototype, {
             page.helpersRunning ? `, ${page.helpersRunning} still working` : ''
           }`,
         });
-      chips.replaceChildren(
-        ...items.map((item) => {
-          const li = document.createElement('li');
-          const inner = document.createElement(item.open ? 'button' : 'span');
-          if (item.open) {
-            inner.type = 'button';
-            inner.dataset.storyOpen = item.open;
-          }
-          inner.textContent = item.text;
-          li.append(inner);
-          return li;
-        })
-      );
+      // Rebuilt only when they change: a chip that opened the drawer must still be there to take focus back.
+      const chipsKey = JSON.stringify(items);
+      if (chips.dataset.key !== chipsKey) {
+        chips.dataset.key = chipsKey;
+        chips.replaceChildren(
+          ...items.map((item) => {
+            const li = document.createElement('li');
+            const inner = document.createElement(item.open ? 'button' : 'span');
+            if (item.open) {
+              inner.type = 'button';
+              inner.dataset.storyOpen = item.open;
+            }
+            inner.textContent = item.text;
+            li.append(inner);
+            return li;
+          })
+        );
+      }
     }
   },
 
@@ -2938,8 +2943,11 @@ Object.assign(CodemanApp.prototype, {
     st.drawerEl.hidden = true;
     st.root.classList.remove('has-drawer');
     st.drawerBody.replaceChildren();
-    const back = st.drawerReturn;
+    let back = st.drawerReturn;
     st.drawerReturn = null;
+    // A control rebuilt while the drawer was open: its replacement opens the same thing.
+    const key = back && !document.contains(back) ? back.dataset?.storyOpen : undefined;
+    if (key) back = [...st.root.querySelectorAll('[data-story-open]')].find((n) => n.dataset.storyOpen === key);
     if (refocus && back && document.contains(back)) back.focus({ preventScroll: true });
   },
 

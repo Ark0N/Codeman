@@ -563,6 +563,26 @@ describe('story-mode.js overlay', () => {
     expect($$('.story-ln--add').map((l) => l.textContent)).toEqual(['+more']);
   });
 
+  it('a chip that opened the drawer takes focus back, even when the page was redrawn meanwhile', async () => {
+    boot(storyOf(demoTurn()));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    const chip = $$('.story-chips button').find((b) => b.dataset.storyOpen === 'diff:page')!;
+    chip.focus();
+    chip.click();
+    expect($('.story-drawer-kind')!.textContent).toBe('Diff');
+    // A redraw with the same chips keeps the same element.
+    app._storyRender();
+    expect(win.document.contains(chip)).toBe(true);
+    // One that did replace it: focus goes to the chip that opens the same thing.
+    const twin = chip.cloneNode(true) as HTMLElement;
+    chip.replaceWith(twin);
+    press('Escape');
+    expect($('.story-drawer')!.hidden).toBe(true);
+    expect(win.document.activeElement).toBe(twin);
+  });
+
   it('while a question waits, the pencils say so; the chosen answer is marked, not struck', async () => {
     const ask = (answered: boolean) =>
       storyOf([
