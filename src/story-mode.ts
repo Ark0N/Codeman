@@ -1444,6 +1444,10 @@ function applyTextBudget(events: StoryEvent[]): boolean {
 
 /** Claude reporting how a check went ("All 7 tests pass"), as opposed to announcing its next step. */
 const TALKS_RESULTS = /\b(pass(es|ed|ing)?|fail(s|ed|ing|ures?)?|green|clean)\b/i;
+/** Claude reporting a save ("Commits are in.", "Pushed to origin."). */
+const TALKS_SAVES = /\b(commit(s|ted)?|pushed|merged|tagged)\b/i;
+/** The remark that reports on a panel of this kind, if any. */
+const REPORT_TALK: Partial<Record<StoryPanelKind, RegExp>> = { check: TALKS_RESULTS, save: TALKS_SAVES };
 const ANNOUNCES = /\b(I'll|I will|let me|let's|I'm going to|next,? I|now I)\b/i;
 
 function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?: string } {
@@ -1463,11 +1467,13 @@ function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?
     } else {
       const panel: DraftPanel = { kind, events: [idx] };
       // A sentence about how the check just before went belongs to that check, not to what comes next.
+      const talk = last ? REPORT_TALK[last.kind] : undefined;
       const reportsBack =
         pendingSay &&
-        last?.kind === 'check' &&
-        (!last.balloon || !TALKS_RESULTS.test(last.balloon.text)) &&
-        TALKS_RESULTS.test(pendingSay) &&
+        talk &&
+        last &&
+        (!last.balloon || !talk.test(last.balloon.text)) &&
+        talk.test(pendingSay) &&
         !ANNOUNCES.test(pendingSay);
       if (kind === 'mission') panel.balloon = { who: 'you', text: clip(ev.label, 220) };
       else if (reportsBack && last && pendingSay) last.balloon = { who: 'claude', text: pendingSay };

@@ -726,6 +726,18 @@ describe('buildStoryPage', () => {
     expect(turns[1].durationMs).toBeGreaterThan(0);
   });
 
+  it('a remark about committing stays on the save it reports on', () => {
+    const page = pageOf([
+      prompt('commit then test'),
+      ...bash('b1', 'git commit -qm a', 'Commit', 'ok'),
+      said('Commits are in.'),
+      ...bash('b2', 'pytest -q', 'Run tests', '3 passed in 0.1s'),
+      end(1000),
+    ]);
+    expect(page.panels.find((p) => p.kind === 'save')!.balloon?.text).toBe('Commits are in.');
+    expect(page.panels.find((p) => p.kind === 'check')!.balloon).toBeUndefined();
+  });
+
   it('a result remark replaces a step announcement on its check', () => {
     const page = pageOf([
       prompt('steps'),
