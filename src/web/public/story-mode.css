@@ -54,6 +54,16 @@
   --story-balloon-ink: #121016;
   --story-cap: #ffd43d;
   --story-cap-ink: #121016;
+  /* Accents as TEXT (tags, counts, labels): the accents themselves where they read on the sheet,
+     darker ones in the paper skin, where yellow or light green text on white fell under 4.5:1. */
+  --story-go-text: #3ec27c;
+  --story-bad-text: #ff4e97;
+  --story-wait-text: #ffd43d;
+  --story-pencil-text: #6f9fcc;
+  --story-live-bg: #ff4e97;
+  --story-live-ink: #121016;
+  /* Text on a balloon (always light): a magenta dark enough for it. */
+  --story-note-ink: #b8125f;
   --story-display: 'Codeman Story Display', Impact, 'Arial Black', sans-serif;
   --story-letter: 'Codeman Story Letter', 'Comic Sans MS', 'Chalkboard SE', cursive;
   --story-body: 'Manrope', system-ui, sans-serif;
@@ -90,6 +100,12 @@
   --story-balloon-ink: #18151d;
   --story-cap: #ffd019;
   --story-cap-ink: #18151d;
+  --story-go-text: #0f6e3c;
+  --story-bad-text: #b8125f;
+  --story-wait-text: #8a6100;
+  --story-pencil-text: #2f6fa8;
+  --story-live-bg: #b8125f;
+  --story-live-ink: #ffffff;
   color-scheme: light;
 }
 .story-overlay[hidden] {
@@ -200,7 +216,7 @@ body.story-open {
   gap: 7px;
   font: 600 12px/1 var(--story-mono);
   letter-spacing: 0.1em;
-  color: var(--story-magenta);
+  color: var(--story-bad-text);
 }
 .story-live[hidden] {
   display: none;
@@ -459,7 +475,7 @@ body.story-open .toast-container {
   font: 600 10px/1 var(--story-mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--story-magenta);
+  color: var(--story-note-ink);
 }
 .story-balloon--note::after {
   display: none;
@@ -486,7 +502,7 @@ body.story-open .toast-container {
   padding: 5px 9px 4px;
   font: 13px/1.2 var(--story-display);
   letter-spacing: 0.03em;
-  color: var(--story-go);
+  color: var(--story-go-text);
   background: var(--story-panel);
   border: 3px solid var(--story-go);
   transform: rotate(-4deg);
@@ -504,8 +520,8 @@ body.story-open .toast-container {
   padding: 3px 7px 2px;
   font: 600 10.5px/1 var(--story-mono);
   letter-spacing: 0.1em;
-  color: #fff;
-  background: var(--story-magenta);
+  color: var(--story-live-ink);
+  background: var(--story-live-bg);
 }
 
 .story-splash {
@@ -571,7 +587,7 @@ body.story-open .toast-container {
   place-content: center;
   gap: 4px;
   text-align: center;
-  color: var(--story-pencil);
+  color: var(--story-pencil-text);
   border: 2.5px dashed var(--story-pencil);
 }
 .story-pencils span {
@@ -727,13 +743,13 @@ body.story-open .toast-container {
   border-radius: 3px;
 }
 .story-tag--bad {
-  color: var(--story-magenta);
+  color: var(--story-bad-text);
 }
 .story-tag--ok {
-  color: var(--story-go);
+  color: var(--story-go-text);
 }
 .story-tag--pending {
-  color: var(--story-yellow);
+  color: var(--story-wait-text);
 }
 
 /* Drawer */
@@ -855,10 +871,10 @@ body.story-open .toast-container {
   font: 500 12.5px/1 var(--story-mono);
 }
 .story-cnt-a {
-  color: var(--story-go);
+  color: var(--story-go-text);
 }
 .story-cnt-d {
-  color: var(--story-magenta);
+  color: var(--story-bad-text);
 }
 .story-code {
   font: 12px/1.65 var(--story-mono);
@@ -890,13 +906,13 @@ body.story-open .toast-container {
   background: color-mix(in srgb, var(--story-go) 17%, transparent);
 }
 .story-ln--add .story-ln-mk {
-  color: var(--story-go);
+  color: var(--story-go-text);
 }
 .story-ln--del {
   background: color-mix(in srgb, var(--story-magenta) 15%, transparent);
 }
 .story-ln--del .story-ln-mk {
-  color: var(--story-magenta);
+  color: var(--story-bad-text);
 }
 .story-ln--hunk {
   display: block;
