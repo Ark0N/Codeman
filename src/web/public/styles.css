@@ -9723,6 +9723,254 @@ kbd {
 .toast-warning { border-color: rgba(234, 179, 8, 0.4); }
 .toast-info { border-color: rgba(59, 130, 246, 0.4); }
 
+/* Security notice card (security-notices.json; showSecurityNotice / showUpdateNotice in
+   panels-ui.js). Its own card in the toast stack, never the plain pill, and in the SAME
+   container, so it shares the toasts' position and z-index. Theme tokens only, so every skin
+   reads: the light skins' --yellow is already a dark amber that holds on white, and the
+   primary button's ink is --bg-card (dark ink on the dark skins' light amber, white ink on
+   the light skins' dark amber). The entrance animates opacity and transform only, and
+   nothing moves under prefers-reduced-motion. */
+.security-notice {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  column-gap: 0.75rem;
+  align-items: start;
+  box-sizing: border-box;
+  width: min(27rem, calc(100vw - 1rem));
+  padding: 0.85rem 0.55rem 0.9rem 1.05rem;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--yellow) 9%, transparent), transparent 6rem),
+    var(--bg-card);
+  border: 1px solid color-mix(in srgb, var(--yellow) 32%, var(--border));
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28), 0 2px 6px rgba(0, 0, 0, 0.16);
+  color: var(--text);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  overflow: hidden;
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(-6px) scale(0.985);
+  transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.security-notice.show {
+  opacity: 1;
+  transform: none;
+}
+
+/* The accent bar: amber running into red down the left edge. */
+.security-notice::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 4px;
+  background: linear-gradient(180deg, var(--yellow), var(--red));
+}
+
+.security-notice-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 15%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--yellow) 30%, transparent);
+}
+
+.security-notice-icon svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+/* The update toast carrying a notice leads with the release, in the accent colour. */
+.security-notice-icon.update-notice-icon {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.security-notice-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+  padding-top: 0.1rem;
+}
+
+.security-notice-eyebrow {
+  color: var(--yellow);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.security-notice-title {
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.security-notice-body,
+.update-notice-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.security-notice-body {
+  color: var(--text-dim);
+}
+
+.update-notice-text {
+  color: var(--text);
+}
+
+/* One warning section per notice inside the update toast. */
+.security-notice-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+  padding: 0.6rem 0.7rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--yellow) 26%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--yellow) 7%, transparent);
+}
+
+.security-notice-section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--yellow);
+}
+
+.security-notice-section-head svg {
+  flex-shrink: 0;
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.security-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.8rem;
+  margin-top: 0.5rem;
+}
+
+/* The update toast's buttons share their row, and when it wraps (a phone, a long label)
+   each fills its own, so the two never sit at odd widths one under the other. */
+.update-notice .security-notice-actions {
+  column-gap: 0.6rem;
+}
+
+.update-notice .security-notice-actions > button {
+  flex: 1 1 auto;
+}
+
+.security-notice-primary,
+.security-notice-secondary,
+.security-notice-quiet {
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.security-notice-primary {
+  padding: 0.45rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: var(--btn-radius);
+  background: var(--yellow);
+  color: var(--bg-card);
+}
+
+.security-notice-primary:hover {
+  background: color-mix(in srgb, var(--yellow) 86%, var(--text));
+}
+
+.security-notice-secondary {
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--border-light);
+  border-radius: var(--btn-radius);
+  background: transparent;
+  color: var(--text);
+}
+
+.security-notice-secondary:hover {
+  background: var(--control-bg-hover);
+}
+
+.security-notice-quiet {
+  padding: 0.45rem 0.15rem;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.security-notice-quiet:hover {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.security-notice-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-top: -0.3rem;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.security-notice-close:hover {
+  background: var(--control-bg-hover);
+  color: var(--text);
+}
+
+.security-notice button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Phones: the full width minus the stack's 0.5rem gutters, and the notice's own button
+   takes the room left beside Dismiss (wrapping under it when the label is long). */
+@media (max-width: 599px) {
+  .security-notice {
+    width: calc(100vw - 1rem);
+  }
+
+  .security-notice-primary {
+    flex: 1 1 auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .security-notice {
+    transform: none;
+    transition: none;
+  }
+}
+
 /* Notification Bell Button */
 .btn-icon-header.btn-notifications {
   position: relative;

@@ -1,0 +1,21 @@
+{
+  "notices": [
+    {
+      "id": "opencode-console-breach-2026-10",
+      "severity": "warning",
+      "cli": "opencode",
+      "published": "2026-10-18",
+      "expires": "2026-12-31",
+      "title": "OpenCode Console breach: check your API keys",
+      "message": "Security notice for OpenCode users: on 17 October OpenCode reported unauthorized access to a legacy OpenCode Console system. Provider API keys some users had saved in a Console workspace (OpenAI, Anthropic and others) may have been exposed. OpenCode emailed the affected users: if you got that email, revoke and replace those keys and check their recent usage. The opencode CLI itself is not reported as affected.",
+      "link": { "label": "Read OpenCode's notice", "url": "https://x.com/opencode/status/2111519637049319818" },
+      "i18n": {
+        "zh-CN": {
+          "title": "OpenCode Console 遭入侵：请检查你的 API 密钥",
+          "message": "OpenCode 用户安全提示：OpenCode 于 10 月 17 日报告，其旧版 OpenCode Console 系统遭到未授权访问。部分用户保存在 Console 工作区中的提供商 API 密钥（OpenAI、Anthropic 等）可能已泄露。OpenCode 已向受影响的用户发送邮件：如果你收到了该邮件，请吊销并更换这些密钥，并检查近期用量。目前没有报告称 opencode CLI 本身受到影响。",
+          "label": "查看 OpenCode 公告"
+        }
+      }
+    }
+  ]
+}

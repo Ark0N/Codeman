@@ -378,32 +378,108 @@ Object.assign(CodemanApp.prototype, {
    * The notes come from /whats-new.json, which `npm run version-packages` regenerates from
    * CHANGELOG.md for each release. A browser that has never seen any version just records the
    * current one, so a fresh install is not greeted with "what's new".
+   *
+   * The same pass places the security notices (/security-notices.json, see
+   * _loadSecurityNotices), so a load shows ONE notification per notice:
+   * CodemanSecurityNotices.plan() (constants.js) puts every selected notice INSIDE the update
+   * toast when that toast shows (showUpdateNotice), and gives each its own card otherwise, a
+   * fresh install or a reload on the same version (showSecurityNotice). With no notice
+   * selected the update toast is the plain one it always was. Storage blocked shows neither:
+   * nothing could remember a close.
    */
   async checkWhatsNew(runningVersion) {
     if (this._whatsNewChecked) return;
     this._whatsNewChecked = true;
     const KEY = 'codeman-whats-new-seen';
     let seen = null;
-    try { seen = localStorage.getItem(KEY); } catch { /* storage blocked: skip the announcement */ return; }
-    if (seen === runningVersion) return;
+    try { seen = localStorage.getItem(KEY); } catch { /* storage blocked: skip the announcement and the notices */ return; }
     const remember = () => { try { localStorage.setItem(KEY, runningVersion); } catch { /* ignore */ } };
-    if (!seen) { remember(); return; }
-    try {
-      const res = await fetch('/whats-new.json', { cache: 'no-cache' });
-      if (!res.ok) return;
-      const notes = await res.json();
-      if (notes?.version !== runningVersion || !Array.isArray(notes.highlights) || !notes.highlights.length) return;
+    const [notes, notices] = await Promise.all([
+      seen && seen !== runningVersion ? this._fetchWhatsNewNotes() : null,
+      this._loadSecurityNotices(),
+    ]);
+    const plan = window.CodemanSecurityNotices.plan({ seenVersion: seen, runningVersion, notes, notices });
+    if (plan.recordVersion) remember();
+    if (plan.update) {
       const shown = notes.highlights.slice(0, 3).join(' · ');
       const more = notes.highlights.length > 3 ? ` (+${notes.highlights.length - 3} more)` : '';
-      remember();
-      this.showToast(`Codeman updated to v${runningVersion}: ${shown}${more}`, 'info', {
-        duration: 20000,
-        action: {
-          label: "See what's new",
-          onClick: () => window.open(`https://github.com/Ark0N/Codeman/releases/tag/codeman%40${runningVersion}`, '_blank', 'noopener'),
-        },
+      const text = `Codeman updated to v${runningVersion}: ${shown}${more}`;
+      const releaseUrl = `https://github.com/Ark0N/Codeman/releases/tag/codeman%40${runningVersion}`;
+      if (plan.updateNotices.length) {
+        this.showUpdateNotice({
+          text,
+          releaseUrl,
+          notices: plan.updateNotices,
+          onNoticeSeen: (id) => this._rememberSecurityNotice(id),
+        });
+      } else {
+        this.showToast(text, 'info', {
+          duration: 20000,
+          action: {
+            label: "See what's new",
+            onClick: () => window.open(releaseUrl, '_blank', 'noopener'),
+          },
+        });
+      }
+    }
+    for (const notice of plan.cards) {
+      this.showSecurityNotice(notice, { onClose: () => this._rememberSecurityNotice(notice.id) });
+    }
+  },
+
+  /** This release's notes, or null (offline or malformed: try again next load). */
+  async _fetchWhatsNewNotes() {
+    try {
+      const res = await fetch('/whats-new.json', { cache: 'no-cache' });
+      return res.ok ? await res.json() : null;
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * The security notices this browser should see now, from the HAND-maintained
+   * /security-notices.json (docs/releasing.md says how to add and retire one), selected by
+   * CodemanSecurityNotices.select() in constants.js: dates, the seen list, and for a notice
+   * naming a CLI, `window.__codemanCliAvailable[cli] === true` only (unknown means not
+   * installed). [] on any failure, and when storage is blocked (a close could not be
+   * remembered, so the card would return on every load).
+   */
+  async _loadSecurityNotices() {
+    let seen;
+    try { seen = this._readSecurityNoticesSeen(); } catch { /* storage blocked: show nothing */ return []; }
+    try {
+      const res = await fetch(CodemanBase.url('/security-notices.json'), { cache: 'no-cache' });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return window.CodemanSecurityNotices.select(data?.notices, {
+        available: window.__codemanCliAvailable,
+        seen,
+        now: Date.now(),
+        lang: window.CodemanI18n?.language || window.__codemanLanguage,
       });
-    } catch { /* offline or malformed: try again next load */ }
+    } catch { /* offline or malformed: try again next load */ return []; }
+  },
+
+  /** The ids the user closed or followed (`codeman-security-notices-seen`). Throws when storage is blocked. */
+  _readSecurityNoticesSeen() {
+    const raw = localStorage.getItem('codeman-security-notices-seen');
+    let ids = [];
+    try { ids = raw ? JSON.parse(raw) : []; } catch { /* a corrupt value counts as nothing seen */ }
+    return Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [];
+  },
+
+  /**
+   * Record a notice as seen. Only a user action calls this (a close, Dismiss, its link), never
+   * the card appearing, so one shown while nobody was looking comes back on the next load.
+   * Re-reads first: another tab may have recorded a notice since this one loaded.
+   */
+  _rememberSecurityNotice(id) {
+    try {
+      const ids = this._readSecurityNoticesSeen();
+      if (!ids.includes(id)) ids.push(id);
+      localStorage.setItem('codeman-security-notices-seen', JSON.stringify(ids));
+    } catch { /* storage blocked since load: it shows again next load */ }
   },
 
   openAppSettings() {
