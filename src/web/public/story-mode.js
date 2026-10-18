@@ -18,8 +18,8 @@
  * existing `openFilePreview()` (workspace confinement, attachment routes for outside paths, remote
  * hosts), never a new file route; editing goes through the file viewer's own edit mode.
  * ⚠️ The overlay owns Escape while it is open (a window capture listener runs before app.js's
- * document listener): the drawer closes first, then the overlay, and nothing closes while the file
- * preview or folder grid is open on top of it.
+ * document listener), one layer per press: a file preview opened from a panel, then the drawer,
+ * then the overlay. A folder grid on top and a preview in edit mode keep their own keys.
  *
  * @mixin Extends CodemanApp.prototype via Object.assign
  * @dependency app.js (this.activeSessionId, this.sessions, this.loadAppSettingsFromStorage, this.getDefaultSettings)
@@ -1683,12 +1683,16 @@ Object.assign(CodemanApp.prototype, {
     }, STORY_POLL_MS);
     st.keyHandler = (e) => {
       if (e.key !== 'Escape' || !st.open) return;
-      // The file preview or folder grid opened from a panel is on top: its own Escape closes it.
-      if (document.getElementById('filePreviewOverlay')?.classList.contains('visible')) return;
+      // A folder grid on top steps back by itself (preview, then grid), and a preview in edit mode
+      // keeps its keys. A plain file preview has no Escape of its own outside the grid, so Story
+      // closes it: one Escape per layer, the preview first.
       if (document.getElementById('folderGridOverlay')?.classList.contains('visible')) return;
+      const previewOpen = document.getElementById('filePreviewOverlay')?.classList.contains('visible');
+      if (previewOpen && this.filePreviewEdit) return;
       e.preventDefault();
       e.stopPropagation();
-      if (st.drawer) this._storyCloseDrawer();
+      if (previewOpen) this.closeFilePreview?.();
+      else if (st.drawer) this._storyCloseDrawer();
       else this.closeStoryMode();
     };
     window.addEventListener('keydown', st.keyHandler, true);
