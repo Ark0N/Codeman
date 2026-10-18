@@ -1083,6 +1083,31 @@ describe('buildStoryPage', () => {
     expect(loop.caption.story).toBe('Build and test, 2 rounds. A check fails once, then everything passes.');
   });
 
+  it('a live loop marks the runs that finished, and the one still going as null', () => {
+    const page = pageOf([
+      prompt('fix'),
+      ...edit('e1', '/w/a.py', ['+a = 1']),
+      ...bash('b1', 'pytest -q', 'Run tests', '1 failed, 2 passed in 0.1s'),
+      ...edit('e2', '/w/a.py', ['-a = 1', '+a = 2']),
+      tool('b2', 'Bash', { command: 'pytest -q', description: 'Run tests again' }),
+    ]);
+    expect(page.panels.find((p) => p.kind === 'loop')?.roundsOk).toEqual([false, null]);
+  });
+
+  it("Claude's word about a red run stays on that run's check", () => {
+    const page = pageOf([
+      prompt('test first'),
+      ...edit('e1', '/w/test_a.py', ['+import a']),
+      ...bash('b1', 'pytest -q', 'Run tests', 'ERROR test_a.py\n1 error in 0.1s'),
+      said('Red as expected: collection error, exit code 2.'),
+      ...bash('b2', 'git commit -qm "test: first"', 'Commit', ''),
+      end(1000),
+    ]);
+    const check = page.panels.find((p) => p.kind === 'check' || p.kind === 'loop')!;
+    expect(check.balloon?.text).toBe('Red as expected: collection error, exit code 2.');
+    expect(page.panels.find((p) => p.kind === 'save')!.balloon).toBeUndefined();
+  });
+
   it('checks that all pass from the start read as building, not fixing', () => {
     const page = pageOf([
       prompt('build it'),

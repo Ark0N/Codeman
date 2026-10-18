@@ -163,8 +163,8 @@ export interface StoryPanel {
   removed?: number;
   ok?: boolean;
   rounds?: number;
-  /** A loop's test runs in order: whether each passed (absent while one is still running). */
-  roundsOk?: boolean[];
+  /** A loop's test runs in order: whether each passed, `null` for one still running. */
+  roundsOk?: (boolean | null)[];
   tests?: StoryTests;
   todos?: StoryTodo[];
   question?: { text: string; answer?: string };

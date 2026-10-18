@@ -740,7 +740,8 @@ body.story-open .toast-container {
 .story-drawer {
   position: absolute;
   z-index: 5;
-  top: 0;
+  /* Below the bar, which stays usable while the drawer is open (story-mode.js measures it). */
+  top: var(--story-bar-h, 0px);
   right: 0;
   bottom: 0;
   width: var(--story-drawer-w);
@@ -986,6 +987,9 @@ body.story-open .toast-container {
   }
   .story-link {
     padding-block: 6px;
+  }
+  .story-turns {
+    min-height: 44px;
   }
   .story-cap-dir,
   .story-ev,

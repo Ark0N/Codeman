@@ -1184,6 +1184,15 @@ const StoryArt = (() => {
             ctx.scale(pr, pr);
             ctx.beginPath();
             ctx.arc(0, 0, 9, 0, TAU);
+            if (ok === null) {
+              // Still running: an open circle, no verdict yet.
+              ctx.setLineDash([3, 3]);
+              ctx.lineWidth = 2.5;
+              ctx.strokeStyle = C.balloon;
+              ctx.stroke();
+              ctx.restore();
+              return;
+            }
             inked(ctx, ok ? C.go : C.magenta, 2.5);
             ctx.strokeStyle = C.balloon;
             ctx.lineWidth = 2.5;
@@ -1766,6 +1775,7 @@ Object.assign(CodemanApp.prototype, {
       saveBtn,
       note,
       stage,
+      mainEl: main,
       pageEl,
       wire,
       wireCount,
@@ -1821,6 +1831,7 @@ Object.assign(CodemanApp.prototype, {
   _storyPickTurn(id) {
     const st = this._story;
     st.picked = true; // a turn you chose is not news to announce
+    st.drawerHolds = false; // your choice wins over a page held for a drawer
     const turns = st.data?.turns || [];
     st.turnId = id && id !== turns[turns.length - 1]?.id ? id : null;
     st.first = true;
@@ -1877,8 +1888,23 @@ Object.assign(CodemanApp.prototype, {
           body?.error || (res?.status === 404 ? 'This session is gone.' : 'Story Mode could not read this session.');
       } else {
         st.error = null;
-        st.data = body.data;
-        st.etag = etag;
+        const held = st.drawer?.pageId;
+        if (held && !st.turnId && body.data.page && body.data.page.id !== held && st.data?.page?.id === held) {
+          // The newest turn moved on while a drawer reads this one: hold this turn (the picker
+          // already lists the new one) until the drawer closes, and fetch this turn's last state.
+          st.turnId = held;
+          st.drawerHolds = true;
+          st.data = { ...body.data, page: st.data.page };
+          st.etag = null;
+          st.again = true;
+          const box = st.root.querySelector('.story-sr');
+          if (box)
+            box.textContent =
+              'A new turn started. This page stays on the turn you are reading until you close the panel.';
+        } else {
+          st.data = body.data;
+          st.etag = etag;
+        }
       }
       this._storyRender();
     } finally {
@@ -1898,7 +1924,10 @@ Object.assign(CodemanApp.prototype, {
     st.ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
         // The bar's height places the phone drawer below it, and changes when the phone turns.
-        if (entry.target === bar) st.root.style.setProperty('--story-bar-h', `${bar.offsetHeight}px`);
+        if (entry.target === bar) {
+          st.root.style.setProperty('--story-bar-h', `${bar.offsetHeight}px`);
+          this._storyDrawerCover();
+        }
         const rt = st.panels.find((p) => p.el === entry.target);
         if (rt) this._storySizePanel(rt);
       }
@@ -2031,7 +2060,7 @@ Object.assign(CodemanApp.prototype, {
     const scope = preview?.classList.contains('visible') ? preview : st.root;
     const items = [
       ...scope.querySelectorAll('button, select, textarea, input, a[href], [tabindex]:not([tabindex="-1"])'),
-    ].filter((n) => !n.disabled && n.offsetParent !== null);
+    ].filter((n) => !n.disabled && n.offsetParent !== null && !n.closest('[inert]'));
     if (!items.length) return;
     const first = items[0];
     const last = items[items.length - 1];
@@ -2044,6 +2073,18 @@ Object.assign(CodemanApp.prototype, {
       e.preventDefault();
       first.focus();
     }
+  },
+
+  /**
+   * A drawer that covers the whole page (a narrow window, a phone) makes the page behind it inert:
+   * Tab would otherwise walk the panels it hides. Beside the page (a wide window) it does not.
+   */
+  _storyDrawerCover() {
+    const st = this._story;
+    if (!st?.mainEl) return;
+    const d = st.drawer ? st.drawerEl.getBoundingClientRect() : null;
+    const m = st.mainEl.getBoundingClientRect();
+    st.mainEl.inert = !!d && d.width > 0 && m.width > 0 && d.left <= m.left + 8;
   },
 
   _storyStopRuntime() {
@@ -2095,8 +2136,23 @@ Object.assign(CodemanApp.prototype, {
     sel.disabled = turns.length < 2;
     const idx = page ? turns.findIndex((t) => t.id === page.id) : -1;
     sel.setAttribute('aria-label', idx >= 0 ? `Turn ${idx + 1} of ${turns.length}` : 'Turn');
-    st.prev.disabled = idx <= 0;
-    st.next.disabled = idx < 0 || idx >= turns.length - 1;
+    const noPrev = idx <= 0;
+    const noNext = idx < 0 || idx >= turns.length - 1;
+    // A button that is about to be disabled under focus hands it to the turn picker first.
+    const a = document.activeElement;
+    if ((a === st.prev && noPrev) || (a === st.next && noNext))
+      (sel.disabled ? st.closeBtn : sel).focus({ preventScroll: true });
+    st.prev.disabled = noPrev;
+    st.next.disabled = noNext;
+    // Parked on an older turn, a new one is news.
+    if (st.turnId && st.knownTurns !== undefined && turns.length > st.knownTurns && !st.drawerHolds) {
+      const box = st.root.querySelector('.story-sr');
+      if (box)
+        box.textContent = `A new turn started: ${(turns[turns.length - 1].prompt || '').slice(0, 100)}. You are on turn ${
+          idx + 1
+        } of ${turns.length}.`;
+    }
+    st.knownTurns = turns.length;
     st.live.hidden = !(page && !page.complete && !page.interrupted && !st.turnId);
 
     // Note line: errors, unsupported sessions, empty sessions, cut pages.
@@ -2170,6 +2226,7 @@ Object.assign(CodemanApp.prototype, {
       if (rt) old.delete(id);
       else {
         rt = this._storyCreatePanel(panel.kind, fresh);
+        rt.isNew = true;
         st.ro?.observe(rt.el);
         st.io?.observe(rt.el);
       }
@@ -2189,6 +2246,11 @@ Object.assign(CodemanApp.prototype, {
     want.forEach((panel, i) => {
       const rt = st.panels[i];
       rt.panel = panel;
+      if (rt.isNew) {
+        // Sized now, not when the resize observer reports: a new panel never shows an empty frame.
+        rt.isNew = false;
+        this._storySizePanel(rt);
+      }
       rt.el.style.setProperty('--story-span6', String(spans6[i]));
       rt.el.style.setProperty('--story-span2', String(spans2[i]));
       this._storyFillPanelText(rt, page, i);
@@ -2937,11 +2999,13 @@ Object.assign(CodemanApp.prototype, {
   _storyOpenDrawer(source, trigger) {
     const st = this._story;
     if (!st.drawer) st.drawerReturn = trigger || null;
-    st.drawer = source;
+    // Bound to the turn it was opened on: if the newest turn moves on, the page holds this one.
+    st.drawer = { ...source, pageId: st.data?.page?.id };
     st.drawerSeen = new Set();
     st.drawerSig = null;
     st.drawerEl.hidden = false;
     st.root.classList.add('has-drawer');
+    this._storyDrawerCover();
     // On a phone the drawer is a sheet from the bottom: it starts below the bar, whatever its height.
     const bar = st.root.querySelector('.story-bar');
     if (bar) st.root.style.setProperty('--story-bar-h', `${bar.offsetHeight}px`);
@@ -2955,6 +3019,14 @@ Object.assign(CodemanApp.prototype, {
     st.drawer = null;
     st.drawerEl.hidden = true;
     st.root.classList.remove('has-drawer');
+    this._storyDrawerCover();
+    // A page held for this drawer follows the newest turn again.
+    if (st.drawerHolds) {
+      st.drawerHolds = false;
+      st.turnId = null;
+      st.etag = null;
+      if (st.open) this._storyRefresh();
+    }
     st.drawerBody.replaceChildren();
     let back = st.drawerReturn;
     st.drawerReturn = null;
@@ -3052,7 +3124,7 @@ Object.assign(CodemanApp.prototype, {
       const edits = items.flatMap((x) =>
         StoryArt.editsOf(x.ev).map((d, k) => ({ ev: x.ev, edit: d, key: `${x.ev.id}#${k}` }))
       );
-      kind = live ? 'Live diff' : 'Diff';
+      kind = 'Diff';
       const added = edits.reduce((n, x) => n + x.edit.added, 0);
       const removed = edits.reduce((n, x) => n + x.edit.removed, 0);
       const files = new Set(edits.map((x) => x.edit.file)).size;
@@ -3068,6 +3140,10 @@ Object.assign(CodemanApp.prototype, {
         }
         out.push(section);
       }
+      // A command that changed files and also printed something (`cat a.py`): what it printed too.
+      for (const { ev, i } of items)
+        if (ev.tool === 'Bash' && StoryArt.editsOf(ev).length && (ev.files?.length || (ev.output || '').trim()))
+          out.push(this._storyOutputSection(ev, i, el, { inDiff: true }));
     } else if (view === 'output' || view === 'list') {
       const withOutput = items.filter((x) => x.ev.tool !== 'Text' && x.ev.intent !== 'prompt');
       kind = view === 'list' ? 'Steps' : 'Output';
@@ -3337,7 +3413,7 @@ Object.assign(CodemanApp.prototype, {
     return section;
   },
 
-  _storyOutputSection(ev, index, el) {
+  _storyOutputSection(ev, index, el, { inDiff = false } = {}) {
     const section = el('section', 'story-out');
     const head = el('div', 'story-out-head');
     const shown = this._storyShortPath(ev.label, { dot: ev.tool === 'Bash' });
@@ -3357,7 +3433,7 @@ Object.assign(CodemanApp.prototype, {
       section.append(this._storyLinkifiedPre(ev.output));
       if (ev.outputTruncated) section.append(el('p', 'story-empty', 'Only the end of this output is kept.'));
       // A command that also wrote files (a here-document) offers the change, not only what it printed.
-      if (ev.edits?.length) {
+      if (ev.edits?.length && !inDiff) {
         const b = el(
           'button',
           'story-btn-s',

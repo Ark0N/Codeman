@@ -337,6 +337,108 @@ describe('story-mode.js overlay', () => {
     expect((win.document.activeElement as HTMLElement).dataset.storyOpen).toMatch(/^diff@loop:/);
   });
 
+  it('a drawer holds its turn when the newest turn moves on, and lets go when it closes', async () => {
+    const one = [prompt('first job'), ...read('r1', '/work/demo-shop/a.ts'), said('Done.'), end(2000)];
+    const two = [...one, prompt('second job'), said('On it.')];
+    boot(storyOf(one));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    const first = app._story.data.page.id;
+    $('[data-story-open="list:page"]')!.click();
+    expect($('.story-drawer')!.hidden).toBe(false);
+    const title = $('.story-drawer-title')!.textContent;
+    responses = [
+      { status: 200, body: { success: true, data: storyOf(two) } },
+      { status: 200, body: { success: true, data: storyAt(two, 0) } },
+    ];
+    calls.length = 0;
+    await app._storyRefresh();
+    await settle(12);
+    expect(app._story.data.page.id).toBe(first);
+    expect(app._story.turnId).toBe(first);
+    expect($('.story-drawer')!.hidden).toBe(false);
+    expect($('.story-drawer-title')!.textContent).toBe(title);
+    expect($$('.story-turns option')).toHaveLength(2);
+    // The held turn's last state is fetched a moment later (the refresh's own retry, 250 ms).
+    await new Promise((r) => setTimeout(r, 320));
+    await settle();
+    expect(calls.some((c) => c.includes(`turn=${encodeURIComponent(first)}`))).toBe(true);
+    expect(app._story.data.page.id).toBe(first);
+    expect($('.story-sr')!.textContent).toMatch(/stays on the turn you are reading/);
+    // Closing the drawer follows the newest turn again.
+    responses = [{ status: 200, body: { success: true, data: storyOf(two) } }];
+    press('Escape');
+    await settle(12);
+    expect(app._story.turnId).toBeNull();
+    expect(app._story.data.page.id).not.toBe(first);
+  });
+
+  it('Previous on the second turn lands on the first with focus on the picker, not the page', async () => {
+    const two = [prompt('first job'), said('Done.'), end(2000), prompt('second job'), said('Done too.'), end(2000)];
+    boot(storyOf(two));
+    app.openStoryMode(SID);
+    await settle();
+    responses = [{ status: 200, body: { success: true, data: storyAt(two, 0) } }];
+    const prev = $('.story-prev') as HTMLButtonElement;
+    prev.focus();
+    prev.click();
+    await settle(12);
+    expect(prev.disabled).toBe(true);
+    expect(win.document.activeElement).toBe($('.story-turns'));
+  });
+
+  it('the diff of a command that also printed a file shows what it printed, with the file to open', async () => {
+    const lines = [
+      prompt('note it'),
+      ...bash(
+        'b1',
+        "cat >> NOTES.md <<'EOF'\nmore\nEOF\ncat stats.py",
+        'Append a note and show the module',
+        'def f(): pass'
+      ),
+      end(1000),
+    ];
+    (lines[1] as { cwd?: string }).cwd = '/work/demo-shop';
+    boot(storyOf(lines));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    $$('.story-panel .story-hit')
+      .find((h) => h.dataset.storyOpen?.startsWith('diff@'))!
+      .click();
+    expect($('.story-drawer-kind')!.textContent).toBe('Diff');
+    expect($('.story-drawer-body')!.textContent).toContain('def f(): pass');
+    expect($$('.story-drawer-body .story-out-files button').map((b) => b.textContent)).toEqual(['Open stats.py']);
+    expect($$('.story-drawer-body button').some((b) => /it wrote/.test(b.textContent || ''))).toBe(false);
+  });
+
+  it('a drawer covering the whole page makes the page behind it inert; one beside it does not', async () => {
+    boot(storyOf(demoTurn()));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    const st = app._story;
+    const box = (left: number, width: number) => () => ({
+      left,
+      width,
+      top: 0,
+      height: 500,
+      right: left + width,
+      bottom: 500,
+    });
+    st.mainEl.getBoundingClientRect = box(0, 400);
+    st.drawerEl.getBoundingClientRect = box(0, 400);
+    $('.story-panel[data-kind="loop"] .story-hit')!.click();
+    expect(st.mainEl.inert).toBe(true);
+    press('Escape');
+    expect(st.mainEl.inert).toBe(false);
+    st.mainEl.getBoundingClientRect = box(0, 1400);
+    st.drawerEl.getBoundingClientRect = box(900, 500);
+    $('.story-panel[data-kind="loop"] .story-hit')!.click();
+    expect(st.mainEl.inert).toBe(false);
+  });
+
   it('activity for this session refreshes, activity for another does not', async () => {
     vi.useFakeTimers();
     try {
@@ -695,7 +797,7 @@ describe('story-mode.js overlay', () => {
     expect(body).not.toMatch(/No output|nothing to show/i);
   });
 
-  it('parked on an older turn, the poll learns about new turns without moving the reader', async () => {
+  it('parked on an older turn, the poll learns about new turns and says so, without moving the reader', async () => {
     const two = [prompt('first job'), said('Done.'), end(2000), prompt('second job'), said('Done too.'), end(2000)];
     const three = [...two, prompt('third job'), said('All three.'), end(2000)];
     let poll: (() => void) | undefined;
@@ -724,7 +826,9 @@ describe('story-mode.js overlay', () => {
     expect($$('.story-turns option')).toHaveLength(3);
     expect(app._story.data.page.id).toBe(first);
     expect($('.story-turns')!.getAttribute('aria-label')).toBe('Turn 1 of 3');
-    expect($('.story-sr')!.textContent).toBe(announced);
+    // The new turn is news, said once, without moving the reader.
+    expect($('.story-sr')!.textContent).not.toBe(announced);
+    expect($('.story-sr')!.textContent).toBe('A new turn started: third job. You are on turn 1 of 3.');
   });
 
   it('while a question waits, the pencils say so; the chosen answer is marked, not struck', async () => {

@@ -1801,7 +1801,7 @@ function applyTextBudget(events: StoryEvent[]): boolean {
 }
 
 /** Claude reporting how a check went ("All 7 tests pass"), as opposed to announcing its next step. */
-const TALKS_RESULTS = /\b(pass(es|ed|ing)?|fail(s|ed|ing|ures?)?|green|clean)\b/i;
+const TALKS_RESULTS = /\b(pass(es|ed|ing)?|fail(s|ed|ing|ures?)?|green|red|clean|errors?)\b/i;
 /** Claude reporting a save ("Commits are in.", "Pushed to origin."). */
 const TALKS_SAVES = /\b(commit(s|ted)?|pushed|merged|tagged)\b/i;
 /** The remark that reports on a panel of this kind, if any. */
@@ -2132,7 +2132,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         // Every test run's verdict, so a run that failed (often the one you asked for) is not lost,
         // even inside a round that passed in the end.
         const runs = checks.map(passed);
-        if (runs.every((r) => r !== undefined)) panel.roundsOk = runs as boolean[];
+        // A run still going is null, so a live loop already shows the runs that finished.
+        if (runs.some((r) => r !== undefined)) panel.roundsOk = runs.map((r) => r ?? null);
         const failed = checks.slice(0, -1).filter((e) => passed(e) === false);
         const fails = failed.length;
         // A failure where the tests passed and only a linter or formatter complained.
