@@ -538,6 +538,54 @@ describe('buildStoryTurns', () => {
     expect(model).toMatchObject({ prompt: '/model opus', ended: true });
   });
 
+  it('one prompt written twice (typed /compact, then its command record) is one turn', () => {
+    const turns = buildStoryTurns(
+      entriesOf([
+        prompt('one'),
+        end(1000),
+        prompt('/compact', { promptId: 'p2' }),
+        { type: 'system', subtype: 'compact_boundary', timestamp: '2026-10-18T09:50:00.000Z' },
+        prompt('<command-name>/compact</command-name><command-args></command-args>', { promptId: 'p2' }),
+        prompt('<local-command-stdout>Compacted</local-command-stdout>', { promptId: 'p2' }),
+      ])
+    );
+    expect(turns).toHaveLength(2);
+    const page = buildStoryPage(turns[1]);
+    expect(page.panels.map((p) => p.kind)).toEqual(['mission', 'compact', 'complete']);
+    expect(page.panels[0].caption).toEqual({ story: 'You run /compact.', director: 'Command · /compact' });
+    expect(page.complete).toBe(true);
+  });
+
+  it('plan mode: the plan file is planning, and the plan and your answer come back with ExitPlanMode', () => {
+    const plan = '# Plan: add wrap\n\n1. Implement wrap.\n2. Add tests.\n3. Commit.';
+    const page = pageOf([
+      prompt('plan it'),
+      ...bash('b0', 'ls', 'List', 'a'),
+      tool('w1', 'Write', { file_path: '/home/me/.claude/plans/radiant.md', content: plan }),
+      result('w1', 'File created', {
+        toolUseResult: {
+          type: 'create',
+          filePath: '/home/me/.claude/plans/radiant.md',
+          content: plan,
+          structuredPatch: [],
+        },
+      }),
+      tool('x1', 'ExitPlanMode', {}),
+      result('x1', 'User has approved your plan. You can now start coding.', { toolUseResult: { plan } }),
+      ...edit('e1', '/w/a.py', ['+def wrap(): ...']),
+      end(1000),
+    ]);
+    expect(page.panels.map((p) => p.kind)).toEqual(['mission', 'investigate', 'plan', 'ask', 'fix', 'complete']);
+    expect(page.panels[2].todos?.map((t) => t.text)).toEqual(['Implement wrap.', 'Add tests.', 'Commit.']);
+    expect(page.panels[2].caption.director).toBe('Write · plan file · 3 steps');
+    expect(page.panels[3].caption.story).toBe('Claude shows you its plan, and you approve it.');
+    expect(page.events.find((e) => e.tool === 'ExitPlanMode')).toMatchObject({
+      output: plan,
+      question: { answer: 'Approved' },
+    });
+    expect(page.filesChanged).toBe(1);
+  });
+
   it('an interrupt ends the turn', () => {
     const turns = buildStoryTurns(
       entriesOf([prompt('go'), ...bash('b', 'ls', 'List', 'a'), prompt('[Request interrupted by user]')])

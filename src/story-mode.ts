@@ -113,6 +113,8 @@ export type StoryEntry =
       queued: boolean;
       /** A slash command (`/compact`), not a prompt to Claude. */
       slash?: boolean;
+      /** Claude Code's id for the prompt; one prompt can be written more than once (typed, then as a command). */
+      promptId?: string;
       /** A background task reporting back: which call it answers, and how it went. */
       task?: StoryTaskReport;
       /** Teammates (helpers started as a team) reporting back, matched to their helper by name. */
@@ -133,6 +135,8 @@ export type StoryEntry =
       tests?: StoryTests;
       /** A check whose output reports problems (lint, format, types). */
       problems?: boolean;
+      /** The plan an ExitPlanMode call presented. */
+      plan?: string;
     }
   | { k: 'end'; at: string; durationMs?: number }
   | { k: 'compact'; at: string }
@@ -652,6 +656,8 @@ function readPrompt(raw: string): {
     };
     return { text: tag('summary') || 'A background task finished.', kind: 'task', task };
   }
+  // A command typed as such (`/compact`, `/model opus`); a path (`/home/x`) is not one.
+  if (/^\/[a-z][\w:-]*(\s|$)/i.test(text) && !text.includes('\n')) return { text, kind: 'prompt', slash: true };
   return { text, kind: 'prompt' };
 }
 
@@ -708,8 +714,11 @@ function reduceInput(name: string, input: unknown, cwd?: string): ReducedInput {
         old: s(i.old_string ?? i.old_str, STORY_LIMITS.inputChars),
         new: s(i.new_string ?? i.new_str, STORY_LIMITS.inputChars),
       };
-    case 'Write':
-      return { file: s(i.file_path, 1000) };
+    case 'Write': {
+      const file = s(i.file_path, 1000);
+      // A plan-mode plan file keeps its text: it becomes the plan panel's list.
+      return file && PLAN_FILE.test(file) ? { file, plan: s(i.content, 4000) } : { file };
+    }
     case 'Grep':
     case 'Glob':
       return { pattern: s(i.pattern, 200), path: s(i.path, 1000) };
@@ -873,6 +882,11 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
                 ? extra.agentId
                 : undefined,
           };
+        } else if (name === 'ExitPlanMode') {
+          // The plan rides on the result (the call's input is empty in current builds), with your answer.
+          if (typeof extra.plan === 'string') result.plan = clip(extra.plan, 4000);
+          if (!isError && /\bapproved\b/i.test(text)) result.answer = 'Approved';
+          else if (text) result.answer = 'Sent back';
         } else if (name === 'AskUserQuestion' && isRecord(extra.answers)) {
           const first = Object.values(extra.answers).find((v): v is string => typeof v === 'string');
           if (first) result.answer = clip(first, 300);
@@ -903,13 +917,16 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
     if (!prompt) return out;
     if (prompt.kind === 'interrupt') return [{ k: 'interrupt', at }];
     return [
-      promptEntry(
-        prompt,
-        str(entry.uuid) ?? `prompt-${at}`,
-        at,
-        originOf(entry.turnOrigin, prompt.kind),
-        entry.promptSource === 'queued'
-      ),
+      {
+        ...promptEntry(
+          prompt,
+          str(entry.uuid) ?? `prompt-${at}`,
+          at,
+          originOf(entry.turnOrigin, prompt.kind),
+          entry.promptSource === 'queued'
+        ),
+        promptId: str(entry.promptId),
+      },
     ];
   }
 
@@ -1042,7 +1059,12 @@ export interface StoryTurn {
   interrupted: boolean;
   endedAt?: string;
   durationMs?: number;
+  /** Claude Code's id for the prompt that started the turn. */
+  promptId?: string;
 }
+
+/** Plan mode keeps its plan in a file under `~/.claude/plans/`: writing it is planning, not changing code. */
+const PLAN_FILE = /\/\.claude\/plans\/[^/]+\.md$/;
 
 function intentOf(name: string, input: ReducedInput): StoryIntent {
   switch (name) {
@@ -1075,7 +1097,7 @@ function intentOf(name: string, input: ReducedInput): StoryIntent {
     case 'MultiEdit':
     case 'Write':
     case 'NotebookEdit':
-      return 'edit';
+      return input.file && PLAN_FILE.test(input.file) ? 'plan' : 'edit';
     case 'Bash':
       return input.intent ?? classifyBashCommand(input.command ?? '');
     default:
@@ -1105,6 +1127,9 @@ function labelOf(name: string, i: ReducedInput): string {
       return i.question ?? '';
     case 'ExitPlanMode':
       return 'Plan ready for your OK';
+    case 'Write':
+    case 'Edit':
+      return i.file && PLAN_FILE.test(i.file) ? `the plan, ${basename(i.file)}` : (i.file ?? '');
     case 'SendMessage':
       return `to ${i.to ?? '?'}: ${i.summary ?? ''}`.trim();
     default:
@@ -1147,6 +1172,10 @@ function toolEvent(e: Extract<StoryEntry, { k: 'tool' }>, actor: StoryActor): St
       prompt: 'Claude shows a stronger model the whole conversation so far and asks what it thinks.',
     };
   if (i.todos) ev.todos = i.todos;
+  if (i.plan) {
+    const todos = planFromText(i.plan);
+    if (todos) ev.todos = todos;
+  }
   if (e.name === 'AskUserQuestion') ev.question = { text: i.question ?? '', options: i.options ?? [] };
   if (e.name === 'ExitPlanMode')
     ev.question = { text: firstSentence(i.plan ?? 'Claude has a plan.', 240), options: [] };
@@ -1158,9 +1187,15 @@ function applyResult(ev: StoryEvent, r: Extract<StoryEntry, { k: 'result' }>): v
   ev.ok = !r.isError;
   if (r.output !== undefined) ev.output = r.output;
   if (r.outputTruncated) ev.outputTruncated = true;
-  if (r.edit) {
+  if (r.edit && ev.intent !== 'plan') {
     ev.edit = r.edit;
     ev.file = r.edit.file;
+  }
+  if (r.plan) {
+    ev.output = r.plan;
+    if (ev.question) ev.question = { ...ev.question, text: firstSentence(r.plan, 240) };
+    const todos = planFromText(r.plan);
+    if (todos) ev.todos = todos;
   }
   if (r.problems) ev.ok = false;
   if (r.tests) {
@@ -1267,6 +1302,16 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
         if (e.task) reportBack(e.task, ev);
         if (e.teammates) teammatesBack(e.teammates, ev);
         const open = cur as StoryTurn | null;
+        if (open && !open.ended && e.promptId && open.promptId === e.promptId) {
+          // The same prompt written again (`/compact` typed, then recorded as a command): one turn.
+          const first = open.events[0];
+          if (e.slash && first?.intent === 'prompt') {
+            first.tool = 'Command';
+            first.label = e.text;
+            open.prompt = e.text;
+          }
+          break;
+        }
         if (open && !open.ended && e.queued) {
           // A report that lands while Claude works is a line on the wire, not a new mission.
           if (e.origin === 'task') {
@@ -1287,6 +1332,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
             ended: false,
             interrupted: false,
           };
+          if (e.promptId) cur.promptId = e.promptId;
           turns.push(cur);
           byId.clear();
           if (pendingCompact) {
@@ -1667,7 +1713,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             : origin === 'peer'
               ? 'Another session chimes in while Claude works.'
               : lines[origin];
-      director = `Prompt · ${plural(words, 'word')}${origin === 'human' ? '' : ` · ${origin}`}`;
+      director = command
+        ? `Command · ${clip(evs[0].label, 60)}`
+        : `Prompt · ${plural(words, 'word')}${origin === 'human' ? '' : ` · ${origin}`}`;
       break;
     }
     case 'investigate': {
@@ -1699,6 +1747,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       story = todos ? `Claude writes a plan: ${plural(todos.length, 'step')}.` : 'Claude thinks it through.';
       // A plan written as text has no progress to report; a plan tool's list does.
       if (todos && evs.every((e) => e.tool === 'Text')) director = `written as text · ${plural(todos.length, 'step')}`;
+      else if (todos && evs.some((e) => e.file && PLAN_FILE.test(e.file)))
+        director = `${tools} · plan file · ${plural(todos.length, 'step')}`;
       else if (todos) director = `${tools} · ${todos.filter((t) => t.done).length}/${todos.length} done`;
       break;
     }
@@ -1846,7 +1896,11 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       if (q) panel.question = { text: q.text, answer: q.answer };
       const plan = evs[0]?.tool === 'ExitPlanMode';
       story = plan
-        ? 'Claude shows you its plan and waits for your OK.'
+        ? q?.answer === 'Approved'
+          ? 'Claude shows you its plan, and you approve it.'
+          : q?.answer
+            ? 'Claude shows you its plan, and you send it back.'
+            : 'Claude shows you its plan and waits for your OK.'
         : q?.answer
           ? 'Claude asks you, and you answer.'
           : 'Claude asks you something.';
