@@ -94,7 +94,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work and uploads it, but a step after that fails.",
+        "story": "Claude starts a git repository, saves the work and copies it to remote.git, a folder on this computer, but a step after that fails.",
         "director": "git commit -q -F - · git push -u origin main · 1 error",
         "balloon": null,
         "tests": null,

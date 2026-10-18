@@ -929,7 +929,7 @@ describe('buildStoryPage', () => {
     const check = page.panels.find((p) => p.kind === 'check')!;
     expect(check.caption.director).toBe('node --test → ok · 3 passed · writes 1 file · 1 commit');
     // The commit at the end of the test one-liner is not lost, nor the file written: the check says both.
-    expect(check.caption.story).toBe('Claude writes 1 file; the tests pass, and Claude saves the work.');
+    expect(check.caption.story).toBe('Claude writes index.js; the tests pass, and Claude saves the work.');
   });
 
   it('one-line printf/echo writes and the files Claude Code says a command changed are edits', () => {
@@ -962,18 +962,48 @@ describe('buildStoryPage', () => {
 
   it('a commit then a push in its own command is one commit, named; a push alone only uploads', () => {
     const save = (lines: unknown[]) => pageOf(lines).panels.find((p) => p.kind === 'save')!.caption.story;
-    expect(
+    const ship = (to: string) =>
       save([
         prompt('ship it'),
         ...bash('b1', 'git commit -qm "feat: add mode()"', 'Commit', ''),
-        ...bash('b2', 'git push origin main', 'Push', 'To ./origin.git\n   f80bb31..3e0fb80  main -> main'),
+        ...bash('b2', 'git push origin main', 'Push', `To ${to}\n   f80bb31..3e0fb80  main -> main`),
         end(1000),
-      ])
-    ).toBe('Claude saves the work and uploads it: "add mode()".');
+      ]);
+    expect(ship('github.com:me/shop.git')).toBe('Claude saves the work and uploads it: "add mode()".');
+    expect(ship('https://example.com/me/shop.git')).toBe('Claude saves the work and uploads it: "add mode()".');
+    // A repository in a folder on this computer: a copy, and nothing left the machine.
+    expect(ship('./origin.git')).toBe(
+      'Claude saves the work: "add mode()", then copies it to origin.git, a folder on this computer.'
+    );
+    expect(ship('/srv/git/shop.git/')).toBe(
+      'Claude saves the work: "add mode()", then copies it to shop.git, a folder on this computer.'
+    );
     expect(save([prompt('push'), ...bash('b1', 'git push', 'Push', 'Everything up-to-date'), end(1000)])).toBe(
       'Claude uploads the work.'
     );
     expect(pageOf([prompt('c'), ...bash('b1', 'git commit -qm x', 'Commit', ''), end(1000)]).events[1].commits).toBe(1);
+  });
+
+  it('the first save in a folder Claude made a repository says so; a bare copy target does not count', () => {
+    const save = (lines: unknown[]) => pageOf(lines).panels.find((p) => p.kind === 'save')!.caption.story;
+    expect(
+      save([
+        prompt('start'),
+        ...bash('b1', 'git init -q', 'Init', ''),
+        ...edit('e1', '/w/a.py', ['+a = 1']),
+        ...bash('b2', 'git add -A && git commit -qm "add a"', 'Commit', ''),
+        end(1000),
+      ])
+    ).toBe('Claude starts a git repository and saves the work: "add a".');
+    // `git init --bare` makes the push target, not the project's repository.
+    expect(
+      save([
+        prompt('start'),
+        ...bash('b1', 'git init --bare ../origin.git', 'Remote', ''),
+        ...bash('b2', 'git commit -qm "add a"', 'Commit', ''),
+        end(1000),
+      ])
+    ).toBe('Claude saves the work: "add a".');
   });
 
   it('crafted agent text never takes seconds: every helper stays linear on its worst shapes', () => {

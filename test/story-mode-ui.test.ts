@@ -887,25 +887,29 @@ describe('story-mode.js overlay', () => {
   });
 
   it('the final panel counts the commits of the whole turn, and says when the work was uploaded', async () => {
-    boot(
-      storyOf([
-        prompt('ship it'),
-        ...edit('e1', '/work/demo-shop/a.py', ['+a = 1']),
-        ...bash('b1', 'pytest -q && git commit -qam "fix: a"', 'Test and commit', '3 passed in 0.1s'),
-        ...bash(
-          'b2',
-          'git commit -qam "docs: b" && git push',
-          'Commit and push',
-          'To ./origin.git\n   1a2b3c4..5d6e7f8  main -> main'
-        ),
-        end(1000),
-      ])
-    );
-    app.openStoryMode(SID);
-    await settle();
-    expect($$('.story-panel[data-kind="complete"] .story-chips li').map((li) => li.textContent)).toContain(
-      '2 commits, uploaded'
-    );
+    const chipsFor = async (to: string) => {
+      boot(
+        storyOf([
+          prompt('ship it'),
+          ...edit('e1', '/work/demo-shop/a.py', ['+a = 1']),
+          ...bash('b1', 'pytest -q && git commit -qam "fix: a"', 'Test and commit', '3 passed in 0.1s'),
+          ...bash(
+            'b2',
+            'git commit -qam "docs: b" && git push',
+            'Commit and push',
+            `To ${to}\n   1a2b3c4..5d6e7f8  main -> main`
+          ),
+          end(1000),
+        ])
+      );
+      app.openStoryMode(SID);
+      await settle();
+      return $$('.story-panel[data-kind="complete"] .story-chips li').map((li) => li.textContent);
+    };
+    expect(await chipsFor('git@github.com:me/shop.git')).toContain('2 commits, uploaded');
+    app.closeStoryMode?.();
+    // A folder on this computer: a copy, named.
+    expect(await chipsFor('./origin.git')).toContain('2 commits, copied to origin.git');
   });
 
   it('a chip that opened the drawer takes focus back, even when the page was redrawn meanwhile', async () => {

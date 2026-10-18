@@ -40,7 +40,7 @@
       {
         "kind": "fix",
         "ok": null,
-        "story": "Claude writes 2 new files.",
+        "story": "Claude writes the new files wordcount.py and test_basic.py.",
         "director": "Write ×2 · wordcount.py +23 · test_basic.py +21",
         "balloon": null,
         "tests": null,

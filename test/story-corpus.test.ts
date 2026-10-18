@@ -107,7 +107,7 @@ describe('Story Mode on real sessions', () => {
 
   it('a commit at the end of a test one-liner is kept, and a background helper reports back in 9 s', () => {
     expect(panel('text-plan-dry-run-helper', 0, 'check')?.story).toBe(
-      'Claude writes 2 files; the tests pass, and Claude saves the work.'
+      'Claude writes test_csvstat.py and pyproject.toml; the tests pass, and Claude saves the work.'
     );
     expect(panel('text-plan-dry-run-helper', 0, 'plan')?.story).toBe('Claude writes a plan: 4 steps.');
     expect(pagesOf('text-plan-dry-run-helper')[1]).toMatchObject({ origin: 'task', durationMs: 9008 });
@@ -125,7 +125,9 @@ describe('Story Mode on real sessions', () => {
     expect(panel('question-tests-first-push', 0, 'save')).toMatchObject({
       ok: true,
       // One commit, then a push in a command of its own: one commit, not two.
-      story: 'Claude saves the work and uploads it, but a step after that fails.',
+      // The folder had no repository: the first save starts one, and the reader is told.
+      story:
+        'Claude starts a git repository, saves the work and copies it to remote.git, a folder on this computer, but a step after that fails.',
     });
   });
 
@@ -137,10 +139,10 @@ describe('Story Mode on real sessions', () => {
       roundsOk: [false, true],
     });
     expect(second.panels.find((p) => p.kind === 'save')?.story).toBe(
-      'Claude saves the work and uploads it: "add calc_stats.mode with smallest-value tie-breaking".'
+      'Claude saves the work: "add calc_stats.mode with smallest-value tie-breaking", then copies it to origin.git, a folder on this computer.'
     );
     expect(third.panels.find((p) => p.kind === 'save')?.story).toBe(
-      'Claude saves the work and uploads it, but a step after that fails.'
+      'Claude saves the work and copies it to origin.git, a folder on this computer, but a step after that fails.'
     );
   });
 
@@ -184,10 +186,10 @@ describe('Story Mode on real sessions', () => {
     expect(pagesOf('background-helpers-reports')[0].finishedLater).toBe(2);
   });
 
-  it('a lookup of tools reads as getting them ready, without their names', () => {
+  it('a lookup of tools reads as getting them ready, without their names; for plan mode, as getting ready to plan', () => {
     const panel = pagesOf('compact-then-plan-mode')
       .flatMap((p) => p.panels)
-      .find((p) => p.story === 'Claude gets the tools it needs ready.');
+      .find((p) => p.story === 'Claude gets ready to plan.');
     expect(panel).toBeTruthy();
   });
 

@@ -40,7 +40,7 @@
       {
         "kind": "fix",
         "ok": null,
-        "story": "Claude writes 2 new files.",
+        "story": "Claude writes the new files mathx.py and test_mathx.py.",
         "director": "Write ×2 · mathx.py +11 · test_mathx.py +26 · after 1 second opinion",
         "balloon": null,
         "tests": null,
@@ -65,7 +65,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"add clamp() with pytest coverage\".",
+        "story": "Claude starts a git repository and saves the work: \"add clamp() with pytest coverage\".",
         "director": "git commit -q -F -",
         "balloon": null,
         "tests": null,
@@ -167,7 +167,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude gets the tools it needs ready.",
+        "story": "Claude gets ready to plan.",
         "director": "ToolSearch",
         "balloon": null,
         "tests": null,
@@ -200,7 +200,7 @@
       {
         "kind": "fix",
         "ok": null,
-        "story": "Claude changes 2 files.",
+        "story": "Claude changes mathx.py and test_mathx.py.",
         "director": "Edit ×3 · mathx.py +11 · test_mathx.py +20 −1",
         "balloon": null,
         "tests": null,

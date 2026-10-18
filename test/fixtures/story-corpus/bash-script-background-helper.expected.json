@@ -62,7 +62,7 @@
       {
         "kind": "fix",
         "ok": null,
-        "story": "Claude changes 2 files.",
+        "story": "Claude changes rename_by_date.sh and -dash.jpg.",
         "director": "Write · Edit ×3 · Bash · rename_by_date.sh +95 −3 · -dash.jpg +1",
         "balloon": "Now I'll create the samples and run the dry run.",
         "tests": null,
@@ -205,7 +205,7 @@
       {
         "kind": "fix",
         "ok": null,
-        "story": "Claude changes 1 file.",
+        "story": "Claude changes rename_by_date.sh.",
         "director": "Edit ×3 · rename_by_date.sh +21 −6",
         "balloon": null,
         "tests": null,
@@ -231,7 +231,7 @@
       {
         "kind": "fix",
         "ok": null,
-        "story": "Claude changes 1 file.",
+        "story": "Claude changes README.md.",
         "director": "Edit ×3 · README.md +18 −2",
         "balloon": "All passing.",
         "tests": null,

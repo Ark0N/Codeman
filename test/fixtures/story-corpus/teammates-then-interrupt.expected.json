@@ -40,7 +40,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude writes 2 files and saves the work: \"add package.json and index.js with add and slugify\".",
+        "story": "Claude starts a git repository, writes package.json and index.js, and saves the work: \"add package.json and index.js with add and slugify\".",
         "director": "git commit -q -m \"feat: add package.json and index.js with… · writes 2 files · after 1 second opinion",
         "balloon": null,
         "tests": null,
@@ -62,7 +62,7 @@
       {
         "kind": "check",
         "ok": true,
-        "story": "Claude writes 1 file; the tests pass.",
+        "story": "Claude writes index.test.mjs; the tests pass.",
         "director": "node --test index.test.mjs → ok · 8 passed · writes 1 file",
         "balloon": null,
         "tests": {

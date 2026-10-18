@@ -51,7 +51,7 @@
       {
         "kind": "fix",
         "ok": null,
-        "story": "Claude writes 1 new file.",
+        "story": "Claude writes the new file test_calc_stats.py.",
         "director": "Write · test_calc_stats.py +55",
         "balloon": null,
         "tests": null,
@@ -77,7 +77,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude writes 1 file and saves the work: \"add failing tests for calc_stats mean/median\".",
+        "story": "Claude writes .gitignore and saves the work: \"add failing tests for calc_stats mean/median\".",
         "director": "git commit -q -F - · writes 1 file",
         "balloon": "Red as expected: collection error, exit code 2.",
         "tests": null,
@@ -88,7 +88,7 @@
       {
         "kind": "fix",
         "ok": null,
-        "story": "Claude writes 1 new file.",
+        "story": "Claude writes the new file calc_stats.py.",
         "director": "Write · calc_stats.py +24",
         "balloon": null,
         "tests": null,
@@ -181,7 +181,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work and uploads it: \"add calc_stats.mode with smallest-value tie-breaking\".",
+        "story": "Claude saves the work: \"add calc_stats.mode with smallest-value tie-breaking\", then copies it to origin.git, a folder on this computer.",
         "director": "git commit -q -F - · git push -u origin HEAD",
         "balloon": null,
         "tests": null,
@@ -243,7 +243,7 @@
       {
         "kind": "fix",
         "ok": null,
-        "story": "Claude writes 1 file.",
+        "story": "Claude writes NOTES.md.",
         "director": "Bash · NOTES.md +2",
         "balloon": null,
         "tests": null,
@@ -268,7 +268,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work and uploads it, but a step after that fails.",
+        "story": "Claude saves the work and copies it to origin.git, a folder on this computer, but a step after that fails.",
         "director": "git commit -q -F - · git push · 1 error",
         "balloon": null,
         "tests": null,

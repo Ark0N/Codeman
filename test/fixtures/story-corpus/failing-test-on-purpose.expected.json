@@ -71,7 +71,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"add slugify module with node:test suite\".",
+        "story": "Claude starts a git repository and saves the work: \"add slugify module with node:test suite\".",
         "director": "git commit -q -F -",
         "balloon": null,
         "tests": null,

@@ -58,7 +58,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude writes 1 file and saves the work: \"ignore Python and pytest caches\".",
+        "story": "Claude writes .gitignore and saves the work: \"ignore Python and pytest caches\".",
         "director": "git commit -q -m \"chore: ignore Python and pytest caches · writes 1 file",
         "balloon": null,
         "tests": null,

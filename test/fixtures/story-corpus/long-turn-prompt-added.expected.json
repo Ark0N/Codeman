@@ -97,7 +97,7 @@
       {
         "kind": "fix",
         "ok": null,
-        "story": "Claude writes 1 new file.",
+        "story": "Claude writes the new file README.md.",
         "director": "Write · README.md +79",
         "balloon": null,
         "tests": null,
@@ -123,7 +123,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work in 6 commits.",
+        "story": "Claude starts a git repository and saves the work in 6 commits.",
         "director": "git commit -q -m \"chore: scaffold inventory package\" -m \"Ad…",
         "balloon": "Commits are in.",
         "tests": null,
@@ -243,7 +243,7 @@
       {
         "kind": "fix",
         "ok": null,
-        "story": "Claude changes 1 file.",
+        "story": "Claude changes CHANGELOG.md.",
         "director": "Edit · CHANGELOG.md +2",
         "balloon": "Step 12:",
         "tests": null,

@@ -2544,9 +2544,21 @@ Object.assign(CodemanApp.prototype, {
       const shipped = page.events.some(
         (e) => e.ships === 'push' && (e.ok !== false || /\[new branch\]|\S+\.\.\S+\s+\S+\s+->/.test(e.output || ''))
       );
+      // A push to a folder on this computer (`To ./origin.git`) is a copy: nothing left the machine.
+      const target = /^To (\S+)/m.exec(
+        page.events
+          .filter((e) => e.ships === 'push')
+          .map((e) => e.output || '')
+          .join('\n')
+      )?.[1];
+      const copiedTo =
+        target && (/^file:\/\//.test(target) || !target.includes(':')) ? target.split('/').filter(Boolean).pop() : '';
       if (commits || shipped)
         items.push({
-          text: [commits ? `${commits} commit${commits === 1 ? '' : 's'}` : '', shipped ? 'uploaded' : '']
+          text: [
+            commits ? `${commits} commit${commits === 1 ? '' : 's'}` : '',
+            shipped ? (copiedTo ? `copied to ${copiedTo}` : 'uploaded') : '',
+          ]
             .filter(Boolean)
             .join(', '),
         });

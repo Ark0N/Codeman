@@ -2289,6 +2289,10 @@ function checkName(e: StoryEvent | undefined): string {
   return 'another check';
 }
 
+/** One or two files by name ("calc.py and test_calc.py"), more by count ("3 files"). */
+const fileWords = (files: string[], noun = 'file'): string =>
+  files.length && files.length <= 2 ? files.map((f) => basename(f)).join(' and ') : plural(files.length, noun);
+
 /** You asked for a failing run first (test first), or Claude said the failure was expected. */
 const PLANNED_IN_PROMPT =
   /\b(test[- ]first|tdd|fail(s|ing)? (first|on purpose)|failing tests? first|on purpose|red first|before (the )?(code|module|function|implementation) exists)\b/i;
@@ -2374,7 +2378,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const checking = turn.origin === 'task' || turn.origin === 'peer';
       const named = shown.map((f) => basename(f));
       story = evs.every((e) => e.tool === 'ToolSearch')
-        ? 'Claude gets the tools it needs ready.'
+        ? evs.some((e) => /PlanMode/.test(e.label))
+          ? 'Claude gets ready to plan.'
+          : 'Claude gets the tools it needs ready.'
         : shown.length && shown.length <= 2
           ? `Claude ${checking ? 'checks' : 'reads'} ${named.join(' and ')}.`
           : shown.length
@@ -2452,11 +2458,13 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           edits.length > 0 && edits.every((d) => d.created || d.hunks.every((h) => !h.oldStart && !h.oldLines));
         story =
           created && created === files.length
-            ? `Claude writes ${plural(created, 'new file')}.`
+            ? files.length <= 2
+              ? `Claude writes the new ${files.length === 1 ? 'file' : 'files'} ${fileWords(files)}.`
+              : `Claude writes ${plural(created, 'new file')}.`
             : whole && files.length
-              ? `Claude writes ${plural(files.length, 'file')}.`
+              ? `Claude writes ${fileWords(files)}.`
               : files.length
-                ? `Claude changes ${plural(files.length, 'file')}.`
+                ? `Claude changes ${fileWords(files)}.`
                 : 'Claude changes a file.';
         const perFile = files.slice(0, 3).map((f) => {
           const mine = edits.filter((e) => e.file === f);
@@ -2571,8 +2579,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           tests.errors ? `, ${plural(tests.errors, 'error')}` : ''
         }`;
       if (edits.length) director += ` · writes ${plural(unique(edits.map((d) => d.file)).length, 'file')}`;
-      const written = unique(edits.map((d) => d.file)).length;
-      if (written) story = `Claude writes ${plural(written, 'file')}; ${story[0].toLowerCase()}${story.slice(1)}`;
+      const written = unique(edits.map((d) => d.file));
+      if (written.length) story = `Claude writes ${fileWords(written)}; ${story[0].toLowerCase()}${story.slice(1)}`;
       const saved = checks.reduce((n, e) => n + (e.commits ?? 0), 0);
       if (saved) {
         director += ` · ${plural(saved, 'commit')}`;
@@ -2627,6 +2635,13 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const inCommits = commits > 1 ? ` in ${commits} commits` : '';
       // A push of commits made earlier: nothing is saved here, only uploaded.
       const uploadOnly = ships === 'push' && !commits;
+      // A push to a folder on this computer (a repository beside the project, `To ./origin.git`) is a
+      // copy, not an upload: nothing left the machine.
+      const target = /^To (\S+)/m.exec(evs.map((e) => e.output ?? '').join('\n'))?.[1];
+      const localTarget =
+        target && (/^file:\/\//.test(target) || !/:/.test(target)) ? basename(target.replace(/\/+$/, '')) : '';
+      const uploads = (what: string) =>
+        localTarget ? `copies ${what} to ${localTarget}, a folder on this computer` : `uploads ${what}`;
       // One commit: its message says what was saved.
       const subject = commits === 1 ? evs.find((e) => e.subject)?.subject : undefined;
       // Its conventional prefix (`feat:`, `chore(deps):`) is for git, not for the reader.
@@ -2634,9 +2649,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const said = plainSubject ? `: "${clip(plainSubject, 60).replace(/[.]$/, '')}"` : '';
       story = savedAnyway
         ? uploadOnly
-          ? 'Claude uploads the work, but a step after that fails.'
+          ? `Claude ${uploads('the work')}, but a step after that fails.`
           : ships === 'push'
-            ? `Claude saves the work${inCommits} and uploads it, but a step after that fails.`
+            ? `Claude saves the work${inCommits} and ${uploads('it')}, but a step after that fails.`
             : `Claude saves the work${inCommits}, but a step after that fails.`
         : panel.ok === false
           ? ships === 'pr'
@@ -2647,12 +2662,30 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           : ships === 'pr'
             ? 'Claude opens a pull request.'
             : uploadOnly
-              ? 'Claude uploads the work.'
+              ? `Claude ${uploads('the work')}.`
               : ships === 'push'
-                ? `Claude saves the work${inCommits} and uploads it${said}.`
+                ? localTarget && said
+                  ? `Claude saves the work${said}, then ${uploads('it')}.`
+                  : `Claude saves the work${inCommits} and ${uploads('it')}${said}.`
                 : `Claude saves the work${inCommits}${said}.`;
-      const wrote = unique(edits.map((d) => d.file)).length;
-      if (wrote && story.startsWith('Claude ')) story = `Claude writes ${plural(wrote, 'file')} and ${story.slice(7)}`;
+      const wrote = unique(edits.map((d) => d.file));
+      const firstAt = Math.min(...draft.events);
+      const earlier = events.slice(0, firstAt);
+      const startsRepo =
+        !earlier.some((e) => (e.commits ?? 0) > 0) &&
+        [...earlier, ...evs].some((e) => e.tool === 'Bash' && /\bgit init\b(?!\s+--bare)/.test(e.label));
+      const lead = [
+        startsRepo ? 'starts a git repository' : '',
+        wrote.length ? `writes ${fileWords(wrote)}` : '',
+      ].filter(Boolean);
+      if (lead.length && story.startsWith('Claude ')) {
+        // "starts a git repository, saves the work and uploads it": never "and … and".
+        const rest = story.slice(7);
+        story =
+          lead.length === 2
+            ? `Claude ${lead.join(', ')}, and ${rest}`
+            : `Claude ${lead[0]}${rest.split('"')[0].includes(' and ') ? ',' : ' and'} ${rest}`;
+      }
       director = `${evs.map(shortCommand).slice(0, 2).join(' · ')}${errors ? ` · ${plural(errors, 'error')}` : ''}${
         edits.length ? ` · writes ${plural(unique(edits.map((d) => d.file)).length, 'file')}` : ''
       }`;
