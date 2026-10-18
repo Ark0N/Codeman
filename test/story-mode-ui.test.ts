@@ -263,6 +263,24 @@ describe('story-mode.js overlay', () => {
     expect($('.story-pencils')).toBeNull();
   });
 
+  it('a balloon too tall for its panel clamps its text, never the hidden speaker words', async () => {
+    boot(storyOf(demoTurn()));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    const rt = app._story.panels[0];
+    const balloon = rt.balloon as HTMLElement;
+    const text = balloon.querySelector('.story-balloon-text') as HTMLElement;
+    // No layout in JSDOM: a balloon 300 px tall in a 270 px panel.
+    Object.defineProperty(balloon, 'offsetHeight', { value: 300, configurable: true });
+    Object.defineProperty(balloon, 'offsetTop', { value: 10, configurable: true });
+    Object.defineProperty(text, 'offsetHeight', { value: 280, configurable: true });
+    rt.balloonKey = '';
+    app._storyPlaceBalloon(rt, null, 0, 1);
+    expect(text.style.getPropertyValue('--story-lines')).toBe('12');
+    expect((balloon.querySelector('.story-vh') as HTMLElement).style.getPropertyValue('--story-lines')).toBe('');
+  });
+
   it('a fold near the start keeps every later panel as it was: no second entrance', async () => {
     const data = storyOf(demoTurn());
     boot(data);
