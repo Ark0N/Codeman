@@ -126,7 +126,9 @@ work from inside a Copilot tab and against Copilot workers:
 The agent image installs `@github/copilot`, and a docker case runs Copilot like any mode. **No
 credential directory is seeded**: without a keyring the sign-in token is plain text in
 `config.json`, and `CRED_STORES` (`src/docker-hosts.ts`) deliberately has no `.copilot` row.
-Sign in inside the container (`copilot login`), or set `COPILOT_GITHUB_TOKEN` for the session.
+Sign in inside the container (`copilot login`). Setting `COPILOT_GITHUB_TOKEN` for the session does
+not reach it: a docker quick-start refuses `envOverrides`, and Copilot's `dockerExecEnvNames` is
+empty, so a token in the server environment is not forwarded either.
 
 ## Remote SSH cases
 

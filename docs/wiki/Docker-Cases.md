@@ -120,7 +120,9 @@ Codeman reads it host-side for history and resume.
 
 GitHub Copilot CLI is not seeded: on a host without a keyring its sign-in token sits in plain
 text in `~/.copilot/config.json`, and there is no Docker credential row for it. Sign in inside
-the container (`copilot login`), or set `COPILOT_GITHUB_TOKEN` for the session.
+the container (`copilot login`). A `COPILOT_GITHUB_TOKEN` cannot be handed in instead: a docker
+case refuses per-session environment overrides, and Copilot forwards no server variable into
+the container.
 
 **Git hosts.** The agent image can also include the GitHub CLI (`gh`) and the Azure CLI (`az`,
 with the `azure-devops` extension), off by default, and its git then uses them as credential
