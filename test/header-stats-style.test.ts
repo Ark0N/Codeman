@@ -69,6 +69,8 @@ beforeAll(async () => {
 function makeApp() {
   const app = Object.create(CodemanApp.prototype) as Record<string, any>;
   app.$ = (id: string) => document.getElementById(id);
+  // The constructor always creates the input queue; _updateConnectionIndicator reads it.
+  app._pendingDeliveries = new Map();
   return app;
 }
 

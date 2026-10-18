@@ -699,6 +699,12 @@ const DEFAULT_SHORTCUTS = [
  * setInterval fire on every frame, and constants.js is cached independently.
  */
 const SIDEBAR_RICH_CLOCK_MS = 20000;
+// Header connection pill: a queue above CONNECTION_BACKLOG_HINT_BYTES is only worth a " · NB queued"
+// suffix once it has STAYED above it for CONNECTION_BACKLOG_HOLD_MS. A paste, an IME commit or a fast
+// word sits above the threshold for a few milliseconds until its ACK lands, and surfacing that made the
+// pill grow to the right and shrink back on every such burst.
+const CONNECTION_BACKLOG_HINT_BYTES = 4;
+const CONNECTION_BACKLOG_HOLD_MS = 1200;
 
 /**
  * How long a `#session=<id>` link waits for the session list to name its id
@@ -4364,19 +4370,26 @@ class CodemanApp {
     }
   }
 
-  // Pure render of the header connection indicator: reads only `this.*` state,
+  // Pure render of the header connection indicator: reads only `this.*` state (and
+  // the pending totals it is handed, which default to a fresh `_pendingBytes()`),
   // touches NO DOM. Returns the exact { display, dotClass, text, title } tuple the
   // writer applies. When hidden (display:'none') the other three are normalized to
   // '' so the cache compare in _updateConnectionIndicator() is well-defined.
   // Every branch/string here must stay byte-identical to what's rendered today.
-  _computeConnectionDescriptor() {
-    const { bytes: totalBytes, count } = this._pendingBytes();
+  _computeConnectionDescriptor(pending = this._pendingBytes()) {
+    const { bytes: totalBytes, count } = pending;
     const hasQueue = count > 0;
     // Only surface a backlog once it's more than a few bytes. A single keystroke
     // (1B) ACKs in milliseconds, so without this the label flickered "sending 1B"
-    // on every key press. Above this threshold means input is genuinely backing up.
-    const BACKLOG_HINT_BYTES = 4;
-    const showBacklog = totalBytes > BACKLOG_HINT_BYTES;
+    // on every key press. Above this threshold means input is genuinely backing up,
+    // and only once it has stayed there (see CONNECTION_BACKLOG_HOLD_MS): a burst
+    // that drains in a moment must not widen the pill. `_backlogOverSince` is kept
+    // by _updateConnectionIndicator; `undefined` (never tracked, as when this pure
+    // compute is called directly) means no hold.
+    const since = this._backlogOverSince;
+    const heldLongEnough =
+      since === undefined || (since !== null && Date.now() - since >= CONNECTION_BACKLOG_HOLD_MS);
+    const showBacklog = totalBytes > CONNECTION_BACKLOG_HINT_BYTES && heldLongEnough;
     const formatBytes = (b) => (b < 1024 ? `${b}B` : `${(b / 1024).toFixed(1)}KB`);
     const queuedSuffix = showBacklog ? ` · ${formatBytes(totalBytes)} queued` : '';
 
@@ -4492,10 +4505,35 @@ class CodemanApp {
     const text = this.$('connectionText');
     if (!indicator || !dot || !text) return;
 
+    // Track how long the queue has stayed above the hint threshold, and make sure
+    // the pill is re-rendered when the hold elapses even if no keystroke or ACK
+    // arrives to trigger it.
+    // ⚠️ This runs before _drainSession() on every keystroke, so it must never throw: a throw here
+    // once skipped immediate delivery and made typing lag (COD-133; the combinatorial never-throws
+    // test in test/connection-indicator.test.ts pins it). The queue is walked ONCE per call and the
+    // same totals are handed to the compute below, since this is the hot input path.
+    const pending = this._pendingBytes();
+    if (pending.bytes > CONNECTION_BACKLOG_HINT_BYTES) {
+      if (this._backlogOverSince == null) this._backlogOverSince = Date.now();
+      if (!this._backlogHoldTimer && Date.now() - this._backlogOverSince < CONNECTION_BACKLOG_HOLD_MS) {
+        const wait = CONNECTION_BACKLOG_HOLD_MS - (Date.now() - this._backlogOverSince) + 25;
+        this._backlogHoldTimer = setTimeout(() => {
+          this._backlogHoldTimer = null;
+          this._updateConnectionIndicator();
+        }, wait);
+      }
+    } else {
+      this._backlogOverSince = null;
+      if (this._backlogHoldTimer) {
+        clearTimeout(this._backlogHoldTimer);
+        this._backlogHoldTimer = null;
+      }
+    }
+
     // Called on EVERY keystroke (_reliableSend) and EVERY ACK (_ackDelivery).
     // During fast typing the rendered tuple is usually identical, so skip the DOM
     // writes when nothing changed (COD-136) — the compute above is DOM-free.
-    const next = this._computeConnectionDescriptor();
+    const next = this._computeConnectionDescriptor(pending);
     const prev = this._lastIndicatorDescriptor;
     // The tile's value word is written in the UI language, so a language
     // switch counts as a change too.
