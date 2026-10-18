@@ -28,6 +28,7 @@ import {
   type AntigravityConfig,
   type PiConfig,
   type GrokConfig,
+  type CopilotConfig,
   type DeepSeekConfig,
   type OmpConfig,
   type RemoteHost,
@@ -189,6 +190,7 @@ import { findLatestOmpSessionId } from '../../utils/omp-session-resolver.js';
 import { scanOmpSessionsHistory } from '../../omp-transcript.js';
 import { scanCodexSessionsHistory, codexThreadBySessionId } from '../../codex-transcript.js';
 import {
+  transcriptNeedsScreenCapture,
   getLastTranscriptResponse,
   isExternalCliTranscriptMode,
   parseExternalCliTranscript,
@@ -628,7 +630,8 @@ export async function _clampExternalCliBypassForOwner(
   antigravityConfig?: AntigravityConfig,
   piConfig?: PiConfig,
   grokConfig?: GrokConfig,
-  deepSeekConfig?: DeepSeekConfig
+  deepSeekConfig?: DeepSeekConfig,
+  copilotConfig?: CopilotConfig
 ): Promise<{
   codexConfig: CodexConfig | undefined;
   geminiConfig: GeminiConfig | undefined;
@@ -636,6 +639,7 @@ export async function _clampExternalCliBypassForOwner(
   piConfig: PiConfig | undefined;
   grokConfig: GrokConfig | undefined;
   deepSeekConfig: DeepSeekConfig | undefined;
+  copilotConfig: CopilotConfig | undefined;
 }> {
   const out = await clampExternalCliBypassForOwner(owner, {
     codexConfig,
@@ -644,6 +648,7 @@ export async function _clampExternalCliBypassForOwner(
     piConfig,
     grokConfig,
     deepSeekConfig,
+    copilotConfig,
   });
   return out as {
     codexConfig: CodexConfig | undefined;
@@ -652,6 +657,7 @@ export async function _clampExternalCliBypassForOwner(
     piConfig: PiConfig | undefined;
     grokConfig: GrokConfig | undefined;
     deepSeekConfig: DeepSeekConfig | undefined;
+    copilotConfig: CopilotConfig | undefined;
   };
 }
 
@@ -1365,6 +1371,7 @@ export function registerSessionRoutes(
       piConfig: gatedPiConfig,
       grokConfig: gatedGrokConfig,
       deepSeekConfig: gatedDeepSeekConfig,
+      copilotConfig: gatedCopilotConfig,
     } = await _clampExternalCliBypassForOwner(
       owner,
       launchBody.codexConfig,
@@ -1372,7 +1379,8 @@ export function registerSessionRoutes(
       launchBody.antigravityConfig,
       launchBody.piConfig,
       launchBody.grokConfig,
-      launchBody.deepSeekConfig
+      launchBody.deepSeekConfig,
+      launchBody.copilotConfig
     );
     const terminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
@@ -1391,6 +1399,7 @@ export function registerSessionRoutes(
       antigravityConfig: mode === 'antigravity' ? gatedAntigravityConfig : undefined,
       piConfig: mode === 'pi' ? gatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? gatedGrokConfig : undefined,
+      copilotConfig: mode === 'copilot' ? gatedCopilotConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? gatedDeepSeekConfig : undefined,
       ompConfig: resolveOmpConfigForCreate(mode, workingDir, launchBody.ompConfig),
       resumeSessionId: validatedResumeId,
@@ -2827,7 +2836,14 @@ export function registerSessionRoutes(
     // where a real rollout file is the better source.
     if (isExternalCliTranscriptMode(session.mode)) {
       const externalQuery = req.query as { context?: string };
-      const blocks = parseExternalCliTranscript(session.terminalBuffer, session.mode);
+      // A repainting full-screen TUI (copilot) streams absolute cursor moves, not lines, so the
+      // buffer cannot be segmented; read the pane's visible screen instead, and fall back to the
+      // buffer when there is no tmux pane to ask (direct PTY, tests).
+      const screen =
+        transcriptNeedsScreenCapture(session.mode) && session.muxName
+          ? (ctx.mux.capturePaneText?.(session.muxName) ?? null)
+          : null;
+      const blocks = parseExternalCliTranscript(screen ?? session.terminalBuffer, session.mode);
       return {
         text: getLastTranscriptResponse(blocks),
         timestamp: '',
@@ -3742,6 +3758,7 @@ export function registerSessionRoutes(
       antigravityConfig,
       piConfig,
       grokConfig,
+      copilotConfig,
       deepSeekConfig,
       ompConfig,
       envOverrides,
@@ -3813,6 +3830,7 @@ export function registerSessionRoutes(
         antigravityConfig ||
         piConfig ||
         grokConfig ||
+        copilotConfig ||
         deepSeekConfig ||
         ompConfig ||
         openCodeConfig ||
@@ -3883,6 +3901,7 @@ export function registerSessionRoutes(
         antigravityConfig ||
         piConfig ||
         grokConfig ||
+        copilotConfig ||
         deepSeekConfig ||
         ompConfig ||
         openCodeConfig ||
@@ -3983,6 +4002,7 @@ export function registerSessionRoutes(
             antigravityConfig,
             piConfig,
             grokConfig,
+            copilotConfig,
             deepSeekConfig,
           } as unknown as Record<string, unknown>)
         );
@@ -4185,6 +4205,7 @@ export function registerSessionRoutes(
       antigravityConfig,
       piConfig,
       grokConfig,
+      copilotConfig,
       deepSeekConfig,
       ompConfig,
     };
@@ -4214,6 +4235,7 @@ export function registerSessionRoutes(
       piConfig: qsGatedPiConfig,
       grokConfig: qsGatedGrokConfig,
       deepSeekConfig: qsGatedDeepSeekConfig,
+      copilotConfig: qsGatedCopilotConfig,
     } = await _clampExternalCliBypassForOwner(
       owner,
       qsLaunchConfigs.codexConfig,
@@ -4221,7 +4243,8 @@ export function registerSessionRoutes(
       qsLaunchConfigs.antigravityConfig,
       qsLaunchConfigs.piConfig,
       qsLaunchConfigs.grokConfig,
-      qsLaunchConfigs.deepSeekConfig
+      qsLaunchConfigs.deepSeekConfig,
+      qsLaunchConfigs.copilotConfig
     );
     const qsTerminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const qsGatedEnvOverrides = await clampEnvOverridesForOwner(owner, envOverrides);
@@ -4388,6 +4411,7 @@ export function registerSessionRoutes(
       antigravityConfig: mode === 'antigravity' ? qsGatedAntigravityConfig : undefined,
       piConfig: mode === 'pi' ? qsGatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? qsGatedGrokConfig : undefined,
+      copilotConfig: mode === 'copilot' ? qsGatedCopilotConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? qsGatedDeepSeekConfig : undefined,
       ompConfig: qsResolvedOmpConfig,
       envOverrides: qsCustomModelEnvOverrides,

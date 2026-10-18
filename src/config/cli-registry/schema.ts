@@ -295,7 +295,7 @@ const capabilitiesSchema = z
     altScreen: z.enum(['strip-full', 'strip-mux-only', 'strip-mux-and-mouse', 'preserve']),
     echo: echoSchema,
     wheelForward: z
-      .object({ mode: z.enum(['never', 'version-gated']), minVersion: z.string().max(20).optional() })
+      .object({ mode: z.enum(['never', 'version-gated', 'always']), minVersion: z.string().max(20).optional() })
       .strict(),
     // Whether a hollow pane's wheel/touch scroll may be turned into PageUp/PageDown for
     // the CLI to page its own transcript. Distinct from wheelForward (SGR reports).
@@ -464,8 +464,10 @@ const capabilitiesSchema = z
       )
       .max(8),
     // Exact env var NAMES, not prefixes: this list is a targeted deny, and a prefix here
-    // would let one entry silently strip a whole namespace off every owner's overrides.
-    privilegedEnvKeys: z.array(envName).max(8),
+    // would let one entry silently strip a whole namespace off every owner's overrides. The
+    // bound is generous because a longer list only takes more away from non-granted owners:
+    // copilot's COPILOT_ prefix covers dozens of variables that run code or redirect its token.
+    privilegedEnvKeys: z.array(envName).max(48),
     gates: z.record(z.string(), z.object({ minVersion: z.string().max(20), failClosed: z.boolean() }).strict()),
     maxFrameBytes: z.number().int().positive().optional(),
     newline: z.enum(['line-feed', 'esc-enter']).optional(),

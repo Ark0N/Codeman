@@ -51,6 +51,17 @@ describe('envOverrides exact-key allowlist', () => {
     ).toThrow();
   });
 
+  it('rejects the shared GitHub token names (Copilot reads COPILOT_GITHUB_TOKEN, in its own prefix)', () => {
+    for (const key of ['GH_TOKEN', 'GITHUB_TOKEN']) {
+      for (const mode of ['claude', 'shell', 'codex', 'copilot'] as const) {
+        expect(() => CreateSessionSchema.parse({ workingDir: '/tmp', mode, envOverrides: { [key]: 'x' } })).toThrow();
+      }
+    }
+    expect(() =>
+      CreateSessionSchema.parse({ workingDir: '/tmp', mode: 'copilot', envOverrides: { COPILOT_GITHUB_TOKEN: 'x' } })
+    ).not.toThrow();
+  });
+
   it('still blocks security-sensitive keys', () => {
     for (const key of ['PATH', 'LD_PRELOAD', 'NODE_OPTIONS', 'CODEMAN_MUX_NAME']) {
       expect(() =>

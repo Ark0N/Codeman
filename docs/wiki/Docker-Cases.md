@@ -4,7 +4,7 @@ Run a case inside its own container instead of directly on your host: for isolat
 reproducible toolchain, and for the ability to pick the whole environment up and move it to
 another machine.
 
-A docker case is a **location overlay**, not a run mode. All ten run modes work inside a
+A docker case is a **location overlay**, not a run mode. All eleven run modes work inside a
 container. See [Core Concepts](Core-Concepts).
 
 ## One-time setup: the base image
@@ -117,6 +117,12 @@ installed packages, which can be gigabytes. So in-container Pi and Grok sessions
 invisible from the host (`pi -c` and `grok -c` inside a docker case see only that
 container's history). OMP's `sessions/` is the exception and is shared read-write, because
 Codeman reads it host-side for history and resume.
+
+GitHub Copilot CLI is not seeded: on a host without a keyring its sign-in token sits in plain
+text in `~/.copilot/config.json`, and there is no Docker credential row for it. Sign in inside
+the container (`copilot login`). A `COPILOT_GITHUB_TOKEN` cannot be handed in instead: a docker
+case refuses per-session environment overrides, and Copilot forwards no server variable into
+the container.
 
 **Git hosts.** The agent image can also include the GitHub CLI (`gh`) and the Azure CLI (`az`,
 with the `azure-devops` extension), off by default, and its git then uses them as credential

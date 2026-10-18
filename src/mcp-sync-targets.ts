@@ -4,9 +4,12 @@
  * `mcpSyncTargets()` (routes/mcp-sync-routes.ts) takes the registry's enabled CLIs that declare an
  * `mcpConfig`. Some tools read an MCP server list worth keeping in step with the others but are not
  * something Codeman launches, so they have no registry entry (and no id to branch on): GitHub
- * Copilot CLI is the first. They are plain data here, take part only when installed or when their
- * config file already exists (an absent tool is reported `absent`, never created), and sort after
- * the registry CLIs, so when two definitions of a name differ the registry CLI's is the one copied.
+ * Copilot CLI is the first. It is also a run mode that declares its own `mcpConfig`, so while that
+ * entry is enabled this row is skipped (`mcpSyncOnlyTargets` drops ids the registry already
+ * supplies); it applies when the run mode is disabled but the tool is still on the machine. They are
+ * plain data here, take part only when installed or when their config file already exists (an
+ * absent tool is reported `absent`, never created), and sort after the registry CLIs, so when two
+ * definitions of a name differ the registry CLI's is the one copied.
  *
  * @module mcp-sync-targets
  */

@@ -485,10 +485,23 @@ describe('capability shapes', () => {
     }, 'transcriptPageKeys is a boolean');
   });
 
+  it('declares which CLIs get the wheel forwarded, and whether a version gates it', () => {
+    // claude forwards from 2.1.187 (fullscreen renderer only); copilot forwards at any version while
+    // it tracks the mouse. codex ignores SGR wheel reports, so every other entry stays 'never'.
+    const mode = (id: string) => STOCK_CLIS.find((e) => (e.id as string) === id)?.capabilities.wheelForward;
+    expect(mode('copilot')).toEqual({ mode: 'always' });
+    expect(mode('claude')).toEqual({ mode: 'version-gated', minVersion: '2.1.187' });
+    const forwarding = STOCK_CLIS.filter((e) => e.capabilities.wheelForward.mode !== 'never').map(
+      (e) => e.id as string
+    );
+    expect(forwarding.sort()).toEqual(['claude', 'copilot']);
+    expect(CliEntrySchema.safeParse(baseEntry('copilot')).success).toBe(true);
+  });
+
   it('declares transcriptPageKeys for exactly the CLIs measured to page on PageUp/PageDown', () => {
-    // claude (repaint mode), codex and opencode (both on the alternate screen) were
+    // claude (repaint mode), codex, opencode and copilot (all on the alternate screen) were
     // measured paging their own transcript on PageUp/PageDown; no other stock entry has been.
     const paging = STOCK_CLIS.filter((e) => e.capabilities.transcriptPageKeys === true).map((e) => e.id as string);
-    expect(paging.sort()).toEqual(['claude', 'codex', 'opencode']);
+    expect(paging.sort()).toEqual(['claude', 'codex', 'copilot', 'opencode']);
   });
 });

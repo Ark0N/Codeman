@@ -188,7 +188,7 @@ for _ in $(seq 1 10); do
 done
 printf '%s\n' "$TXT"
 #    (.data is {text,timestamp}; text is also "" before the first completed turn and
-#     always "" for shell/opencode/gemini/antigravity/pi/grok/omp, which have no transcript, use
+#     always "" for shell/opencode/gemini/antigravity/pi/grok/omp/copilot, which have no transcript, use
 #     the terminal tail there, and here only to diagnose an unsubmitted prompt.)
 
 # 6. clean up: exact id, own list only, through the fail-closed preamble helper

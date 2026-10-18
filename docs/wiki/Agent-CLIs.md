@@ -1,9 +1,9 @@
 # Agent CLIs
 
-Codeman drives ten run modes: nine agent CLIs plus a plain shell. This page covers picking
+Codeman drives eleven run modes: ten agent CLIs plus a plain shell. This page covers picking
 one, setting it up, and the differences that actually change how you work.
 
-## The ten modes
+## The eleven modes
 
 | Mode                 | CLI                          | Get it                                                                 |
 | -------------------- | ---------------------------- | ---------------------------------------------------------------------- |
@@ -16,6 +16,7 @@ one, setting it up, and the differences that actually change how you work.
 | **Grok Build**       | `grok`                       | [github.com/xai-org/grok-build](https://github.com/xai-org/grok-build) |
 | **DeepSeek Harness** | `dsh`                        | [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) |
 | **OMP**              | `omp`                        | [github.com/can1357/oh-my-pi](https://github.com/can1357/oh-my-pi)     |
+| **GitHub Copilot**   | `copilot`                    | [github.com/github/copilot-cli](https://github.com/github/copilot-cli) |
 | **Terminal / Shell** | your `$SHELL`                | Already installed.                                                     |
 
 Any combination works, including all of them. The run mode is chosen per session from the
@@ -50,10 +51,10 @@ If a CLI is installed but a Run button for it never appears:
    precisely to avoid this; a hand-written plist or unit will not.
 3. Restart the server after installing a new CLI.
 
-`pi`, `grok`, `omp` and `dsh` are additionally identity-probed rather than trusted by name:
+`pi`, `grok`, `omp`, `copilot` and `dsh` are additionally identity-probed rather than trusted by name:
 `pi` and `omp` are generic enough that something else on your PATH may answer to them,
 `grok` has npm squatters, and Debian ships an unrelated `dsh` (dancer's shell). Each has a
-status endpoint (`/api/grok/status`, `/api/deepseek/status`, `/api/omp/status`) that reports
+status endpoint (`/api/grok/status`, `/api/deepseek/status`, `/api/omp/status`, `/api/copilot/status`) that reports
 the path and version that actually resolved, so a misresolution is visible rather than
 presenting as "the mode just does not work".
 
@@ -69,7 +70,7 @@ output. The other CLIs expose no equivalent.
 | Respawn cycling and unattended runs               | Yes    | Yes                                                  |
 | Cron jobs                                         | Yes    | Yes                                                  |
 | Docker cases, remote SSH cases                    | Yes    | Yes                                                  |
-| Precise idle detection                            | Yes    | Codex, Pi, OpenCode, OMP, Gemini and Antigravity: same screen check, via their own prompt and working line. DeepSeek: reports its end of turn itself. Grok: generic cues only, unreliable |
+| Precise idle detection                            | Yes    | Codex, Pi, OpenCode, OMP, Copilot, Gemini and Antigravity: same screen check, via their own prompt and working line. DeepSeek: reports its end of turn itself. Grok: generic cues only, unreliable |
 | Auto-resume when a usage limit resets             | Yes    | No                                                   |
 | Plan usage chip                                   | Yes    | No                                                   |
 | Approvals Inbox                                   | Yes    | DeepSeek and Codex as alerts (answer in the terminal); others no |
@@ -273,6 +274,59 @@ an OMP session that had started a turn showed as working for good.
 
 Guide: [`docs/omp-integration.md`](https://github.com/Ark0N/Codeman/blob/master/docs/omp-integration.md).
 
+### GitHub Copilot CLI
+
+GitHub's `copilot`, installed with `npm install -g @github/copilot` (CLI management can run
+that for you). Codeman recognises it only when `--version` answers `GitHub Copilot CLI`, and
+`GET /api/copilot/status` reports the path and version that resolved.
+
+**Signing in.** Codeman does not log it in: run `copilot` once and use `/login`, or sign in
+inside a Codeman tab. Copilot keeps the token in the OS keychain when there is one; a headless
+server has none, so it offers to save it as **plain text in `~/.copilot/config.json`**, which is
+what a service ends up with. To keep a token out of a file, give the service
+`COPILOT_GITHUB_TOKEN` (Copilot reads it first, then `GH_TOKEN`, `GITHUB_TOKEN`). The token is
+never copied into a [Docker case](Docker-Cases): sign in inside the container.
+
+**Run button and permissions.** Run starts `copilot --yolo` (allow every tool, path and URL),
+the same bypass switch the other agent CLIs get, so an unattended session never stops on an
+approval. A multi-user user without the bypass grant gets a plain `copilot`, which is
+Copilot's own Manual Approval mode. Model, permission mode and the rest are also changeable
+inside its TUI.
+
+**Options and resume.** `--model` is sent only by an API caller that sets `copilotConfig.model`; the Run menu has no Copilot model picker (a saved custom endpoint sets `COPILOT_MODEL` instead). A session from
+Past Sessions continues with `--continue`, which resumes the most recent Copilot conversation
+in that directory. A tab name you set yourself is passed as `--name`, so Copilot's own session
+list reads like that tab (an automatic `w1-myapp` name is not pinned); Copilot refuses `--name`
+together with `--resume`/`--continue`, so a continued session keeps the name it had.
+
+**Your own endpoint.** With [custom model endpoints](Custom-Model-Endpoints) on, a saved
+endpoint appears in the Run menu for Copilot. It is launched with Copilot's BYOK variables
+(`COPILOT_PROVIDER_BASE_URL` with the `/v1` an OpenAI route needs, `COPILOT_PROVIDER_API_KEY`,
+`COPILOT_MODEL`), needs no GitHub sign-in, and applies at launch with no restart.
+
+**Working and idle.** A turn shows `◉ Working` in the footer, which is what Codeman reads;
+a tool waiting for your approval replaces the composer and reads as idle. The model name is
+read from the footer too. Copilot has no hooks, so the `stop` and `blocked` wait signals are
+not available: wait on `idle`, `exit` or an output marker.
+
+**Selecting and scrolling.** Copilot turns mouse tracking on itself. Codeman strips that, so a
+plain drag selects text (and Auto Copy works) and clicks still reach Copilot. The wheel, and a
+swipe on a phone, scroll Copilot's own transcript; Shift+wheel scrolls Codeman's local history.
+
+**MCP servers.** [MCP server sync](Settings-Reference) includes Copilot's
+`~/.copilot/mcp-config.json` (relocated by `COPILOT_HOME`), as a target and a source.
+
+**From another agent.** The `codeman agent` verbs work from inside a Copilot tab and against
+Copilot workers: `spawn` waits for the composer (not the folder-trust dialog), `send --wait`
+resolves on `idle`, and `read` returns the last answer from the pane's visible screen. Tool-call
+rows are not modelled and read as part of the answer, and `--until stop` is refused as for
+every hook-less mode.
+
+**Not available.** Auto-resume on a usage limit, the Approvals Inbox, Read My Mind and the
+Ralph tracker, as for the other non-Claude CLIs.
+
+Guide: [`docs/copilot-integration.md`](https://github.com/Ark0N/Codeman/blob/master/docs/copilot-integration.md).
+
 ### Terminal / Shell
 
 A plain shell in a tmux session. No agent, no hooks, no idle detection.
@@ -299,6 +353,7 @@ respawns. Which variables are accepted depends on the mode:
 | Grok        | `GROK_*`, `XAI_*`                 |
 | DeepSeek    | `DSH_*`, `DEEPSEEK_*`             |
 | OMP         | `OMP_*`                           |
+| Copilot     | `COPILOT_*` (a token goes in `COPILOT_GITHUB_TOKEN`; `GH_TOKEN` and `GITHUB_TOKEN` are not accepted as per-session overrides) |
 
 Anything outside the allowlist is rejected at the schema. This is intentional: the allowlist
 is one global list, so widening it for one CLI widens it for all of them. In multi-user mode
@@ -314,7 +369,7 @@ into the case's `.claude/settings.local.json` so that `/model` keeps working.
 
 - **Claude Code** if you want every Codeman feature. Unattended overnight runs, usage-limit
   auto-resume, the Approvals Inbox, and subagent visualization all assume it.
-- **Codex, OpenCode, Gemini, Antigravity, Grok, OMP** when you prefer that agent or that
+- **Codex, OpenCode, Gemini, Antigravity, Grok, OMP, GitHub Copilot** when you prefer that agent or that
   model. You get the session layer, respawn, cron, Docker, and remote SSH; you do not get the
   hook-driven features (Codex dialogs still raise the red alert and an alert-only inbox card,
   see [Codex](#codex) above).
