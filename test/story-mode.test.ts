@@ -740,7 +740,55 @@ describe('buildStoryPage', () => {
     expect(ev.headline).toBe('node --test');
     expect(page.filesChanged).toBe(1);
     const check = page.panels.find((p) => p.kind === 'check')!;
-    expect(check.caption.director).toMatch(/^node --test → ok · 3 passed · writes 1 file$/);
+    expect(check.caption.director).toBe('node --test → ok · 3 passed · writes 1 file · 1 commit');
+    // The commit at the end of the test one-liner is not lost: the check says it saved.
+    expect(check.caption.story).toBe('The tests pass, and Claude saves the work.');
+  });
+
+  it('one-line printf/echo writes and the files Claude Code says a command changed are edits', () => {
+    expect(
+      heredocWrites('printf \'name = "x"\\nversion = 1\\n\' > pyproject.toml && ls', '/w').map((d) => [d.file, d.added])
+    ).toEqual([['/w/pyproject.toml', 2]]);
+    expect(heredocWrites('echo hi > /tmp/x.txt; echo "a" >> notes.md', '/w').map((d) => d.file)).toEqual([
+      '/w/notes.md',
+    ]);
+    const lines = [
+      prompt('rewrite'),
+      ...bash(
+        'b1',
+        "python3 - <<'EOF'\nopen('t.py','w').write('x')\nEOF",
+        'Rewrite the test file',
+        "done\n[This command modified 1 file you've previously read: test_a.py. Call Read before editing.]"
+      ),
+      end(1000),
+    ];
+    (lines[2] as { cwd?: string }).cwd = '/w';
+    const page = pageOf(lines);
+    expect(page.events[1].edits?.map((d) => d.file)).toEqual(['/w/test_a.py']);
+    expect(page.filesChanged).toBe(1);
+  });
+
+  it('a compaction says what it did; ToolSearch is looking; EnterPlanMode says plan mode', () => {
+    const page = pageOf([
+      prompt('go'),
+      tool('t1', 'ToolSearch', { query: 'select:EnterPlanMode,ExitPlanMode', max_results: 2 }),
+      result('t1', 'ok'),
+      tool('p1', 'EnterPlanMode', {}),
+      result('p1', 'Entered plan mode.'),
+      {
+        type: 'system',
+        subtype: 'compact_boundary',
+        timestamp: '2026-10-18T09:45:00.000Z',
+        compactMetadata: { trigger: 'auto', preTokens: 46928, postTokens: 3623, durationMs: 24014 },
+      },
+      end(1000),
+    ]);
+    expect(page.panels.map((p) => p.kind)).toEqual(['mission', 'investigate', 'plan', 'compact', 'complete']);
+    expect(page.panels[2].caption.story).toBe('Claude switches to plan mode to think it through.');
+    expect(page.panels[3].caption).toEqual({
+      story: "Claude's memory is full: it packs up its notes.",
+      director: 'automatic · 46.9k → 3.6k tokens · 24 s',
+    });
   });
 
   it('heredocWrites skips scratch, stdin bodies and relative paths after a cd', () => {

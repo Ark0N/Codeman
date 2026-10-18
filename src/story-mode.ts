@@ -137,9 +137,11 @@ export type StoryEntry =
       problems?: boolean;
       /** The plan an ExitPlanMode call presented. */
       plan?: string;
+      /** Files Claude Code says a Bash call changed ("This command modified 1 file you've previously read: a.py"). */
+      modified?: string[];
     }
   | { k: 'end'; at: string; durationMs?: number }
-  | { k: 'compact'; at: string }
+  | { k: 'compact'; at: string; trigger?: string; preTokens?: number; postTokens?: number; durationMs?: number }
   /** What a local slash command printed (`<local-command-stdout>`): its whole answer. */
   | { k: 'local'; at: string; text: string }
   | { k: 'interrupt'; at: string };
@@ -376,6 +378,47 @@ function redirectsIntoProject(segment: string): boolean {
   return false;
 }
 
+/**
+ * One-line writes: `printf 'a\nb\n' > f`, `echo "x" >> f`. The quoted text is the content (printf
+ * and `echo -e` turn `\n` into line breaks). Same target rules as here-documents.
+ */
+function echoWrites(command: string, cwd?: string): StoryEdit[] {
+  const out: StoryEdit[] = [];
+  let moved = false;
+  for (const segment of commandSegments(withoutHeredocBodies(command.slice(0, 20_000)))) {
+    const head = segmentHead(segment);
+    if (/^(cd|pushd)\b/.test(head)) moved = true;
+    const m =
+      /^(printf|echo)((?:\s+-[neE]+)*)\s+(['"])((?:(?!\3)[\s\S])*)\3\s*(>>?)\s*(["']?)([^\s"'|;&<>()]+)\6\s*$/.exec(
+        head
+      );
+    if (!m || SCRATCH_TARGET.test(m[7])) continue;
+    const escapes = m[1] === 'printf' || /e/.test(m[2]);
+    const text = escapes ? m[4].replace(/\\n/g, '\n').replace(/\\t/g, '\t') : m[4];
+    const lines = text.replace(/\n$/, '').split('\n');
+    const file =
+      m[7].startsWith('/') || !cwd || moved ? m[7] : `${cwd.replace(/\/+$/, '')}/${m[7].replace(/^\.\//, '')}`;
+    out.push({
+      file,
+      added: lines.length,
+      removed: 0,
+      created: false,
+      hunks: [
+        {
+          oldStart: m[5] === '>>' ? 1 : 0,
+          oldLines: 0,
+          newStart: 1,
+          newLines: lines.length,
+          lines: lines.slice(0, 40).map((l) => `+${clip(l, STORY_LIMITS.lineChars)}`),
+        },
+      ],
+      truncated: lines.length > 40,
+    });
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
 /** A here-document's body is data, not commands: `cat > a.py <<'EOF' ... EOF` keeps only its first line. */
 function withoutHeredocBodies(command: string): string {
   const out: string[] = [];
@@ -470,7 +513,7 @@ function judgeBashCommand(command: string): { intent: StoryIntent; segment: stri
  * (`python3 - <<EOF`) writes nothing.
  */
 export function heredocWrites(command: string, cwd?: string): StoryEdit[] {
-  const out: StoryEdit[] = [];
+  const out: StoryEdit[] = [...echoWrites(command, cwd)];
   const lines = command.slice(0, 200_000).split('\n');
   let moved = false;
   for (let i = 0; i < lines.length && out.length < 6; i++) {
@@ -694,12 +737,13 @@ function reduceInput(name: string, input: unknown, cwd?: string): ReducedInput {
         const reads = printedFiles(full);
         if (reads.length) input.reads = reads;
       }
-      if (intent === 'save') {
+      {
+        // Counted whatever wins: a test run that ends in a commit still saves the work.
         const heads = commandSegments(withoutHeredocBodies(full.slice(0, 4000))).map(segmentHead);
         if (heads.some((h) => /^gh pr create\b/.test(h))) input.ships = 'pr';
         else if (heads.some((h) => /^git push\b/.test(h))) input.ships = 'push';
         const commits = heads.filter((h) => /^git commit\b/.test(h)).length;
-        if (commits > 1) input.commits = commits;
+        if (commits > 1 || (commits && intent !== 'save')) input.commits = commits;
       }
       return input;
     }
@@ -899,6 +943,15 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
             if (tests) result.tests = tests;
             const intent = call?.input.intent;
             if ((intent === 'build' || intent === 'test') && reportsProblems(tail.text)) result.problems = true;
+            const note = /This command modified \d+ files? you've previously read: ([^\]\n]+?)\.? Call Read/.exec(text);
+            if (note) {
+              const cwd = str(entry.cwd);
+              result.modified = note[1]
+                .split(/,\s*/)
+                .filter((f) => f && !/\s/.test(f))
+                .slice(0, 8)
+                .map((f) => (f.startsWith('/') || !cwd ? f : `${cwd.replace(/\/+$/, '')}/${f}`));
+            }
           }
         }
         out.push(result);
@@ -1036,7 +1089,19 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
           // Some sessions never write turn_duration; the Stop hook's summary marks the same end (unless
           // the hook kept Claude going).
           if (line.subtype === 'stop_hook_summary' && line.preventedContinuation !== true) return [{ k: 'end', at }];
-          if (line.subtype === 'compact_boundary') return [{ k: 'compact', at }];
+          if (line.subtype === 'compact_boundary') {
+            const meta = isRecord(line.compactMetadata) ? line.compactMetadata : {};
+            return [
+              {
+                k: 'compact',
+                at,
+                trigger: str(meta.trigger),
+                preTokens: num(meta.preTokens),
+                postTokens: num(meta.postTokens),
+                durationMs: num(meta.durationMs),
+              },
+            ];
+          }
           return [];
         default:
           return [];
@@ -1083,6 +1148,8 @@ function intentOf(name: string, input: ReducedInput): StoryIntent {
     case 'TaskUpdate':
     case 'EnterPlanMode':
       return 'plan';
+    case 'ToolSearch':
+      return 'look';
     case 'ExitPlanMode':
     case 'AskUserQuestion':
       return 'ask';
@@ -1127,6 +1194,10 @@ function labelOf(name: string, i: ReducedInput): string {
       return i.question ?? '';
     case 'ExitPlanMode':
       return 'Plan ready for your OK';
+    case 'EnterPlanMode':
+      return 'plan mode on';
+    case 'ToolSearch':
+      return `tools: ${(i.text ?? '').replace(/^select:/, '')}`;
     case 'Write':
     case 'Edit':
       return i.file && PLAN_FILE.test(i.file) ? `the plan, ${basename(i.file)}` : (i.file ?? '');
@@ -1198,6 +1269,14 @@ function applyResult(ev: StoryEvent, r: Extract<StoryEntry, { k: 'result' }>): v
     if (todos) ev.todos = todos;
   }
   if (r.problems) ev.ok = false;
+  if (r.modified?.length) {
+    // Changed, but no diff to show: the file is listed, its lines unknown.
+    const known = new Set((ev.edits ?? []).map((d) => d.file));
+    const more = r.modified
+      .filter((f) => !known.has(f))
+      .map((file) => ({ file, added: 0, removed: 0, created: false, hunks: [], truncated: true }));
+    if (more.length) ev.edits = [...(ev.edits ?? []), ...more];
+  }
   if (r.tests) {
     ev.tests = r.tests;
     // A run that reports failed tests failed, whatever its exit code (`pytest | tail` exits 0).
@@ -1392,6 +1471,16 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
           label: 'Context compacted',
           intent: 'compact',
         };
+        const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+        const facts = [
+          e.trigger === 'auto' ? 'automatic' : e.trigger,
+          e.preTokens !== undefined && e.postTokens !== undefined
+            ? `${k(e.preTokens)} → ${k(e.postTokens)} tokens`
+            : '',
+          e.durationMs !== undefined ? exactDuration(e.durationMs) : '',
+        ].filter(Boolean);
+        if (facts.length) ev.description = facts.join(' · ');
+        if (e.trigger === 'auto') ev.label = 'Context compacted: memory was full';
         // Between turns (`/compact` writes its boundary before the command line itself), it belongs to
         // the turn that comes next; mid-turn (an automatic compaction), to the running one.
         const t = cur as StoryTurn | null;
@@ -1547,7 +1636,13 @@ function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?
     } else {
       const panel: DraftPanel = { kind, events: [idx] };
       // A sentence about how the check just before went belongs to that check, not to what comes next.
-      const talk = last ? REPORT_TALK[last.kind] : undefined;
+      // A check that also committed reports on both: "All 8 pass." and "Committed."
+      const saves = last?.kind === 'check' && last.events.some((i) => events[i].commits);
+      const talk = last
+        ? saves
+          ? new RegExp(`${TALKS_RESULTS.source}|${TALKS_SAVES.source}`, 'i')
+          : REPORT_TALK[last.kind]
+        : undefined;
       const reportsBack =
         pendingSay &&
         talk &&
@@ -1649,7 +1744,7 @@ function countBy(events: StoryEvent[], key: (e: StoryEvent) => string): string {
 const NOISE_LINE = /^\s*(#.*|set\s+[-+][a-zA-Z]+(\s+\w+)?|cd\s+\S+|[A-Za-z_][A-Za-z0-9_]*=\S*)?\s*$/;
 /** What a command does, for a caption: the part that decided it, else its first telling line. */
 const shortCommand = (e: StoryEvent) => {
-  if (e.headline) return clip(e.headline.split('\n')[0] ?? '', 60);
+  if (e.headline) return clip((e.headline.split('\n')[0] ?? '').replace(/\s*<<-?\s*(['"]?)\w+\1/g, ''), 60);
   const lines = e.label.split('\n');
   return clip(lines.find((l) => !NOISE_LINE.test(l)) ?? lines[0] ?? '', 60);
 };
@@ -1744,7 +1839,11 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const todos = [...evs].reverse().find((e) => e.todos)?.todos;
       if (todos) panel.todos = todos;
       else panel.notes = evs.map(shortCommand).slice(0, 4);
-      story = todos ? `Claude writes a plan: ${plural(todos.length, 'step')}.` : 'Claude thinks it through.';
+      story = todos
+        ? `Claude writes a plan: ${plural(todos.length, 'step')}.`
+        : evs.every((e) => e.tool === 'EnterPlanMode')
+          ? 'Claude switches to plan mode to think it through.'
+          : 'Claude thinks it through.';
       // A plan written as text has no progress to report; a plan tool's list does.
       if (todos && evs.every((e) => e.tool === 'Text')) director = `written as text · ${plural(todos.length, 'step')}`;
       else if (todos && evs.some((e) => e.file && PLAN_FILE.test(e.file)))
@@ -1860,6 +1959,12 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           tests.errors ? `, ${plural(tests.errors, 'error')}` : ''
         }`;
       if (edits.length) director += ` · writes ${plural(unique(edits.map((d) => d.file)).length, 'file')}`;
+      const saved = checks.reduce((n, e) => n + (e.commits ?? 0), 0);
+      if (saved) {
+        director += ` · ${plural(saved, 'commit')}`;
+        if (ok)
+          story = `${story.slice(0, -1)}, and Claude saves the work${checks.some((e) => e.ships === 'push') ? ' and sends it up' : ''}.`;
+      }
       break;
     }
     case 'run':
@@ -1908,8 +2013,10 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       break;
     }
     case 'compact':
-      story = 'Claude packs up its notes to free memory.';
-      director = 'compact_boundary';
+      story = evs.some((e) => e.label.includes('memory was full'))
+        ? "Claude's memory is full: it packs up its notes."
+        : 'Claude packs up its notes to free memory.';
+      director = evs.map((e) => e.description).find(Boolean) ?? 'compact_boundary';
       break;
     case 'montage':
       panel.notes = notesOf(evs.filter((e) => e.tool === 'Bash'));

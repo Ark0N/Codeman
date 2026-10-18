@@ -31,6 +31,8 @@
 const STORY_REFRESH_DEBOUNCE_MS = 800;
 /** While a turn runs, refresh this often even without events (text lines raise none). */
 const STORY_POLL_MS = 4000;
+/** How often a finished newest page is checked for a turn no hook announced. */
+const STORY_IDLE_POLL_MS = 15000;
 /**
  * Widest stage a scene is drawn on, in virtual units. A panel stretched across a whole row keeps its
  * art together in a centered stage instead of spreading it to both ends; the background still fills it.
@@ -1048,7 +1050,7 @@ const StoryArt = (() => {
         const running = p.panel.ok === undefined;
         let b;
         if (total) {
-          const dots = Math.min(42, Math.max(7, total));
+          const dots = Math.min(42, total);
           const fail = bad ? Math.max(1, Math.round((bad / total) * dots)) : 0;
           const fill = running ? (f * 0.6) % (dots + 6) : Math.min(dots, (f - 4) * 1.6);
           b = board(ctx, 16, 106, `${total} checks`, dots, fail, fill);
@@ -1108,7 +1110,7 @@ const StoryArt = (() => {
           const total = t ? t.passed + bad : 0;
           let b;
           if (total) {
-            const dots = Math.min(28, Math.max(7, total));
+            const dots = Math.min(28, total);
             const fail = bad ? Math.max(1, Math.round((bad / total) * dots)) : 0;
             b = board(ctx, bx, 116, `${total} checks`, dots, fail, Math.min(dots, (f - 4) * 1.6));
           } else b = verdict(ctx, bx, 116, 'checks', p.panel.ok, f);
@@ -1264,8 +1266,9 @@ const StoryArt = (() => {
         base(ctx, W, H);
         halftone(ctx, W, H, C.magenta, 0, 0, { rmax: 3.2, alpha: 0.7 });
       },
-      draw(ctx, W, H, f) {
+      draw(ctx, W, H, f, p, hit) {
         const squeeze = interpolate(f, [10, 50], [1, 0.35], easeOut);
+        hit('output', 24, 110, 140, 130, 'See what was packed up');
         for (let k = 0; k < 6; k++) {
           ctx.save();
           ctx.translate(40 + k * 4, 200 - k * 14 * squeeze);
@@ -1850,6 +1853,12 @@ Object.assign(CodemanApp.prototype, {
         this._storyRefresh();
         return;
       }
+      // A finished newest page: look again now and then (a local command like /compact raises no
+      // hook). An unchanged page is a 304.
+      if (!st.turnId && Date.now() - (st.lastIdlePoll || 0) > STORY_IDLE_POLL_MS) {
+        st.lastIdlePoll = Date.now();
+        this._storyRefresh();
+      }
       if (st.drawer?.view === 'helper') {
         const ev = page?.events.find((e) => e.id === st.drawer.event);
         if (ev?.pending || ev?.helper?.running) this._storyRenderDrawer(false);
@@ -1870,8 +1879,12 @@ Object.assign(CodemanApp.prototype, {
       if (previewOpen && this.filePreviewEdit) return;
       e.preventDefault();
       e.stopPropagation();
-      if (previewOpen) this.closeFilePreview?.();
-      else if (st.drawer) this._storyCloseDrawer();
+      if (previewOpen) {
+        this.closeFilePreview?.();
+        const back = st.previewReturn;
+        st.previewReturn = null;
+        if (back && document.contains(back)) back.focus({ preventScroll: true });
+      } else if (st.drawer) this._storyCloseDrawer();
       else this.closeStoryMode();
     };
     window.addEventListener('keydown', st.keyHandler, true);
@@ -1892,16 +1905,18 @@ Object.assign(CodemanApp.prototype, {
   /** The overlay is a modal dialog: Tab and Shift+Tab cycle inside it (not when a preview is on top). */
   _storyTrapTab(e) {
     const st = this._story;
-    if (document.getElementById('filePreviewOverlay')?.classList.contains('visible')) return;
     if (document.getElementById('folderGridOverlay')?.classList.contains('visible')) return;
-    const items = [...st.root.querySelectorAll('button, select, a[href], [tabindex]:not([tabindex="-1"])')].filter(
-      (n) => !n.disabled && n.offsetParent !== null
-    );
+    // A file preview opened from a panel sits on top: Tab cycles inside it until it closes.
+    const preview = document.getElementById('filePreviewOverlay');
+    const scope = preview?.classList.contains('visible') ? preview : st.root;
+    const items = [
+      ...scope.querySelectorAll('button, select, textarea, input, a[href], [tabindex]:not([tabindex="-1"])'),
+    ].filter((n) => !n.disabled && n.offsetParent !== null);
     if (!items.length) return;
     const first = items[0];
     const last = items[items.length - 1];
     const active = document.activeElement;
-    const inside = st.root.contains(active);
+    const inside = scope.contains(active);
     if (e.shiftKey && (active === first || !inside)) {
       e.preventDefault();
       last.focus();
@@ -1985,6 +2000,10 @@ Object.assign(CodemanApp.prototype, {
       2
     );
     const fresh = !st.first;
+    // A panel that holds focus may be rebuilt (a new turn, a fold into a loop): keep the place.
+    const focused = document.activeElement;
+    const focusAt = st.panels.findIndex((rt) => rt.el.contains(focused));
+    const focusHit = focusAt >= 0 ? [...st.panels[focusAt].hitEls].find(([, b]) => b === focused)?.[0] : null;
     if (st.shownPageId !== (page?.id ?? null)) {
       for (const rt of st.panels.splice(0)) this._storyDropPanel(rt);
       st.shownPageId = page?.id ?? null;
@@ -2031,6 +2050,16 @@ Object.assign(CodemanApp.prototype, {
       pencils.style.setProperty('--story-span2', String(spans2[want.length]));
       st.pageEl.append(pencils);
     } else pencils?.remove();
+    if (focusAt >= 0 && !document.contains(focused)) {
+      const rt = st.panels[Math.min(focusAt, st.panels.length - 1)];
+      if (rt && !rt.w) this._storySizePanel(rt);
+      const target = rt && ((focusHit && rt.hitEls.get(focusHit)) || rt.hitEls.values().next().value);
+      if (target) target.focus({ preventScroll: true });
+      else {
+        st.pageEl.tabIndex = -1;
+        st.pageEl.focus({ preventScroll: true });
+      }
+    }
   },
 
   _storyCreatePanel(kind, fresh) {
@@ -2601,7 +2630,7 @@ Object.assign(CodemanApp.prototype, {
       if (!panel) return;
       if (what.startsWith('file:')) {
         const file = panel.files?.[Number(what.slice(5))];
-        if (file) this.openFilePreview?.(this._storyResolvePath(file), st.sessionId);
+        if (file) this._storyOpenFile(this._storyResolvePath(file), trigger);
         return;
       }
       const [view, arg] = what.split(':');
@@ -2623,10 +2652,24 @@ Object.assign(CodemanApp.prototype, {
     const ev = page.events[Number(arg)];
     if (!ev) return;
     if (view === 'file') {
-      this.openFilePreview?.(this._storyResolvePath(ev.file), st.sessionId);
+      this._storyOpenFile(this._storyResolvePath(ev.file), trigger);
       return;
     }
     this._storyOpenDrawer({ view, event: ev.id }, trigger);
+  },
+
+  /**
+   * Opens a file in the file preview on top of Story Mode, with keyboard focus on the preview's close
+   * button; Escape gives it back to what opened it.
+   */
+  _storyOpenFile(path, trigger) {
+    const st = this._story;
+    if (!st || !path) return;
+    st.previewReturn = trigger || document.activeElement;
+    this.openFilePreview?.(path, st.sessionId);
+    requestAnimationFrame(() =>
+      document.querySelector('#filePreviewOverlay.visible button[title="Close"]')?.focus({ preventScroll: true })
+    );
   },
 
   /** A path as a transcript named it, made absolute against the session's folder when relative. */
@@ -2817,8 +2860,11 @@ Object.assign(CodemanApp.prototype, {
       out.push(ul);
     } else if (view === 'ask') {
       const ev = items.find((x) => x.ev.question)?.ev;
+      const plan = ev?.tool === 'ExitPlanMode';
       kind = 'Your call';
       title = ev?.question?.text || 'Question';
+      if (plan && ev.output)
+        out.push(el('h4', 'story-h', 'The plan'), this._storyLinkifiedPre(ev.output, { rooted: true }));
       if (ev?.question?.options?.length) {
         const ul = el('ul', 'story-todos');
         for (const o of ev.question.options) ul.append(el('li', o === ev.question.answer ? 'is-chosen' : '', o));
@@ -2828,7 +2874,13 @@ Object.assign(CodemanApp.prototype, {
         el(
           'p',
           'story-answer-line',
-          ev?.question?.answer ? `You chose: ${ev.question.answer}` : 'Waiting for your answer in the terminal.'
+          ev?.question?.answer
+            ? plan
+              ? ev.question.answer === 'Approved'
+                ? 'You approved the plan.'
+                : 'You sent the plan back.'
+              : `You chose: ${ev.question.answer}`
+            : 'Waiting for your answer in the terminal.'
         )
       );
     }
@@ -2905,7 +2957,7 @@ Object.assign(CodemanApp.prototype, {
       if (shown !== ev.label) label.title = ev.label;
       if (ev.file) {
         label.type = 'button';
-        label.addEventListener('click', () => this.openFilePreview?.(ev.file, this._story.sessionId));
+        label.addEventListener('click', (e) => this._storyOpenFile(ev.file, e.currentTarget));
       }
       const tag = el(
         'i',
@@ -2934,7 +2986,7 @@ Object.assign(CodemanApp.prototype, {
     open.type = 'button';
     open.className = 'story-btn-s';
     open.textContent = 'Open file';
-    open.addEventListener('click', () => this.openFilePreview?.(edit.file, this._story.sessionId));
+    open.addEventListener('click', (e) => this._storyOpenFile(edit.file, e.currentTarget));
     head.append(name, cnt, open);
     section.append(head);
     const code = el('div', 'story-code');
@@ -3041,7 +3093,7 @@ Object.assign(CodemanApp.prototype, {
         if (header) target = `${header[1].replace(/\/+$/, '')}/${target}`;
       }
       const resolved = typeof resolveLinkedFilePath === 'function' ? resolveLinkedFilePath(target, workingDir) : target;
-      b.addEventListener('click', () => this.openFilePreview?.(resolved, this._story.sessionId));
+      b.addEventListener('click', (e) => this._storyOpenFile(resolved, e.currentTarget));
       pre.append(b);
       last = link.index + link.path.length;
     }

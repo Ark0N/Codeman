@@ -57,7 +57,7 @@ function boot(initial: unknown) {
     `<!doctype html><body>
       <button class="btn-story-header btn-story-header--hidden"></button>
       <button id="sessionOptionsStoryBtn" hidden></button>
-      <div class="file-preview-overlay" id="filePreviewOverlay"></div>
+      <div class="file-preview-overlay" id="filePreviewOverlay"><button id="pvOther">Edit</button><button title="Close">×</button></div>
       <div class="folder-grid-overlay" id="folderGridOverlay"></div>
     </body>`,
     { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true }
@@ -563,7 +563,12 @@ describe('story-mode.js overlay', () => {
     boot(
       storyOf([
         prompt('look'),
-        ...bash('b1', 'ls /work/demo-shop && ls -R /work/demo-shop/clone', 'List the clone', 'clone/src:\nkebab.py\n\nnotes.md'),
+        ...bash(
+          'b1',
+          'ls /work/demo-shop && ls -R /work/demo-shop/clone',
+          'List the clone',
+          'clone/src:\nkebab.py\n\nnotes.md'
+        ),
         end(1000),
       ])
     );
@@ -577,6 +582,30 @@ describe('story-mode.js overlay', () => {
     expect(app.openFilePreview).toHaveBeenLastCalledWith('/work/demo-shop/clone/src/kebab.py', SID);
     links.find((l) => l.textContent === 'notes.md')!.click();
     expect(app.openFilePreview).toHaveBeenLastCalledWith('/work/demo-shop/notes.md', SID);
+  });
+
+  it('a file opened from Story Mode takes keyboard focus, keeps Tab inside, and gives focus back on Escape', async () => {
+    boot(storyOf(demoTurn()));
+    const overlay = () => $('#filePreviewOverlay')!;
+    app.openFilePreview = vi.fn(() => overlay().classList.add('visible'));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    $('.story-panel[data-kind="loop"] .story-hit')!.click();
+    const open = $$('.story-drawer-body .story-btn-s').find((b) => b.textContent === 'Open file')!;
+    open.focus();
+    open.click();
+    await new Promise((r) => win.requestAnimationFrame(() => r(null)));
+    const close = $('#filePreviewOverlay button[title="Close"]')!;
+    expect(win.document.activeElement).toBe(close);
+    for (const n of $$('#filePreviewOverlay button'))
+      Object.defineProperty(n, 'offsetParent', { get: () => win.document.body });
+    press('Tab');
+    expect(overlay().contains(win.document.activeElement)).toBe(true);
+    press('Escape');
+    expect(app.closeFilePreview).toHaveBeenCalled();
+    expect(win.document.activeElement).toBe(open);
+    expect($('#storyOverlay')!.hidden).toBe(false);
   });
 
   it('turning the setting off hides the button and closes an open story', async () => {
