@@ -111,6 +111,8 @@ export type StoryEntry =
       text: string;
       origin: StoryTurnOrigin;
       queued: boolean;
+      /** A slash command (`/compact`), not a prompt to Claude. */
+      slash?: boolean;
       /** A background task reporting back: which call it answers, and how it went. */
       task?: StoryTaskReport;
       /** Teammates (helpers started as a team) reporting back, matched to their helper by name. */
@@ -134,6 +136,8 @@ export type StoryEntry =
     }
   | { k: 'end'; at: string; durationMs?: number }
   | { k: 'compact'; at: string }
+  /** What a local slash command printed (`<local-command-stdout>`): its whole answer. */
+  | { k: 'local'; at: string; text: string }
   | { k: 'interrupt'; at: string };
 
 /** What a `<task-notification>` says about the background call it answers. */
@@ -600,6 +604,8 @@ function readTeammateMessages(text: string): StoryTeammateReport[] {
 function readPrompt(raw: string): {
   text: string;
   kind: 'prompt' | 'task' | 'peer' | 'interrupt';
+  /** A slash command (`/compact`, `/model`), from its `<command-name>`. */
+  slash?: boolean;
   task?: StoryTaskReport;
   teammates?: StoryTeammateReport[];
 } | null {
@@ -629,7 +635,7 @@ function readPrompt(raw: string): {
   const command = /<command-name>([^<]*)<\/command-name>/.exec(text);
   if (command) {
     const args = /<command-args>([^<]*)<\/command-args>/.exec(text)?.[1] ?? '';
-    return { text: `${command[1].trim()} ${args.trim()}`.trim(), kind: 'prompt' };
+    return { text: `${command[1].trim()} ${args.trim()}`.trim(), kind: 'prompt', slash: true };
   }
   if (/^<task-notification>/.test(text)) {
     const tag = (name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1]?.trim();
@@ -887,6 +893,12 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
       if (results.length) return out;
     }
     if (entry.isMeta === true || entry.turnCompanion === true) return out;
+    const local = /^\s*<local-command-(stdout|stderr)>([\s\S]*?)<\/local-command-\1>/.exec(blockText(content));
+    if (local) {
+      // eslint-disable-next-line no-control-regex
+      const text = local[2].replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').trim();
+      return [{ k: 'local', at, text: clip(text, 2000) }];
+    }
     const prompt = readPrompt(blockText(content));
     if (!prompt) return out;
     if (prompt.kind === 'interrupt') return [{ k: 'interrupt', at }];
@@ -932,6 +944,7 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
       origin,
       queued,
     };
+    if (prompt.slash) reduced.slash = true;
     if (prompt.task) {
       const t = prompt.task;
       reduced.task = {
@@ -1181,6 +1194,8 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
   const byId = new Map<string, StoryEvent>();
   /** Helper calls by tool id, across turns: a background helper reports back in a later turn. */
   const helpers = new Map<string, StoryEvent>();
+  /** A compaction between turns, held for the turn that comes next. */
+  let pendingCompact: StoryEvent | null = null;
   /** The same helpers by name: a teammate reports back by name, not by call. */
   const helpersByName = new Map<string, StoryEvent>();
   let say = 0;
@@ -1244,7 +1259,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
           id: e.id,
           at: e.at,
           actor: e.origin === 'human' ? 'you' : 'system',
-          tool: 'Prompt',
+          tool: e.slash ? 'Command' : 'Prompt',
           label: e.text,
           intent: 'prompt',
           origin: e.origin,
@@ -1274,6 +1289,10 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
           };
           turns.push(cur);
           byId.clear();
+          if (pendingCompact) {
+            cur.events.push(pendingCompact);
+            pendingCompact = null;
+          }
         }
         break;
       }
@@ -1318,16 +1337,31 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
         }
         break;
       }
-      case 'compact':
-        ensure(e.at).events.push({
+      case 'compact': {
+        const ev: StoryEvent = {
           id: `compact-${say++}`,
           at: e.at,
           actor: 'system',
           tool: 'Compact',
           label: 'Context compacted',
           intent: 'compact',
-        });
+        };
+        // Between turns (`/compact` writes its boundary before the command line itself), it belongs to
+        // the turn that comes next; mid-turn (an automatic compaction), to the running one.
+        const t = cur as StoryTurn | null;
+        if (t && !t.ended) t.events.push(ev);
+        else pendingCompact = ev;
         break;
+      }
+      case 'local': {
+        // A local slash command answers itself: its turn ends with what it printed.
+        const t = cur as StoryTurn | null;
+        if (t && !t.ended && t.events[0]?.tool === 'Command' && countToolCalls(t.events) === 0) {
+          if (e.text) t.events[0].output = e.text;
+          closeTurn(t, e.at);
+        }
+        break;
+      }
       case 'interrupt': {
         const t = ensure(e.at);
         t.events.push({
@@ -1623,8 +1657,10 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         system: 'Something automatic starts this turn.',
       };
       const origin = evs[0]?.origin ?? turn.origin;
-      story =
-        index === 0
+      const command = evs[0]?.tool === 'Command' ? evs[0].label.split(/\s/)[0] : '';
+      story = command
+        ? `You run ${command}.`
+        : index === 0
           ? lines[turn.origin]
           : origin === 'human'
             ? 'You add something while Claude works.'

@@ -245,7 +245,8 @@ describe('createStoryReducer', () => {
       prompt('<local-command-stdout>ok</local-command-stdout>'),
       prompt('<bash-input>ls</bash-input>'),
     ]);
-    expect(entries).toEqual([]);
+    // None is a prompt; a local command's output is kept apart, as what that command printed.
+    expect(entries).toEqual([{ k: 'local', at: expect.any(String), text: 'ok' }]);
   });
 
   it('reads slash commands, task notifications, interrupts and strips system reminders', () => {
@@ -504,6 +505,37 @@ describe('buildStoryTurns', () => {
       entriesOf([prompt('<pasted_content id="291c">\nDo these steps.\n</pasted_content>')])
     );
     expect(pasted.prompt).toBe('Do these steps.');
+  });
+
+  it('/compact is its own turn: you run it, Claude packs up, and the command answers itself', () => {
+    const boundary = { type: 'system', subtype: 'compact_boundary', timestamp: '2026-10-18T09:50:00.000Z' };
+    const summary = prompt('This session is being continued from a previous conversation.', { isCompactSummary: true });
+    const command = prompt(
+      '<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>'
+    );
+    const stdout = prompt('<local-command-stdout>\u001b[2mCompacted \u001b[22m</local-command-stdout>', {
+      turnOrigin: undefined,
+    });
+    const turns = buildStoryTurns(
+      entriesOf([prompt('one'), ...bash('b', 'ls', 'List', 'a'), end(1000), boundary, summary, command, stdout])
+    );
+    expect(turns).toHaveLength(2);
+    expect(turns[0].events.some((e) => e.intent === 'compact')).toBe(false);
+    expect(turns[1]).toMatchObject({ prompt: '/compact', ended: true });
+    const page = buildStoryPage(turns[1]);
+    expect(page.panels.map((p) => p.kind)).toEqual(['mission', 'compact', 'complete']);
+    expect(page.panels[0].caption.story).toBe('You run /compact.');
+    expect(page.events[0]).toMatchObject({ tool: 'Command', output: 'Compacted' });
+    // A local command like /model ends at its output too.
+    const [, model] = buildStoryTurns(
+      entriesOf([
+        prompt('one'),
+        end(1000),
+        prompt('<command-name>/model</command-name><command-args>opus</command-args>'),
+        prompt('<local-command-stdout>Set model to opus</local-command-stdout>'),
+      ])
+    );
+    expect(model).toMatchObject({ prompt: '/model opus', ended: true });
   });
 
   it('an interrupt ends the turn', () => {
