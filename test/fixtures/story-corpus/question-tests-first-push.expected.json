@@ -5,7 +5,7 @@
     "complete": true,
     "interrupted": false,
     "durationMs": 297209,
-    "toolCalls": 20,
+    "toolCalls": 18,
     "filesChanged": 6,
     "added": 221,
     "removed": 2,
@@ -51,7 +51,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Test first: the first run fails as planned, the second passes.",
+        "story": "The first run fails on purpose, as you asked; the second passes.",
         "director": "2 checks · 4 edits · +151 −1 · last: ok · after 1 second opinion",
         "balloon": "All 19 test cases pass (13 test functions), and ruff check and ruff format both come back clean.",
         "tests": {
@@ -94,7 +94,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude starts a git repository, saves the work and copies it to remote.git, a folder on this computer, but a check after that fails.",
+        "story": "Claude starts a git repository, saves the work: \"add kebab CLI that turns text into URL slugs\" and copies it to remote.git, a folder on this computer, but a check after that fails.",
         "director": "git commit -q -F - · git push -u origin main · 1 error",
         "balloon": null,
         "tests": null,
@@ -120,7 +120,7 @@
         "kind": "complete",
         "ok": null,
         "story": "Done in 5 minutes.",
-        "director": "turn_duration · 4 min 57 s · 20 tool calls · 6 files changed",
+        "director": "turn_duration · 4 min 57 s · 18 tool calls · 6 files changed",
         "balloon": "I've built the kebab slug tool in this folder, committed it, and pushed it to the new bare repo remote.git. If you want a different author, run git commit --amend --reset-author and push again. Not tested: the README says pip install . gives you a kebab command.",
         "tests": null,
         "roundsOk": null,

@@ -5,7 +5,7 @@
     "complete": true,
     "interrupted": false,
     "durationMs": 130001,
-    "toolCalls": 12,
+    "toolCalls": 10,
     "filesChanged": 3,
     "added": 81,
     "removed": 0,
@@ -125,7 +125,7 @@
         "kind": "complete",
         "ok": null,
         "story": "Done in 2 minutes.",
-        "director": "turn_duration · 2 min 10 s · 12 tool calls · 3 files changed",
+        "director": "turn_duration · 2 min 10 s · 10 tool calls · 3 files changed",
         "balloon": "I built it test-first: the suite failed at collection before calc_stats.py existed, then passed once the module was written. I didn't push, didn't touch origin.git/ and didn't create a README, since none existed to keep in sync.",
         "tests": null,
         "roundsOk": null,
@@ -164,7 +164,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Test first: the first run fails as planned, the second passes.",
+        "story": "The first run fails on purpose, as you asked; the second passes.",
         "director": "2 checks · 3 edits · +40 −1 · last: ok",
         "balloon": "Green: 18 passed and ruff is clean.",
         "tests": {
@@ -181,7 +181,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"add calc_stats.mode with smallest-value tie-breaking\", then copies it to origin.git, a folder on this computer.",
+        "story": "Claude saves the work: \"add calc_stats.mode with smallest-value tie-breaking\" and copies it to origin.git, a folder on this computer, but a check after that fails.",
         "director": "git commit -q -F - · git push -u origin HEAD",
         "balloon": null,
         "tests": null,
@@ -268,7 +268,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work and copies it to origin.git, a folder on this computer, but a check after that fails.",
+        "story": "Claude saves the work: \"add NOTES.md describing mode behavior\" and copies it to origin.git, a folder on this computer, but a check after that fails.",
         "director": "git commit -q -F - · git push · 1 error",
         "balloon": null,
         "tests": null,

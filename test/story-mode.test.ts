@@ -994,10 +994,13 @@ describe('buildStoryPage', () => {
     expect(pageFor('cat .env.example | wc -l; git config user.name', 'Exit code 1\n4').noneWorked).toBeUndefined();
     expect(pageFor('./deploy.sh; which deploy', 'Exit code 2\nno target').noneWorked).toBe(true);
     expect(run('cat .env.example | wc -l; git config user.name', 'Exit code 1\n4')).toBe(
-      'Claude checks a few things; the last check finds nothing.'
+      'Claude looks a few things up; the last one finds a git setting that is not set, which is no error.'
     );
     expect(run('node scripts/count.js && grep -c TODO src/a.js', 'Exit code 1\n12 files\n0')).toBe(
-      'Claude checks a few things; the last check finds nothing.'
+      'Claude looks a few things up; the last search finds no match, which is no error.'
+    );
+    expect(run('node a.js; which ffmpeg', 'Exit code 1\nok')).toBe(
+      'Claude looks a few things up; the last one finds a program that is not installed, which is no error.'
     );
     // A real failure, or one with nothing printed before it, still fails.
     expect(run('./deploy.sh; which deploy', 'Exit code 2\nno target')).toBe('Claude tries a command, and it fails.');
@@ -1207,6 +1210,52 @@ describe('buildStoryPage', () => {
     expect(keyKindOf('Decisions you may want to change: I committed CLAUDE.md.')).toBe('offer');
   });
 
+  it('a failure after the push that `; echo` hid from the exit code still shows; a second opinion is no tool call', () => {
+    const page = pageOf([
+      prompt('ship it'),
+      ...bash('b1', 'git commit -qm "add a"', 'Commit', ''),
+      ...bash(
+        'b2',
+        'git push -u origin HEAD && git describe --tags; echo "exit=$?"',
+        'Push',
+        'To ./origin.git\n * [new branch]      HEAD -> master\nfatal: No names found, cannot describe anything.\nexit=128'
+      ),
+      {
+        type: 'assistant',
+        timestamp: '2026-10-18T09:41:20.000Z',
+        message: {
+          content: [
+            { type: 'server_tool_use', id: 'srv1', name: 'advisor', input: {} },
+            { type: 'advisor_tool_result', tool_use_id: 'srv1', content: { type: 'advisor_redacted_result' } },
+          ],
+        },
+      },
+      end(1000),
+    ]);
+    expect(page.panels.find((p) => p.kind === 'save')!.caption.story).toBe(
+      'Claude saves the work: "add a" and copies it to origin.git, a folder on this computer, but a check after that fails.'
+    );
+    expect(page.toolCalls).toBe(2);
+  });
+
+  it('a failing first run the prompt asked for, in its own words, is "as you asked"', () => {
+    const loop = (ask: string) =>
+      pageOf([
+        prompt(ask),
+        ...edit('e1', '/w/test_a.py', ['+def test_a(): assert f()']),
+        ...bash('b1', 'pytest -q', 'Test', '1 failed in 0.1s', true),
+        ...edit('e2', '/w/a.py', ['+def f(): return True']),
+        ...bash('b2', 'pytest -q', 'Test', '1 passed in 0.1s'),
+        end(1000),
+      ]).panels.find((p) => p.kind === 'loop')!.caption.story;
+    for (const ask of [
+      'Add mode(); run the tests, it should fail because mode is missing.',
+      'Write the tests and run them to watch them fail.',
+    ])
+      expect(loop(ask), ask).toBe('The first run fails on purpose, as you asked; the second passes.');
+    expect(loop('Add mode() with tests.')).not.toMatch(/as you asked/);
+  });
+
   it('a check after a push is named a check, and tests in a fresh copy say so', () => {
     const page = pageOf([
       prompt('ship it'),
@@ -1390,7 +1439,7 @@ describe('buildStoryPage', () => {
     const loop = page.panels.find((p) => p.kind === 'loop')!;
     expect(loop.roundsOk).toEqual([true, false, true]);
     expect(loop.caption.story).toBe(
-      'Build and test, 2 rounds. The tests pass every time; a layout check fails once, then passes.'
+      'Build and test, 2 rounds. The tests pass every time; a formatting check fails once, then passes.'
     );
   });
 

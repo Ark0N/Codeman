@@ -5,7 +5,7 @@
     "complete": true,
     "interrupted": false,
     "durationMs": 385054,
-    "toolCalls": 26,
+    "toolCalls": 24,
     "filesChanged": 13,
     "added": 798,
     "removed": 0,
@@ -77,7 +77,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Build and test, 4 rounds. The tests pass every time; a layout check fails once, then passes.",
+        "story": "Build and test, 4 rounds. The tests pass every time; a formatting check fails once, then passes.",
         "director": "5 checks · 10 edits · +694 · last: ok",
         "balloon": "All 4 modules are done: 63 tests pass and ruff is clean.",
         "tests": {
@@ -149,7 +149,7 @@
         "kind": "complete",
         "ok": null,
         "story": "Done in 6 minutes.",
-        "director": "turn_duration · 6 min 25 s · 26 tool calls · 13 files changed",
+        "director": "turn_duration · 6 min 25 s · 24 tool calls · 13 files changed",
         "balloon": "The inventory/ package is built and committed. Decisions you may want to change: I committed CLAUDE.md. .claude/settings.local.json, .codeman-agent-case.json and the default inventory.json are gitignored. --csv is part of the CLI commit rather than its own commit, because you asked for it before that module existed. Known quirks: remove pear prints the name as you typed it, not as it was stored (\"Pear\"). Because of how the temporary file is created, the saved JSON file is readable only by its owner (permissions 0600).",
         "tests": null,
         "roundsOk": null,

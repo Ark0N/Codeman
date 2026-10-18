@@ -2011,7 +2011,9 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
 }
 
 const NOT_TOOL_CALLS = new Set<StoryIntent>(['prompt', 'say', 'interrupt', 'compact', 'notice']);
-const countToolCalls = (events: StoryEvent[]) => events.filter((e) => !NOT_TOOL_CALLS.has(e.intent)).length;
+/** The turn's own tool calls: a second opinion (the advisor) is no step of the work, so it is not counted. */
+const countToolCalls = (events: StoryEvent[]) =>
+  events.filter((e) => !NOT_TOOL_CALLS.has(e.intent) && e.tool !== 'Advisor').length;
 
 export function summarizeTurn(turn: StoryTurn): StoryTurnSummary {
   return {
@@ -2332,10 +2334,11 @@ function printableLine(line: string): string | null {
   return clip(text.replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '…@…').replace(/[A-Za-z0-9+/=_-]{32,}/g, '…'), 90);
 }
 
-/** What a check other than the tests is, by its tool, for a reader: "a layout check", "a style check". */
+/** What a check other than the tests is, by its tool, for a reader: "a formatting check", "a style check". */
 function checkName(e: StoryEvent | undefined): string {
   const cmd = e?.label ?? '';
-  if (/\b(ruff format|black|prettier|gofmt|rustfmt|isort|autopep8|biome format)\b/.test(cmd)) return 'a layout check';
+  if (/\b(ruff format|black|prettier|gofmt|rustfmt|isort|autopep8|biome format)\b/.test(cmd))
+    return 'a formatting check';
   if (/\b(ruff|eslint|flake8|pylint|clippy|shellcheck|golangci-lint|stylelint|biome)\b/.test(cmd))
     return 'a style check';
   if (/\b(tsc|mypy|pyright|vue-tsc)\b/.test(cmd)) return 'a type check';
@@ -2360,13 +2363,36 @@ const emptyAnswer = (e: StoryEvent): boolean => {
   );
 };
 
+/** The first save of a folder Claude made a repository (`git init`, not `--bare`) with nothing committed before. */
+function startsRepoAt(indices: number[], events: StoryEvent[]): boolean {
+  const earlier = events.slice(0, Math.min(...indices));
+  return (
+    !earlier.some((e) => (e.commits ?? 0) > 0) &&
+    [...earlier, ...indices.map((i) => events[i])].some(
+      (e) => e.tool === 'Bash' && /\bgit init\b(?![^;&|\n]*\s--bare\b)/.test(e.label)
+    )
+  );
+}
+
+/** What the last lookup of an empty answer came back without, in a reader's words. */
+function emptyAnswerWhat(e: StoryEvent): string {
+  const step = EMPTY_ANSWER_STEP.exec(e.label.trim())?.[0].replace(/^[;&|\s]+/, '') ?? '';
+  return /^git config/.test(step)
+    ? 'the last one finds a git setting that is not set'
+    : /^(which|command -v)/.test(step)
+      ? 'the last one finds a program that is not installed'
+      : /^(test|\[)/.test(step)
+        ? 'the last test it makes comes out false'
+        : 'the last search finds no match';
+}
+
 /** One or two files by name ("calc.py and test_calc.py"), more by count ("3 files"). */
 const fileWords = (files: string[], noun = 'file'): string =>
   files.length && files.length <= 2 ? files.map((f) => basename(f)).join(' and ') : plural(files.length, noun);
 
 /** You asked for a failing run first (test first), or Claude said the failure was expected. */
 const PLANNED_IN_PROMPT =
-  /\b(test[- ]first|tdd|fail(s|ing)? (first|on purpose)|failing tests? first|on purpose|red first|before (the )?(code|module|function|implementation) exists)\b/i;
+  /\b(test[- ]first|tdd|fail(s|ing)? (first|on purpose)|failing tests? first|on purpose|red first|before (the )?(code|module|function|implementation) exists|should fail because|(watch|see) (them|it|the tests?) fail|must (error|fail) (at|on|because|while))\b/i;
 const EXPECTED_BY_CLAUDE =
   /\b(as expected|as planned|as intended|expected (failure|to fail|red)|deliberately fail\w*|on purpose|test[- ]first|the red state)\b/i;
 function plannedFailure(turn: StoryTurn, events: StoryEvent[]): false | 'asked' | 'planned' {
@@ -2587,7 +2613,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         const testFails = fails - lintFails;
         // A failure you asked for (test first), or that Claude said it expected, is the plan working.
         const planned = passed(checks[0]) === false ? plannedFailure(turn, events) : false;
-        // The check that failed while the tests passed, by name: "a layout check", not "another check".
+        // The check that failed while the tests passed, by name: "a formatting check", not "another check".
         const otherCheck = checkName(
           failed.find((e) => !!e.tests && e.tests.passed > 0 && !e.tests.failed && !e.tests.errors)
         );
@@ -2617,7 +2643,10 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
                               : `Fix and test, ${plural(n, 'round')}.`;
         // Commits made inside the loop (a test one-liner that ends in one) are part of its story.
         const saved = evs.reduce((k, e) => k + (e.commits ?? 0), 0);
-        if (saved) story += ` Claude saves the work${saved > 1 ? ` in ${saved} commits` : ''} along the way.`;
+        if (saved)
+          story += ` Claude ${startsRepoAt(draft.events, events) ? 'starts a git repository and ' : ''}saves the work${
+            saved > 1 ? ` in ${saved} commits` : ''
+          } along the way.`;
         director = `${plural(checks.length, 'check')} · ${plural(edits.length, 'edit')} · ${fmtCounts(panel.added, panel.removed)} · last: ${
           lastCheck ? outcome(lastCheck) : 'running'
         }`;
@@ -2684,7 +2713,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       if (saved) {
         director += ` · ${plural(saved, 'commit')}`;
         if (ok)
-          story = `${story.slice(0, -1)}, and Claude saves the work${checks.some((e) => e.ships === 'push') ? ' and sends it up' : ''}.`;
+          story = `${story.slice(0, -1)}, and Claude ${startsRepoAt(draft.events, events) ? 'starts a git repository and ' : ''}saves the work${
+            checks.some((e) => e.ships === 'push') ? ' and sends it up' : ''
+          }.`;
       }
       break;
     }
@@ -2703,7 +2734,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       story = evs.every((e) => e.running)
         ? `Claude starts ${evs.length === 1 ? 'a command' : `${evs.length} commands`} in the background.`
         : errors && errors === evs.length && evs.every(emptyAnswer)
-          ? `Claude checks ${evs.length === 1 ? 'a few things' : 'several things'}; the last check finds nothing.`
+          ? `Claude looks a few things up; ${emptyAnswerWhat(evs[evs.length - 1])}, which is no error.`
           : errors && errors === evs.length
             ? `Claude tries ${evs.length === 1 ? 'a command' : `${evs.length} commands`}, and ${
                 evs.some((e) => /\bblocked\b|PreToolUse|denied/i.test(e.output ?? ''))
@@ -2731,6 +2762,10 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         (ships === 'push'
           ? /\[new branch\]|\S+\.\.\S+\s+\S+\s+->|\bset up to track\b|Everything up-to-date/.test(out)
           : /^\[[^\]\n]+ [0-9a-f]{7,}\]/m.test(out));
+      // `git push && git describe; echo "exit=$?"` exits 0, but printed the failure after the push.
+      const pushedAt = ships === 'push' ? out.search(/\[new branch\]|\S+\.\.\S+\s+\S+\s+->|Everything up-to-date/) : -1;
+      const hiddenFail =
+        last?.ok === true && pushedAt >= 0 && /^(fatal|error): |\bexit[= ][1-9]\d*\b/m.test(out.slice(pushedAt));
       if (savedAnyway) panel.ok = true;
       const commits = evs.reduce((n, e) => n + (e.commits ?? 0), 0);
       const inCommits = commits > 1 ? ` in ${commits} commits` : '';
@@ -2767,33 +2802,30 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           )
         );
       const stepAfter = looksOnly ? 'a check after that fails' : 'a step after that fails';
-      story = savedAnyway
-        ? uploadOnly
-          ? `Claude ${uploads('the work')}, but ${stepAfter}.`
-          : ships === 'push'
-            ? `Claude saves the work${inCommits} and ${uploads('it')}, but ${stepAfter}.`
-            : `Claude saves the work${inCommits}, but ${stepAfter}.`
-        : panel.ok === false
-          ? ships === 'pr'
-            ? 'Claude tries to open a pull request, and the command fails.'
+      story =
+        savedAnyway || hiddenFail
+          ? uploadOnly
+            ? `Claude ${uploads('the work')}, but ${stepAfter}.`
             : ships === 'push'
-              ? 'Claude tries to upload the work, and the command fails.'
-              : 'Claude tries to save the work, and the command fails.'
-          : ships === 'pr'
-            ? 'Claude opens a pull request.'
-            : uploadOnly
-              ? `Claude ${uploads('the work')}.`
+              ? `Claude saves the work${inCommits}${said} and ${uploads('it')}, but ${stepAfter}.`
+              : `Claude saves the work${inCommits}${said}, but ${stepAfter}.`
+          : panel.ok === false
+            ? ships === 'pr'
+              ? 'Claude tries to open a pull request, and the command fails.'
               : ships === 'push'
-                ? localTarget && said
-                  ? `Claude saves the work${said}, then ${uploads('it')}.`
-                  : `Claude saves the work${inCommits} and ${uploads('it')}${said}.`
-                : `Claude saves the work${inCommits}${said}.`;
+                ? 'Claude tries to upload the work, and the command fails.'
+                : 'Claude tries to save the work, and the command fails.'
+            : ships === 'pr'
+              ? 'Claude opens a pull request.'
+              : uploadOnly
+                ? `Claude ${uploads('the work')}.`
+                : ships === 'push'
+                  ? localTarget && said
+                    ? `Claude saves the work${said}, then ${uploads('it')}.`
+                    : `Claude saves the work${inCommits} and ${uploads('it')}${said}.`
+                  : `Claude saves the work${inCommits}${said}.`;
       const wrote = unique(edits.map((d) => d.file));
-      const firstAt = Math.min(...draft.events);
-      const earlier = events.slice(0, firstAt);
-      const startsRepo =
-        !earlier.some((e) => (e.commits ?? 0) > 0) &&
-        [...earlier, ...evs].some((e) => e.tool === 'Bash' && /\bgit init\b(?![^;&|\n]*\s--bare\b)/.test(e.label));
+      const startsRepo = startsRepoAt(draft.events, events);
       const lead = [
         startsRepo ? 'starts a git repository' : '',
         wrote.length ? `writes ${fileWords(wrote)}` : '',
@@ -2804,7 +2836,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         story =
           lead.length === 2
             ? `Claude ${lead.join(', ')}, and ${rest}`
-            : `Claude ${lead[0]}${rest.split('"')[0].includes(' and ') ? ',' : ' and'} ${rest}`;
+            : `Claude ${lead[0]}${rest.replace(/"[^"]*"/g, '').includes(' and ') ? ',' : ' and'} ${rest}`;
       }
       director = `${evs.map(shortCommand).slice(0, 2).join(' · ')}${errors ? ` · ${plural(errors, 'error')}` : ''}${
         edits.length ? ` · writes ${plural(unique(edits.map((d) => d.file)).length, 'file')}` : ''
@@ -2975,7 +3007,7 @@ export function buildStoryPage(turn: StoryTurn): StoryPage {
       ? { finishedLater: events.filter((e) => e.finishedLater && e.intent !== 'prompt').length }
       : {}),
   };
-  const calls = events.filter((e) => !NOT_TOOL_CALLS.has(e.intent));
+  const calls = events.filter((e) => !NOT_TOOL_CALLS.has(e.intent) && e.tool !== 'Advisor');
   // A check that found nothing answered its question: it did not fail to work.
   if (calls.length && calls.every((e) => e.ok === false && !emptyAnswer(e))) base.noneWorked = true;
   if (turn.endedAt) base.endedAt = turn.endedAt;

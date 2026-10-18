@@ -5,7 +5,7 @@
     "complete": true,
     "interrupted": false,
     "durationMs": 163647,
-    "toolCalls": 11,
+    "toolCalls": 10,
     "filesChanged": 5,
     "added": 255,
     "removed": 0,
@@ -62,7 +62,7 @@
       {
         "kind": "check",
         "ok": true,
-        "story": "Claude writes test_csvstat.py and pyproject.toml; the tests pass, and Claude saves the work.",
+        "story": "Claude writes test_csvstat.py and pyproject.toml; the tests pass, and Claude starts a git repository and saves the work.",
         "director": "python3 -m pytest -q 2>&1 → ok ×2 · 17 passed · writes 2 files · 1 commit",
         "balloon": "Code and tests are committed.",
         "tests": {
@@ -103,7 +103,7 @@
         "kind": "complete",
         "ok": null,
         "story": "Claude's part is done in 3 minutes. Its helper finished later and reported back.",
-        "director": "turn_duration · 2 min 44 s · 11 tool calls · 5 files changed · 1 helper",
+        "director": "turn_duration · 2 min 44 s · 10 tool calls · 5 files changed · 1 helper",
         "balloon": "I've built csvstat.py, a command-line tool that prints a CSV's row count and the min, max and mean of each column. Its 17 pytest tests pass, the linter (ruff) is clean, and the dry run on a sample CSV worked. A background helper is writing README.md; I didn't wait for it, so it isn't confirmed yet. Problem: numbers are shown to only 6 significant digits. Once it has finished, the fix is a one-line formatting change and an update to the README example; say if you want it.",
         "tests": null,
         "roundsOk": null,

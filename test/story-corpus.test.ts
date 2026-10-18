@@ -77,7 +77,7 @@ describe('Story Mode on real sessions', () => {
     expect(panel('python-cli-fix-loop', 0, 'loop')).toMatchObject({
       // The failing test was a real bug, the second failure only ruff: said apart, with the 4 commits made inside.
       story:
-        'Fix and test, 2 rounds: a test fails and Claude fixes it, then a layout check fails and Claude fixes that; everything passes. Claude saves the work in 4 commits along the way.',
+        'Fix and test, 2 rounds: a test fails and Claude fixes it, then a formatting check fails and Claude fixes that; everything passes. Claude starts a git repository and saves the work in 4 commits along the way.',
       roundsOk: [false, false, true],
     });
   });
@@ -107,7 +107,7 @@ describe('Story Mode on real sessions', () => {
 
   it('a commit at the end of a test one-liner is kept, and a background helper reports back in 9 s', () => {
     expect(panel('text-plan-dry-run-helper', 0, 'check')?.story).toBe(
-      'Claude writes test_csvstat.py and pyproject.toml; the tests pass, and Claude saves the work.'
+      'Claude writes test_csvstat.py and pyproject.toml; the tests pass, and Claude starts a git repository and saves the work.'
     );
     expect(panel('text-plan-dry-run-helper', 0, 'plan')?.story).toBe('Claude writes a plan: 4 steps.');
     expect(pagesOf('text-plan-dry-run-helper')[1]).toMatchObject({ origin: 'task', durationMs: 9008 });
@@ -127,7 +127,7 @@ describe('Story Mode on real sessions', () => {
       // One commit, then a push in a command of its own: one commit, not two.
       // The folder had no repository: the first save starts one, and the reader is told.
       story:
-        'Claude starts a git repository, saves the work and copies it to remote.git, a folder on this computer, but a check after that fails.',
+        'Claude starts a git repository, saves the work: "add kebab CLI that turns text into URL slugs" and copies it to remote.git, a folder on this computer, but a check after that fails.',
     });
   });
 
@@ -135,14 +135,16 @@ describe('Story Mode on real sessions', () => {
     const [first, second, third] = pagesOf('errors-push-append');
     expect(first.panels.find((p) => p.kind === 'check')?.story).toBe("The tests don't even load, as you asked.");
     expect(second.panels.find((p) => p.kind === 'loop')).toMatchObject({
-      story: 'Test first: the first run fails as planned, the second passes.',
+      // The prompt asked for it ("it should fail because mode is missing"): the user's idea, not Claude's.
+      story: 'The first run fails on purpose, as you asked; the second passes.',
       roundsOk: [false, true],
     });
     expect(second.panels.find((p) => p.kind === 'save')?.story).toBe(
-      'Claude saves the work: "add calc_stats.mode with smallest-value tie-breaking", then copies it to origin.git, a folder on this computer.'
+      // `git describe --tags` failed after the push; `; echo "exit=$?"` hid it from the exit code, not from the output.
+      'Claude saves the work: "add calc_stats.mode with smallest-value tie-breaking" and copies it to origin.git, a folder on this computer, but a check after that fails.'
     );
     expect(third.panels.find((p) => p.kind === 'save')?.story).toBe(
-      'Claude saves the work and copies it to origin.git, a folder on this computer, but a check after that fails.'
+      'Claude saves the work: "add NOTES.md describing mode behavior" and copies it to origin.git, a folder on this computer, but a check after that fails.'
     );
   });
 

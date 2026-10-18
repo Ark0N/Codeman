@@ -2524,7 +2524,7 @@ Object.assign(CodemanApp.prototype, {
         : page.superseded
           ? 'To be continued…'
           : page.noneWorked
-            ? 'Turn over'
+            ? 'Not done'
             : page.helpersRunning || page.finishedLater || page.events.some((e) => e.running && !e.helper)
               ? // Work was still out when the turn ended (and maybe still is): not a clean finish.
                 'Done for now'
