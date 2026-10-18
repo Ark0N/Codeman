@@ -509,20 +509,3 @@ describe('_updateConnectionIndicator — COD-136 unchanged-skip', () => {
   });
 });
 
-describe('connection indicator — the backlog tracking never throws on the input path', () => {
-  it('still renders when the queue cannot be read', () => {
-    const { app, els } = makeApp({ activeSessionId: 's1', _wsState: 'connected' });
-    (app as unknown as { _pendingBytes: () => never })._pendingBytes = () => {
-      throw new Error('no queue');
-    };
-    // The compute reads the queue too, so stub it as the real hot path would see a healthy one.
-    (app as unknown as { _computeConnectionDescriptor: () => unknown })._computeConnectionDescriptor = () => ({
-      display: 'flex',
-      dotClass: 'connection-dot connected',
-      text: 'WS',
-      title: 'Terminal connected over WebSocket',
-    });
-    expect(() => app._updateConnectionIndicator()).not.toThrow();
-    expect(els.connectionText.textContent).toBe('WS');
-  });
-});

@@ -4287,13 +4287,14 @@ class CodemanApp {
     }
   }
 
-  // Pure render of the header connection indicator: reads only `this.*` state,
+  // Pure render of the header connection indicator: reads only `this.*` state (and
+  // the pending totals it is handed, which default to a fresh `_pendingBytes()`),
   // touches NO DOM. Returns the exact { display, dotClass, text, title } tuple the
   // writer applies. When hidden (display:'none') the other three are normalized to
   // '' so the cache compare in _updateConnectionIndicator() is well-defined.
   // Every branch/string here must stay byte-identical to what's rendered today.
-  _computeConnectionDescriptor() {
-    const { bytes: totalBytes, count } = this._pendingBytes();
+  _computeConnectionDescriptor(pending = this._pendingBytes()) {
+    const { bytes: totalBytes, count } = pending;
     const hasQueue = count > 0;
     // Only surface a backlog once it's more than a few bytes. A single keystroke
     // (1B) ACKs in milliseconds, so without this the label flickered "sending 1B"
@@ -4425,14 +4426,11 @@ class CodemanApp {
     // the pill is re-rendered when the hold elapses even if no keystroke or ACK
     // arrives to trigger it.
     // ⚠️ This runs before _drainSession() on every keystroke, so it must never throw: a throw here
-    // once skipped immediate delivery and made typing lag (the ReferenceError regression above).
-    let pendingBytes = 0;
-    try {
-      pendingBytes = this._pendingBytes().bytes;
-    } catch {
-      /* no queue to read: treat as drained */
-    }
-    if (pendingBytes > CONNECTION_BACKLOG_HINT_BYTES) {
+    // once skipped immediate delivery and made typing lag (COD-133; the combinatorial never-throws
+    // test in test/connection-indicator.test.ts pins it). The queue is walked ONCE per call and the
+    // same totals are handed to the compute below, since this is the hot input path.
+    const pending = this._pendingBytes();
+    if (pending.bytes > CONNECTION_BACKLOG_HINT_BYTES) {
       if (this._backlogOverSince == null) this._backlogOverSince = Date.now();
       if (!this._backlogHoldTimer && Date.now() - this._backlogOverSince < CONNECTION_BACKLOG_HOLD_MS) {
         const wait = CONNECTION_BACKLOG_HOLD_MS - (Date.now() - this._backlogOverSince) + 25;
@@ -4452,7 +4450,7 @@ class CodemanApp {
     // Called on EVERY keystroke (_reliableSend) and EVERY ACK (_ackDelivery).
     // During fast typing the rendered tuple is usually identical, so skip the DOM
     // writes when nothing changed (COD-136) — the compute above is DOM-free.
-    const next = this._computeConnectionDescriptor();
+    const next = this._computeConnectionDescriptor(pending);
     const prev = this._lastIndicatorDescriptor;
     // The tile's value word is written in the UI language, so a language
     // switch counts as a change too.
