@@ -105,11 +105,11 @@ CLI is 2.1.224+ (`buildNameCliArgs`, `session-cli-builder.ts:97-101`, wired in a
 the worker's messages arrive tagged `from-name="<that name>"`; a derived-name worker's
 messages carry no `from-name`). Name your workers: a quick-start WITHOUT
 `sessionName` leaves the Codeman name empty, so there is nothing to pass and the
-peer name stays derived. ⚠️ Give them a DESCRIPTIVE name: only a name the user chose
-is pinned (`Session.cliPinnedName`), because `--name` is also the conversation's
+peer name stays derived. ⚠️ Give them a DESCRIPTIVE name: by default only a name the user chose
+is pinned (`Session.cliPinnedName`; the opt-in `pinCliSessionName` setting pins every tab name, and a rename then holds only until the next turn), because `--name` is also the conversation's
 `/resume` title and terminal title and suppresses Claude's own generated title. A
 placeholder-shaped name (`w9-msgtest`, anything matching `isGeneratedSessionName`)
-and an auto name are NOT passed, so such a worker's peer name is derived; use
+and an auto name are NOT passed (with `pinCliSessionName` off, the default), so such a worker's peer name is derived; use
 `msgtest-worker` rather than `w9-msgtest`. The flag is fail-closed (older/unknown CLI omits it, because an
 unknown flag aborts startup and would kill every spawn) and allowlist-sanitized (a name of
 only unsafe characters is dropped), and the docker/remote builders never see it at all

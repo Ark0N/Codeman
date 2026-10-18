@@ -1132,6 +1132,19 @@ export async function readPlanUsageTelemetryEnabled(): Promise<boolean> {
 }
 
 /**
+ * Whether every Claude session is launched with `--name` set to its tab name
+ * (the `pinCliSessionName` setting). Read FRESH from settings.json at every
+ * claude create and respawn, like {@link readPlanUsageTelemetryEnabled}, so a
+ * toggle applies from the next spawn with no server restart. An ABSENT key
+ * means OFF: only a name the user chose is pinned, and Claude titles the
+ * placeholder- and auto-named conversations itself (see `Session.cliPinnedName`).
+ */
+export async function readPinCliSessionNameEnabled(): Promise<boolean> {
+  const settings = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {});
+  return settings.pinCliSessionName === true;
+}
+
+/**
  * Resolve the statusLine command to pass as an EPHEMERAL `claude --settings`
  * CLI flag for this one process (see buildSpawnCommandFromRegistry in
  * session-cli-registry-bridge.ts) — never written to disk. This supersedes

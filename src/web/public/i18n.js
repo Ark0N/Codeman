@@ -678,6 +678,9 @@
     'Claude Model': 'Claude 模型',
     '1M Opus Context': 'Opus 100 万上下文',
     'Remote auto-reconnect': '远程自动重连',
+    'Pin tab names on the CLI': '在 CLI 上固定标签名',
+    "Launch every Claude session with its tab name, so the CLI's prompt label and /resume list match your tabs. Claude then stops generating its own titles for those sessions, and a rename in Codeman holds only until the next turn. Applies from the next session start or respawn, no server restart needed.":
+      '以标签名启动每个 Claude 会话，让 CLI 的提示框标签和 /resume 列表与你的标签一致。Claude 随后不再为这些会话生成自己的标题，在 Codeman 中的重命名也只保留到下一轮。从下一次会话启动或重新生成时生效，无需重启服务器。',
     'Thinking Effort': '思考强度',
     Low: '低',
     Medium: '中',
