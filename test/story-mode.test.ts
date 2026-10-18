@@ -939,10 +939,42 @@ describe('buildStoryPage', () => {
       ),
       end(1000),
     ];
+    (lines[1] as { cwd?: string }).cwd = '/w';
     (lines[2] as { cwd?: string }).cwd = '/w';
     const page = pageOf(lines);
-    expect(page.events[1].edits?.map((d) => d.file)).toEqual(['/w/test_a.py']);
-    expect(page.filesChanged).toBe(1);
+    // The script's own write and the file Claude Code says changed: both, neither with lines.
+    expect(page.events[1].edits?.map((d) => [d.file, d.hunks.length])).toEqual([
+      ['/w/t.py', 0],
+      ['/w/test_a.py', 0],
+    ]);
+    expect(page.filesChanged).toBe(2);
+  });
+
+  it('a python or node script fed by a here-document: the files it opens for writing, never guessed', () => {
+    const files = (command: string) => heredocWrites(command, '/w').map((d) => d.file);
+    expect(
+      files(
+        [
+          "python3 - <<'EOF'",
+          'p = "textstats.py"',
+          's = open(p).read()',
+          "s = s.replace('a', 'b')",
+          'open(p, "w").write(s)',
+          "Path('README.md').write_text('# x')",
+          "with open('notes.txt', mode='a') as f: f.write('x')",
+          "open('/tmp/scratch.txt', 'w').write('x')",
+          "open(os.path.join(d, 'x.py'), 'w')",
+          "open('data.json').read()",
+          'EOF',
+        ].join('\n')
+      )
+    ).toEqual(['/w/textstats.py', '/w/README.md', '/w/notes.txt']);
+    expect(files("node <<'EOF'\nconst out = 'dist/app.js';\nfs.writeFileSync(out, code);\nEOF")).toEqual([
+      '/w/dist/app.js',
+    ]);
+    expect(files("python3 - <<'EOF'\nprint(open('a.py').read())\nEOF")).toEqual([]);
+    const [edit] = heredocWrites("python3 - <<'EOF'\nopen('a.py', 'w').write('x')\nEOF", '/w');
+    expect(edit).toMatchObject({ file: '/w/a.py', added: 0, removed: 0, hunks: [], truncated: true });
   });
 
   it('a compaction says what it did; ToolSearch is looking; EnterPlanMode says plan mode', () => {

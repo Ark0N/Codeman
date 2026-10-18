@@ -566,8 +566,9 @@ function judgeBashCommand(command: string): { intent: StoryIntent; segment: stri
  * Files a command writes through here-documents: `cat > f <<'EOF'`, `cat <<EOF > f`, `tee f <<EOF`
  * (and `>>` / `tee -a`, appends). Each becomes a whole-file edit of the body's lines. A relative
  * target resolves against the transcript line's `cwd` unless the command changed directory first;
- * scratch targets (`/tmp/x`, `"$S/x"`) are not project files. A body piped into a program
- * (`python3 - <<EOF`) writes nothing.
+ * scratch targets (`/tmp/x`, `"$S/x"`) are not project files. A script fed to python or node
+ * (`python3 - <<EOF`) is read for the files it opens for writing; those are edits without lines,
+ * since what the script changed is not in the command.
  */
 export function heredocWrites(command: string, cwd?: string): StoryEdit[] {
   const out: StoryEdit[] = [...echoWrites(command, cwd)];
@@ -600,6 +601,18 @@ export function heredocWrites(command: string, cwd?: string): StoryEdit[] {
         append = !!tee[1];
       }
     }
+    if (!target && /\b(python3?|node)\b/.test(before)) {
+      for (const written of scriptWrites(body)) {
+        if (SCRATCH_TARGET.test(written) || out.some((d) => d.file.endsWith(written))) continue;
+        const file =
+          written.startsWith('/') || !cwd || moved
+            ? written
+            : `${cwd.replace(/\/+$/, '')}/${written.replace(/^\.\//, '')}`;
+        out.push({ file, added: 0, removed: 0, created: false, hunks: [], truncated: true });
+        if (out.length >= 6) break;
+      }
+      continue;
+    }
     if (!target || SCRATCH_TARGET.test(target)) continue;
     const file =
       target.startsWith('/') || !cwd || moved ? target : `${cwd.replace(/\/+$/, '')}/${target.replace(/^\.\//, '')}`;
@@ -620,6 +633,41 @@ export function heredocWrites(command: string, cwd?: string): StoryEdit[] {
     });
   }
   return out;
+}
+
+/**
+ * Files a python or node script opens for writing: `open('a.py', 'w')`, `open(p, "w")` after
+ * `p = "a.py"`, `Path('a.py').write_text(...)`, `fs.writeFileSync('a.js', ...)`. Only string literals
+ * and names bound to one; anything computed is left out rather than guessed.
+ */
+function scriptWrites(body: string[]): string[] {
+  const names = new Map<string, string>();
+  for (const line of body) {
+    const m = /^\s*(?:(?:const|let|var)\s+)?([A-Za-z_]\w*)\s*=\s*(?:Path\(\s*)?(['"])([^'"\n]+)\2\s*\)?\s*;?\s*$/.exec(
+      line
+    );
+    if (m) names.set(m[1], m[3]);
+  }
+  const target = (lit: string | undefined, name: string | undefined) => lit ?? (name ? names.get(name) : undefined);
+  const found: Array<{ at: number; file: string }> = [];
+  const text = body.join('\n');
+  const patterns = [
+    // open(target, 'w') / open(target, mode="a+")
+    /\bopen\(\s*(?:(['"])([^'"\n]+)\1|([A-Za-z_]\w*))\s*,\s*(?:mode\s*=\s*)?(['"])([rwaxbt+]*)\4/g,
+    // Path(target).write_text( / name.write_text(
+    /(?:\bPath\(\s*(?:(['"])([^'"\n]+)\1|([A-Za-z_]\w*))\s*\)|\b([A-Za-z_]\w*))\.write_(?:text|bytes)\(/g,
+    // fs.writeFileSync(target / appendFileSync(target
+    /\b(?:write|append)File(?:Sync)?\(\s*(?:(['"])([^'"\n]+)\1|([A-Za-z_]\w*))/g,
+  ];
+  for (const [k, re] of patterns.entries()) {
+    for (const m of text.matchAll(re)) {
+      if (k === 0 && !/[wax+]/.test(m[5])) continue;
+      const file = k === 1 ? target(m[2], m[3] ?? m[4]) : target(m[2], m[3]);
+      if (file && !/[*?$`{}]/.test(file)) found.push({ at: m.index ?? 0, file });
+    }
+  }
+  // In the order the script writes them.
+  return unique(found.sort((x, y) => x.at - y.at).map((f) => f.file)).slice(0, 6);
 }
 
 /**
