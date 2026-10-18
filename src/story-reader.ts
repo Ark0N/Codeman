@@ -87,7 +87,16 @@ async function readRange(path: string, start: number, end: number): Promise<Buff
 
 const entryChars = (e: StoryEntry): number => JSON.stringify(e).length;
 
-function ingest(entry: CacheEntry, buf: Buffer, startsMidLine: boolean): void {
+/** Bytes of lines parsed between yields to the event loop: a big first read must not stall the server. */
+const YIELD_EVERY_BYTES = 1024 * 1024;
+const yieldToLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/**
+ * Parses the complete lines in `buf` into the entry. Lines are decoded one at a time (never the whole
+ * buffer as one string: a 64 MB tail would be ~128 MB of UTF-16), and the loop yields every
+ * `YIELD_EVERY_BYTES`, so even the largest read keeps the event loop moving.
+ */
+async function ingest(entry: CacheEntry, buf: Buffer, startsMidLine: boolean): Promise<void> {
   let begin = 0;
   if (startsMidLine) {
     const firstNewline = buf.indexOf(0x0a);
@@ -100,19 +109,29 @@ function ingest(entry: CacheEntry, buf: Buffer, startsMidLine: boolean): void {
     entry.offset += begin;
     return;
   }
-  const text = buf.subarray(begin, lastNewline).toString('utf8');
   entry.offset += lastNewline + 1;
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue; // a malformed line is skipped, never fatal
+  let pos = begin;
+  let sinceYield = 0;
+  while (pos < lastNewline) {
+    let nl = buf.indexOf(0x0a, pos);
+    if (nl < 0 || nl > lastNewline) nl = lastNewline;
+    if (nl - pos > 1) {
+      let parsed: unknown = null;
+      try {
+        parsed = JSON.parse(buf.toString('utf8', pos, nl));
+      } catch {
+        parsed = null; // a malformed line is skipped, never fatal
+      }
+      for (const reduced of entry.reducer.reduce(parsed)) {
+        entry.entries.push(reduced);
+        entry.chars += entryChars(reduced);
+      }
     }
-    for (const reduced of entry.reducer.reduce(parsed)) {
-      entry.entries.push(reduced);
-      entry.chars += entryChars(reduced);
+    sinceYield += nl - pos + 1;
+    pos = nl + 1;
+    if (sinceYield >= YIELD_EVERY_BYTES) {
+      sinceYield = 0;
+      await yieldToLoop();
     }
   }
   while (entry.entries.length > MAX_ENTRIES || (entry.chars > MAX_CHARS && entry.entries.length > 1)) {
@@ -139,7 +158,7 @@ async function load(path: string, sidechain: boolean): Promise<StoryEntriesResul
   ) {
     // The file only grew: read what was appended since the last complete line.
     const buf = await readRange(path, cached.offset, info.size);
-    ingest(cached, buf, false);
+    await ingest(cached, buf, false);
     cached.size = info.size;
     cached.mtimeMs = info.mtimeMs;
     cache.set(key, cached);
@@ -161,7 +180,7 @@ async function load(path: string, sidechain: boolean): Promise<StoryEntriesResul
       reducer: createStoryReducer({ sidechain }),
       partial: start > 0,
     };
-    ingest(fresh, await readRange(path, start, info.size), start > 0);
+    await ingest(fresh, await readRange(path, start, info.size), start > 0);
     if (start === 0 || hasTurnStart(fresh.entries)) break;
   }
   const done = fresh as CacheEntry;
