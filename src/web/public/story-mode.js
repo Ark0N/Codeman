@@ -2598,7 +2598,9 @@ Object.assign(CodemanApp.prototype, {
       const capRight = cap ? cap.offsetLeft + capW : 0;
       const capBottom = cap ? cap.offsetTop + cap.offsetHeight : 0;
       const right = Math.max(10, Math.min(rt.w - 160, rt.w - hx - 38));
-      let maxW = Math.min(rt.w * 0.5, rt.w - right - 14);
+      // The loop has no Claude to keep clear of on the left: its balloon may run wide, so it stays
+      // short and ends above the board it points at.
+      let maxW = Math.min(rt.w * (rt.kind === 'loop' ? 0.9 : 0.5), rt.w - right - 14);
       let top = 10;
       const besideCap = rt.w - right - capRight - 10;
       if (besideCap >= 150) maxW = Math.min(maxW, besideCap);
@@ -2614,14 +2616,19 @@ Object.assign(CodemanApp.prototype, {
       for (const prop of ['left', 'right', 'top', 'max-width']) b.style.removeProperty(prop);
     }
     // Clamp a long text: inside the panel always, and off Claude's head when three lines allow.
-    const text = b.firstElementChild;
+    const text = b.querySelector('.story-balloon-text');
     if (!text) return;
     text.style.removeProperty('--story-lines');
     const lh = parseFloat(getComputedStyle(text).lineHeight) || 19;
     const pad = b.offsetHeight - text.offsetHeight;
-    const limit = placed ? Math.max(b.offsetTop + pad + 3 * lh, head.top * s - 22) : rt.h - 12;
+    // The loop's "head" is its board: down to one line rather than over the test count.
+    const least = rt.kind === 'loop' ? 1 : placed ? 3 : 2;
+    const limit = placed ? Math.max(b.offsetTop + pad + least * lh, head.top * s - 22) : rt.h - 12;
     if (b.offsetHeight && b.offsetTop + b.offsetHeight > limit)
-      text.style.setProperty('--story-lines', String(Math.max(2, Math.floor((limit - b.offsetTop - pad) / lh))));
+      text.style.setProperty(
+        '--story-lines',
+        String(Math.max(Math.min(least, 2), Math.floor((limit - b.offsetTop - pad) / lh)))
+      );
   },
 
   /** Canvas click regions become real buttons: focusable, labelled, keyboard-reachable. */
