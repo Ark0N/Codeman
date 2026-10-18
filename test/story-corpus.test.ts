@@ -55,7 +55,7 @@ function pagesOf(name: string) {
 
 describe('Story Mode on real sessions', () => {
   it('has the corpus', () => {
-    expect(NAMES.length).toBeGreaterThanOrEqual(9);
+    expect(NAMES.length).toBeGreaterThanOrEqual(11);
   });
 
   it.each(NAMES)('%s draws as it did when it was checked by hand', (name) => {
@@ -119,6 +119,37 @@ describe('Story Mode on real sessions', () => {
       // One commit, then a push in a command of its own: one commit, not two.
       story: 'Claude saves the work and uploads it, but a step after that fails.',
     });
+  });
+
+  it('tests that do not load, a commit then a push in its own command, a push with a failing step after it', () => {
+    const [first, second, third] = pagesOf('errors-push-append');
+    expect(first.panels.find((p) => p.kind === 'check')?.story).toBe("The tests don't even load.");
+    expect(second.panels.find((p) => p.kind === 'loop')).toMatchObject({
+      story: 'Fix and test: the first run fails, the second passes.',
+      roundsOk: [false, true],
+    });
+    expect(second.panels.find((p) => p.kind === 'save')?.story).toBe(
+      'Claude saves the work and uploads it: "feat: add calc_stats.mode with smallest-value tie-breaking".'
+    );
+    expect(third.panels.find((p) => p.kind === 'save')?.story).toBe(
+      'Claude saves the work and uploads it, but a step after that fails.'
+    );
+  });
+
+  it('helpers and a command in the background: their reports are turns of their own, counted where they started', () => {
+    const pages = pagesOf('background-helpers-reports');
+    expect(pages[0].panels.find((p) => p.kind === 'backup')?.story).toBe(
+      'Claude sends 2 helpers off to work in the background.'
+    );
+    expect(pages[0].helpers).toBe(2);
+    for (const report of [pages[1], pages[2], pages[4], pages[5]]) {
+      expect(report.origin).toBe('task');
+      expect(report.helpers).toBe(0);
+      expect(report.panels[0].story).toBe('A background job reports back.');
+    }
+    expect(pages[3].panels.map((p) => p.story)).toContain('The tests run in the background and pass.');
+    // A python script that rewrote README.md counts as a change, beside the two files written.
+    expect(pages[3].panels.map((p) => p.story)).toContain('Claude changes 3 files.');
   });
 
   it('a blocked command ends a turn where nothing worked, without a celebration', () => {

@@ -1,0 +1,449 @@
+[
+  {
+    "prompt": "Build a tiny Python word-count tool here (no git, no installs). First, use the Agent tool TWICE with",
+    "origin": "human",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 36371,
+    "toolCalls": 5,
+    "filesChanged": 2,
+    "added": 44,
+    "removed": 0,
+    "helpers": 2,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You give Claude a job.",
+        "director": "Prompt · 87 words",
+        "balloon": "Build a tiny Python word-count tool here (no git, no installs). First, use the Agent tool TWICE with run_in_background: true to start two background helper agents in parallel: helper A writes README.md describing wordcount.py (usage: python3 wordcount.py FILE prints lines, words, chars), helper B writes extra pytest tests in tests/test_extra.py for count(text) returning a (lines, words, chars) tu…",
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "backup",
+        "ok": null,
+        "story": "Claude sends 2 helpers off to work in the background.",
+        "director": "Agent ×2 · general-purpose · 8 calls inside",
+        "balloon": "Starting both helpers in parallel first.",
+        "tests": null,
+        "roundsOk": null,
+        "events": 2
+      },
+      {
+        "kind": "fix",
+        "ok": null,
+        "story": "Claude writes 2 new files.",
+        "director": "Write ×2 · wordcount.py +23 · test_basic.py +21",
+        "balloon": null,
+        "tests": null,
+        "roundsOk": null,
+        "events": 2
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests pass.",
+        "director": "python3 -m pytest -q 2>&1 → ok · 4 passed",
+        "balloon": null,
+        "tests": {
+          "passed": 4,
+          "failed": 0
+        },
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 36 seconds.",
+        "director": "turn_duration · 36 s · 5 tool calls · 2 files changed · 2 helpers",
+        "balloon": "I wrote wordcount.py and tests/test_basic.py, and the one python3 -m pytest -q run passed 4 of 4 tests.",
+        "tests": null,
+        "roundsOk": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "Agent \"Helper A: write README.md\" finished",
+    "origin": "task",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 14201,
+    "toolCalls": 1,
+    "filesChanged": 0,
+    "added": 0,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "A background job reports back.",
+        "director": "Prompt · 6 words · task",
+        "balloon": "Agent \"Helper A: write README.md\" finished",
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "investigate",
+        "ok": null,
+        "story": "Claude reads 1 file to find its way around.",
+        "director": "Bash · cat /work/cases/story-r6-b/README.md",
+        "balloon": null,
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 14 seconds.",
+        "director": "turn_duration · 14 s · 1 tool call",
+        "balloon": "Helper A has finished writing README.md, and I checked it against the code.",
+        "tests": null,
+        "roundsOk": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "Agent \"Helper B: write extra pytest tests\" finished",
+    "origin": "task",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 11217,
+    "toolCalls": 1,
+    "filesChanged": 0,
+    "added": 0,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "A background job reports back.",
+        "director": "Prompt · 8 words · task",
+        "balloon": "Agent \"Helper B: write extra pytest tests\" finished",
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests pass.",
+        "director": "python3 -m pytest -q 2>&1 → ok · 22 passed",
+        "balloon": "Helper B finished; running the full suite against the real wordcount.py now.",
+        "tests": {
+          "passed": 22,
+          "failed": 0
+        },
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 11 seconds.",
+        "director": "turn_duration · 11 s · 1 tool call",
+        "balloon": "Both helpers have finished.",
+        "tests": null,
+        "roundsOk": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "Follow-up, no git: first start ONE background helper with the Agent tool (run_in_background: true) t",
+    "origin": "human",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 51878,
+    "toolCalls": 5,
+    "filesChanged": 3,
+    "added": 18,
+    "removed": 4,
+    "helpers": 1,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You give Claude a job.",
+        "director": "Prompt · 93 words",
+        "balloon": "Follow-up, no git: first start ONE background helper with the Agent tool (run_in_background: true) that writes CHANGELOG.md slowly: it must run sleep 20 with Bash, then Write CHANGELOG.md with one entry, then run sleep 20 again, then add a second entry with the Edit tool. Next, start the full test suite in the background with the Bash tool's run_in_background: true parameter, as: sleep 30; python…",
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "backup",
+        "ok": null,
+        "story": "Claude sends 1 helper off to work in the background.",
+        "director": "Agent · general-purpose · 4 calls inside",
+        "balloon": null,
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests run in the background and pass.",
+        "director": "python3 -m pytest -q → ok",
+        "balloon": null,
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "fix",
+        "ok": null,
+        "story": "Claude changes 3 files.",
+        "director": "Write ×2 · Bash · wordcount.py +11 −4 · test_basic.py +7 · README.md ±0",
+        "balloon": null,
+        "tests": null,
+        "roundsOk": null,
+        "events": 3
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 52 seconds.",
+        "director": "turn_duration · 52 s · 5 tool calls · 3 files changed · 1 helper",
+        "balloon": "I added the --json flag and started the helper and the test run as you asked.",
+        "tests": null,
+        "roundsOk": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "Background command \"Run full test suite after a 30s delay\" completed (exit code 0)",
+    "origin": "task",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 7033,
+    "toolCalls": 1,
+    "filesChanged": 0,
+    "added": 0,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "A background job reports back.",
+        "director": "Prompt · 14 words · task",
+        "balloon": "Background command \"Run full test suite after a 30s delay\" completed (exit code 0)",
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests pass.",
+        "director": "tail -5 /tmp/claude/-work-cases-story-r6-b/a1a47282-e3ca-45… → ok · 23 passed",
+        "balloon": null,
+        "tests": {
+          "passed": 23,
+          "failed": 0
+        },
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 7 seconds.",
+        "director": "turn_duration · 7 s · 1 tool call",
+        "balloon": "The background test run finished and all 23 tests passed, including the new --json test.",
+        "tests": null,
+        "roundsOk": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "Agent \"Helper: write CHANGELOG.md slowly\" finished",
+    "origin": "task",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 8053,
+    "toolCalls": 1,
+    "filesChanged": 0,
+    "added": 0,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "A background job reports back.",
+        "director": "Prompt · 6 words · task",
+        "balloon": "Agent \"Helper: write CHANGELOG.md slowly\" finished",
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "investigate",
+        "ok": null,
+        "story": "Claude reads 1 file to find its way around.",
+        "director": "Bash · cat /work/cases/story-r6-b/CHANGELOG.md",
+        "balloon": null,
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 8 seconds.",
+        "director": "turn_duration · 8 s · 1 tool call",
+        "balloon": "Everything you asked for this round is done.",
+        "tests": null,
+        "roundsOk": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "Small follow-up, no git: run python3 -m pytest -q once, then show the first 5 lines of CHANGELOG.md ",
+    "origin": "human",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 12517,
+    "toolCalls": 2,
+    "filesChanged": 0,
+    "added": 0,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You give Claude a job.",
+        "director": "Prompt · 26 words",
+        "balloon": "Small follow-up, no git: run python3 -m pytest -q once, then show the first 5 lines of CHANGELOG.md with head -5, then reply with one sentence.",
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "check",
+        "ok": true,
+        "story": "The tests pass.",
+        "director": "python3 -m pytest -q 2>&1 → ok · 23 passed",
+        "balloon": null,
+        "tests": {
+          "passed": 23,
+          "failed": 0
+        },
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "investigate",
+        "ok": null,
+        "story": "Claude reads 1 file to find its way around.",
+        "director": "Bash · head -5 /work/cases/story-r6-b/CHANGELOG.md",
+        "balloon": null,
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 13 seconds.",
+        "director": "turn_duration · 13 s · 2 tool calls",
+        "balloon": "All 23 tests passed, and the first five lines of CHANGELOG.md are the # Changelog title, the ## 2026-10-18 heading and the wordcount.py entry, with the --json entry on line 6, just past what head -5 shows.",
+        "tests": null,
+        "roundsOk": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "Reply with just the word OK, no tools.",
+    "origin": "human",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 2547,
+    "toolCalls": 0,
+    "filesChanged": 0,
+    "added": 0,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You give Claude a job.",
+        "director": "Prompt · 8 words",
+        "balloon": "Reply with just the word OK, no tools.",
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 3 seconds.",
+        "director": "turn_duration · 3 s · 0 tool calls",
+        "balloon": "OK",
+        "tests": null,
+        "roundsOk": null,
+        "events": 0
+      }
+    ]
+  },
+  {
+    "prompt": "Reply with just the word DONE, no tools.",
+    "origin": "human",
+    "complete": true,
+    "interrupted": false,
+    "durationMs": 5054,
+    "toolCalls": 0,
+    "filesChanged": 0,
+    "added": 0,
+    "removed": 0,
+    "helpers": 0,
+    "helpersRunning": 0,
+    "panels": [
+      {
+        "kind": "mission",
+        "ok": null,
+        "story": "You give Claude a job.",
+        "director": "Prompt · 8 words",
+        "balloon": "Reply with just the word DONE, no tools.",
+        "tests": null,
+        "roundsOk": null,
+        "events": 1
+      },
+      {
+        "kind": "complete",
+        "ok": null,
+        "story": "Done in 5 seconds.",
+        "director": "turn_duration · 5 s · 0 tool calls",
+        "balloon": "DONE",
+        "tests": null,
+        "roundsOk": null,
+        "events": 0
+      }
+    ]
+  }
+]

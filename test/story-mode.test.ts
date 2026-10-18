@@ -740,6 +740,10 @@ describe('buildStoryTurns', () => {
     expect(first.events[1].output).toBe(
       'Finished in the background, exit code 0. Its report is the turn it came back in.'
     );
+    // Not tests that ran during that turn: they ran later, in the background.
+    expect(first.panels.find((p) => p.kind === 'check')!.caption.story).toBe(
+      'The tests run in the background and pass.'
+    );
     const second = buildStoryPage(turns[1]);
     expect(second.panels.find((p) => p.kind === 'check')).toMatchObject({
       caption: { story: 'The tests pass.' },
@@ -1051,6 +1055,14 @@ describe('buildStoryPage', () => {
     expect(files("python3 - <<'EOF'\nprint(open('a.py').read())\nEOF")).toEqual([]);
     const [edit] = heredocWrites("python3 - <<'EOF'\nopen('a.py', 'w').write('x')\nEOF", '/w');
     expect(edit).toMatchObject({ file: '/w/a.py', added: 0, removed: 0, hunks: [], truncated: true });
+    // A script that writes project files is an edit: it draws as a change, not as terminal work.
+    const lines = [
+      prompt('rewrite'),
+      ...bash('b1', "python3 - <<'EOF'\nopen('a.py', 'w').write('x')\nEOF", 'Rewrite a.py', ''),
+      end(1000),
+    ];
+    (lines[1] as { cwd?: string }).cwd = '/w';
+    expect(pageOf(lines).panels.map((p) => p.kind)).toEqual(['mission', 'fix', 'complete']);
   });
 
   it('a compaction says what it did; ToolSearch is looking; EnterPlanMode says plan mode', () => {

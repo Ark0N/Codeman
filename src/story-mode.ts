@@ -951,6 +951,8 @@ function reduceInput(name: string, input: unknown, cwd?: string): ReducedInput {
         input.headline = clip(segment, 200);
       const writes = heredocWrites(full, cwd);
       if (writes.length) input.writes = writes;
+      // A script or command that writes project files is an edit, whatever it was run as.
+      if (writes.length && (intent === 'run' || intent === 'look')) input.intent = 'edit';
       // Files it prints, whatever else it does (`cat a.py && pytest`): the drawer offers them. A
       // relative name resolves against the line's cwd (printedFiles gives none after a `cd`).
       const reads = printedFiles(full).map((f) =>
@@ -1522,6 +1524,7 @@ function applyResult(ev: StoryEvent, r: Extract<StoryEntry, { k: 'result' }>): v
   if (r.background) {
     // Started, not done: its task notification says how it ended.
     ev.running = true;
+    ev.background = true;
     ev.ok = undefined;
   }
   // Reading a background job's output file that reports tests is a look at test results.
@@ -1533,7 +1536,9 @@ function applyResult(ev: StoryEvent, r: Extract<StoryEntry, { k: 'result' }>): v
   )
     ev.intent = 'test';
   if (r.modified?.length) {
-    // Changed, but no diff to show: the file is listed, its lines unknown.
+    // Changed, but no diff to show: the file is listed, its lines unknown. A plain command that did
+    // it (a script, a formatter) edited files.
+    if (ev.intent === 'run' || ev.intent === 'look') ev.intent = 'edit';
     const known = new Set((ev.edits ?? []).map((d) => d.file));
     const more = r.modified
       .filter((f) => !known.has(f))
@@ -2271,6 +2276,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const failedFirst = checks.slice(0, -1).some((e) => passed(e) === false);
       if (lastCheck?.running)
         story = isTest ? 'Claude starts the tests in the background.' : 'Claude starts the checks in the background.';
+      // Finished later, in the background: not tests that ran during this turn.
+      else if (lastCheck?.background && ok !== undefined)
+        story = `The ${isTest ? 'tests' : 'checks'} run in the background and ${ok ? 'pass' : 'fail'}.`;
       else if (ok === undefined) story = isTest ? 'Claude runs the tests.' : 'Claude runs the checks.';
       else if (!ok && tests && !tests.passed && !tests.failed && tests.errors) story = "The tests don't even load.";
       else if (!ok && tests && tests.passed && !tests.failed && !tests.errors)

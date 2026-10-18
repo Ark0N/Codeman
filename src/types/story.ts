@@ -128,6 +128,8 @@ export interface StoryEvent {
   description?: string;
   /** A command sent to the background ("Command running in background") that has not reported back. */
   running?: boolean;
+  /** A command that ran in the background (its result came back later, as a report of its own). */
+  background?: boolean;
   /** A save that ships the work: `gh pr create` (`pr`) or `git push` (`push`). */
   ships?: 'pr' | 'push';
   /** How many commits a Bash call makes (`git commit` segments). */
