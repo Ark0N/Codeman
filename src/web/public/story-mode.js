@@ -1975,7 +1975,10 @@ Object.assign(CodemanApp.prototype, {
       ...turns.map((t, i) => {
         const o = document.createElement('option');
         o.value = t.id;
-        o.textContent = `${i + 1}. ${t.prompt || (t.origin === 'task' ? 'Background task' : 'Earlier work')}`;
+        o.textContent = `${i + 1}. ${
+          t.prompt ||
+          (t.origin === 'task' ? 'Background task' : t.origin === 'system' ? 'Claude carries on' : 'Earlier work')
+        }`;
         return o;
       })
     );

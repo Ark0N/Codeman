@@ -726,6 +726,7 @@ function originOf(turnOrigin: unknown, kind: 'prompt' | 'task' | 'peer'): StoryT
   if (turnOrigin === 'task_notification' || turnOrigin === 'task-notification' || kind === 'task') return 'task';
   if (turnOrigin === 'peer' || turnOrigin === 'coordinator' || kind === 'peer') return 'peer';
   if (turnOrigin === 'human') return 'human';
+  if (turnOrigin === 'scheduled') return 'scheduled';
   if (typeof turnOrigin === 'string') return 'system';
   return 'human';
 }
@@ -977,7 +978,9 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
       }
       if (results.length) return out;
     }
-    if (entry.isMeta === true || entry.turnCompanion === true) return out;
+    // A scheduled task's prompt is written as a meta line; it still starts a turn of its own.
+    const scheduled = entry.turnOrigin === 'scheduled' || typeof entry.scheduledTaskId === 'string';
+    if ((entry.isMeta === true && !scheduled) || entry.turnCompanion === true) return out;
     const local = /^\s*<local-command-(stdout|stderr)>([\s\S]*?)<\/local-command-\1>/.exec(blockText(content));
     if (local) {
       // eslint-disable-next-line no-control-regex
@@ -1147,6 +1150,9 @@ export interface StoryTurn {
   /** What ended the turn, for the Director's cut. */
   endedBy?: 'turn_duration' | 'stop_hook_summary' | 'local command' | 'interrupted' | 'next prompt';
 }
+
+/** How long after a turn's end a line may still belong to it (Claude Code flushes some lines late). */
+const LATE_FLUSH_MS = 5000;
 
 /** Plan mode keeps its plan in a file under `~/.claude/plans/`: writing it is planning, not changing code. */
 const PLAN_FILE = /\/\.claude\/plans\/[^/]+\.md$/;
@@ -1374,13 +1380,16 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
     if (report.status && !/^(completed|done|finished|success)/i.test(report.status)) ev.ok = false;
   };
   const ensure = (at: string): StoryTurn => {
-    if (!cur) {
+    // Work that comes well after a turn ended (no prompt of its own) is a turn of its own; a line
+    // Claude Code flushed a moment late still joins the turn it belongs to.
+    const after = cur?.ended ? Date.parse(at) - Date.parse(cur.endedAt ?? at) : 0;
+    if (!cur || (cur.ended && Number.isFinite(after) && after > LATE_FLUSH_MS)) {
       cur = {
-        id: `partial-${at}`,
+        id: cur ? `continued-${at}` : `partial-${at}`,
         at,
         prompt: '',
-        origin: 'human',
-        partial: true,
+        origin: cur ? 'system' : 'human',
+        partial: !cur,
         events: [],
         ended: false,
         interrupted: false,
@@ -1729,15 +1738,20 @@ function capPanels(panels: DraftPanel[], max: number): DraftPanel[] {
   const firstMergeable = out[0]?.kind === 'mission' ? 1 : 0;
   while (out.length > max) {
     let best = -1;
-    search: for (const strict of [true, false]) {
+    // Three passes: quiet kinds; then anything but a prompt or a question; then, as a last resort, a
+    // prompt you added mid-turn (the turn's own prompt and a question to you are never folded).
+    search: for (const pass of [0, 1, 2]) {
       for (const lastStart of [out.length - 3, out.length - 2]) {
         let oldest = -1;
         for (let k = firstMergeable; k <= lastStart; k++) {
           const a = out[k];
           const b = out[k + 1];
-          const ok = strict
-            ? MINOR.has(a.kind) && MINOR.has(b.kind)
-            : ![a.kind, b.kind].some((kind) => kind === 'mission' || kind === 'ask');
+          const ok =
+            pass === 0
+              ? MINOR.has(a.kind) && MINOR.has(b.kind)
+              : pass === 1
+                ? ![a.kind, b.kind].some((kind) => kind === 'mission' || kind === 'ask')
+                : ![a, b].some((d) => d.kind === 'ask' || (d.kind === 'mission' && d.events[0] === out[0]?.events[0]));
           if (!ok) continue;
           if (a.kind === 'montage' || b.kind === 'montage') {
             best = k;
@@ -1820,6 +1834,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         human: 'You give Claude a job.',
         task: 'A background job reports back.',
         peer: 'Another session sends a message.',
+        scheduled: 'A scheduled task starts this turn.',
         system: 'Something automatic starts this turn.',
       };
       const origin = evs[0]?.origin ?? turn.origin;
@@ -2053,7 +2068,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       break;
     case 'montage':
       panel.notes = notesOf(evs.filter((e) => e.tool === 'Bash'));
-      story = `Claude keeps going: ${montageSummary(evs)}.`;
+      const added = evs.filter((e) => e.intent === 'prompt').length;
+      story = `Claude keeps going${added ? ` (you add ${plural(added, 'thing')})` : ''}: ${montageSummary(evs)}.`;
       break;
     case 'complete':
       break;

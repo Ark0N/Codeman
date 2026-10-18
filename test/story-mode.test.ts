@@ -617,6 +617,72 @@ describe('buildStoryTurns', () => {
     expect(page.filesChanged).toBe(1);
   });
 
+  it('a scheduled task (its prompt a meta line) is a turn of its own, not part of the one before', () => {
+    const turns = buildStoryTurns(
+      entriesOf([
+        prompt('/compact', { promptId: 'p1' }),
+        prompt('<command-name>/compact</command-name>', { promptId: 'p1' }),
+        prompt('<local-command-stdout>Compacted</local-command-stdout>', { promptId: 'p1' }),
+        {
+          type: 'system',
+          subtype: 'scheduled_task_fire',
+          timestamp: '2026-10-18T11:00:00.000Z',
+          prompt: 'Resume the work',
+        },
+        prompt('Resume the work', {
+          isMeta: true,
+          turnOrigin: 'scheduled',
+          promptSource: 'system',
+          scheduledTaskId: 'abc',
+        }),
+        ...bash('b', 'ls', 'List', 'a'),
+        end(5000),
+      ])
+    );
+    expect(turns.map((t) => [t.prompt, t.origin, t.endedBy])).toEqual([
+      ['/compact', 'human', 'local command'],
+      ['Resume the work', 'scheduled', 'turn_duration'],
+    ]);
+    expect(buildStoryPage(turns[1]).panels[0].caption.story).toBe('A scheduled task starts this turn.');
+  });
+
+  it('work long after a turn ended is a turn of its own; a line flushed a moment late still joins', () => {
+    const turns = buildStoryTurns(
+      entriesOf([
+        prompt('one'),
+        end(1000),
+        { ...said('Late line.'), timestamp: undefined },
+        {
+          type: 'assistant',
+          timestamp: '2026-10-18T12:00:00.000Z',
+          message: { content: [{ type: 'tool_use', id: 'x', name: 'Bash', input: { command: 'ls' } }] },
+        },
+      ])
+    );
+    expect(turns).toHaveLength(2);
+    expect(turns[1]).toMatchObject({ origin: 'system', prompt: '', ended: false });
+    expect(turns[1].events.map((e) => e.tool)).toEqual(['Bash']);
+  });
+
+  it('a page with many prompts added mid-turn still fits, folding added prompts last', () => {
+    const queued = (text: string, i: number) => ({
+      type: 'attachment',
+      timestamp: `2026-10-18T09:5${i}:00.000Z`,
+      attachment: { type: 'queued_command', prompt: text, commandMode: 'prompt', origin: { kind: 'human' } },
+    });
+    const lines: unknown[] = [prompt('big job')];
+    for (let i = 0; i < 8; i++) {
+      lines.push(queued(`also do ${i}`, i));
+      lines.push(...edit(`e${i}`, `/w/f${i}.ts`, ['+x']));
+      lines.push(...bash(`b${i}`, 'npm test', 'Run tests', ' Tests  4 passed (4)'));
+    }
+    lines.push(end(60_000));
+    const page = pageOf(lines);
+    expect(page.panels.length).toBeLessThanOrEqual(STORY_LIMITS.panelsPerPage);
+    expect(page.panels[0].kind).toBe('mission');
+    expect(page.panels.some((p) => /you add \d+ things?/.test(p.caption.story))).toBe(true);
+  });
+
   it('an interrupt ends the turn', () => {
     const turns = buildStoryTurns(
       entriesOf([prompt('go'), ...bash('b', 'ls', 'List', 'a'), prompt('[Request interrupted by user]')])

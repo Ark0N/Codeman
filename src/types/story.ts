@@ -52,7 +52,7 @@ export type StoryPanelKind =
 export type StoryActor = 'you' | 'claude' | 'helper' | 'system';
 
 /** Who started a turn: you, a background task reporting back, another session, or a schedule/SDK. */
-export type StoryTurnOrigin = 'human' | 'task' | 'peer' | 'system';
+export type StoryTurnOrigin = 'human' | 'task' | 'peer' | 'scheduled' | 'system';
 
 /** One hunk of an edit, in the shape of Claude Code's `structuredPatch` (lines keep their ` `/`+`/`-` prefix). */
 export interface StoryHunk {
