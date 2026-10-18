@@ -984,6 +984,31 @@ describe('buildStoryPage', () => {
     expect(pageOf([prompt('c'), ...bash('b1', 'git commit -qm x', 'Commit', ''), end(1000)]).events[1].commits).toBe(1);
   });
 
+  it('a stop names the step Claude was on and what its to-do list still had open', () => {
+    const stopped = (lines: unknown[]) =>
+      pageOf([...lines, prompt('[Request interrupted by user]')]).panels.find((p) => p.kind === 'complete')!.caption
+        .story;
+    expect(
+      stopped([
+        prompt('three things'),
+        tool('t1', 'TodoWrite', {
+          todos: [
+            { content: 'Split the module', status: 'completed' },
+            { content: 'Write the new tests', status: 'in_progress' },
+            { content: 'Update the README', status: 'pending' },
+            { content: 'Update CONTRIBUTING', status: 'pending' },
+          ],
+        }),
+        result('t1', 'Todos have been modified successfully.'),
+        ...bash('b1', 'git commit -qm "split"', 'Commit', ''),
+        said('Step 2: **new tests** under `test/`. First I work out the values.'),
+      ])
+    ).toBe(
+      'You stop Claude here, during its step 2 (new tests under test/). Saved before the stop: 1 commit. Not done yet: Write the new tests; Update the README and 1 more.'
+    );
+    expect(stopped([prompt('go'), ...bash('b1', 'ls', 'List', 'a')])).toBe('You stop Claude here.');
+  });
+
   it('the first save in a folder Claude made a repository says so; a bare copy target does not count', () => {
     const save = (lines: unknown[]) => pageOf(lines).panels.find((p) => p.kind === 'save')!.caption.story;
     expect(

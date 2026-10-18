@@ -304,7 +304,7 @@
       {
         "kind": "complete",
         "ok": null,
-        "story": "You stop Claude here, during its step 3. Saved before the stop: 2 commits.",
+        "story": "You stop Claude here, during its step 3 (new tests under test/). Saved before the stop: 2 commits.",
         "director": "interrupted · 2 min 41 s · 5 tool calls · 4 files changed",
         "balloon": "Step 3: new tests under test/.",
         "tests": null,

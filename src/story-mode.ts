@@ -2742,11 +2742,23 @@ function completePanel(turn: StoryTurn, page: Omit<StoryPage, 'panels'>, trailin
   // Where a stop landed: the step Claude last announced ("Step 3: …"), and what it had saved by then.
   const announced = [...page.events].reverse().find((e) => e.intent === 'say' && /^\W{0,4}step \d+\b/i.test(e.label));
   const step = announced ? /step (\d+)/i.exec(announced.label)?.[1] : undefined;
+  // What that step was, in Claude's words: "Step 3: new tests under test/." brings "new tests under test/".
+  const stepWhat = announced
+    ? /^\W{0,4}step \d+\W{0,3}[:.-]\s*([^.!?\n]{3,80}?)\s*(?:[.!?](?:\s|$)|\n|$)/i
+        .exec(announced.label.replace(/[`*]/g, ''))?.[1]
+        ?.replace(/[:;,]$/, '')
+    : undefined;
   const savedBefore = page.events.reduce((n, e) => n + (e.commits ?? 0), 0);
+  // What was still open on Claude's own to-do list when you stopped it.
+  const todos = [...page.events].reverse().find((e) => e.todos?.length)?.todos;
+  const open = todos?.filter((t) => !t.done).map((t) => clip(t.text, 60)) ?? [];
+  const notDone = open.length
+    ? ` Not done yet: ${open.slice(0, 2).join('; ')}${open.length > 2 ? ` and ${open.length - 2} more` : ''}.`
+    : '';
   const story = turn.interrupted
-    ? `You stop Claude here${step ? `, during its step ${step}` : ''}.${
+    ? `You stop Claude here${step ? `, during its step ${step}${stepWhat ? ` (${stepWhat})` : ''}` : ''}.${
         savedBefore ? ` Saved before the stop: ${plural(savedBefore, 'commit')}.` : ''
-      }`
+      }${notDone}`
     : page.noneWorked
       ? 'Nothing Claude tried worked, so the job is not done.'
       : turn.endedBy === 'next prompt'
