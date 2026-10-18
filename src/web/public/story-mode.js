@@ -1586,6 +1586,7 @@ Object.assign(CodemanApp.prototype, {
     st.sessionLabel.textContent = session
       ? this.getSessionName?.(session) || session.name || sessionId.slice(0, 8)
       : sessionId.slice(0, 8);
+    st.root.setAttribute('aria-label', `Story Mode: ${st.sessionLabel.textContent}`);
     this._storyRender();
     this._storyStartRuntime();
     this._storyRefresh();
@@ -1649,7 +1650,13 @@ Object.assign(CodemanApp.prototype, {
     root.hidden = true;
     root.setAttribute('role', 'dialog');
     root.setAttribute('aria-modal', 'true');
-    root.setAttribute('aria-labelledby', 'storyTitle');
+    root.setAttribute('aria-label', 'Story Mode');
+    // A file preview opened from a panel sits beside the overlay, not in it: while it is up the
+    // overlay is no longer modal, or a screen reader that honours aria-modal would hide it.
+    root.addEventListener('focusin', () => {
+      if (!document.getElementById('filePreviewOverlay')?.classList.contains('visible'))
+        root.setAttribute('aria-modal', 'true');
+    });
 
     const bar = el('div', 'story-bar');
     const brand = el('div', 'story-brand');
@@ -1731,7 +1738,8 @@ Object.assign(CodemanApp.prototype, {
     drawerMeta.append(drawerKind, drawerLive);
     const drawerTitle = el('p', 'story-drawer-title');
     drawerTitle.id = 'storyDrawerTitle';
-    drawer.setAttribute('aria-labelledby', 'storyDrawerTitle');
+    drawerKind.id = 'storyDrawerKind';
+    drawer.setAttribute('aria-labelledby', 'storyDrawerKind storyDrawerTitle');
     const drawerSub = el('p', 'story-drawer-sub');
     drawerTitle.dataset.i18nSkip = '';
     drawerSub.dataset.i18nSkip = '';
@@ -2370,7 +2378,7 @@ Object.assign(CodemanApp.prototype, {
     const balloonText = p.kind === 'ask' && p.question?.text ? p.question.text : p.balloon?.text;
     rt.balloon.hidden = !balloonText;
     // The text sits in its own box so a long one can be clamped without clipping the tail.
-    let balloonSpan = rt.balloon.firstElementChild;
+    let balloonSpan = rt.balloon.querySelector('.story-balloon-text');
     if (!balloonSpan) {
       balloonSpan = document.createElement('span');
       balloonSpan.className = 'story-balloon-text';
@@ -2380,6 +2388,20 @@ Object.assign(CodemanApp.prototype, {
     // A prompt somebody else sent (a background job, another session) is a notice, not your speech.
     const origin = page.events[p.events[0]]?.origin ?? (index === 0 ? page.origin : 'human');
     const notice = p.kind === 'mission' && origin && origin !== 'human';
+    // Who speaks, for a screen reader: the art shows it, the text alone does not.
+    let who = rt.balloon.querySelector('.story-vh');
+    if (!who) {
+      who = document.createElement('span');
+      who.className = 'story-vh';
+      rt.balloon.prepend(who);
+    }
+    who.textContent = notice
+      ? 'Notice: '
+      : p.kind === 'mission' || p.balloon?.who === 'you'
+        ? 'You say: '
+        : p.kind === 'ask'
+          ? 'Claude asks: '
+          : 'Claude says: ';
     rt.balloon.onclick =
       p.kind === 'mission'
         ? () =>
@@ -2397,7 +2419,8 @@ Object.assign(CodemanApp.prototype, {
     }`;
     rt.liveTag.hidden = !p.live;
     rt.el.classList.toggle('is-live', !!p.live);
-    rt.el.setAttribute('aria-label', `Panel ${index + 1}: ${p.caption.story}`);
+    // Named by its place only: the caption inside is read as the panel's content, once.
+    rt.el.setAttribute('aria-label', `Panel ${index + 1} of ${page.panels.length}`);
     if (rt.answer) {
       rt.answer.hidden = !p.question?.answer;
       const planned = page.events[p.events[0]]?.tool === 'ExitPlanMode';
@@ -2416,7 +2439,9 @@ Object.assign(CodemanApp.prototype, {
           ? 'To be continued…'
           : page.noneWorked
             ? 'Turn over'
-            : 'Mission complete!';
+            : page.helpersRunning || page.events.some((e) => e.running && !e.helper)
+              ? 'To be continued…'
+              : 'Mission complete!';
       const chips = rt.splash.querySelector('.story-chips');
       const items = [];
       if (page.durationMs !== undefined) items.push({ text: this._storyDuration(page.durationMs) });
@@ -2443,6 +2468,10 @@ Object.assign(CodemanApp.prototype, {
             if (item.open) {
               inner.type = 'button';
               inner.dataset.storyOpen = item.open;
+              inner.setAttribute(
+                'aria-label',
+                `${item.text}: ${item.open.startsWith('diff') ? 'see the changes' : 'list every step'}`
+              );
             }
             inner.textContent = item.text;
             li.append(inner);
@@ -2777,7 +2806,9 @@ Object.assign(CodemanApp.prototype, {
       }
     }
     // The text the reader sees (hidden spans, like the other reading level, are left out).
-    const text = (el.innerText || el.textContent || '').trim();
+    let text = (el.innerText || el.textContent || '').trim();
+    const spoken = el.querySelector?.('.story-vh');
+    if (spoken) text = text.replace(spoken.textContent.trim(), '').trim();
     if (!text) return;
     const size = parseFloat(cs.fontSize) || 14;
     const lh = parseFloat(cs.lineHeight) || size * 1.15;
@@ -2857,7 +2888,9 @@ Object.assign(CodemanApp.prototype, {
       if (pi !== lastPanel && pi >= 0) {
         const g = document.createElement('li');
         g.className = 'story-wire-group';
-        g.textContent = `Panel ${pi + 1} · ${STORY_KIND_NAMES[page.panels[pi].kind] || page.panels[pi].kind}`;
+        const h = document.createElement('h3');
+        h.textContent = `Panel ${pi + 1} · ${STORY_KIND_NAMES[page.panels[pi].kind] || page.panels[pi].kind}`;
+        g.append(h);
         rows.push(g);
         lastPanel = pi;
       }
@@ -2984,6 +3017,7 @@ Object.assign(CodemanApp.prototype, {
     const st = this._story;
     if (!st || !path) return;
     st.previewReturn = trigger || document.activeElement;
+    st.root.setAttribute('aria-modal', 'false');
     this.openFilePreview?.(path, st.sessionId);
     requestAnimationFrame(() =>
       document.querySelector('#filePreviewOverlay.visible button[title="Close"]')?.focus({ preventScroll: true })
@@ -3334,7 +3368,7 @@ Object.assign(CodemanApp.prototype, {
       const li = el('li', 'story-ev');
       li.dataset.actor = 'helper';
       const body = el('span', 'story-ev-body');
-      const shown = this._storyShortPath(ev.label);
+      const shown = this._storyShortPath(ev.label, { dot: ev.tool === 'Bash' });
       const label = ev.file ? el('button', 'story-link', shown) : el('span', null, shown);
       if (shown !== ev.label) label.title = ev.label;
       if (ev.file) {

@@ -104,7 +104,7 @@
     "filesChanged": 0,
     "added": 0,
     "removed": 0,
-    "helpers": 1,
+    "helpers": 0,
     "helpersRunning": 0,
     "panels": [
       {
@@ -141,7 +141,7 @@
         "kind": "complete",
         "ok": null,
         "story": "Done in 21 seconds.",
-        "director": "turn_duration · 21 s · 2 tool calls · 1 helper",
+        "director": "turn_duration · 21 s · 2 tool calls",
         "balloon": "I built rename_by_date.sh, the helper agent wrote README.md, and the script passed every test I ran on sample files in samples/. Nothing is committed because this folder isn't a git repository, even though the session context said it was.",
         "tests": null,
         "roundsOk": null,

@@ -735,6 +735,10 @@ describe('buildStoryTurns', () => {
     const first = buildStoryPage(turns[0]);
     expect(first.events[1]).toMatchObject({ intent: 'test', ok: true });
     expect(first.events[1].running).toBeUndefined();
+    // Its drawer says what happened, not the launch note meant for Claude.
+    expect(first.events[1].output).toBe(
+      'Finished in the background, exit code 0. Its report is the turn it came back in.'
+    );
     const second = buildStoryPage(turns[1]);
     expect(second.panels.find((p) => p.kind === 'check')).toMatchObject({
       caption: { story: 'The tests pass.' },
@@ -751,6 +755,7 @@ describe('buildStoryTurns', () => {
     const page = buildStoryPage(alone);
     expect(page.events[1]).toMatchObject({ running: true });
     expect(page.events[1].ok).toBeUndefined();
+    expect(page.events[1].output).toBe('Started in the background. Its result comes back as a report of its own.');
     expect(page.panels.find((p) => p.kind === 'check')!.caption.story).toBe(
       'Claude starts the tests in the background.'
     );
@@ -1031,6 +1036,12 @@ describe('buildStoryPage', () => {
     const [whole] = heredocWrites("cat > notes.md <<'EOF'\none\nEOF", '/w');
     expect(whole.hunks[0]).toMatchObject({ newStart: 1, newLines: 1 });
     expect(whole.hunks[0].atEnd).toBeUndefined();
+  });
+
+  it('sed -n prints part of a file, like head', () => {
+    expect(printedFiles("sed -n '5,25p' README.md")).toEqual(['README.md']);
+    expect(printedFiles('sed -n 10p src/a.py && ls')).toEqual(['src/a.py']);
+    expect(printedFiles("sed -i 's/a/b/' a.py")).toEqual([]);
   });
 
   it('files a command prints are on its event, resolved against its cwd, whatever it does', () => {

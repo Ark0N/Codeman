@@ -503,7 +503,9 @@ export function printedFiles(command: string): string[] {
   for (const segment of commandSegments(withoutHeredocBodies(command.slice(0, 2000)))) {
     const head = segmentHead(segment);
     if (/^(cd|pushd)\b/.test(head)) return [];
-    const m = /^(cat|head|tail|nl|bat)\s+(.*)$/.exec(head);
+    // `sed -n '5,25p' README.md` prints part of a file, like head and tail.
+    const sed = /^sed\s+-n\s+(['"]?)[0-9,$]+p\1\s+(.+)$/.exec(head);
+    const m = sed ? [head, 'sed', sed[2]] : /^(cat|head|tail|nl|bat)\s+(.*)$/.exec(head);
     if (!m || /[<>]/.test(m[2])) continue;
     const words = m[2].match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
     for (let k = 0; k < words.length; k++) {
@@ -1083,6 +1085,9 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
           if (tail.truncated) result.outputTruncated = true;
           if (name === 'Bash' && /^\s*Command running in background with ID:/.test(text)) {
             result.background = true;
+            // The launch note tells Claude where to read later; the reader gets what it means.
+            result.output = 'Started in the background. Its result comes back as a report of its own.';
+            result.outputTruncated = undefined;
           } else if (name === 'Bash') {
             // Counted on the whole output: a later command's lines can push the summary out of the tail.
             const tests = parseTestCounts(text);
@@ -1519,6 +1524,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
       const code = /\(exit code (\d+)\)/.exec(prompt.label)?.[1];
       ev.ok =
         code !== undefined ? code === '0' : !report.status || /^(completed|done|finished|success)/i.test(report.status);
+      ev.output = `Finished in the background${code !== undefined ? `, exit code ${code}` : ''}. Its report is the turn it came back in.`;
       return;
     }
     if (!ev?.helper) return;
@@ -2393,7 +2399,7 @@ export function buildStoryPage(turn: StoryTurn): StoryPage {
     added: edits.reduce((n, e) => n + e.added, 0),
     removed: edits.reduce((n, e) => n + e.removed, 0),
     // The advisor is a second opinion, not a helper that does work.
-    helpers: events.filter((e) => e.helper && e.tool !== 'Advisor').length,
+    helpers: events.filter((e) => e.helper && e.tool !== 'Advisor' && e.intent !== 'prompt').length,
     helpersRunning: events.filter((e) => e.helper?.running).length,
   };
   const calls = events.filter((e) => !NOT_TOOL_CALLS.has(e.intent));

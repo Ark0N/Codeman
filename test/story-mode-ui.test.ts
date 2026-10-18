@@ -151,9 +151,12 @@ describe('story-mode.js overlay', () => {
       'save',
       'complete',
     ]);
-    expect($('.story-panel[data-kind="mission"] .story-balloon')!.textContent).toBe(
+    expect($('.story-panel[data-kind="mission"] .story-balloon-text')!.textContent).toBe(
       'The checkout button does nothing on phones. Can you fix it?'
     );
+    // Who speaks, for a screen reader (visually hidden; the art shows it).
+    expect($('.story-panel[data-kind="mission"] .story-balloon .story-vh')!.textContent).toBe('You say: ');
+    expect($('.story-panel[data-kind="mission"]')!.getAttribute('aria-label')).toBe('Panel 1 of 7');
     expect($('.story-panel[data-kind="mission"] .story-balloon')!.className).toContain('story-balloon--you');
     expect($('.story-panel[data-kind="investigate"] .story-cap-story')!.textContent).toBe(
       'Claude reads 2 files to find its way around.'
@@ -535,7 +538,8 @@ describe('story-mode.js overlay', () => {
     await settle();
     const balloon = $('.story-panel[data-kind="mission"] .story-balloon')!;
     expect(balloon.className).toContain('story-balloon--note');
-    expect(balloon.textContent).toBe('Agent "Docs" finished');
+    expect(balloon.querySelector('.story-balloon-text')!.textContent).toBe('Agent "Docs" finished');
+    expect(balloon.querySelector('.story-vh')!.textContent).toBe('Notice: ');
   });
 
   it("the helper drawer fetches and lists the helper's own steps", async () => {
@@ -680,6 +684,8 @@ describe('story-mode.js overlay', () => {
     await settle();
     sizeAndDraw();
     expect($('.story-panel[data-kind="complete"] .story-chips')!.textContent).toContain('1 helper, 1 still working');
+    // Work still out is not a finished mission.
+    expect($('.story-panel[data-kind="complete"] .story-splash-title')!.textContent).toBe('To be continued…');
     $('.story-panel[data-kind="backup"] .story-hit')!.click();
     await settle();
     expect($('.story-drawer-sub')!.textContent).toContain('in the background');

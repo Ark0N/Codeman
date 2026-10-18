@@ -117,7 +117,7 @@
     "filesChanged": 0,
     "added": 0,
     "removed": 0,
-    "helpers": 1,
+    "helpers": 0,
     "helpersRunning": 0,
     "panels": [
       {
@@ -144,7 +144,7 @@
         "kind": "complete",
         "ok": null,
         "story": "Done in 9 seconds.",
-        "director": "turn_duration · 9 s · 1 tool call · 1 helper",
+        "director": "turn_duration · 9 s · 1 tool call",
         "balloon": "The background helper has finished README.md, and I've checked its work.",
         "tests": null,
         "roundsOk": null,

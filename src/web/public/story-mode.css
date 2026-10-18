@@ -345,6 +345,10 @@ body.story-open {
   outline: 3px dashed var(--story-magenta) !important;
   outline-offset: 2px;
 }
+/* A light band under the dashes: on a magenta halftone (the loop) the ring alone vanished. */
+.story-hit:focus-visible {
+  box-shadow: 0 0 0 5px var(--story-balloon);
+}
 .story-cap {
   position: absolute;
   z-index: 2;
@@ -393,7 +397,8 @@ body.story-open {
   cursor: pointer;
 }
 /* Spoken, not shown: the status region a screen reader announces from. */
-.story-sr {
+.story-sr,
+.story-vh {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -701,6 +706,10 @@ body.story-open .toast-container {
   padding: 12px 13px 3px;
   font: 16px/1.1 var(--story-letter);
   color: var(--story-muted);
+}
+.story-wire-group h3 {
+  margin: 0;
+  font: inherit;
 }
 .story-ev {
   display: grid;
