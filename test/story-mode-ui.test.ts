@@ -36,10 +36,14 @@ function storyOf(lines: unknown[]) {
   };
 }
 
+/** Every text a scene drew, in order (the fake context records `fillText`). */
+const drawnTexts: string[] = [];
+
 /** A 2D context that accepts every call; measureText answers a plausible width. */
 function fakeContext() {
   const target: Record<string, unknown> = {
     measureText: (text: string) => ({ width: String(text).length * 6 }),
+    fillText: (text: unknown) => void drawnTexts.push(String(text)),
   };
   return new Proxy(target, {
     get(t, key) {
@@ -884,6 +888,41 @@ describe('story-mode.js overlay', () => {
     const note = $('.story-panel[data-kind="fix"] .story-cap-note')!;
     expect(note.hidden).toBe(false);
     expect(note.textContent).toBe('after asking a stronger AI model for a second opinion');
+  });
+
+  it('a second opinion asked in the middle of a step says so, and the badge counts the card in front', async () => {
+    const advisor = {
+      type: 'assistant',
+      timestamp: '2026-10-18T09:41:20.000Z',
+      message: {
+        content: [
+          { type: 'server_tool_use', id: 'srv1', name: 'advisor', input: {} },
+          { type: 'advisor_tool_result', tool_use_id: 'srv1', content: { type: 'advisor_redacted_result' } },
+        ],
+      },
+    };
+    boot(
+      storyOf([
+        prompt('fix it'),
+        ...edit('e1', '/work/demo-shop/a.py', ['+a = 1', '+b = 2']),
+        advisor,
+        ...edit('e2', '/work/demo-shop/b.py', ['+c = 3', '+d = 4', '+e = 5']),
+        end(1000),
+      ])
+    );
+    drawnTexts.length = 0;
+    app.openStoryMode(SID);
+    await settle();
+    expect($('.story-panel[data-kind="fix"] .story-cap-note')!.textContent).toBe(
+      'along the way, asks a stronger AI model for a second opinion'
+    );
+    // Two files: the badge counts a.py, the card in front (+2), not the panel's +5. (JSDOM lays out
+    // nothing, so the panel is given a size and drawn late in its animation, the badge showing.)
+    const rt = app._story.panels.find((p: { kind: string }) => p.kind === 'fix');
+    Object.assign(rt, { w: 600, h: 270, dpr: 1, bgKey: '', clock: 200 });
+    app._storyDrawPanel(rt);
+    expect(drawnTexts).toContain('+2');
+    expect(drawnTexts).not.toContain('+5');
   });
 
   it('a second opinion that came back with an error says no answer came', async () => {

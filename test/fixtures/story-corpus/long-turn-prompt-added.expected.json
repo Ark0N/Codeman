@@ -171,7 +171,7 @@
     "helpers": 0,
     "helpersRunning": 0,
     "finishedLater": 0,
-    "openNote": false,
+    "openNote": "note",
     "asks": false,
     "panels": [
       {

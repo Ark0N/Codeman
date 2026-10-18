@@ -314,7 +314,7 @@ const KEY_KINDS: Array<[StoryKeyKind, RegExp]> = [
   ['failed', /(?<!\b(a|the|any|on) )(?<!\d )\b(failed|fails)\b/i],
   [
     'asked',
-    /\b(as you (asked|expected|said|wanted|suggested)|you asked|your (--?[\w-]+|request|option|flag|change))\b/i,
+    /\b(as you (asked|expected|said|wanted|suggested)|you asked|your (--?[\w-]+|request|option|flag|change)|(didn't|did not|couldn't|could not) (follow|use|do) (your|exactly what you))\b/i,
   ],
   // A warning or report that turned out wrong: what resolves a worry an earlier panel raised.
   [
@@ -2121,12 +2121,16 @@ const REPORT_TALK: Partial<Record<StoryPanelKind, RegExp>> = {
 const ANNOUNCES = /\b(I'll|I will|let me|let's|I'm going to|next,? I|now I)\b/i;
 
 /** What Claude's last words leave open: a catch (a problem), a note (something pending), a question. */
+/** Claude did something differently from what you asked: worth a note on the final panel. */
+const DEVIATED =
+  /\b(didn't|did not|couldn't|could not) (follow|use|do) (your|exactly what you)|\bnot exactly as you\b/i;
+
 function closingKinds(points: string[] = []): { openNote?: 'catch' | 'note'; asks?: boolean } {
   const kinds = new Set(points.map(keyKindOf));
   return {
     ...(kinds.has('problem')
       ? { openNote: 'catch' as const }
-      : kinds.has('pending')
+      : kinds.has('pending') || points.some((p) => DEVIATED.test(p))
         ? { openNote: 'note' as const }
         : {}),
     ...(points.some((p) => keyKindOf(p) === 'offer' && ASKS_YOU.test(p)) ? { asks: true } : {}),
@@ -2573,7 +2577,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       if (draft.kind === 'fix') {
         const created = unique(edits.filter((e) => e.created).map((e) => e.file)).length;
         const whole =
-          edits.length > 0 && edits.every((d) => d.created || d.hunks.every((h) => !h.oldStart && !h.oldLines));
+          edits.length > 0 &&
+          edits.every((d) => d.created || (d.hunks.length > 0 && d.hunks.every((h) => !h.oldStart && !h.oldLines)));
         story =
           created && created === files.length
             ? files.length <= 2
@@ -2708,7 +2713,16 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           `The $1 $2$3 in a fresh copy made from ${basename(cloned.replace(/\/+$/, ''))}`
         );
       const written = unique(edits.map((d) => d.file));
-      if (written.length) story = `Claude writes ${fileWords(written)}; ${story[0].toLowerCase()}${story.slice(1)}`;
+      // Whole files are written; a file it patched is changed (a later panel often patches one written earlier).
+      const isWhole = (d: StoryEdit) =>
+        d.created || (d.hunks.length > 0 && d.hunks.every((h) => !h.oldStart && !h.oldLines));
+      const wholeFiles = written.filter((f) => edits.filter((d) => d.file === f).every(isWhole));
+      const patched = written.filter((f) => !wholeFiles.includes(f));
+      const did = [
+        wholeFiles.length ? `writes ${fileWords(wholeFiles)}` : '',
+        patched.length ? `changes ${fileWords(patched)}` : '',
+      ].filter(Boolean);
+      if (did.length) story = `Claude ${did.join(' and ')}; ${story[0].toLowerCase()}${story.slice(1)}`;
       const saved = checks.reduce((n, e) => n + (e.commits ?? 0), 0);
       if (saved) {
         director += ` · ${plural(saved, 'commit')}`;
@@ -2875,11 +2889,17 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       break;
   }
   if (panel.secondOpinion) {
-    // Asked before the step, or (nothing following) after the last one.
-    const lastWork = Math.max(...draft.events.filter((i) => events[i].tool !== 'Advisor'));
-    const trailing = draft.events.some((i) => events[i].tool === 'Advisor' && i > lastWork);
-    const unanswered = draft.events.every((i) => events[i].tool !== 'Advisor' || events[i].ok === false);
-    director += ` · ${trailing ? 'then' : 'after'} ${plural(panel.secondOpinion, 'second opinion')}${unanswered ? ' (no answer)' : ''}`;
+    // Asked before the step, after it (nothing following), or in the middle of a step's calls.
+    const work = draft.events.filter((i) => events[i].tool !== 'Advisor');
+    const asked = draft.events.filter((i) => events[i].tool === 'Advisor');
+    const when = asked.every((i) => i < Math.min(...work))
+      ? 'after'
+      : asked.every((i) => i > Math.max(...work))
+        ? 'then'
+        : 'during';
+    const unanswered = asked.every((i) => events[i].ok === false);
+    const count = plural(panel.secondOpinion, 'second opinion');
+    director += ` · ${when === 'during' ? `${count} along the way` : `${when} ${count}`}${unanswered ? ' (no answer)' : ''}`;
   }
   panel.caption = { story, director };
   return panel;

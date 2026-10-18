@@ -1060,10 +1060,15 @@ const StoryArt = (() => {
         const hp = [tip[0] + 20 + Math.sin(f / 2.6) * 3, tip[1] - 28 + Math.cos(f / 3.1) * 2.5];
         const a = agent(ctx, ax, 248, { frame: f, mood: 'focus', l: [hp[0] - ax, hp[1] - 248], r: [30, -42] });
         pencil(ctx, a.l, [tip[0] + Math.sin(f / 2.6) * 3, tip[1] + Math.cos(f / 3.1) * 2.5]);
-        if (p.panel.added)
+        // With several files the badge counts the card in front: a total beside one file's card read as
+        // that file's own. The Director's cut has every file's count.
+        const front = files.length > 1 && first ? edits.filter((d) => d.file === first.file) : null;
+        const added = front ? front.reduce((n, d) => n + d.added, 0) : p.panel.added;
+        const removed = front ? front.reduce((n, d) => n + d.removed, 0) : p.panel.removed;
+        if (added)
           sfx(
             ctx,
-            `+${p.panel.added}`,
+            `+${added}`,
             x0 + pw * 0.32,
             y0 + ph + 2,
             26,
@@ -1071,10 +1076,10 @@ const StoryArt = (() => {
             -0.18,
             spring(f - 44, { damping: 9, stiffness: 170 })
           );
-        if (p.panel.removed)
+        if (removed)
           sfx(
             ctx,
-            `−${p.panel.removed}`,
+            `−${removed}`,
             x0 + pw * 0.74,
             y0 + ph + 6,
             24,
@@ -2494,15 +2499,22 @@ Object.assign(CodemanApp.prototype, {
       // Asked before this step, or after it when nothing followed.
       const work = p.events.filter((i) => page.events[i]?.tool !== 'Advisor');
       const asked = p.events.filter((i) => page.events[i]?.tool === 'Advisor');
-      const trailing = asked.some((i) => i > Math.max(...work));
+      // Before the step's calls, after them, or in the middle of them.
+      const before = asked.every((i) => i < Math.min(...work));
+      const trailing = !before && asked.every((i) => i > Math.max(...work));
       // A call that came back with an error brought no opinion: say so, never that one was given.
       const unanswered = asked.length > 0 && asked.every((i) => page.events[i].ok === false);
+      const ask = unanswered ? 'tries to ask' : 'asks';
       rt.capNote.hidden = !p.secondOpinion;
       rt.capNote.textContent = !p.secondOpinion
         ? ''
-        : unanswered
-          ? `${trailing ? 'then tries to ask' : 'after trying to ask'} a stronger AI model for a second opinion (no answer came)`
-          : `${trailing ? 'then asks' : 'after asking'} a stronger AI model for a second opinion`;
+        : `${
+            before
+              ? `after ${unanswered ? 'trying to ask' : 'asking'}`
+              : trailing
+                ? `then ${ask}`
+                : `along the way, ${ask}`
+          } a stronger AI model for a second opinion${unanswered ? ' (no answer came)' : ''}`;
     }
     rt.el.classList.toggle('is-live', !!p.live);
     // Named by its place only: the caption inside is read as the panel's content, once.

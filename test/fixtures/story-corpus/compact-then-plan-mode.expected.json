@@ -179,7 +179,7 @@
         "kind": "plan",
         "ok": null,
         "story": "Claude writes a plan: 3 steps.",
-        "director": "EnterPlanMode · Write · plan file · 3 steps · after 1 second opinion",
+        "director": "EnterPlanMode · Write · plan file · 3 steps · 1 second opinion along the way",
         "balloon": null,
         "tests": null,
         "roundsOk": null,

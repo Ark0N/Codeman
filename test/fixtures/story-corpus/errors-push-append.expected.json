@@ -41,7 +41,7 @@
         "kind": "run",
         "ok": null,
         "story": "Claude works in the terminal.",
-        "director": "Bash ×2 · python3 -c \"import calc_stats\" 2>&1 | tail -1; ls pytest.in… · after 1 second opinion",
+        "director": "Bash ×2 · python3 -c \"import calc_stats\" 2>&1 | tail -1; ls pytest.in… · 1 second opinion along the way",
         "balloon": null,
         "tests": null,
         "roundsOk": null,

@@ -107,7 +107,8 @@ describe('Story Mode on real sessions', () => {
 
   it('a commit at the end of a test one-liner is kept, and a background helper reports back in 9 s', () => {
     expect(panel('text-plan-dry-run-helper', 0, 'check')?.story).toBe(
-      'Claude writes test_csvstat.py and pyproject.toml; the tests pass, then Claude starts a git repository and saves the work.'
+      // test_csvstat.py was written a panel before and only patched here.
+      'Claude writes pyproject.toml and changes test_csvstat.py; the tests pass, then Claude starts a git repository and saves the work.'
     );
     expect(panel('text-plan-dry-run-helper', 0, 'plan')?.story).toBe('Claude writes a plan: 4 steps.');
     expect(pagesOf('text-plan-dry-run-helper')[1]).toMatchObject({ origin: 'task', durationMs: 9008 });
@@ -193,6 +194,12 @@ describe('Story Mode on real sessions', () => {
       .flatMap((p) => p.panels)
       .find((p) => p.story === 'Claude gets ready to plan.');
     expect(panel).toBeTruthy();
+  });
+
+  it('an ending that says Claude did not follow your wording is a note, not a clean finish (round 10)', () => {
+    const [, exact] = pagesOf('long-turn-prompt-added');
+    expect(exact.openNote).toBe('note');
+    expect(exact.panels.at(-1)!.balloon).toMatch(/Steps 5, 10 and 15: I added a second -m/);
   });
 
   it('a helper reporting back is heard in its own words, not only "finished" (round 9)', () => {
