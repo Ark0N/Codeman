@@ -1,5 +1,34 @@
 # aicodeman
 
+## 1.43.0
+
+### Minor Changes
+
+- ### Thanks
+  - @opticon454 for five PRs: GitHub Copilot CLI as a run mode (#592), an Antigravity tab that shows when it is working (#648, reported in #639), a WS pill that no longer flickers on every paste (#647, reported in #638), custom-folder cases anywhere below a broad cases folder (#567, reported in #637), and the opt-in "Pin tab names on the CLI" setting (#646). Also for filing #637 to #641 with the cause already worked out, and for measuring Copilot and `agy` live instead of guessing.
+  - @JDProfresh for four follow-ups to the document uploads in #621: a mixed pick, drop or paste that says how many files it skipped (#651), a text upload refused as "not UTF-8" instead of a type mismatch (#652), a parity test that keeps the browser's copies of the document list honest (#653), and link taps on a phone that land on the right row after a tab switch (#654).
+  - @irisitymichaelgrundberg for clickable `.diff` and `.patch` paths (#644).
+
+  **Security notices for the CLIs you run.** Codeman can now warn you about a security incident in an agent CLI it runs, and it does so only on machines where that CLI is installed. After an update the warning sits inside the "Codeman updated" note, with a button to the vendor's own notice next to **See what's new**; on a new install, or if you missed it, it comes as a card of its own. It stays until you close it or open the link, and expires on its own. The first one is about OpenCode: on 17 October OpenCode reported unauthorized access to a legacy system, and provider API keys (OpenAI, Anthropic and others) saved in some OpenCode Console workspaces may have been exposed. If OpenCode emailed you about it, revoke and replace those keys and check their recent usage. If you got no email, OpenCode says you were not affected.
+
+  **GitHub Copilot CLI is a run mode (#592).** Install `copilot` (`npm install -g @github/copilot`) and it appears in the Run menu, on the welcome screen, in cron and in CLI management. It runs in tmux like the other agent CLIs, shows working and idle and the model it reads off its own footer, takes the usual launch options (`copilotConfig`: model, resume, continue, and `allowAll`, which is clamped off for non-granted multi-user owners), works with Custom Model Endpoints through Copilot's BYOK variables, joins MCP sync, and works with `codeman agent spawn`, `send` and `read`. A plain drag selects text, so Auto Copy works, while the wheel and phone swipes scroll its transcript. Copilot's folder-trust dialog still needs one Enter the first time a folder is used.
+
+  **Pin tab names on the CLI (#646, optional).** A new App Settings switch, off by default, launches every Claude session with `--name <tab name>`, not only the ones you renamed, so Claude Code's prompt-box label, `/resume` entry and remote session list match your tabs. The cost, which the setting spells out: Claude stops generating its own titles for those sessions, and a rename in Codeman holds only until the next turn. It applies from the next session start or respawn.
+
+  **Antigravity tabs show when they are working (#648).** An `agy` turn now marks its tab working and a finished turn reads as idle again. A shell command waiting for your approval keeps showing as working until you answer it.
+
+  **Fixes.**
+  - **Custom-folder cases below the cases folder (#567).** Create New with a custom folder refused every folder anywhere below the cases folder. Now only the cases folder itself and its direct children are refused, since those are the only ones listed as local cases, so a broad `CODEMAN_CASES_PATH` such as `/mnt/user/Scripts` no longer blocks the whole tree. The refusal now says which of the two it hit.
+  - **A steady WS pill (#647).** The ` · NB queued` suffix appears only once a backlog has lasted over a second, instead of flashing on every paste, IME commit or fast burst.
+  - **Clickable diff and patch files (#644).** A `.diff` or `.patch` path is now a link in the terminal and the response viewer, so an agent's review diff opens in one click.
+  - **Mixed uploads say what they skipped (#651).** A pick, drop or paste with some unsupported files attaches the rest and says how many it skipped; the Compose and paste-dialog pickers now report an unsupported pick instead of doing nothing.
+  - **"Not UTF-8" for refused text uploads (#652).** A text file that fails the UTF-8 check is told it is not UTF-8 (or UTF-16, when it starts with that byte order mark) and to save it as UTF-8, instead of reading like a corrupt file.
+  - **Link taps on a phone after a tab switch (#654).** With the view parked above the bottom, a URL typed into the prompt no longer opens on tap, and a link in the scrollback opens on its own row.
+
+  **Fixes applied while landing.** The Copilot run mode clamps every `COPILOT_*` variable that bypasses approval, runs code or moves the token for non-granted multi-user owners, keeps a divider row inside an answer as part of what `codeman agent read` returns, and its Docker docs no longer promise a token you cannot set there (#592). Antigravity's working line only matches at the start of a row, so an answer that quotes the spinner no longer holds the tab busy (#648). The custom-folder refusal names the cases folder itself and a direct child separately (#567). The WS pill reads its queue once per update (#647). The "Pin tab names" setting is translated for zh-CN and listed in the Settings Reference (#646). JSON files the page fetches at runtime (the update note, the security notices) are now served `no-cache` instead of cached for a year, so a later notice always reaches a browser that already has the old copy.
+
+  **Docs and tests.** New route tests for nested custom-folder cases and for Copilot's screen-read answers, a wrapped-composer touch test, stricter upload parity checks, and docs that move Antigravity and Copilot into the screen-checked idle group.
+
 ## 1.42.0
 
 ### Minor Changes

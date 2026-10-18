@@ -3,7 +3,7 @@
   "name": "io.github.Ark0N/codeman",
   "title": "Codeman",
   "description": "Start, prompt and read AI coding agent sessions (Claude Code, Codex, Gemini CLI and more) in Codeman",
-  "version": "1.42.0",
+  "version": "1.43.0",
   "websiteUrl": "https://getcodeman.com",
   "repository": {
     "url": "https://github.com/Ark0N/Codeman",
@@ -13,7 +13,7 @@
     {
       "registryType": "npm",
       "identifier": "aicodeman",
-      "version": "1.42.0",
+      "version": "1.43.0",
       "transport": {
         "type": "stdio"
       },
