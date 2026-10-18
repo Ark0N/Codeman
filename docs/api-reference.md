@@ -626,7 +626,9 @@ or `.csv` is unreliable): the office formats `.pdf`, `.docx`, `.pptx`, `.xlsx`,
 `.zip` and the text family `.txt`, `.md`, `.csv`, `.tsv`, `.json`, `.log`,
 `.yaml`, `.yml`, `.xml`. A document is buffered under the same 50 MB image cap,
 its bytes are checked against the extension (a magic-number signature, or UTF-8
-with no NUL byte for text) and answered 415 on a mismatch, and it is saved under
+with no NUL byte for text) and answered 415 on a mismatch (for text, an `error`
+saying the file is not UTF-8 text, or UTF-16 text when it opens with a UTF-16
+byte order mark, and to save it as UTF-8), and it is saved under
 a sanitized stem of its name, so `Q3 report.pdf` is findable as
 `paste-<ms>-<hex>-Q3-report.pdf`. A named type that is neither an image nor a
 document (a script, an HTML page, a `.sh`) is refused 400 `Unsupported file

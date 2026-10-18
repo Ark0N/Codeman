@@ -184,13 +184,15 @@ through server memory. Documents are the office formats (pdf, docx, pptx, xlsx, 
 text family (txt, md, csv, tsv, json, log, yaml, yml, xml). Each is checked on the way in,
 against its file signature for the binary formats and against its encoding for text (UTF-8,
 no NUL bytes), so a script renamed to `.pdf` is refused while a `.txt` can hold any text at
-all. Files with script or page extensions (sh, py, js, html) are not accepted, since a prompt
-upload is something for the agent to read, not something for Codeman to store and serve. A
-document keeps a trimmed copy of its original name, letters, digits, dot, dash and underscore
-with anything else turned into a dash, so `Q3 report.pdf` is findable as
-`paste-<time>-<id>-Q3-report.pdf`; a name made entirely of other characters saves without
-one. Uploads are refused for remote (SSH) sessions, whose working directory is on the other
-host.
+all. A text file in another encoding is refused with a message saying it is not UTF-8 (or that
+it is UTF-16, which Excel's "Unicode Text" and Notepad's "Unicode" produce); save it as UTF-8
+(in Excel, "CSV UTF-8") and attach it again. Files with script or page extensions (sh, py,
+js, html) are not accepted, since a prompt upload is something for the agent to read, not
+something for Codeman to store and serve. A document keeps a trimmed copy of its original
+name, letters, digits, dot, dash and underscore with anything else turned into a dash, so
+`Q3 report.pdf` is findable as `paste-<time>-<id>-Q3-report.pdf`; a name made entirely of
+other characters saves without one. Uploads are refused for remote (SSH) sessions, whose
+working directory is on the other host.
 
 Uploads land in `.codeman-uploads/` inside the case, next to the code the agent is working
 on, because that is the one path a local agent and a Docker case (whose workspace is mounted
