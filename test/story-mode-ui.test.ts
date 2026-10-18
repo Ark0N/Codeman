@@ -604,6 +604,68 @@ describe('story-mode.js overlay', () => {
     expect(app.openFilePreview).toHaveBeenLastCalledWith('/work/demo-shop/a.md', SID);
   });
 
+  it("a page that holds still (304) still refreshes a working helper's steps in its open drawer", async () => {
+    const data = storyOf([
+      prompt('docs'),
+      tool('a1', 'Agent', { description: 'Write README', subagent_type: 'general-purpose', prompt: 'Write it' }),
+      result('a1', 'Async agent launched successfully. agentId: h9', {
+        toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'h9' },
+      }),
+      end(1000),
+    ]);
+    boot(data);
+    const helperPage = storyOf([prompt('Write it'), ...read('r1', '/work/demo-shop/a.md')]).page;
+    let helperCalls = 0;
+    app._api = async (path: string) => {
+      if (path.includes('/story/helpers/h9')) {
+        helperCalls++;
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async () => ({ success: true, data: { supported: true, helper: { agentId: 'h9' }, page: helperPage } }),
+        };
+      }
+      // The parent page never changes while the helper works: the same tag every time.
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (h: string) => (h.toLowerCase() === 'etag' ? 'W/"same"' : null) },
+        json: async () => ({ success: true, data }),
+      };
+    };
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    $('.story-panel[data-kind="backup"] .story-hit')!.click();
+    await settle();
+    const before = helperCalls;
+    expect(before).toBeGreaterThan(0);
+    await app._storyRefresh();
+    await settle();
+    expect(helperCalls).toBe(before + 1);
+  });
+
+  it('a request that never settled does not block the next open: the page draws', async () => {
+    const data = storyOf(demoTurn());
+    boot(data);
+    app._api = () => new Promise(() => {}); // hangs forever
+    app.openStoryMode(SID);
+    await settle();
+    app.closeStoryMode();
+    app._api = async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ success: true, data }),
+    });
+    app.openStoryMode(SID);
+    await settle();
+    expect($$('.story-panel').length).toBeGreaterThan(0);
+    // Reopened, nothing from before is announced as news.
+    expect($('.story-sr')!.textContent).toBe('');
+  });
+
   it('Tab stays inside the overlay', async () => {
     boot(storyOf(demoTurn()));
     app.openStoryMode(SID);

@@ -5,6 +5,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   STORY_LIMITS,
+  buildHelperPage,
   buildStoryPage,
   buildStoryTurns,
   classifyBashCommand,
@@ -994,6 +995,17 @@ describe('buildStoryPage', () => {
       ],
     ];
     for (const [name, fn] of shapes) expect([name, ms(fn) < 250]).toEqual([name, true]);
+  });
+
+  it('a helper messaged twice reads as one finished run, not as superseded', () => {
+    const r = createStoryReducer({ sidechain: true });
+    const lines = [prompt('write it'), said('Done.'), prompt('also the tests'), said('Done too.')].map((l) => ({
+      ...(l as object),
+      isSidechain: true,
+    }));
+    const page = buildHelperPage(buildStoryTurns(lines.flatMap((l) => r.reduce(l))), true)!;
+    expect(page.superseded).toBeUndefined();
+    expect(page.panels.at(-1)!.caption.story).not.toMatch(/trail stops here/);
   });
 
   it('a python or node script fed by a here-document: the files it opens for writing, never guessed', () => {

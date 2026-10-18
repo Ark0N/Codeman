@@ -202,6 +202,16 @@ describe('GET /api/sessions/:id/story', () => {
     expect(res.json().data).toMatchObject({ supported: true, turns: [], page: null });
   });
 
+  it('says when the list leaves turns out past the 60 it shows, even in a small file', async () => {
+    const lines: unknown[] = [];
+    for (let i = 0; i < 80; i++) lines.push(prompt(`job ${i}`), said('ok'), end(1000));
+    writeFileSync(transcript, jsonl(lines));
+    const { app } = await setup();
+    const body = (await app.inject({ method: 'GET', url: URL })).json();
+    expect(body.data.turns).toHaveLength(60);
+    expect(body.data.older).toBe(true);
+  });
+
   it('404s an unknown session', async () => {
     const { app } = await setup();
     const res = await app.inject({ method: 'GET', url: '/api/sessions/nope/story' });

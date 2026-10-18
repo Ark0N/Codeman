@@ -2512,10 +2512,13 @@ export function buildHelperPage(turns: StoryTurn[], finished?: boolean): StoryPa
   if (!turns.length) return null;
   const first = turns[0];
   const last = turns[turns.length - 1];
+  // One helper's whole run as one page: how it ended is the LAST turn's (the first one "ended" only
+  // because the helper was messaged again, which would read as superseded).
   return buildStoryPage({
     ...first,
     events: turns.flatMap((t) => t.events),
     ended: finished ?? last.ended,
+    endedBy: last.endedBy === 'next prompt' ? undefined : last.endedBy,
     interrupted: false,
     endedAt: last.endedAt,
     durationMs: undefined,

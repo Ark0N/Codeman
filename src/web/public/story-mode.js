@@ -33,6 +33,8 @@ const STORY_REFRESH_DEBOUNCE_MS = 800;
 const STORY_POLL_MS = 4000;
 /** How often a finished newest page is checked for a turn no hook announced. */
 const STORY_IDLE_POLL_MS = 15000;
+/** A /story request that has not settled by then counts as failed, so the view never wedges. */
+const STORY_REQUEST_TIMEOUT_MS = 30000;
 /**
  * Widest stage a scene is drawn on, in virtual units. A panel stretched across a whole row keeps its
  * art together in a centered stage instead of spreading it to both ends; the background still fills it.
@@ -1579,6 +1581,15 @@ Object.assign(CodemanApp.prototype, {
     st.epoch++;
     st.first = true;
     st.drawer = null;
+    st.drawerHolds = false;
+    // What was said and shown belongs to the last session drawn, not this one.
+    st.announced = undefined;
+    st.knownTurns = undefined;
+    st.shownPageId = undefined;
+    st.picked = false;
+    // A request still out from before is ignored (its epoch is old); it must not block this one.
+    st.inFlight = 0;
+    st.again = false;
     st.root.hidden = false;
     document.body.classList.add('story-open');
     this._storyApplyTheme();
@@ -1604,6 +1615,8 @@ Object.assign(CodemanApp.prototype, {
     this._storyStopRuntime();
     this._storyCloseDrawer({ refocus: false });
     for (const rt of st.panels) this._storyDropPanel(rt);
+    // Full-size backing canvases (megabytes each at 2x): not kept once Story Mode is closed.
+    storyBgCache.clear();
     st.panels = [];
     st.pageEl.replaceChildren();
     st.wireList.replaceChildren();
@@ -1874,16 +1887,28 @@ Object.assign(CodemanApp.prototype, {
       st.again = true;
       return;
     }
-    st.inFlight = true;
+    const mine = (st.requestSeq = (st.requestSeq || 0) + 1);
+    st.inFlight = mine;
     const epoch = st.epoch;
     try {
       const qs = st.turnId ? `?turn=${encodeURIComponent(st.turnId)}` : '';
-      const res = await this._api(`/api/sessions/${encodeURIComponent(st.sessionId)}/story${qs}`);
+      // A request that never settles must not wedge the view: after the timeout it counts as failed.
+      let timer;
+      const timeout = new Promise((resolve) => (timer = setTimeout(() => resolve(null), STORY_REQUEST_TIMEOUT_MS)));
+      const res = await Promise.race([
+        this._api(`/api/sessions/${encodeURIComponent(st.sessionId)}/story${qs}`),
+        timeout,
+      ]).finally(() => clearTimeout(timer));
       if (epoch !== st.epoch || !st.open) return;
       // The route sends an ETag and no-cache, so the browser revalidates and an unchanged page comes
       // back from its cache with the same tag: nothing to parse, nothing to redraw.
       const etag = res?.ok ? res.headers?.get?.('etag') || null : null;
-      if (etag && etag === st.etag && !st.error) return;
+      if (etag && etag === st.etag && !st.error) {
+        // The page holds still, but a helper still working writes only to its own transcript (a
+        // foreground helper adds nothing to this one until it returns): its open drawer refreshes.
+        this._storyRefreshWorkingHelpers();
+        return;
+      }
       let body = null;
       try {
         body = res ? await res.json() : null;
@@ -1916,12 +1941,22 @@ Object.assign(CodemanApp.prototype, {
       }
       this._storyRender();
     } finally {
-      st.inFlight = false;
-      if (st.again) {
-        st.again = false;
-        this._storyScheduleRefresh(250);
+      if (st.inFlight === mine) {
+        st.inFlight = 0;
+        if (st.again) {
+          st.again = false;
+          this._storyScheduleRefresh(250);
+        }
       }
     }
+  },
+
+  /** An open drawer's helpers that are still working fetch their newest steps (each ETag'd). */
+  _storyRefreshWorkingHelpers() {
+    const st = this._story;
+    if (!st?.drawer) return;
+    for (const box of st.drawerBody.querySelectorAll('.story-helper-steps'))
+      if (box.dataset.working === '1') this._storyFillHelperSteps(box, box.dataset.agent, true);
   },
 
   // ── Runtime: frame loop, observers, poll, Escape ──

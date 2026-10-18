@@ -30,7 +30,7 @@ import {
   type StoryResponse,
 } from '../../types.js';
 import { getCli } from '../../config/cli-registry/registry.js';
-import { buildHelperPage, buildStoryPage, buildStoryTurns, summarizeTurns } from '../../story-mode.js';
+import { STORY_LIMITS, buildHelperPage, buildStoryPage, buildStoryTurns, summarizeTurns } from '../../story-mode.js';
 import { readSmallRegularFile, readStoryEntries, storyFileVersion } from '../../story-reader.js';
 import { claudeProjectsDir, findClaudeTranscriptPath } from '../../utils/claude-transcript.js';
 import { findSessionOrFail } from '../route-helpers.js';
@@ -169,7 +169,8 @@ export function registerStoryRoutes(app: FastifyInstance, ctx: SessionPort & Con
         supported: true,
         turns: summarizeTurns(turns),
         page: wanted ? buildStoryPage(wanted) : null,
-        ...(read.partial ? { older: true } : {}),
+        // Older turns exist that the list leaves out: before the part read, or past the listed ones.
+        ...(read.partial || turns.length > STORY_LIMITS.turnsListed ? { older: true } : {}),
       },
     };
   });
