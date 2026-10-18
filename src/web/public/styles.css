@@ -9835,6 +9835,13 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   text-wrap: balance;
 }
 
+/* Chinese has no spaces, so a balanced title would break inside a word (遭入 / 侵).
+   Break only at the spaces and punctuation the title has; overflow-wrap above still
+   rescues a run that cannot fit. */
+:lang(zh) .security-notice-title {
+  word-break: keep-all;
+}
+
 .security-notice-body,
 .update-notice-text {
   margin: 0;
@@ -9967,10 +9974,10 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   outline-offset: 2px;
 }
 
-/* Phones: the full width minus the stack's 0.5rem gutters. Every button grows to fill its
-   row (so one that wraps fills its own instead of sitting stray at the left) and is at least
-   --touch-target-min tall; the × gets a touch-sized box too, its negative margin keeping the
-   glyph where it sits on a desktop. */
+/* Phones: the full width minus the stack's 0.5rem gutters, and every button grows to fill
+   its row (so one that wraps fills its own instead of sitting stray at the left). On a touch
+   pointer, below, buttons are at least --touch-target-min tall and the × gets a touch-sized
+   box, its negative margin keeping the glyph where it sits on a desktop. */
 @media (max-width: 599px) {
   .security-notice {
     width: calc(100vw - 1rem);
@@ -9978,6 +9985,13 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 
   .security-notice-actions > button {
     flex: 1 1 auto;
+  }
+}
+
+/* Touch sizing follows the pointer, not the width: a phone turned to landscape is wider
+   than 599px and still needs fingertip-sized targets. */
+@media (pointer: coarse) {
+  .security-notice-actions > button {
     min-height: var(--touch-target-min);
   }
 
