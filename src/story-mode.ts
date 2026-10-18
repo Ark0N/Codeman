@@ -231,6 +231,8 @@ function plainMarkdown(text: string, spans: string[]): string {
 }
 
 const restoreSpans = (text: string, spans: string[]): string =>
+  // NUL marks a kept span: no text Claude writes contains one.
+  // eslint-disable-next-line no-control-regex
   text.replace(/\u0000(\d+)\u0000/g, (_, n: string) => spans[Number(n)] ?? '');
 
 /**
@@ -1108,8 +1110,8 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
     if ((entry.isMeta === true && !scheduled) || entry.turnCompanion === true) return out;
     const local = /^\s*<local-command-(stdout|stderr)>([\s\S]*?)<\/local-command-\1>/.exec(blockText(content));
     if (local) {
-      // eslint-disable-next-line no-control-regex
       const text = local[2]
+        // eslint-disable-next-line no-control-regex
         .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
         .replace(/`([^`\n]+)`/g, '$1')
         .trim();
@@ -2296,11 +2298,12 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         : 'Claude packs up its notes to free memory.';
       director = evs.map((e) => e.description).find(Boolean) ?? 'compact_boundary';
       break;
-    case 'montage':
+    case 'montage': {
       panel.notes = notesOf(evs.filter((e) => e.tool === 'Bash'));
       const added = evs.filter((e) => e.intent === 'prompt').length;
       story = `Claude ${index <= 1 ? 'gets started' : 'keeps going'}${added ? ` (you add ${plural(added, 'thing')})` : ''}: ${montageSummary(evs)}.`;
       break;
+    }
     case 'complete':
       break;
   }
