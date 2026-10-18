@@ -43,10 +43,10 @@ A security notice is a sticky warning card about something outside Codeman that 
   "id": "opencode-console-breach-2026-10",
   "severity": "warning",
   "cli": "opencode",
-  "published": "2026-10-18",
+  "published": "2026-10-17",
   "expires": "2026-12-31",
   "title": "OpenCode Console breach: check your API keys",
-  "message": "One or two plain sentences: what happened and what to do.",
+  "message": "A few short plain sentences, about 50 words at most: what happened and what to do.",
   "link": { "label": "Read OpenCode's notice", "url": "https://..." },
   "i18n": { "zh-CN": { "title": "...", "message": "...", "label": "..." } }
 }
@@ -54,7 +54,8 @@ A security notice is a sticky warning card about something outside Codeman that 
 
 - `id` is stable and unique, and never reused: a browser that closed a notice remembers its id (`codeman-security-notices-seen` in localStorage), so a reworded notice under the same id is NOT shown again to anyone who closed it. Give a materially new warning a new id.
 - `cli` (optional) is a registry CLI id. The notice is then shown only on a server where that CLI is installed and enabled; without `cli` it is shown to everyone.
-- `published` and `expires` are inclusive `YYYY-MM-DD` days in the viewer's local time. `expires` is what keeps an old notice from alarming a browser that first opens Codeman months later, so always set one.
+- `published` and `expires` are inclusive `YYYY-MM-DD` days in the viewer's local time. Set `published` a day before the release ships, so the notice is already live in every timezone when it lands (a browser still on the previous day would otherwise take the plain update toast and see the notice later as a separate card). `expires` is what keeps an old notice from alarming a browser that first opens Codeman months later, so always set one.
+- Keep `message` to about 50 words and do not repeat the card's chrome (the "Security notice" eyebrow and the title are already on it): on a phone the card shares the screen with the update toast's text, and a longer one has to be scrolled to reach its buttons. State only what the affected vendor has said.
 - `title` (optional) is the card's bold line; keep it short. `link.url` must be https. `i18n` is optional; a missing string falls back to the English one.
 - Run `npx prettier --write src/web/public/security-notices.json` and `npm test -- test/security-notices.test.ts`, which validates the file (unique ids, real dates, https links, every `cli` a stock registry id, a zh-CN title wherever there is an English one).
 
