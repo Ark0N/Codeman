@@ -235,6 +235,36 @@ const restoreSpans = (text: string, spans: string[]): string =>
  */
 const SENTENCE_END = /^(.+?(?<!\.)(?<!\b(?:e\.g|i\.e|vs|cf))[.!?](?!\.))(?=\s|$)/;
 
+/** The first two sentences of a message, without markdown (the second may be empty). */
+function firstTwoSentences(text: string): [string, string] {
+  const spans: string[] = [];
+  const plain = plainMarkdown(text, spans).replace(/\s+/g, ' ').trim();
+  const one = SENTENCE_END.exec(plain);
+  if (!one) return [restoreSpans(plain, spans), ''];
+  const rest = plain.slice(one[1].length).trim();
+  const two = SENTENCE_END.exec(rest);
+  return [restoreSpans(one[1], spans), two ? restoreSpans(two[1], spans) : ''];
+}
+
+/** A sentence that reports a problem: its next sentence (usually the fix) belongs with it. */
+const REPORTS_PROBLEM = /\b(left|stray|broke|broken|fail(s|ed)?|error|missing|wrong|bug|oops|mistake|forgot)\b/i;
+/** A sentence that carries a caveat a reader must not lose. */
+const CAVEAT =
+  /^(but|however|note|nothing|no\b|none|one (caveat|gap|thing)|heads up|caveat|warning|i (didn't|did not|couldn't|could not|haven't|have not|wasn't|left)|it (isn't|is not|wasn't|was not)|this (isn't|is not)|the (only|one) )/i;
+
+/** What a speech balloon says: the first sentence, and the next when the first reports a problem. */
+export function balloonText(text: string): string {
+  const [one, two] = firstTwoSentences(text);
+  return clip(two && REPORTS_PROBLEM.test(one) && two.length <= 140 ? `${one} ${two}` : one, 260);
+}
+
+/** Claude's last words: the first sentence, and the next when it carries a caveat. */
+export function closingText(text: string): string {
+  const [one, two] = firstTwoSentences(text);
+  // A very short first sentence ("Not done.") says too little alone.
+  return clip(two && (CAVEAT.test(two) || one.length < 24) && two.length <= 200 ? `${one} ${two}` : one, 300);
+}
+
 /** The first sentence of a message, without markdown, for a speech balloon. */
 export function firstSentence(text: string, max = 160): string {
   const spans: string[] = [];
@@ -573,14 +603,26 @@ export function heredocWrites(command: string, cwd?: string): StoryEdit[] {
  * reformatted`, `✖ 5 problems`, `error TS2322:`). Read when a trailing command (`; ls`) hid the exit code.
  */
 export function reportsProblems(output: string): boolean {
-  return [
+  // The last verdict wins: a formatter's "1 file would be reformatted" preview, then "1 file
+  // reformatted" and a clean check, is clean.
+  const last = (patterns: RegExp[]) =>
+    Math.max(-1, ...patterns.map((re) => [...output.matchAll(new RegExp(re.source, 'gm'))].pop()?.index ?? -1));
+  const problem = last([
     /\bFound [1-9]\d* errors?\b/,
     /\b[1-9]\d* files? would be reformatted\b/,
-    /^would reformat /m,
+    /^would reformat /,
     /✖ [1-9]\d* problems?\b/,
     /\[warn\] Code style issues found/,
     /\berror TS\d+:/,
-  ].some((re) => re.test(output));
+  ]);
+  if (problem < 0) return false;
+  const clean = last([
+    /\bAll checks passed!/,
+    /\bFound 0 errors\b/,
+    /^(?!.*would be).*\b\d+ files? reformatted\b/,
+    /^(?!.*would be).*\b\d+ files? (left unchanged|already formatted)\b/,
+  ]);
+  return problem > clean;
 }
 
 /**
@@ -1655,21 +1697,32 @@ const TALKS_RESULTS = /\b(pass(es|ed|ing)?|fail(s|ed|ing|ures?)?|green|clean)\b/
 /** Claude reporting a save ("Commits are in.", "Pushed to origin."). */
 const TALKS_SAVES = /\b(commit(s|ted)?|pushed|merged|tagged)\b/i;
 /** The remark that reports on a panel of this kind, if any. */
-const REPORT_TALK: Partial<Record<StoryPanelKind, RegExp>> = { check: TALKS_RESULTS, save: TALKS_SAVES };
+const REPORT_TALK: Partial<Record<StoryPanelKind, RegExp>> = {
+  check: TALKS_RESULTS,
+  save: TALKS_SAVES,
+  run: TALKS_RESULTS,
+};
 const ANNOUNCES = /\b(I'll|I will|let me|let's|I'm going to|next,? I|now I)\b/i;
 
 function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?: string } {
   const panels: DraftPanel[] = [];
   let pendingSay: string | undefined;
+  let lastSaid: string | undefined;
   events.forEach((ev, idx) => {
     if (ev.intent === 'say' && !ev.todos) {
-      pendingSay ??= firstSentence(ev.label);
+      pendingSay ??= balloonText(ev.label);
+      lastSaid ??= ev.label;
       return;
     }
+    lastSaid = undefined;
     const kind = ev.todos && ev.intent === 'say' ? 'plan' : PANEL_FOR[ev.intent];
     if (!kind) return;
     const last = panels[panels.length - 1];
-    if (last && last.kind === kind && MERGEABLE.has(kind)) {
+    const advisorMix =
+      kind === 'backup' &&
+      last?.kind === 'backup' &&
+      (events[last.events[0]].tool === 'Advisor') !== (ev.tool === 'Advisor');
+    if (last && last.kind === kind && MERGEABLE.has(kind) && !advisorMix) {
       last.events.push(idx);
       if (pendingSay && !last.balloon) last.balloon = { who: 'claude', text: pendingSay };
     } else {
@@ -1686,17 +1739,18 @@ function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?
         pendingSay &&
         talk &&
         last &&
-        (!last.balloon || !talk.test(last.balloon.text)) &&
+        (!last.balloon || (last.kind === 'check' && !talk.test(last.balloon.text))) &&
         talk.test(pendingSay) &&
         !ANNOUNCES.test(pendingSay);
-      if (kind === 'mission') panel.balloon = { who: 'you', text: clip(ev.label, 220) };
+      if (kind === 'mission') panel.balloon = { who: 'you', text: clip(ev.label, 400) };
       else if (reportsBack && last && pendingSay) last.balloon = { who: 'claude', text: pendingSay };
       else if (pendingSay) panel.balloon = { who: 'claude', text: pendingSay };
       panels.push(panel);
     }
     pendingSay = undefined;
   });
-  return { panels, trailingSay: pendingSay };
+  // The closing words keep a caveat that follows them ("Nothing is committed: this is no git repo.").
+  return { panels, trailingSay: lastSaid !== undefined ? closingText(lastSaid) : pendingSay };
 }
 
 /** Fix → check → fix → check (4 panels or more) is one "loop" panel: try, test, repeat. */
@@ -1863,14 +1917,18 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         evs.flatMap((e) => (e.intent === 'read' && e.file ? [e.file] : e.intent === 'look' ? (e.files ?? []) : []))
       );
       panel.files = files.slice(0, 12);
+      // Codeman's own case file is plumbing, not part of the story.
+      panel.files = panel.files.filter((f) => !/(^|\/)\.codeman[-.]/.test(f));
       panel.notes = evs
         .filter((e) => e.intent !== 'read')
-        .map(shortCommand)
+        .map((e) => e.description || shortCommand(e))
         .slice(0, 4);
+      if (evs.every((e) => e.tool === 'ToolSearch')) story = 'Claude gets the tools it needs ready.';
       if (evs.every((e) => e.tool === 'Bash')) director = `${tools} · ${shortCommand(evs[0])}`;
       if (errors) director += ` · ${plural(errors, 'error')}`;
-      story = files.length
-        ? `Claude reads ${plural(files.length, 'file')} to find its way around.`
+      const shown = files.filter((f) => !/(^|\/)\.codeman[-.]/.test(f));
+      story = shown.length
+        ? `Claude reads ${plural(shown.length, 'file')} to find its way around.`
         : evs.every((e) => e.intent === 'search')
           ? 'Claude searches the code.'
           : 'Claude looks around the project.';
@@ -1960,20 +2018,31 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         if (ok !== undefined) panel.ok = ok;
         const tests = lastCheck?.tests;
         if (tests) panel.tests = tests;
-        // Every check green from the start: Claude was building piece by piece, not fixing.
-        const neverFailed = checks.every((e) => passed(e) !== false);
+        // Every test run's verdict, so a run that failed (often the one you asked for) is not lost,
+        // even inside a round that passed in the end.
+        const runs = checks.map(passed);
+        if (runs.every((r) => r !== undefined)) panel.roundsOk = runs as boolean[];
+        const failed = checks.slice(0, -1).filter((e) => passed(e) === false);
+        const fails = failed.length;
+        // A failure where the tests passed and only a linter or formatter complained.
+        const lintFails = failed.filter(
+          (e) => !!e.tests && e.tests.passed > 0 && !e.tests.failed && !e.tests.errors
+        ).length;
+        const n = panel.rounds;
         story =
-          neverFailed && panel.ok === true
-            ? `Build and test, ${plural(panel.rounds, 'round')}. Every check passes.`
-            : `Fix and test, ${plural(panel.rounds, 'round')}.${
-                panel.ok === true
-                  ? ' It passes in the end.'
+          panel.ok === true && !fails
+            ? `Build and test, ${plural(n, 'round')}. Every check passes.`
+            : panel.ok === true && fails === lintFails
+              ? `Build and test, ${plural(n, 'round')}. A check fails ${fails === 1 ? 'once' : `${fails} times`}, then everything passes.`
+              : panel.ok === true && n === 2
+                ? 'Fix and test: the first run fails, the second passes.'
+                : panel.ok === true
+                  ? `Fix and test, ${plural(n, 'round')}: ${fails === 1 ? 'one run fails' : `${fails} runs fail`}, then it passes.`
                   : panel.ok === false && tests && tests.passed && !tests.failed && !tests.errors
-                    ? ' The tests pass, but another check fails.'
+                    ? `Fix and test, ${plural(n, 'round')}. The tests pass, but another check fails.`
                     : panel.ok === false
-                      ? ' Still failing.'
-                      : ''
-              }`;
+                      ? `Fix and test, ${plural(n, 'round')}. Still failing.`
+                      : `Fix and test, ${plural(n, 'round')}.`;
         director = `${plural(checks.length, 'check')} · ${plural(edits.length, 'edit')} · ${fmtCounts(panel.added, panel.removed)} · last: ${
           lastCheck ? outcome(lastCheck) : 'running'
         }`;
@@ -2017,6 +2086,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           tests.errors ? `, ${plural(tests.errors, 'error')}` : ''
         }`;
       if (edits.length) director += ` · writes ${plural(unique(edits.map((d) => d.file)).length, 'file')}`;
+      const written = unique(edits.map((d) => d.file)).length;
+      if (written) story = `Claude writes ${plural(written, 'file')}; ${story[0].toLowerCase()}${story.slice(1)}`;
       const saved = checks.reduce((n, e) => n + (e.commits ?? 0), 0);
       if (saved) {
         director += ` · ${plural(saved, 'commit')}`;
@@ -2027,7 +2098,18 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
     }
     case 'run':
       panel.notes = notesOf(evs);
-      story = evs.every((e) => e.tool !== 'Bash') ? 'Claude uses a tool.' : 'Claude works in the terminal.';
+      story =
+        errors && errors === evs.length
+          ? `Claude tries ${evs.length === 1 ? 'a command' : `${evs.length} commands`}, and ${
+              evs.some((e) => /\bblocked\b|PreToolUse|denied/i.test(e.output ?? ''))
+                ? 'it is blocked'
+                : evs.length === 1
+                  ? 'it fails'
+                  : 'they fail'
+            }.`
+          : evs.every((e) => e.tool !== 'Bash')
+            ? 'Claude uses a tool.'
+            : 'Claude works in the terminal.';
       director = `${tools} · ${shortCommand(evs[0])}${errors ? ` · ${plural(errors, 'error')}` : ''}`;
       break;
     case 'save': {
@@ -2035,20 +2117,34 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const last = evs[evs.length - 1];
       if (last?.ok !== undefined) panel.ok = last.ok;
       const ships = evs.some((e) => e.ships === 'pr') ? 'pr' : evs.some((e) => e.ships === 'push') ? 'push' : '';
+      // The command failed, but its own output shows the push (or the commit) went through: a step
+      // chained after it failed, not the save.
+      const out = last?.output ?? '';
+      const savedAnyway =
+        last?.ok === false &&
+        (ships === 'push'
+          ? /\[new branch\]|\S+\.\.\S+\s+\S+\s+->|\bset up to track\b|Everything up-to-date/.test(out)
+          : /^\[[^\]\n]+ [0-9a-f]{7,}\]/m.test(out));
+      if (savedAnyway) panel.ok = true;
       const commits = evs.reduce((n, e) => n + (e.commits ?? (e.intent === 'save' ? 1 : 0)), 0);
       const inCommits = commits > 1 ? ` in ${commits} commits` : '';
-      story =
-        panel.ok === false
+      story = savedAnyway
+        ? ships === 'push'
+          ? `Claude saves the work${inCommits} and uploads it, but a step after that fails.`
+          : `Claude saves the work${inCommits}, but a step after that fails.`
+        : panel.ok === false
           ? ships === 'pr'
             ? 'Claude tries to open a pull request, and the command fails.'
             : ships === 'push'
-              ? 'Claude tries to send the work up, and the command fails.'
+              ? 'Claude tries to upload the work, and the command fails.'
               : 'Claude tries to save the work, and the command fails.'
           : ships === 'pr'
             ? 'Claude opens a pull request.'
             : ships === 'push'
-              ? `Claude saves the work${inCommits} and sends it up.`
+              ? `Claude saves the work${inCommits} and uploads it.`
               : `Claude saves the work${inCommits}.`;
+      const wrote = unique(edits.map((d) => d.file)).length;
+      if (wrote && story.startsWith('Claude ')) story = `Claude writes ${plural(wrote, 'file')} and ${story.slice(7)}`;
       director = `${evs.map(shortCommand).slice(0, 2).join(' · ')}${errors ? ` · ${plural(errors, 'error')}` : ''}${
         edits.length ? ` · writes ${plural(unique(edits.map((d) => d.file)).length, 'file')}` : ''
       }`;
@@ -2079,7 +2175,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
     case 'montage':
       panel.notes = notesOf(evs.filter((e) => e.tool === 'Bash'));
       const added = evs.filter((e) => e.intent === 'prompt').length;
-      story = `Claude keeps going${added ? ` (you add ${plural(added, 'thing')})` : ''}: ${montageSummary(evs)}.`;
+      story = `Claude ${index <= 1 ? 'gets started' : 'keeps going'}${added ? ` (you add ${plural(added, 'thing')})` : ''}: ${montageSummary(evs)}.`;
       break;
     case 'complete':
       break;
@@ -2093,13 +2189,15 @@ function completePanel(turn: StoryTurn, page: Omit<StoryPage, 'panels'>, trailin
   const done = turn.durationMs !== undefined ? `Done in ${roughDuration(turn.durationMs)}.` : 'Done.';
   const story = turn.interrupted
     ? 'You stop Claude here.'
-    : turn.endedBy === 'next prompt'
-      ? 'The trail stops here: the next prompt starts a new turn.'
-      : running
-        ? `Claude's part is done${turn.durationMs !== undefined ? ` in ${roughDuration(turn.durationMs)}` : ''}. ${
-            running === 1 ? 'A helper is' : `${running} helpers are`
-          } still working.`
-        : done;
+    : page.noneWorked
+      ? 'Nothing Claude tried worked, so the job is not done.'
+      : turn.endedBy === 'next prompt'
+        ? 'The trail stops here: the next prompt starts a new turn.'
+        : running
+          ? `Claude's part is done${turn.durationMs !== undefined ? ` in ${roughDuration(turn.durationMs)}` : ''}. ${
+              running === 1 ? 'A helper is' : `${running} helpers are`
+            } still working.`
+          : done;
   const director = [
     turn.endedBy === 'next prompt' ? 'superseded by the next prompt' : (turn.endedBy ?? 'turn_duration'),
     turn.durationMs !== undefined ? exactDuration(turn.durationMs) : '',
@@ -2165,6 +2263,8 @@ export function buildStoryPage(turn: StoryTurn): StoryPage {
     helpers: events.filter((e) => e.helper && e.tool !== 'Advisor').length,
     helpersRunning: events.filter((e) => e.helper?.running).length,
   };
+  const calls = events.filter((e) => !NOT_TOOL_CALLS.has(e.intent));
+  if (calls.length && calls.every((e) => e.ok === false)) base.noneWorked = true;
   if (turn.endedAt) base.endedAt = turn.endedAt;
   if (turn.durationMs !== undefined) base.durationMs = turn.durationMs;
   if (turn.ended) {

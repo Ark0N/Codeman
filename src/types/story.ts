@@ -156,6 +156,8 @@ export interface StoryPanel {
   removed?: number;
   ok?: boolean;
   rounds?: number;
+  /** A loop's test runs in order: whether each passed (absent while one is still running). */
+  roundsOk?: boolean[];
   tests?: StoryTests;
   todos?: StoryTodo[];
   question?: { text: string; answer?: string };
@@ -190,6 +192,8 @@ export interface StoryPage extends StoryTurnSummary {
   helpers: number;
   /** Background helpers that had not reported back when this page was drawn. */
   helpersRunning: number;
+  /** Every tool call of the turn failed (a blocked command, nothing that worked): no celebration. */
+  noneWorked?: boolean;
 }
 
 /** `GET /api/sessions/:id/story/helpers/:agentId`: one helper's own steps, as one page. */

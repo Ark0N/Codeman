@@ -17,7 +17,7 @@
         "ok": null,
         "story": "You give Claude a job.",
         "director": "Prompt · 65 words",
-        "balloon": "First write a short todo list for this job, then build a bash script rename_by_date.sh in this folder that renames *.jpg files to their modification time as YYYY-MM-DD_HHMMSS.jpg with a --dry-run flag, and while you do…",
+        "balloon": "First write a short todo list for this job, then build a bash script rename_by_date.sh in this folder that renames *.jpg files to their modification time as YYYY-MM-DD_HHMMSS.jpg with a --dry-run flag, and while you do that use the Agent tool to have one helper agent write README.md for the script; finally test it on a few sample files you create in a samples folder.",
         "tests": null,
         "events": 1
       },
@@ -33,7 +33,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude looks around the project.",
         "director": "Bash ×2 · ls -la && git log --oneline | head; which shellcheck; bash…",
         "balloon": null,
         "tests": null,
@@ -42,11 +42,20 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude calls in 2 helpers.",
-        "director": "Advisor · Agent · a second opinion · general-purpose · 6 calls inside",
+        "story": "Claude asks the advisor for a second opinion.",
+        "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
-        "events": 2
+        "events": 1
+      },
+      {
+        "kind": "backup",
+        "ok": null,
+        "story": "Claude sends 1 helper off to work in the background.",
+        "director": "Agent · general-purpose · 6 calls inside",
+        "balloon": null,
+        "tests": null,
+        "events": 1
       },
       {
         "kind": "fix",
@@ -62,7 +71,7 @@
         "ok": null,
         "story": "Claude works in the terminal.",
         "director": "Bash ×5 · rm -- ./-- && S=/tmp/claude/-work-cases-story-review-c/740e…",
-        "balloon": "My mk -- ... helper call left a stray file named --.",
+        "balloon": "My mk -- ... helper call left a stray file named --. I'll remove it, then run the dry run and save a listing to confirm nothing changed.",
         "tests": null,
         "events": 5
       },
@@ -122,7 +131,7 @@
         "ok": null,
         "story": "Done in 21 seconds.",
         "director": "turn_duration · 21 s · 2 tool calls · 1 helper",
-        "balloon": "I built rename_by_date.sh, the helper agent wrote README.md, and the script passed every test I ran on sample files in samples/.",
+        "balloon": "I built rename_by_date.sh, the helper agent wrote README.md, and the script passed every test I ran on sample files in samples/. Nothing is committed because this folder isn't a git repository, even though the session context said it was.",
         "tests": null,
         "events": 0
       }

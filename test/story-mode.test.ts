@@ -129,6 +129,15 @@ describe('parseTestCounts beyond "N passed"', () => {
     expect(reportsProblems('✖ 5 problems (3 errors, 2 warnings)')).toBe(true);
     expect(reportsProblems("src/a.ts(3,1): error TS2322: Type 'x' is not assignable")).toBe(true);
     expect(reportsProblems('All checks passed!\n5 files already formatted\nFound 0 errors.')).toBe(false);
+    // The last verdict wins: a formatter's preview, then the fix.
+    expect(
+      reportsProblems('1 file would be reformatted\n1 file reformatted\nAll checks passed!\n10 files already formatted')
+    ).toBe(false);
+    expect(
+      reportsProblems(
+        'All checks passed!\nWould reformat: a.py\n1 file would be reformatted, 9 files already formatted'
+      )
+    ).toBe(true);
   });
 
   it('a line that only mentions a failure is not a summary', () => {
@@ -736,7 +745,7 @@ describe('buildStoryPage', () => {
     expect(byKind.backup.caption.story).toBe('Claude calls in 1 helper.');
     expect(byKind.backup.caption.director).toContain('3 calls inside');
     expect(byKind.loop).toMatchObject({ rounds: 2, ok: true, added: 2, removed: 1 });
-    expect(byKind.loop.caption.story).toBe('Fix and test, 2 rounds. It passes in the end.');
+    expect(byKind.loop.caption.story).toBe('Fix and test: the first run fails, the second passes.');
     expect(byKind.save.caption.story).toBe('Claude saves the work.');
     expect(byKind.complete.caption.story).toBe('Done in 7 minutes.');
     expect(byKind.complete.caption.director).toContain('7 min 12 s');
@@ -749,7 +758,11 @@ describe('buildStoryPage', () => {
       text: 'The checkout button does nothing on phones. Can you fix it?',
     });
     expect(page.panels[1].balloon).toEqual({ who: 'claude', text: 'Let me see how checkout works.' });
-    expect(page.panels[page.panels.length - 1].balloon).toEqual({ who: 'claude', text: 'Fixed.' });
+    // A first sentence this short says too little alone: the next one comes along.
+    expect(page.panels[page.panels.length - 1].balloon).toEqual({
+      who: 'claude',
+      text: 'Fixed. The banner sat on top of the button.',
+    });
   });
 
   it('lists files and keeps edits reachable from the panel', () => {
@@ -812,7 +825,7 @@ describe('buildStoryPage', () => {
       end(1000),
     ]);
     const loop = page.panels.find((p) => p.kind === 'loop')!;
-    expect(loop.caption.story).toBe('Fix and test, 2 rounds. It passes in the end.');
+    expect(loop.caption.story).toBe('Fix and test: the first run fails, the second passes.');
     expect(loop.balloon?.text).toBe('All 4 tests pass now.');
     expect(loop.tests).toEqual({ passed: 4, failed: 0 });
   });
@@ -830,7 +843,7 @@ describe('buildStoryPage', () => {
     expect(check.caption.director).toContain('0 passed, 1 error');
     const save = page.panels.find((p) => p.kind === 'save')!;
     expect(save.ok).toBe(false);
-    expect(save.caption.story).toBe('Claude tries to send the work up, and the command fails.');
+    expect(save.caption.story).toBe('Claude tries to upload the work, and the command fails.');
     expect(save.caption.director).toContain('1 error');
   });
 
@@ -857,8 +870,8 @@ describe('buildStoryPage', () => {
     expect(page.filesChanged).toBe(1);
     const check = page.panels.find((p) => p.kind === 'check')!;
     expect(check.caption.director).toBe('node --test → ok · 3 passed · writes 1 file · 1 commit');
-    // The commit at the end of the test one-liner is not lost: the check says it saved.
-    expect(check.caption.story).toBe('The tests pass, and Claude saves the work.');
+    // The commit at the end of the test one-liner is not lost, nor the file written: the check says both.
+    expect(check.caption.story).toBe('Claude writes 1 file; the tests pass, and Claude saves the work.');
   });
 
   it('one-line printf/echo writes and the files Claude Code says a command changed are edits', () => {
@@ -912,6 +925,26 @@ describe('buildStoryPage', () => {
     expect(heredocWrites('cat > "$S/x.txt" <<EOF\nx\nEOF', '/w')).toEqual([]);
     expect(heredocWrites('cd sub && cat > a.txt <<EOF\nx\nEOF', '/w').map((d) => d.file)).toEqual(['a.txt']);
     expect(heredocWrites('tee -a notes.md <<EOF\nx\nEOF', '/w').map((d) => d.file)).toEqual(['/w/notes.md']);
+  });
+
+  it('a loop keeps every run: a lint failure inside a round that passed in the end still shows', () => {
+    const page = pageOf([
+      prompt('build'),
+      ...edit('e1', '/w/a.py', ['+a = 1']),
+      ...bash('b1', 'pytest -q', 'Run tests', '3 passed in 0.1s'),
+      ...edit('e2', '/w/b.py', ['+b = 1']),
+      ...bash(
+        'b2',
+        'pytest -q; ruff format --check .',
+        'Run tests and format check',
+        '6 passed in 0.1s\n1 file would be reformatted'
+      ),
+      ...bash('b3', 'ruff format . && pytest -q', 'Format and retest', '1 file reformatted\n6 passed in 0.1s'),
+      end(1000),
+    ]);
+    const loop = page.panels.find((p) => p.kind === 'loop')!;
+    expect(loop.roundsOk).toEqual([true, false, true]);
+    expect(loop.caption.story).toBe('Build and test, 2 rounds. A check fails once, then everything passes.');
   });
 
   it('checks that all pass from the start read as building, not fixing', () => {
@@ -1026,7 +1059,7 @@ describe('buildStoryPage', () => {
       end(1000),
     ]);
     expect(page.panels.find((p) => p.kind === 'save')!.caption.story).toBe(
-      'Claude saves the work in 2 commits and sends it up.'
+      'Claude saves the work in 2 commits and uploads it.'
     );
     const lines: unknown[] = [prompt('many steps')];
     for (let i = 0; i < 14; i++) {

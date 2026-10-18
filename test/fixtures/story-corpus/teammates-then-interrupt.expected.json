@@ -17,14 +17,14 @@
         "ok": null,
         "story": "You give Claude a job.",
         "director": "Prompt · 77 words",
-        "balloon": "Create a tiny node project here: package.json (type module) and index.js exporting two functions add(a,b) and slugify(s). Then start TWO helpers with the Agent tool IN THE BACKGROUND (run_in_background: true): one write…",
+        "balloon": "Create a tiny node project here: package.json (type module) and index.js exporting two functions add(a,b) and slugify(s). Then start TWO helpers with the Agent tool IN THE BACKGROUND (run_in_background: true): one writes README.md describing the project, the other writes CONTRIBUTING.md. While they work, write index.test.mjs using node:test with a few tests for both functions and run it with node…",
         "tests": null,
         "events": 1
       },
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude looks around the project.",
         "director": "Bash ×2 · ls -la && git log --oneline -3 2>&1; node --version · 1 error",
         "balloon": null,
         "tests": null,
@@ -42,7 +42,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work.",
+        "story": "Claude writes 2 files and saves the work.",
         "director": "git commit -q -m \"feat: add package.json and index.js with… · writes 2 files",
         "balloon": null,
         "tests": null,
@@ -60,7 +60,7 @@
       {
         "kind": "check",
         "ok": true,
-        "story": "The tests pass.",
+        "story": "Claude writes 1 file; the tests pass.",
         "director": "node --test index.test.mjs → ok · 8 passed · writes 1 file",
         "balloon": null,
         "tests": {
@@ -212,7 +212,7 @@
         "ok": null,
         "story": "You give Claude a job.",
         "director": "Prompt · 56 words",
-        "balloon": "Big refactor: split index.js into three modules under lib/ (lib/add.js, lib/slugify.js, lib/util.js with shared helpers), keep index.js as a re-export barrel, add full JSDoc to every function, add at least 15 more node:…",
+        "balloon": "Big refactor: split index.js into three modules under lib/ (lib/add.js, lib/slugify.js, lib/util.js with shared helpers), keep index.js as a re-export barrel, add full JSDoc to every function, add at least 15 more node:test tests in separate files under test/, update README and CONTRIBUTING to match, run the tests after each step and commit each step separately.",
         "tests": null,
         "events": 1
       },
@@ -228,7 +228,7 @@
       {
         "kind": "check",
         "ok": true,
-        "story": "The tests pass.",
+        "story": "Claude writes 4 files; the tests pass.",
         "director": "npm test 2>&1 → ok · 8 passed · writes 4 files",
         "balloon": "All 8 tests pass, the README examples give the same outputs, and the barrel exports only add and slugify.",
         "tests": {
@@ -249,7 +249,7 @@
       {
         "kind": "check",
         "ok": true,
-        "story": "The tests pass.",
+        "story": "Claude writes 4 files; the tests pass.",
         "director": "npm test 2>&1 → ok · 8 passed · writes 4 files",
         "balloon": "Every @example output matches what the code actually returns, and 8/8 tests pass.",
         "tests": {
@@ -303,7 +303,7 @@
       {
         "kind": "run",
         "ok": null,
-        "story": "Claude works in the terminal.",
+        "story": "Claude tries a command, and it is blocked.",
         "director": "Bash · sleep 65 · 1 error",
         "balloon": null,
         "tests": null,
@@ -312,9 +312,9 @@
       {
         "kind": "complete",
         "ok": null,
-        "story": "Done in 6 seconds.",
+        "story": "Nothing Claude tried worked, so the job is not done.",
         "director": "stop_hook_summary · 6 s · 1 tool call",
-        "balloon": "Not done.",
+        "balloon": "Not done. The harness blocked sleep 65: a sleep on its own in the foreground isn't allowed.",
         "tests": null,
         "events": 0
       }

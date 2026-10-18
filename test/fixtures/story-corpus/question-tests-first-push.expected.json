@@ -17,7 +17,7 @@
         "ok": null,
         "story": "You give Claude a job.",
         "director": "Prompt · 121 words",
-        "balloon": "Build a tiny Python command-line tool in this folder that turns text into URL slugs. Before doing anything else, ask me with your AskUserQuestion tool whether the tool should be named slugify or kebab (offer exactly tho…",
+        "balloon": "Build a tiny Python command-line tool in this folder that turns text into URL slugs. Before doing anything else, ask me with your AskUserQuestion tool whether the tool should be named slugify or kebab (offer exactly those two options). After my answer, first write me your plan as a short numbered list, then write the pytest tests FIRST (at least 8 tests in tests/), run them with python3 -m pytest…",
         "tests": null,
         "events": 1
       },
@@ -33,7 +33,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude looks around the project.",
         "director": "Bash ×2 · ls -la && git status 2>&1 | head -5; git rev-parse --show-t…",
         "balloon": null,
         "tests": null,
@@ -51,7 +51,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Fix and test, 2 rounds. It passes in the end.",
+        "story": "Fix and test: the first run fails, the second passes.",
         "director": "2 checks · 4 edits · +151 −1 · last: ok",
         "balloon": "All 19 test cases pass (13 test functions), and ruff check and ruff format both come back clean.",
         "tests": {
@@ -80,8 +80,8 @@
       },
       {
         "kind": "save",
-        "ok": false,
-        "story": "Claude tries to send the work up, and the command fails.",
+        "ok": true,
+        "story": "Claude saves the work in 2 commits and uploads it, but a step after that fails.",
         "director": "git commit -q -F - · git push -u origin main · 1 error",
         "balloon": null,
         "tests": null,

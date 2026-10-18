@@ -68,7 +68,9 @@ describe('Story Mode on real sessions', () => {
   const panel = (name: string, turn: number, kind: string) => pagesOf(name)[turn].panels.find((p) => p.kind === kind);
 
   it('a fix, a failing test (exit code hidden by a pipe), a fix and a pass fold into one loop', () => {
-    expect(panel('python-cli-fix-loop', 0, 'loop')?.story).toBe('Fix and test, 2 rounds. It passes in the end.');
+    expect(panel('python-cli-fix-loop', 0, 'loop')?.story).toBe(
+      'Fix and test: the first run fails, the second passes.'
+    );
   });
 
   it('a prompt typed mid-turn (a queued_command attachment) is drawn where Claude took it in', () => {
@@ -93,7 +95,9 @@ describe('Story Mode on real sessions', () => {
   });
 
   it('a commit at the end of a test one-liner is kept, and a background helper reports back in 9 s', () => {
-    expect(panel('text-plan-dry-run-helper', 0, 'check')?.story).toBe('The tests pass, and Claude saves the work.');
+    expect(panel('text-plan-dry-run-helper', 0, 'check')?.story).toBe(
+      'Claude writes 2 files; the tests pass, and Claude saves the work.'
+    );
     expect(panel('text-plan-dry-run-helper', 0, 'plan')?.story).toBe('Claude writes a plan: 4 steps.');
     expect(pagesOf('text-plan-dry-run-helper')[1]).toMatchObject({ origin: 'task', durationMs: 9008 });
   });
@@ -106,10 +110,19 @@ describe('Story Mode on real sessions', () => {
     expect(pages[2].filesChanged).toBe(2);
   });
 
-  it('a push whose command failed says so', () => {
+  it('a push that went through, with a step after it that failed, says both', () => {
     expect(panel('question-tests-first-push', 0, 'save')).toMatchObject({
-      ok: false,
-      story: 'Claude tries to send the work up, and the command fails.',
+      ok: true,
+      story: 'Claude saves the work in 2 commits and uploads it, but a step after that fails.',
     });
+  });
+
+  it('a blocked command ends a turn where nothing worked, without a celebration', () => {
+    const last = pagesOf('teammates-then-interrupt')[4];
+    expect(last.panels.map((p) => p.story)).toEqual([
+      'You give Claude a job.',
+      'Claude tries a command, and it is blocked.',
+      'Nothing Claude tried worked, so the job is not done.',
+    ]);
   });
 });

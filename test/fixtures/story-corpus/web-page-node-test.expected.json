@@ -17,14 +17,14 @@
         "ok": null,
         "story": "You give Claude a job.",
         "director": "Prompt · 56 words",
-        "balloon": "Build a tiny single-page pomodoro timer in this folder: index.html with inline CSS, timer.js exporting the timer logic as plain functions, and timer.test.mjs using node:test that covers start, pause and reset; run the t…",
+        "balloon": "Build a tiny single-page pomodoro timer in this folder: index.html with inline CSS, timer.js exporting the timer logic as plain functions, and timer.test.mjs using node:test that covers start, pause and reset; run the tests with node --test until they pass, then git init and commit everything with a short message, with no remote and no push.",
         "tests": null,
         "events": 1
       },
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 2 files to find its way around.",
+        "story": "Claude reads 1 file to find its way around.",
         "director": "Bash ×2 · ls -la && git status 2>&1 | head; git log --oneline 2>&1 |…",
         "balloon": null,
         "tests": null,
@@ -33,7 +33,7 @@
       {
         "kind": "run",
         "ok": null,
-        "story": "Claude works in the terminal.",
+        "story": "Claude tries a command, and it fails.",
         "director": "Bash · grep -oE '\"(permissions|env|allow|deny)\"|[A-Za-z_]*(TOKEN|K… · 1 error",
         "balloon": null,
         "tests": null,

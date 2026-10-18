@@ -17,14 +17,14 @@
         "ok": null,
         "story": "You give Claude a job.",
         "director": "Prompt · 96 words",
-        "balloon": "Build a small Python package inventory/ (a CLI to add, list and remove items kept in a JSON file) split into at least 4 modules (for example storage.py, models.py, commands.py, cli.py), with a pytest suite of at least 2…",
+        "balloon": "Build a small Python package inventory/ (a CLI to add, list and remove items kept in a JSON file) split into at least 4 modules (for example storage.py, models.py, commands.py, cli.py), with a pytest suite of at least 25 tests in total; build it one module at a time, and after EACH module write its tests and run pytest, fixing any failures before moving on to the next module; then git init the fo…",
         "tests": null,
         "events": 1
       },
       {
         "kind": "montage",
         "ok": null,
-        "story": "Claude keeps going: runs 4 commands.",
+        "story": "Claude gets started: runs 4 commands.",
         "director": "Bash ×4",
         "balloon": null,
         "tests": null,
@@ -59,9 +59,9 @@
       },
       {
         "kind": "loop",
-        "ok": false,
-        "story": "Fix and test, 4 rounds. The tests pass, but another check fails.",
-        "director": "5 checks · 10 edits · +694 · last: error",
+        "ok": true,
+        "story": "Build and test, 4 rounds. A check fails once, then everything passes.",
+        "director": "5 checks · 10 edits · +694 · last: ok",
         "balloon": "All 4 modules are done: 63 tests pass and ruff is clean.",
         "tests": {
           "passed": 63,
@@ -146,14 +146,14 @@
         "ok": null,
         "story": "You give Claude a job.",
         "director": "Prompt · 188 words",
-        "balloon": "Now do these 15 small steps strictly one at a time, each as its own separate tool call, in exactly this order, never combining two steps into one call and without extra steps in between: 1) Read inventory/models.py with…",
+        "balloon": "Now do these 15 small steps strictly one at a time, each as its own separate tool call, in exactly this order, never combining two steps into one call and without extra steps in between: 1) Read inventory/models.py with the Read tool; 2) with the Edit tool add the line 'Version 0.1.0.' at the end of README.md; 3) run 'python3 -m pytest -q' in Bash; 4) run 'uname -s' in Bash; 5) run 'git add -A &&…",
         "tests": null,
         "events": 1
       },
       {
         "kind": "montage",
         "ok": null,
-        "story": "Claude keeps going: reads 1 file, runs 2 commands, changes files, runs checks, saves the work.",
+        "story": "Claude gets started: reads 1 file, runs 2 commands, changes files, runs checks, saves the work.",
         "director": "Read · Edit · Bash ×4",
         "balloon": "Step 1:",
         "tests": null,

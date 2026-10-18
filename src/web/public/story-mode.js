@@ -1080,7 +1080,7 @@ const StoryArt = (() => {
           const dots = Math.min(42, total);
           const fail = bad ? Math.max(1, Math.round((bad / total) * dots)) : 0;
           const fill = running ? (f * 0.6) % (dots + 6) : Math.min(dots, (f - 4) * 1.6);
-          b = board(ctx, 16, 106, `${total} checks`, dots, fail, fill);
+          b = board(ctx, 16, 106, `${total} tests`, dots, fail, fill);
         } else {
           b = verdict(ctx, 16, 106, 'checks', p.panel.ok, f);
         }
@@ -1139,7 +1139,7 @@ const StoryArt = (() => {
           if (total) {
             const dots = Math.min(28, total);
             const fail = bad ? Math.max(1, Math.round((bad / total) * dots)) : 0;
-            b = board(ctx, bx, 116, `${total} checks`, dots, fail, Math.min(dots, (f - 4) * 1.6));
+            b = board(ctx, bx, 116, `${total} tests`, dots, fail, Math.min(dots, (f - 4) * 1.6));
           } else b = verdict(ctx, bx, 116, 'checks', p.panel.ok, f);
           hit('output', bx, 116, b.w, b.h, 'See the test output');
         }
@@ -1169,17 +1169,50 @@ const StoryArt = (() => {
         ctx.closePath();
         inked(ctx, C.yellow, 2);
         ctx.restore();
-        // Rounds and verdict stack under the top corner, which the balloon may take.
-        sfx(
-          ctx,
-          `×${p.panel.rounds || 1}`,
-          W - 60,
-          214,
-          30,
-          C.yellow,
-          -0.1,
-          spring(f - 20, { damping: 9, stiffness: 160 })
-        );
+        // Every round's verdict, in order: a first run that failed (often the one you asked for) shows.
+        const marks = p.panel.roundsOk || [];
+        if (marks.length) {
+          const shown = marks.slice(-6);
+          const gap = 22;
+          const x0 = W - 60 - ((shown.length - 1) * gap) / 2;
+          shown.forEach((ok, k) => {
+            const pr = spring(f - 20 - k * 6, { damping: 10, stiffness: 160 });
+            if (pr <= 0.01) return;
+            const cx = x0 + k * gap;
+            ctx.save();
+            ctx.translate(cx, 214);
+            ctx.scale(pr, pr);
+            ctx.beginPath();
+            ctx.arc(0, 0, 9, 0, TAU);
+            inked(ctx, ok ? C.go : C.magenta, 2.5);
+            ctx.strokeStyle = C.balloon;
+            ctx.lineWidth = 2.5;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            if (ok) {
+              ctx.moveTo(-4, 0);
+              ctx.lineTo(-1, 3.5);
+              ctx.lineTo(4.5, -3.5);
+            } else {
+              ctx.moveTo(-3.5, -3.5);
+              ctx.lineTo(3.5, 3.5);
+              ctx.moveTo(3.5, -3.5);
+              ctx.lineTo(-3.5, 3.5);
+            }
+            ctx.stroke();
+            ctx.restore();
+          });
+        } else
+          sfx(
+            ctx,
+            `×${p.panel.rounds || 1}`,
+            W - 60,
+            214,
+            30,
+            C.yellow,
+            -0.1,
+            spring(f - 20, { damping: 9, stiffness: 160 })
+          );
         // The verdict stamp only where it clears the board (a narrow panel shows the board alone).
         if (p.panel.ok !== undefined && W - 108 > bx + 131) {
           const word = p.panel.ok ? 'POW!' : 'KRAK!';
@@ -1390,6 +1423,10 @@ const StoryArt = (() => {
             ctx.fillText('STOP', 0, 1);
             ctx.restore();
           }
+          return;
+        }
+        if (p.page.noneWorked) {
+          agent(ctx, ax, 250, { frame: f, scale: sc, mood: 'neutral', l: [-34, -48], r: [34, -48] });
           return;
         }
         const colors = [C.cyan, C.magenta, C.yellow, C.go];
@@ -2272,7 +2309,9 @@ Object.assign(CodemanApp.prototype, {
         ? 'Stopped!'
         : page.superseded
           ? 'To be continued…'
-          : 'Mission complete!';
+          : page.noneWorked
+            ? 'Turn over'
+            : 'Mission complete!';
       const chips = rt.splash.querySelector('.story-chips');
       const items = [];
       if (page.durationMs !== undefined) items.push({ text: this._storyDuration(page.durationMs) });

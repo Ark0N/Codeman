@@ -17,7 +17,7 @@
         "ok": null,
         "story": "You give Claude a job.",
         "director": "Prompt · 81 words",
-        "balloon": "First reply with a numbered plan of exactly 4 steps (as text, not a tool). Then build csvstat.py, a Python CLI that prints row count and per-column min/max/mean of a CSV, with pytest tests. Do a dry run on a sample CSV…",
+        "balloon": "First reply with a numbered plan of exactly 4 steps (as text, not a tool). Then build csvstat.py, a Python CLI that prints row count and per-column min/max/mean of a CSV, with pytest tests. Do a dry run on a sample CSV and save its log with `| tee /tmp/csvstat-dryrun.log`. Start ONE helper with the Agent tool, run_in_background: true and WITHOUT a name parameter, to write README.md; do not wait f…",
         "tests": null,
         "events": 1
       },
@@ -33,7 +33,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude looks around the project.",
         "director": "Bash ×2 · ls -la && git status && git branch -a && git log --oneline… · 1 error",
         "balloon": null,
         "tests": null,
@@ -60,7 +60,7 @@
       {
         "kind": "check",
         "ok": true,
-        "story": "The tests pass, and Claude saves the work.",
+        "story": "Claude writes 2 files; the tests pass, and Claude saves the work.",
         "director": "python3 -m pytest -q 2>&1 → ok ×2 · 17 passed · writes 2 files · 1 commit",
         "balloon": "Code and tests are committed.",
         "tests": {

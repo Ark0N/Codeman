@@ -17,14 +17,14 @@
         "ok": null,
         "story": "You give Claude a job.",
         "director": "Prompt · 52 words",
-        "balloon": "Build a small Python command-line tool wcount.py in this folder that prints the line, word and character counts of the files given as arguments, like wc, with a --json flag that prints the counts as JSON, plus pytest te…",
+        "balloon": "Build a small Python command-line tool wcount.py in this folder that prints the line, word and character counts of the files given as arguments, like wc, with a --json flag that prints the counts as JSON, plus pytest tests in test_wcount.py; run pytest and fix anything that fails until all tests pass.",
         "tests": null,
         "events": 1
       },
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude looks around the project.",
         "director": "Bash ×2 · ls -la && git log --oneline -5 2>&1; git branch -a; python3… · 1 error",
         "balloon": null,
         "tests": null,
@@ -42,7 +42,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Fix and test, 2 rounds. It passes in the end.",
+        "story": "Fix and test: the first run fails, the second passes.",
         "director": "3 checks · 5 edits · +218 −1 · last: ok",
         "balloon": "All 19 tests pass, ruff check is clean, and the output matches real wc column for column.",
         "tests": {
@@ -54,7 +54,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work.",
+        "story": "Claude writes 1 file and saves the work.",
         "director": "git commit -q -m \"chore: ignore Python and pytest caches · writes 1 file",
         "balloon": null,
         "tests": null,

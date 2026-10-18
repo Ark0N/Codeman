@@ -17,14 +17,14 @@
         "ok": null,
         "story": "You give Claude a job.",
         "director": "Prompt · 67 words",
-        "balloon": "Create a small JavaScript ES module slugify.mjs exporting slugify(str) (lowercase, trim, spaces and punctuation to single hyphens, no leading or trailing hyphens) plus slugify.test.mjs with 4 node:test tests; on purpose…",
+        "balloon": "Create a small JavaScript ES module slugify.mjs exporting slugify(str) (lowercase, trim, spaces and punctuation to single hyphens, no leading or trailing hyphens) plus slugify.test.mjs with 4 node:test tests; on purpose make ONE test expectation wrong so the first run of node --test fails, run it, then fix that expectation, rerun until all pass, then git init if needed and git commit both files w…",
         "tests": null,
         "events": 1
       },
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude looks around the project.",
         "director": "Bash ×2 · ls -la && git status && git log --oneline -5 2>&1; node --v…",
         "balloon": null,
         "tests": null,
@@ -42,7 +42,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Fix and test, 2 rounds. It passes in the end.",
+        "story": "Fix and test: the first run fails, the second passes.",
         "director": "2 checks · 3 edits · +35 −1 · last: ok",
         "balloon": "All 4 pass.",
         "tests": {
@@ -98,14 +98,14 @@
         "ok": null,
         "story": "You give Claude a job.",
         "director": "Prompt · 38 words",
-        "balloon": "Add a fifth node:test test for slugify('') to slugify.test.mjs that on purpose expects 'x' so the first run fails, run node --test, then fix that expectation to the empty string, rerun until all pass, and commit the cha…",
+        "balloon": "Add a fifth node:test test for slugify('') to slugify.test.mjs that on purpose expects 'x' so the first run fails, run node --test, then fix that expectation to the empty string, rerun until all pass, and commit the change.",
         "tests": null,
         "events": 1
       },
       {
         "kind": "loop",
         "ok": true,
-        "story": "Fix and test, 2 rounds. It passes in the end.",
+        "story": "Fix and test: the first run fails, the second passes.",
         "director": "2 checks · 2 edits · +5 −1 · last: ok",
         "balloon": "All 5 pass.",
         "tests": {
