@@ -11,6 +11,7 @@
     "removed": 3,
     "helpers": 1,
     "helpersRunning": 0,
+    "finishedLater": 1,
     "panels": [
       {
         "kind": "mission",
@@ -45,7 +46,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion, but gets no answer.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -85,7 +86,7 @@
       {
         "kind": "complete",
         "ok": null,
-        "story": "Done in 2 minutes.",
+        "story": "Claude's part is done in 2 minutes. Its helper finished later and reported back.",
         "director": "turn_duration · 2 min 1 s · 14 tool calls · 2 files changed · 1 helper",
         "balloon": "All the script tests pass.",
         "tests": null,
@@ -106,6 +107,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -120,7 +122,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude checks README.md.",
         "director": "Read",
         "balloon": null,
         "tests": null,
@@ -142,7 +144,7 @@
         "ok": null,
         "story": "Done in 21 seconds.",
         "director": "turn_duration · 21 s · 2 tool calls",
-        "balloon": "I built rename_by_date.sh, the helper agent wrote README.md, and the script passed every test I ran on sample files in samples/. Nothing is committed because this folder isn't a git repository, even though the session context said it was.",
+        "balloon": "I built rename_by_date.sh, the helper agent wrote README.md, and the script passed every test I ran on sample files in samples/. Nothing is committed because this folder isn't a git repository, even though the session context said it was. Only lowercase .jpg is matched, as you asked.",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -161,6 +163,7 @@
     "removed": 8,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -175,7 +178,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude reads rename_by_date.sh.",
         "director": "Read",
         "balloon": null,
         "tests": null,
@@ -217,7 +220,7 @@
         "ok": null,
         "story": "Done in 1 minute.",
         "director": "turn_duration · 1 min 14 s · 9 tool calls · 2 files changed",
-        "balloon": "I added a --prefix option to rename_by_date.sh.",
+        "balloon": "I added a --prefix option to rename_by_date.sh. The samples folder didn't change.",
         "tests": null,
         "roundsOk": null,
         "events": 0

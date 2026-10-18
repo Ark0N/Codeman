@@ -11,6 +11,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -35,7 +36,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -68,7 +69,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"feat: add clamp() with pytest coverage\".",
+        "story": "Claude saves the work: \"add clamp() with pytest coverage\".",
         "director": "git commit -q -F -",
         "balloon": null,
         "tests": null,
@@ -80,7 +81,7 @@
         "ok": null,
         "story": "Done in 1 minute.",
         "director": "turn_duration · 1 min 12 s · 7 tool calls · 2 files changed",
-        "balloon": "I wrote clamp and its five tests, and all five pass.",
+        "balloon": "I wrote clamp and its five tests, and all five pass. I didn't commit CLAUDE.md, .claude/ or .codeman-agent-case.json.",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -99,6 +100,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -144,6 +146,7 @@
     "removed": 1,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -158,7 +161,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude looks around the project.",
+        "story": "Claude gets the tools it needs ready.",
         "director": "ToolSearch",
         "balloon": null,
         "tests": null,
@@ -178,7 +181,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -231,7 +234,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"feat: add wrap() for modular wrapping into a range\".",
+        "story": "Claude saves the work: \"add wrap() for modular wrapping into a range\".",
         "director": "git commit -q -F -",
         "balloon": null,
         "tests": null,

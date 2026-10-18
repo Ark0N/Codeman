@@ -127,7 +127,7 @@ export type StoryEntry =
       /** Teammates (helpers started as a team) reporting back, matched to their helper by name. */
       teammates?: StoryTeammateReport[];
     }
-  | { k: 'text'; at: string; text: string }
+  | { k: 'text'; at: string; text: string; keyPoints?: string[] }
   | { k: 'tool'; at: string; id: string; name: string; input: ReducedInput }
   | {
       k: 'result';
@@ -269,11 +269,75 @@ export function balloonText(text: string): string {
   return clip(two && REPORTS_PROBLEM.test(one) && two.length <= 140 ? `${one} ${two}` : one, 260);
 }
 
-/** Claude's last words: the first sentence, and the next when it carries a caveat. */
-export function closingText(text: string): string {
+/**
+ * A sentence a reader of Claude's last words must not lose. STRONG: an open problem or quirk,
+ * something not yet done, checked or confirmed, work still out, a word on what you asked for or
+ * expected, a correction of an earlier warning. WEAK: a bare negation ("I didn't push"), kept only when
+ * nothing strong is there.
+ */
+const KEY_POINT_STRONG = new RegExp(
+  [
+    String.raw`\b(problem|known (issue|quirk)s?|quirks?|caveat|limitation|heads up|warning|not yet|haven't|have not|never|unfixed|left (open|unfixed|out)|still (fails?|failing|broken|missing|open|running|working)|must be (served|run)|(won't|doesn't|does not|will not) work|can't tell|isn't (confirmed|committed|pushed|tested|done|checked)|not (checked|tested|verified|confirmed|committed|pushed|opened))\b`,
+    String.raw`\b(as you (asked|expected|said|wanted|suggested)|you asked|your (--?[\w-]+|request|option|flag|change))\b`,
+    String.raw`\b(out of date|looked too early|turned out|was wrong)\b`,
+  ].join('|'),
+  'i'
+);
+const KEY_POINT_WEAK = /\b(didn't|did not|couldn't|could not|wasn't able|won't|doesn't)\b/i;
+
+/**
+ * Sentences from further into a long message that carry a key point, at most two strong ones (or one
+ * weak one when none is strong), in order. Read on the whole message (the event's label is clipped),
+ * its first 8,000 characters. Table rows, list intros ending in `:` and questions are skipped: none of
+ * them reads on its own in a balloon.
+ */
+function keyPointsOf(text: string): string[] {
+  if (text.length <= 160) return [];
+  const spans: string[] = [];
+  const plain = plainMarkdown(text.slice(0, 8000), spans);
+  const strong: string[] = [];
+  let weak: string | undefined;
+  let first = true;
+  let previous = '';
+  for (const line of plain.split('\n')) {
+    if (strong.length >= 2) break;
+    const trimmed = line.trim();
+    if (trimmed.startsWith('|') || (trimmed.match(/\|/g)?.length ?? 0) >= 2) continue; // a table row
+    let rest = trimmed.replace(/\s+/g, ' ');
+    while (rest && strong.length < 2) {
+      const m = SENTENCE_END.exec(rest);
+      const sentence = (m ? m[1] : rest).trim();
+      rest = m ? rest.slice(m[1].length).trim() : '';
+      // The first sentence is the balloon's anyway.
+      if (first) {
+        first = false;
+        continue;
+      }
+      const before = previous;
+      previous = sentence;
+      if (sentence.length < 12 || /[:?]$/.test(sentence)) continue;
+      // "That's out of date" needs what "that" was: the sentence before comes along.
+      const context = /^(that|this|it)\b/i.test(sentence) && before && !strong.includes(before) ? `${before} ` : '';
+      const shown = clip(restoreSpans(context + sentence, spans), context ? 300 : 180);
+      if (KEY_POINT_STRONG.test(sentence)) strong.push(shown);
+      else if (!weak && KEY_POINT_WEAK.test(sentence)) weak = shown;
+    }
+  }
+  return strong.length ? strong : weak ? [weak] : [];
+}
+
+/**
+ * Claude's last words: the first sentence, the next when it carries a caveat, and the key points from
+ * further in (an open problem, what was or was not done), so the final panel never reads as a clean
+ * finish when Claude said otherwise.
+ */
+export function closingText(text: string, keyPoints: string[] = []): string {
   const [one, two] = firstTwoSentences(text);
   // A very short first sentence ("Not done.") says too little alone.
-  return clip(two && (CAVEAT.test(two) || one.length < 24) && two.length <= 200 ? `${one} ${two}` : one, 300);
+  const parts = [one];
+  if (two && (CAVEAT.test(two) || one.length < 24) && two.length <= 200) parts.push(two);
+  for (const point of keyPoints) if (!parts.some((p) => p.includes(point) || point.includes(p))) parts.push(point);
+  return clip(parts.join(' '), parts.length > 2 ? 420 : 300);
 }
 
 /** The first sentence of a message, without markdown, for a speech balloon. */
@@ -1283,14 +1347,17 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
   function reduceAssistant(entry: Record<string, unknown>, at: string): StoryEntry[] {
     const message = isRecord(entry.message) ? entry.message : {};
     const content = message.content;
-    if (typeof content === 'string')
-      return content.trim() ? [{ k: 'text', at, text: clip(content, STORY_LIMITS.textChars) }] : [];
+    const textEntry = (text: string): StoryEntry => {
+      const keyPoints = keyPointsOf(text);
+      return { k: 'text', at, text: clip(text, STORY_LIMITS.textChars), ...(keyPoints.length ? { keyPoints } : {}) };
+    };
+    if (typeof content === 'string') return content.trim() ? [textEntry(content)] : [];
     if (!Array.isArray(content)) return [];
     const out: StoryEntry[] = [];
     for (const block of content) {
       if (!isRecord(block)) continue;
       if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
-        out.push({ k: 'text', at, text: clip(block.text, STORY_LIMITS.textChars) });
+        out.push(textEntry(block.text));
       } else if (block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
         const input = reduceInput(block.name, block.input, str(entry.cwd));
         remember(block.id, block.name, input);
@@ -1581,6 +1648,12 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
   /** The same helpers by name: a teammate reports back by name, not by call. */
   const helpersByName = new Map<string, StoryEvent>();
   let say = 0;
+  /** The turn each helper or command call belongs to: a report after that turn ended came back later. */
+  const turnOfCall = new WeakMap<StoryEvent, StoryTurn>();
+  const cameBackLater = (ev: StoryEvent) => {
+    const own = turnOfCall.get(ev);
+    return !!own && (own !== cur || own.ended);
+  };
   const teammatesBack = (reports: StoryTeammateReport[], prompt: StoryEvent) => {
     const told = reports.filter((r) => r.result || r.summary);
     if (told.length) {
@@ -1593,6 +1666,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
       const ev = helpersByName.get(r.from);
       if (!ev?.helper) continue;
       const helper: StoryHelper = { ...ev.helper, running: undefined };
+      if (helper.background && cameBackLater(ev)) ev.finishedLater = true;
       if (r.result) helper.result = r.result;
       ev.helper = helper;
     }
@@ -1614,6 +1688,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
     if (ev?.running && !ev.helper) {
       // A background command: done now, and its summary carries the exit code.
       ev.running = undefined;
+      if (cameBackLater(ev)) ev.finishedLater = true;
       const code = /\(exit code (\d+)\)/.exec(prompt.label)?.[1];
       ev.ok =
         code !== undefined ? code === '0' : !report.status || /^(completed|done|finished|success)/i.test(report.status);
@@ -1622,6 +1697,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
     }
     if (!ev?.helper) return;
     const helper: StoryHelper = { ...ev.helper, running: undefined };
+    if (helper.background && cameBackLater(ev)) ev.finishedLater = true;
     if (report.result) helper.result = report.result;
     if (report.toolUses !== undefined) helper.toolUses = report.toolUses;
     if (report.durationMs !== undefined) helper.durationMs = report.durationMs;
@@ -1712,6 +1788,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
           tool: 'Text',
           label: e.text,
           intent: 'say',
+          ...(e.keyPoints ? { keyPoints: e.keyPoints } : {}),
         });
         break;
       case 'tool': {
@@ -1721,6 +1798,7 @@ export function buildStoryTurns(entries: StoryEntry[]): StoryTurn[] {
         if (ev.helper || ev.tool === 'Bash') {
           // A helper, or a command that may turn out to run in the background: both report back later.
           helpers.set(e.id, ev);
+          turnOfCall.set(ev, ensure(e.at));
           if (helpers.size > 2000) helpers.delete(helpers.keys().next().value as string);
           if (ev.helper) {
             helpersByName.set(ev.helper.name, ev);
@@ -1916,11 +1994,11 @@ const ANNOUNCES = /\b(I'll|I will|let me|let's|I'm going to|next,? I|now I)\b/i;
 function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?: string } {
   const panels: DraftPanel[] = [];
   let pendingSay: string | undefined;
-  let lastSaid: string | undefined;
+  let lastSaid: StoryEvent | undefined;
   events.forEach((ev, idx) => {
     if (ev.intent === 'say' && !ev.todos) {
       pendingSay ??= balloonText(ev.label);
-      lastSaid ??= ev.label;
+      lastSaid ??= ev;
       return;
     }
     lastSaid = undefined;
@@ -1959,7 +2037,7 @@ function groupPanels(events: StoryEvent[]): { panels: DraftPanel[]; trailingSay?
     pendingSay = undefined;
   });
   // The closing words keep a caveat that follows them ("Nothing is committed: this is no git repo.").
-  return { panels, trailingSay: lastSaid !== undefined ? closingText(lastSaid) : pendingSay };
+  return { panels, trailingSay: lastSaid !== undefined ? closingText(lastSaid.label, lastSaid.keyPoints) : pendingSay };
 }
 
 /** Fix → check → fix → check (4 panels or more) is one "loop" panel: try, test, repeat. */
@@ -2076,6 +2154,16 @@ function montageSummary(evs: StoryEvent[]): string {
   return parts.length ? parts.join(', ') : 'a few more steps';
 }
 
+/** You asked for a failing run first (test first), or Claude said the failure was expected. */
+const PLANNED_IN_PROMPT =
+  /\b(test[- ]first|tdd|fail(s|ing)? (first|on purpose)|failing tests? first|on purpose|red first|before (the )?(code|module|function|implementation) exists)\b/i;
+const EXPECTED_BY_CLAUDE =
+  /\b(as expected|as planned|as intended|expected (failure|to fail|red)|deliberately fail\w*|on purpose|test[- ]first|the red state)\b/i;
+function plannedFailure(turn: StoryTurn, events: StoryEvent[]): boolean {
+  const prompt = events.find((e) => e.intent === 'prompt')?.label ?? turn.prompt;
+  return PLANNED_IN_PROMPT.test(prompt) || events.some((e) => e.intent === 'say' && EXPECTED_BY_CLAUDE.test(e.label));
+}
+
 function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, index: number): StoryPanel {
   const evs = draft.events.map((i) => events[i]);
   const panel: StoryPanel = { kind: draft.kind, events: draft.events, caption: { story: '', director: '' } };
@@ -2139,15 +2227,23 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         .filter((e) => e.intent !== 'read')
         .map((e) => e.description || shortCommand(e))
         .slice(0, 4);
-      if (evs.every((e) => e.tool === 'ToolSearch')) story = 'Claude gets the tools it needs ready.';
       if (evs.every((e) => e.tool === 'Bash')) director = `${tools} · ${shortCommand(evs[0])}`;
       if (errors) director += ` · ${plural(errors, 'error')}`;
       const shown = files.filter((f) => !/(^|\/)\.codeman[-.]/.test(f));
-      story = shown.length
-        ? `Claude reads ${plural(shown.length, 'file')} to find its way around.`
-        : evs.every((e) => e.intent === 'search')
-          ? 'Claude searches the code.'
-          : 'Claude looks around the project.';
+      // A file or two by name; in a turn a report started, reading is checking what came back.
+      const checking = turn.origin === 'task' || turn.origin === 'peer';
+      const named = shown.map((f) => basename(f));
+      story = evs.every((e) => e.tool === 'ToolSearch')
+        ? 'Claude gets the tools it needs ready.'
+        : shown.length && shown.length <= 2
+          ? `Claude ${checking ? 'checks' : 'reads'} ${named.join(' and ')}.`
+          : shown.length
+            ? `Claude reads ${plural(shown.length, 'file')} to find its way around.`
+            : evs.every((e) => e.intent === 'search')
+              ? 'Claude searches the code.'
+              : 'Claude looks around the project.';
+      // A tool lookup's query (`select:EnterPlanMode,ExitPlanMode`) means nothing to a reader.
+      if (evs.every((e) => e.tool === 'ToolSearch')) panel.notes = [];
       break;
     }
     case 'research':
@@ -2188,7 +2284,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const advisor = evs.filter((e) => e.tool === 'Advisor').length;
       story = helpers.length
         ? advisor === helpers.length
-          ? 'Claude asks the advisor for a second opinion.'
+          ? evs.every((e) => e.tool !== 'Advisor' || e.ok === false)
+            ? 'Claude asks a stronger AI model for a second opinion, but gets no answer.'
+            : 'Claude asks a stronger AI model for a second opinion.'
           : behind === helpers.length
             ? `Claude sends ${plural(helpers.length, 'helper')} off to work in the background.`
             : `Claude calls in ${plural(helpers.length, 'helper')}.`
@@ -2246,20 +2344,32 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           (e) => !!e.tests && e.tests.passed > 0 && !e.tests.failed && !e.tests.errors
         ).length;
         const n = panel.rounds;
+        const testFails = fails - lintFails;
+        // A failure you asked for (test first), or that Claude said it expected, is the plan working.
+        const planned = plannedFailure(turn, events) && passed(checks[0]) === false;
         story =
           panel.ok === true && !fails
             ? `Build and test, ${plural(n, 'round')}. Every check passes.`
             : panel.ok === true && fails === lintFails
-              ? `Build and test, ${plural(n, 'round')}. A check fails ${fails === 1 ? 'once' : `${fails} times`}, then everything passes.`
-              : panel.ok === true && checks.length === 2 && fails === 1
-                ? 'Fix and test: the first run fails, the second passes.'
-                : panel.ok === true
-                  ? `Fix and test, ${plural(n, 'round')}: ${fails === 1 ? 'one run fails' : `${fails} runs fail`}, then it passes.`
-                  : panel.ok === false && tests && tests.passed && !tests.failed && !tests.errors
-                    ? `Fix and test, ${plural(n, 'round')}. The tests pass, but another check fails.`
-                    : panel.ok === false
-                      ? `Fix and test, ${plural(n, 'round')}. Still failing.`
-                      : `Fix and test, ${plural(n, 'round')}.`;
+              ? `Build and test, ${plural(n, 'round')}. The tests pass every time; another check fails ${fails === 1 ? 'once' : `${fails} times`}, then passes.`
+              : panel.ok === true && planned && checks.length === 2
+                ? 'Test first: the first run fails as planned, the second passes.'
+                : panel.ok === true && planned
+                  ? `Test first, ${plural(n, 'round')}: the first run fails as planned, then it passes.`
+                  : panel.ok === true && checks.length === 2 && fails === 1
+                    ? 'Fix and test: the first run fails, the second passes.'
+                    : panel.ok === true && testFails && lintFails
+                      ? `Fix and test, ${plural(n, 'round')}: ${testFails === 1 ? 'a test run fails' : `${testFails} test runs fail`}, then another check, then everything passes.`
+                      : panel.ok === true
+                        ? `Fix and test, ${plural(n, 'round')}: ${fails === 1 ? 'one run fails' : `${fails} runs fail`}, then it passes.`
+                        : panel.ok === false && tests && tests.passed && !tests.failed && !tests.errors
+                          ? `Fix and test, ${plural(n, 'round')}. The tests pass, but another check fails.`
+                          : panel.ok === false
+                            ? `Fix and test, ${plural(n, 'round')}. Still failing.`
+                            : `Fix and test, ${plural(n, 'round')}.`;
+        // Commits made inside the loop (a test one-liner that ends in one) are part of its story.
+        const saved = evs.reduce((k, e) => k + (e.commits ?? 0), 0);
+        if (saved) story += ` Claude saves the work${saved > 1 ? ` in ${saved} commits` : ''} along the way.`;
         director = `${plural(checks.length, 'check')} · ${plural(edits.length, 'edit')} · ${fmtCounts(panel.added, panel.removed)} · last: ${
           lastCheck ? outcome(lastCheck) : 'running'
         }`;
@@ -2291,6 +2401,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             ? `${tests.failed} tests fail.`
             : 'A test fails.'
           : 'A check fails.';
+      if (ok === false && plannedFailure(turn, events)) story = `${story.replace(/[.]$/, '')}, as planned.`;
       // The same command with the same outcome twice in a row reads once, with a count.
       const runs: Array<{ text: string; n: number }> = [];
       for (const e of checks) {
@@ -2355,7 +2466,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const uploadOnly = ships === 'push' && !commits;
       // One commit: its message says what was saved.
       const subject = commits === 1 ? evs.find((e) => e.subject)?.subject : undefined;
-      const said = subject ? `: "${clip(subject, 60).replace(/[.]$/, '')}"` : '';
+      // Its conventional prefix (`feat:`, `chore(deps):`) is for git, not for the reader.
+      const plainSubject = subject?.replace(/^[a-z]+(\([^)]*\))?!?:\s*/i, '');
+      const said = plainSubject ? `: "${clip(plainSubject, 60).replace(/[.]$/, '')}"` : '';
       story = savedAnyway
         ? uploadOnly
           ? 'Claude uploads the work, but a step after that fails.'
@@ -2420,6 +2533,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
 function completePanel(turn: StoryTurn, page: Omit<StoryPage, 'panels'>, trailingSay?: string): StoryPanel {
   const running = page.helpersRunning;
   const commands = page.events.filter((e) => e.running && !e.helper).length;
+  const later = page.events.filter((e) => e.finishedLater && e.intent !== 'prompt');
+  const laterHelpers = later.filter((e) => e.helper).length;
+  const laterCommands = later.length - laterHelpers;
   const done = turn.durationMs !== undefined ? `Done in ${roughDuration(turn.durationMs)}.` : 'Done.';
   const story = turn.interrupted
     ? 'You stop Claude here.'
@@ -2436,7 +2552,18 @@ function completePanel(turn: StoryTurn, page: Omit<StoryPage, 'panels'>, trailin
             ]
               .filter(Boolean)
               .join(' ')}`
-          : done;
+          : later.length
+            ? `Claude's part is done${turn.durationMs !== undefined ? ` in ${roughDuration(turn.durationMs)}` : ''}. ${[
+                laterHelpers
+                  ? `${laterHelpers === 1 ? 'Its helper' : `Its ${laterHelpers} helpers`} finished later and reported back.`
+                  : '',
+                laterCommands
+                  ? `${laterCommands === 1 ? 'Its background command' : `${laterCommands} background commands`} finished later.`
+                  : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}`
+            : done;
   const director = [
     turn.endedBy === 'next prompt' ? 'superseded by the next prompt' : (turn.endedBy ?? 'turn_duration'),
     turn.durationMs !== undefined ? exactDuration(turn.durationMs) : '',
@@ -2501,6 +2628,9 @@ export function buildStoryPage(turn: StoryTurn): StoryPage {
     // The advisor is a second opinion, not a helper that does work.
     helpers: events.filter((e) => e.helper && e.tool !== 'Advisor' && e.intent !== 'prompt').length,
     helpersRunning: events.filter((e) => e.helper?.running).length,
+    ...(events.some((e) => e.finishedLater && e.intent !== 'prompt')
+      ? { finishedLater: events.filter((e) => e.finishedLater && e.intent !== 'prompt').length }
+      : {}),
   };
   const calls = events.filter((e) => !NOT_TOOL_CALLS.has(e.intent));
   if (calls.length && calls.every((e) => e.ok === false)) base.noneWorked = true;

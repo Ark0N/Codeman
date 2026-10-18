@@ -11,6 +11,7 @@
     "removed": 1,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -35,7 +36,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -45,7 +46,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Fix and test, 2 rounds: 2 runs fail, then it passes.",
+        "story": "Fix and test, 2 rounds: a test run fails, then another check, then everything passes. Claude saves the work in 4 commits along the way.",
         "director": "3 checks · 5 edits · +218 −1 · last: ok",
         "balloon": "All 19 tests pass, ruff check is clean, and the output matches real wc column for column.",
         "tests": {
@@ -62,7 +63,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude writes 1 file and saves the work: \"chore: ignore Python and pytest caches\".",
+        "story": "Claude writes 1 file and saves the work: \"ignore Python and pytest caches\".",
         "director": "git commit -q -m \"chore: ignore Python and pytest caches · writes 1 file",
         "balloon": null,
         "tests": null,
@@ -72,7 +73,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -94,7 +95,7 @@
         "ok": null,
         "story": "Done in 3 minutes.",
         "director": "turn_duration · 3 min 13 s · 13 tool calls · 3 files changed",
-        "balloon": "I built wcount.py and test_wcount.py.",
+        "balloon": "I built wcount.py and test_wcount.py. With a missing file plus a readable one, the total row didn't appear because the code counted files that could be read rather than files that were named.",
         "tests": null,
         "roundsOk": null,
         "events": 0

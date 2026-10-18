@@ -39,6 +39,7 @@ function pagesOf(name: string) {
       removed: p.removed,
       helpers: p.helpers,
       helpersRunning: p.helpersRunning,
+      finishedLater: p.finishedLater ?? 0,
       panels: p.panels.map((x) => ({
         kind: x.kind,
         ok: x.ok ?? null,
@@ -71,7 +72,9 @@ describe('Story Mode on real sessions', () => {
   it('a fix, a failing test (exit code hidden by a pipe), a fix and a pass fold into one loop', () => {
     // Three runs in two rounds: the failing test asked for, then ruff, then a pass (the marks: ✗ ✗ ✓).
     expect(panel('python-cli-fix-loop', 0, 'loop')).toMatchObject({
-      story: 'Fix and test, 2 rounds: 2 runs fail, then it passes.',
+      // The failing test was a real bug, the second failure only ruff: said apart, with the 4 commits made inside.
+      story:
+        'Fix and test, 2 rounds: a test run fails, then another check, then everything passes. Claude saves the work in 4 commits along the way.',
       roundsOk: [false, false, true],
     });
   });
@@ -123,13 +126,13 @@ describe('Story Mode on real sessions', () => {
 
   it('tests that do not load, a commit then a push in its own command, a push with a failing step after it', () => {
     const [first, second, third] = pagesOf('errors-push-append');
-    expect(first.panels.find((p) => p.kind === 'check')?.story).toBe("The tests don't even load.");
+    expect(first.panels.find((p) => p.kind === 'check')?.story).toBe("The tests don't even load, as planned.");
     expect(second.panels.find((p) => p.kind === 'loop')).toMatchObject({
-      story: 'Fix and test: the first run fails, the second passes.',
+      story: 'Test first: the first run fails as planned, the second passes.',
       roundsOk: [false, true],
     });
     expect(second.panels.find((p) => p.kind === 'save')?.story).toBe(
-      'Claude saves the work and uploads it: "feat: add calc_stats.mode with smallest-value tie-breaking".'
+      'Claude saves the work and uploads it: "add calc_stats.mode with smallest-value tie-breaking".'
     );
     expect(third.panels.find((p) => p.kind === 'save')?.story).toBe(
       'Claude saves the work and uploads it, but a step after that fails.'
@@ -150,6 +153,33 @@ describe('Story Mode on real sessions', () => {
     expect(pages[3].panels.map((p) => p.story)).toContain('The tests run in the background and pass.');
     // A python script that rewrote README.md counts as a change, beside the two files written.
     expect(pages[3].panels.map((p) => p.story)).toContain('Claude changes 3 files.');
+  });
+
+  it("Claude's last words keep what a reader must not lose (round 8, the cold readers)", () => {
+    const last = (name: string, turn: number) => pagesOf(name)[turn].panels.at(-1)!;
+    // An open problem, said further into the final message than its first sentence.
+    expect(last('web-page-node-test', 0).balloon).toMatch(/won't work if you double-click index\.html/);
+    expect(last('text-plan-dry-run-helper', 1).balloon).toMatch(/doesn't fix it/);
+    // What you expected, and what you asked for mid-turn.
+    expect(last('errors-push-append', 2).balloon).toMatch(/As you expected, git describe --tags then failed/);
+    expect(last('long-turn-prompt-added', 0).balloon).toMatch(/--csv is part of the CLI commit/);
+    // A helper's warning that turned out to be out of date, with what it was about.
+    expect(last('teammates-then-interrupt', 1).balloon).toMatch(/didn't exist yet\. That's out of date/);
+    expect(last('teammates-then-interrupt', 2).balloon).toMatch(/they had looked before I created it/);
+  });
+
+  it('helpers still out when a turn ended finished later, and the page says so', () => {
+    expect(pagesOf('background-helpers-reports')[0].panels.at(-1)!.story).toBe(
+      "Claude's part is done in 36 seconds. Its 2 helpers finished later and reported back."
+    );
+    expect(pagesOf('background-helpers-reports')[0].finishedLater).toBe(2);
+  });
+
+  it('a lookup of tools reads as getting them ready, without their names', () => {
+    const panel = pagesOf('compact-then-plan-mode')
+      .flatMap((p) => p.panels)
+      .find((p) => p.story === 'Claude gets the tools it needs ready.');
+    expect(panel).toBeTruthy();
   });
 
   it('a blocked command ends a turn where nothing worked, without a celebration', () => {

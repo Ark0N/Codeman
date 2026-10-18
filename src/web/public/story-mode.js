@@ -2481,8 +2481,9 @@ Object.assign(CodemanApp.prototype, {
           ? 'To be continued…'
           : page.noneWorked
             ? 'Turn over'
-            : page.helpersRunning || page.events.some((e) => e.running && !e.helper)
-              ? 'To be continued…'
+            : page.helpersRunning || page.finishedLater || page.events.some((e) => e.running && !e.helper)
+              ? // Work was still out when the turn ended (and maybe still is): not a clean finish.
+                'Done for now'
               : 'Mission complete!';
       const chips = rt.splash.querySelector('.story-chips');
       const items = [];
@@ -2493,6 +2494,18 @@ Object.assign(CodemanApp.prototype, {
           open: 'diff:page',
         });
       items.push({ text: `${page.toolCalls} tool call${page.toolCalls === 1 ? '' : 's'}`, open: 'list:page' });
+      // What was saved, wherever in the turn: commits inside a loop or a test one-liner count too.
+      const commits = page.events.reduce((n, e) => n + (e.commits || 0), 0);
+      // An upload that went through, even when a step after it in the same command failed.
+      const shipped = page.events.some(
+        (e) => e.ships === 'push' && (e.ok !== false || /\[new branch\]|\S+\.\.\S+\s+\S+\s+->/.test(e.output || ''))
+      );
+      if (commits || shipped)
+        items.push({
+          text: [commits ? `${commits} commit${commits === 1 ? '' : 's'}` : '', shipped ? 'uploaded' : '']
+            .filter(Boolean)
+            .join(', '),
+        });
       if (page.helpers)
         items.push({
           text: `${page.helpers} helper${page.helpers === 1 ? '' : 's'}${

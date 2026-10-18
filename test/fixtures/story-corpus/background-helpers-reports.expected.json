@@ -11,6 +11,7 @@
     "removed": 0,
     "helpers": 2,
     "helpersRunning": 0,
+    "finishedLater": 2,
     "panels": [
       {
         "kind": "mission",
@@ -58,9 +59,9 @@
       {
         "kind": "complete",
         "ok": null,
-        "story": "Done in 36 seconds.",
+        "story": "Claude's part is done in 36 seconds. Its 2 helpers finished later and reported back.",
         "director": "turn_duration · 36 s · 5 tool calls · 2 files changed · 2 helpers",
-        "balloon": "I wrote wordcount.py and tests/test_basic.py, and the one python3 -m pytest -q run passed 4 of 4 tests.",
+        "balloon": "I wrote wordcount.py and tests/test_basic.py, and the one python3 -m pytest -q run passed 4 of 4 tests. Only 4 tests ran, so tests/test_extra.py from helper B wasn't there yet and those tests haven't been run.",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -79,6 +80,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -93,7 +95,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude checks README.md.",
         "director": "Bash · cat /work/cases/story-r6-b/README.md",
         "balloon": null,
         "tests": null,
@@ -105,7 +107,7 @@
         "ok": null,
         "story": "Done in 14 seconds.",
         "director": "turn_duration · 14 s · 1 tool call",
-        "balloon": "Helper A has finished writing README.md, and I checked it against the code.",
+        "balloon": "Helper A has finished writing README.md, and I checked it against the code. It describes the command-line usage, count(text) and how to run the tests correctly, and its example ((2, 4, 24)) is right. It doesn't mention that running the tool without exactly one file prints a usage message and exits…",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -124,6 +126,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -172,6 +175,7 @@
     "removed": 4,
     "helpers": 1,
     "helpersRunning": 0,
+    "finishedLater": 2,
     "panels": [
       {
         "kind": "mission",
@@ -216,9 +220,9 @@
       {
         "kind": "complete",
         "ok": null,
-        "story": "Done in 52 seconds.",
+        "story": "Claude's part is done in 52 seconds. Its helper finished later and reported back. Its background command finished later.",
         "director": "turn_duration · 52 s · 5 tool calls · 3 files changed · 1 helper",
-        "balloon": "I added the --json flag and started the helper and the test run as you asked.",
+        "balloon": "I added the --json flag and started the helper and the test run as you asked. The helper and the tests are still running in the background; I haven't waited for either, so I don't have results yet. No git, as you asked.",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -237,6 +241,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -285,6 +290,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -299,7 +305,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude checks CHANGELOG.md.",
         "director": "Bash · cat /work/cases/story-r6-b/CHANGELOG.md",
         "balloon": null,
         "tests": null,
@@ -311,7 +317,7 @@
         "ok": null,
         "story": "Done in 8 seconds.",
         "director": "turn_duration · 8 s · 1 tool call",
-        "balloon": "Everything you asked for this round is done.",
+        "balloon": "Everything you asked for this round is done. The helper used four tools, one for each step you asked for, so it looks like it followed the sleep, write, sleep, edit sequence.",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -330,6 +336,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -357,7 +364,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude reads CHANGELOG.md.",
         "director": "Bash · head -5 /work/cases/story-r6-b/CHANGELOG.md",
         "balloon": null,
         "tests": null,
@@ -388,6 +395,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -423,6 +431,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",

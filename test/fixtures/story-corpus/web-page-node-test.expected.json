@@ -11,6 +11,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -25,7 +26,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude reads CLAUDE.md.",
         "director": "Bash ×2 · ls -la && git status 2>&1 | head; git log --oneline 2>&1 |…",
         "balloon": null,
         "tests": null,
@@ -45,7 +46,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -78,7 +79,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"feat: add pomodoro timer with tests\".",
+        "story": "Claude saves the work: \"add pomodoro timer with tests\".",
         "director": "git commit -q -m \"feat: add pomodoro timer with tests\" -m \"…",
         "balloon": null,
         "tests": null,
@@ -88,7 +89,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -100,7 +101,7 @@
         "ok": null,
         "story": "Done in 3 minutes.",
         "director": "turn_duration · 2 min 39 s · 10 tool calls · 3 files changed",
-        "balloon": "I built the pomodoro timer.",
+        "balloon": "I built the pomodoro timer. Opening the page: it won't work if you double-click index.html. The page loads timer.js as a module, and Chrome and Firefox block that for local files, so you'd get a timer that never moves.",
         "tests": null,
         "roundsOk": null,
         "events": 0

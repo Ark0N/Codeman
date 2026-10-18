@@ -159,7 +159,7 @@ describe('story-mode.js overlay', () => {
     expect($('.story-panel[data-kind="mission"]')!.getAttribute('aria-label')).toBe('Panel 1 of 7');
     expect($('.story-panel[data-kind="mission"] .story-balloon')!.className).toContain('story-balloon--you');
     expect($('.story-panel[data-kind="investigate"] .story-cap-story')!.textContent).toBe(
-      'Claude reads 2 files to find its way around.'
+      'Claude reads CheckoutButton.tsx and banner.css.'
     );
     expect($('.story-splash-title')!.textContent).toBe('Mission complete!');
     expect($$('.story-turns option').map((o) => o.textContent)).toEqual([
@@ -781,7 +781,7 @@ describe('story-mode.js overlay', () => {
     sizeAndDraw();
     expect($('.story-panel[data-kind="complete"] .story-chips')!.textContent).toContain('1 helper, 1 still working');
     // Work still out is not a finished mission.
-    expect($('.story-panel[data-kind="complete"] .story-splash-title')!.textContent).toBe('To be continued…');
+    expect($('.story-panel[data-kind="complete"] .story-splash-title')!.textContent).toBe('Done for now');
     $('.story-panel[data-kind="backup"] .story-hit')!.click();
     await settle();
     expect($('.story-drawer-sub')!.textContent).toContain('in the background');
@@ -849,6 +849,28 @@ describe('story-mode.js overlay', () => {
       .click();
     expect($('.story-ln--hunk')!.textContent).toBe('Added at the end of the file (1 line)');
     expect($$('.story-ln--add').map((l) => l.textContent)).toEqual(['+more']);
+  });
+
+  it('the final panel counts the commits of the whole turn, and says when the work was uploaded', async () => {
+    boot(
+      storyOf([
+        prompt('ship it'),
+        ...edit('e1', '/work/demo-shop/a.py', ['+a = 1']),
+        ...bash('b1', 'pytest -q && git commit -qam "fix: a"', 'Test and commit', '3 passed in 0.1s'),
+        ...bash(
+          'b2',
+          'git commit -qam "docs: b" && git push',
+          'Commit and push',
+          'To ./origin.git\n   1a2b3c4..5d6e7f8  main -> main'
+        ),
+        end(1000),
+      ])
+    );
+    app.openStoryMode(SID);
+    await settle();
+    expect($$('.story-panel[data-kind="complete"] .story-chips li').map((li) => li.textContent)).toContain(
+      '2 commits, uploaded'
+    );
   });
 
   it('a chip that opened the drawer takes focus back, even when the page was redrawn meanwhile', async () => {

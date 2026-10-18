@@ -130,6 +130,13 @@ export interface StoryEvent {
   running?: boolean;
   /** A command that ran in the background (its result came back later, as a report of its own). */
   background?: boolean;
+  /** Background work (this command, or this helper call's helper) that finished after its turn ended. */
+  finishedLater?: boolean;
+  /**
+   * Sentences from further into a long message that a reader must not lose: an open problem, a step
+   * not taken, what you asked for. From the whole message, past the clip of `label`.
+   */
+  keyPoints?: string[];
   /** A save that ships the work: `gh pr create` (`pr`) or `git push` (`push`). */
   ships?: 'pr' | 'push';
   /** How many commits a Bash call makes (`git commit` segments). */
@@ -201,6 +208,8 @@ export interface StoryPage extends StoryTurnSummary {
   helpers: number;
   /** Background helpers that had not reported back when this page was drawn. */
   helpersRunning: number;
+  /** Helpers and background commands of this turn that finished only after it ended. */
+  finishedLater?: number;
   /** Every tool call of the turn failed (a blocked command, nothing that worked): no celebration. */
   noneWorked?: boolean;
 }

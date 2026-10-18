@@ -11,6 +11,7 @@
     "removed": 0,
     "helpers": 1,
     "helpersRunning": 0,
+    "finishedLater": 1,
     "panels": [
       {
         "kind": "mission",
@@ -45,7 +46,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -98,9 +99,9 @@
       {
         "kind": "complete",
         "ok": null,
-        "story": "Done in 3 minutes.",
+        "story": "Claude's part is done in 3 minutes. Its helper finished later and reported back.",
         "director": "turn_duration · 2 min 44 s · 11 tool calls · 5 files changed · 1 helper",
-        "balloon": "I've built csvstat.py, a command-line tool that prints a CSV's row count and the min, max and mean of each column.",
+        "balloon": "I've built csvstat.py, a command-line tool that prints a CSV's row count and the min, max and mean of each column. A background helper is writing README.md; I didn't wait for it, so it isn't confirmed yet. The population mean shows a problem, described below.",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -119,6 +120,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -145,7 +147,7 @@
         "ok": null,
         "story": "Done in 9 seconds.",
         "director": "turn_duration · 9 s · 1 tool call",
-        "balloon": "The background helper has finished README.md, and I've checked its work.",
+        "balloon": "The background helper has finished README.md, and I've checked its work. Rounding: the README now explains that numbers are shown to 6 significant digits, so the population mean of 214574.2 appears as 214574. That note makes the current behaviour clear, but it doesn't fix it.",
         "tests": null,
         "roundsOk": null,
         "events": 0

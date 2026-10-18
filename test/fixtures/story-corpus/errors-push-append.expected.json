@@ -11,6 +11,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -35,7 +36,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -65,7 +66,7 @@
       {
         "kind": "check",
         "ok": false,
-        "story": "The tests don't even load.",
+        "story": "The tests don't even load, as planned.",
         "director": "python3 -m pytest -q → error · 0 passed, 1 error",
         "balloon": "Now the red run, once, with calc_stats.py confirmed absent:",
         "tests": {
@@ -79,7 +80,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude writes 1 file and saves the work: \"test: add failing tests for calc_stats mean/median\".",
+        "story": "Claude writes 1 file and saves the work: \"add failing tests for calc_stats mean/median\".",
         "director": "git commit -q -F - · writes 1 file",
         "balloon": "Red as expected: collection error, exit code 2.",
         "tests": null,
@@ -112,7 +113,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"feat: implement calc_stats mean and median\".",
+        "story": "Claude saves the work: \"implement calc_stats mean and median\".",
         "director": "git commit -q -F -",
         "balloon": null,
         "tests": null,
@@ -122,7 +123,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -134,7 +135,7 @@
         "ok": null,
         "story": "Done in 2 minutes.",
         "director": "turn_duration · 2 min 10 s · 12 tool calls · 3 files changed",
-        "balloon": "I built it test-first: the suite failed at collection before calc_stats.py existed, then passed once the module was written.",
+        "balloon": "I built it test-first: the suite failed at collection before calc_stats.py existed, then passed once the module was written. I didn't push, didn't touch origin.git/ and didn't create a README, since none existed to keep in sync.",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -153,6 +154,7 @@
     "removed": 1,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -167,7 +169,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Fix and test: the first run fails, the second passes.",
+        "story": "Test first: the first run fails as planned, the second passes.",
         "director": "2 checks · 3 edits · +40 −1 · last: ok",
         "balloon": "Green: 18 passed and ruff is clean.",
         "tests": {
@@ -183,7 +185,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work and uploads it: \"feat: add calc_stats.mode with smallest-value tie-breaking\".",
+        "story": "Claude saves the work and uploads it: \"add calc_stats.mode with smallest-value tie-breaking\".",
         "director": "git commit -q -F - · git push -u origin HEAD",
         "balloon": null,
         "tests": null,
@@ -205,7 +207,7 @@
         "ok": null,
         "story": "Done in 37 seconds.",
         "director": "turn_duration · 37 s · 8 tool calls · 2 files changed",
-        "balloon": "mode(xs) is in calc_stats.py, committed once after the tests went green, and pushed.",
+        "balloon": "mode(xs) is in calc_stats.py, committed once after the tests went green, and pushed. I didn't use the advisor, gh or the network.",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -224,6 +226,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -283,7 +286,7 @@
         "ok": null,
         "story": "Done in 27 seconds.",
         "director": "turn_duration · 27 s · 5 tool calls · 1 file changed",
-        "balloon": "NOTES.md has the two lines and is committed and pushed.",
+        "balloon": "NOTES.md has the two lines and is committed and pushed. As you expected, git describe --tags then failed because the repo has no tags.",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -302,6 +305,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",

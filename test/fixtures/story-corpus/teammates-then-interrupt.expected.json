@@ -11,6 +11,7 @@
     "removed": 0,
     "helpers": 2,
     "helpersRunning": 0,
+    "finishedLater": 2,
     "panels": [
       {
         "kind": "mission",
@@ -35,7 +36,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -45,7 +46,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude writes 2 files and saves the work: \"feat: add package.json and index.js with add and slugify\".",
+        "story": "Claude writes 2 files and saves the work: \"add package.json and index.js with add and slugify\".",
         "director": "git commit -q -m \"feat: add package.json and index.js with… · writes 2 files",
         "balloon": null,
         "tests": null,
@@ -78,7 +79,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"test: add node:test suite for add and slugify\".",
+        "story": "Claude saves the work: \"add node:test suite for add and slugify\".",
         "director": "git commit -q -m \"test: add node:test suite for add and slu…",
         "balloon": null,
         "tests": null,
@@ -88,9 +89,9 @@
       {
         "kind": "complete",
         "ok": null,
-        "story": "Done in 2 minutes.",
+        "story": "Claude's part is done in 2 minutes. Its 2 helpers finished later and reported back.",
         "director": "stop_hook_summary · 1 min 44 s · 8 tool calls · 3 files changed · 2 helpers",
-        "balloon": "I've set up the project, started both helpers, and the tests pass: node --test index.test.mjs ran 8 tests, 8 passed, 0 failed.",
+        "balloon": "I've set up the project, started both helpers, and the tests pass: node --test index.test.mjs ran 8 tests, 8 passed, 0 failed. No linter is set up in this project, so I didn't run one.",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -109,6 +110,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -123,7 +125,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude checks CONTRIBUTING.md.",
         "director": "Bash · ls -la && git status --short && cat CONTRIBUTING.md",
         "balloon": null,
         "tests": null,
@@ -133,7 +135,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"docs: add CONTRIBUTING.md\".",
+        "story": "Claude saves the work: \"add CONTRIBUTING.md\".",
         "director": "git commit -q -m \"docs: add CONTRIBUTING.md",
         "balloon": null,
         "tests": null,
@@ -145,7 +147,7 @@
         "ok": null,
         "story": "Done in 15 seconds.",
         "director": "stop_hook_summary · 15 s · 2 tool calls",
-        "balloon": "The CONTRIBUTING.md helper has finished, and I've committed its file (docs: add CONTRIBUTING.md).",
+        "balloon": "The CONTRIBUTING.md helper has finished, and I've committed its file (docs: add CONTRIBUTING.md). The helper reported that index.test.mjs and README.md didn't exist yet. That's out of date: it must have looked before I wrote the tests, and both files are there now. README.md is already on disk, but its helper hasn't reported back yet, so I haven't committed it in case it's still being written.",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -164,6 +166,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -178,7 +181,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude checks README.md.",
         "director": "Bash · cat README.md && ls index.test.mjs",
         "balloon": null,
         "tests": null,
@@ -203,7 +206,7 @@
         "ok": null,
         "story": "Done in 16 seconds.",
         "director": "stop_hook_summary · 16 s · 2 tool calls",
-        "balloon": "The project is done: both helpers finished, and I checked their files and committed them.",
+        "balloon": "The project is done: both helpers finished, and I checked their files and committed them. Both helpers warned that index.test.mjs didn't exist, but they had looked before I created it, so the README's Testing section is correct.",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -222,6 +225,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -236,7 +240,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -259,7 +263,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"refactor: split index.js into lib/ modules behind an index.…\".",
+        "story": "Claude saves the work: \"split index.js into lib/ modules behind an index.js barrel\".",
         "director": "git commit -q -m \"refactor: split index.js into lib/ module…",
         "balloon": null,
         "tests": null,
@@ -282,7 +286,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"docs: add full JSDoc to every function and module\".",
+        "story": "Claude saves the work: \"add full JSDoc to every function and module\".",
         "director": "git commit -q -m \"docs: add full JSDoc to every function an…",
         "balloon": null,
         "tests": null,
@@ -313,6 +317,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -339,7 +344,7 @@
         "ok": null,
         "story": "Nothing Claude tried worked, so the job is not done.",
         "director": "stop_hook_summary · 6 s · 1 tool call",
-        "balloon": "Not done. The harness blocked sleep 65: a sleep on its own in the foreground isn't allowed.",
+        "balloon": "Not done. The harness blocked sleep 65: a sleep on its own in the foreground isn't allowed. I didn't try to get around the block, for example by chaining shorter sleeps or running it in the background.",
         "tests": null,
         "roundsOk": null,
         "events": 0

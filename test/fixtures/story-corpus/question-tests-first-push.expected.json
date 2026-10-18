@@ -11,6 +11,7 @@
     "removed": 2,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -45,7 +46,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -55,7 +56,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Fix and test: the first run fails, the second passes.",
+        "story": "Test first: the first run fails as planned, the second passes.",
         "director": "2 checks · 4 edits · +151 −1 · last: ok",
         "balloon": "All 19 test cases pass (13 test functions), and ruff check and ruff format both come back clean.",
         "tests": {
@@ -114,7 +115,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -126,7 +127,7 @@
         "ok": null,
         "story": "Done in 5 minutes.",
         "director": "turn_duration · 4 min 57 s · 20 tool calls · 6 files changed",
-        "balloon": "I've built the kebab slug tool in this folder, committed it, and pushed it to the new bare repo remote.git.",
+        "balloon": "I've built the kebab slug tool in this folder, committed it, and pushed it to the new bare repo remote.git. Not tested: the README says pip install . gives you a kebab command.",
         "tests": null,
         "roundsOk": null,
         "events": 0

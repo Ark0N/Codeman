@@ -797,14 +797,14 @@ describe('buildStoryPage', () => {
     const page = pageOf(demoTurn());
     const byKind = Object.fromEntries(page.panels.map((p) => [p.kind, p]));
     expect(byKind.mission.caption.story).toBe('You give Claude a job.');
-    expect(byKind.investigate.caption.story).toBe('Claude reads 2 files to find its way around.');
+    expect(byKind.investigate.caption.story).toBe('Claude reads CheckoutButton.tsx and banner.css.');
     expect(byKind.investigate.caption.director).toBe('Read ×2 · Bash');
     expect(byKind.plan.caption.story).toBe('Claude writes a plan: 2 steps.');
     expect(byKind.backup.caption.story).toBe('Claude calls in 1 helper.');
     expect(byKind.backup.caption.director).toContain('3 calls inside');
     expect(byKind.loop).toMatchObject({ rounds: 2, ok: true, added: 2, removed: 1 });
     expect(byKind.loop.caption.story).toBe('Fix and test: the first run fails, the second passes.');
-    expect(byKind.save.caption.story).toBe('Claude saves the work: "fix: banner".');
+    expect(byKind.save.caption.story).toBe('Claude saves the work: "banner".');
     expect(byKind.complete.caption.story).toBe('Done in 7 minutes.');
     expect(byKind.complete.caption.director).toContain('7 min 12 s');
   });
@@ -969,7 +969,7 @@ describe('buildStoryPage', () => {
         ...bash('b2', 'git push origin main', 'Push', 'To ./origin.git\n   f80bb31..3e0fb80  main -> main'),
         end(1000),
       ])
-    ).toBe('Claude saves the work and uploads it: "feat: add mode()".');
+    ).toBe('Claude saves the work and uploads it: "add mode()".');
     expect(save([prompt('push'), ...bash('b1', 'git push', 'Push', 'Everything up-to-date'), end(1000)])).toBe(
       'Claude uploads the work.'
     );
@@ -1017,6 +1017,21 @@ describe('buildStoryPage', () => {
     expect(page.panels.length).toBeLessThanOrEqual(12);
     expect(page.panels[0].kind).toBe('mission');
     expect(page.panels.at(-1)!.kind).toBe('complete');
+  });
+
+  it('the closing balloon keeps an open problem from far into the message, never a table row or a question', () => {
+    const long = [
+      'I built the csvstat tool for your CSV files.',
+      'It reads the file and prints the counts for each column, one line per column. '.repeat(4),
+      '| column | state |',
+      '| amount | not yet rounded |',
+      'Want me to add a --json flag?',
+      'One known issue: big numbers are shown rounded.',
+    ].join('\n');
+    const balloon = pageOf([prompt('build it'), said(long), end(1000)]).panels.at(-1)!.balloon!.text;
+    expect(balloon).toBe(
+      'I built the csvstat tool for your CSV files. One known issue: big numbers are shown rounded.'
+    );
   });
 
   it('a helper messaged twice reads as one finished run, not as superseded', () => {
@@ -1158,7 +1173,9 @@ describe('buildStoryPage', () => {
     ]);
     const loop = page.panels.find((p) => p.kind === 'loop')!;
     expect(loop.roundsOk).toEqual([true, false, true]);
-    expect(loop.caption.story).toBe('Build and test, 2 rounds. A check fails once, then everything passes.');
+    expect(loop.caption.story).toBe(
+      'Build and test, 2 rounds. The tests pass every time; another check fails once, then passes.'
+    );
   });
 
   it('a live loop marks the runs that finished, and the one still going as null', () => {
@@ -1220,7 +1237,7 @@ describe('buildStoryPage', () => {
       end(1000),
     ]);
     const backup = page.panels.find((p) => p.kind === 'backup')!;
-    expect(backup.caption.story).toBe('Claude asks the advisor for a second opinion.');
+    expect(backup.caption.story).toBe('Claude asks a stronger AI model for a second opinion.');
     expect(page.events[1]).toMatchObject({ tool: 'Advisor', ok: true, helper: { name: 'advisor' } });
     expect(page.events[1].helper!.result).toMatch(/encrypted/);
     expect(page.helpers).toBe(0);

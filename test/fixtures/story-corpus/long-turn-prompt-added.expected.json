@@ -11,6 +11,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -35,7 +36,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -65,7 +66,7 @@
       {
         "kind": "loop",
         "ok": true,
-        "story": "Build and test, 4 rounds. A check fails once, then everything passes.",
+        "story": "Build and test, 4 rounds. The tests pass every time; another check fails once, then passes.",
         "director": "5 checks · 10 edits · +694 · last: ok",
         "balloon": "All 4 modules are done: 63 tests pass and ruff is clean.",
         "tests": {
@@ -127,7 +128,7 @@
       {
         "kind": "backup",
         "ok": null,
-        "story": "Claude asks the advisor for a second opinion.",
+        "story": "Claude asks a stronger AI model for a second opinion.",
         "director": "Advisor · a second opinion",
         "balloon": null,
         "tests": null,
@@ -139,7 +140,7 @@
         "ok": null,
         "story": "Done in 6 minutes.",
         "director": "turn_duration · 6 min 25 s · 26 tool calls · 13 files changed",
-        "balloon": "The inventory/ package is built and committed.",
+        "balloon": "The inventory/ package is built and committed. --csv is part of the CLI commit rather than its own commit, because you asked for it before that module existed.",
         "tests": null,
         "roundsOk": null,
         "events": 0
@@ -158,6 +159,7 @@
     "removed": 0,
     "helpers": 0,
     "helpersRunning": 0,
+    "finishedLater": 0,
     "panels": [
       {
         "kind": "mission",
@@ -202,7 +204,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"docs: changelog\".",
+        "story": "Claude saves the work: \"changelog\".",
         "director": "git commit -m \"docs: changelog\" -m \"Co-Authored-By: Claude…",
         "balloon": "Step 10:",
         "tests": null,
@@ -212,7 +214,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude reads 1 file to find its way around.",
+        "story": "Claude reads cli.py.",
         "director": "Read",
         "balloon": "Step 11:",
         "tests": null,
@@ -255,7 +257,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude saves the work: \"docs: changelog entry\".",
+        "story": "Claude saves the work: \"changelog entry\".",
         "director": "git commit -am \"docs: changelog entry\" -m \"Co-Authored-By:…",
         "balloon": "Step 15:",
         "tests": null,
@@ -277,7 +279,7 @@
         "ok": null,
         "story": "Done in 1 minute.",
         "director": "turn_duration · 1 min 16 s · 16 tool calls · 2 files changed",
-        "balloon": "I ran all 16 steps in order, one tool call each.",
+        "balloon": "I ran all 16 steps in order, one tool call each. I didn't re-run ruff, because only README.md and CHANGELOG.md changed, and ruff doesn't check Markdown.",
         "tests": null,
         "roundsOk": null,
         "events": 0
