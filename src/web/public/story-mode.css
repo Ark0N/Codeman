@@ -152,8 +152,9 @@ body.story-open {
   width: 100%;
   flex: 1;
   max-width: 420px;
-  padding: 6px 8px;
+  padding: 6px 26px 6px 8px;
   font: 500 12.5px/1.2 var(--story-mono);
+  text-overflow: ellipsis;
   color: var(--story-ink);
   background: var(--story-panel);
   border: 2px solid var(--story-ink);
@@ -341,6 +342,13 @@ body.story-open {
 .story-balloon[hidden] {
   display: none;
 }
+/* story-mode.js sets --story-lines when a balloon would leave its panel or cover Claude's head. */
+.story-balloon-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--story-lines, none);
+  overflow: hidden;
+}
 .story-balloon::before,
 .story-balloon::after {
   content: '';
@@ -408,17 +416,11 @@ body.story-open {
 .story-balloon--note::after {
   display: none;
 }
-.story-panel[data-kind='investigate'] .story-balloon--claude {
-  right: auto;
-  left: 30%;
-  top: 30%;
-  max-width: 38%;
-}
-.story-panel[data-kind='backup'] .story-balloon--claude {
-  right: auto;
-  left: 56%;
-  top: 25%;
-  max-width: 40%;
+/* Claude's balloon is placed over its head by story-mode.js (_storyPlaceBalloon); a scene with no
+   Claude in it (the loop) keeps it in the top corner, clear of the art below. */
+.story-panel[data-kind='loop'] .story-balloon--claude {
+  top: 10px;
+  right: 12px;
 }
 .story-panel[data-kind='ask'] .story-balloon--claude {
   right: auto;
@@ -790,6 +792,7 @@ body.story-open {
 .story-out-cmd {
   flex: 1 1 220px;
   font: 500 12.5px/1.35 var(--story-mono);
+  font-variant-ligatures: none;
   overflow-wrap: anywhere;
 }
 .story-cnt {
@@ -803,6 +806,8 @@ body.story-open {
 }
 .story-code {
   font: 12px/1.65 var(--story-mono);
+  /* Code as written: `!==` stays three characters. */
+  font-variant-ligatures: none;
 }
 .story-ln {
   display: grid;
@@ -868,8 +873,14 @@ body.story-open {
   margin: 0;
   padding: 8px 18px;
   font: 12px/1.6 var(--story-mono);
+  font-variant-ligatures: none;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.story-prompt {
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.55;
 }
 .story-h {
   margin: 16px 18px 0;

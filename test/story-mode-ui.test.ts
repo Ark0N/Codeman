@@ -409,6 +409,112 @@ describe('story-mode.js overlay', () => {
     expect(win.document.activeElement).toBe(controls[0]);
   });
 
+  it("the mission opens the whole prompt, and a task turn's mission opens what the job reported", async () => {
+    const report = [
+      '<task-notification>',
+      '<tool-use-id>a1</tool-use-id>',
+      '<status>completed</status>',
+      '<summary>Agent "Docs" finished</summary>',
+      '<result>I wrote /home/me/demo-shop/README.md. Names look like old.jpg -> new.jpg.</result>',
+      '</task-notification>',
+    ].join('\n');
+    boot(storyOf([prompt(report, { turnOrigin: 'task_notification' }), said('Thanks.'), end(1000)]));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    const hit = $('.story-panel[data-kind="mission"] .story-hit')!;
+    expect(hit.title).toBe('Read the report');
+    hit.click();
+    expect($('.story-drawer-kind')!.textContent).toBe('Report');
+    expect($('.story-drawer-body')!.textContent).toContain('What it reported');
+    const links = $$('.story-drawer-body .story-link');
+    // In prose only rooted paths link: `old.jpg` is an example, not a file.
+    expect(links.map((l) => l.textContent)).toEqual(['/home/me/demo-shop/README.md']);
+  });
+
+  it("the wire files Claude's last words under the final panel", async () => {
+    boot(storyOf([prompt('look'), ...read('r1', '/work/demo-shop/a.md'), said('All done here.'), end(1000)]));
+    app.openStoryMode(SID);
+    await settle();
+    app._storySetDirector(true);
+    const rows = $$('.story-wire li').map((li) => li.textContent || '');
+    const lastGroup = [...rows].reverse().find((t) => t.startsWith('Panel'));
+    expect(lastGroup).toMatch(/· The end$/);
+    expect(rows[rows.length - 1]).toContain('All done here.');
+  });
+
+  it('a fix made from the terminal opens what ran, not an empty diff', async () => {
+    boot(
+      storyOf([
+        prompt('patch it'),
+        ...bash('b1', "sed -i 's/a/b/' app.py", 'Patch the file', ''),
+        ...bash('b2', 'printf x > notes.md', 'Write notes', ''),
+        end(1000),
+      ])
+    );
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    $('.story-panel[data-kind="fix"] .story-hit')!.click();
+    expect($('.story-drawer-kind')!.textContent).toBe('Output');
+    expect($('.story-drawer-body')!.textContent).toContain("sed -i 's/a/b/' app.py");
+    expect($('.story-drawer-body')!.textContent).not.toContain('No changes');
+  });
+
+  it('output links skip globs and paths a tool elided', async () => {
+    boot(
+      storyOf([
+        prompt('test'),
+        ...bash('b1', 'pytest -q', 'Run tests', 'FAILED test_a.py::t - 2...rted_0/a.txt\nsee *.test.ts and src/app.py'),
+        end(1000),
+      ])
+    );
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    $('.story-panel[data-kind="check"] .story-hit')!.click();
+    const links = $$('.story-drawer-body .story-link').map((l) => l.textContent);
+    expect(links).toContain('src/app.py');
+    expect(links.some((l) => /\.\.\.|\*/.test(l || ''))).toBe(false);
+    expect(links).not.toContain('.test.ts');
+  });
+
+  it('a helper still working in the background says so, in its drawer and on the final panel', async () => {
+    boot(
+      storyOf([
+        prompt('docs'),
+        tool('a1', 'Agent', { description: 'Write README', subagent_type: 'general-purpose', prompt: 'Write it' }),
+        result('a1', 'Async agent launched successfully. agentId: h9', {
+          toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'h9' },
+        }),
+        end(1000),
+      ])
+    );
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    expect($('.story-panel[data-kind="complete"] .story-chips')!.textContent).toContain('1 helper, 1 still working');
+    $('.story-panel[data-kind="backup"] .story-hit')!.click();
+    await settle();
+    expect($('.story-drawer-sub')!.textContent).toContain('in the background');
+    expect($('.story-drawer-body')!.textContent).toContain('Still working in the background.');
+    expect($('.story-drawer-body')!.textContent).not.toContain('Async agent launched');
+  });
+
+  it('a click region reused for a new page gets the new label', async () => {
+    boot(storyOf([prompt('one'), ...read('r1', '/work/demo-shop/README.md'), end(1000)]));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    expect($('.story-panel[data-kind="investigate"] .story-hit')!.title).toBe('Open README.md');
+    const next = storyOf([prompt('one'), ...read('r1', '/work/demo-shop/rename_by_date.sh'), end(1000)]);
+    next.page!.id = app._story.data.page.id;
+    app._story.data = next;
+    app._storyRender();
+    sizeAndDraw();
+    expect($('.story-panel[data-kind="investigate"] .story-hit')!.title).toBe('Open rename_by_date.sh');
+  });
+
   it('turning the setting off hides the button and closes an open story', async () => {
     boot(storyOf(demoTurn()));
     app.openStoryMode(SID);
