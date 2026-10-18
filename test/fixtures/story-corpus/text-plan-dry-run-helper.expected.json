@@ -151,7 +151,7 @@
       {
         "kind": "investigate",
         "ok": null,
-        "story": "Claude looks around the project.",
+        "story": "Claude checks the work that came back.",
         "unaskedSave": false,
         "director": "Bash · git log --oneline && git status --short && git show --stat…",
         "balloon": null,

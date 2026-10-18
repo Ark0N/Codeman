@@ -216,6 +216,11 @@ describe('Story Mode on real sessions', () => {
     expect(marked('question-tests-first-push')).toEqual([]);
   });
 
+  it('in a turn a helper report started, looking around is checking what came back (round 12)', () => {
+    const [, report] = pagesOf('text-plan-dry-run-helper');
+    expect(report.panels.map((p) => p.story)).toContain('Claude checks the work that came back.');
+  });
+
   it('a helper reporting back is heard in its own words, not only "finished" (round 9)', () => {
     const [, readme, extra] = pagesOf('background-helpers-reports');
     expect(readme.panels[0].balloon).toBe(

@@ -2595,7 +2595,9 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
               ? 'Claude searches the code.'
               : savedBefore && evs.every((e) => e.tool === 'Bash' && GIT_LOOK.test(e.label.trim()))
                 ? 'Claude checks what it saved.'
-                : 'Claude looks around the project.';
+                : checking
+                  ? 'Claude checks the work that came back.'
+                  : 'Claude looks around the project.';
       // A tool lookup's query (`select:EnterPlanMode,ExitPlanMode`) means nothing to a reader.
       if (evs.every((e) => e.tool === 'ToolSearch')) panel.notes = [];
       break;
