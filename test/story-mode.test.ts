@@ -971,6 +971,31 @@ describe('buildStoryPage', () => {
     expect(pageOf([prompt('c'), ...bash('b1', 'git commit -qm x', 'Commit', ''), end(1000)]).events[1].commits).toBe(1);
   });
 
+  it('crafted agent text never takes seconds: every helper stays linear on its worst shapes', () => {
+    // Each shape took one to several seconds before (a lazy regex rescanning per opener, or a
+    // backtracking one over a long one-liner); a single call blocks the whole server.
+    const rep = (str: string, n: number) => str.repeat(Math.ceil(n / str.length)).slice(0, n);
+    const ms = (fn: () => unknown) => {
+      const start = performance.now();
+      fn();
+      return performance.now() - start;
+    };
+    const prompt1 = (content: string) => () => buildStoryTurns(entriesOf([prompt(content), said('ok'), end(1000)]));
+    const bashOut = (command: string, output: string) => () =>
+      pageOf([prompt('go'), ...bash('b1', command, 'x', output), end(1000)]);
+    const shapes: Array<[string, () => unknown]> = [
+      ['teammate openers', prompt1(rep('<teammate-message teammate_id="a">x ', 400_000))],
+      ['system-reminder openers', prompt1('hi ' + rep('<system-reminder>x ', 400_000))],
+      ['task-notification field openers', prompt1('<task-notification>\n' + rep('<summary>x ', 400_000))],
+      ['git commit tokens', bashOut(rep('git commit ', 8000), 'ok')],
+      [
+        'modified-note phrases',
+        bashOut('python3 x.py', rep("This command modified 1 file you've previously read: a", 400_000)),
+      ],
+    ];
+    for (const [name, fn] of shapes) expect([name, ms(fn) < 250]).toEqual([name, true]);
+  });
+
   it('a python or node script fed by a here-document: the files it opens for writing, never guessed', () => {
     const files = (command: string) => heredocWrites(command, '/w').map((d) => d.file);
     expect(

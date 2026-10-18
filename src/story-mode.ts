@@ -278,7 +278,8 @@ export function closingText(text: string): string {
 /** The first sentence of a message, without markdown, for a speech balloon. */
 export function firstSentence(text: string, max = 160): string {
   const spans: string[] = [];
-  const plain = plainMarkdown(text, spans).replace(/\s+/g, ' ').trim();
+  // Only the start can hold the first sentence; the rest (a helper's whole report) is never scanned.
+  const plain = plainMarkdown(text.slice(0, 4000), spans).replace(/\s+/g, ' ').trim();
   const match = SENTENCE_END.exec(plain);
   return clip(restoreSpans(match ? match[1] : plain, spans).replace(/\s+/g, ' '), max);
 }
@@ -291,13 +292,15 @@ export function planFromText(text: string): StoryTodo[] | null {
   const items: StoryTodo[] = [];
   let numbered = 0;
   let boxes = 0;
-  for (const line of text.split('\n')) {
+  for (const line of text.slice(0, 20_000).split('\n')) {
     const m = /^\s{0,3}(?:(\d+)[.)]|[-*+])\s+(\[[ xX]\]\s+)?(\S.*)$/.exec(line);
     if (!m || (!m[1] && !m[2])) continue;
     if (m[2]) boxes++;
     else numbered++;
     const spans: string[] = [];
-    const plain = restoreSpans(plainMarkdown(m[3], spans), spans).replace(/\s+/g, ' ').trim();
+    const plain = restoreSpans(plainMarkdown(m[3].slice(0, 400), spans), spans)
+      .replace(/\s+/g, ' ')
+      .trim();
     if (plain) items.push({ text: clip(plain, 120), done: /x/i.test(m[2] ?? '') });
   }
   return numbered >= 3 || boxes >= 2 ? items.slice(0, STORY_LIMITS.todoItems) : null;
@@ -472,14 +475,37 @@ function echoWrites(command: string, cwd?: string): StoryEdit[] {
  * here-document a `git commit -F -` reads.
  */
 function commitSubject(command: string): string | undefined {
-  // `-m`, a combined `-am` / `-qm`, or `--message`; a trailer (`Co-Authored-By:`) is never the subject.
-  const m = /\bgit\b[^\n;&|]*\bcommit\b[^\n;&|]*?\s-(?:[a-zA-Z]*m|-message=?)\s*(["'])((?:(?!\1)[\s\S])*)\1/.exec(
-    command
-  );
-  const first = m?.[2].split('\n')[0].trim();
-  if (first && !/^[\w-]+-By:/i.test(first)) return clip(first, 100);
-  const f = /\bgit\b[^\n;&|]*\bcommit\b[^\n]*\s-F\s*-[^\n]*<<-?\s*(['"]?)(\w+)\1[^\n]*\n([^\n]*)/.exec(command);
-  return f && f[3].trim() && f[3].trim() !== f[2] ? clip(f[3].trim(), 100) : undefined;
+  // Line by line with plain searches, never one regex over the command: a command is agent-written,
+  // and `[^;]*commit[^;]*?-m` over many `git commit` tokens backtracks (seconds on a long one-liner).
+  const lines = command.slice(0, 8000).split('\n');
+  for (let i = 0; i < lines.length && i < 400; i++) {
+    const line = lines[i];
+    const g = line.search(/\bgit\b/);
+    if (g < 0) continue;
+    const c = line.slice(g).search(/\bcommit\b/);
+    if (c < 0) continue;
+    const rest = line.slice(g + c + 'commit'.length);
+    // Its own options only: the part before the next `;`, `&` or `|`.
+    const stop = rest.search(/[;&|]/);
+    const end = stop < 0 ? rest.length : stop;
+    // `-m`, a combined `-am` / `-qm`, or `--message`; a trailer (`Co-Authored-By:`) is never the subject.
+    const m = /\s-(?:[a-zA-Z]{0,8}m|-message=?)\s*(["'])/.exec(rest);
+    if (m && m.index < end) {
+      const from = m.index + m[0].length;
+      const close = rest.indexOf(m[1], from);
+      const first = (close < 0 ? rest.slice(from) : rest.slice(from, close)).trim();
+      if (first && !/^[\w-]+-By:/i.test(first)) return clip(first, 100);
+      continue;
+    }
+    // `git commit -F - <<'EOF'`: the here-document's first line.
+    const f = /\s-F\s*-(?=\s|$)/.exec(rest);
+    const h = /<<-?\s*(['"]?)(\w+)\1/.exec(rest);
+    if (f && f.index < end && h) {
+      const body = lines[i + 1]?.trim();
+      if (body && body !== h[2]) return clip(body, 100);
+    }
+  }
+  return undefined;
 }
 
 /** A here-document's body is data, not commands: `cat > a.py <<'EOF' ... EOF` keeps only its first line. */
@@ -745,7 +771,57 @@ export function parseTestCounts(output: string): StoryTests | null {
 
 // ========== Stage 1: reduce one transcript line ==========
 
-const SYSTEM_REMINDER_RE = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
+/*
+ * Tagged blocks in prompt text are found with indexOf, never a lazy `<a>[\s\S]*?</a>` regex: that
+ * one rescans to the end for every opener without a closer (seconds on a crafted megabyte, and a
+ * teammate's or a helper's message is another agent's writing).
+ */
+/** The text with every `<open>…<close>` block taken out; an opener never closed stays. */
+function withoutBlocks(text: string, open: string, close: string): string {
+  let out = '';
+  let from = 0;
+  for (;;) {
+    const at = text.indexOf(open, from);
+    if (at < 0) break;
+    const end = text.indexOf(close, at + open.length);
+    if (end < 0) break;
+    out += text.slice(from, at);
+    from = end + close.length;
+  }
+  return out + text.slice(from);
+}
+
+/** `<name attrs>inner</name>` blocks in order (`name` followed by a space or `>`), at most `limit`. */
+function blocks(text: string, name: string, limit = 50): Array<{ attrs: string; inner: string }> {
+  const out: Array<{ attrs: string; inner: string }> = [];
+  const open = `<${name}`;
+  const close = `</${name}>`;
+  let from = 0;
+  while (out.length < limit) {
+    const at = text.indexOf(open, from);
+    if (at < 0) break;
+    const next = text[at + open.length];
+    if (next !== '>' && next !== undefined && !/\s/.test(next)) {
+      from = at + open.length;
+      continue;
+    }
+    const gt = text.indexOf('>', at + open.length);
+    if (gt < 0) break;
+    const end = text.indexOf(close, gt + 1);
+    if (end < 0) break;
+    out.push({ attrs: text.slice(at + open.length, gt), inner: text.slice(gt + 1, end) });
+    from = end + close.length;
+  }
+  return out;
+}
+
+/** The inner text of the first `<name>…</name>`. */
+function blockText1(text: string, name: string): string | undefined {
+  const at = text.indexOf(`<${name}>`);
+  if (at < 0) return undefined;
+  const end = text.indexOf(`</${name}>`, at);
+  return end < 0 ? undefined : text.slice(at + name.length + 2, end);
+}
 /** Wrappers around things the user did locally (shell `!`, slash command output): never a turn. */
 const LOCAL_WRAPPER_RE =
   /^\s*<(local-command-caveat|local-command-stdout|local-command-stderr|bash-input|bash-stdout|bash-stderr)>/;
@@ -756,12 +832,12 @@ const LOCAL_WRAPPER_RE =
  */
 function readTeammateMessages(text: string): StoryTeammateReport[] {
   const reports: StoryTeammateReport[] = [];
-  for (const m of text.matchAll(/<teammate-message\b([^>]*)>([\s\S]*?)<\/teammate-message>/g)) {
-    const from = /teammate_id="([^"]*)"/.exec(m[1])?.[1]?.split('@')[0];
+  for (const m of blocks(text, 'teammate-message')) {
+    const from = /teammate_id="([^"]*)"/.exec(m.attrs)?.[1]?.split('@')[0];
     if (!from) continue;
-    const rawSummary = /summary="([^"]*)"/.exec(m[1])?.[1];
+    const rawSummary = /summary="([^"]*)"/.exec(m.attrs)?.[1];
     const summary = rawSummary === undefined ? undefined : unescapeXml(rawSummary);
-    let body: string | undefined = unescapeXml(m[2].trim());
+    let body: string | undefined = unescapeXml(m.inner.trim());
     if (body.startsWith('{')) {
       try {
         const note: unknown = JSON.parse(body);
@@ -794,8 +870,7 @@ function readPrompt(raw: string): {
   task?: StoryTaskReport;
   teammates?: StoryTeammateReport[];
 } | null {
-  const text = raw
-    .replace(SYSTEM_REMINDER_RE, '')
+  const text = withoutBlocks(raw, '<system-reminder>', '</system-reminder>')
     .replace(/<\/?pasted_content\b[^>]*>/g, '') // Claude Code's wrapper around pasted text
     .replace(/^\s*Another Claude session sent a message:\s*/, '')
     .trim();
@@ -824,7 +899,7 @@ function readPrompt(raw: string): {
   }
   if (/^<task-notification>/.test(text)) {
     const tag = (name: string) => {
-      const value = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1]?.trim();
+      const value = blockText1(text, name)?.trim();
       return value === undefined ? undefined : unescapeXml(value);
     };
     const count = (name: string) => {
@@ -1098,7 +1173,15 @@ export function createStoryReducer({ sidechain = false }: { sidechain?: boolean 
             if (tests) result.tests = tests;
             const intent = call?.input.intent;
             if ((intent === 'build' || intent === 'test') && reportsProblems(tail.text)) result.problems = true;
-            const note = /This command modified \d+ files? you've previously read: ([^\]\n]+?)\.? Call Read/.exec(text);
+            // Claude Code appends this note: one anchored try at its last occurrence, never a scan
+            // of the whole output (a lazy match per repeat of the phrase is quadratic).
+            const noteAt = text.lastIndexOf('This command modified ');
+            const note =
+              noteAt < 0
+                ? null
+                : /^This command modified \d+ files? you've previously read: ([^\]\n]{1,2000}?)\.? Call Read/.exec(
+                    text.slice(noteAt, noteAt + 2400)
+                  );
             if (note) {
               const cwd = str(entry.cwd);
               result.modified = note[1]
