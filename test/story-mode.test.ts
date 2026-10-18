@@ -1373,6 +1373,31 @@ describe('buildStoryPage', () => {
     expect(loop('Add mode() with tests.')).not.toMatch(/as you asked/);
   });
 
+  it('a check that failed after a push and passes in the next command after a change reads as fixed', () => {
+    const save = (next: string, nextOk = true) =>
+      pageOf([
+        prompt('ship it'),
+        ...bash('b1', 'git commit -qm "add a"', 'Commit', ''),
+        ...bash(
+          'b2',
+          'git push -u origin main && git -C remote.git log --oneline',
+          'Push',
+          'Exit code 128\nTo ./remote.git\n * [new branch]      main -> main\nfatal: your current branch does not have any commits yet',
+          true
+        ),
+        ...bash('b3', next, 'Next', nextOk ? 'f4c840d add a' : 'Exit code 1\nfatal: no', !nextOk),
+        end(1000),
+      ]).panels.find((p) => p.kind === 'save')!.caption.story;
+    expect(save('git -C remote.git symbolic-ref HEAD refs/heads/main && git -C remote.git log --oneline')).toMatch(
+      /, but a check after that fails; Claude fixes it, and the check passes next\.$/
+    );
+    // Run again with no change before it, or failing again: no claim of a fix.
+    expect(save('git status -sb && git -C remote.git log --oneline')).toMatch(/, but a check after that fails\.$/);
+    expect(
+      save('git -C remote.git symbolic-ref HEAD refs/heads/main && git -C remote.git log --oneline', false)
+    ).toMatch(/, but a check after that fails\.$/);
+  });
+
   it('a check after a push is named a check, and tests in a fresh copy say so', () => {
     const page = pageOf([
       prompt('ship it'),

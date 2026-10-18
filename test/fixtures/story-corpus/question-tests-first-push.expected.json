@@ -100,7 +100,7 @@
       {
         "kind": "save",
         "ok": true,
-        "story": "Claude starts a git repository, saves the work: \"add kebab CLI that turns text into URL slugs\" and copies it to remote.git, a folder on this computer, but a check after that fails.",
+        "story": "Claude starts a git repository, saves the work: \"add kebab CLI that turns text into URL slugs\" and copies it to remote.git, a folder on this computer, but a check after that fails; Claude fixes it, and the check passes next.",
         "unaskedSave": false,
         "director": "git commit -q -F - · git push -u origin main · 1 error",
         "balloon": null,

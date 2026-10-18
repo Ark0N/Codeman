@@ -2953,13 +2953,26 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         );
       // `git describe` with no tags: a lookup of a version name, not a check of the work.
       const noTags = /No names found, cannot describe anything|No tags can describe/.test(out);
+      // The failed check is run again in Claude's next command, after a change, and passes: it was fixed
+      // (`git -C remote.git symbolic-ref HEAD refs/heads/main && git -C remote.git log …`).
+      const lookSegs = after.filter((seg) => !/^(echo|printf)\b/.test(seg));
+      const nextRun = events.slice(Math.max(...draft.events) + 1).find((e) => e.tool === 'Bash');
+      let fixedNext = false;
+      if (looksOnly && !noTags && nextRun?.ok === true) {
+        const segs = nextRun.label
+          .split(/&&|\|\||;|\n/)
+          .map((seg) => seg.trim())
+          .filter(Boolean);
+        const at = segs.findIndex((seg) => lookSegs.includes(seg));
+        fixedNext = at > 0 && segs.slice(0, at).some((seg) => !GIT_LOOK.test(seg) && !/^(echo|printf|cd)\b/.test(seg));
+      }
       const stepAfter = `${
         noTags
           ? 'the version-tag lookup after that fails (there are no tags yet)'
           : looksOnly
             ? 'a check after that fails'
             : 'a step after that fails'
-      }${allowed ? ', as you said it might' : ''}`;
+      }${allowed ? ', as you said it might' : ''}${fixedNext ? '; Claude fixes it, and the check passes next' : ''}`;
       story =
         savedAnyway || hiddenFail
           ? uploadOnly

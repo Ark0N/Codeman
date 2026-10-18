@@ -129,7 +129,7 @@ describe('Story Mode on real sessions', () => {
       // One commit, then a push in a command of its own: one commit, not two.
       // The folder had no repository: the first save starts one, and the reader is told.
       story:
-        'Claude starts a git repository, saves the work: "add kebab CLI that turns text into URL slugs" and copies it to remote.git, a folder on this computer, but a check after that fails.',
+        'Claude starts a git repository, saves the work: "add kebab CLI that turns text into URL slugs" and copies it to remote.git, a folder on this computer, but a check after that fails; Claude fixes it, and the check passes next.',
     });
   });
 
