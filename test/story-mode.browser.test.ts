@@ -79,6 +79,25 @@ describe('Story Mode in a real browser', () => {
     rmSync(transcriptDir, { recursive: true, force: true });
   }, 60000);
 
+  /** Every chip and the balloon of the final panel lie inside it (a fixed-height panel clipped them). */
+  const finalPanelHoldsItsWords = () =>
+    page.evaluate(() => {
+      const panel = document.querySelector('.story-panel[data-kind="complete"]');
+      if (!panel) return false;
+      // A long ending, as real ones are (key points from far into Claude's last message).
+      const text = panel.querySelector('.story-balloon-text');
+      if (text) text.textContent = 'All 19 tests pass and the work is committed. '.repeat(14);
+      const p = panel.getBoundingClientRect();
+      const parts = [...panel.querySelectorAll('.story-chips li, .story-balloon:not([hidden]), .story-splash-title')];
+      return (
+        parts.length > 0 &&
+        parts.every((el) => {
+          const r = el.getBoundingClientRect();
+          return r.bottom <= p.bottom + 0.5 && r.right <= p.right + 0.5 && r.left >= p.left - 0.5;
+        })
+      );
+    });
+
   it('is off by default: no header button', async () => {
     expect(await page.locator('.btn-story-header').isVisible()).toBe(false);
   });
@@ -132,6 +151,7 @@ describe('Story Mode in a real browser', () => {
     const head = readFileSync(path!).subarray(0, 24);
     expect(head.subarray(1, 4).toString()).toBe('PNG');
     expect(head.readUInt32BE(16)).toBeGreaterThan(1000); // width, at 2x
+    expect(await finalPanelHoldsItsWords()).toBe(true);
     await page.keyboard.press('Escape');
   });
 
@@ -144,6 +164,8 @@ describe('Story Mode in a real browser', () => {
       return main.scrollWidth - main.clientWidth;
     });
     expect(overflow).toBe(0);
+    // The final panel grows to its words and chips: nothing of them is cut off at its edge.
+    expect(await finalPanelHoldsItsWords()).toBe(true);
     // The bar keeps to three rows, and a panel below the fold gets its buttons without a scroll.
     expect(await page.evaluate(() => (document.querySelector('.story-bar') as HTMLElement).offsetHeight)).toBeLessThan(
       190

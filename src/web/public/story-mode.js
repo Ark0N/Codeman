@@ -1423,7 +1423,8 @@ const StoryArt = (() => {
       fullWidth: true,
       bg(ctx, W, H) {
         base(ctx, W, H);
-        rays(ctx, W, H, W > 420 ? W * 0.72 : W / 2, 200, 30, C.cyan, 0.32);
+        // Centred on Claude, who stands at the bottom of the stage (H - 60 is 200 on a normal panel).
+        rays(ctx, W, H, W > 420 ? W * 0.72 : W / 2, H - 60, 30, C.cyan, 0.32);
         halftone(ctx, W, H, C.magenta, W, 0, { rmax: 3.4, reach: 0.85, alpha: 0.75 });
       },
       draw(ctx, W, H, f, p) {
@@ -2612,6 +2613,11 @@ Object.assign(CodemanApp.prototype, {
     if (w === rt.w && h === rt.h && dpr === rt.dpr) return;
     rt.w = w;
     rt.h = h;
+    // A final panel its words made taller keeps its scene at the usual size, standing at the bottom:
+    // the stage is the panel's minimum height (inside its border), the rest is background.
+    const minH = rt.splash ? parseFloat(getComputedStyle(rt.el).minHeight) || 0 : 0;
+    const border = rt.el.offsetHeight - rt.el.clientHeight;
+    rt.stageH = minH > border ? Math.min(h, minH - border) : h;
     rt.dpr = dpr;
     rt.canvas.width = Math.max(1, Math.round(w * dpr));
     rt.canvas.height = Math.max(1, Math.round(h * dpr));
@@ -2630,8 +2636,12 @@ Object.assign(CodemanApp.prototype, {
     if (!rt.panel || !rt.w || !rt.h) return;
     const scene = StoryArt.SCENES[rt.kind];
     if (!scene) return;
-    const s = rt.h / StoryArt.VH;
+    const s = (rt.stageH || rt.h) / StoryArt.VH;
     const W = rt.w / s;
+    // Scene units down the whole panel: VH, or more on a final panel its words made taller, whose
+    // stage then stands at the bottom (oy) with background above it.
+    const H = rt.h / s;
+    const oy = H - StoryArt.VH;
     const k = rt.dpr * s;
     const key = `${rt.kind}|${rt.canvas.width}x${rt.canvas.height}|${StoryArt.C.key}`;
     if (rt.bgKey !== key) {
@@ -2657,14 +2667,14 @@ Object.assign(CodemanApp.prototype, {
       // Without a frame loop (tests, a browser that never paints) the whole background at once.
       const steps = st?.raf && !full ? 1 : job.total - job.next;
       for (let i = 0; i < steps && b; i++, job.next++) {
-        const top = (StoryArt.VH / job.total) * job.next;
-        const bottom = top + StoryArt.VH / job.total;
+        const top = (H / job.total) * job.next;
+        const bottom = top + H / job.total;
         b.save();
         b.setTransform(k, 0, 0, k, 0, 0);
         b.beginPath();
         b.rect(0, top, W, bottom - top);
         b.clip();
-        StoryArt.inBand(top, bottom, () => scene.bg(b, W, StoryArt.VH));
+        StoryArt.inBand(top, bottom, () => scene.bg(b, W, H));
         b.restore();
       }
       if (!b) job.next = job.total;
@@ -2677,9 +2687,9 @@ Object.assign(CodemanApp.prototype, {
     ctx.drawImage(job.canvas, 0, 0);
     const stageW = scene.fullWidth ? W : Math.min(W, STORY_STAGE_MAX);
     const ox = (W - stageW) / 2;
-    ctx.setTransform(k, 0, 0, k, ox * k, 0);
+    ctx.setTransform(k, 0, 0, k, ox * k, oy * k);
     const hits = [];
-    const hit = (id, x, y, w, h, label) => hits.push({ id, x: x + ox, y, w, h, label });
+    const hit = (id, x, y, w, h, label) => hits.push({ id, x: x + ox, y: y + oy, w, h, label });
     StoryArt.takeSpeaker();
     scene.draw(
       ctx,

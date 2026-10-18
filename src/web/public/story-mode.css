@@ -308,7 +308,8 @@ body.story-open {
 .story-page {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  grid-auto-rows: 270px;
+  /* A row grows only for the final panel, whose words and chips are in flow (never clipped). */
+  grid-auto-rows: minmax(270px, auto);
   gap: 14px;
   padding: 14px;
 }
@@ -542,13 +543,20 @@ body.story-open .toast-container {
   background: var(--story-live-bg);
 }
 
+/* The final panel's words sit in flow, so a long ending or a second row of chips makes the panel
+   taller instead of being cut off at its edge. */
+.story-panel[data-kind='complete'] {
+  display: flex;
+  /* The row's own height, read back as the scene's stage when the words make the panel taller. */
+  min-height: 270px;
+}
 .story-splash {
-  position: absolute;
+  position: relative;
   z-index: 2;
-  left: 12px;
-  top: 12px;
-  bottom: 12px;
-  width: 46%;
+  box-sizing: border-box;
+  flex: 0 0 46%;
+  max-width: 46%;
+  margin: 12px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -658,12 +666,15 @@ body.story-open .toast-container {
     height: 300px;
   }
   .story-panel[data-kind='complete'] {
-    height: 430px;
+    height: auto;
+    min-height: 430px;
   }
   .story-splash {
-    right: 12px;
-    bottom: auto;
-    width: auto;
+    flex: 1 1 auto;
+    max-width: none;
+    justify-content: flex-start;
+    /* Claude stands centred at the bottom on a phone: the words end above it. */
+    margin-bottom: 170px;
   }
   .story-splash-title {
     font-size: 36px;
