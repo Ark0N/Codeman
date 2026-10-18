@@ -7,9 +7,9 @@
  * GET  /api/config-backups/diff?from=&to= — what differs between two snapshots, or a snapshot and the
  *                                           running config (`current`, the default for `to`).
  *
- * The files include credentials (`.env`, `users.json`, endpoint keys), so in multi-user mode all three
+ * The files include credentials (`.env`, `users.json`, endpoint keys), so in multi-user mode all four
  * are admin only. Responses carry file NAMES and sizes, never file content, except the diff, which shows
- * changed values but never a credential's (`.env`, `users.json`, `push-keys.json` and any key that looks
+ * changed values but never a credential's (`.env`, `users.json`, `push-keys.json`, `webhook.json`, `intents.json` and any key that looks
  * like a token/secret/password are reported as "changed" only). Restore replaces files the running server
  * may have cached: `restartRequired` says which ones only apply after a restart.
  */
@@ -18,6 +18,7 @@ import { createRequire } from 'node:module';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
 import { isAdmin, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
+import { reloadCliRegistry } from '../../config/cli-registry/registry.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { getDataDir } from '../../config/instance.js';
 import { intentStore } from '../../intent-store.js';
@@ -53,8 +54,9 @@ const APP_VERSION: string = (() => {
   }
 })();
 
-/** Files whose running-process copy only reloads on restart (the rest are read per request). */
-const RESTART_REQUIRED = new Set<string>(['clis.json', 'users.json', '.env', 'push-keys.json', 'settings.json']);
+/** Files whose running-process copy only reloads on restart (the rest are read per request; `users.json`
+ * is re-read within a second, `clis.json` is reloaded below, `intents.json` by `reload()`). */
+const RESTART_REQUIRED = new Set<string>(['.env', 'push-keys.json', 'settings.json']);
 
 export interface ConfigBackupStatus {
   settings: ConfigBackupSettings;
@@ -203,6 +205,8 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
       const out = restoreConfigBackup({ dataDir: getDataDir(), backupDir: dir, id, appVersion: APP_VERSION });
       // IntentStore caches the file and rewrites it whole on the next prompt, which would undo the restore.
       if (out.restored.includes('intents.json')) intentStore.reload();
+      // restoreConfigBackup writes clis.json directly (the one writer besides mutateRegistryFile).
+      if (out.restored.includes('clis.json')) reloadCliRegistry();
       return {
         success: true,
         data: {

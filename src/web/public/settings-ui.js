@@ -1482,7 +1482,11 @@ Object.assign(CodemanApp.prototype, {
   },
 
   async restoreConfigBackup(id) {
-    if (!confirm('Restore this backup? Its files replace the current ones (a copy of the current files is made first). Some files only take effect after a restart.')) return;
+    const names = ((this._configBackups || []).find((b) => b.id === id)?.files || []).map((f) => f.name);
+    const secret = names.filter((n) => ['.env', 'users.json', 'push-keys.json', 'custom-model-hosts.json', 'webhook.json'].includes(n));
+    const list = names.length ? `\n\nFiles replaced: ${names.join(', ')}` : '';
+    const warn = secret.length ? `\n\nThis rolls back credentials and accounts (${secret.join(', ')}): passwords, disabled accounts and keys return to how they were then.` : '';
+    if (!confirm(`Restore this backup? Its files replace the current ones (a copy of the current files is made first). Some files only take effect after a restart.${list}${warn}`)) return;
     const res = await this._apiPost(`/api/config-backups/${encodeURIComponent(id)}/restore`, {});
     let body = null;
     try { body = res ? await res.json() : null; } catch { /* fall through */ }
@@ -1492,7 +1496,12 @@ Object.assign(CodemanApp.prototype, {
     }
     const d = body.data;
     const restart = d.restartRequired?.length ? ` Restart Codeman to apply: ${d.restartRequired.join(', ')}.` : '';
-    this.showToast(`Restored ${d.restored.length} file${d.restored.length === 1 ? '' : 's'}. Reload this page to see settings.${restart}`, 'success');
+    // The form still holds the pre-restore values, and Save would PUT them over the restored file.
+    if (d.restored.includes('settings.json')) {
+      await this.loadAppSettingsFromServer();
+      this.openAppSettings();
+    }
+    this.showToast(`Restored ${d.restored.length} file${d.restored.length === 1 ? '' : 's'}.${restart}`, 'success');
     this.loadConfigBackups();
   },
 

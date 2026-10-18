@@ -21,7 +21,7 @@
  * @module config-backup
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -34,7 +34,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir, hostname } from 'node:os';
+import { homedir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 
 /**
@@ -96,7 +96,7 @@ export interface ConfigBackupManifest {
   appVersion: string;
   /** Digest of the set of files, so an unchanged state is not snapshotted twice. */
   hash: string;
-  /** Host and data dir that made it, so instances sharing one folder keep to their own snapshots. */
+  /** Id of the data dir that made it (see {@link configBackupOrigin}), so instances sharing one folder keep to their own snapshots. */
   origin?: string;
   files: ConfigBackupFile[];
 }
@@ -156,8 +156,33 @@ export function resolveConfigBackupDir(settings: ConfigBackupSettings, dataDir: 
   return dir;
 }
 
-/** Who owns a snapshot: this machine's name plus the data dir (prod and a beta differ by the latter). */
-export const configBackupOrigin = (dataDir: string): string => `${hostname()}:${resolve(dataDir)}`;
+const ORIGIN_FILE = 'config-backup-id';
+const ORIGIN_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Who owns a snapshot: a random id made once and kept in the data dir. A hostname would not do (a
+ * Docker container gets a new one on every recreate, which orphaned every earlier snapshot), nor
+ * would the path alone (two machines can share a `$HOME` path). It is a file of its own, not the
+ * hook secret, and is not tracked or restored. If it cannot be written the id is not persisted, so
+ * snapshots made meanwhile are not listed later; the data dir being unwritable breaks far more.
+ */
+export function configBackupOrigin(dataDir: string): string {
+  const path = join(dataDir, ORIGIN_FILE);
+  try {
+    const existing = readFileSync(path, 'utf8').trim();
+    if (ORIGIN_RE.test(existing)) return existing;
+  } catch {
+    /* missing: made below */
+  }
+  const id = randomUUID();
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(path, id + '\n', { mode: 0o600 });
+  } catch {
+    /* see above */
+  }
+  return id;
+}
 
 const sha256 = (data: Buffer | string): string => createHash('sha256').update(data).digest('hex');
 

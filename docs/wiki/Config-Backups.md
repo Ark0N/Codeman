@@ -122,14 +122,17 @@ Only the tracked names are ever written, whatever a manifest lists.
 
 Settings are re-read on the next request, so reload the page. `clis.json`, `users.json`,
 `.env` and `push-keys.json` are read once per process: **restart Codeman** for those to take
-effect (the response lists which). Restoring `settings.json` also does not re-run the switches
+effect (the response lists which). `clis.json` is reloaded by the restore itself and `users.json`
+is re-read within a second. Restoring `settings.json` also does not re-run the switches
 that saving in Settings applies at once (file watchers and the like), so those apply after a
 restart, and `settings.json` is listed with the restart-required files. A restore does not touch
 running sessions.
 
 When the backup folder is shared (a synced folder used by two machines, or prod and a beta),
-each snapshot records the host and data directory that made it, and every instance only
-snapshots, lists, prunes, compares and restores its own.
+each snapshot records a random id that the instance made once and keeps in its data directory
+(`config-backup-id`; not the hostname, which a Docker container changes on every recreate). Every
+instance only snapshots, lists, prunes, compares and restores its own. Deleting that file makes
+the instance a new owner, and its earlier snapshots stop being listed (they stay on disk).
 
 You can also restore by hand: the files in a backup folder are the originals, so copying one back
 over the file in the data directory is equivalent (stop Codeman first if you are replacing

@@ -84,7 +84,7 @@ describe('/api/config-backups', () => {
     expect(res.statusCode).toBe(200);
     const d = res.json().data;
     expect(d.restored).toEqual(expect.arrayContaining(['settings.json', 'clis.json']));
-    expect(d.restartRequired).toContain('clis.json');
+    expect(d.restartRequired).not.toContain('clis.json'); // reloaded by the restore itself
     expect(d.restartRequired).toContain('settings.json'); // its watcher toggles are not re-run by a restore
     expect(d.safetySnapshot).toBeTruthy();
     expect(JSON.parse(readFileSync(SETTINGS_PATH, 'utf8')).displayName).toBe('before');
