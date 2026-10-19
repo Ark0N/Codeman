@@ -20,7 +20,8 @@ import {
   type KeepWarmPorts,
   type KeepWarmSessionView,
 } from '../src/prompt-cache-keepwarm.js';
-import { composerIsEmpty } from '../src/session-submit-verifier.js';
+import { composerIsEmpty, plainFrame } from '../src/session-submit-verifier.js';
+import { detectUsageLimitPause } from '../src/usage-limit-patterns.js';
 import { isCapturablePrompt } from '../src/intent-store.js';
 import { Session } from '../src/session.js';
 import type { KeepWarmStatus, PromptCacheStatus } from '../src/types.js';
@@ -92,9 +93,7 @@ describe('decideKeepWarm', () => {
     ],
     ['a dead pane', { paneAlive: false }, 'no live pane'],
     ['a usage-limit pause', { limitPaused: true }, 'usage-limit'],
-    ['respawn, Ralph or an agent driving', { automationActive: true }, 'driving the session'],
     ['the cap after the last prompt', { budgetAnchorAt: NOW - 2 * HOUR }, 'window after the last prompt'],
-    ['an unreadable composer', { composerEmpty: null }, 'cannot read the composer'],
   ])('stops for %s', (_label, over, reason) => {
     const d = decideKeepWarm(dueFacts(over));
     expect(d.action).toBe('stop');
@@ -119,6 +118,9 @@ describe('decideKeepWarm', () => {
     ['the session is working', { idle: false }, 'working'],
     ['a dialog is open', { pendingApproval: true }, 'dialog'],
     ['the composer holds a draft', { composerEmpty: false }, 'composer holds text'],
+    // Neither ends with a turn, so a stop here would leave an idle session with no trigger.
+    ['respawn, Ralph or an agent is driving (a long-poll waiter included)', { automationActive: true }, 'driving'],
+    ['one capture of the composer failed', { composerEmpty: null }, 'cannot read the composer'],
     ['someone typed a moment ago', { lastHumanInputAt: NOW - KEEP_WARM_RECENT_INPUT_MS + 1 }, 'typed'],
   ])('defers by a minute while %s', (_label, over, reason) => {
     const d = decideKeepWarm(dueFacts(over));
@@ -173,6 +175,50 @@ describe('composerIsEmpty', () => {
 
   it('gives no verdict without the bottom rule that bounds the composer', () => {
     expect(composerIsEmpty(`${glyph} \n  unfinished draft`, glyph)).toBeUndefined();
+  });
+
+  /**
+   * `capture-pane -p -e` of one Claude Code 2.1.300 pane, byte for byte apart from the
+   * statusline row (dropped): the composer with its prompt suggestion, empty, holding a draft,
+   * holding the same draft with the cursor moved home, and holding a pasted-text chip. The suggestion's first letter sits
+   * in the reverse-video cursor cell and the rest is faint; a typed draft is neither.
+   */
+  const RULE = `\x1b[38;5;244m${'─'.repeat(120)}`;
+  const FOOTER = '  \x1b[38;5;220m⏵⏵ auto mode on\x1b[38;5;246m (shift+tab to cycle)\x1b[39m';
+  const frame = (composer: string) =>
+    ['\x1b[38;5;246m✻ Cooked for 2s · done 6:56 PM\x1b[39m', '', RULE, composer, RULE, FOOTER].join('\n');
+  const SUGGESTION = '\x1b[39m❯\u00a0\x1b[7mw\x1b[0;2m\x1b[39m\x1b[49mrite tests for add\x1b[0m\x1b[39m\x1b[49m';
+  const EMPTY = '\x1b[39m❯\u00a0\x1b[7m \x1b[0m\x1b[39m\x1b[49m';
+  const DRAFT = '\x1b[39m❯\u00a0half a draft\x1b[7m \x1b[0m\x1b[39m\x1b[49m';
+  const DRAFT_CURSOR_HOME = '\x1b[39m❯\u00a0\x1b[7mh\x1b[0m\x1b[39m\x1b[49malf a draft';
+  // A 40-line paste collapses to a chip, drawn plain like typed text.
+  const PASTED_CHIP = '\x1b[39m❯\u00a0[Pasted text #1 +40 lines]\x1b[7m \x1b[0m\x1b[39m\x1b[49m';
+
+  it("reads Claude Code's prompt suggestion as empty and a typed draft as text, from a real styled capture", () => {
+    expect(composerIsEmpty(frame(SUGGESTION), glyph)).toBe(true);
+    expect(composerIsEmpty(frame(EMPTY), glyph)).toBe(true);
+    expect(composerIsEmpty(frame(DRAFT), glyph)).toBe(false);
+    // The cursor cell holds the draft's first letter, but no faint text follows it.
+    expect(composerIsEmpty(frame(DRAFT_CURSOR_HOME), glyph)).toBe(false);
+    expect(composerIsEmpty(frame(PASTED_CHIP), glyph)).toBe(false);
+  });
+
+  it('reads a suggestion drawn without a cursor cell as empty, and a plain capture of it as text', () => {
+    expect(composerIsEmpty(frame('❯\u00a0\x1b[2mwrite tests for add\x1b[0m'), glyph)).toBe(true);
+    expect(composerIsEmpty(frame('❯\u00a0\x1b[2mwrite \x1b[22mtyped\x1b[0m'), glyph)).toBe(false);
+    // Without the styles nothing tells the two apart, which is why the pane is read with -e.
+    expect(composerIsEmpty(frame('❯\u00a0write tests for add'), glyph)).toBe(false);
+  });
+
+  it("reads text styled with tmux's colon sub-parameters, which stripAnsi leaves behind", () => {
+    const limit = "You've hit your \x1b[4:3mlimit\x1b[0m · resets 1:40pm (UTC)";
+    expect(detectUsageLimitPause(plainFrame(limit), NOW)).not.toBeNull();
+    expect(composerIsEmpty(frame('\x1b[4:3m❯\x1b[0m\u00a0'), glyph)).toBe(true);
+  });
+
+  it("never takes an extended colour's arguments for the faint or reverse attributes", () => {
+    expect(composerIsEmpty(frame('❯\u00a0\x1b[38;2;2;7;2mtyped in truecolour\x1b[0m'), glyph)).toBe(false);
+    expect(composerIsEmpty(frame('❯\u00a0\x1b[38;5;2mtyped in a 256 colour\x1b[0m'), glyph)).toBe(false);
   });
 });
 
@@ -256,6 +302,12 @@ describe('the two submit clocks on a Session', () => {
     const fresh = new Session({ workingDir: '/tmp' });
     expect(fresh.lastRealPromptAt).toBe(0);
     expect(fresh.toState().lastRealPromptAt).toBeUndefined();
+  });
+
+  it('seeds the real-prompt clock from lastSubmitAt for a state.json written before it existed', () => {
+    expect(new Session({ workingDir: '/tmp', lastSubmitAt: NOW - HOUR }).lastRealPromptAt).toBe(NOW - HOUR);
+    const both = new Session({ workingDir: '/tmp', lastSubmitAt: NOW, lastRealPromptAt: NOW - HOUR });
+    expect(both.lastRealPromptAt).toBe(NOW - HOUR);
   });
 });
 
@@ -590,6 +642,110 @@ describe('PromptCacheKeepWarmService', () => {
     fail = false;
     await service.schedule(session.id);
     expect(reads).toBe(3);
+    service.stop();
+  });
+
+  it('publishes no window while off, so a real prompt on a session with keep-warm off broadcasts nothing', async () => {
+    const session = new FakeSession();
+    session.keepWarmEnabled = false;
+    session.promptCache = warmCache(NOW + HOUR);
+    const { ports, published } = makePorts(session);
+    const service = new PromptCacheKeepWarmService(ports);
+    await service.schedule(session.id);
+    session.lastRealPromptAt = NOW;
+    await service.schedule(session.id);
+    expect(published[0]).toMatchObject({ enabled: false, state: 'off' });
+    expect(published[0]).not.toHaveProperty('budgetEndsAt');
+    expect(published[0]).not.toHaveProperty('nextCheckAt');
+    expect(JSON.stringify(published[1])).toBe(JSON.stringify(published[0]));
+    service.stop();
+  });
+
+  it('retries a minute later when an evaluation throws, since an idle session has no other trigger', async () => {
+    const session = new FakeSession();
+    session.keepWarmEnabled = true;
+    session.promptCache = warmCache(NOW + KEEP_WARM_LEAD_MS - 1000);
+    let fail = true;
+    const { ports, last } = makePorts(session, {
+      readSettings: async () => {
+        if (fail) throw new Error('settings.json mid-rewrite');
+        return { keepWarmDefault: false, maxHours: 2 };
+      },
+    });
+    const service = new PromptCacheKeepWarmService(ports);
+    await service.schedule(session.id);
+    expect(session.writes).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(1);
+    fail = false;
+    await vi.advanceTimersByTimeAsync(KEEP_WARM_RETRY_MS);
+    await settle();
+    expect(session.writes).toEqual([`${KEEP_WARM_NUDGE}\r`]);
+    expect(last()).toMatchObject({ state: 'nudged' });
+    service.stop();
+  });
+
+  it('runs one follow-up for triggers that land during an evaluation, and resolves after it', async () => {
+    const session = new FakeSession();
+    session.keepWarmEnabled = true;
+    session.promptCache = warmCache(NOW + KEEP_WARM_LEAD_MS - 1000);
+    let releaseWrite!: (ok: boolean) => void;
+    session.writeViaMux = async (data: string) => {
+      session.writes.push(data);
+      return new Promise<boolean>((r) => (releaseWrite = r));
+    };
+    const { ports, published } = makePorts(session);
+    const service = new PromptCacheKeepWarmService(ports);
+    const first = service.schedule(session.id);
+    await settle();
+    expect(session.writes).toHaveLength(1);
+    // Switched off while the nudge is being written: the toggle's own evaluation must not be lost.
+    session.keepWarmEnabled = false;
+    const toggle = service.schedule(session.id);
+    const settingsChange = service.schedule(session.id);
+    expect(settingsChange).toBe(toggle);
+    releaseWrite(true);
+    await first;
+    await toggle;
+    expect(published.map((s) => s.state)).toEqual(['nudged', 'off']);
+    service.stop();
+  });
+
+  it('remove() drops a follow-up queued behind an evaluation, and a failed read after it arms nothing', async () => {
+    const session = new FakeSession();
+    session.keepWarmEnabled = true;
+    session.promptCache = warmCache(NOW + KEEP_WARM_LEAD_MS - 1000);
+    let release!: () => void;
+    let fail = false;
+    const { ports, published } = makePorts(session, {
+      readSettings: async () => {
+        await new Promise<void>((r) => (release = r));
+        if (fail) throw new Error('settings.json mid-rewrite');
+        return { keepWarmDefault: false, maxHours: 2 };
+      },
+    });
+    const service = new PromptCacheKeepWarmService(ports);
+    // The session stays discoverable while it is being deleted, so only remove() can stop these.
+    const first = service.schedule(session.id);
+    const followUp = service.schedule(session.id);
+    service.remove(session.id);
+    release();
+    await first;
+    await followUp;
+    await settle();
+    expect(session.writes).toHaveLength(0);
+    expect(published).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+
+    // rescheduleAll() drops the kept settings, so this read really runs, and fails.
+    fail = true;
+    const logged: string[] = [];
+    ports.log = (m) => logged.push(m);
+    service.rescheduleAll();
+    service.remove(session.id);
+    release();
+    await settle();
+    expect(logged).toEqual([expect.stringContaining('mid-rewrite')]);
+    expect(vi.getTimerCount()).toBe(0);
     service.stop();
   });
 

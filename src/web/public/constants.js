@@ -773,7 +773,7 @@ function formatKeepWarmStatus(status, now, statusLine) {
   if (PROMPT_CACHE_NOT_COLLECTED[statusLine]) return '';
   if (!status || typeof status.state !== 'string') return '';
   const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const window = Number.isFinite(status.budgetEndsAt)
+  const keepWarmWindow = Number.isFinite(status.budgetEndsAt)
     ? status.budgetEndsAt > now
       ? `stops ${clock(status.budgetEndsAt)}`
       : 'window closed'
@@ -794,13 +794,13 @@ function formatKeepWarmStatus(status, now, statusLine) {
       break;
     }
     case 'armed':
-      parts = [`next ${clock(status.nextCheckAt)}`, window, idleCompaction];
+      parts = [`next ${clock(status.nextCheckAt)}`, keepWarmWindow, idleCompaction];
       break;
     case 'waiting':
-      parts = ['waiting', status.reason || 'retrying', `retry ${clock(status.nextCheckAt)}`, window, idleCompaction];
+      parts = ['waiting', status.reason || 'retrying', `retry ${clock(status.nextCheckAt)}`, keepWarmWindow, idleCompaction];
       break;
     case 'nudged':
-      parts = [`sent ${clock(status.lastNudgeAt)} (${status.nudges}\u00d7)`, window, idleCompaction];
+      parts = [`sent ${clock(status.lastNudgeAt)} (${status.nudges}\u00d7)`, keepWarmWindow, idleCompaction];
       break;
     default:
       parts = ['stopped', status.reason || 'nothing to do', idleCompaction];

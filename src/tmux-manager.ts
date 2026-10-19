@@ -4143,17 +4143,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   /**
    * Plain visible-frame text for the working/idle probe (see `session.ts`).
    *
-   * One `capture-pane` and nothing else: no `-e` styles, no `display-message`
-   * cursor query, no repaint reconstruction: this feeds a regex, not a
-   * terminal. Returns null in tests (no tmux) so callers fall back to their
-   * stream heuristics rather than reading an empty screen as "not working".
+   * One `capture-pane` and nothing else: no `display-message` cursor query, no
+   * repaint reconstruction: this feeds a regex, not a terminal. `styles` adds
+   * `-e` for a reader that must tell faint text from typed text (the keep-warm
+   * composer check); lines stay `\n`-separated either way. Returns null in tests
+   * (no tmux) so callers fall back to their stream heuristics rather than
+   * reading an empty screen as "not working".
    */
-  capturePaneText(muxName: string, paneTarget?: string): string | null {
+  capturePaneText(muxName: string, paneTarget?: string, opts?: { styles?: boolean }): string | null {
     if (IS_TEST_MODE) return null;
     const target = resolveTmuxPaneTarget(muxName, paneTarget);
     if (!target) return null;
     try {
-      return execSync(`${this.tmux()} capture-pane -p -t ${shellescape(target)}`, {
+      return execSync(`${this.tmux()} capture-pane -p${opts?.styles ? ' -e' : ''} -t ${shellescape(target)}`, {
         encoding: 'utf-8',
         timeout: EXEC_TIMEOUT_MS,
       });

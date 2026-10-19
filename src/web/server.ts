@@ -119,7 +119,7 @@ import { AI_CHECK_MODEL } from '../config/ai-defaults.js';
 import { approvalInbox } from './approval-inbox.js';
 import { SCREEN_BLOCKED_SOURCE } from './screen-blocked.js';
 import { PromptCacheKeepWarmService } from '../prompt-cache-keepwarm.js';
-import { composerIsEmpty } from '../session-submit-verifier.js';
+import { composerIsEmpty, plainFrame } from '../session-submit-verifier.js';
 import { detectUsageLimitPause } from '../usage-limit-patterns.js';
 import { stopDeepSeekWeb } from '../deepseek-web-server.js';
 import {
@@ -348,10 +348,11 @@ export class WebServer extends EventEmitter {
     readPane: (view) => {
       const session = view as Session;
       const muxName = session.muxName;
-      // `capture-pane -p`: the visible frame as plain text.
-      const text = muxName ? (this.mux.capturePaneText?.(muxName) ?? null) : null;
+      // `capture-pane -p -e`: the visible frame with its styles, which is how `composerIsEmpty()`
+      // tells Claude Code's faint prompt suggestion from a typed draft.
+      const text = muxName ? (this.mux.capturePaneText?.(muxName, undefined, { styles: true }) ?? null) : null;
       if (!text) return { composerEmpty: null, limitShown: false };
-      const limit = detectUsageLimitPause(text);
+      const limit = detectUsageLimitPause(plainFrame(text));
       return {
         composerEmpty: composerIsEmpty(text, getCli(session.mode)?.capabilities.workDetect?.promptGlyph ?? '') ?? null,
         limitShown: limit !== null && limit.resetAt > Date.now(),

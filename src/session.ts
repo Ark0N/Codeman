@@ -1001,8 +1001,9 @@ export class Session extends EventEmitter {
     // response viewer re-derive the live conversation without waiting for the
     // user to type again.
     this._lastSubmitAt = config.lastSubmitAt ?? 0;
-    // Restored so a restart neither reopens the keep-warm window nor drops the choice.
-    this._lastRealPromptAt = config.lastRealPromptAt ?? 0;
+    // Restored so a restart neither reopens the keep-warm window nor drops the choice. A state.json
+    // from before the field has only `lastSubmitAt`, and every submit then was a real one.
+    this._lastRealPromptAt = config.lastRealPromptAt ?? config.lastSubmitAt ?? 0;
     this._keepWarmEnabled = config.keepWarmEnabled;
     // Restored chain: its tail is the conversation the CLI was actually on when
     // the server stopped, which outranks the launch id seeded just above. The

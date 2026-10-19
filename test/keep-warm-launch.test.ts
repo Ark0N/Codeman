@@ -117,7 +117,8 @@ describe('the pane read behind the last two guards', () => {
     const at = port.indexOf('readPane: (view) => {');
     expect(at).toBeGreaterThan(-1);
     const body = port.slice(at, port.indexOf('publish: (id, status) => {', at));
-    expect(body).toContain('const limit = detectUsageLimitPause(text);');
+    expect(body).toContain('this.mux.capturePaneText?.(muxName, undefined, { styles: true })');
+    expect(body).toContain('const limit = detectUsageLimitPause(plainFrame(text));');
     expect(body).toContain('limitShown: limit !== null && limit.resetAt > Date.now(),');
     expect(body).toContain('composerEmpty: composerIsEmpty(text,');
   });

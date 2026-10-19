@@ -134,7 +134,6 @@ export function decideKeepWarm(f: KeepWarmFacts): KeepWarmDecision {
   if ((c.recacheTokensIfCold ?? 0) < KEEP_WARM_MIN_TOKENS) return stop('context too small to be worth a turn');
   if (!f.paneAlive) return stop('no live pane');
   if (f.limitPaused) return stop('usage-limit pause');
-  if (f.automationActive) return stop('respawn, Ralph or an agent is driving the session');
   if (f.now >= f.budgetAnchorAt + f.maxKeepWarmMs) return stop('keep-warm window after the last prompt has passed');
   const dueAt = c.expiresAt - KEEP_WARM_LEAD_MS;
   if (f.now < dueAt) return wait(dueAt, 'not due yet');
@@ -143,7 +142,10 @@ export function decideKeepWarm(f: KeepWarmFacts): KeepWarmDecision {
   const retryAt = Math.min(f.now + KEEP_WARM_RETRY_MS, lastChance);
   if (!f.idle) return wait(retryAt, 'session is working');
   if (f.pendingApproval) return wait(retryAt, 'a dialog is open');
-  if (f.composerEmpty === null) return stop('cannot read the composer');
+  // Transient, and nothing else re-triggers an idle session: an agent's long-poll waiter ends
+  // without a turn, and so does a capture that failed once.
+  if (f.automationActive) return wait(retryAt, 'respawn, Ralph or an agent is driving the session');
+  if (f.composerEmpty === null) return wait(retryAt, 'cannot read the composer');
   if (!f.composerEmpty) return wait(retryAt, 'the composer holds text');
   if (f.lastHumanInputAt && f.now - f.lastHumanInputAt < KEEP_WARM_RECENT_INPUT_MS) {
     return wait(retryAt, 'someone typed a moment ago');
@@ -213,6 +215,9 @@ export class PromptCacheKeepWarmService implements KeepWarmScheduler {
   private readonly tallies = new Map<string, { nudges: number; lastNudgeAt?: number }>();
   /** One evaluation per session; `remove()` and `stop()` cancel it at its next await. */
   private readonly inFlight = new Map<string, symbol>();
+  /** The evaluation running per session, and the one follow-up queued behind it. */
+  private readonly running = new Map<string, Promise<void>>();
+  private readonly followUps = new Map<string, Promise<void>>();
   /**
    * The default and cap, read once and kept: every statusline report schedules an evaluation,
    * and reading settings.json on each would cost every install, the feature off included.
@@ -225,9 +230,36 @@ export class PromptCacheKeepWarmService implements KeepWarmScheduler {
 
   schedule(sessionId: string): Promise<void> {
     if (this.stopped) return Promise.resolve();
-    return this.evaluate(sessionId).catch((err) => {
-      this.ports.log?.(`[KeepWarm] ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
-    });
+    const running = this.running.get(sessionId);
+    if (running) {
+      // A trigger landing mid-evaluation (a toggle while the nudge is written, a settings change)
+      // carries what that evaluation read too early, so one follow-up runs after it, shared by
+      // every trigger that arrives meanwhile.
+      let next = this.followUps.get(sessionId);
+      if (!next) {
+        next = running.then(() => {
+          // `remove()` drops the queued follow-up: a deleted session gets no evaluation.
+          if (this.followUps.get(sessionId) !== next) return;
+          this.followUps.delete(sessionId);
+          return this.schedule(sessionId);
+        });
+        this.followUps.set(sessionId, next);
+      }
+      return next;
+    }
+    const run = this.evaluate(sessionId)
+      .catch((err) => {
+        this.ports.log?.(`[KeepWarm] ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+        // A failed settings read or write is transient, and an idle session gets no other
+        // trigger until its next turn.
+        // Not after `remove()`, which drops this run: the session is being deleted.
+        if (!this.stopped && this.running.get(sessionId) === run) this.arm(sessionId, Date.now() + KEEP_WARM_RETRY_MS);
+      })
+      .finally(() => {
+        if (this.running.get(sessionId) === run) this.running.delete(sessionId);
+      });
+    this.running.set(sessionId, run);
+    return run;
   }
 
   rescheduleAll(): void {
@@ -239,6 +271,8 @@ export class PromptCacheKeepWarmService implements KeepWarmScheduler {
     this.clearTimer(sessionId);
     this.tallies.delete(sessionId);
     this.inFlight.delete(sessionId);
+    this.running.delete(sessionId);
+    this.followUps.delete(sessionId);
   }
 
   stop(): void {
@@ -318,7 +352,9 @@ export class PromptCacheKeepWarmService implements KeepWarmScheduler {
         idleCompactionOff: session.idleCompactionOptOut,
         nudges: tally.nudges,
         lastNudgeAt: tally.lastNudgeAt,
-        budgetEndsAt: facts.budgetAnchorAt + facts.maxKeepWarmMs,
+        // Off, the window means nothing, and it moves with every real prompt: carrying it would
+        // broadcast a change on every turn of every session.
+        ...(enabled && { budgetEndsAt: facts.budgetAnchorAt + facts.maxKeepWarmMs }),
       };
       if (decision.action === 'nudge') {
         session.beginKeepAliveTurn(KEEP_WARM_TURN_WINDOW_MS);

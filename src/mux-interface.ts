@@ -428,11 +428,12 @@ export interface TerminalMultiplexer extends EventEmitter {
   captureActivePaneBuffer?(muxName: string, opts?: PaneCaptureOptions): string | null;
 
   /**
-   * Plain text of the visible frame: no styles, no cursor query, no repaint
-   * reconstruction. Deliberately cheaper than `capturePaneBuffer` because idle
+   * Plain text of the visible frame: no cursor query, no repaint
+   * reconstruction, and no styles unless `styles` asks for them (SGR only, lines
+   * still `\n`-separated). Deliberately cheaper than `capturePaneBuffer` because idle
    * detection calls it on a timer: it only needs to read what the CLI is
    * currently rendering, never to replay it into an xterm. Returns null when the
    * pane cannot be read.
    */
-  capturePaneText?(muxName: string, paneTarget?: string): string | null;
+  capturePaneText?(muxName: string, paneTarget?: string, opts?: { styles?: boolean }): string | null;
 }
