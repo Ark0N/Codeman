@@ -1405,6 +1405,235 @@ describe('story-mode.js overlay', () => {
   });
 });
 
+describe('story-mode.js composer', () => {
+  const OTHER = 'session-0002-fedcba';
+  const done = (text = 'job') => storyOf([prompt(text), said('Done.'), end(1000)]);
+  const field = () => $('.story-compose-field') as HTMLTextAreaElement;
+  const sendBtn = () => $('.story-compose-send') as HTMLButtonElement;
+  const hint = () => $('.story-compose-hint')!.textContent;
+  let sent: ReturnType<typeof vi.fn>;
+  /** The mobile composer's send path, a global in the page (keyboard-accessory.js). */
+  function stubSend(ok = true) {
+    sent = vi.fn(() => ok);
+    win.KeyboardAccessoryBar = { _sendComposedPrompt: sent };
+  }
+  function type(text: string) {
+    field().focus();
+    field().value = text;
+    field().dispatchEvent(new win.Event('input', { bubbles: true }));
+  }
+  function enter(init: KeyboardEventInit = {}, keyCode?: number) {
+    const ev = new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...init });
+    if (keyCode !== undefined) Object.defineProperty(ev, 'keyCode', { value: keyCode });
+    field().dispatchEvent(ev);
+    return ev;
+  }
+
+  it('Enter sends; Shift+Enter, an IME composition and whitespace never do', async () => {
+    boot(done());
+    stubSend();
+    app.openStoryMode(SID);
+    await settle();
+    expect(field().getAttribute('aria-label')).toBe('Message Claude');
+    expect(field().hasAttribute('data-i18n-skip')).toBe(true);
+    expect(hint()).toBe('Enter sends. Shift+Enter adds a line.');
+    expect(sendBtn().disabled).toBe(true);
+    type('line one');
+    expect(sendBtn().disabled).toBe(false);
+    expect(enter({ shiftKey: true }).defaultPrevented).toBe(false);
+    expect(enter({ isComposing: true }).defaultPrevented).toBe(false);
+    expect(enter({}, 229).defaultPrevented).toBe(false);
+    expect(sent).not.toHaveBeenCalled();
+    type('   \n ');
+    expect(enter().defaultPrevented).toBe(true);
+    expect(sent).not.toHaveBeenCalled();
+    type('line one\nline two');
+    enter();
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveBeenCalledWith(SID, 'line one\nline two');
+    expect(field().value).toBe('');
+    expect(win.document.activeElement).toBe(field());
+    // The Send button takes the same path.
+    type('again');
+    sendBtn().click();
+    expect(sent).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends to the session the story shows, not the active tab', async () => {
+    boot(done());
+    stubSend();
+    app.sessions.set(OTHER, { name: 'other', workingDir: '/work/other' });
+    app.activeSessionId = OTHER;
+    app.openStoryMode(SID);
+    await settle();
+    type('look here');
+    enter();
+    expect(sent).toHaveBeenCalledWith(SID, 'look here');
+  });
+
+  it('a refused send (too long) keeps the text', async () => {
+    boot(done());
+    stubSend(false);
+    app.openStoryMode(SID);
+    await settle();
+    type('far too long');
+    enter();
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(field().value).toBe('far too long');
+  });
+
+  it('while Claude waits on a question or a permission, Enter never sends; the hint says why', async () => {
+    const ask = (answered: boolean) =>
+      storyOf([
+        prompt('pick'),
+        tool('q1', 'AskUserQuestion', {
+          questions: [{ question: 'Which name?', options: [{ label: 'slugify' }, { label: 'kebab' }] }],
+        }),
+        ...(answered ? [result('q1', 'kebab', { toolUseResult: { answers: { 'Which name?': 'kebab' } } })] : []),
+      ]);
+    boot(ask(false));
+    stubSend();
+    app.openStoryMode(SID);
+    await settle();
+    type('use kebab');
+    expect(app._story.compose.state).toBe('waiting');
+    expect(hint()).toMatch(/waiting for your answer in the terminal/);
+    expect(sendBtn().disabled).toBe(true);
+    // Swallowed (no newline added), not sent: it would pick an option in the dialog.
+    expect(enter().defaultPrevented).toBe(true);
+    sendBtn().click();
+    expect(sent).not.toHaveBeenCalled();
+    expect(field().value).toBe('use kebab');
+    expect(field().readOnly).toBe(false);
+    // Answered in the terminal: the turn works on, and a message may go out (Claude queues it).
+    responses = [{ status: 200, body: { success: true, data: ask(true) } }];
+    await app._storyRefresh();
+    await settle();
+    expect(app._story.compose.state).toBe('working');
+    expect(hint()).toMatch(/working/);
+    // A permission prompt never reaches the transcript: the hook says it.
+    app.pendingHooks = new Map([[SID, new Set(['permission_prompt'])]]);
+    enter();
+    expect(sent).not.toHaveBeenCalled();
+    expect(app._story.compose.state).toBe('waiting');
+    app.pendingHooks = new Map();
+    enter();
+    expect(sent).toHaveBeenCalledWith(SID, 'use kebab');
+  });
+
+  it('keeps a draft per session across switching and closing; a send clears only its own', async () => {
+    boot(done());
+    stubSend();
+    app.sessions.set(OTHER, { name: 'other', workingDir: '/work/other' });
+    app.openStoryMode(SID);
+    await settle();
+    type('draft for one');
+    app.openStoryMode(OTHER);
+    await settle();
+    expect(field().value).toBe('');
+    type('draft for two');
+    app.closeStoryMode();
+    app.openStoryMode(SID);
+    await settle();
+    expect(field().value).toBe('draft for one');
+    app.openStoryMode(OTHER);
+    await settle();
+    expect(field().value).toBe('draft for two');
+    enter();
+    expect(sent).toHaveBeenCalledWith(OTHER, 'draft for two');
+    app.closeStoryMode();
+    app.openStoryMode(OTHER);
+    await settle();
+    expect(field().value).toBe('');
+    app.openStoryMode(SID);
+    await settle();
+    expect(field().value).toBe('draft for one');
+  });
+
+  it('a reader parked on an older turn is taken to the newest after a send', async () => {
+    const two = [prompt('first job'), said('Done.'), end(2000), prompt('second job'), said('Done too.'), end(2000)];
+    boot(storyOf(two));
+    stubSend();
+    app.openStoryMode(SID);
+    await settle();
+    responses = [{ status: 200, body: { success: true, data: storyAt(two, 0) } }];
+    app._storyPickTurn(app._story.data.turns[0].id);
+    await settle();
+    expect(app._story.turnId).toBe(app._story.data.turns[0].id);
+    responses = [{ status: 200, body: { success: true, data: storyOf(two) } }];
+    calls.length = 0;
+    type('and now a third');
+    enter();
+    await settle();
+    expect(sent).toHaveBeenCalledWith(SID, 'and now a third');
+    expect(app._story.turnId).toBeNull();
+    expect(calls[0]).not.toContain('turn=');
+    expect(app._story.data.page.id).toBe(app._story.data.turns[1].id);
+    expect(win.document.activeElement).toBe(field());
+  });
+
+  it('a session that is gone gets no message; its draft stays readable', async () => {
+    boot(done());
+    stubSend();
+    app.openStoryMode(SID);
+    await settle();
+    type('one more thing');
+    app.sessions.delete(SID);
+    enter();
+    expect(sent).not.toHaveBeenCalled();
+    expect(app._story.compose.state).toBe('gone');
+    expect(field().readOnly).toBe(true);
+    expect(sendBtn().disabled).toBe(true);
+    expect(field().value).toBe('one more thing');
+    expect(hint()).toMatch(/gone/);
+    // The story says it too: a 404 from the route.
+    app.sessions.set(SID, { name: 'demo-shop', workingDir: '/work/demo-shop' });
+    responses = [{ status: 404, body: { success: false, error: 'Session not found' } }];
+    await app._storyRefresh();
+    expect(app._story.compose.state).toBe('gone');
+  });
+
+  it('a session Story Mode cannot draw gets no message: a shell would run it as a command', async () => {
+    boot({ supported: false, reason: 'Story Mode draws Claude Code sessions.' });
+    stubSend();
+    app.openStoryMode(SID);
+    await settle();
+    expect(app._story.compose.state).toBe('unsupported');
+    expect(sendBtn().disabled).toBe(true);
+  });
+
+  it('Escape in a field with text steps out of it first; an empty one closes as before', async () => {
+    boot(done());
+    app.openStoryMode(SID);
+    await settle();
+    type('half a thought');
+    // An IME cancelling its composition keeps everything as it is.
+    win.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', isComposing: true, cancelable: true }));
+    expect($('#storyOverlay')!.hidden).toBe(false);
+    expect(win.document.activeElement).toBe(field());
+    press('Escape');
+    expect($('#storyOverlay')!.hidden).toBe(false);
+    expect(win.document.activeElement).toBe($('.story-close'));
+    expect(field().value).toBe('half a thought');
+    press('Escape');
+    expect($('#storyOverlay')!.hidden).toBe(true);
+    app.openStoryMode(SID);
+    await settle();
+    expect(field().value).toBe('half a thought');
+    type('');
+    press('Escape');
+    expect($('#storyOverlay')!.hidden).toBe(true);
+  });
+
+  it('the composer is not part of the page Save image draws', async () => {
+    boot(done());
+    app.openStoryMode(SID);
+    await settle();
+    expect($('.story-page')!.contains($('.story-compose'))).toBe(false);
+    expect($('.story-main')!.contains($('.story-compose'))).toBe(false);
+  });
+});
+
 describe('story-mode.js scenes', () => {
   /** Every panel kind, in plain and awkward shapes, drawn across its whole animation. */
   function pageWith(panels: StoryPanel[], extra: Partial<StoryPage> = {}): StoryPage {
