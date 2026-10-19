@@ -164,7 +164,12 @@ export interface StoryPanel {
   kind: StoryPanelKind;
   /** Indices into the page's `events`. */
   events: number[];
-  caption: { story: string; director: string };
+  /**
+   * Three reading levels: `simple` for someone who has never seen a terminal (one short sentence in
+   * everyday words, no file names, commands, tools or jargon), `story` for anyone, `director` naming
+   * the tools. All three are written from the same facts, so none says more (or better) than happened.
+   */
+  caption: { story: string; director: string; simple: string };
   /** `note`: words that start a turn but are not yours (a background job's report, another session). */
   balloon?: { who: 'you' | 'claude' | 'note'; text: string };
   files?: string[];

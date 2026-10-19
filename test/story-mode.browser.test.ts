@@ -169,6 +169,8 @@ describe('Story Mode in a real browser', () => {
     // A caption longer than the band above the art makes its panel taller, so it covers no art.
     const fit = await page.evaluate(async () => {
       const st = (window as any).app._story;
+      // The story line shows at the Advanced level (the Director's cut, the default, shows the tools).
+      (window as any).app._storySetLevel('advanced');
       const rt = st.panels.find((p: { kind: string; splash: unknown }) => !p.splash && p.kind !== 'mission');
       rt.capStory.textContent = 'Claude writes three files, runs the tests twice and saves the work. '.repeat(4);
       (window as any).app._storyFitCaption(rt);

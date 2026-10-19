@@ -1567,6 +1567,16 @@ function storyLayoutSpans(prefs, cols) {
   return spans;
 }
 
+/**
+ * Reading levels, in the order the bar shows them: Simple for someone who has never seen a terminal,
+ * Advanced (the plain story), Director's cut (the wire and the tool captions).
+ */
+const STORY_LEVELS = ['simple', 'advanced', 'director'];
+/** The level a reader gets until they pick one (owner: the Director's cut, for now). */
+const STORY_LEVEL_DEFAULT = 'director';
+/** Where the reader's pick is kept, per device. */
+const STORY_LEVEL_KEY = 'codeman:story-level';
+
 Object.assign(CodemanApp.prototype, {
   /** Per-device setting, default OFF. */
   isStoryButtonEnabled() {
@@ -1726,9 +1736,15 @@ Object.assign(CodemanApp.prototype, {
     const seg = el('div', 'story-seg');
     seg.setAttribute('role', 'group');
     seg.setAttribute('aria-label', 'Reading level');
-    const storyBtn = btn('story-seg-btn', 'Story');
-    const dirBtn = btn('story-seg-btn', "Director's cut");
-    seg.append(storyBtn, dirBtn);
+    const levelBtns = {
+      simple: btn('story-seg-btn', 'Simple'),
+      advanced: btn('story-seg-btn', 'Advanced'),
+      director: btn('story-seg-btn', "Director's cut"),
+    };
+    levelBtns.simple.title = 'Plain words, for anyone';
+    levelBtns.advanced.title = 'The story, with file names';
+    levelBtns.director.title = 'Every step and tool, with the wire';
+    seg.append(...STORY_LEVELS.map((lv) => levelBtns[lv]));
 
     const live = el('span', 'story-live');
     live.append(el('i'), el('span', null, 'LIVE'));
@@ -1809,6 +1825,8 @@ Object.assign(CodemanApp.prototype, {
       turnId: null,
       data: null,
       error: null,
+      // The reading level; `director` stays a plain boolean for the wire and the scenes.
+      level: STORY_LEVEL_DEFAULT,
       director: false,
       first: true,
       panels: [],
@@ -1826,8 +1844,7 @@ Object.assign(CodemanApp.prototype, {
       turnSelect,
       prev,
       next,
-      storyBtn,
-      dirBtn,
+      levelBtns,
       live,
       closeBtn,
       saveBtn,
@@ -1850,8 +1867,8 @@ Object.assign(CodemanApp.prototype, {
     closeBtn.addEventListener('click', () => this.closeStoryMode());
     saveBtn.addEventListener('click', () => this.saveStoryImage());
     drawerClose.addEventListener('click', () => this._storyCloseDrawer());
-    storyBtn.addEventListener('click', () => this._storySetDirector(false));
-    dirBtn.addEventListener('click', () => this._storySetDirector(true));
+    for (const lv of STORY_LEVELS)
+      levelBtns[lv].addEventListener('click', () => this._storySetLevel(lv, { remember: true }));
     turnSelect.addEventListener('change', () => this._storyPickTurn(turnSelect.value));
     prev.addEventListener('click', () => this._storyStepTurn(-1));
     next.addEventListener('click', () => this._storyStepTurn(1));
@@ -1863,7 +1880,7 @@ Object.assign(CodemanApp.prototype, {
         this._storyOpenTarget(t.dataset.storyOpen, t);
       }
     });
-    this._storySetDirector(false);
+    this._storySetLevel(this._storyStoredLevel());
     return st;
   },
 
@@ -1875,20 +1892,52 @@ Object.assign(CodemanApp.prototype, {
     for (const rt of st.panels) rt.bgKey = '';
   },
 
+  /** The reading level this device last picked; an unknown or unreadable value is the default. */
+  _storyStoredLevel() {
+    try {
+      const level = localStorage.getItem(STORY_LEVEL_KEY);
+      if (STORY_LEVELS.includes(level)) return level;
+    } catch {
+      // Storage refused (a private window, blocked site data): the default level.
+    }
+    return STORY_LEVEL_DEFAULT;
+  },
+
+  /** Kept for callers of the two-level toggle: on is the Director's cut, off the Advanced story. */
   _storySetDirector(on) {
+    this._storySetLevel(on ? 'director' : 'advanced');
+  },
+
+  /**
+   * Switches the reading level. Only the reader's own pick (`remember`) is kept for the next visit:
+   * opening Story Mode never writes the default back, so changing the default stays a one-line change.
+   */
+  _storySetLevel(level, { remember = false } = {}) {
     const st = this._story;
+    if (!STORY_LEVELS.includes(level)) level = STORY_LEVEL_DEFAULT;
+    const on = level === 'director';
+    st.level = level;
     st.director = on;
+    st.root.classList.toggle('is-simple', level === 'simple');
     st.root.classList.toggle('is-director', on);
-    st.storyBtn.setAttribute('aria-pressed', String(!on));
-    st.dirBtn.setAttribute('aria-pressed', String(on));
+    for (const lv of STORY_LEVELS) st.levelBtns[lv].setAttribute('aria-pressed', String(lv === level));
+    if (remember) {
+      try {
+        localStorage.setItem(STORY_LEVEL_KEY, level);
+      } catch {
+        // Not kept: the level still applies to this visit.
+      }
+    }
     st.wire.hidden = !on;
     if (on) this._storyRenderWire();
-    // The other caption has another height: the panels refit to it. Within the frame budget, never
-    // every panel in one task.
-    for (const rt of st.panels) {
-      this._storyFitCaption(rt);
+    // Each level has its own words (and Simple hides Claude's balloons): the panels refill and refit
+    // to them. Drawn within the frame budget, never every panel in one task.
+    const page = st.data?.supported ? st.data.page : null;
+    st.panels.forEach((rt, i) => {
+      if (page && rt.panel) this._storyFillPanelText(rt, page, i);
+      else this._storyFitCaption(rt);
       this._storyQueueDraw(rt);
-    }
+    });
   },
 
   _storyPickTurn(id) {
@@ -2279,7 +2328,8 @@ Object.assign(CodemanApp.prototype, {
     st.picked = false;
     if (first || (picked && newTurn)) return;
     const last = page.panels[page.panels.length - 1];
-    const finished = `${done ? `Turn finished. ${last?.caption.story || ''}` : ''}`.trim();
+    const said = st.level === 'simple' ? last?.caption.simple || last?.caption.story : last?.caption.story;
+    const finished = `${done ? `Turn finished. ${said || ''}` : ''}`.trim();
     box.textContent = newTurn ? `New turn: ${page.prompt.slice(0, 140)}${finished ? `. ${finished}` : ''}` : finished;
   },
 
@@ -2389,11 +2439,14 @@ Object.assign(CodemanApp.prototype, {
     capStory.className = 'story-cap-story';
     const capDir = document.createElement('span');
     capDir.className = 'story-cap-dir';
+    // The Simple level's sentence: everyday words, shown instead of the story line at that level.
+    const capSimple = document.createElement('span');
+    capSimple.className = 'story-cap-simple';
     // A second opinion Claude asked for before this step: a line, not a panel of its own.
     const capNote = document.createElement('span');
     capNote.className = 'story-cap-note';
     capNote.hidden = true;
-    cap.append(capStory, capDir, capNote);
+    cap.append(capStory, capDir, capSimple, capNote);
     const balloon = document.createElement('p');
     balloon.className = 'story-balloon';
     balloon.hidden = true;
@@ -2433,6 +2486,7 @@ Object.assign(CodemanApp.prototype, {
       panel: null,
       capStory,
       capDir,
+      capSimple,
       capNote,
       balloon,
       liveTag,
@@ -2460,8 +2514,13 @@ Object.assign(CodemanApp.prototype, {
     const p = rt.panel;
     rt.capStory.textContent = p.caption.story;
     rt.capDir.textContent = p.caption.director || p.caption.story;
+    rt.capSimple.textContent = p.caption.simple || p.caption.story;
+    const simple = this._story?.level === 'simple';
     const balloonText = p.kind === 'ask' && p.question?.text ? p.question.text : p.balloon?.text;
-    rt.balloon.hidden = !balloonText;
+    // Simple keeps your own words (the prompt) and hides Claude's: its narration is often technical,
+    // and at the end the plain summary stands in for it, Claude's words one click away (a chip).
+    const yours = p.kind === 'mission' && p.balloon?.who === 'you';
+    rt.balloon.hidden = !balloonText || (simple && !yours);
     // The text sits in its own box so a long one can be clamped without clipping the tail.
     let balloonSpan = rt.balloon.querySelector('.story-balloon-text');
     if (!balloonSpan) {
@@ -2573,7 +2632,10 @@ Object.assign(CodemanApp.prototype, {
           text: `${page.filesChanged} file${page.filesChanged === 1 ? '' : 's'} changed`,
           open: 'diff:page',
         });
-      items.push({ text: `${page.toolCalls} tool call${page.toolCalls === 1 ? '' : 's'}`, open: 'list:page' });
+      // Simple: the time, the files and Claude's own last words; no tool calls, commits or helpers.
+      if (simple && p.balloon?.text) items.push({ text: "Read Claude's message", open: 'said:page' });
+      if (!simple)
+        items.push({ text: `${page.toolCalls} tool call${page.toolCalls === 1 ? '' : 's'}`, open: 'list:page' });
       // What was saved, wherever in the turn: commits inside a loop or a test one-liner count too.
       const commits = page.events.reduce((n, e) => n + (e.commits || 0), 0);
       // An upload that went through, even when a step after it in the same command failed.
@@ -2589,7 +2651,7 @@ Object.assign(CodemanApp.prototype, {
       )?.[1];
       const copiedTo =
         target && (/^file:\/\//.test(target) || !target.includes(':')) ? target.split('/').filter(Boolean).pop() : '';
-      if (commits || shipped)
+      if (!simple && (commits || shipped))
         items.push({
           text: [
             commits ? `${commits} commit${commits === 1 ? '' : 's'}` : '',
@@ -2598,7 +2660,7 @@ Object.assign(CodemanApp.prototype, {
             .filter(Boolean)
             .join(', '),
         });
-      if (page.helpers)
+      if (!simple && page.helpers)
         items.push({
           text: `${page.helpers} helper${page.helpers === 1 ? '' : 's'}${
             page.helpersRunning ? `, ${page.helpersRunning} still working` : ''
@@ -2615,10 +2677,11 @@ Object.assign(CodemanApp.prototype, {
             if (item.open) {
               inner.type = 'button';
               inner.dataset.storyOpen = item.open;
-              inner.setAttribute(
-                'aria-label',
-                `${item.text}: ${item.open.startsWith('diff') ? 'see the changes' : 'list every step'}`
-              );
+              if (!item.open.startsWith('said'))
+                inner.setAttribute(
+                  'aria-label',
+                  `${item.text}: ${item.open.startsWith('diff') ? 'see the changes' : 'list every step'}`
+                );
             }
             inner.textContent = item.text;
             li.append(inner);
@@ -3452,6 +3515,30 @@ Object.assign(CodemanApp.prototype, {
             : 'Waiting for your answer in the terminal.'
         )
       );
+    } else if (view === 'said') {
+      // Claude's own last words, which the Simple level's summary stands in for: what it wrote after
+      // its last step (the final panel's balloon), each message as Claude wrote it.
+      const lastStep = page.panels.reduce((n, p) => Math.max(n, ...p.events), -1);
+      const words = items.filter((x) => x.i > lastStep && x.ev.intent === 'say');
+      kind = 'Message';
+      title = "Claude's last words";
+      for (const { ev } of words) {
+        out.push(this._storyLinkifiedPre(ev.label, { rooted: true }));
+        // A long message is kept only in part: what it says further in (a problem, what is left) follows.
+        if (ev.label.endsWith('…')) {
+          const more = (ev.keyPoints || []).filter((k) => !ev.label.includes(k));
+          if (more.length) {
+            out.push(el('h4', 'story-h', 'Further in, Claude says'));
+            const ul = el('ul', 'story-todos');
+            for (const k of more) ul.append(el('li', '', k));
+            out.push(ul);
+          }
+          out.push(el('p', 'story-empty', 'Only the start of the message is kept here.'));
+        }
+      }
+      const fin = page.panels[page.panels.length - 1];
+      if (!words.length && fin?.balloon?.text) out.push(this._storyLinkifiedPre(fin.balloon.text, { rooted: true }));
+      if (!out.length) out.push(el('p', 'story-empty', 'Claude wrote nothing at the end of this turn.'));
     }
 
     st.drawerKind.textContent = kind;

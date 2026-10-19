@@ -263,6 +263,15 @@ body.story-open {
   .story-save {
     order: 3;
   }
+  /* Three reading levels and Save image share one row at 390px; LIVE goes up beside the title,
+     where the session name gives way to it (on the third row it wrapped to a fourth). */
+  .story-seg-btn {
+    padding: 6px 7px 5px;
+    font-size: 15px !important;
+  }
+  .story-live {
+    order: 0;
+  }
 }
 
 /* Main: the sheet and the wire */
@@ -392,6 +401,23 @@ body.story-open {
   display: none;
 }
 .story-overlay.is-director .story-cap-dir {
+  display: inline;
+}
+/* Simple: one plain sentence per panel, in the letter font and a size up, for a reader who has never
+   seen a terminal. The final panel keeps its full width (.story-splash .story-cap comes later). */
+.story-cap-simple {
+  display: none;
+}
+.story-overlay.is-simple .story-cap {
+  max-width: min(68%, 30ch);
+  font-size: calc(20px * var(--story-k, 1));
+  line-height: 1.12;
+}
+.story-overlay.is-simple .story-cap-story,
+.story-overlay.is-simple .story-cap-note {
+  display: none;
+}
+.story-overlay.is-simple .story-cap-simple {
   display: inline;
 }
 .story-balloon {

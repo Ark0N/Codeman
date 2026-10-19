@@ -1189,7 +1189,7 @@ describe('story-mode.js scenes', () => {
     const base = storyOf(demoTurn()).page as StoryPage;
     return { ...base, ...extra, panels };
   }
-  const cap = { story: 's', director: 'd' };
+  const cap = { story: 's', director: 'd', simple: 'p' };
 
   it('no scene throws, whatever the panel holds', async () => {
     const base = storyOf(demoTurn()).page as StoryPage;
@@ -1298,5 +1298,108 @@ describe('story-mode.js layout', () => {
       expect(row).toBe(0);
     }
     expect(spans([1, 1, 1], 2)).toEqual([1, 1, 2]);
+  });
+});
+
+describe('story-mode.js reading levels', () => {
+  const levels = () => $$('.story-seg .story-seg-btn');
+  const pressed = () => levels().map((b) => b.getAttribute('aria-pressed'));
+
+  it("three levels in order, the Director's cut by default, and the pick is kept per device", async () => {
+    boot(storyOf(demoTurn()));
+    app.openStoryMode(SID);
+    await settle();
+    expect($('.story-seg')!.getAttribute('aria-label')).toBe('Reading level');
+    expect(levels().map((b) => b.textContent)).toEqual(['Simple', 'Advanced', "Director's cut"]);
+    expect(pressed()).toEqual(['false', 'false', 'true']);
+    expect($('.story-overlay')!.classList.contains('is-director')).toBe(true);
+    expect($('.story-wire')!.hidden).toBe(false);
+    // Opening never writes the default back: a later change of the default reaches every device.
+    expect(win.localStorage.getItem('codeman:story-level')).toBeNull();
+    levels()[0].click();
+    expect(pressed()).toEqual(['true', 'false', 'false']);
+    expect($('.story-overlay')!.classList.contains('is-simple')).toBe(true);
+    expect($('.story-overlay')!.classList.contains('is-director')).toBe(false);
+    expect($('.story-wire')!.hidden).toBe(true);
+    expect(app._story.director).toBe(false);
+    expect(win.localStorage.getItem('codeman:story-level')).toBe('simple');
+    levels()[1].click();
+    expect(pressed()).toEqual(['false', 'true', 'false']);
+    expect($('.story-overlay')!.className).not.toMatch(/is-simple|is-director/);
+    expect(win.localStorage.getItem('codeman:story-level')).toBe('advanced');
+  });
+
+  it('a stored pick is honored; an unknown one falls back to the default', async () => {
+    boot(storyOf(demoTurn()));
+    win.localStorage.setItem('codeman:story-level', 'simple');
+    app.openStoryMode(SID);
+    await settle();
+    expect(pressed()).toEqual(['true', 'false', 'false']);
+    expect(app._story.level).toBe('simple');
+    app.closeStoryMode();
+    dom.window.close();
+
+    boot(storyOf(demoTurn()));
+    win.localStorage.setItem('codeman:story-level', 'comic-sans');
+    app.openStoryMode(SID);
+    await settle();
+    expect(pressed()).toEqual(['false', 'false', 'true']);
+  });
+
+  it("the old two-level toggle still works: on is the Director's cut, off is Advanced", async () => {
+    boot(storyOf(demoTurn()));
+    app.openStoryMode(SID);
+    await settle();
+    app._storySetDirector(false);
+    expect(app._story.level).toBe('advanced');
+    expect(pressed()).toEqual(['false', 'true', 'false']);
+    app._storySetDirector(true);
+    expect(app._story.level).toBe('director');
+    expect(app._story.director).toBe(true);
+    // A script switching levels is not the reader's pick: nothing is stored.
+    expect(win.localStorage.getItem('codeman:story-level')).toBeNull();
+    app._storySetLevel('simple');
+    expect(app._story.level).toBe('simple');
+    app._storySetLevel('nonsense');
+    expect(app._story.level).toBe('director');
+  });
+
+  it("Simple shows the plain captions, keeps your prompt and hides Claude's balloons", async () => {
+    const data = storyOf(demoTurn());
+    boot(data);
+    app.openStoryMode(SID);
+    await settle();
+    app._storySetLevel('simple');
+    const page = data.page as StoryPage;
+    const panels = $$('.story-panel');
+    panels.forEach((el, i) =>
+      expect(el.querySelector('.story-cap-simple')!.textContent).toBe(page.panels[i].caption.simple)
+    );
+    expect($('.story-panel[data-kind="investigate"] .story-cap-simple')!.textContent).toBe(
+      'Claude reads two files from the project.'
+    );
+    // Your own prompt stays; every balloon of Claude's (the middle panels and the end) is hidden.
+    expect($('.story-panel[data-kind="mission"] .story-balloon')!.hidden).toBe(false);
+    expect($('.story-panel[data-kind="investigate"] .story-balloon')!.hidden).toBe(true);
+    expect($('.story-panel[data-kind="complete"] .story-balloon')!.hidden).toBe(true);
+    expect($('.story-panel[data-kind="complete"] .story-cap-simple')!.textContent).toBe(
+      'Done in about 7 minutes. One file changed. The checks pass. The work is saved.'
+    );
+    // The time, the files and Claude's own words; no tool calls, commits or helpers.
+    const chips = () => $$('.story-panel[data-kind="complete"] .story-chips li > *').map((c) => c.textContent);
+    expect(chips()).toEqual(['7 min 12 s', '1 file changed', "Read Claude's message"]);
+    // Claude's own words are one click away.
+    ($$('.story-chips button').find((b) => b.textContent === "Read Claude's message") as HTMLElement).click();
+    expect($('.story-drawer')!.hidden).toBe(false);
+    expect($('.story-drawer-kind')!.textContent).toBe('Message');
+    expect($('.story-drawer-body')!.textContent).toContain(
+      'Fixed. The banner sat on top of the button. The same fix covers the cart page.'
+    );
+    app._storyCloseDrawer();
+    // Back to Advanced: the balloons and the full chips return.
+    app._storySetLevel('advanced');
+    expect($('.story-panel[data-kind="investigate"] .story-balloon')!.hidden).toBe(false);
+    expect($('.story-panel[data-kind="complete"] .story-balloon')!.hidden).toBe(false);
+    expect(chips()).toEqual(['7 min 12 s', '1 file changed', '10 tool calls', '1 commit', '1 helper']);
   });
 });

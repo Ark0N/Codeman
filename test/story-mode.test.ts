@@ -24,6 +24,7 @@ import {
   type StoryEntry,
 } from '../src/story-mode.js';
 import { bash, demoTurn, edit, end, prompt, read, resetClock, result, said, tool } from './story-fixtures.js';
+import { plainWordsProblem } from './story-plain-words.js';
 
 function entriesOf(lines: unknown[]): StoryEntry[] {
   const reducer = createStoryReducer();
@@ -600,7 +601,11 @@ describe('buildStoryTurns', () => {
     expect(turns).toHaveLength(2);
     const page = buildStoryPage(turns[1]);
     expect(page.panels.map((p) => p.kind)).toEqual(['mission', 'compact', 'complete']);
-    expect(page.panels[0].caption).toEqual({ story: 'You run /compact.', director: 'Command · /compact' });
+    expect(page.panels[0].caption).toEqual({
+      story: 'You run /compact.',
+      director: 'Command · /compact',
+      simple: 'You give Claude a short instruction.',
+    });
     expect(page.complete).toBe(true);
   });
 
@@ -1507,6 +1512,7 @@ describe('buildStoryPage', () => {
     expect(page.panels[3].caption).toEqual({
       story: "Claude's memory is full: it packs up its notes.",
       director: 'automatic · 46.9k → 3.6k tokens · 24 s',
+      simple: "Claude's memory is full, so it tidies up its notes.",
     });
   });
 
@@ -1856,5 +1862,139 @@ describe('buildStoryPage', () => {
     ]);
     expect(page.panels[0].caption.story).toBe('A background job reports back.');
     expect(page.origin).toBe('task');
+  });
+});
+
+describe('the Simple reading level', () => {
+  /** The final panel's Simple caption, every other panel's checked for plain words on the way. */
+  const ending = (lines: unknown[], turn = -1) => {
+    const turns = buildStoryTurns(entriesOf(lines));
+    const page = buildStoryPage(turns.at(turn)!);
+    for (const p of page.panels) expect(plainWordsProblem(p.caption.simple), p.caption.simple).toBeNull();
+    return page.panels.at(-1)!.caption.simple;
+  };
+
+  it('the guard itself catches what a reader who never saw a terminal stops at', () => {
+    for (const bad of [
+      'Claude changes app.py.',
+      'Claude writes .gitignore.',
+      'Claude runs npm test.',
+      'Claude uses Bash.',
+      'Claude saves the work in 2 commits.',
+      'Claude adds a --json option.',
+      'Claude reads src/app.ts.',
+      'Claude starts a git repository.',
+      'Claude works in the terminal.',
+      'The tests pass.',
+    ])
+      expect(plainWordsProblem(bad), bad).not.toBeNull();
+    expect(plainWordsProblem('Done in 3 minutes. 2 files changed. The checks pass. The work is saved.')).toBeNull();
+  });
+
+  it('the demo turn, one plain sentence per panel and a summary at the end', () => {
+    const page = pageOf(demoTurn());
+    expect(page.panels.map((p) => p.caption.simple)).toEqual([
+      'You give Claude a job.',
+      'Claude reads two files from the project.',
+      'Claude makes a plan with 2 steps.',
+      'Claude calls in a helper.',
+      'The first check fails; Claude fixes it, and the second passes.',
+      'Claude saves the work.',
+      'Done in about 7 minutes. One file changed. The checks pass. The work is saved.',
+    ]);
+    for (const p of page.panels) expect(plainWordsProblem(p.caption.simple), p.caption.simple).toBeNull();
+  });
+
+  it('a failed check never reads as a pass: on its panel and in the summary', () => {
+    const lines = [
+      prompt('fix the total'),
+      ...edit('e1', '/w/cart.js', ['+  return sum;']),
+      ...bash('b1', 'npm test', 'Run tests', ' Tests  3 failed | 39 passed (42)', true),
+      said('Three tests still fail.'),
+      end(4000),
+    ];
+    const page = pageOf(lines);
+    expect(page.panels.find((p) => p.kind === 'check')!.caption.simple).toBe('Claude checks the work: 3 checks fail.');
+    expect(ending(lines)).toBe('Done in 4 seconds. One file changed. A check still fails.');
+    // A failure you asked for (test first) is said as such, until a run has passed.
+    const asked = [
+      prompt('write the tests first; they should fail because add() is missing'),
+      ...edit('e1', '/w/test_add.py', ['+def test_add(): assert add(1, 2) == 3']),
+      ...bash('b1', 'pytest -q', 'Run tests', '1 failed in 0.1s', true),
+      end(2000),
+    ];
+    expect(pageOf(asked).panels.find((p) => p.kind === 'check')!.caption.simple).toBe(
+      'Claude checks the work: one check fails, as you asked.'
+    );
+    expect(ending(asked)).toBe('Done in 2 seconds. One file changed. The checks fail, as you asked.');
+  });
+
+  it('a catch, a note and a question each reach the summary in plain words', () => {
+    expect(ending([prompt('go'), said('Done. One known issue: big numbers are shown rounded.'), end(1000)])).toBe(
+      'Done in 1 second. No files changed. Claude says a problem is left: read its message.'
+    );
+    expect(ending([prompt('go'), said('Done. The README update is left out for now.'), end(1000)])).toBe(
+      'Done in 1 second. No files changed. Claude left you a note: read its message.'
+    );
+    expect(ending([prompt('go'), said('I built it. Want me to add a --json flag?'), end(1000)])).toBe(
+      'Done in 1 second. No files changed. Claude has a question for you.'
+    );
+  });
+
+  it('stopped, not done, to be continued, done for now: an honest ending each', () => {
+    const stopped = ending([
+      prompt('three things'),
+      tool('t1', 'TodoWrite', {
+        todos: [
+          { content: 'Split the module', status: 'completed' },
+          { content: 'Write the new tests', status: 'in_progress' },
+        ],
+      }),
+      result('t1', 'Todos have been modified successfully.'),
+      ...edit('e1', '/w/a.js', ['+x']),
+      prompt('[Request interrupted by user]'),
+    ]);
+    expect(stopped).toMatch(/^You stopped Claude (after \d+ seconds|partway)\. One file changed\./);
+    expect(stopped).toContain('Some of its plan is not done yet.');
+    // Every step failed (blocked): not done, and never a pass.
+    expect(
+      ending([
+        prompt('sleep'),
+        ...bash('b1', 'sleep 65', 'Wait', 'Blocked by a PreToolUse hook: denied', true),
+        end(2000),
+      ])
+    ).toBe('Nothing Claude tried worked, so the job is not done. No files changed.');
+    // A turn the next prompt cut off (no end of its own).
+    expect(ending([prompt('one'), ...bash('b1', 'ls', 'List', 'a'), prompt('two'), said('ok'), end(1000)], 0)).toBe(
+      'The work stops here; the next message starts something new. No files changed.'
+    );
+    // A helper still out when the turn ended.
+    expect(
+      ending([
+        prompt('docs'),
+        tool('a1', 'Agent', { description: 'Write README', subagent_type: 'general-purpose', prompt: 'Write it' }),
+        result('a1', 'Async agent launched successfully. agentId: h9', {
+          toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'h9' },
+        }),
+        end(3000),
+      ])
+    ).toBe("Claude's part took 3 seconds, but a helper is still working. No files changed.");
+  });
+
+  it('saved, partly saved, not saved: only where saving is in play', () => {
+    const commit = (id: string) =>
+      bash(id, 'git add -A && git commit -qm "feat: total"', 'Commit', '[main 1a2b3c4] feat: total');
+    expect(ending([prompt('fix it and commit'), ...edit('e1', '/w/a.js', ['+x']), ...commit('c1'), end(1000)])).toBe(
+      'Done in 1 second. One file changed. Claude did not try out its changes. The work is saved.'
+    );
+    expect(
+      ending([prompt('fix it and commit'), ...commit('c1'), ...edit('e1', '/w/a.js', ['+x']), end(1000)])
+    ).toContain('Some of the work is saved, but the latest changes are not.');
+    // You asked for a commit and none came: the reader is told.
+    expect(ending([prompt('fix it and commit'), ...edit('e1', '/w/a.js', ['+x']), end(1000)])).toContain(
+      'The work is not saved yet.'
+    );
+    // "No git": files written are simply there, nothing is "not saved".
+    expect(ending([prompt('fix it, no git'), ...edit('e1', '/w/a.js', ['+x']), end(1000)])).not.toMatch(/saved/);
   });
 });
