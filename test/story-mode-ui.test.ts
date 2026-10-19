@@ -832,6 +832,9 @@ describe('story-mode.js overlay', () => {
     boot(storyOf(lines));
     app.openStoryMode(SID);
     await settle();
+    // The Director's cut is the default level: start from Advanced to turn it on during the turn.
+    app._storySetDirector(false);
+    await settle();
     const list = $('.story-wire-list')!;
     const box = fakeScroller(list, 40);
     app._storySetDirector(true);
@@ -884,6 +887,9 @@ describe('story-mode.js overlay', () => {
     ];
     boot(storyOf(lines));
     app.openStoryMode(SID);
+    await settle();
+    // The Director's cut is the default level: start from Advanced to turn it on during the turn.
+    app._storySetDirector(false);
     await settle();
     const list = $('.story-wire-list')!;
     const box = fakeScroller(list, 40);
