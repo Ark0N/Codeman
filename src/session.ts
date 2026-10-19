@@ -125,7 +125,7 @@ import {
 import { DEFAULT_TMUX_HISTORY_LIMIT } from './config/terminal-history.js';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 import { getCli } from './config/cli-registry/registry.js';
-import { SubmitVerifier } from './session-submit-verifier.js';
+import { PastedPromptWatch, SubmitVerifier } from './session-submit-verifier.js';
 import { compileVersionRegex } from './config/cli-registry/patterns.js';
 import { resolveSessionCliVersion } from './utils/cli-resolver.js';
 import {
@@ -646,6 +646,7 @@ export class Session extends EventEmitter {
   private _trustDialogTimer: NodeJS.Timeout | null = null; // Re-read after a keystroke (see below)
   /** Re-sends Enter while a programmatic prompt still sits in the composer (session-submit-verifier.ts). */
   private _submitVerifier: SubmitVerifier | null = null;
+  private readonly _pastedPromptWatch = new PastedPromptWatch();
   private _interactiveStartedAt = 0; // When the interactive pane launched (bounds that scan)
   private _taskTracker: TaskTracker;
 
@@ -4598,6 +4599,7 @@ export class Session extends EventEmitter {
     if (!this.ptyProcess) return false;
     this.ptyProcess.write(data);
     this._emitSubmittedPrompt(submittedPrompt);
+    this._notePastedPrompt(data);
     return true;
   }
 
@@ -4746,6 +4748,7 @@ export class Session extends EventEmitter {
       if (sent) {
         this._emitSubmittedPrompt(submittedPrompt);
         this._verifySubmitted(data);
+        this._notePastedPrompt(data);
       }
       return sent;
     }
@@ -4775,9 +4778,28 @@ export class Session extends EventEmitter {
    * can read its pane, only text can be stranded, and the glyph is the CLI's own.
    */
   private _verifySubmitted(data: string): void {
-    if (!data.includes('\r') || !this._mux?.capturePaneText || !this._muxSession) return;
-    const text = data.replace(/[\r\n]/g, '').trimEnd();
-    if (!text) return;
+    if (!data.includes('\r')) return;
+    this._armSubmitVerifier(data.replace(/[\r\n]/g, '').trimEnd());
+  }
+
+  /**
+   * The browser composers (Story Mode's prompt bar, the phone's Compose sheet) send a
+   * prompt as a bracketed paste and then a bare Enter, as two writes: over the
+   * WebSocket both land in `write()`, on the POST fallback the Enter takes
+   * `writeViaMux()`. Neither is a `text\r` pair, so the Enter armed nothing and a
+   * prompt sent while Claude Code was ignoring Enter sat unsent. This pairs them
+   * (PastedPromptWatch) and checks the pasted text, line breaks kept so a paste the
+   * CLI shows as `[Pasted text #1 +3 lines]` is still recognised. A newer paste
+   * cancels any pending check: pressing Enter then would send the user's paste too.
+   */
+  private _notePastedPrompt(data: string): void {
+    const seen = this._pastedPromptWatch.feed(data, Date.now());
+    if (seen?.kind === 'paste') this._submitVerifier?.cancel();
+    else if (seen?.kind === 'submit') this._armSubmitVerifier(seen.text);
+  }
+
+  private _armSubmitVerifier(text: string): void {
+    if (!text.trim() || !this._mux?.capturePaneText || !this._muxSession) return;
     this._submitVerifier ??= new SubmitVerifier({
       capture: () =>
         this._isStopped || !this._mux || !this._muxSession
