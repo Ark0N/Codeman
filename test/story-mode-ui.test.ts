@@ -733,6 +733,228 @@ describe('story-mode.js overlay', () => {
     expect(rows[rows.length - 1]).toContain('All done here.');
   });
 
+  /**
+   * JSDOM lays nothing out: the wire list gets a fake scroll box whose content grows with its rows,
+   * so the follow logic sees a list that really scrolls (and `scrollTop` clamps like a browser's).
+   */
+  function fakeScroller(list: HTMLElement, height = 200, rowPx = 20) {
+    let top = 0;
+    const max = () => Math.max(0, list.children.length * rowPx - height);
+    Object.defineProperty(list, 'clientHeight', { configurable: true, get: () => height });
+    Object.defineProperty(list, 'scrollHeight', {
+      configurable: true,
+      get: () => Math.max(height, list.children.length * rowPx),
+    });
+    Object.defineProperty(list, 'scrollTop', {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        const was = top;
+        top = Math.max(0, Math.min(Number(v) || 0, max()));
+        // A browser tells the page with a scroll event, a moment later.
+        if (top !== was) setTimeout(() => list.dispatchEvent(new win.Event('scroll')), 0);
+      },
+    });
+    return {
+      max,
+      /** The reader scrolls the list by hand. */
+      scrollBy(dy: number) {
+        list.dispatchEvent(new win.WheelEvent('wheel', { deltaY: dy, bubbles: true }));
+        top = Math.max(0, Math.min(top + dy, max()));
+        list.dispatchEvent(new win.Event('scroll'));
+      },
+    };
+  }
+  /** Waits until `ok()` holds (the glide runs on animation frames), at most `ms`. */
+  async function until(ok: () => boolean, ms = 2000) {
+    const t0 = Date.now();
+    while (!ok() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 16));
+    return ok();
+  }
+  const wireRows = () => $$('.story-wire-list > li');
+
+  it('a refresh keeps the wire rows it already has: same nodes, focus kept, the new one added in place', async () => {
+    const lines = [prompt('go'), ...read('r1', '/work/demo-shop/a.ts')];
+    boot(storyOf(lines));
+    app.openStoryMode(SID);
+    await settle();
+    app._storySetDirector(true);
+    await settle();
+    const before = wireRows();
+    const link = $('.story-wire [data-story-open="file:event:1"]')!;
+    link.focus();
+    responses = [
+      { status: 200, body: { success: true, data: storyOf([...lines, ...read('r2', '/work/demo-shop/b.ts')]) } },
+    ];
+    await app._storyRefresh();
+    await settle();
+    const after = wireRows();
+    expect(after.length).toBeGreaterThan(before.length);
+    before.forEach((row, i) => expect(after[i]).toBe(row));
+    expect(win.document.activeElement).toBe(link);
+    const added = after[after.length - 1];
+    expect(added.dataset.wireKey).toBe('e:r2');
+    expect(added.classList.contains('is-new')).toBe(true);
+    expect(before.some((row) => row.classList.contains('is-new'))).toBe(false);
+    // A refresh that changes nothing touches nothing.
+    const html = $('.story-wire-list')!.innerHTML;
+    app._storyRenderWire();
+    expect($('.story-wire-list')!.innerHTML).toBe(html);
+  });
+
+  it('a call that finishes updates its row in place: the same tag flips from running to its result', async () => {
+    const lines = [prompt('go'), tool('b1', 'Bash', { command: 'npm test', description: 'Run tests' })];
+    boot(storyOf(lines));
+    app.openStoryMode(SID);
+    await settle();
+    app._storySetDirector(true);
+    await settle();
+    const row = $('.story-wire-list [data-wire-key="e:b1"]')!;
+    const tag = row.querySelector('.story-tag')!;
+    expect(tag.textContent).toBe('running');
+    const done = result('b1', ' Tests  4 passed (4)', {
+      toolUseResult: { stdout: ' Tests  4 passed (4)', stderr: '' },
+    });
+    responses = [{ status: 200, body: { success: true, data: storyOf([...lines, done]) } }];
+    await app._storyRefresh();
+    await settle();
+    expect($('.story-wire-list [data-wire-key="e:b1"]')).toBe(row);
+    expect(row.querySelector('.story-tag')).toBe(tag);
+    expect(tag.textContent).not.toBe('running');
+    expect(tag.className).not.toContain('pending');
+    // Its output arrived, so the label became a button that opens it.
+    expect(row.querySelector('.story-link')?.getAttribute('data-story-open')).toBe('output:event:1');
+    expect(row.classList.contains('is-new')).toBe(false);
+  });
+
+  it('the wire follows a running turn; scrolled up it counts new rows on a pill that brings it back', async () => {
+    const lines = [prompt('go'), ...read('r1', '/work/demo-shop/a.ts'), ...read('r2', '/work/demo-shop/b.ts')];
+    boot(storyOf(lines));
+    app.openStoryMode(SID);
+    await settle();
+    const list = $('.story-wire-list')!;
+    const box = fakeScroller(list, 40);
+    app._storySetDirector(true);
+    await settle();
+    const view = app._story.wireView;
+    const pill = $('.story-wire-pill') as HTMLButtonElement;
+    // Turned on during a live turn: at the bottom, following.
+    expect(view.follow).toBe(true);
+    expect(list.scrollTop).toBe(box.max());
+    expect(pill.hidden).toBe(true);
+    box.scrollBy(-30); // still within reach of the bottom: following
+    expect(view.follow).toBe(true);
+    box.scrollBy(-30);
+    expect(view.follow).toBe(false);
+    expect(pill.hidden).toBe(false);
+    expect(pill.textContent).toBe('↓ Newest');
+    const more = [...lines, ...read('r3', '/work/demo-shop/c.ts'), ...read('r4', '/work/demo-shop/d.ts')];
+    responses = [{ status: 200, body: { success: true, data: storyOf(more) } }];
+    await app._storyRefresh();
+    await settle();
+    expect(view.follow).toBe(false);
+    expect(pill.textContent).toBe('↓ 2 new');
+    expect(pill.getAttribute('aria-label')).toBe('2 new events. Scroll to the newest.');
+    const top = list.scrollTop;
+    expect(top).toBeLessThan(box.max()); // the reader's place, not moved
+    pill.focus();
+    pill.click();
+    expect(view.follow).toBe(true);
+    expect(pill.hidden).toBe(true);
+    expect(win.document.activeElement).toBe(list); // focus is not dropped with the pill
+    expect(await until(() => list.scrollTop === box.max())).toBe(true);
+    // Back at the bottom by hand also follows again.
+    box.scrollBy(-60);
+    expect(view.follow).toBe(false);
+    box.scrollBy(200);
+    expect(view.follow).toBe(true);
+    expect(pill.hidden).toBe(true);
+  });
+
+  it('a turn switch starts the wire afresh: a finished turn at the top, the running newest one at the bottom', async () => {
+    const lines = [
+      prompt('first job'),
+      ...read('r1', '/work/demo-shop/a.ts'),
+      ...read('r2', '/work/demo-shop/b.ts'),
+      said('Done.'),
+      end(2000),
+      prompt('second job'),
+      ...read('r3', '/work/demo-shop/c.ts'),
+      ...read('r4', '/work/demo-shop/d.ts'),
+    ];
+    boot(storyOf(lines));
+    app.openStoryMode(SID);
+    await settle();
+    const list = $('.story-wire-list')!;
+    const box = fakeScroller(list, 40);
+    app._storySetDirector(true);
+    await settle();
+    const newest = wireRows();
+    expect(app._story.wireView.follow).toBe(true);
+    expect(list.scrollTop).toBe(box.max());
+    responses = [{ status: 200, body: { success: true, data: storyAt(lines, 0) } }];
+    app._storyPickTurn(app._story.data.turns[0].id);
+    await settle(12);
+    const older = wireRows();
+    expect(older.some((row) => newest.includes(row))).toBe(false);
+    expect(older.some((row) => row.classList.contains('is-new'))).toBe(false);
+    expect(older.map((row) => row.dataset.wireKey)).toContain('e:r1');
+    expect(app._story.wireView.follow).toBe(false);
+    expect(list.scrollTop).toBe(0);
+    expect(($('.story-wire-pill') as HTMLButtonElement).hidden).toBe(true);
+    responses = [{ status: 200, body: { success: true, data: storyOf(lines) } }];
+    app._storyPickTurn(app._story.data.turns[1].id);
+    await settle(12);
+    expect(wireRows().map((row) => row.dataset.wireKey)).toContain('e:r4');
+    expect(app._story.wireView.follow).toBe(true);
+    expect(list.scrollTop).toBe(box.max());
+  });
+
+  it('the follow decision: following sticks, scrolling up by hand stops it, the bottom resumes it', () => {
+    boot(null);
+    const update = win.storyWireAfterUpdate;
+    const scroll = win.storyWireAfterScroll;
+    expect(update({ follow: true, unseen: 0 }, { gap: 900, added: 2 })).toEqual({ follow: true, unseen: 0 });
+    expect(update({ follow: false, unseen: 1 }, { gap: 900, added: 2 })).toEqual({ follow: false, unseen: 3 });
+    expect(update({ follow: false, unseen: 3 }, { gap: 30, added: 1 })).toEqual({ follow: true, unseen: 0 });
+    const following = { follow: true, unseen: 0, lastTop: 500 };
+    expect(scroll(following, { top: 400, gap: 300, user: true }).follow).toBe(false);
+    // Up without the reader's hand (a row above shrank, the browser kept the view still): still following.
+    expect(scroll(following, { top: 467, gap: 300, user: false }).follow).toBe(true);
+    // The glide moving down is never the reader scrolling up.
+    expect(scroll(following, { top: 540, gap: 260, user: true }).follow).toBe(true);
+    expect(scroll({ follow: false, unseen: 4, lastTop: 100 }, { top: 880, gap: 12, user: true })).toEqual({
+      follow: true,
+      unseen: 0,
+      lastTop: 880,
+    });
+    expect(win.storyWirePillText(0).text).toBe('↓ Newest');
+    expect(win.storyWirePillText(1)).toEqual({ text: '↓ 1 new', label: '1 new event. Scroll to the newest.' });
+  });
+
+  it('the glide only moves down, never past its target, and keeps its speed when the target moves', () => {
+    boot(null);
+    const spring = win.storyWireSpring;
+    let s = { pos: 0, v: 0, done: false };
+    const deltas: number[] = [];
+    let target = 100;
+    for (let f = 0; f < 90 && !s.done; f++) {
+      if (f === 8) target = 260; // more rows land mid-glide
+      const next = spring(s.pos, s.v, target, 1 / 60);
+      expect(next.pos).toBeGreaterThanOrEqual(s.pos);
+      expect(next.pos).toBeLessThanOrEqual(target);
+      deltas.push(next.pos - s.pos);
+      s = next;
+    }
+    expect(s.done).toBe(true);
+    expect(s.pos).toBe(260);
+    // No stop and restart at the new target: the step after it is no smaller than the one before.
+    expect(deltas[8]).toBeGreaterThanOrEqual(deltas[7]);
+    expect(deltas.slice(0, 40).every((d) => d > 0)).toBe(true);
+    // A target above (the list got shorter) is taken at once.
+    expect(spring(300, 50, 200, 1 / 60)).toEqual({ pos: 200, v: 0, done: true });
+  });
+
   it('a fix made from the terminal opens what ran, not an empty diff', async () => {
     boot(
       storyOf([

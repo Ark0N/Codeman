@@ -816,6 +816,60 @@ body.story-open .toast-container {
 .story-tag--pending {
   color: var(--story-wait-text);
 }
+/* A row that just came in slides up a little and fades in: transform and opacity only, so the list's
+   height (and the glide to its bottom) never moves with it; 6px stays inside the list's bottom padding. */
+.story-wire-list > .is-new {
+  animation: story-wire-in 0.28s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+@keyframes story-wire-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+.story-wire-list:focus {
+  outline: none;
+}
+.story-wire-list:focus-visible {
+  outline: 3px solid var(--story-cyan);
+  outline-offset: -3px;
+}
+/* The pill sits on the list's bottom edge: a zero-height foot, so showing it moves nothing. */
+.story-wire-foot {
+  position: relative;
+  height: 0;
+}
+.story-overlay .story-wire-pill {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  z-index: 1;
+  translate: -50% 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 4px 14px;
+  font: 700 12.5px/1 var(--story-mono);
+  white-space: nowrap;
+  color: var(--story-line);
+  background: var(--story-yellow);
+  border: 2px solid var(--story-line);
+  border-radius: 999px;
+  box-shadow: 0 3px 0 rgb(0 0 0 / 35%);
+  animation: story-wire-pill-in 0.2s ease-out both;
+}
+.story-overlay .story-wire-pill:hover {
+  box-shadow: 0 4px 0 rgb(0 0 0 / 45%);
+}
+.story-overlay .story-wire-pill[hidden] {
+  display: none;
+}
+@keyframes story-wire-pill-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
 
 /* Drawer */
 .story-drawer {
@@ -1072,6 +1126,9 @@ body.story-open .toast-container {
   .story-turns {
     min-height: 44px;
   }
+  .story-overlay .story-wire-pill {
+    min-height: 44px;
+  }
   .story-cap-dir,
   .story-ev,
   .story-code,
@@ -1093,7 +1150,9 @@ body.story-open .toast-container {
 @media (prefers-reduced-motion: reduce) {
   .story-fresh *,
   .story-arrive,
-  .story-live i {
+  .story-live i,
+  .story-wire-list > .is-new,
+  .story-overlay .story-wire-pill {
     animation: none !important;
   }
 }
