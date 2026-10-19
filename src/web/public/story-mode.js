@@ -2965,11 +2965,16 @@ Object.assign(CodemanApp.prototype, {
     const fit = rt.balloonFit;
     rt.balloonKey = `${h}|${fit?.serial ?? '-'}|${b.className}|${b.textContent}`;
     text.style.removeProperty('--story-lines');
-    const limit = fit ? fit.limit + h - fit.stageH : h - 12;
+    // A panel ignores a growth of 2 px or less (_storyFitCaption): the balloon may use that much of the
+    // gap it keeps, or such a panel would show one line fewer than its fit made room for.
+    const limit = (fit ? fit.limit + h - fit.stageH : h - 12) + 2;
     const lh = parseFloat(getComputedStyle(text).lineHeight) || 19;
     const pad = b.offsetHeight - text.offsetHeight;
     if (b.offsetHeight && b.offsetTop + b.offsetHeight > limit)
-      text.style.setProperty('--story-lines', String(Math.max(1, Math.floor((limit - b.offsetTop - pad) / lh))));
+      text.style.setProperty(
+        '--story-lines',
+        String(Math.max(1, Math.floor((limit - b.offsetTop - pad) / lh + 0.001)))
+      );
   },
 
   /** Canvas click regions become real buttons: focusable, labelled, keyboard-reachable. */

@@ -1320,7 +1320,8 @@ describe('story-mode.js speech balloons', () => {
   });
 
   /** A panel with a box model: JSDOM lays nothing out, so every box the fit reads is given here. */
-  function boxes(rt: Record<string, any>, capHeight: number) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function boxes(rt: Record<string, any>, capHeight: number, { capWidth = 250, pad = 24 } = {}) {
     const def = (el: HTMLElement, props: Record<string, () => number>) => {
       for (const [k, get] of Object.entries(props)) Object.defineProperty(el, k, { get, configurable: true });
     };
@@ -1335,18 +1336,18 @@ describe('story-mode.js speech balloons', () => {
       offsetTop: () => 10,
       offsetLeft: () => 10,
       offsetHeight: () => capHeight,
-      offsetWidth: () => 250,
+      offsetWidth: () => capWidth,
     });
     const b = rt.balloon as HTMLElement;
     const text = b.querySelector('.story-balloon-text') as HTMLElement;
-    // Three lines of 19 px, fewer once clamped; 24 px of padding and border around them.
+    // Three lines of 19 px, fewer once clamped; `pad` px of padding and border around them.
     const lines = () => Number(text.style.getPropertyValue('--story-lines')) || 3;
     const right = () => parseFloat(b.style.right);
     def(b, {
       offsetTop: () => parseFloat(b.style.top) || 0,
       offsetWidth: () => 200,
       offsetLeft: () => (Number.isNaN(right()) ? parseFloat(b.style.left) || 0 : 394 - right() - 200),
-      offsetHeight: () => 24 + lines() * 19,
+      offsetHeight: () => pad + lines() * 19,
     });
     def(text, { offsetHeight: () => lines() * 19 });
     return state;
@@ -1376,6 +1377,23 @@ describe('story-mode.js speech balloons', () => {
     rt.h = 264 + box.grown + 40;
     app._storyPlaceBalloon(rt);
     expect(text.style.getPropertyValue('--story-lines')).toBe('');
+  });
+
+  it('a growth too small for the panel to take never costs the balloon a line', async () => {
+    boot(storyOf(demoTurn()));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    const rt = app._story.panels.find((p: { kind: string }) => p.kind === 'investigate');
+    // A short caption: the balloon stands beside it, 10 px down. Two lines need 22 + 38 px and Claude's
+    // head leaves 59.4 (69.4 - 10): 0.6 px short, under the 2 px a panel ignores.
+    boxes(rt, 40, { capWidth: 120, pad: 22 });
+    app._storyFitCaption(rt);
+    expect(rt.balloon.style.top).toBe('10px');
+    expect(rt.el.style.minHeight).toBe('');
+    expect(
+      (rt.balloon.querySelector('.story-balloon-text') as HTMLElement).style.getPropertyValue('--story-lines')
+    ).toBe('2');
   });
 
   it('your balloon stands below a long caption, never under it', async () => {
