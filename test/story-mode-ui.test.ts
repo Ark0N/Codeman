@@ -1638,6 +1638,22 @@ describe('story-mode.js composer', () => {
     expect($('.story-page')!.contains($('.story-compose'))).toBe(false);
     expect($('.story-main')!.contains($('.story-compose'))).toBe(false);
   });
+
+  it('the turn picker sits in the prompt bar beside the field, not in the top bar', async () => {
+    boot(done());
+    app.openStoryMode(SID);
+    await settle();
+    const row = $('.story-compose-row')!;
+    expect($('.story-bar .story-turns')).toBeNull();
+    expect([...row.children].map((n) => n.className)).toEqual([
+      'story-nav',
+      'story-compose-field',
+      'story-compose-send',
+      'story-compose-hint',
+    ]);
+    expect(row.querySelector('.story-prev')).not.toBeNull();
+    expect(row.querySelector('.story-next')).not.toBeNull();
+  });
 });
 
 describe('story-mode.js scenes', () => {

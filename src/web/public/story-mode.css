@@ -251,8 +251,9 @@ body.story-open {
   }
 }
 
-/* A phone: three rows (title and close, the turn, the view and Save image), not four with the
-   close button alone at the bottom. Tab order stays the DOM's; focus starts on close anyway. */
+/* A phone: two rows (title and close, then the view and Save image), not three with the close
+   button alone at the bottom. Tab order stays the DOM's; focus starts on close anyway. The turn
+   picker is in the composer at the bottom. */
 @media (max-width: 600px) {
   .story-bar {
     gap: 8px 10px;
@@ -267,13 +268,6 @@ body.story-open {
   }
   .story-close {
     order: 1;
-  }
-  .story-nav {
-    order: 2;
-    flex: 1 1 100%;
-  }
-  .story-turns {
-    max-width: none;
   }
   .story-seg,
   .story-live,
@@ -1157,17 +1151,41 @@ body.story-open .toast-container {
   background: var(--story-sheet);
   border-top: 2px solid var(--story-ink);
 }
-.story-compose-inner {
-  max-width: 1240px;
-  margin: 0 auto;
-}
+/* One prompt bar: the turns you sent (picker and arrows) on the left, the next message beside them,
+   the hint under the field. On a narrow screen the turns take a row of their own above it. */
 .story-compose-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: minmax(220px, 400px) minmax(0, 1fr) auto;
+  grid-template-areas:
+    'nav field send'
+    '. hint .';
+  align-items: end;
+  gap: 4px 8px;
+}
+.story-compose .story-nav {
+  grid-area: nav;
+  min-width: 0;
+}
+/* As tall as the field beside it. */
+.story-compose .story-nav .story-btn {
+  min-width: 44px;
+  height: 44px;
+}
+.story-compose .story-turns {
+  max-width: none;
+  height: 44px;
+}
+@media (max-width: 760px) {
+  .story-compose-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'nav nav'
+      'field send'
+      'hint hint';
+  }
 }
 .story-compose .story-compose-field {
-  flex: 1 1 auto;
+  grid-area: field;
   min-width: 0;
   box-sizing: border-box;
   /* One line to about five (story-mode.js grows it to its text), then it scrolls inside. 16px keeps
@@ -1193,7 +1211,7 @@ body.story-open .toast-container {
   border-style: dashed;
 }
 .story-compose .story-compose-send {
-  flex: none;
+  grid-area: send;
   min-width: 76px;
   height: 44px;
   padding: 0 16px;
@@ -1208,7 +1226,8 @@ body.story-open .toast-container {
   cursor: default;
 }
 .story-compose-hint {
-  margin: 4px 0 0;
+  grid-area: hint;
+  margin: 0;
   font: 12px/1.35 var(--story-body);
   color: var(--story-muted);
 }
@@ -1241,6 +1260,11 @@ body.story-open .toast-container {
   }
   .story-overlay .story-wire-pill {
     min-height: 44px;
+  }
+  /* "Enter sends. Shift+Enter adds a line." means nothing on a touch keyboard: the bar keeps its
+     height for the page, and the hints that matter (Claude waits, the session is gone) still show. */
+  .story-compose[data-state='ready'] .story-compose-hint {
+    display: none;
   }
   .story-cap-dir,
   .story-ev,

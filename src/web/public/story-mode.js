@@ -1859,7 +1859,9 @@ Object.assign(CodemanApp.prototype, {
     const saveBtn = btn('story-btn story-save', 'Save image', 'Save this page as an image');
     saveBtn.title = 'Save this page as a PNG to share';
     const closeBtn = btn('story-btn story-close', '×', 'Close Story Mode');
-    bar.append(brand, nav, seg, live, saveBtn, closeBtn);
+    // The turn picker lives in the composer at the bottom (_storyComposeBuild): the prompts you sent and
+    // the one you write next, in one bar.
+    bar.append(brand, seg, live, saveBtn, closeBtn);
     // What a screen reader hears as the page changes: a new turn, a finished one.
     const announcer = el('p', 'story-sr');
     announcer.dataset.i18nSkip = ''; // it reads out the agent's prompts
@@ -1964,6 +1966,7 @@ Object.assign(CodemanApp.prototype, {
       wireCount,
       wireList,
       wirePill,
+      navEl: nav,
       drawerEl: drawer,
       drawerKind,
       drawerLive,
@@ -2107,8 +2110,9 @@ Object.assign(CodemanApp.prototype, {
     const t = typeof window.CodemanI18n?.t === 'function' ? (s) => window.CodemanI18n.t(s) : (s) => s;
     field.setAttribute('aria-label', t('Message Claude'));
     field.placeholder = t('Tell Claude what to do next');
-    row.append(field, send);
-    inner.append(row, hint);
+    // The turn picker on the left (the prompts already sent), then the next one: one prompt bar.
+    row.append(st.navEl, field, send, hint);
+    inner.append(row);
     box.append(inner);
     // Between the page and the drawer: Tab walks bar, page, composer, then an open drawer.
     st.root.insertBefore(box, st.drawerEl);
