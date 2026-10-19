@@ -560,6 +560,7 @@ Object.assign(CodemanApp.prototype, {
     // .checked fires no onchange, so the list's visibility (and lazy load)
     // needs an explicit sync on every open, not just a save.
     this.applyCliManagementVisibility();
+    document.getElementById('appSettingsSyncCaseState').checked = settings.syncCaseState === true;
     // MCP server sync: synced, default OFF; same explicit-sync reasoning as above.
     // The routes read the SAVED setting, so remember what it was on open: switching it on
     // here does nothing server-side until Save (see mcpSync()).
@@ -3139,6 +3140,7 @@ Object.assign(CodemanApp.prototype, {
       customModelEndpointsEnabled: document.getElementById('appSettingsCustomModelEndpoints').checked,
       cliManagementEnabled: document.getElementById('appSettingsCliManagement').checked,
       mcpSyncEnabled: document.getElementById('appSettingsMcpSync').checked,
+      syncCaseState: document.getElementById('appSettingsSyncCaseState').checked,
       configBackupEnabled: document.getElementById('appSettingsConfigBackup').checked,
       configBackupDir: document.getElementById('appSettingsConfigBackupDir').value.trim(),
       ...this._configBackupRetentionPayload(_prev),
@@ -5280,6 +5282,7 @@ Object.assign(CodemanApp.prototype, {
         // installs that had saved `false` (agent-skill-default-migration.ts).
         if (!('agentSkillEnabled' in appSettings)) delete merged.agentSkillEnabled;
         this.saveAppSettingsToStorage(merged);
+        this._applyServerCaseSettings(settings);
 
         // Apply notification prefs from server if present (only if localStorage has none)
         if (notificationPreferences && this.notificationManager) {
