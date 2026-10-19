@@ -481,7 +481,7 @@ body.story-open .toast-container {
   top: auto;
   bottom: calc(var(--story-compose-h, env(safe-area-inset-bottom, 0px)) + 0.75rem);
 }
-/* story-mode.js sets --story-lines when a balloon would leave its panel or cover Claude's head. */
+/* story-mode.js sets --story-lines when a balloon would leave its panel or cover the art or Claude's face. */
 .story-balloon-text {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -556,8 +556,8 @@ body.story-open .toast-container {
 .story-balloon--note::after {
   display: none;
 }
-/* Claude's balloon is placed over its head by story-mode.js (_storyPlaceBalloon); a scene with no
-   Claude in it (the loop) keeps it in the top corner, clear of the art below. */
+/* Every balloon is placed by story-mode.js (_storyFitBalloon), from the scene's layout: these are its
+   places before that (or without a scene layout). */
 .story-panel[data-kind='loop'] .story-balloon--claude {
   top: 10px;
   right: 12px;

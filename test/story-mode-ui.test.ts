@@ -1970,3 +1970,147 @@ describe('story-mode.js reading levels', () => {
     expect(chips()).toEqual(['7 min 12 s', '1 file changed', '10 tool calls', '1 commit', '1 helper']);
   });
 });
+
+describe('story-mode.js speech balloons', () => {
+  const room = (o: Record<string, unknown>) => win.storyBalloonRoom(o) as { limit: number; grow: number };
+
+  it('a balloon reaches down to the first object under it, its tail to the first under the tail', () => {
+    boot(null);
+    const base = { top: 10, x0: 100, x1: 300, floor: 250, keep: 62 };
+    expect(room(base)).toEqual({ limit: 250, grow: 0 });
+    // Under the body: the balloon ends above it (4 px gap).
+    expect(room({ ...base, obstacles: [{ x0: 200, x1: 260, y: 104 }] }).limit).toBe(100);
+    // Beside it (more than the gap away): ignored.
+    expect(room({ ...base, obstacles: [{ x0: 20, x1: 90, y: 40 }] }).limit).toBe(250);
+    // Under the tail only: the tail's tip ends above it, so the body ends a tail higher.
+    const tail = { x0: 330, x1: 352, h: 16.5 };
+    expect(room({ ...base, tail, obstacles: [{ x0: 340, x1: 400, y: 120 }] }).limit).toBe(120 - 16.5 - 4);
+    // No room for two lines below a long caption: the panel grows by the shortfall.
+    expect(room({ ...base, top: 168, obstacles: [{ x0: 200, x1: 260, y: 104 }] })).toEqual({ limit: 100, grow: 130 });
+  });
+
+  /** A panel with a box model: JSDOM lays nothing out, so every box the fit reads is given here. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function boxes(rt: Record<string, any>, capHeight: number, { capWidth = 250, pad = 24 } = {}) {
+    const def = (el: HTMLElement, props: Record<string, () => number>) => {
+      for (const [k, get] of Object.entries(props)) Object.defineProperty(el, k, { get, configurable: true });
+    };
+    const state = { grown: 0 };
+    rt.el.style.setProperty('--story-panel-min', '270px');
+    def(rt.el, {
+      offsetHeight: () => 270 + state.grown,
+      clientHeight: () => 264 + state.grown,
+      clientWidth: () => 394,
+    });
+    def(rt.capStory.parentElement, {
+      offsetTop: () => 10,
+      offsetLeft: () => 10,
+      offsetHeight: () => capHeight,
+      offsetWidth: () => capWidth,
+    });
+    const b = rt.balloon as HTMLElement;
+    const text = b.querySelector('.story-balloon-text') as HTMLElement;
+    // Three lines of 19 px, fewer once clamped; `pad` px of padding and border around them.
+    const lines = () => Number(text.style.getPropertyValue('--story-lines')) || 3;
+    const right = () => parseFloat(b.style.right);
+    def(b, {
+      offsetTop: () => parseFloat(b.style.top) || 0,
+      offsetWidth: () => 200,
+      offsetLeft: () => (Number.isNaN(right()) ? parseFloat(b.style.left) || 0 : 394 - right() - 200),
+      offsetHeight: () => pad + lines() * 19,
+    });
+    def(text, { offsetHeight: () => lines() * 19 });
+    return state;
+  }
+
+  it('a balloon pushed below a long caption grows its panel, the same growth on the grown panel', async () => {
+    boot(storyOf(demoTurn()));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    const rt = app._story.panels.find((p: { kind: string }) => p.kind === 'investigate');
+    const box = boxes(rt, 150);
+    app._storyFitCaption(rt);
+    // No room beside the caption: the balloon stands below it, over Claude's head at the right.
+    expect(rt.balloon.style.top).toBe('168px');
+    const grown = rt.el.style.minHeight;
+    // Two lines (24 + 38 px) end above Claude's head (91 px down the usual stage, the tail 22 px
+    // over it), so the panel grows by 168 + 62 - 69: more than the caption alone asks for (71).
+    expect(grown).toBe('431px');
+    // The resize observer refits the grown panel: the same height, and the text clamps to two lines.
+    box.grown = parseFloat(grown) - 270;
+    app._storyFitCaption(rt);
+    expect(rt.el.style.minHeight).toBe(grown);
+    const text = rt.balloon.querySelector('.story-balloon-text') as HTMLElement;
+    expect(text.style.getPropertyValue('--story-lines')).toBe('2');
+    // A taller row (a neighbour grew more) gives the text its third line back.
+    rt.h = 264 + box.grown + 40;
+    app._storyPlaceBalloon(rt);
+    expect(text.style.getPropertyValue('--story-lines')).toBe('');
+  });
+
+  it('a growth too small for the panel to take never costs the balloon a line', async () => {
+    boot(storyOf(demoTurn()));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    const rt = app._story.panels.find((p: { kind: string }) => p.kind === 'investigate');
+    // A short caption: the balloon stands beside it, 10 px down. Two lines need 22 + 38 px and Claude's
+    // head leaves 59.4 (69.4 - 10): 0.6 px short, under the 2 px a panel ignores.
+    boxes(rt, 40, { capWidth: 120, pad: 22 });
+    app._storyFitCaption(rt);
+    expect(rt.balloon.style.top).toBe('10px');
+    expect(rt.el.style.minHeight).toBe('');
+    expect(
+      (rt.balloon.querySelector('.story-balloon-text') as HTMLElement).style.getPropertyValue('--story-lines')
+    ).toBe('2');
+  });
+
+  it('your balloon stands below a long caption, never under it', async () => {
+    boot(storyOf(demoTurn()));
+    app.openStoryMode(SID);
+    await settle();
+    sizeAndDraw();
+    const rt = app._story.panels.find((p: { kind: string }) => p.kind === 'mission');
+    boxes(rt, 120);
+    app._storyFitCaption(rt);
+    expect(rt.balloon.className).toContain('story-balloon--you');
+    expect(rt.balloon.style.top).toBe('140px');
+    expect(rt.balloon.style.left).toBe('16px');
+    // The mission's click region is Claude himself: not an object to avoid, only his face is.
+    expect(rt.layout.objects).toEqual([]);
+    // Claude stands at the right: the balloon ends left of his face.
+    const face = rt.layout.face;
+    expect(16 + parseFloat(rt.balloon.style.maxWidth)).toBeLessThanOrEqual(face.x0 - 8);
+  });
+});
+
+describe('story-mode.js magnifier', () => {
+  it('terminal lines the magnifier is held over end short of it, the others keep their width', async () => {
+    const look = (id: string, desc: string) => bash(id, `ls -la ${id}`, desc, '');
+    boot(
+      storyOf([
+        prompt('Look around please'),
+        ...look('b1', 'Inspect project folder, git state and the remotes'),
+        ...look('b2', 'List src and config contents of the whole repository'),
+        end(4000),
+      ])
+    );
+    app.openStoryMode(SID);
+    await settle();
+    const rt = app._story.panels.find((p: { kind: string }) => p.kind === 'investigate');
+    expect(rt.panel.files ?? []).toEqual([]);
+    // A narrow panel: the stage is 300 / (270 / 260) = 289 units wide, Claude at 231, the lens's rim
+    // at 231 - 119 at most, the terminal 168 units wide from 14.
+    Object.assign(rt, { w: 300, h: 270, dpr: 1, bgKey: '', clock: 72 }); // the finished frame (HERO)
+    drawnTexts.length = 0;
+    app._storyDrawPanel(rt);
+    const lines = drawnTexts.filter((t) => t.startsWith('› '));
+    expect(lines).toHaveLength(2);
+    // The fake context measures 6 units a character: the first line uses the terminal's width (above
+    // the lens), the second ends with an ellipsis before the rim (231 - 122 - 14 - 13 = 82 units).
+    expect(lines[0].length * 6).toBeGreaterThan(120);
+    expect(lines[1].endsWith('…')).toBe(true);
+    expect(lines[1].length * 6).toBeLessThanOrEqual(82);
+  });
+});

@@ -343,7 +343,10 @@ const StoryArt = (() => {
   /** The agent: a terminal-headed character. (x, y) is the point between its feet. */
   /** Every edit an event made: an Edit/Write call's one, or the files a Bash here-document wrote. */
   const editsOf = (e) => (e?.edit ? [e.edit] : e?.edits || []);
-  /** Where Claude's head was last drawn (stage units): the speech balloon is placed over it. */
+  /**
+   * Where Claude's head was last drawn (stage units): the speech balloon is placed over it, and no
+   * balloon covers `face`, the box of his head.
+   */
   let speaker = null;
   /** A scene with no Claude in it names the spot its balloon should point at. */
   function aim(x, top) {
@@ -360,8 +363,21 @@ const StoryArt = (() => {
     const L = o.l ?? [-32, -44];
     const R = o.r ?? [32, -44];
     const hy = -120 + (o.headBob ?? 0);
-    // Claude is the cyan one; a helper in another colour never holds the balloon.
-    if (body === C.cyan) speaker = { x, top: y + (hy - 36) * s };
+    // Claude is the one drawn in his own colour (no `body` given); a helper never holds the balloon,
+    // not even the cyan fourth one. `rise`: how much higher a jump lifts him on other frames.
+    if (!o.body) {
+      const lift = o.rise ?? 0;
+      const t = o.tilt ?? 0;
+      // The head turns with the body about the feet: its centre moves sideways by the tilt.
+      const cy = (hy + 1) * s;
+      const fx = x - cy * Math.sin(t);
+      const fy = y + cy * Math.cos(t) - lift;
+      speaker = {
+        x,
+        top: y + (hy - 36) * s - lift,
+        face: { x: fx - 33 * s, y: fy - 28 * s, w: 66 * s, h: 56 * s + lift },
+      };
+    }
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(o.tilt ?? 0);
@@ -699,7 +715,10 @@ const StoryArt = (() => {
     if (t && !t.passed && !t.failed && t.errors) return `${t.errors} error${t.errors === 1 ? '' : 's'}`;
     return `${total} test${total === 1 ? '' : 's'}`;
   }
-  function terminal(ctx, x, y, w, h, lines, f, printed = []) {
+  /** `clear` ({ x, top, bottom }): a band something is held over (the magnifier); lines in it end left of `x`. */
+  function terminal(ctx, x, y, w, h, lines, f, printed = [], clear = null) {
+    const room = (base) =>
+      clear && base + 2 > clear.top && base - 8 < clear.bottom ? Math.min(w - 18, clear.x - x - 13) : w - 18;
     rr(ctx, x, y, w, h, 7);
     inked(ctx, C.line, 2.5);
     ctx.fillStyle = C.balloonInk;
@@ -714,7 +733,7 @@ const StoryArt = (() => {
     ctx.textBaseline = 'alphabetic';
     const rows = Math.max(1, Math.floor((h - 24) / 14));
     lines.slice(0, rows).forEach((line, i) => {
-      const text = fitText(ctx, `› ${line}`, w - 18);
+      const text = fitText(ctx, `› ${line}`, room(y + 30 + i * 14));
       const shown = Math.floor(interpolate(f, [8 + i * 12, 20 + i * 12], [0, text.length]));
       ctx.fillStyle = i === Math.min(rows, lines.length) - 1 ? C.yellow : C.balloon;
       ctx.fillText(text.slice(0, shown), x + 9, y + 30 + i * 14);
@@ -722,7 +741,7 @@ const StoryArt = (() => {
     const n = Math.min(rows, lines.length);
     const out = printed.slice(0, Math.max(0, rows - n));
     out.forEach((line, i) => {
-      const text = fitText(ctx, line, w - 18);
+      const text = fitText(ctx, line, room(y + 30 + (n + i) * 14));
       const at = 8 + (n + i) * 12;
       const shown = Math.floor(interpolate(f, [at, at + 10], [0, text.length]));
       ctx.save();
@@ -824,16 +843,12 @@ const StoryArt = (() => {
         const files = p.panel.files || [];
         const ax = W - 58;
         if (!files.length) {
-          terminal(
-            ctx,
-            14,
-            92,
-            Math.min(W * 0.58, 220),
-            130,
-            p.panel.notes?.length ? p.panel.notes : ['looking around'],
-            f
-          );
-          hit('list', 14, 92, Math.min(W * 0.58, 220), 130, 'See what Claude looked at');
+          const tw = Math.min(W * 0.58, 220);
+          // On a narrow panel the magnifier is held over the terminal: the lines it passes end short of
+          // it (its rim's reach over every frame of its sway), so it never hides their words.
+          const lens = { x: ax - 122, top: 125, bottom: 187 };
+          terminal(ctx, 14, 92, tw, 130, p.panel.notes?.length ? p.panel.notes : ['looking around'], f, [], lens);
+          hit('list', 14, 92, tw, 130, 'See what Claude looked at');
         } else {
           const shown = files.length > 8 ? files.slice(0, 7) : files;
           const extra = files.length - shown.length;
@@ -1138,10 +1153,12 @@ const StoryArt = (() => {
           ].forEach(([x, y], k) => star4(ctx, x, y, 7 + Math.sin(f / 5 + k * 1.7) * 3, C.yellow));
         }
         const mood = running ? 'focus' : p.panel.ok ? 'happy' : 'shock';
-        const jump = p.panel.ok && f > 30 ? Math.abs(Math.sin((f - 30) / 7)) * 12 : 0;
+        const jumping = p.panel.ok && f > 30;
+        const jump = jumping ? Math.abs(Math.sin((f - 30) / 7)) * 12 : 0;
         agent(ctx, W - 40, 254 - jump, {
           frame: f,
           scale: 0.66,
+          rise: jumping ? 12 - jump : 0,
           mood,
           tilt: p.panel.ok === false ? interpolate(f, [28, 36], [0, 0.14]) : 0,
           l: p.panel.ok ? [-32, -58] : [-36, -98],
@@ -1525,7 +1542,33 @@ const StoryArt = (() => {
     },
   };
 
-  return { FPS, HERO, VH, C, readColors, spring, SCENES, takeSpeaker, editsOf, inBand };
+  /**
+   * A scene's layout at its finished frame, drawn on a 1x1 scratch canvas: its click regions and where
+   * Claude stands (stage units). Balloons are placed from this, never from the frame on screen, where
+   * an entrance still has objects in flight and the panel would change height with them.
+   */
+  let scratch;
+  function layout(kind, W, p) {
+    const scene = SCENES[kind];
+    if (scratch === undefined) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 1;
+      scratch = c.getContext('2d');
+    }
+    if (!scene || !scratch) return null;
+    const hits = [];
+    takeSpeaker();
+    scratch.save();
+    scratch.setTransform(1, 0, 0, 1, 0, 0);
+    try {
+      scene.draw(scratch, W, VH, HERO, p, (id, x, y, w, h) => hits.push({ id, x, y, w, h }));
+    } finally {
+      scratch.restore();
+    }
+    return { hits, speaker: takeSpeaker() };
+  }
+
+  return { FPS, HERO, VH, C, readColors, spring, SCENES, takeSpeaker, editsOf, inBand, layout };
 })();
 
 /** Panel kinds as the wire's group headings name them. */
@@ -1682,6 +1725,25 @@ function storyRowHeights(spans, cols, { width, height, gap = 0, stageMin = [], l
     Math.max(STORY_ROW_MIN, Math.min(heights[rowOf[i]], Math.floor(tallest(i, own(i)))))
   );
   return { heights, stage, rowOf, k, fill: avail / n, caps };
+}
+
+/**
+ * How far down a speech balloon may reach, and how much taller its panel must grow for the balloon to
+ * keep `keep` px (its padding and the lines it must show). Everything is in panel px at the panel's
+ * usual height: `obstacles` ({ x0, x1, y }: the scene's objects and Claude's face) and `floor` (the
+ * bottom edge, Claude's head) stand on the stage, so a panel grown by g moves each of them down by g
+ * while the balloon keeps its `top`. The result therefore does not depend on the grown height: a
+ * second pass over a grown panel asks for the same growth, never more.
+ * An obstacle under the body (`x0`..`x1`) must start below it; one under the tail (`tail`: { x0, x1,
+ * h }, the point below the body) must start below the tail's tip.
+ */
+function storyBalloonRoom({ top, x0, x1, tail = null, obstacles = [], floor, keep, gap = 4 }) {
+  let limit = floor;
+  for (const o of obstacles) {
+    if (o.x1 > x0 - gap && o.x0 < x1 + gap) limit = Math.min(limit, o.y - gap);
+    if (tail && o.x1 > tail.x0 - gap && o.x0 < tail.x1 + gap) limit = Math.min(limit, o.y - tail.h - gap);
+  }
+  return { limit, grow: Math.max(0, top + keep - limit) };
 }
 
 Object.assign(CodemanApp.prototype, {
@@ -3169,6 +3231,8 @@ Object.assign(CodemanApp.prototype, {
   /**
    * A caption taller than the band above the art makes its panel taller by the difference, and the
    * scene stands below it (`rt.stageH`): a long caption never covers a test board or a code page.
+   * The speech balloon is placed here too (`_storyFitBalloon`), and when it has to sit below the
+   * caption the panel grows for both, so the balloon covers no object and not Claude's face either.
    */
   _storyFitCaption(rt) {
     if (rt.splash) return;
@@ -3176,11 +3240,136 @@ Object.assign(CodemanApp.prototype, {
     const base = parseFloat(getComputedStyle(rt.el).getPropertyValue('--story-panel-min')) || 0;
     if (!cap || !base) return;
     const border = rt.el.offsetHeight - rt.el.clientHeight;
+    const s = (base - border) / StoryArt.VH;
     // The art starts about 88 scene units down (a terminal at 92, a code page at 104, a board at 106).
-    const room = (88 * (base - border)) / StoryArt.VH;
-    const need = cap.offsetTop + cap.offsetHeight - room;
+    const capBottom = cap.offsetTop + cap.offsetHeight;
+    // Never more than one more usual height for the balloon: a guard, the room it asks for is smaller.
+    const balloon = Math.min(base, this._storyFitBalloon(rt, base - border, s, cap));
+    const need = Math.max(capBottom - 88 * s, balloon);
     const grow = need > 2 ? `${Math.ceil(base + need)}px` : '';
     if (rt.el.style.minHeight !== grow) rt.el.style.minHeight = grow;
+    if (rt.balloonFit) this._storyClampBalloon(rt, rt.el.clientHeight);
+  },
+
+  /**
+   * The scene's objects and Claude in panel px at the panel's usual height, from the scene's finished
+   * frame (`StoryArt.layout`), kept until the panel's data, width or mode changes. A click region that
+   * holds Claude's face is Claude himself (the mission's prompt, the ask panel's question): it is not
+   * an object a balloon must avoid, only his face is.
+   */
+  _storySceneLayout(rt, w, s) {
+    const st = this._story;
+    const key = `${rt.kind}|${w}|${s}|${st.director}`;
+    if (rt.layoutKey === key && rt.layoutFor === rt.panel) return rt.layout;
+    const scene = StoryArt.SCENES[rt.kind];
+    const W = w / s;
+    const stageW = scene?.fullWidth ? W : Math.min(W, STORY_STAGE_MAX);
+    const ox = (W - stageW) / 2;
+    const raw =
+      rt.panel && StoryArt.layout(rt.kind, stageW, { panel: rt.panel, page: st.data?.page, director: st.director });
+    let lay = null;
+    if (raw) {
+      const box = (r) => ({ x0: (r.x + ox) * s, x1: (r.x + ox + r.w) * s, y: r.y * s, y1: (r.y + r.h) * s });
+      const sp = raw.speaker;
+      const face = sp?.face ? box(sp.face) : null;
+      const cx = face && (face.x0 + face.x1) / 2;
+      const cy = face && (face.y + face.y1) / 2;
+      const objects = raw.hits.map(box).filter((o) => !(face && o.x0 <= cx && cx <= o.x1 && o.y <= cy && cy <= o.y1));
+      lay = { objects, face, head: sp ? { x: (sp.x + ox) * s, top: sp.top * s } : null };
+    }
+    rt.layoutKey = key;
+    rt.layoutFor = rt.panel;
+    rt.layout = lay;
+    return lay;
+  },
+
+  /**
+   * Places the balloon (left or right, top, max-width; nothing of it reads the panel's height) and
+   * returns how much taller the panel must be for the balloon to show two lines (or all of a shorter
+   * one) above every object it would cover and above Claude's face. Claude's own balloon goes in the
+   * band above his head, the tail pointing down at it: beside the caption when there is room, else
+   * below it. The ask panel's stays left of his face; yours and a notice stand under the caption.
+   * The room it may use is kept in `rt.balloonFit` for the clamp (`_storyClampBalloon`).
+   */
+  _storyFitBalloon(rt, stageH, s, cap) {
+    const b = rt.balloon;
+    const text = b?.querySelector('.story-balloon-text');
+    rt.balloonFit = null;
+    if (!b || b.hidden || !text) return 0;
+    const w = rt.el.clientWidth;
+    const lay = this._storySceneLayout(rt, w, s);
+    if (!lay) {
+      // No scene layout (a browser out of canvas memory): the stylesheet's places, clamped to the panel.
+      for (const prop of ['left', 'right', 'top', 'max-width']) b.style.removeProperty(prop);
+      return 0;
+    }
+    const capRight = cap.offsetLeft + cap.offsetWidth;
+    const capBottom = cap.offsetTop + cap.offsetHeight;
+    const face = lay.face;
+    const claude = b.classList.contains('story-balloon--claude');
+    const placed = claude && rt.kind !== 'ask' && !!lay.head;
+    let floor = stageH - 12;
+    let tail = null;
+    if (placed) {
+      const hx = lay.head.x;
+      const right = Math.max(10, Math.min(w - 160, w - hx - 38));
+      // The loop has no Claude to keep clear of on the left: its balloon may run wide, so it stays
+      // short and ends above the board it points at.
+      let maxW = Math.min(w * (rt.kind === 'loop' ? 0.9 : 0.5), w - right - 14);
+      let top = 10;
+      const besideCap = w - right - capRight - 10;
+      if (besideCap >= 150) maxW = Math.min(maxW, besideCap);
+      else top = capBottom + 8;
+      // The LIVE tag sits in the top-right corner: start below it when the balloon reaches that far.
+      if (!rt.liveTag.hidden && right < w - rt.liveTag.offsetLeft)
+        top = Math.max(top, rt.liveTag.offsetTop + rt.liveTag.offsetHeight + 6);
+      b.style.left = 'auto';
+      b.style.right = `${Math.round(right)}px`;
+      b.style.top = `${Math.round(top)}px`;
+      b.style.maxWidth = `${Math.round(Math.max(140, maxW))}px`;
+      // The tail's tip ends just above the head (it points at it).
+      floor = Math.min(floor, lay.head.top - 22);
+    } else {
+      // The ask panel's balloon and yours stand at the left: under the caption, and left of his face.
+      const left = claude ? 14 : 16;
+      const top = Math.max(claude ? 0.3 * stageH : 74, capBottom + (claude ? 8 : 10));
+      let maxW = w * (claude ? 0.46 : 0.54);
+      if (face && face.x0 - 8 - left < maxW) maxW = Math.max(120, face.x0 - 8 - left);
+      b.style.left = `${left}px`;
+      b.style.right = 'auto';
+      b.style.top = `${Math.round(top)}px`;
+      b.style.maxWidth = `${Math.round(maxW)}px`;
+    }
+    text.style.removeProperty('--story-lines');
+    const top = b.offsetTop;
+    const x0 = b.offsetLeft;
+    const x1 = x0 + b.offsetWidth;
+    const lh = parseFloat(getComputedStyle(text).lineHeight) || 19;
+    const pad = b.offsetHeight - text.offsetHeight;
+    if (claude) {
+      // The tail (the ink half, ::before) hangs below the body's right end, set inside its border.
+      const bs = getComputedStyle(b);
+      const tb = getComputedStyle(b, '::before');
+      const inset = parseFloat(bs.borderRightWidth) || 0;
+      const right = x1 - inset - (parseFloat(tb.right) || 0);
+      const below = -(parseFloat(tb.bottom) || 0) - (parseFloat(bs.borderBottomWidth) || 0);
+      if (below > 0 && tb.display !== 'none') tail = { x0: right - (parseFloat(tb.width) || 0), x1: right, h: below };
+    }
+    const obstacles = lay.objects.slice();
+    if (face) obstacles.push(face);
+    // The ask panel's answer stamp stands at the bottom, so it moves with a taller panel like the art.
+    if (rt.answer && !rt.answer.hidden)
+      obstacles.push({
+        x0: rt.answer.offsetLeft,
+        x1: rt.answer.offsetLeft + rt.answer.offsetWidth,
+        y: stageH - (rt.el.clientHeight - rt.answer.offsetTop) - 6,
+      });
+    const lines = Math.max(1, Math.round(text.offsetHeight / lh));
+    const keep = pad + Math.min(2, lines) * lh;
+    const room = storyBalloonRoom({ top, x0, x1, tail, obstacles, floor, keep });
+    rt.balloonSerial = (rt.balloonSerial || 0) + 1;
+    rt.balloonFit = { top, limit: room.limit, stageH, serial: rt.balloonSerial };
+    return room.grow;
   },
 
   /** Draws on the next frame, within its budget (now, when the frame loop is not running). */
@@ -3260,60 +3449,43 @@ Object.assign(CodemanApp.prototype, {
       hit
     );
     this._storySyncHits(rt, hits, s);
-    this._storyPlaceBalloon(rt, StoryArt.takeSpeaker(), ox, s, oy);
+    StoryArt.takeSpeaker(); // the balloon is placed from the scene's layout (_storyFitBalloon), not this frame
+    this._storyPlaceBalloon(rt);
   },
 
   /**
-   * Claude's balloon goes in the band above its head, the tail pointing down at it, so it never
-   * covers the art the scene draws below (a test board, a burst, the code page). It keeps clear of
-   * the caption box: narrower beside it, or below it when there is no room. Recomputed only when
-   * the panel's size, the text or the head's column changes.
+   * Keeps the balloon's clamp right for the panel's height, which can change without a refit (a
+   * taller neighbour stretches the row). Cheap when nothing changed: it runs on every draw.
    */
-  _storyPlaceBalloon(rt, head, ox, s, oy = 0) {
+  _storyPlaceBalloon(rt) {
     const b = rt.balloon;
     if (!b || b.hidden || rt.splash) return;
-    const placed = !!head && rt.kind !== 'ask' && b.classList.contains('story-balloon--claude');
-    const hx = placed ? (head.x + ox) * s : 0;
-    const cap = rt.capStory.parentElement;
-    const capW = cap?.offsetWidth || 0;
-    const live = !rt.liveTag.hidden;
-    const key = `${rt.w}x${rt.h}|${placed ? Math.round(hx / 6) : '-'}|${capW}|${live}|${b.className}|${b.textContent}`;
+    const key = `${rt.h}|${rt.balloonFit?.serial ?? '-'}|${b.className}|${b.textContent}`;
     if (key === rt.balloonKey) return;
-    rt.balloonKey = key;
-    if (placed) {
-      const capRight = cap ? cap.offsetLeft + capW : 0;
-      const capBottom = cap ? cap.offsetTop + cap.offsetHeight : 0;
-      const right = Math.max(10, Math.min(rt.w - 160, rt.w - hx - 38));
-      // The loop has no Claude to keep clear of on the left: its balloon may run wide, so it stays
-      // short and ends above the board it points at.
-      let maxW = Math.min(rt.w * (rt.kind === 'loop' ? 0.9 : 0.5), rt.w - right - 14);
-      let top = 10;
-      const besideCap = rt.w - right - capRight - 10;
-      if (besideCap >= 150) maxW = Math.min(maxW, besideCap);
-      else top = capBottom + 8;
-      // The LIVE tag sits in the top-right corner: start below it when the balloon reaches that far.
-      if (live && right < rt.w - rt.liveTag.offsetLeft)
-        top = Math.max(top, rt.liveTag.offsetTop + rt.liveTag.offsetHeight + 6);
-      b.style.left = 'auto';
-      b.style.right = `${Math.round(right)}px`;
-      b.style.top = `${Math.round(top)}px`;
-      b.style.maxWidth = `${Math.round(Math.max(140, maxW))}px`;
-    } else {
-      for (const prop of ['left', 'right', 'top', 'max-width']) b.style.removeProperty(prop);
-    }
-    // Clamp a long text: inside the panel always, and off Claude's head when three lines allow.
-    const text = b.querySelector('.story-balloon-text');
+    this._storyClampBalloon(rt, rt.h);
+  },
+
+  /**
+   * Clamps a long balloon text (`--story-lines`) to the room its fit left it at panel height `h`: a
+   * taller panel moves the scene's objects and Claude down, so the room grows with it. Without a fit
+   * (no stylesheet, no scene layout) the text only stays inside the panel.
+   */
+  _storyClampBalloon(rt, h) {
+    const b = rt.balloon;
+    const text = b?.querySelector('.story-balloon-text');
     if (!text) return;
+    const fit = rt.balloonFit;
+    rt.balloonKey = `${h}|${fit?.serial ?? '-'}|${b.className}|${b.textContent}`;
     text.style.removeProperty('--story-lines');
+    // A panel ignores a growth of 2 px or less (_storyFitCaption): the balloon may use that much of the
+    // gap it keeps, or such a panel would show one line fewer than its fit made room for.
+    const limit = (fit ? fit.limit + h - fit.stageH : h - 12) + 2;
     const lh = parseFloat(getComputedStyle(text).lineHeight) || 19;
     const pad = b.offsetHeight - text.offsetHeight;
-    // The loop's "head" is its board: down to one line rather than over the test count.
-    const least = rt.kind === 'loop' ? 1 : placed ? 3 : 2;
-    const limit = placed ? Math.max(b.offsetTop + pad + least * lh, (head.top + oy) * s - 22) : rt.h - 12;
     if (b.offsetHeight && b.offsetTop + b.offsetHeight > limit)
       text.style.setProperty(
         '--story-lines',
-        String(Math.max(Math.min(least, 2), Math.floor((limit - b.offsetTop - pad) / lh)))
+        String(Math.max(1, Math.floor((limit - b.offsetTop - pad) / lh + 0.001)))
       );
   },
 
