@@ -1760,7 +1760,8 @@ Object.assign(CodemanApp.prototype, {
     wireHead.append(el('p', 'story-wire-title', 'The wire'), wireCount);
     const wireList = el('ol', 'story-wire-list');
     wireList.dataset.i18nSkip = '';
-    wire.append(wireHead, wireList);
+    const { foot: wireFoot, pill: wirePill } = this._storyWireControls(wire, wireList);
+    wire.append(wireHead, wireList, wireFoot);
     stage.append(sheet, wire);
     main.append(note, stage);
 
@@ -1838,6 +1839,7 @@ Object.assign(CodemanApp.prototype, {
       wire,
       wireCount,
       wireList,
+      wirePill,
       drawerEl: drawer,
       drawerKind,
       drawerLive,
@@ -3043,13 +3045,25 @@ Object.assign(CodemanApp.prototype, {
 
   // ── The wire ──
 
+  /**
+   * The wire, updated in place: rows are keyed by event id and headings by the row they head, so a
+   * refresh keeps every node it can (focus, hover and the reader's place survive), patches a row whose
+   * state changed and adds new rows in order. A new turn replaces the whole list. While it follows,
+   * the list glides to the newest row (`_storyWireGlide`).
+   */
   _storyRenderWire() {
     const st = this._story;
     const page = st.data?.supported ? st.data.page : null;
     const list = st.wireList;
+    const view = this._storyWireView();
     if (!page) {
-      list.replaceChildren();
-      st.wireCount.textContent = '';
+      if (list.firstElementChild) list.replaceChildren();
+      view.nodes.clear();
+      view.pageId = null;
+      view.unseen = 0;
+      this._storyWireStop();
+      this._storyWirePill();
+      if (st.wireCount.textContent) st.wireCount.textContent = '';
       return;
     }
     const panelOf = new Map();
@@ -3062,23 +3076,355 @@ Object.assign(CodemanApp.prototype, {
       if (panelOf.has(i)) next = panelOf.get(i);
       else panelOf.set(i, next);
     }
-    const rows = [];
+    // What the list should hold, in order. A row's key is its event id (numbered if an id repeats); a
+    // heading's is the row it heads, so a panel that changes kind or number as the turn grows (a fix
+    // that becomes a loop, a fold into a montage) keeps its heading node and only its words change.
+    const seen = new Map();
+    const unique = (key) => {
+      const n = seen.get(key) || 0;
+      seen.set(key, n + 1);
+      return n ? `${key}#${n}` : key;
+    };
+    const want = [];
     let lastPanel = -2;
     page.events.forEach((ev, i) => {
       const pi = panelOf.get(i);
+      const key = unique(`e:${ev.id}`);
       if (pi !== lastPanel && pi >= 0) {
-        const g = document.createElement('li');
-        g.className = 'story-wire-group';
-        const h = document.createElement('h3');
-        h.textContent = `Panel ${pi + 1} · ${STORY_KIND_NAMES[page.panels[pi].kind] || page.panels[pi].kind}`;
-        g.append(h);
-        rows.push(g);
+        const panel = page.panels[pi];
+        const text = `Panel ${pi + 1} · ${STORY_KIND_NAMES[panel.kind] || panel.kind}`;
+        want.push({
+          key: `g:${key}`,
+          sig: text,
+          make: () => {
+            const g = document.createElement('li');
+            g.className = 'story-wire-group';
+            const h = document.createElement('h3');
+            h.textContent = text;
+            g.append(h);
+            return g;
+          },
+        });
         lastPanel = pi;
       }
-      rows.push(this._storyEventRow(ev, i));
+      want.push({
+        key,
+        // Everything _storyEventRow reads: the same signature draws the same row.
+        sig: JSON.stringify([
+          ev.actor,
+          ev.at,
+          ev.tool,
+          ev.label,
+          ev.intent,
+          ev.ok,
+          !!ev.pending,
+          !!ev.running,
+          this._storyEventTarget(ev, i),
+        ]),
+        event: true,
+        make: () => this._storyEventRow(ev, i),
+      });
     });
-    list.replaceChildren(...rows);
-    st.wireCount.textContent = `${page.toolCalls} tool call${page.toolCalls === 1 ? '' : 's'}, ${page.events.length} events. Underlined parts open.`;
+
+    const reset = view.pageId !== page.id || !list.firstElementChild;
+    if (reset) {
+      view.nodes.clear();
+      view.pageId = page.id;
+      view.unseen = 0;
+    }
+    // Geometry is read once, before any write, and only when the decision needs it: a list that
+    // follows keeps following (its own glide may still be under way, so the gap says nothing).
+    const gap = reset || view.parked || view.follow ? 0 : list.scrollHeight - list.scrollTop - list.clientHeight;
+    const animate = !reset && !view.parked && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const nodes = new Map();
+    let added = 0;
+    let entering = 0;
+    let changed = false;
+    for (const w of want) {
+      let node = view.nodes.get(w.key);
+      if (node && view.sigs.get(node) !== w.sig) {
+        const fresh = w.make();
+        // A row still entering keeps its entrance.
+        if (node.classList.contains('is-new')) fresh.classList.add('is-new');
+        fresh.dataset.wireKey = w.key;
+        if (node.style.animationDelay) fresh.style.animationDelay = node.style.animationDelay;
+        node = storyMorph(node, fresh);
+        view.sigs.set(node, w.sig);
+        changed = true;
+      } else if (!node) {
+        node = w.make();
+        node.dataset.wireKey = w.key;
+        view.sigs.set(node, w.sig);
+        if (animate) {
+          node.classList.add('is-new');
+          // Rows that arrive together come in one after another, not as a block.
+          const k = Math.min(entering++, 5);
+          if (k > 0) node.style.animationDelay = `${k * 45}ms`;
+        }
+        if (w.event) added++;
+        changed = true;
+      }
+      nodes.set(w.key, node);
+    }
+    if (reset) list.replaceChildren(...nodes.values());
+    else {
+      // Gone first, so the rows that stay never move (moving a node would drop its focus).
+      for (const [key, node] of view.nodes) {
+        if (!nodes.has(key)) {
+          node.remove();
+          changed = true;
+        }
+      }
+      let prev = null;
+      for (const node of nodes.values()) {
+        if (prev ? prev.nextElementSibling !== node : list.firstElementChild !== node) {
+          if (prev) prev.after(node);
+          else list.prepend(node);
+        }
+        prev = node;
+      }
+    }
+    view.nodes = nodes;
+    const count = `${page.toolCalls} tool call${page.toolCalls === 1 ? '' : 's'}, ${page.events.length} events. Underlined parts open.`;
+    if (st.wireCount.textContent !== count) st.wireCount.textContent = count;
+
+    if (view.parked) return; // a hidden wire is placed when it shows again (_storyWireShown)
+    if (reset) {
+      this._storyWirePlace(page);
+      return;
+    }
+    Object.assign(view, storyWireAfterUpdate(view, { gap, added }));
+    if (view.follow && changed) this._storyWireGlide();
+    this._storyWirePill();
+  },
+
+  /** The wire's follow and scroll state, made on first use. */
+  _storyWireView() {
+    const st = this._story;
+    st.wireView ??= {
+      pageId: null,
+      nodes: new Map(),
+      /** What each node was drawn from (kept off the DOM: it holds the transcript's words). */
+      sigs: new WeakMap(),
+      follow: true,
+      unseen: 0,
+      lastTop: 0,
+      parked: !!st.wire?.hidden,
+      userAt: -Infinity,
+      held: false,
+      raf: 0,
+      v: 0,
+      t: 0,
+      pos: null,
+      wrote: null,
+    };
+    return st.wireView;
+  },
+
+  /** Whether the wire shows the newest turn while it is still running (it then opens at the bottom). */
+  _storyWireLive(page) {
+    const st = this._story;
+    return !!page && !st.turnId && !page.complete && !page.interrupted;
+  },
+
+  /**
+   * Where the wire opens: a running newest turn at the bottom, following; any other turn at the top.
+   * Instant, never a glide: this is a new list, not news arriving in one.
+   */
+  _storyWirePlace(page) {
+    const st = this._story;
+    const view = this._storyWireView();
+    const list = st.wireList;
+    this._storyWireStop();
+    view.follow = this._storyWireLive(page);
+    view.unseen = 0;
+    list.scrollTop = view.follow ? list.scrollHeight : 0;
+    view.lastTop = list.scrollTop;
+    this._storyWirePill();
+  },
+
+  /**
+   * The pill under the list ("↓ 3 new"), a list that stopped following, and the listeners that tell
+   * the reader's own scrolling from the list's glide. Built once, with the overlay.
+   */
+  _storyWireControls(wire, list) {
+    const foot = document.createElement('div');
+    foot.className = 'story-wire-foot';
+    const pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = 'story-wire-pill';
+    pill.hidden = true;
+    foot.append(pill);
+    pill.addEventListener('click', () => this._storyWireResume());
+    // The reader's own hand: a wheel, a finger, a scroll key or the scrollbar. Each stops the glide (it
+    // would fight them); only a move UP while they scroll stops following (_storyWireScrolled).
+    const byHand = () => {
+      if (!this._story) return;
+      this._storyWireView().userAt = performance.now();
+      this._storyWireStop();
+    };
+    list.addEventListener('wheel', byHand, { passive: true });
+    list.addEventListener('touchstart', byHand, { passive: true });
+    list.addEventListener('touchmove', byHand, { passive: true });
+    list.addEventListener('keydown', (e) => {
+      if (STORY_WIRE_SCROLL_KEYS.has(e.key)) byHand();
+    });
+    // A press on the list itself (not on a row) is its scrollbar; a drag there takes a while.
+    list.addEventListener('pointerdown', (e) => {
+      if (e.target !== list || !this._story) return;
+      const view = this._storyWireView();
+      view.held = true;
+      byHand();
+      const release = () => {
+        view.held = false;
+        view.userAt = performance.now();
+        window.removeEventListener('pointerup', release, true);
+        window.removeEventListener('pointercancel', release, true);
+      };
+      window.addEventListener('pointerup', release, true);
+      window.addEventListener('pointercancel', release, true);
+    });
+    list.addEventListener('scroll', () => this._storyWireScrolled(), { passive: true });
+    list.addEventListener('animationend', (e) => {
+      if (e.animationName !== 'story-wire-in') return;
+      e.target.classList.remove('is-new');
+      e.target.style.animationDelay = '';
+    });
+    // The wire is hidden outside the Director's cut, and a hidden list has no scroll position: when it
+    // shows again it is placed afresh, whoever showed it.
+    new MutationObserver(() => this._storyWireShown()).observe(wire, { attributes: true, attributeFilter: ['hidden'] });
+    // A wire that changes size while it follows (a resize, the drawer) stays at the bottom.
+    if (typeof ResizeObserver === 'function') {
+      new ResizeObserver(() => {
+        const view = this._story?.wireView;
+        if (!view || view.parked || !view.follow || view.raf || view.held) return;
+        list.scrollTop = list.scrollHeight;
+      }).observe(list);
+    }
+    return { foot, pill };
+  },
+
+  /** The wire was hidden or shown: hidden, it rests; shown, it opens where a new list opens. */
+  _storyWireShown() {
+    const st = this._story;
+    if (!st) return;
+    const view = this._storyWireView();
+    if (st.wire.hidden) {
+      view.parked = true;
+      this._storyWireStop();
+      this._storyWirePill();
+      return;
+    }
+    if (!view.parked) return;
+    view.parked = false;
+    const page = st.data?.supported ? st.data.page : null;
+    if (page && st.open) this._storyWirePlace(page);
+  },
+
+  /** A scroll of the list: the reader's, or the glide's (see storyWireAfterScroll). */
+  _storyWireScrolled() {
+    const st = this._story;
+    if (!st?.open) return;
+    const view = this._storyWireView();
+    if (view.parked) return;
+    const list = st.wireList;
+    const top = list.scrollTop;
+    const gap = list.scrollHeight - top - list.clientHeight;
+    const user = view.held || performance.now() - view.userAt < STORY_WIRE_HAND_MS;
+    const next = storyWireAfterScroll(view, { top, gap, user });
+    const flip = next.follow !== view.follow || next.unseen !== view.unseen;
+    Object.assign(view, next);
+    if (flip) this._storyWirePill();
+  },
+
+  /** The pill: shown while the wire does not follow a running turn, or rows came in below. */
+  _storyWirePill() {
+    const st = this._story;
+    const pill = st?.wirePill;
+    if (!pill) return;
+    const view = this._storyWireView();
+    const page = st.data?.supported ? st.data.page : null;
+    const show = !!page && !view.parked && !view.follow && (view.unseen > 0 || this._storyWireLive(page));
+    const { text, label } = storyWirePillText(view.unseen);
+    if (pill.textContent !== text) pill.textContent = text;
+    if (pill.getAttribute('aria-label') !== label) pill.setAttribute('aria-label', label);
+    if (pill.hidden === show) {
+      // A pill that hides under keyboard focus hands it to the list it brought down.
+      if (!show && document.activeElement === pill) {
+        st.wireList.tabIndex = -1;
+        st.wireList.focus({ preventScroll: true });
+      }
+      pill.hidden = !show;
+    }
+  },
+
+  /** The pill, clicked: down to the newest row, following again. */
+  _storyWireResume() {
+    const view = this._storyWireView();
+    view.follow = true;
+    view.unseen = 0;
+    view.userAt = -Infinity;
+    this._storyWirePill();
+    this._storyWireGlide();
+  },
+
+  /**
+   * Glides the list to its bottom. One glide at a time: an update that lands while it runs moves the
+   * target, and the glide carries its speed into the new target (a critically damped spring,
+   * storyWireSpring), so a burst of rows reads as one smooth motion. Under prefers-reduced-motion
+   * the list jumps.
+   */
+  _storyWireGlide() {
+    const view = this._storyWireView();
+    if (view.raf || view.parked || view.held) return;
+    view.t = 0;
+    view.raf = requestAnimationFrame((t) => this._storyWireStep(t));
+  },
+
+  /** One frame of the glide: read the list once, then write its position once. */
+  _storyWireStep(t) {
+    const st = this._story;
+    const view = st?.wireView;
+    if (!view) return;
+    view.raf = 0;
+    if (!st.open || view.parked || !view.follow || view.held) {
+      this._storyWireStop();
+      return;
+    }
+    const list = st.wireList;
+    const max = Math.max(0, list.scrollHeight - list.clientHeight);
+    const at = list.scrollTop;
+    // Something else moved the list (a row above changed height, a resize): carry on from there.
+    if (view.pos === null || Math.abs(at - view.wrote) > 1.5) view.pos = at;
+    // A frame that came late (the page drew panels) moves at most two frames' worth: a short slowdown
+    // reads as smooth, a leap does not.
+    const dt = view.t ? Math.min(1 / 30, (t - view.t) / 1000) : 1 / 60;
+    view.t = t;
+    const s = matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? { pos: max, v: 0, done: true }
+      : storyWireSpring(view.pos, view.v, max, dt);
+    list.scrollTop = s.pos;
+    view.pos = s.pos;
+    view.wrote = s.pos;
+    view.lastTop = list.scrollTop; // "up" is measured from where the glide put it
+    view.v = s.v;
+    if (s.done) {
+      view.pos = null;
+      view.t = 0;
+      return;
+    }
+    view.raf = requestAnimationFrame((t2) => this._storyWireStep(t2));
+  },
+
+  /** Stops a glide where it is. */
+  _storyWireStop() {
+    const view = this._story?.wireView;
+    if (!view) return;
+    if (view.raf) cancelAnimationFrame(view.raf);
+    view.raf = 0;
+    view.v = 0;
+    view.t = 0;
+    view.pos = null;
   },
 
   _storyEventRow(ev, index) {
@@ -3757,3 +4103,97 @@ Object.assign(CodemanApp.prototype, {
     return pre;
   },
 });
+
+// ── The wire: follow and glide (pure) ──
+
+/** Within this many pixels of the bottom, the wire counts as at the bottom: it follows. */
+const STORY_WIRE_BOTTOM_PX = 40;
+/** A scroll this soon after the reader's own input (wheel, finger, key, scrollbar) is theirs. */
+const STORY_WIRE_HAND_MS = 400;
+/** Keys that scroll a focused list. */
+const STORY_WIRE_SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+/**
+ * Stiffness of the glide (1/s): a critically damped spring settles in about 5.8 / ω, here ~0.48 s,
+ * before the next refresh can land (0.8 s debounce). Stiffer made a tall row (a long command) arrive
+ * at ~25 px a frame.
+ */
+const STORY_WIRE_OMEGA = 12;
+
+/**
+ * What a scroll of the wire means for following. Back at the bottom (by hand or by the glide) it
+ * follows again; moving up by the reader's own hand stops it. Anything else changes nothing: the
+ * glide only ever moves down, and a row above that changes height moves the list without anyone
+ * scrolling it.
+ */
+function storyWireAfterScroll(view, { top, gap, user }) {
+  const up = top < view.lastTop - 1;
+  if (gap <= STORY_WIRE_BOTTOM_PX) return { follow: true, unseen: 0, lastTop: top };
+  if (up && user) return { follow: false, unseen: view.unseen, lastTop: top };
+  return { follow: view.follow, unseen: view.unseen, lastTop: top };
+}
+
+/**
+ * New rows came in. A wire that follows keeps following, and one at the bottom starts; one the
+ * reader scrolled up counts them for the pill. `gap` is the distance to the bottom before the rows
+ * came in.
+ */
+function storyWireAfterUpdate(view, { gap, added }) {
+  if (view.follow || gap <= STORY_WIRE_BOTTOM_PX) return { follow: true, unseen: 0 };
+  return { follow: false, unseen: view.unseen + added };
+}
+
+/** The pill's words, and what a screen reader hears. */
+function storyWirePillText(unseen) {
+  if (!unseen) return { text: '↓ Newest', label: 'Scroll to the newest event' };
+  return {
+    text: `↓ ${unseen} new`,
+    label: `${unseen} new event${unseen === 1 ? '' : 's'}. Scroll to the newest.`,
+  };
+}
+
+/**
+ * One step (`dt` seconds) of a critically damped spring from `pos` (moving at `v` px/s) toward
+ * `target`. A new target keeps the speed, so a glide that is retargeted mid-way never stops and
+ * restarts. Toward a target below, it only ever moves down and never past it.
+ */
+function storyWireSpring(pos, v, target, dt, omega = STORY_WIRE_OMEGA) {
+  if (target < pos) return { pos: target, v: 0, done: true };
+  const x = pos - target;
+  const e = Math.exp(-omega * dt);
+  const c = v + omega * x;
+  let np = target + (x + c * dt) * e;
+  let nv = (v - omega * c * dt) * e;
+  if (np < pos) {
+    np = pos;
+    nv = Math.max(0, nv);
+  }
+  if (np > target) np = target;
+  if (target - np < 0.5 && Math.abs(nv) < 30) return { pos: target, v: 0, done: true };
+  return { pos: np, v: nv, done: false };
+}
+
+/**
+ * Makes `node` match `fresh` (built the same way, from newer data) while keeping every node that can
+ * stay: an element whose tag is unchanged is patched (attributes, text, children), so focus and hover
+ * on it survive. Returns the node that ends up in the tree.
+ */
+function storyMorph(node, fresh) {
+  if (node.nodeType !== fresh.nodeType || node.nodeName !== fresh.nodeName) {
+    node.replaceWith(fresh);
+    return fresh;
+  }
+  if (node.nodeType !== 1) {
+    if (node.nodeValue !== fresh.nodeValue) node.nodeValue = fresh.nodeValue;
+    return node;
+  }
+  for (const a of [...node.attributes]) if (!fresh.hasAttribute(a.name)) node.removeAttribute(a.name);
+  for (const a of [...fresh.attributes]) if (node.getAttribute(a.name) !== a.value) node.setAttribute(a.name, a.value);
+  const want = [...fresh.childNodes];
+  want.forEach((child, i) => {
+    const have = node.childNodes[i];
+    if (have) storyMorph(have, child);
+    else node.append(child);
+  });
+  while (node.childNodes.length > want.length) node.lastChild.remove();
+  return node;
+}
