@@ -15,6 +15,20 @@
   font-display: swap;
 }
 
+/* Registered so they always compute to a plain value: story-mode.js reads --story-panel-min back
+   with parseFloat (an unregistered property holding calc() would come back as its raw text, and
+   caption fitting would silently stop). --story-k scales the comic text with the row height. */
+@property --story-panel-min {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 270px;
+}
+@property --story-k {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 1;
+}
+
 /* Session Options → Story (story-mode.js): shown while Story Mode is on. Sits in the sheet's
    header tray beside the close button, on every device. */
 #sessionOptionsModal .set-head-actions .story-options-btn {
@@ -69,6 +83,8 @@
   --story-body: 'Manrope', system-ui, sans-serif;
   --story-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
   --story-drawer-w: min(560px, 44vw);
+  /* The Director's cut wire beside the sheet grows with the window. */
+  --story-wire-w: clamp(320px, 25vw, 460px);
 
   position: fixed;
   inset: 0;
@@ -268,14 +284,16 @@ body.story-open {
 /* Main: the sheet and the wire */
 .story-main {
   overflow: auto;
-  padding: 16px max(16px, env(safe-area-inset-right, 0px)) 40px max(16px, env(safe-area-inset-left, 0px));
+  /* The scrollbar's room is kept whether the page scrolls or not, so the sheet's width (and the row
+     height story-mode.js derives from it) never depends on whether the rows overflow. */
+  scrollbar-gutter: stable;
+  padding: 16px max(16px, env(safe-area-inset-right, 0px)) 16px max(16px, env(safe-area-inset-left, 0px));
 }
 .story-overlay.has-drawer .story-main {
   padding-right: calc(var(--story-drawer-w) + 16px);
 }
 .story-note {
-  max-width: 1240px;
-  margin: 0 auto 14px;
+  margin: 0 0 14px;
   padding: 8px 12px;
   font-size: 14px;
   line-height: 1.45;
@@ -290,35 +308,47 @@ body.story-open {
   grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   align-items: start;
-  max-width: 1240px;
-  margin: 0 auto;
 }
 .story-overlay.is-director .story-stage {
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) var(--story-wire-w);
+}
+/* The wire runs the full height beside the note too (it starts at the top of the main area): the
+   note ends where the sheet does, at the stage's 16px gap before the wire. */
+.story-overlay.is-director .story-note {
+  margin-right: calc(var(--story-wire-w) + 16px);
 }
 @media (max-width: 1100px) {
   .story-overlay.is-director .story-stage {
     grid-template-columns: minmax(0, 1fr);
   }
+  .story-overlay.is-director .story-note {
+    margin-right: 0;
+  }
 }
 .story-sheet {
   container: story-sheet / inline-size;
+  /* Down to the visible bottom even when a short page's rows stop short of it (a row is capped). */
+  min-height: calc(var(--story-view-h, 0px) - var(--story-note-h, 0px));
   background: var(--story-sheet);
 }
 .story-page {
+  /* The shortest row: story-mode.js sets each row from the visible height (plain px values, in
+     grid-template-rows) and this to the shortest, for any row past those and as a panel's default. */
+  --story-row-h: 270px;
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  /* A row grows only for the final panel, whose words and chips are in flow (never clipped). */
-  grid-auto-rows: minmax(270px, auto);
+  /* A row grows past it only for words that need more room (the final panel's are in flow). */
+  grid-auto-rows: minmax(var(--story-row-h), auto);
   gap: 14px;
   padding: 14px;
 }
 
 /* Panels */
 .story-panel {
-  /* The panel's usual height, read back as its scene's stage: a long caption or ending makes the
-     panel taller (inline min-height), and the scene then stands at the bottom, never scaled up. */
-  --story-panel-min: 270px;
+  /* The panel's usual height, read back as its scene's stage: its row's, which story-mode.js writes
+     on the panel (plain px). A long caption or ending makes the panel taller (inline min-height),
+     and the scene then stands at the bottom, never scaled up. */
+  --story-panel-min: var(--story-row-h);
   position: relative;
   margin: 0;
   min-height: var(--story-panel-min);
@@ -378,7 +408,7 @@ body.story-open {
   background: var(--story-cap);
   color: var(--story-cap-ink);
   border: 2.5px solid var(--story-cap-ink);
-  font: 17px/1.13 var(--story-letter);
+  font: calc(17px * var(--story-k, 1)) / 1.13 var(--story-letter);
   text-wrap: pretty;
 }
 .story-cap-dir {
@@ -386,7 +416,7 @@ body.story-open {
 }
 .story-overlay.is-director .story-cap {
   max-width: min(74%, 46ch);
-  font: 500 11px/1.45 var(--story-mono);
+  font: 500 calc(11px * var(--story-k, 1)) / 1.45 var(--story-mono);
 }
 .story-overlay.is-director .story-cap-story {
   display: none;
@@ -404,7 +434,7 @@ body.story-open {
   background: var(--story-balloon);
   color: var(--story-balloon-ink);
   border: 2.5px solid var(--story-balloon-ink);
-  font: 17px/1.12 var(--story-letter);
+  font: calc(17px * var(--story-k, 1)) / 1.12 var(--story-letter);
   text-wrap: balance;
   overflow-wrap: anywhere;
 }
@@ -463,7 +493,8 @@ body.story-open .toast-container {
 }
 .story-balloon--you {
   left: 16px;
-  top: 74px;
+  /* Below the caption, which grows with the comic text (--story-k). */
+  top: calc(74px * var(--story-k, 1));
   max-width: 54%;
 }
 .story-balloon--you::before {
@@ -485,7 +516,7 @@ body.story-open .toast-container {
 /* A turn somebody else started (a background task, another session): a notice, not your speech. */
 .story-balloon--note {
   left: 16px;
-  top: 74px;
+  top: calc(74px * var(--story-k, 1));
   max-width: 54%;
   border-radius: 4px;
   border-style: dashed;
@@ -577,7 +608,7 @@ body.story-open .toast-container {
 .story-splash-title {
   /* Room for the tilt: rotated about its bottom-left corner, its right end rises. */
   margin: 0.4em 0 0;
-  font: 400 clamp(28px, 4.4cqi, 44px) / 0.92 var(--story-display);
+  font: 400 calc(clamp(28px, 4.4cqi, 44px) * var(--story-k, 1)) / 0.92 var(--story-display);
   color: var(--story-yellow);
   -webkit-text-stroke: 2.5px var(--story-line);
   paint-order: stroke fill;
@@ -596,7 +627,7 @@ body.story-open .toast-container {
 .story-chips li > * {
   display: block;
   padding: 4px 8px;
-  font: 500 12px/1.2 var(--story-mono) !important;
+  font: 500 calc(12px * var(--story-k, 1)) / 1.2 var(--story-mono) !important;
   background: var(--story-balloon);
   color: var(--story-balloon-ink) !important;
   border: 2px solid var(--story-line);
@@ -690,13 +721,17 @@ body.story-open .toast-container {
   }
 }
 
-/* The wire */
+/* The wire: beside the sheet, a column as tall as the main area's visible height (story-mode.js
+   measures it), sticky, its list scrolling inside. It starts at the top of the main area even when
+   a note sits above the sheet: pulled up by the note's height, which the note's own margin clears. */
 .story-wire {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  max-height: calc(100vh - 120px);
+  height: var(--story-view-h, calc(100vh - 120px));
+  margin-top: calc(-1 * var(--story-note-h, 0px));
   position: sticky;
+  /* 0: a sticky box already stops inside its scroll container's padding. */
   top: 0;
   background: var(--story-sheet);
   border: 2.5px solid var(--story-ink);
@@ -707,7 +742,9 @@ body.story-open .toast-container {
 @media (max-width: 1100px) {
   .story-wire {
     position: static;
+    height: auto;
     max-height: 460px;
+    margin-top: 0;
   }
 }
 .story-wire-head {
