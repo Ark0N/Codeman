@@ -45,8 +45,13 @@ export const KEEP_WARM_LAST_CHANCE_MS = 60_000;
 export const KEEP_WARM_MIN_TOKENS = 20_000;
 /** A person typed this recently: they may be about to submit, which refreshes the cache for free. */
 export const KEEP_WARM_RECENT_INPUT_MS = 3 * 60_000;
-/** How long after sending the nudge its own stop hook and idle prompt stay pre-acknowledged. */
-export const KEEP_WARM_TURN_WINDOW_MS = 3 * 60_000;
+/**
+ * Ceiling on the keep-alive window. The window normally closes on the turn's own idle prompt
+ * (Claude Code sends it about a minute after the turn ends, so a slow turn must not outlast a
+ * short fixed window) or earlier, at any other submit; the ceiling covers a turn whose idle
+ * prompt never arrives, such as a workspace without Codeman's hooks.
+ */
+export const KEEP_WARM_TURN_WINDOW_MS = 10 * 60_000;
 /** Default cap: hours after the last real prompt during which nudges are sent. */
 export const DEFAULT_KEEP_WARM_MAX_HOURS = 2;
 /** Longest delay `setTimeout` honours; Node fires anything longer after 1 ms. */
@@ -197,7 +202,7 @@ export interface KeepWarmPorts {
 export interface KeepWarmScheduler {
   /** Re-evaluate a session: after a cache report, a flag change, or a settings change. Resolves once the status is published. */
   schedule(sessionId: string): Promise<void>;
-  /** Re-evaluate every session (the app-wide default or cap changed). */
+  /** Re-read the app-wide default and cap, then re-evaluate every session (either one changed). */
   rescheduleAll(): void;
   /** The session is gone. */
   remove(sessionId: string): void;
@@ -208,6 +213,12 @@ export class PromptCacheKeepWarmService implements KeepWarmScheduler {
   private readonly tallies = new Map<string, { nudges: number; lastNudgeAt?: number }>();
   /** One evaluation per session; `remove()` and `stop()` cancel it at its next await. */
   private readonly inFlight = new Map<string, symbol>();
+  /**
+   * The default and cap, read once and kept: every statusline report schedules an evaluation,
+   * and reading settings.json on each would cost every install, the feature off included.
+   * `rescheduleAll()` drops it, and the settings PUT calls that whenever either key changes.
+   */
+  private settings: Promise<KeepWarmSettings> | undefined;
   private stopped = false;
 
   constructor(private readonly ports: KeepWarmPorts) {}
@@ -220,6 +231,7 @@ export class PromptCacheKeepWarmService implements KeepWarmScheduler {
   }
 
   rescheduleAll(): void {
+    this.settings = undefined;
     for (const id of this.ports.sessionIds()) void this.schedule(id);
   }
 
@@ -232,6 +244,18 @@ export class PromptCacheKeepWarmService implements KeepWarmScheduler {
   stop(): void {
     this.stopped = true;
     for (const id of [...this.timers.keys()]) this.clearTimer(id);
+  }
+
+  private readSettings(): Promise<KeepWarmSettings> {
+    if (!this.settings) {
+      const read = this.ports.readSettings();
+      this.settings = read;
+      // A failed read is not kept: the next evaluation tries again.
+      read.catch(() => {
+        if (this.settings === read) this.settings = undefined;
+      });
+    }
+    return this.settings;
   }
 
   private clearTimer(id: string): void {
@@ -258,7 +282,7 @@ export class PromptCacheKeepWarmService implements KeepWarmScheduler {
       this.clearTimer(id);
       const session = this.ports.getSession(id);
       if (!session) return;
-      const settings = await this.ports.readSettings();
+      const settings = await this.readSettings();
       if (cancelled()) return;
       const tally = this.tallies.get(id) ?? { nudges: 0 };
       const facts: KeepWarmFacts = {

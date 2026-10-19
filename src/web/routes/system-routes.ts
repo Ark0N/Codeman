@@ -1111,8 +1111,8 @@ export function registerSystemRoutes(
       // drift. Same convention as the tmuxHistoryLimit block above.
       // Handle subagent tracking toggle dynamically
       toggleService((merged.subagentTrackingEnabled as boolean) ?? true, subagentWatcher, 'Subagent watcher');
-      // The prompt-cache keep-warm reads its default and cap fresh on every decision; a changed
-      // default or cap re-evaluates every session now rather than at its next cache report.
+      // The prompt-cache keep-warm keeps its default and cap in memory; a changed default or cap
+      // makes it re-read them and re-evaluate every session now rather than at its next cache report.
       if ('promptCacheKeepWarm' in settingsToStore || 'promptCacheKeepWarmMaxHours' in settingsToStore) {
         ctx.keepWarm.rescheduleAll();
       }

@@ -99,7 +99,7 @@ import { getLifecycleLog } from '../session-lifecycle-log.js';
 import {
   applyWorkspaceHooks,
   pruneAgentSessionPreambles,
-  readKeepWarmSettings,
+  readKeepWarmSettingsOrThrow,
   removeAgentSessionPreamble,
 } from '../hooks-config.js';
 import { PushSubscriptionStore } from '../push-store.js';
@@ -332,7 +332,7 @@ export class WebServer extends EventEmitter {
   private readonly keepWarmService = new PromptCacheKeepWarmService({
     getSession: (id) => this.sessions.get(id),
     sessionIds: () => this.sessions.keys(),
-    readSettings: readKeepWarmSettings,
+    readSettings: readKeepWarmSettingsOrThrow,
     isAutomationActive: (id) => {
       const session = this.sessions.get(id);
       if (!session) return true;

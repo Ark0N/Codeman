@@ -778,15 +778,21 @@ function formatKeepWarmStatus(status, now, statusLine) {
       ? `stops ${clock(status.budgetEndsAt)}`
       : 'window closed'
     : '';
-  // Keep-warm switched on after launch: the `idleCompaction` opt-out rides only a launch.
+  // Keep-warm switched on or off after launch: the `idleCompaction` opt-out rides only a launch.
   const idleCompaction =
-    status.enabled && status.idleCompactionOff === false ? 'idle compaction on until relaunch' : '';
+    status.enabled && status.idleCompactionOff === false
+      ? 'idle compaction on until relaunch'
+      : !status.enabled && status.idleCompactionOff === true
+        ? 'idle compaction off until relaunch'
+        : '';
   let parts;
   switch (status.state) {
-    case 'off':
-      if (!status.reason || status.reason === 'off') return '';
-      parts = ['off', status.reason];
+    case 'off': {
+      const reason = status.reason === 'off' ? '' : status.reason;
+      if (!reason && !idleCompaction) return '';
+      parts = ['off', reason, idleCompaction];
       break;
+    }
     case 'armed':
       parts = [`next ${clock(status.nextCheckAt)}`, window, idleCompaction];
       break;

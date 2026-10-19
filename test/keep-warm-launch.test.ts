@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it, expect, afterEach } from 'vitest';
 import { decideIdleCompactionOptOut } from '../src/tmux-manager.js';
-import { readKeepWarmSettings } from '../src/hooks-config.js';
+import { readKeepWarmSettings, readKeepWarmSettingsOrThrow } from '../src/hooks-config.js';
 import { SETTINGS_PATH } from '../src/web/route-helpers.js';
 import { DEFAULT_KEEP_WARM_MAX_HOURS } from '../src/prompt-cache-keepwarm.js';
 
@@ -154,5 +154,21 @@ describe('readKeepWarmSettings', () => {
     expect(await readKeepWarmSettings()).toEqual({ keepWarmDefault: true, maxHours: 3.5 });
     await writeFile(SETTINGS_PATH, JSON.stringify({ promptCacheKeepWarm: 'yes', promptCacheKeepWarmMaxHours: -1 }));
     expect(await readKeepWarmSettings()).toEqual({ keepWarmDefault: false, maxHours: 2 });
+  });
+
+  /**
+   * The service keeps what it reads until the next keep-warm settings change, so its reader must
+   * never hand back a fallback for a file it could not read: settings.json is rewritten in place
+   * by several routes, and defaults kept from a mid-write read would hold keep-warm off.
+   */
+  it('the service reader rejects an unreadable file instead of falling back, and the server wires it', async () => {
+    expect(await readKeepWarmSettingsOrThrow()).toEqual({ keepWarmDefault: false, maxHours: 2 });
+    await mkdir(dirname(SETTINGS_PATH), { recursive: true });
+    await writeFile(SETTINGS_PATH, JSON.stringify({ promptCacheKeepWarm: true, promptCacheKeepWarmMaxHours: 3.5 }));
+    expect(await readKeepWarmSettingsOrThrow()).toEqual({ keepWarmDefault: true, maxHours: 3.5 });
+    await writeFile(SETTINGS_PATH, '{"promptCacheKeepWarm": tr');
+    await expect(readKeepWarmSettingsOrThrow()).rejects.toThrow();
+    expect(await readKeepWarmSettings()).toEqual({ keepWarmDefault: false, maxHours: 2 });
+    expect(src('web/server.ts')).toContain('readSettings: readKeepWarmSettingsOrThrow,');
   });
 });

@@ -3470,8 +3470,10 @@ class CodemanApp {
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) this._updateLocalEchoState();
     }
-    // Start stuck detection timer (only if no respawn running)
-    if (!this.respawnStatus[data.id]?.enabled) {
+    // Start stuck detection timer (only if no respawn running). Not at the end of Codeman's
+    // own keep-alive turn (`keepAlive`): the session has been waiting since the last real
+    // turn, whose timer is still running or has already fired.
+    if (!data.keepAlive && !this.respawnStatus[data.id]?.enabled) {
       const threshold = this.notificationManager?.preferences?.stuckThresholdMs || 600000;
       clearTimeout(this.idleTimers.get(data.id));
       this.idleTimers.set(data.id, setTimeout(() => {
@@ -3493,8 +3495,9 @@ class CodemanApp {
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) this._updateLocalEchoState();
     }
-    // Clear stuck detection timer
-    const timer = this.idleTimers.get(data.id);
+    // Clear stuck detection timer, unless this is Codeman's own keep-alive turn, which is
+    // no sign of life from the agent's side.
+    const timer = data.keepAlive ? null : this.idleTimers.get(data.id);
     if (timer) {
       clearTimeout(timer);
       this.idleTimers.delete(data.id);

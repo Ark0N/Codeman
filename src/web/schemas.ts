@@ -1871,12 +1871,12 @@ export const AutoCompactSchema = z.object({
 });
 
 /** POST /api/sessions/:id/auto-resume */
-/** `POST /api/sessions/:id/keep-warm`: `null` clears the session's choice so the app-wide default applies. */
-export const KeepWarmSchema = z.object({ enabled: z.boolean().nullable() });
-
 export const AutoResumeSchema = z.object({
   enabled: z.boolean(),
 });
+
+/** `POST /api/sessions/:id/keep-warm`: `null` clears the session's choice so the app-wide default applies. */
+export const KeepWarmSchema = z.object({ enabled: z.boolean().nullable() });
 
 /** POST /api/sessions/:id/pin (COD-139) — explicit pin state for idempotency. */
 export const PinSessionSchema = z.object({

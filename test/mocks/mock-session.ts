@@ -56,6 +56,9 @@ export class MockSession extends EventEmitter {
   }
   /** Mirrors the prompt-cache keep-warm surface on Session (prompt-cache-keepwarm.ts). */
   keepAliveTurnActive = false;
+  endKeepAliveTurn(): void {
+    this.keepAliveTurnActive = false;
+  }
   keepWarmEnabled: boolean | undefined = undefined;
   setKeepWarmEnabled(enabled: boolean | undefined): void {
     this.keepWarmEnabled = enabled;

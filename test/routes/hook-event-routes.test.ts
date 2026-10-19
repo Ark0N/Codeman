@@ -127,6 +127,75 @@ describe('hook-event-routes', () => {
       expect(item?.acknowledgedAt).toBe(item?.createdAt);
     });
 
+    /**
+     * Only a human spends an idle alert (CLAUDE.md, Approvals Inbox). A keep-alive turn that
+     * starts while an idle item is pending must leave that item exactly as it found it: its stop
+     * does not resolve it, and its idle prompt does not replace it, so an unseen alert stays
+     * unseen (and pushes nothing a second time) and one a person looked at keeps saying so.
+     */
+    it.each([
+      { seen: false, label: 'an unseen' },
+      { seen: true, label: 'a seen' },
+    ])('leaves $label idle item pending through a keep-alive turn', async ({ seen }) => {
+      const sessionId = harness.ctx._sessionId;
+      const hook = (event: string) =>
+        harness.app.inject({ method: 'POST', url: '/api/hook-event', payload: { event, sessionId, data: null } });
+      await hook('idle_prompt');
+      const before = approvalInbox.getForSession(sessionId);
+      expect(before?.acknowledgedAt).toBeUndefined();
+      if (seen) approvalInbox.acknowledge(sessionId);
+      const acknowledgedAt = before?.acknowledgedAt;
+      harness.ctx.sendPushNotifications.mockClear();
+      harness.ctx.broadcast.mockClear();
+
+      harness.ctx._session.keepAliveTurnActive = true;
+      await hook('stop');
+      await hook('idle_prompt');
+
+      const after = approvalInbox.getForSession(sessionId);
+      approvalInbox.resolveForSession(sessionId, 'dismissed');
+      expect(after?.id).toBe(before?.id);
+      expect(after?.acknowledgedAt).toBe(acknowledgedAt);
+      expect(after?.acknowledgedReason).toBeUndefined();
+      expect(harness.ctx.sendPushNotifications).not.toHaveBeenCalled();
+      // The page's _onHookStop and _onHookIdlePrompt return on the reason, leaving the tab alert.
+      for (const event of ['stop', 'idle_prompt']) {
+        expect(harness.ctx.broadcast).toHaveBeenCalledWith(
+          `hook:${event}`,
+          expect.objectContaining({ acknowledgedReason: 'cache keep-alive' })
+        );
+      }
+    });
+
+    it("a keep-alive turn's idle prompt ends the keep-alive window, its stop does not", async () => {
+      const sessionId = harness.ctx._sessionId;
+      const hook = (event: string) =>
+        harness.app.inject({ method: 'POST', url: '/api/hook-event', payload: { event, sessionId, data: null } });
+      harness.ctx._session.keepAliveTurnActive = true;
+      await hook('stop');
+      expect(harness.ctx._session.keepAliveTurnActive).toBe(true);
+      await hook('idle_prompt');
+      approvalInbox.resolveForSession(sessionId, 'dismissed');
+      expect(harness.ctx._session.keepAliveTurnActive).toBe(false);
+    });
+
+    it("a keep-alive turn's stop still resolves a pending permission dialog", async () => {
+      const sessionId = harness.ctx._sessionId;
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/hook-event',
+        payload: { event: 'permission_prompt', sessionId, data: null },
+      });
+      expect(approvalInbox.getForSession(sessionId)?.kind).toBe('permission');
+      harness.ctx._session.keepAliveTurnActive = true;
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/hook-event',
+        payload: { event: 'stop', sessionId, data: null },
+      });
+      expect(approvalInbox.getForSession(sessionId)).toBeUndefined();
+    });
+
     it('sends push notifications for hook events', async () => {
       const res = await harness.app.inject({
         method: 'POST',

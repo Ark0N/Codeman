@@ -240,7 +240,8 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
       // kind: `working` is heuristic and can flap mid-turn, so clearing a
       // pending permission/question dialog on the signal ALONE would
       // false-clear real approvals.
-      approvalInbox.resolveForSession(session.id, 'resolved_in_terminal', ['idle']);
+      // Not for Codeman's own keep-alive turn: only a human spends an idle alert.
+      if (!session.keepAliveTurnActive) approvalInbox.resolveForSession(session.id, 'resolved_in_terminal', ['idle']);
       // A permission/question dialog gets the pane-VERIFIED variant instead:
       // the signal only decides when to look, `verifyStillAnswerable` re-reads
       // the screen and resolves only when the dialog is really gone. Without
@@ -250,7 +251,11 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
       // open. `stop` was the first thing to clear it, which on a long turn is
       // minutes away.
       approvalInbox.resolveIfDialogGone(session.id);
-      deps.broadcast(SseEvent.SessionWorking, { id: session.id });
+      // `keepAlive` tells the page this turn is Codeman's own keep-alive (stuck detection ignores it).
+      deps.broadcast(SseEvent.SessionWorking, {
+        id: session.id,
+        ...(session.keepAliveTurnActive && { keepAlive: true }),
+      });
       // Full state ride-along: the home screens sort the running group on
       // lastSubmitAt, and without this the browser keeps the stamp it loaded
       // with (a turn started after page load ranks by the PREVIOUS turn's
@@ -266,7 +271,7 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
     /** Broadcasts `session:idle` — Claude finished processing, waiting for input */
     idle: () => {
       sessionWaits.notifySignal(session.id, 'idle');
-      deps.broadcast(SseEvent.SessionIdle, { id: session.id });
+      deps.broadcast(SseEvent.SessionIdle, { id: session.id, ...(session.keepAliveTurnActive && { keepAlive: true }) });
       deps.broadcastSessionStateDebounced(session.id);
       deps.keepWarmSchedule?.(session.id);
       const tracker = deps.getRunSummaryTracker(session.id);

@@ -72,6 +72,10 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _onHookStop(data) {
+    // The end of Codeman's own keep-alive turn (prompt-cache keep-warm): nothing finished
+    // that a person asked for, and an idle alert still pending is theirs to spend, so this
+    // neither clears it nor raises "Response Complete".
+    if (data.acknowledgedReason) return;
     // Clear all pending hooks when Claude finishes responding
     if (data.sessionId) {
       this.clearPendingHooks(data.sessionId);
@@ -2765,7 +2769,8 @@ Object.assign(CodemanApp.prototype, {
       imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
       promptCacheKeepWarm: document.getElementById('appSettingsPromptCacheKeepWarm').checked,
       promptCacheKeepWarmMaxHours:
-        parseFloat(document.getElementById('appSettingsPromptCacheKeepWarmMaxHours').value) || 2,
+        // Clamped to the schema's range: one value outside it fails the whole save.
+        Math.min(24, Math.max(0.5, parseFloat(document.getElementById('appSettingsPromptCacheKeepWarmMaxHours').value) || 2)),
       tunnelEnabled: document.getElementById('appSettingsTunnelEnabled').checked,
       localEchoEnabled: document.getElementById('appSettingsLocalEcho').checked,
       autoCopySelection: document.getElementById('appSettingsAutoCopySelection').checked,

@@ -1148,14 +1148,34 @@ export async function readPinCliSessionNameEnabled(): Promise<boolean> {
 /**
  * The prompt-cache keep-warm's app-wide default (`promptCacheKeepWarm`, absent = OFF) and its
  * cap (`promptCacheKeepWarmMaxHours`, hours after the last real prompt). Read FRESH like
- * {@link readPinCliSessionNameEnabled}: by the service on every evaluation, and at every claude
- * create and respawn, which decides the launch's `idleCompaction` opt-out.
+ * {@link readPinCliSessionNameEnabled} at every claude create and respawn, which decides the
+ * launch's `idleCompaction` opt-out.
  */
 export async function readKeepWarmSettings(): Promise<KeepWarmSettings> {
-  const settings = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {});
-  const hours = settings.promptCacheKeepWarmMaxHours;
+  return keepWarmSettingsFrom(await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {}));
+}
+
+/**
+ * The same two keys for the keep-warm service, which keeps what it reads until the next
+ * settings change. A missing file is the defaults, but any other read or parse failure rejects
+ * rather than falling back: settings.json is rewritten in place, so a read can land mid-write,
+ * and a fallback kept from it would hold keep-warm off until the next keep-warm settings change.
+ */
+export async function readKeepWarmSettingsOrThrow(): Promise<KeepWarmSettings> {
+  let text: string;
+  try {
+    text = await readFile(SETTINGS_PATH, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return keepWarmSettingsFrom({});
+    throw err;
+  }
+  return keepWarmSettingsFrom(JSON.parse(text) as Record<string, unknown>);
+}
+
+function keepWarmSettingsFrom(settings: Record<string, unknown>): KeepWarmSettings {
+  const hours = settings?.promptCacheKeepWarmMaxHours;
   return {
-    keepWarmDefault: settings.promptCacheKeepWarm === true,
+    keepWarmDefault: settings?.promptCacheKeepWarm === true,
     maxHours: typeof hours === 'number' && Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_KEEP_WARM_MAX_HOURS,
   };
 }

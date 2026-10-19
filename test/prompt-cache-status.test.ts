@@ -172,6 +172,15 @@ describe('Keep-warm line on the Status row', () => {
       `Keep-alive: next ${clock(T)} · idle compaction on until relaunch`
     );
   });
+
+  it('says idle compaction stays off when keep-warm was switched off on a launch that carries the opt-out', () => {
+    const { formatKeepWarm } = loadApi();
+    const off = { enabled: false, state: 'off', reason: 'off', nudges: 0 };
+    expect(formatKeepWarm({ ...off, idleCompactionOff: false }, NOW, 'injected')).toBe('');
+    expect(formatKeepWarm({ ...off, idleCompactionOff: true }, NOW, 'injected')).toBe(
+      'Keep-alive: off · idle compaction off until relaunch'
+    );
+  });
 });
 
 /**

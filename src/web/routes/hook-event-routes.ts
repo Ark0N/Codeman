@@ -190,8 +190,15 @@ export function registerHookEventRoutes(
     const keepAliveReason =
       session?.keepAliveTurnActive && (event === 'stop' || event === 'idle_prompt') ? 'cache keep-alive' : undefined;
     const approvalKind = APPROVAL_KIND_BY_EVENT[event];
+    // Only a human spends an idle alert, so a keep-alive turn leaves a pending idle item exactly
+    // as it found it: its stop does not resolve it, and its idle prompt does not replace it (a
+    // replacement would forget the item was unseen, or that a person had seen it). With no idle
+    // item pending, the keep-alive's idle prompt opens a pre-acknowledged one.
+    const keepsPendingIdle = keepAliveReason !== undefined && approvalInbox.getForSession(sessionId)?.kind === 'idle';
     if (session && hooksAvailableForMode(session.mode, sessionHookOptions(session))) {
-      if (approvalKind) {
+      if (approvalKind === 'idle' && keepsPendingIdle) {
+        // Left in place: no new item, and the broadcast below carries the keep-alive reason.
+      } else if (approvalKind) {
         const toolInput =
           safeData.tool_input && typeof safeData.tool_input === 'object'
             ? (safeData.tool_input as Record<string, unknown>)
@@ -226,12 +233,15 @@ export function registerHookEventRoutes(
         });
         approvalId = item.id;
         acknowledgedReason = item.acknowledgedReason;
-      } else if (APPROVAL_RESOLVING_EVENTS.has(event)) {
+      } else if (APPROVAL_RESOLVING_EVENTS.has(event) && !keepsPendingIdle) {
         approvalInbox.resolveForSession(sessionId, 'resolved_in_terminal');
       }
     }
 
     acknowledgedReason ??= keepAliveReason;
+    // The keep-alive turn's own idle prompt is the last thing it sends, so the window ends here
+    // rather than on a fixed clock that a slow turn could outlast.
+    if (keepAliveReason && event === 'idle_prompt') session?.endKeepAliveTurn();
 
     ctx.broadcast(`hook:${event}`, {
       sessionId,

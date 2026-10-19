@@ -228,6 +228,28 @@ describe('the two submit clocks on a Session', () => {
     }
   });
 
+  /**
+   * The window is a ceiling, not the turn's length: a slow keep-alive turn's idle prompt lands
+   * about a minute after it ends, so the window closes on that prompt (the route calls
+   * endKeepAliveTurn) or on any other submit, never by a short clock alone.
+   */
+  it('the keep-alive window survives the nudge and a bare Enter, and ends on any other submit', () => {
+    const session = new Session({ workingDir: '/tmp' });
+    session.beginKeepAliveTurn(KEEP_WARM_TURN_WINDOW_MS);
+    session.write(`${KEEP_WARM_NUDGE}\r`);
+    session.write('\r');
+    expect(session.keepAliveTurnActive).toBe(true);
+    session.write('/compact\r');
+    expect(session.keepAliveTurnActive).toBe(false);
+
+    session.beginKeepAliveTurn(KEEP_WARM_TURN_WINDOW_MS);
+    session.write('typed but not sent');
+    expect(session.keepAliveTurnActive).toBe(true);
+    session.endKeepAliveTurn();
+    expect(session.keepAliveTurnActive).toBe(false);
+    expect(KEEP_WARM_TURN_WINDOW_MS).toBeGreaterThanOrEqual(10 * 60_000);
+  });
+
   it('persists the real-prompt clock and the choice, and restores both', () => {
     const session = new Session({ workingDir: '/tmp', lastRealPromptAt: NOW, keepWarmEnabled: true });
     expect(session.toState()).toMatchObject({ lastRealPromptAt: NOW, keepWarmEnabled: true });
@@ -529,13 +551,45 @@ describe('PromptCacheKeepWarmService', () => {
     // Second evaluation: not due, held in its settings read.
     session.promptCache = warmCache(NOW + HOUR);
     releaseRead = () => {};
-    const second = service.schedule(session.id);
+    // rescheduleAll() drops the kept settings, so this evaluation really waits in its read.
+    service.rescheduleAll();
     await settle();
     releaseWrite(true);
     await first;
     releaseRead();
-    await second;
+    await settle();
     expect(published).toEqual([expect.objectContaining({ state: 'armed' })]);
+    service.stop();
+  });
+
+  /**
+   * Every statusline report schedules an evaluation, so the settings are read once and kept
+   * rather than read from disk on each report, the feature off included; the settings PUT calls
+   * rescheduleAll() when either key changes, which is what makes the next read fresh.
+   */
+  it('reads the settings once, again after rescheduleAll(), and again after a failed read', async () => {
+    const session = new FakeSession();
+    session.promptCache = warmCache(NOW + HOUR);
+    let reads = 0;
+    let fail = false;
+    const { ports } = makePorts(session, {
+      readSettings: async () => {
+        reads += 1;
+        if (fail) throw new Error('unreadable');
+        return { keepWarmDefault: false, maxHours: 2 };
+      },
+    });
+    const service = new PromptCacheKeepWarmService(ports);
+    await service.schedule(session.id);
+    await service.schedule(session.id);
+    expect(reads).toBe(1);
+    fail = true;
+    service.rescheduleAll();
+    await settle();
+    expect(reads).toBe(2);
+    fail = false;
+    await service.schedule(session.id);
+    expect(reads).toBe(3);
     service.stop();
   });
 

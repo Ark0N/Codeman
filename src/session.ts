@@ -457,6 +457,15 @@ export interface ClaudeMessage {
 }
 
 /**
+ * Whether a programmatic write leaves the keep-alive turn running: the nudge itself, or a bare
+ * Enter (which submits nothing new). Anything else carrying an Enter starts a turn of its own.
+ */
+function isKeepAliveWrite(data: string): boolean {
+  const text = data.replace(/[\r\n]/g, '').trim();
+  return text === '' || text === KEEP_WARM_NUDGE;
+}
+
+/**
  * Event signatures emitted by the Session class.
  * Subscribe using `session.on('eventName', handler)`.
  */
@@ -1562,8 +1571,10 @@ export class Session extends EventEmitter {
   /**
    * True while the running turn is Codeman's own keep-alive nudge: its stop hook and idle
    * prompt open pre-acknowledged, and its submit moves `lastSubmitAt` (it IS a submit, and the
-   * response viewer's conversation correlation needs it) but not `lastRealPromptAt`. Any
-   * `fromUser` write ends it early, so a person's prompt right after a nudge counts and alerts normally.
+   * response viewer's conversation correlation needs it) but not `lastRealPromptAt`. The turn's
+   * own idle prompt ends it (`endKeepAliveTurn()`), and so does any other submit: a `fromUser`
+   * write, a programmatic write of anything but the nudge, or a `prompt_submitted` hook for
+   * another prompt, so a prompt right after a nudge counts and alerts normally.
    */
   get keepAliveTurnActive(): boolean {
     return Date.now() < this._keepAliveTurnUntil;
@@ -1571,6 +1582,10 @@ export class Session extends EventEmitter {
 
   beginKeepAliveTurn(windowMs: number): void {
     this._keepAliveTurnUntil = Date.now() + windowMs;
+  }
+
+  endKeepAliveTurn(): void {
+    this._keepAliveTurnUntil = 0;
   }
 
   /** Last keystroke a person sent (`fromUser` write), epoch ms; 0 when none this process. */
@@ -4740,6 +4755,9 @@ export class Session extends EventEmitter {
     if (options.fromUser) {
       this._lastHumanInputAt = Date.now();
       // A person is here: whatever turn follows is theirs, not the keep-alive's.
+      this._keepAliveTurnUntil = 0;
+    } else if (hasEnter && !isKeepAliveWrite(data)) {
+      // Anything else submitted (an agent, respawn, auto-resume) starts a turn of its own.
       this._keepAliveTurnUntil = 0;
     }
     if (hasEnter) this._stampSubmit();
