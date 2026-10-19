@@ -75,13 +75,14 @@
   z-index: 2400;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
+  /* The bar, the page, the composer. The bottom safe area is the composer's own padding, so its
+     background reaches the edge of the screen. */
+  grid-template-rows: auto minmax(0, 1fr) auto;
   background: var(--story-bg);
   color: var(--story-ink);
   font-family: var(--story-body);
   color-scheme: dark;
   padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 .story-overlay.story-paper {
   --story-bg: #ecede9;
@@ -424,10 +425,11 @@ body.story-open {
   clip-path: inset(50%);
   white-space: nowrap;
 }
-/* App toasts move to the bottom while Story Mode is open: at the top they cover its bar. */
+/* App toasts move to the bottom while Story Mode is open: at the top they cover its bar. They sit
+   above the composer, whose measured height (safe area included) story-mode.js sets on body. */
 body.story-open .toast-container {
   top: auto;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
+  bottom: calc(var(--story-compose-h, env(safe-area-inset-bottom, 0px)) + 0.75rem);
 }
 /* story-mode.js sets --story-lines when a balloon would leave its panel or cover Claude's head. */
 .story-balloon-text {
@@ -825,7 +827,6 @@ body.story-open .toast-container {
     border-left: 0;
     border-top: 3px solid var(--story-ink);
     padding-left: env(safe-area-inset-left, 0px);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 }
 .story-drawer-head {
@@ -1023,6 +1024,81 @@ body.story-open .toast-container {
 }
 .story-todos .is-chosen::before {
   content: '✓ ';
+}
+
+/* Composer (story-mode.js _storyCompose*): a message to the session on the page, across the bottom.
+   Never in Save image (that draws the page only). The drawer ends above it, so a message can be
+   written while a drawer is open; story-mode.js measures it into --story-compose-h. */
+.story-overlay .story-drawer {
+  bottom: var(--story-compose-h, 0px);
+}
+.story-compose {
+  grid-row: 3;
+  min-width: 0;
+  padding: 8px max(16px, env(safe-area-inset-right, 0px)) calc(7px + env(safe-area-inset-bottom, 0px))
+    max(16px, env(safe-area-inset-left, 0px));
+  background: var(--story-sheet);
+  border-top: 2px solid var(--story-ink);
+}
+.story-compose-inner {
+  max-width: 1240px;
+  margin: 0 auto;
+}
+.story-compose-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.story-compose .story-compose-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  box-sizing: border-box;
+  /* One line to about five (story-mode.js grows it to its text), then it scrolls inside. 16px keeps
+     iOS from zooming the page when the field takes focus. */
+  min-height: 44px;
+  max-height: calc(5 * 1.4em + 22px);
+  margin: 0;
+  padding: 9px 11px;
+  font: 16px/1.4 var(--story-body);
+  color: var(--story-ink);
+  background: var(--story-panel);
+  border: 2px solid var(--story-ink);
+  border-radius: 0;
+  resize: none;
+  overflow-y: auto;
+}
+.story-compose .story-compose-field::placeholder {
+  color: var(--story-muted);
+  opacity: 1;
+}
+.story-compose .story-compose-field[readonly] {
+  color: var(--story-muted);
+  border-style: dashed;
+}
+.story-compose .story-compose-send {
+  flex: none;
+  min-width: 76px;
+  height: 44px;
+  padding: 0 16px;
+  font: 20px/1 var(--story-letter);
+  background: var(--story-cap);
+  color: var(--story-cap-ink);
+  border: 2.5px solid var(--story-cap-ink);
+  border-radius: 0;
+}
+.story-compose .story-compose-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.story-compose-hint {
+  margin: 4px 0 0;
+  font: 12px/1.35 var(--story-body);
+  color: var(--story-muted);
+}
+/* Claude waits on you: the one hint that needs noticing (a text token, 4.5:1 in both skins). */
+.story-compose[data-state='waiting'] .story-compose-hint {
+  color: var(--story-wait-text);
+  font-weight: 650;
 }
 
 /* Touch screens: every control a finger can hit (44 px), and the small type a little larger. */

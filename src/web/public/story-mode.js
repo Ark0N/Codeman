@@ -1846,6 +1846,7 @@ Object.assign(CodemanApp.prototype, {
       drawerBody,
     };
     this._story = st;
+    this._storyComposeBuild(st);
 
     closeBtn.addEventListener('click', () => this.closeStoryMode());
     saveBtn.addEventListener('click', () => this.saveStoryImage());
@@ -1913,6 +1914,219 @@ Object.assign(CodemanApp.prototype, {
     if (target) this._storyPickTurn(target.id);
   },
 
+  // ── Composer: a message to the session on the page ──
+
+  /**
+   * The bar under the page: a field and Send. It talks to the session the overlay shows
+   * (`st.sessionId`), never the active tab, since Session Options opens Story for any session.
+   * Drafts live in memory per session id for the life of the page (prompts carry secrets, so they
+   * are never persisted). The bar is outside `.story-main`, so a drawer that makes the page inert
+   * leaves it usable, and outside the page, so Save image never draws it.
+   */
+  _storyComposeBuild(st) {
+    const el = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    };
+    const box = el('div', 'story-compose');
+    const inner = el('div', 'story-compose-inner');
+    const row = el('div', 'story-compose-row');
+    const field = el('textarea', 'story-compose-field');
+    field.rows = 1;
+    field.dataset.i18nSkip = ''; // what is typed is the user's, never translated
+    field.setAttribute('autocapitalize', 'sentences');
+    field.setAttribute('enterkeyhint', 'send');
+    field.spellcheck = true;
+    const hint = el('p', 'story-compose-hint');
+    hint.id = 'storyComposeHint';
+    field.setAttribute('aria-describedby', hint.id);
+    const send = el('button', 'story-compose-send', 'Send');
+    send.type = 'button';
+    send.title = 'Send to Claude (Enter). Shift+Enter adds a line.';
+    // i18n.js skips <textarea> subtrees, so its label and placeholder are translated here.
+    const t = typeof window.CodemanI18n?.t === 'function' ? (s) => window.CodemanI18n.t(s) : (s) => s;
+    field.setAttribute('aria-label', t('Message Claude'));
+    field.placeholder = t('Tell Claude what to do next');
+    row.append(field, send);
+    inner.append(row, hint);
+    box.append(inner);
+    // Between the page and the drawer: Tab walks bar, page, composer, then an open drawer.
+    st.root.insertBefore(box, st.drawerEl);
+    st.drafts = new Map();
+    st.compose = { el: box, field, send, hint, hintText: '', boundId: null, state: 'ready', blocked: false };
+
+    field.addEventListener('input', () => {
+      const id = st.compose.boundId;
+      if (id) {
+        if (field.value) st.drafts.set(id, field.value);
+        else st.drafts.delete(id);
+      }
+      this._storyComposeFit();
+      this._storyComposeSync();
+    });
+    field.addEventListener('focus', () => this._storyComposeSync());
+    field.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+      // An IME commits what it composes with Enter: that Enter belongs to the IME, never a send.
+      if (e.isComposing || e.keyCode === 229) return;
+      // Plain Enter never inserts a line here, even when sending is blocked (a dialog waits, the
+      // session is gone): the hint says why, and the draft stays as it was.
+      e.preventDefault();
+      this._storySendCompose();
+    });
+    send.addEventListener('click', () => this._storySendCompose());
+    // The drawer ends above the composer and app toasts sit above it (story-mode.css reads the height).
+    // A custom property on body reaches both: the overlay inherits it, and toasts live in body.
+    if (typeof ResizeObserver === 'function') {
+      let width = 0;
+      new ResizeObserver(() => {
+        if (!st.open) return;
+        // A new width rewraps the text: the field takes its new height (the next callback then
+        // reports the bar's settled height).
+        if (box.offsetWidth !== width) {
+          width = box.offsetWidth;
+          this._storyComposeFit();
+        }
+        document.body.style.setProperty('--story-compose-h', `${box.offsetHeight}px`);
+      }).observe(box);
+    }
+  },
+
+  /**
+   * Whether a message can go to the session now, and the hint that says so. Blocked states keep the
+   * field (a draft can still be written) but never send.
+   * @returns {{ state: 'gone'|'exited'|'unsupported'|'waiting'|'working'|'ready', hint: string }}
+   */
+  _storyComposeState() {
+    const st = this._story;
+    const session = this.sessions?.get(st.sessionId);
+    if (!session || st.goneId === st.sessionId)
+      return { state: 'gone', hint: 'This session is gone, so there is nothing to send to.' };
+    if (typeof paneExitLabel === 'function' && paneExitLabel(session.paneExit))
+      return { state: 'exited', hint: 'Claude has exited in this session, so nothing can be sent.' };
+    // The server could not draw this session (a shell, another CLI, a remote host): text plus Enter
+    // in a shell would run as a command, so the bar sends only to sessions Story Mode reads.
+    if (st.data && st.data.supported === false)
+      return { state: 'unsupported', hint: 'Story Mode sends only to the Claude Code sessions it can draw.' };
+    // Claude waits on a question or a permission in the terminal. A message there would land in the
+    // selection dialog, where its Enter picks whatever option is highlighted (often "Yes"), so
+    // sending is off until it is answered; the field still takes a draft. The page shows a pending
+    // question of the newest turn; a permission prompt never reaches the transcript, only the hook
+    // (and a reader parked on an older turn sees only the hook).
+    const page = st.data?.supported ? st.data.page : null;
+    const asking =
+      !st.turnId && !!page && !page.complete && !page.interrupted && page.events.some((e) => e.question && e.pending);
+    const hooks = this.pendingHooks?.get(st.sessionId);
+    if (asking || hooks?.has('permission_prompt') || hooks?.has('elicitation_dialog'))
+      return {
+        state: 'waiting',
+        hint: 'Claude is waiting for your answer in the terminal. Answer it there; your message waits here.',
+      };
+    const turns = st.data?.supported ? st.data.turns || [] : [];
+    const newest = turns[turns.length - 1];
+    // Claude Code queues a message typed during a turn, so sending while it works is fine.
+    if (newest && !newest.complete && !newest.interrupted)
+      return { state: 'working', hint: 'Claude is working. What you send now waits in line for it.' };
+    return { state: 'ready', hint: 'Enter sends. Shift+Enter adds a line.' };
+  },
+
+  /** Brings the bar in line with the session: its draft, whether it can send, the hint. */
+  _storyComposeSync() {
+    const st = this._story;
+    const c = st?.compose;
+    if (!c || !st.sessionId) return;
+    if (c.boundId !== st.sessionId) {
+      // Another session on the page: its own draft (the old one was saved on every keystroke).
+      c.boundId = st.sessionId;
+      c.field.value = st.drafts.get(st.sessionId) || '';
+      this._storyComposeFit();
+    }
+    const { state, hint } = this._storyComposeState();
+    c.state = state;
+    c.blocked = state !== 'ready' && state !== 'working';
+    c.el.dataset.state = state;
+    // Gone for good: the draft stays readable (and copyable), not editable.
+    c.field.readOnly = state === 'gone' || state === 'exited' || state === 'unsupported';
+    const off = c.blocked || !c.field.value.trim();
+    // A button that is about to be disabled under focus hands it to the field first.
+    if (off && document.activeElement === c.send) c.field.focus({ preventScroll: true });
+    c.send.disabled = off;
+    // Compared with the last English text set, never the DOM (i18n.js may have translated it).
+    if (c.hintText !== hint) {
+      c.hintText = hint;
+      c.hint.textContent = hint;
+    }
+  },
+
+  /** The field grows with its text up to the CSS max-height (about five lines), then scrolls. */
+  _storyComposeFit() {
+    const f = this._story?.compose?.field;
+    if (!f) return;
+    f.style.height = 'auto';
+    const h = f.scrollHeight;
+    // No layout (a hidden overlay, a test DOM): leave the field at its natural one line.
+    if (h > 0) f.style.height = `${h + f.offsetHeight - f.clientHeight}px`;
+    else f.style.height = '';
+  },
+
+  /**
+   * Sends the field to the session on the page through the mobile composer's tested path
+   * (KeyboardAccessoryBar._sendComposedPrompt: one bracketed paste on the durable exactly-once
+   * input queue, then Enter as a separate delayed write, plus the too-long toast). Never text and
+   * `\r` in one write: Claude Code reads a long burst as a paste and its Enter as a newline.
+   * @returns {boolean} whether it went out
+   */
+  _storySendCompose() {
+    const st = this._story;
+    const c = st?.compose;
+    if (!st?.open || !c) return false;
+    // Fresh: a dialog that opened since the last poll still blocks this Enter.
+    this._storyComposeSync();
+    const text = c.field.value;
+    // Whitespace-only would submit blank lines; real text goes out untrimmed.
+    if (c.blocked || !text.trim()) return false;
+    const bar = typeof KeyboardAccessoryBar !== 'undefined' ? KeyboardAccessoryBar : null;
+    if (typeof bar?._sendComposedPrompt !== 'function') {
+      this.showToast?.('Sending is not available on this page. Use the terminal.', 'error');
+      return false;
+    }
+    const sessionId = st.sessionId;
+    if (!bar._sendComposedPrompt(sessionId, text)) return false;
+    st.drafts.delete(sessionId);
+    c.field.value = '';
+    this._storyComposeFit();
+    this._storyComposeSync();
+    c.field.focus({ preventScroll: true });
+    // The answer is a new turn. A reader parked on an older one (or held there by a drawer) would
+    // never see it, since activity is ignored while parked: go to the newest, as the picker does.
+    if (st.turnId || st.drawer) {
+      const turns = st.data?.turns || [];
+      this._storyPickTurn(turns[turns.length - 1]?.id ?? null);
+    }
+    // The prompt hook refreshes when Claude takes it; this one covers a workspace without hooks.
+    this._storyScheduleRefresh(1500);
+    return true;
+  },
+
+  /**
+   * Escape in the field while it holds text steps out of the field first (focus to Close) instead
+   * of closing a layer: an Escape mid-sentence is far more often a slip than a request to leave.
+   * The draft would survive a close anyway (kept per session); this keeps the reader in place.
+   * An empty field lets Escape close one layer, as everywhere else on the overlay.
+   * @returns {boolean} whether this Escape was handled
+   */
+  _storyComposeEscape(e) {
+    const st = this._story;
+    const c = st?.compose;
+    if (!c || document.activeElement !== c.field || !c.field.value.trim()) return false;
+    e.preventDefault();
+    e.stopPropagation();
+    st.closeBtn.focus({ preventScroll: true });
+    return true;
+  },
+
   // ── Fetching ──
 
   _storyScheduleRefresh(delay = STORY_REFRESH_DEBOUNCE_MS) {
@@ -1958,6 +2172,9 @@ Object.assign(CodemanApp.prototype, {
         body = null;
       }
       if (epoch !== st.epoch || !st.open) return;
+      // The route answers 404 only for a session that no longer exists: the composer stops sending.
+      // Kept with its id, so opening Story for another session never inherits it.
+      st.goneId = res?.status === 404 ? st.sessionId : null;
       if (!res || !res.ok || !body?.success) {
         st.error =
           body?.error || (res?.status === 404 ? 'This session is gone.' : 'Story Mode could not read this session.');
@@ -2082,6 +2299,8 @@ Object.assign(CodemanApp.prototype, {
     st.pollTimer = setInterval(() => {
       const page = st.data?.page;
       if (!st.open || document.hidden) return;
+      // A permission prompt or a closed session raises no Story event: the composer looks again.
+      this._storyComposeSync();
       // A session Story Mode cannot draw does not change that by itself: nothing to poll.
       if (st.data && st.data.supported === false) return;
       if (!st.turnId && page && !page.complete && !page.interrupted) {
@@ -2108,6 +2327,9 @@ Object.assign(CodemanApp.prototype, {
         return;
       }
       if (e.key !== 'Escape') return;
+      // An Escape that cancels an IME composition is the IME's, not a request to close anything.
+      if (e.isComposing || e.keyCode === 229) return;
+      if (this._storyComposeEscape(e)) return;
       // A folder grid on top steps back by itself (preview, then grid), and a preview in edit mode
       // keeps its keys. A plain file preview has no Escape of its own outside the grid, so Story
       // closes it: one Escape per layer, the preview first.
@@ -2262,6 +2484,7 @@ Object.assign(CodemanApp.prototype, {
     if (st.drawer) this._storyRenderDrawer(false);
     // Panels on screen when a page first loads are drawn finished; only later arrivals animate in.
     if (data) st.first = false;
+    this._storyComposeSync();
   },
 
   /** Says a new turn or a finished one out loud (the polite status region), once each. */
