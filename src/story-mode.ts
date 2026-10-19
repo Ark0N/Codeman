@@ -2486,12 +2486,149 @@ function plannedFailure(turn: StoryTurn, events: StoryEvent[]): false | 'asked' 
   return events.some((e) => e.intent === 'say' && EXPECTED_BY_CLAUDE.test(e.label)) ? 'planned' : false;
 }
 
+// ========== Simple captions ==========
+// The Simple reading level is for someone who has never seen a terminal (a parent, a manager). Its
+// captions are TEMPLATES ONLY: never a word taken from the transcript (no file name, command, commit
+// message, branch or helper name), so no path, code or jargon can reach them. They are written from
+// the same facts as the story caption, so a failed check never reads as a pass.
+
+/** "a file", "3 files". */
+const someFiles = (n: number): string => (n === 1 ? 'a file' : `${n} files`);
+/** "a helper", "2 helpers". */
+const someHelpers = (n: number): string => (n === 1 ? 'a helper' : `${n} helpers`);
+/** A caption sentence continued after a semicolon: "A check fails." becomes "a check fails.". */
+const lowerFirst = (s: string): string => (s.startsWith('Claude') ? s : `${s[0]?.toLowerCase() ?? ''}${s.slice(1)}`);
+/** "a, b and c". */
+const andList = (parts: string[]): string =>
+  parts.length < 2 ? (parts[0] ?? '') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+/** A check other than the tests, in everyday words; a type check or a build is just "another check". */
+const simpleCheckName = (e: StoryEvent | undefined): string => {
+  const name = checkName(e);
+  return name === 'a formatting check' || name === 'a style check' ? name : 'another check';
+};
+/** A prompt that keeps the work out of git ("no git", "don't commit"). */
+const NO_SAVE = /\b(no|without|skip|don't use|do not use) git\b|\b(don't|do not|never) commit\b|\bno commits?\b/i;
+/** git's own line for a commit it made (`[main 1a2b3c4] message`): the save went through. */
+const COMMIT_MADE = /^\[[^\]\n]+ [0-9a-f]{7,}\]/m;
+/** git's own lines for a push that went through. */
+const PUSH_MADE = /\[new branch\]|\S+\.\.\S+\s+\S+\s+->|\bset up to track\b|Everything up-to-date/;
+
+/** A montage in everyday words: the parts that matter most first, three at most. */
+function simpleMontage(evs: StoryEvent[]): string {
+  const has = (...intents: StoryIntent[]) => evs.some((e) => intents.includes(e.intent));
+  const parts = [
+    has('edit') ? 'changes files' : '',
+    has('test', 'build') ? 'checks the work' : '',
+    has('save') || evs.some((e) => (e.commits ?? 0) > 0) ? 'saves the work' : '',
+    has('read', 'search', 'look') ? 'reads files' : '',
+    has('run', 'tool') ? 'runs some steps' : '',
+    has('plan') ? 'makes a plan' : '',
+    has('web') ? 'looks things up' : '',
+  ].filter(Boolean);
+  if (!parts.length) return 'takes a few more steps';
+  return parts.length > 3 ? `${parts.slice(0, 3).join(', ')}, and more` : andList(parts);
+}
+
+/**
+ * The final panel in everyday words: how the turn ended and how long it took, how many files changed,
+ * whether the checks pass, whether the work is saved, and what the reader must not miss.
+ */
+function simpleEnding(turn: StoryTurn, page: Omit<StoryPage, 'panels'>): string {
+  const events = page.events;
+  // Rounded to minutes past one, so "about": the chip beside it says "2 min 41 s".
+  const ms = turn.durationMs;
+  const took = ms !== undefined && ms >= 1000 ? `${ms >= 60_000 ? 'about ' : ''}${roughDuration(ms)}` : '';
+  const running = page.helpersRunning;
+  const commands = events.filter((e) => e.running && !e.helper).length;
+  const later = events.filter((e) => e.finishedLater && e.intent !== 'prompt');
+  const out: string[] = [];
+  if (turn.interrupted) out.push(took ? `You stopped Claude after ${took}.` : 'You stopped Claude partway.');
+  else if (page.noneWorked) out.push('Nothing Claude tried worked, so the job is not done.');
+  else if (turn.endedBy === 'next prompt') out.push('The work stops here; the next message starts something new.');
+  else if (running || commands)
+    out.push(
+      `Claude's part ${took ? `took ${took}` : 'is done'}, but ${
+        running
+          ? `${running === 1 ? 'a helper is' : `${running} helpers are`} still working`
+          : 'some work is still running'
+      }.`
+    );
+  else if (later.length)
+    out.push(
+      `Claude's part ${took ? `took ${took}` : 'is done'}; ${
+        later.every((e) => e.helper) ? (later.length === 1 ? 'its helper' : 'its helpers') : 'the work it left running'
+      } finished later.`
+    );
+  else out.push(took ? `Done in ${took}.` : 'Done.');
+
+  // A report turn's helper wrote its files in its own transcript: "no files changed" would contradict it.
+  if (page.filesChanged) out.push(`${page.filesChanged === 1 ? 'One file' : `${page.filesChanged} files`} changed.`);
+  else if (turn.origin === 'human') out.push('No files changed.');
+
+  // The checks: how the LAST one went, failed counting a run that reports failed tests.
+  const checks = events.filter((e) => e.intent === 'test' || e.intent === 'build');
+  const last = checks[checks.length - 1];
+  if (last && (last.running || last.ok === undefined)) out.push('A check is still running.');
+  else if (last && last.ok && !(last.tests && last.tests.failed > 0)) out.push('The checks pass.');
+  else if (last) {
+    // "As you asked" only while no run has passed yet: a check failing after one passed is a problem.
+    const planned = checks.some((e) => e.ok && !(e.tests && e.tests.failed > 0)) ? false : plannedFailure(turn, events);
+    out.push(
+      planned === 'asked'
+        ? 'The checks fail, as you asked.'
+        : planned
+          ? 'The checks fail, as planned.'
+          : 'A check still fails.'
+    );
+  } else if (page.filesChanged) {
+    // No check, and nothing run after the first change either (a practice run counts as trying it).
+    const firstEditAt = events.findIndex((e) => editsOf(e).length > 0);
+    const tried = events.some((e, i) => i > firstEditAt && e.tool === 'Bash' && e.intent === 'run');
+    if (!tried) out.push('Claude did not try out its changes.');
+  }
+
+  // Saved: a commit or an upload that went through, whatever came after it in the same command.
+  const savedAt = events.reduce(
+    (at, e, i) =>
+      ((e.commits ?? 0) > 0 && (e.ok !== false || COMMIT_MADE.test(e.output ?? ''))) ||
+      (e.ships && (e.ok !== false || PUSH_MADE.test(e.output ?? '')))
+        ? i
+        : at,
+    -1
+  );
+  const lastEditAt = events.reduce((at, e, i) => (editsOf(e).length ? i : at), -1);
+  if (savedAt >= 0 && lastEditAt > savedAt) out.push('Some of the work is saved, but the latest changes are not.');
+  else if (savedAt >= 0) out.push('The work is saved.');
+  // "Not saved" only where saving is in play (you asked for it, or the project keeps its history in
+  // git): in a folder you said to keep out of git, files written are simply there.
+  else if (
+    page.filesChanged &&
+    (events.some((e) => e.intent === 'prompt' && ASKS_TO_SAVE.test(e.label) && !NO_SAVE.test(e.label)) ||
+      events.some((e) => e.tool === 'Bash' && /\bgit\b/.test(e.label)))
+  )
+    out.push('The work is not saved yet.');
+
+  // What the reader must not miss: Claude's own words hold the details, one click away.
+  if (page.openNote === 'catch') out.push('Claude says a problem is left: read its message.');
+  else if (page.openNote === 'note') out.push('Claude left you a note: read its message.');
+  if (page.asks) out.push('Claude has a question for you.');
+  if (turn.interrupted) {
+    const todos = [...events].reverse().find((e) => e.todos?.length)?.todos;
+    if (todos?.some((t) => !t.done)) out.push('Some of its plan is not done yet.');
+  }
+  return out.join(' ');
+}
+
 function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, index: number): StoryPanel {
   const all = draft.events.map((i) => events[i]);
   // Second opinions riding on this step are counted, never part of its story.
   const opinions = all.filter((e) => e.tool === 'Advisor').length;
   const evs = opinions && opinions < all.length ? all.filter((e) => e.tool !== 'Advisor') : all;
-  const panel: StoryPanel = { kind: draft.kind, events: draft.events, caption: { story: '', director: '' } };
+  const panel: StoryPanel = {
+    kind: draft.kind,
+    events: draft.events,
+    caption: { story: '', director: '', simple: '' },
+  };
   if (evs !== all) panel.secondOpinion = opinions;
   if (draft.balloon) panel.balloon = draft.balloon;
   const edits = evs.flatMap(editsOf);
@@ -2513,6 +2650,8 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
   const tools = countBy(evs, (e) => e.tool);
   let story = '';
   let director = tools;
+  // The Simple level's sentence, from the same facts (templates only: see "Simple captions").
+  let simple = '';
 
   switch (draft.kind) {
     case 'mission': {
@@ -2535,6 +2674,22 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             : origin === 'peer'
               ? 'Another session chimes in while Claude works.'
               : lines[origin];
+      const plainly: Record<StoryTurnOrigin, string> = {
+        human: 'You give Claude a job.',
+        task: 'A job Claude left running reports back.',
+        peer: 'Another Claude sends a message.',
+        scheduled: 'A job set up ahead of time starts this work.',
+        system: 'Claude picks up the work by itself.',
+      };
+      simple = command
+        ? 'You give Claude a short instruction.'
+        : index === 0
+          ? plainly[turn.origin]
+          : origin === 'human'
+            ? 'You add something while Claude works.'
+            : origin === 'peer'
+              ? 'Another Claude chimes in while this one works.'
+              : plainly[origin];
       // Words that started the turn but are not yours are a note, not your balloon.
       if (panel.balloon && !command && origin !== 'human') panel.balloon = { ...panel.balloon, who: 'note' };
       // A helper reporting back: its own words, not only the line saying it finished, so what it
@@ -2598,6 +2753,25 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
                 : checking
                   ? 'Claude checks the work that came back.'
                   : 'Claude looks around the project.';
+      simple = evs.every((e) => e.tool === 'ToolSearch')
+        ? evs.some((e) => /PlanMode/.test(e.label))
+          ? 'Claude gets ready to plan.'
+          : 'Claude gets ready for the job.'
+        : shown.length && shown.length <= 2
+          ? checking
+            ? 'Claude checks the work that came back.'
+            : shown.length === 1
+              ? 'Claude reads a file from the project.'
+              : 'Claude reads two files from the project.'
+          : shown.length
+            ? `Claude reads ${shown.length} files to find its way around.`
+            : evs.every((e) => e.intent === 'search')
+              ? 'Claude searches the project.'
+              : savedBefore && evs.every((e) => e.tool === 'Bash' && GIT_LOOK.test(e.label.trim()))
+                ? 'Claude checks what it saved.'
+                : checking
+                  ? 'Claude checks the work that came back.'
+                  : 'Claude looks around the project.';
       // A tool lookup's query (`select:EnterPlanMode,ExitPlanMode`) means nothing to a reader.
       if (evs.every((e) => e.tool === 'ToolSearch')) panel.notes = [];
       break;
@@ -2605,6 +2779,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
     case 'research':
       panel.notes = evs.map(shortCommand).slice(0, 4);
       story = 'Claude looks things up on the web.';
+      simple = story;
       break;
     case 'plan': {
       const todos = [...evs].reverse().find((e) => e.todos)?.todos;
@@ -2614,6 +2789,11 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         ? `Claude writes a plan: ${plural(todos.length, 'step')}.`
         : evs.every((e) => e.tool === 'EnterPlanMode')
           ? 'Claude switches to plan mode to think it through.'
+          : 'Claude thinks it through.';
+      simple = todos
+        ? `Claude makes a plan with ${plural(todos.length, 'step')}.`
+        : evs.every((e) => e.tool === 'EnterPlanMode')
+          ? 'Claude stops to plan before it acts.'
           : 'Claude thinks it through.';
       // A plan written as text has no progress to report; a plan tool's list does.
       if (todos && evs.every((e) => e.tool === 'Text')) director = `written as text · ${plural(todos.length, 'step')}`;
@@ -2648,6 +2828,15 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             ? `Claude sends ${plural(helpers.length, 'helper')} off to work in the background.`
             : `Claude calls in ${plural(helpers.length, 'helper')}.`
         : 'Claude sends a message to another session.';
+      simple = helpers.length
+        ? advisor === helpers.length
+          ? evs.every((e) => e.tool !== 'Advisor' || e.ok === false)
+            ? 'Claude asks a stronger AI for advice, but no answer comes.'
+            : 'Claude asks a stronger AI for advice.'
+          : behind === helpers.length
+            ? `Claude sends ${someHelpers(helpers.length)} off to work while it carries on.`
+            : `Claude calls in ${someHelpers(helpers.length)}.`
+        : 'Claude sends a message to another Claude.';
       const inside = evs.reduce((n, e) => n + (e.helper?.toolUses ?? 0), 0);
       const types = unique(helpers.map((h) => h.type).filter((t) => t !== 'advisor'));
       director = `${tools}${advisor ? ' · a second opinion' : ''}${types.length ? ` · ${types.join(' + ')}` : ''}${inside ? ` · ${plural(inside, 'call')} inside` : ''}`;
@@ -2696,6 +2885,16 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
                 : files.length
                   ? `Claude changes ${fileWords(files)}.`
                   : 'Claude changes a file.';
+        simple =
+          created && created === files.length
+            ? files.length === 1
+              ? 'Claude writes a new file.'
+              : `Claude writes ${files.length} new files.`
+            : whole && files.length && wholeList.length === files.length
+              ? `Claude writes ${someFiles(files.length)}.`
+              : mixed
+                ? `Claude writes ${someFiles(mixed.whole.length)} and changes ${someFiles(mixed.patched.length)}.`
+                : `Claude changes ${someFiles(Math.max(1, files.length))}.`;
         const perFile = files.slice(0, 3).map((f) => {
           const mine = netCounts(edits.filter((e) => e.file === f));
           return `${basename(f)} ${fmtCounts(mine.added, mine.removed)}`;
@@ -2754,12 +2953,33 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
                             : panel.ok === false
                               ? `Fix and test, ${plural(n, 'round')}. Still failing.`
                               : `Fix and test, ${plural(n, 'round')}.`;
+        simple =
+          panel.ok === true && !fails
+            ? 'Claude changes the work and checks it: everything passes.'
+            : panel.ok === true && fails === lintFails
+              ? `${simpleCheckName(failed.find((e) => !!e.tests && e.tests.passed > 0 && !e.tests.failed && !e.tests.errors)).replace(/^a/, 'A')} fails at first; Claude fixes it, and everything passes.`
+              : panel.ok === true && planned === 'asked'
+                ? checks.length === 2 && loadsNot(checks[0])
+                  ? "At first the checks can't even start, as you asked; then they pass."
+                  : 'The first check fails on purpose, as you asked, then passes.'
+                : panel.ok === true && planned
+                  ? 'The first check fails, as planned, then everything passes.'
+                  : panel.ok === true && checks.length === 2 && fails === 1
+                    ? 'The first check fails; Claude fixes it, and the second passes.'
+                    : panel.ok === true
+                      ? 'Some checks fail at first; Claude fixes them until all pass.'
+                      : panel.ok === false && tests && tests.passed && !tests.failed && !tests.errors
+                        ? 'Claude fixes and checks the work, but one check still fails.'
+                        : panel.ok === false
+                          ? 'Claude keeps fixing and checking, but it still fails.'
+                          : 'Claude fixes and checks the work.';
         // Commits made inside the loop (a test one-liner that ends in one) are part of its story.
         const saved = evs.reduce((k, e) => k + (e.commits ?? 0), 0);
         if (saved)
           story += ` Claude ${startsRepoAt(draft.events, events) ? 'starts a git repository and ' : ''}saves the work${
             saved > 1 ? ` in ${saved} commits` : ''
           } along the way.`;
+        if (saved) simple += ' It also saves the work.';
         director = `${plural(checks.length, 'check')} · ${plural(edits.length, 'edit')} · ${fmtCounts(panel.added, panel.removed)} · last: ${
           lastCheck ? outcome(lastCheck) : 'running'
         }`;
@@ -2796,6 +3016,25 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       const plannedCheck = ok === false ? plannedFailure(turn, events) : false;
       if (plannedCheck)
         story = `${story.replace(/[.]$/, '')}, ${plannedCheck === 'asked' ? 'as you asked' : 'as planned'}.`;
+      // The same verdicts in everyday words ("checks", never tests, builds or linters).
+      if (lastCheck?.running) simple = 'Claude starts a check that runs on its own.';
+      else if (lastCheck?.background && ok !== undefined)
+        simple = lastCheck.finishedLater
+          ? `Claude starts a check that runs on its own; later it ${ok ? 'passes' : 'fails'}.`
+          : `A check runs on its own and ${ok ? 'passes' : 'fails'}.`;
+      else if (ok === undefined) simple = 'Claude checks the work.';
+      else if (!ok && tests && !tests.passed && !tests.failed && tests.errors) simple = "The checks can't even start.";
+      else if (!ok && tests && tests.passed && !tests.failed && !tests.errors)
+        simple = 'The main checks pass, but another one fails.';
+      else if (ok)
+        simple = failedFirst ? 'A check fails at first, then passes.' : 'Claude checks the work: everything passes.';
+      else
+        simple =
+          tests && tests.failed > 1
+            ? `Claude checks the work: ${tests.failed} checks fail.`
+            : 'Claude checks the work: one check fails.';
+      if (plannedCheck)
+        simple = `${simple.replace(/[.]$/, '')}, ${plannedCheck === 'asked' ? 'as you asked' : 'as planned'}.`;
       // The same command with the same outcome twice in a row reads once, with a count.
       const runs: Array<{ text: string; n: number }> = [];
       for (const e of checks) {
@@ -2836,6 +3075,12 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         patched.length ? `changes ${fileWords(patched)}` : '',
       ].filter(Boolean);
       if (did.length) story = `Claude ${did.join(' and ')}; ${story[0].toLowerCase()}${story.slice(1)}`;
+      // The files by count only, one verb (a new file is a change too): the sentence stays short.
+      const didPlainly = written.length ? `${patched.length ? 'changes' : 'writes'} ${someFiles(written.length)}` : '';
+      if (didPlainly)
+        simple = simple.startsWith('Claude ')
+          ? `Claude ${didPlainly}, then ${simple.slice(7)}`
+          : `Claude ${didPlainly}; ${lowerFirst(simple)}`;
       const saved = checks.reduce((n, e) => n + (e.commits ?? 0), 0);
       if (saved) {
         director += ` · ${plural(saved, 'commit')}`;
@@ -2843,6 +3088,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
           story = `${story.slice(0, -1)}, ${startsRepoAt(draft.events, events) ? 'then Claude starts a git repository and' : 'and Claude'} saves the work${
             newBranchAt(draft.events, events) ? ` on a new branch (${newBranchAt(draft.events, events)})` : ''
           }${checks.some((e) => e.ships === 'push') ? ' and sends it up' : ''}.`;
+        if (ok) simple += ' Then it saves the work.';
       }
       break;
     }
@@ -2883,6 +3129,26 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
                   ? 'Claude does the dry run you asked for: it shows what would happen, changing nothing.'
                   : 'Claude does a dry run: it shows what would happen, changing nothing.'
                 : 'Claude works in the terminal.';
+      const one = evs.length === 1;
+      simple = evs.every((e) => e.running)
+        ? 'Claude starts something that keeps running on its own.'
+        : errors && errors === evs.length && evs.every(emptyAnswer)
+          ? 'Claude looks something up and finds nothing, which is fine.'
+          : errors && errors === evs.length
+            ? `Claude tries ${one ? 'a step' : 'some steps'}, but ${
+                evs.some((e) => /\bblocked\b|PreToolUse|denied/i.test(e.output ?? ''))
+                  ? `${one ? 'it is' : 'they are'} not allowed`
+                  : one
+                    ? 'it fails'
+                    : 'they fail'
+              }.`
+            : evs.every((e) => e.tool !== 'Bash')
+              ? 'Claude uses one of its tools.'
+              : dryRun
+                ? events.some((e) => e.intent === 'prompt' && DRY_RUN.test(e.label))
+                  ? 'Claude does the practice run you asked for; nothing is changed.'
+                  : 'Claude does a practice run; nothing is changed.'
+                : 'Claude runs some steps on the computer.';
       director = `${tools} · ${shortCommand(evs[0])}${errors ? ` · ${plural(errors, 'error')}` : ''}`;
       break;
     }
@@ -2995,6 +3261,29 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
                     ? `Claude saves the work${said}, then ${uploads('it')}.`
                     : `Claude saves the work${inCommits} and ${uploads('it')}${said}.`
                   : `Claude saves the work${inCommits}${said}.`;
+      const shipPlainly = uploadOnly
+        ? localTarget
+          ? 'copies the work to another folder'
+          : 'uploads the work'
+        : ships === 'push'
+          ? localTarget
+            ? 'saves the work and copies it to another folder'
+            : 'saves the work and uploads it'
+          : 'saves the work';
+      simple =
+        savedAnyway || hiddenFail
+          ? `Claude ${uploadOnly ? shipPlainly : 'saves the work'}, but ${
+              noTags ? 'a small lookup' : looksOnly ? 'a check' : 'a step'
+            } after that fails${allowed ? ', as you said it might' : ''}${fixedNext ? '; Claude fixes it' : ''}.`
+          : panel.ok === false
+            ? ships === 'pr'
+              ? 'Claude tries to send the work for review, but it fails.'
+              : ships === 'push'
+                ? 'Claude tries to upload the work, but it fails.'
+                : 'Claude tries to save the work, but it fails.'
+            : ships === 'pr'
+              ? 'Claude sends the work to be reviewed.'
+              : `Claude ${shipPlainly}.`;
       const wrote = unique(edits.map((d) => d.file));
       const startsRepo = startsRepoAt(draft.events, events);
       const wroteWhole = wrote.filter(
@@ -3019,6 +3308,13 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
             ? `Claude ${lead.join(', ')}, and ${rest}`
             : `Claude ${lead[0]}${rest.replace(/"[^"]*"/g, '').includes(' and ') ? ',' : ' and'} ${rest}`;
       }
+      // Files written before the save, by count: "Claude writes a file, then saves the work."
+      const wrotePlainly = [
+        wroteWhole.length ? `writes ${someFiles(wroteWhole.length)}` : '',
+        wrotePatched.length ? `changes ${someFiles(wrotePatched.length)}` : '',
+      ].filter(Boolean);
+      if (wrotePlainly.length && panel.ok !== false && !savedAnyway && !hiddenFail)
+        simple = `Claude ${wrotePlainly.join(' and ')}, then ${simple.slice(7)}`;
       const branch = newBranchAt(draft.events, events);
       if (branch && commits) story = story.replace('saves the work', `saves the work on a new branch (${branch})`);
       director = `${evs.map(shortCommand).slice(0, 2).join(' · ')}${errors ? ` · ${plural(errors, 'error')}` : ''}${
@@ -3039,6 +3335,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
         : q?.answer
           ? 'Claude asks you, and you answer.'
           : 'Claude asks you something.';
+      simple = plan ? story : q?.answer ? 'Claude asks you a question, and you answer.' : 'Claude asks you a question.';
       director = `${tools}${q?.answer ? ` · answer: ${clip(q.answer, 60)}` : ''}`;
       break;
     }
@@ -3046,12 +3343,16 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
       story = evs.some((e) => e.label.includes('memory was full'))
         ? "Claude's memory is full: it packs up its notes."
         : 'Claude packs up its notes to free memory.';
+      simple = evs.some((e) => e.label.includes('memory was full'))
+        ? "Claude's memory is full, so it tidies up its notes."
+        : 'Claude tidies up its notes to free up memory.';
       director = evs.map((e) => e.description).find(Boolean) ?? 'compact_boundary';
       break;
     case 'montage': {
       panel.notes = notesOf(evs.filter((e) => e.tool === 'Bash'));
       const added = evs.filter((e) => e.intent === 'prompt').length;
       story = `Claude ${index <= 1 ? 'gets started' : 'keeps going'}${added ? ` (you add ${plural(added, 'thing')})` : ''}: ${montageSummary(evs)}.`;
+      simple = `Claude ${index <= 1 ? 'gets started' : 'keeps going'}${added ? ', and you add something' : ''}: it ${simpleMontage(evs)}.`;
       break;
     }
     case 'complete':
@@ -3086,7 +3387,7 @@ function decorate(draft: DraftPanel, events: StoryEvent[], turn: StoryTurn, inde
     const count = plural(panel.secondOpinion, 'second opinion');
     director += ` · ${when === 'during' ? `${count} along the way` : `${when} ${count}`}${unanswered ? ' (no answer)' : ''}`;
   }
-  panel.caption = { story, director };
+  panel.caption = { story, director, simple: simple || 'Claude keeps working.' };
   return panel;
 }
 
@@ -3158,6 +3459,7 @@ function completePanel(turn: StoryTurn, page: Omit<StoryPage, 'panels'>, trailin
     caption: {
       story: turn.durationMs !== undefined && turn.durationMs < 1000 && story === done ? 'Done.' : story,
       director,
+      simple: simpleEnding(turn, page),
     },
   };
   // A local command answers itself: its own first line is the last word.

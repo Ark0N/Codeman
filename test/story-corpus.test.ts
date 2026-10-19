@@ -11,6 +11,7 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildStoryPage, buildStoryTurns, createStoryReducer } from '../src/story-mode.js';
+import { plainWordsProblem } from './story-plain-words.js';
 
 const DIR = join(import.meta.dirname, 'fixtures', 'story-corpus');
 const NAMES = readdirSync(DIR)
@@ -46,6 +47,7 @@ function pagesOf(name: string) {
         kind: x.kind,
         ok: x.ok ?? null,
         story: x.caption.story,
+        simple: x.caption.simple,
         unaskedSave: x.unaskedSave ?? false,
         director: x.caption.director,
         balloon: x.balloon?.text ?? null,
@@ -61,6 +63,13 @@ function pagesOf(name: string) {
 describe('Story Mode on real sessions', () => {
   it('has the corpus', () => {
     expect(NAMES.length).toBeGreaterThanOrEqual(11);
+  });
+
+  // The Simple level is for a reader who has never seen a terminal: every caption of every page.
+  it.each(NAMES)('%s reads plainly at the Simple level', (name) => {
+    for (const [t, page] of pagesOf(name).entries())
+      for (const [i, panel] of page.panels.entries())
+        expect(plainWordsProblem(panel.simple), `turn ${t + 1}, panel ${i + 1}: ${panel.simple}`).toBeNull();
   });
 
   it.each(NAMES)('%s draws as it did when it was checked by hand', (name) => {
