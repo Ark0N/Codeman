@@ -49,6 +49,11 @@ const STORY_STAGE_MAX = 680;
 const STORY_FPS_INTRO = 30;
 /** Panel backgrounds kept for reuse (kind × size × palette). */
 const STORY_BG_CACHE = 32;
+/**
+ * And at most this many bytes of them: rows grow with the window, and 32 backgrounds of a 1440p
+ * screen at 2x came to 342 MB (a panel still showing one keeps it; only reuse is lost).
+ */
+const STORY_BG_CACHE_BYTES = 160e6;
 /** Horizontal bands a new background is built in, one per frame. */
 const STORY_BG_BANDS = 4;
 const storyBgCache = new Map();
@@ -1577,6 +1582,108 @@ const STORY_LEVEL_DEFAULT = 'director';
 /** Where the reader's pick is kept, per device. */
 const STORY_LEVEL_KEY = 'codeman:story-level';
 
+/** Shortest row a page draws, in CSS px: the height the scenes and the comic text were drawn for. */
+const STORY_ROW_MIN = 270;
+/**
+ * Tallest row, in CSS px: twice the drawn size. A row past it holds mostly background (a turn that
+ * just started is one row of two panels), and the comic text, which stops growing at
+ * STORY_TEXT_MAX, would look lost in art drawn more than twice its size.
+ */
+const STORY_ROW_MAX = 540;
+/**
+ * The narrowest stage, in scene units, that keeps all of a scene's art on the panel: the mission's
+ * exclamation mark beside Claude's head (at 0.78 of the width) runs off the right edge below about
+ * 278. A row is never so tall that its narrowest panel's stage gets narrower, so a narrow panel
+ * stays about as wide as it is tall, never a portrait.
+ */
+const STORY_STAGE_MIN = 280;
+/**
+ * The final panel's narrowest stage: under 420 units its scene centres Claude, behind the words on
+ * its left. Its row may still be taller (it takes what the narrow rows cannot); the scene then
+ * stands at the bottom, the words above it, as it does when the words make the panel taller.
+ */
+const STORY_FINAL_STAGE_MIN = 440;
+/** The comic text grows with the rows up to this factor (`--story-k`); a caption in a narrow panel would wrap past its band beyond it. */
+const STORY_TEXT_MAX = 1.45;
+
+/** Each item's row, and the items in each row, for `spans` on a page `cols` wide. */
+function storyLayoutRows(spans, cols) {
+  const rowOf = [];
+  const rows = [];
+  let used = 0;
+  spans.forEach((span, i) => {
+    if (!used) rows.push([]);
+    rows[rows.length - 1].push(i);
+    rowOf.push(rows.length - 1);
+    used += span;
+    if (used >= cols) used = 0;
+  });
+  return { rowOf, rows };
+}
+
+/**
+ * Row heights, in whole CSS px, that make a page that fits fill the visible height, and each item's
+ * stage (the height its scene is drawn at, `--story-panel-min`). The height is shared evenly; a row
+ * never goes under STORY_ROW_MIN (a longer page keeps its rows and scrolls) nor over its cap
+ * (STORY_ROW_MAX, and the height at which a panel's stage would fall under STORY_STAGE_MIN wide),
+ * and what a capped row cannot take goes to the rows that can (the final panel's full-width row,
+ * mostly). Rounded down, so the rows never overflow by a fraction and raise a scrollbar.
+ * `box` is the page's content box: `width` across, `height` the visible height the rows may take,
+ * `gap` between rows and columns; `stageMin` each item's narrowest stage in scene units (default
+ * STORY_STAGE_MIN; 0 for an item without art, the pencils); and `lastRow` the height the last row
+ * takes once its words made it taller (the final panel's are in flow): the other rows give that up,
+ * so the page still ends at the bottom. The text scale `k` (the shortest row over STORY_ROW_MIN) is
+ * settled before that, so the words that set `lastRow` never change with it. One column (a phone)
+ * gives null: its panels keep their natural heights.
+ * @returns {{ heights: number[], stage: number[], rowOf: number[], k: number, fill: number, caps: number[] } | null}
+ */
+function storyRowHeights(spans, cols, { width, height, gap = 0, stageMin = [], lastRow = 0 }) {
+  if (!(cols >= 2) || !spans?.length || !(width > 0) || !(height > 0)) return null;
+  const { rowOf, rows } = storyLayoutRows(spans, cols);
+  const col = (width - gap * (cols - 1)) / cols;
+  // The tallest row an item allows: its stage, its width wide in scene units, no narrower than `min`.
+  const tallest = (i, min) => {
+    const n = Math.min(cols, spans[i]);
+    return min > 0 ? ((n * col + (n - 1) * gap) * StoryArt.VH) / min : Infinity;
+  };
+  const own = (i) => stageMin[i] ?? STORY_STAGE_MIN;
+  const caps = rows.map((items) =>
+    Math.max(STORY_ROW_MIN, Math.min(STORY_ROW_MAX, ...items.map((i) => tallest(i, Math.min(own(i), STORY_STAGE_MIN)))))
+  );
+  /** `total` shared by the rows in `which`, evenly, up to each row's cap; the rest to the others. */
+  const share = (which, total) => {
+    const out = new Map();
+    let open = which;
+    let left = total;
+    while (open.length) {
+      const even = left / open.length;
+      const full = open.filter((r) => caps[r] < even);
+      if (!full.length) {
+        for (const r of open) out.set(r, even);
+        break;
+      }
+      for (const r of full) {
+        out.set(r, caps[r]);
+        left -= caps[r];
+      }
+      open = open.filter((r) => caps[r] >= even);
+    }
+    return which.map((r) => Math.max(STORY_ROW_MIN, Math.floor(out.get(r))));
+  };
+  const n = rows.length;
+  const avail = height - gap * (n - 1);
+  const all = rows.map((_, r) => r);
+  let heights = share(all, avail);
+  const k = Math.round(Math.min(STORY_TEXT_MAX, Math.min(...heights) / STORY_ROW_MIN) * 1000) / 1000;
+  const others = heights.slice(0, -1).reduce((a, h) => a + h, 0);
+  if (n > 1 && lastRow > heights[n - 1] && others + lastRow > avail)
+    heights = [...share(all.slice(0, -1), avail - lastRow), heights[n - 1]].map((h, r) => Math.min(h, heights[r]));
+  const stage = spans.map((_, i) =>
+    Math.max(STORY_ROW_MIN, Math.min(heights[rowOf[i]], Math.floor(tallest(i, own(i)))))
+  );
+  return { heights, stage, rowOf, k, fill: avail / n, caps };
+}
+
 Object.assign(CodemanApp.prototype, {
   /** Per-device setting, default OFF. */
   isStoryButtonEnabled() {
@@ -2057,7 +2164,36 @@ Object.assign(CodemanApp.prototype, {
   _storyStartRuntime() {
     const st = this._story;
     const bar = st.root.querySelector('.story-bar');
+    const sheet = st.pageEl.parentElement;
+    st.sheetW = undefined;
+    st.pageH = undefined;
+    cancelAnimationFrame(st.layoutRaf || 0);
+    st.layoutRaf = 0;
     st.ro = new ResizeObserver((entries) => {
+      // The main area's box (the window, the drawer's padding, a bar above or below it) or the
+      // sheet's width (the Director's cut wire takes some) sets the row heights: once per delivery,
+      // before the panels re-size to them. The page's height changes with its words too (another
+      // reading level, a caption that grew, the fonts arriving), which the final panel's row
+      // measures: that pass waits for the next frame, so a pass that moves the page's own height
+      // is never reported back in the same one. Same boxes, same values, nothing written: no loop.
+      let relayout = false;
+      let later = false;
+      for (const entry of entries) {
+        if (entry.target === st.mainEl) relayout = true;
+        else if (entry.target === sheet && Math.abs(entry.contentRect.width - (st.sheetW ?? -1)) > 0.5) {
+          st.sheetW = entry.contentRect.width;
+          relayout = true;
+        } else if (entry.target === st.pageEl && Math.abs(entry.contentRect.height - (st.pageH ?? -1)) > 0.5) {
+          st.pageH = entry.contentRect.height;
+          later = true;
+        }
+      }
+      if (relayout) this._storyLayoutPage();
+      if (later && !st.layoutRaf)
+        st.layoutRaf = requestAnimationFrame(() => {
+          st.layoutRaf = 0;
+          this._storyLayoutPage();
+        });
       for (const entry of entries) {
         // The bar's height places the phone drawer below it, and changes when the phone turns.
         if (entry.target === bar) {
@@ -2069,6 +2205,9 @@ Object.assign(CodemanApp.prototype, {
       }
     });
     if (bar) st.ro.observe(bar);
+    st.ro.observe(st.mainEl);
+    if (sheet) st.ro.observe(sheet);
+    st.ro.observe(st.pageEl);
     st.io = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         const rt = st.panels.find((p) => p.el === entry.target);
@@ -2383,6 +2522,14 @@ Object.assign(CodemanApp.prototype, {
         else st.pageEl.prepend(rt.el);
       }
     });
+    // Spans first, then the row height they make: a new panel is sized at its final width and height.
+    next.forEach((rt, i) => {
+      rt.el.style.setProperty('--story-span6', String(spans6[i]));
+      rt.el.style.setProperty('--story-span2', String(spans2[i]));
+    });
+    st.spans6 = spans6;
+    st.spans2 = spans2;
+    this._storyLayoutPage();
     want.forEach((panel, i) => {
       const rt = st.panels[i];
       rt.panel = panel;
@@ -2391,8 +2538,6 @@ Object.assign(CodemanApp.prototype, {
         rt.isNew = false;
         this._storySizePanel(rt);
       }
-      rt.el.style.setProperty('--story-span6', String(spans6[i]));
-      rt.el.style.setProperty('--story-span2', String(spans2[i]));
       this._storyFillPanelText(rt, page, i);
       this._storyQueueDraw(rt);
     });
@@ -2416,6 +2561,8 @@ Object.assign(CodemanApp.prototype, {
       pencils.style.setProperty('--story-span2', String(spans2[want.length]));
       st.pageEl.append(pencils);
     } else pencils?.remove();
+    // Again now that the words are in: the final panel's may take more of the height than its row.
+    if (st.panels[st.panels.length - 1]?.splash) this._storyLayoutPage();
     if (focusAt >= 0 && !document.contains(focused)) {
       const rt = st.panels[Math.min(focusAt, st.panels.length - 1)];
       if (rt && !rt.w) this._storySizePanel(rt);
@@ -2706,19 +2853,90 @@ Object.assign(CodemanApp.prototype, {
     const w = rt.el.clientWidth;
     const h = rt.el.clientHeight;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    if (w === rt.w && h === rt.h && dpr === rt.dpr) return;
-    rt.w = w;
-    rt.h = h;
     // A panel its words made taller (a long caption, the final panel's ending) keeps its scene at the
     // usual size, standing at the bottom: the stage is the panel's usual height inside its border.
+    // That height is its row's (a plain px value _storyLayoutPage writes on the panel), so the art
+    // grows with the rows; read before the early return, since a row can change height while this
+    // panel's box, held by a taller neighbour, does not.
     const minH = parseFloat(getComputedStyle(rt.el).getPropertyValue('--story-panel-min')) || 0;
     const border = rt.el.offsetHeight - rt.el.clientHeight;
-    rt.stageH = minH > border ? Math.min(h, minH - border) : h;
+    const stageH = minH > border ? Math.min(h, minH - border) : h;
+    if (w === rt.w && h === rt.h && dpr === rt.dpr && stageH === rt.stageH) return;
+    rt.w = w;
+    rt.h = h;
+    rt.stageH = stageH;
     rt.dpr = dpr;
     rt.canvas.width = Math.max(1, Math.round(w * dpr));
     rt.canvas.height = Math.max(1, Math.round(h * dpr));
     rt.bgKey = '';
     this._storyQueueDraw(rt);
+  },
+
+  /**
+   * Fits the page to the main area: the rows take the visible height (storyRowHeights), the comic
+   * text grows with them (`--story-k`), and the sheet and the Director's cut wire span that height.
+   * It reads the main area's box and the page's width, never the sheet's height, so nothing it
+   * writes feeds back into it, and it writes a property only when its value changes. Called when the
+   * page is rendered and by the resize observer (window, drawer, the wire's toggle).
+   */
+  _storyLayoutPage() {
+    const st = this._story;
+    if (!st?.open) return;
+    const px = (v) => parseFloat(v) || 0;
+    const main = st.mainEl;
+    const mcs = getComputedStyle(main);
+    const view = Math.max(0, main.clientHeight - px(mcs.paddingTop) - px(mcs.paddingBottom));
+    const noteH = st.note.hidden ? 0 : st.note.offsetHeight + px(getComputedStyle(st.note).marginBottom);
+    const pcs = getComputedStyle(st.pageEl);
+    // The column count the container queries chose: the page's resolved tracks, else their thresholds.
+    const tracks = pcs.gridTemplateColumns || '';
+    const sheetW = st.pageEl.parentElement?.getBoundingClientRect().width || 0;
+    const cols =
+      (tracks && !tracks.includes('(') && tracks.trim().split(/\s+/).length) ||
+      (sheetW > 1000 ? 6 : sheetW > 600 ? 2 : 1);
+    const spans = cols === 6 ? st.spans6 : cols === 2 ? st.spans2 : null;
+    const box = {
+      width: st.pageEl.clientWidth - px(pcs.paddingLeft) - px(pcs.paddingRight),
+      height: view - noteH - px(pcs.paddingTop) - px(pcs.paddingBottom),
+      gap: px(pcs.rowGap),
+    };
+    const set = (el, name, value) => {
+      if (value === null) el.style.removeProperty(name);
+      else if (el.style.getPropertyValue(name) !== value) el.style.setProperty(name, value);
+    };
+    set(st.stage, '--story-view-h', `${view}px`);
+    set(st.stage, '--story-note-h', `${noteH}px`);
+    // Plain px values, never calc() or clamp(): every panel reads its row back with parseFloat
+    // (--story-panel-min), as its scene's stage. No fit (one column): the stylesheet's own heights.
+    const apply = (f) => {
+      set(st.pageEl, '--story-row-h', f ? `${Math.min(...f.heights)}px` : null);
+      set(st.pageEl, '--story-k', f ? String(f.k) : null);
+      set(st.pageEl, 'grid-template-rows', f ? f.heights.map((h) => `minmax(${h}px, auto)`).join(' ') : null);
+      st.panels.forEach((rt, i) => set(rt.el, '--story-panel-min', f ? `${f.stage[i]}px` : null));
+    };
+    // The pencils (after the panels) draw no art; the final panel's scene needs a wide stage.
+    box.stageMin = st.panels.map((rt) => (rt.splash ? STORY_FINAL_STAGE_MIN : STORY_STAGE_MIN)).concat([0]);
+    let fit = storyRowHeights(spans, cols, box);
+    apply(fit);
+    // The final panel's words are in flow and may make its row taller at this text size (it sits
+    // alone in the last row): measured now, the other rows give that height up. The words depend on
+    // the text size and the width only, never on the row heights, so this settles in one step.
+    const last = st.panels[st.panels.length - 1];
+    if (fit && last?.splash && last.panel && fit.rowOf[st.panels.length - 1] === fit.heights.length - 1) {
+      const lastRow = last.el.offsetHeight;
+      if (lastRow > fit.heights[fit.heights.length - 1]) {
+        fit = storyRowHeights(spans, cols, { ...box, lastRow });
+        apply(fit);
+      }
+    }
+    const sig = fit ? `${fit.heights.join(',')}|${fit.stage.join(',')}|${fit.k}` : '';
+    const changed = sig !== st.layoutSig;
+    st.layoutSig = sig;
+    st.fit = fit;
+    // A panel held at its size by a taller neighbour gets no resize report: its stage still follows
+    // its row. Sizing only queues the draws (the frame loop rations them); a panel not sized yet is
+    // sized when it is filled.
+    if (changed) for (const rt of st.panels) if (rt.w) this._storySizePanel(rt);
   },
 
   /**
@@ -2769,7 +2987,9 @@ Object.assign(CodemanApp.prototype, {
         canvas.height = rt.canvas.height;
         job = { canvas, next: 0, total: STORY_BG_BANDS };
         storyBgCache.set(key, job);
-        if (storyBgCache.size > STORY_BG_CACHE) storyBgCache.delete(storyBgCache.keys().next().value);
+        const bytes = () => [...storyBgCache.values()].reduce((n, j) => n + j.canvas.width * j.canvas.height * 4, 0);
+        while (storyBgCache.size > 1 && (storyBgCache.size > STORY_BG_CACHE || bytes() > STORY_BG_CACHE_BYTES))
+          storyBgCache.delete(storyBgCache.keys().next().value);
       }
       rt.bg = job;
       rt.bgKey = key;

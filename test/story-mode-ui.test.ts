@@ -1521,6 +1521,100 @@ describe('story-mode.js layout', () => {
     }
     expect(spans([1, 1, 1], 2)).toEqual([1, 1, 2]);
   });
+
+  it('rows fill the visible height: shared evenly, never under 270, capped for narrow panels and one row', () => {
+    boot(null);
+    type Box = { width: number; height: number; gap: number; stageMin?: number[]; lastRow?: number };
+    type Fit = { heights: number[]; stage: number[]; k: number } | null;
+    const rows = (spans: number[], cols: number, box: Box) => win.storyRowHeights(spans, cols, box) as Fit;
+    // A 1505x870 window: the page's rows may take 753 px, 1437 px across.
+    const box = { width: 1437, height: 753, gap: 14 };
+    // The mission and one step over the final panel: two rows of 369 px fill it, text 1.367x.
+    const two = rows([3, 3, 6], 6, box)!;
+    expect(two.heights).toEqual([369, 369]);
+    expect(two.stage).toEqual([369, 369, 369]);
+    expect(two.k).toBe(1.367);
+    // More rows than fit at 270: they stay 270 and the page scrolls; the text keeps its drawn size.
+    const long = rows([3, 3, 2, 2, 2, 6, 6], 6, box)!;
+    expect(long.heights).toEqual([270, 270, 270, 270]);
+    expect(long.k).toBe(1);
+    // One row (a turn that just started): twice the drawn size at most, not the whole window.
+    expect(rows([3, 3], 6, box)!.heights).toEqual([540]);
+    // Two columns of 365 px: the narrow row stops where its stage would fall under 280 units, the
+    // full-width row takes the rest, and the final panel's scene keeps a stage wide enough to stand
+    // beside its words (440 units), at the bottom of its taller row.
+    const narrow = rows([1, 1, 2], 2, { width: 744, height: 870, gap: 14, stageMin: [280, 280, 440] })!;
+    expect(narrow.heights).toEqual([Math.floor((365 * 260) / 280), 517]);
+    expect(narrow.heights[0] + narrow.heights[1] + 14).toBeGreaterThan(868);
+    expect(narrow.stage).toEqual([338, 338, Math.floor((744 * 260) / 440)]);
+    // The final panel's words make its row 410 px tall: the other row gives that up, the text stays.
+    const fixed = rows([3, 3, 6], 6, { ...box, lastRow: 410 })!;
+    expect(fixed.heights).toEqual([329, 369]);
+    expect(fixed.k).toBe(two.k);
+    // One column (a phone) keeps its natural heights; no visible height, nothing to fit.
+    expect(rows([1, 1, 1], 1, box)).toBeNull();
+    expect(rows([3, 3, 6], 6, { ...box, height: 0 })).toBeNull();
+  });
+
+  it('every panel reads its row back as a plain px value, and its scene is drawn at that height', async () => {
+    boot(storyOf([prompt('first job'), ...read('r1', '/work/demo-shop/a.ts'), said('Done.'), end(2000)]));
+    app.openStoryMode(SID);
+    await settle();
+    const st = app._story;
+    // JSDOM lays nothing out: the boxes a 1505x870 window gives the overlay, the paddings the
+    // stylesheet sets.
+    const fix = (el: HTMLElement, prop: string, value: number) =>
+      Object.defineProperty(el, prop, { configurable: true, get: () => value });
+    st.mainEl.style.padding = '16px';
+    st.pageEl.style.padding = '14px';
+    st.pageEl.style.rowGap = '14px';
+    fix(st.mainEl, 'clientHeight', 813);
+    fix(st.pageEl, 'clientWidth', 1465);
+    let sheetW = 1465;
+    st.pageEl.parentElement.getBoundingClientRect = () => ({ width: sheetW }) as DOMRect;
+    app._storyLayoutPage();
+    expect(st.pageEl.style.getPropertyValue('grid-template-rows')).toBe('minmax(369px, auto) minmax(369px, auto)');
+    expect(st.pageEl.style.getPropertyValue('--story-k')).toBe('1.367');
+    expect(st.stage.style.getPropertyValue('--story-view-h')).toBe('781px');
+    // What _storySizePanel and _storyFitCaption read with parseFloat: a finite px value, never the
+    // raw text of a calc() or clamp().
+    for (const p of st.panels) {
+      const raw = win.getComputedStyle(p.el).getPropertyValue('--story-panel-min');
+      expect(raw).toMatch(/^\d+px$/);
+      expect(parseFloat(raw)).toBeGreaterThan(0);
+    }
+    const rt = st.panels[0];
+    fix(rt.el, 'clientWidth', 712);
+    fix(rt.el, 'clientHeight', 363);
+    fix(rt.el, 'offsetHeight', 369);
+    app._storySizePanel(rt);
+    expect(rt.stageH).toBe(363); // 369 inside the 3 px border: the art grows with the row
+    // The final panel's words make its row 410 px tall: the first row gives the height up, and the
+    // panel already sized redraws its scene at its new row.
+    fix(st.panels[st.panels.length - 1].el, 'offsetHeight', 410);
+    app._storyLayoutPage();
+    expect(st.pageEl.style.getPropertyValue('grid-template-rows')).toBe('minmax(329px, auto) minmax(369px, auto)');
+    expect(win.getComputedStyle(rt.el).getPropertyValue('--story-panel-min')).toBe('329px');
+    expect(rt.stageH).toBe(323);
+    // One column (a phone): nothing inline, the stylesheet's own heights apply.
+    sheetW = 500;
+    app._storyLayoutPage();
+    expect(st.pageEl.style.getPropertyValue('grid-template-rows')).toBe('');
+    expect(st.pageEl.style.getPropertyValue('--story-k')).toBe('');
+    expect(rt.el.style.getPropertyValue('--story-panel-min')).toBe('');
+  });
+
+  it('the stylesheet keeps the row height one plain length, registered, with one default', () => {
+    const css = readFileSync(new URL('../src/web/public/story-mode.css', import.meta.url), 'utf-8');
+    // Registered: whatever a later rule puts in it, it computes to a length parseFloat reads.
+    expect(css).toMatch(/@property --story-panel-min \{[^}]*syntax: '<length>';/);
+    // One default on the page, used by the rows and by every panel (no second 270 anywhere).
+    expect(css).toMatch(
+      /\.story-page \{[^}]*--story-row-h: 270px;[^}]*grid-auto-rows: minmax\(var\(--story-row-h\), auto\);/
+    );
+    expect(css).toMatch(/\.story-panel \{[^}]*--story-panel-min: var\(--story-row-h\);/);
+    expect(css).not.toMatch(/minmax\(270px/);
+  });
 });
 
 describe('story-mode.js reading levels', () => {
