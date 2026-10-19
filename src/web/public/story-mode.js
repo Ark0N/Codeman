@@ -49,6 +49,11 @@ const STORY_STAGE_MAX = 680;
 const STORY_FPS_INTRO = 30;
 /** Panel backgrounds kept for reuse (kind × size × palette). */
 const STORY_BG_CACHE = 32;
+/**
+ * And at most this many bytes of them: rows grow with the window, and 32 backgrounds of a 1440p
+ * screen at 2x came to 342 MB (a panel still showing one keeps it; only reuse is lost).
+ */
+const STORY_BG_CACHE_BYTES = 160e6;
 /** Horizontal bands a new background is built in, one per frame. */
 const STORY_BG_BANDS = 4;
 const storyBgCache = new Map();
@@ -2110,19 +2115,34 @@ Object.assign(CodemanApp.prototype, {
     const bar = st.root.querySelector('.story-bar');
     const sheet = st.pageEl.parentElement;
     st.sheetW = undefined;
+    st.pageH = undefined;
+    cancelAnimationFrame(st.layoutRaf || 0);
+    st.layoutRaf = 0;
     st.ro = new ResizeObserver((entries) => {
-      // The main area's box (the window, the drawer's padding, a bar above or below it) or the sheet's width
-      // (the Director's cut wire takes some) sets the row height: once per delivery, before the
-      // panels re-size to it. The sheet's height follows the rows, so a height alone changes nothing.
+      // The main area's box (the window, the drawer's padding, a bar above or below it) or the
+      // sheet's width (the Director's cut wire takes some) sets the row heights: once per delivery,
+      // before the panels re-size to them. The page's height changes with its words too (another
+      // reading level, a caption that grew, the fonts arriving), which the final panel's row
+      // measures: that pass waits for the next frame, so a pass that moves the page's own height
+      // is never reported back in the same one. Same boxes, same values, nothing written: no loop.
       let relayout = false;
+      let later = false;
       for (const entry of entries) {
         if (entry.target === st.mainEl) relayout = true;
         else if (entry.target === sheet && Math.abs(entry.contentRect.width - (st.sheetW ?? -1)) > 0.5) {
           st.sheetW = entry.contentRect.width;
           relayout = true;
+        } else if (entry.target === st.pageEl && Math.abs(entry.contentRect.height - (st.pageH ?? -1)) > 0.5) {
+          st.pageH = entry.contentRect.height;
+          later = true;
         }
       }
       if (relayout) this._storyLayoutPage();
+      if (later && !st.layoutRaf)
+        st.layoutRaf = requestAnimationFrame(() => {
+          st.layoutRaf = 0;
+          this._storyLayoutPage();
+        });
       for (const entry of entries) {
         // The bar's height places the phone drawer below it, and changes when the phone turns.
         if (entry.target === bar) {
@@ -2136,6 +2156,7 @@ Object.assign(CodemanApp.prototype, {
     if (bar) st.ro.observe(bar);
     st.ro.observe(st.mainEl);
     if (sheet) st.ro.observe(sheet);
+    st.ro.observe(st.pageEl);
     st.io = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         const rt = st.panels.find((p) => p.el === entry.target);
@@ -2901,7 +2922,9 @@ Object.assign(CodemanApp.prototype, {
         canvas.height = rt.canvas.height;
         job = { canvas, next: 0, total: STORY_BG_BANDS };
         storyBgCache.set(key, job);
-        if (storyBgCache.size > STORY_BG_CACHE) storyBgCache.delete(storyBgCache.keys().next().value);
+        const bytes = () => [...storyBgCache.values()].reduce((n, j) => n + j.canvas.width * j.canvas.height * 4, 0);
+        while (storyBgCache.size > 1 && (storyBgCache.size > STORY_BG_CACHE || bytes() > STORY_BG_CACHE_BYTES))
+          storyBgCache.delete(storyBgCache.keys().next().value);
       }
       rt.bg = job;
       rt.bgKey = key;
