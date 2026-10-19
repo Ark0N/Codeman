@@ -256,8 +256,16 @@ body.story-open {
    picker is in the composer at the bottom. */
 @media (max-width: 600px) {
   .story-bar {
-    gap: 8px 10px;
+    gap: 0 10px;
     padding-block: 8px;
+  }
+  /* The row break: a full-width item between close (order 1) and the levels (order 3). The turn
+     picker used to force it; it lives in the composer now. Its height is the gap between the rows. */
+  .story-bar::after {
+    content: '';
+    order: 2;
+    flex-basis: 100%;
+    height: 8px;
   }
   .story-brand {
     order: 0;
