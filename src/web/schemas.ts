@@ -1422,6 +1422,16 @@ export const SettingsUpdateSchema = z
     defaultClaudeMdPath: z.string().max(500).optional(),
     defaultWorkingDir: z.string().max(500).optional(),
     lastUsedCase: z.string().max(200).optional(),
+    /**
+     * Opt-in, SYNCED, default OFF: per-case run options (Agent Teams, Opus 1M) are kept here instead of
+     * only in each browser, and a device follows the selected case another device chose.
+     */
+    syncCaseState: z.boolean().optional(),
+    /** Per-case run options, by case name; read and written only while `syncCaseState` is on. */
+    caseSettings: z
+      .record(z.string().max(200), z.object({ agentTeams: z.boolean(), opusContext1m: z.boolean() }).strict())
+      .refine((m) => Object.keys(m).length <= 500, 'too many cases')
+      .optional(),
     // Feature toggles
     ralphTrackerEnabled: z.boolean().optional(),
     subagentTrackingEnabled: z.boolean().optional(),
