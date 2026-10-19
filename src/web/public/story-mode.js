@@ -710,7 +710,10 @@ const StoryArt = (() => {
     if (t && !t.passed && !t.failed && t.errors) return `${t.errors} error${t.errors === 1 ? '' : 's'}`;
     return `${total} test${total === 1 ? '' : 's'}`;
   }
-  function terminal(ctx, x, y, w, h, lines, f, printed = []) {
+  /** `clear` ({ x, top, bottom }): a band something is held over (the magnifier); lines in it end left of `x`. */
+  function terminal(ctx, x, y, w, h, lines, f, printed = [], clear = null) {
+    const room = (base) =>
+      clear && base + 2 > clear.top && base - 8 < clear.bottom ? Math.min(w - 18, clear.x - x - 13) : w - 18;
     rr(ctx, x, y, w, h, 7);
     inked(ctx, C.line, 2.5);
     ctx.fillStyle = C.balloonInk;
@@ -725,7 +728,7 @@ const StoryArt = (() => {
     ctx.textBaseline = 'alphabetic';
     const rows = Math.max(1, Math.floor((h - 24) / 14));
     lines.slice(0, rows).forEach((line, i) => {
-      const text = fitText(ctx, `› ${line}`, w - 18);
+      const text = fitText(ctx, `› ${line}`, room(y + 30 + i * 14));
       const shown = Math.floor(interpolate(f, [8 + i * 12, 20 + i * 12], [0, text.length]));
       ctx.fillStyle = i === Math.min(rows, lines.length) - 1 ? C.yellow : C.balloon;
       ctx.fillText(text.slice(0, shown), x + 9, y + 30 + i * 14);
@@ -733,7 +736,7 @@ const StoryArt = (() => {
     const n = Math.min(rows, lines.length);
     const out = printed.slice(0, Math.max(0, rows - n));
     out.forEach((line, i) => {
-      const text = fitText(ctx, line, w - 18);
+      const text = fitText(ctx, line, room(y + 30 + (n + i) * 14));
       const at = 8 + (n + i) * 12;
       const shown = Math.floor(interpolate(f, [at, at + 10], [0, text.length]));
       ctx.save();
@@ -835,16 +838,12 @@ const StoryArt = (() => {
         const files = p.panel.files || [];
         const ax = W - 58;
         if (!files.length) {
-          terminal(
-            ctx,
-            14,
-            92,
-            Math.min(W * 0.58, 220),
-            130,
-            p.panel.notes?.length ? p.panel.notes : ['looking around'],
-            f
-          );
-          hit('list', 14, 92, Math.min(W * 0.58, 220), 130, 'See what Claude looked at');
+          const tw = Math.min(W * 0.58, 220);
+          // On a narrow panel the magnifier is held over the terminal: the lines it passes end short of
+          // it (its rim's reach over every frame of its sway), so it never hides their words.
+          const lens = { x: ax - 122, top: 125, bottom: 187 };
+          terminal(ctx, 14, 92, tw, 130, p.panel.notes?.length ? p.panel.notes : ['looking around'], f, [], lens);
+          hit('list', 14, 92, tw, 130, 'See what Claude looked at');
         } else {
           const shown = files.length > 8 ? files.slice(0, 7) : files;
           const extra = files.length - shown.length;

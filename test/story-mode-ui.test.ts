@@ -1396,3 +1396,33 @@ describe('story-mode.js speech balloons', () => {
     expect(16 + parseFloat(rt.balloon.style.maxWidth)).toBeLessThanOrEqual(face.x0 - 8);
   });
 });
+
+describe('story-mode.js magnifier', () => {
+  it('terminal lines the magnifier is held over end short of it, the others keep their width', async () => {
+    const look = (id: string, desc: string) => bash(id, `ls -la ${id}`, desc, '');
+    boot(
+      storyOf([
+        prompt('Look around please'),
+        ...look('b1', 'Inspect project folder, git state and the remotes'),
+        ...look('b2', 'List src and config contents of the whole repository'),
+        end(4000),
+      ])
+    );
+    app.openStoryMode(SID);
+    await settle();
+    const rt = app._story.panels.find((p: { kind: string }) => p.kind === 'investigate');
+    expect(rt.panel.files ?? []).toEqual([]);
+    // A narrow panel: the stage is 300 / (270 / 260) = 289 units wide, Claude at 231, the lens's rim
+    // at 231 - 119 at most, the terminal 168 units wide from 14.
+    Object.assign(rt, { w: 300, h: 270, dpr: 1, bgKey: '', clock: 72 }); // the finished frame (HERO)
+    drawnTexts.length = 0;
+    app._storyDrawPanel(rt);
+    const lines = drawnTexts.filter((t) => t.startsWith('› '));
+    expect(lines).toHaveLength(2);
+    // The fake context measures 6 units a character: the first line uses the terminal's width (above
+    // the lens), the second ends with an ellipsis before the rim (231 - 122 - 14 - 13 = 82 units).
+    expect(lines[0].length * 6).toBeGreaterThan(120);
+    expect(lines[1].endsWith('…')).toBe(true);
+    expect(lines[1].length * 6).toBeLessThanOrEqual(82);
+  });
+});
