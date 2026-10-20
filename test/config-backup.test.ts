@@ -148,6 +148,11 @@ describe('createConfigBackup', () => {
   });
 
   it.each([
+    [
+      'docker-cases.json',
+      (n: number) => JSON.stringify([{ name: 'app', hostId: 'h', lastClaudeSessionId: `c${n}` }]),
+      'hostId',
+    ],
     ['users.json', (n: number) => JSON.stringify({ users: [{ name: 'a', role: 'admin', lastLoginAt: n }] }), 'role'],
     ['settings.json', (n: number) => JSON.stringify({ displayName: 'x', lastUsedCase: `case-${n}` }), 'displayName'],
     [

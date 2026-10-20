@@ -139,8 +139,8 @@ which is the default, you have copies:
 
 1. Open **Settings → System → Config backups** and pick the newest backup from before the
    change. The list shows when each was made and what it holds.
-2. **Restore** it, reload the page, and restart Codeman if the response says `clis.json`,
-   `users.json`, `.env` or `push-keys.json` were restored.
+2. **Restore** it, reload the page, and restart Codeman if the response's `restartRequired`
+   list is not empty.
 
 Without the UI: the backups are plain folders in `~/.codeman/backups/config/`
 (`cfg-YYYYMMDD-HHMMSS`); copy the file you need back over the one in `~/.codeman/`.

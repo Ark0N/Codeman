@@ -205,10 +205,12 @@ const sha256 = (data: Buffer | string): string => createHash('sha256').update(da
 const VOLATILE_KEYS: Readonly<Record<string, readonly string[]>> = {
   'custom-model-hosts.json': ['lastDiscoveredAt'],
   // Rewritten by activity, not by anything the user set: a Basic-auth login (at most once a minute
-  // per user), a session started in another case, and every captured prompt.
+  // per user), a session started in another case, every captured prompt, and a Docker case's
+  // conversation id after a /clear.
   'users.json': ['lastLoginAt'],
   'settings.json': ['lastUsedCase'],
   'intents.json': ['recentPrompts', 'updatedAt'],
+  'docker-cases.json': ['lastClaudeSessionId'],
 };
 
 function withoutKeys(value: unknown, drop: ReadonlySet<string>): unknown {

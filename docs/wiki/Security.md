@@ -108,7 +108,7 @@ Two features send data outward, both off by default and both stated where they a
 dictation through your Claude login, and the Read My Mind prediction call.
 
 [Config Backups](Config-Backups) copies some credential-bearing files (`.env`, `users.json`,
-`custom-model-hosts.json`, `push-keys.json`) into a backup folder. The default folder is inside
+`custom-model-hosts.json`, `push-keys.json`, `webhook.json`) into a backup folder. The default folder is inside
 the data directory, and every backup is mode `0700`/`0600`, so nothing new is exposed. Only a
 folder you choose yourself can move them somewhere less private; admin only in multi-user mode.
 

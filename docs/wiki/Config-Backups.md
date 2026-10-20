@@ -37,10 +37,15 @@ cron jobs.
 - **Whenever the content changes.** The files are read and hashed every five minutes; a new
   backup is written only if the set differs from the latest backup. An idle server writes
   nothing, and the history is one entry per real change rather than one per timer tick.
-  A field a file refreshes by itself is not a change: `custom-model-hosts.json` carries a
-  `lastDiscoveredAt` per host that the model-discovery poll rewrites every five minutes, and
-  the comparison looks through it (the snapshot still stores the file exactly as written).
-  Without that, every tick looked like an edit and 20 copies covered only about 100 minutes.
+  A field a file rewrites on its own is not a change, and the comparison looks through it (the
+  snapshot still stores the file exactly as written, and a restore puts those fields back as they
+  were): `custom-model-hosts.json` `lastDiscoveredAt` (the model-discovery poll, every five
+  minutes), `users.json` `lastLoginAt`, `settings.json` `lastUsedCase`, `intents.json`
+  `recentPrompts` and `updatedAt` (every captured prompt) and `docker-cases.json`
+  `lastClaudeSessionId` (a Docker case's conversation id after a `/clear`). Without that, every
+  tick looked like an edit and 20 copies covered only about 100 minutes. So Compare shows
+  `intents.json` as unchanged when only prompts differ, yet a restore drops the prompts captured
+  since.
 - **On demand**, with **Back up now** (always writes one, even if nothing changed).
 - **Before a restore**, as a `pre-restore` safety copy of the files about to be replaced.
 
@@ -155,8 +160,8 @@ Before you restore, or to find out what changed and when, use **Compare** in the
 Each file that differs is listed with its changed keys (`theme.mode`, `tags[1]`, a variable name
 in `.env`) as before → after, plus files that appeared or vanished between the two states. Files
 that are the same are listed on one line. A file that is not JSON shows only that it differs, and
-a file with more than 200 changes is cut short, so use the files themselves for a full diff. A
-self-refreshed discovery timestamp in `custom-model-hosts.json` is not counted as a change.
+a file with more than 200 changes is cut short, so use the files themselves for a full diff. The
+self-rewritten fields listed under "When a backup is made" are not counted as changes.
 
 **Credential values are never shown.** `.env`, `users.json`, `push-keys.json`, `webhook.json` (the
 URL is a bearer secret) and `intents.json` (captured prompts) list only the names that changed, and in every other file a key that looks like a token, secret, password,
