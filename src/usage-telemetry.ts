@@ -226,6 +226,8 @@ export function parseCopilotQuotaResponse(value: unknown): StatusTelemetry | nul
   };
   const snap = raw.quota_snapshots?.premium_interactions;
   if (!snap || typeof snap !== 'object' || snap.unlimited === true) return null;
+  // A zero (or negative) quota that is not 'unlimited' would show a stuck 0% or 100% row.
+  if (typeof snap.entitlement === 'number' && snap.entitlement <= 0) return null;
 
   const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
   const limit = finite(snap.entitlement) && snap.entitlement > 0 ? snap.entitlement : undefined;
@@ -344,6 +346,14 @@ export function telemetrySignature(t: StatusTelemetry): string {
     t.sevenDay?.resetAt ?? null,
   ];
   // Appended only when present, so the Claude and Codex signatures are byte-identical to before.
-  if (t.monthly) parts.push(t.monthly.used ?? Math.round(t.monthly.usedPercentage), t.monthly.resetAt);
+  // The limit is part of it: a plan change mid-month (300 to 1500 with 100 used) keeps `used` and the reset.
+  if (t.monthly) {
+    parts.push(
+      Math.round(t.monthly.usedPercentage),
+      t.monthly.used ?? null,
+      t.monthly.limit ?? null,
+      t.monthly.resetAt
+    );
+  }
   return JSON.stringify(parts);
 }

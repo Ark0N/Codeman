@@ -87,6 +87,26 @@ describe('parseCopilotQuotaResponse', () => {
     }
   });
 
+  it('returns nothing for a zero quota that is not unlimited', () => {
+    expect(
+      parseCopilotQuotaResponse({
+        quota_snapshots: { premium_interactions: { entitlement: 0, remaining: 0, percent_remaining: 0 } },
+      })
+    ).toBeNull();
+  });
+
+  it('changes the signature when only the limit changes (a plan change mid-month)', () => {
+    // 100 requests used and the same reported percentage under both plans: only the entitlement differs.
+    const quota = (entitlement: number) =>
+      parseCopilotQuotaResponse({
+        quota_snapshots: {
+          premium_interactions: { entitlement, remaining: entitlement - 100, percent_remaining: 66.7 },
+        },
+        quota_reset_date_utc: '2026-11-01T00:00:00.000Z',
+      })!;
+    expect(telemetrySignature(quota(300))).not.toBe(telemetrySignature(quota(1500)));
+  });
+
   it('feeds the change-detection signature without disturbing the Claude/Codex one', () => {
     const copilot = parseCopilotQuotaResponse(RESPONSE)!;
     expect(telemetrySignature(copilot)).not.toBe(telemetrySignature({}));
@@ -125,29 +145,31 @@ describe('resolveCopilotToken', () => {
     }),
   ].join('\n');
 
-  it('prefers the environment, in the order Copilot itself reads it', () => {
+  it('prefers the environment, in the order Copilot itself reads it', async () => {
     const h = home(CONFIG);
-    expect(resolveCopilotToken({ GITHUB_TOKEN: 'c', GH_TOKEN: 'b', COPILOT_GITHUB_TOKEN: 'a' }, h)).toBe('a');
-    expect(resolveCopilotToken({ GITHUB_TOKEN: 'c', GH_TOKEN: 'b' }, h)).toBe('b');
-    expect(resolveCopilotToken({ GITHUB_TOKEN: 'c' }, h)).toBe('c');
+    await expect(resolveCopilotToken({ GITHUB_TOKEN: 'c', GH_TOKEN: 'b', COPILOT_GITHUB_TOKEN: 'a' }, h)).resolves.toBe(
+      'a'
+    );
+    await expect(resolveCopilotToken({ GITHUB_TOKEN: 'c', GH_TOKEN: 'b' }, h)).resolves.toBe('b');
+    await expect(resolveCopilotToken({ GITHUB_TOKEN: 'c' }, h)).resolves.toBe('c');
   });
 
-  it("falls back to the signed-in user's token in the commented config.json", () => {
-    expect(resolveCopilotToken({}, home(CONFIG))).toBe('file-token');
+  it("falls back to the signed-in user's token in the commented config.json", async () => {
+    await expect(resolveCopilotToken({}, home(CONFIG))).resolves.toBe('file-token');
   });
 
-  it('honours COPILOT_HOME', () => {
+  it('honours COPILOT_HOME', async () => {
     const elsewhere = home();
     mkdirSync(join(elsewhere, 'cp'));
     writeFileSync(join(elsewhere, 'cp', 'config.json'), CONFIG.replace('file-token', 'relocated'));
-    expect(resolveCopilotToken({ COPILOT_HOME: join(elsewhere, 'cp') }, home())).toBe('relocated');
+    await expect(resolveCopilotToken({ COPILOT_HOME: join(elsewhere, 'cp') }, home())).resolves.toBe('relocated');
   });
 
-  it('reads no file token for another host, a missing file or a broken one', () => {
+  it('reads no file token for another host, a missing file or a broken one', async () => {
     const ghe = CONFIG.replace('"host":"https://github.com"', '"host":"https://ghe.example.com"');
-    expect(resolveCopilotToken({}, home(ghe))).toBeNull();
-    expect(resolveCopilotToken({}, home())).toBeNull();
-    expect(resolveCopilotToken({}, home('{ not json'))).toBeNull();
+    await expect(resolveCopilotToken({}, home(ghe))).resolves.toBeNull();
+    await expect(resolveCopilotToken({}, home())).resolves.toBeNull();
+    await expect(resolveCopilotToken({}, home('{ not json'))).resolves.toBeNull();
   });
 });
 

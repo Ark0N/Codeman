@@ -2922,8 +2922,9 @@ export class WebServer extends EventEmitter {
     this.copilotUsageRefreshInFlight = true;
     try {
       let usage = null;
-      if (isCopilotAvailable() && (await readPlanUsageTelemetryEnabled())) {
-        const token = resolveCopilotToken();
+      // The cheap settings read first: isCopilotAvailable() can run a synchronous login-shell probe.
+      if ((await readPlanUsageTelemetryEnabled()) && isCopilotAvailable()) {
+        const token = await resolveCopilotToken();
         usage = token ? await readCopilotPlanUsage({ token }) : null;
       }
       const signature = usage ? telemetrySignature(usage) : '';

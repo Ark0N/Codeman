@@ -13,7 +13,7 @@
  * @module utils/copilot-plan-usage
  */
 
-import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseCopilotQuotaResponse, type StatusTelemetry } from '../usage-telemetry.js';
@@ -39,17 +39,17 @@ function parseCommentedJson(raw: string): unknown {
  * `authTokens` entry the CLI keeps in `<COPILOT_HOME or ~/.copilot>/config.json` when no OS keychain
  * is available. Only github.com sign-ins are read from the file (the quota URL is github.com's).
  */
-export function resolveCopilotToken(
+export async function resolveCopilotToken(
   env: Record<string, string | undefined> = process.env,
   home: string = homedir()
-): string | null {
+): Promise<string | null> {
   for (const key of TOKEN_ENV_KEYS) {
     const value = env[key]?.trim();
     if (value) return value;
   }
   const dir = env.COPILOT_HOME?.trim() || join(home, '.copilot');
   try {
-    const config = parseCommentedJson(readFileSync(join(dir, 'config.json'), 'utf8')) as {
+    const config = parseCommentedJson(await readFile(join(dir, 'config.json'), 'utf8')) as {
       lastLoggedInUser?: { host?: string; login?: string };
       authTokens?: Record<string, { token?: unknown } | undefined>;
     };
