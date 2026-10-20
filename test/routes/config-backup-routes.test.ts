@@ -9,10 +9,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
-import { registerConfigBackupRoutes } from '../../src/web/routes/config-backup-routes.js';
+import { registerConfigBackupRoutes, runConfigBackup } from '../../src/web/routes/config-backup-routes.js';
 import { SETTINGS_PATH } from '../../src/web/route-helpers.js';
 import { getDataDir } from '../../src/config/instance.js';
-import { defaultConfigBackupDir } from '../../src/config-backup.js';
+import { createConfigBackup, defaultConfigBackupDir, listConfigBackups } from '../../src/config-backup.js';
 import { intentStore } from '../../src/intent-store.js';
 
 let custom: string;
@@ -181,5 +181,63 @@ describe('GET /api/config-backups/diff', () => {
     expect((await app.inject({ method: 'GET', url: '/api/config-backups/diff' })).statusCode).toBe(400);
     const missing = await app.inject({ method: 'GET', url: '/api/config-backups/diff?from=cfg-20200101-000000' });
     expect(missing.statusCode).toBe(404);
+  });
+});
+
+describe('retention survives an unreadable or reset settings.json', () => {
+  const DAY = 86_400_000;
+  const BASE = Date.UTC(2025, 0, 1);
+  const dir = () => defaultConfigBackupDir(getDataDir());
+  /** 30 snapshots a day apart, made under a long-history retention (100 copies, no age limit). */
+  function seed() {
+    settings({ configBackupKeepCount: 100, configBackupKeepDays: 0 });
+    for (let i = 0; i < 30; i++) {
+      writeFileSync(
+        SETTINGS_PATH,
+        JSON.stringify({ displayName: `v${i}`, configBackupKeepCount: 100, configBackupKeepDays: 0 })
+      );
+      createConfigBackup({
+        dataDir: getDataDir(),
+        backupDir: dir(),
+        reason: 'auto',
+        now: BASE + i * DAY,
+        keepCount: 100,
+        keepDays: 0,
+      });
+    }
+    expect(listConfigBackups(dir())).toHaveLength(30);
+  }
+
+  it('a settings.json that does not parse still gets a snapshot but prunes nothing', async () => {
+    seed();
+    writeFileSync(SETTINGS_PATH, '{ "displayName": "half-written", }');
+    const out = await runConfigBackup('auto');
+    expect(out?.result.status).toBe('created');
+    expect(out?.removed).toEqual([]);
+    expect(listConfigBackups(dir())).toHaveLength(31);
+  });
+
+  it('a reset settings.json prunes with the retention the newest snapshot recorded, not the defaults', async () => {
+    seed();
+    writeFileSync(SETTINGS_PATH, '{}');
+    const out = await runConfigBackup('auto');
+    expect(out?.result.status).toBe('created');
+    // aged manifests (a year old) and keepDays 0: the defaults (20 copies, 30 days) would leave 20
+    expect(listConfigBackups(dir())).toHaveLength(31);
+  });
+
+  it('a settings.json that sets the retention still wins', async () => {
+    seed();
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ configBackupKeepCount: 5, configBackupKeepDays: 0 }));
+    await runConfigBackup('auto');
+    expect(listConfigBackups(dir())).toHaveLength(5);
+  });
+
+  it('listing never creates config-backup-id', async () => {
+    const { app } = await createRouteTestHarness(registerConfigBackupRoutes);
+    const idFile = join(getDataDir(), 'config-backup-id');
+    rmSync(idFile, { force: true });
+    expect((await app.inject({ method: 'GET', url: '/api/config-backups' })).json().data.backups).toEqual([]);
+    expect(existsSync(idFile)).toBe(false);
   });
 });

@@ -526,6 +526,30 @@ describe('restore trusts only what this module wrote', () => {
     expect(listConfigBackups(backups)).toHaveLength(1);
   });
 
+  it('skips the group/world bit test on a filesystem that does not keep modes, but never the symlink test', () => {
+    put('settings.json', '{"a":1}');
+    put('clis.json', '{"clis":{}}');
+    const { id } = made();
+    const file = join(backups, id, 'clis.json');
+    chmodSync(file, 0o644); // what vfat, CIFS and WSL /mnt/d report for every file
+    expect(() => restoreConfigBackup({ dataDir: data, backupDir: backups, id, keepsModes: false })).not.toThrow();
+
+    const real = join(root, 'elsewhere.json');
+    writeFileSync(real, '{"clis":{}}');
+    rmSync(file);
+    symlinkSync(real, file);
+    expect(() => restoreConfigBackup({ dataDir: data, backupDir: backups, id, keepsModes: false })).toThrow(/symlink/);
+  });
+
+  it('compare applies the same check to a snapshot file', () => {
+    put('settings.json', '{"a":1}');
+    const { id } = made();
+    chmodSync(join(backups, id, 'settings.json'), 0o644);
+    expect(() => diffConfigBackups({ dataDir: data, backupDir: backups, from: id, to: 'current' })).toThrow(
+      ConfigBackupCorruptError
+    );
+  });
+
   it('refuses a snapshot folder that others can write to', () => {
     put('settings.json', '{"a":1}');
     const { id } = made();

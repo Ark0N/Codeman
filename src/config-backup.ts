@@ -100,6 +100,13 @@ export interface ConfigBackupManifest {
   hash: string;
   /** Id of the data dir that made it (see {@link configBackupOrigin}), so instances sharing one folder keep to their own snapshots. */
   origin?: string;
+  /**
+   * The retention in force when it was made. If `settings.json` later fails to parse or is reset,
+   * the next pass prunes with these instead of the defaults, so one bad write cannot shorten a
+   * history the user asked to keep.
+   */
+  keepCount?: number;
+  keepDays?: number;
   files: ConfigBackupFile[];
 }
 
@@ -189,6 +196,23 @@ export function configBackupOrigin(dataDir: string): string {
     /* see above */
   }
   return id;
+}
+
+/** The id already made for this data dir, or null. Read-only: listing must not write a file. */
+export function readConfigBackupOrigin(dataDir: string): string | null {
+  try {
+    const existing = readFileSync(join(dataDir, ORIGIN_FILE), 'utf8').trim();
+    return ORIGIN_RE.test(existing) ? existing : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when any of the four `configBackup*` keys is present (the Settings form always sends all four). */
+export function hasConfigBackupSettings(raw: Record<string, unknown>): boolean {
+  return ['configBackupEnabled', 'configBackupDir', 'configBackupKeepCount', 'configBackupKeepDays'].some(
+    (k) => k in raw
+  );
 }
 
 const sha256 = (data: Buffer | string): string => createHash('sha256').update(data).digest('hex');
@@ -297,6 +321,9 @@ export interface CreateConfigBackupOptions {
   appVersion?: string;
   /** Snapshot even if nothing changed (a manual request, a pre-restore safety copy). */
   force?: boolean;
+  /** Recorded in the manifest, see {@link ConfigBackupManifest.keepCount}. */
+  keepCount?: number;
+  keepDays?: number;
   now?: number;
 }
 
@@ -341,6 +368,8 @@ export function createConfigBackup(opts: CreateConfigBackupOptions): ConfigBacku
       appVersion: opts.appVersion ?? '',
       hash,
       origin,
+      ...(opts.keepCount !== undefined && { keepCount: opts.keepCount }),
+      ...(opts.keepDays !== undefined && { keepDays: opts.keepDays }),
       files: present.map((f) => ({ name: f.name, bytes: f.data.length, sha256: f.sha })),
     };
     for (const f of present) writeFileSync(join(tmp, f.name), f.data, { mode: 0o600 });
@@ -371,6 +400,15 @@ export function sweepConfigBackupTemps(dir: string, now: number = Date.now()): v
     const st = lstatSync(join(dir, n), { throwIfNoEntry: false });
     if (st && now - st.mtimeMs > 3_600_000) rmSync(join(dir, n), { recursive: true, force: true });
   }
+}
+
+/** The retention recorded in this instance's newest snapshot, or null when it recorded none. */
+export function latestBackupRetention(dir: string, origin: string): { keepCount: number; keepDays: number } | null {
+  const [newest] = listConfigBackups(dir, origin);
+  const m = newest ? readManifest(dir, newest.id, origin) : null;
+  return m && typeof m.keepCount === 'number' && typeof m.keepDays === 'number'
+    ? { keepCount: m.keepCount, keepDays: m.keepDays }
+    : null;
 }
 
 export interface PruneOptions {
@@ -418,15 +456,36 @@ export class ConfigBackupCorruptError extends Error {}
  * writes the file as 0600: a symlink, or a file with a group/world bit, was planted or loosened
  * after the snapshot, and rewriting it as 0600 would turn it into trusted config (`clis.json`
  * selects the binaries Codeman spawns; `isUnsafePermissions` refuses the same bits there).
- * POSIX only, like `isUnsafePermissions`.
+ * POSIX only, like `isUnsafePermissions`. The mode test is skipped (the symlink test is not) on a
+ * filesystem that does not keep modes, see {@link folderKeepsModes}.
  */
-function assertTrustedSnapshotEntry(path: string, label: string): void {
+function assertTrustedSnapshotEntry(path: string, label: string, checkMode: boolean): void {
   if (process.platform === 'win32') return;
   const st = lstatSync(path, { throwIfNoEntry: false });
   if (!st) return; // missing is reported by the read that follows
-  if (st.isSymbolicLink()) throw new ConfigBackupCorruptError(`${label} is a symlink, so it is not restored`);
-  if ((st.mode & 0o077) !== 0) {
-    throw new ConfigBackupCorruptError(`${label} is readable or writable by group or others, so it is not restored`);
+  if (st.isSymbolicLink()) throw new ConfigBackupCorruptError(`${label} is a symlink, so it is not used`);
+  if (checkMode && (st.mode & 0o077) !== 0) {
+    throw new ConfigBackupCorruptError(`${label} is readable or writable by group or others, so it is not used`);
+  }
+}
+
+/**
+ * Whether the backup folder's filesystem keeps a file's mode: vfat/exFAT, CIFS shares and WSL's
+ * `/mnt/d` report 0755 or 0777 for everything, so the group/world test would refuse every backup
+ * there even though snapshots succeed (`createConfigBackup` already expects mode-less filesystems).
+ * Probed with a 0600 temp file; if the probe cannot run, the strict test stays on.
+ */
+function folderKeepsModes(dir: string): boolean {
+  if (process.platform === 'win32') return false;
+  const probe = join(dir, `.mode-probe-${process.pid}`);
+  try {
+    writeFileSync(probe, '', { mode: 0o600 });
+    chmodSync(probe, 0o600);
+    return (lstatSync(probe).mode & 0o777 & 0o077) === 0;
+  } catch {
+    return true;
+  } finally {
+    rmSync(probe, { force: true });
   }
 }
 
@@ -471,17 +530,21 @@ export function restoreConfigBackup(opts: {
   id: string;
   appVersion?: string;
   now?: number;
+  /** Override the probe of whether the backup folder keeps file modes (tests; a mode-less filesystem). */
+  keepsModes?: boolean;
 }): RestoreResult {
-  const manifest = readManifest(opts.backupDir, opts.id, configBackupOrigin(opts.dataDir));
+  const origin = readConfigBackupOrigin(opts.dataDir);
+  const manifest = origin ? readManifest(opts.backupDir, opts.id, origin) : null;
   if (!manifest) throw new ConfigBackupNotFoundError(`No config backup named ${opts.id}`);
 
   const allowed = new Set<string>(CONFIG_BACKUP_FILES);
   const loaded: Array<{ name: string; data: Buffer }> = [];
-  assertTrustedSnapshotEntry(join(opts.backupDir, opts.id), `Backup ${opts.id}`);
+  const checkMode = opts.keepsModes ?? folderKeepsModes(opts.backupDir);
+  assertTrustedSnapshotEntry(join(opts.backupDir, opts.id), `Backup ${opts.id}`, checkMode);
   for (const f of manifest.files) {
     if (!allowed.has(f.name)) continue;
     let data: Buffer;
-    assertTrustedSnapshotEntry(join(opts.backupDir, opts.id, f.name), `${f.name} in ${opts.id}`);
+    assertTrustedSnapshotEntry(join(opts.backupDir, opts.id, f.name), `${f.name} in ${opts.id}`, checkMode);
     try {
       data = readFileSync(join(opts.backupDir, opts.id, f.name));
     } catch {
@@ -661,12 +724,16 @@ function loadDiffSide(side: string, dataDir: string, backupDir: string): Map<str
     }
     return out;
   }
-  const manifest = readManifest(backupDir, side, configBackupOrigin(dataDir));
+  const origin = readConfigBackupOrigin(dataDir);
+  const manifest = origin ? readManifest(backupDir, side, origin) : null;
   if (!manifest) throw new ConfigBackupNotFoundError(`No config backup named ${side}`);
   const allowed = new Set<string>(CONFIG_BACKUP_FILES);
+  const checkMode = folderKeepsModes(backupDir);
+  assertTrustedSnapshotEntry(join(backupDir, side), `Backup ${side}`, checkMode);
   for (const f of manifest.files) {
     if (!allowed.has(f.name)) continue;
     let data: Buffer;
+    assertTrustedSnapshotEntry(join(backupDir, side, f.name), `${f.name} in ${side}`, checkMode);
     try {
       data = readFileSync(join(backupDir, side, f.name));
     } catch {

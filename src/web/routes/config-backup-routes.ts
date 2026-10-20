@@ -14,6 +14,7 @@
  * may have cached: `restartRequired` says which ones only apply after a restart.
  */
 
+import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
@@ -39,6 +40,9 @@ import {
   resolveConfigBackupDir,
   restoreConfigBackup,
   configBackupOrigin,
+  hasConfigBackupSettings,
+  latestBackupRetention,
+  readConfigBackupOrigin,
   sweepConfigBackupTemps,
   type ConfigBackupResult,
   type ConfigBackupSettings,
@@ -96,27 +100,51 @@ export async function probeBackupDir(settings: ConfigBackupSettings, dir: string
   return false;
 }
 
+async function readSettingsForBackup(): Promise<Record<string, unknown> | 'unreadable'> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(SETTINGS_PATH, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : 'unreadable';
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? {} : 'unreadable';
+  }
+}
+
 /** Snapshot (when changed) and apply retention; shared by the timer and the manual route. */
 export async function runConfigBackup(
   reason: string,
   opts: { force?: boolean } = {}
 ): Promise<{ result: ConfigBackupResult; removed: string[] } | null> {
-  const { settings, dir } = await readEffectiveBackupSettings();
-  if (!settings.enabled && !opts.force) return null;
-  await probeBackupDir(settings, dir);
+  // Read settings.json directly: readJsonConfig answers {} for ANY failure, so a syntax error or a read
+  // that lands inside PUT /api/settings's non-atomic write used to prune with the defaults (20 / 30
+  // days) and drop the longer history the user asked to keep.
+  const raw = await readSettingsForBackup();
+  const unreadable = raw === 'unreadable';
+  const fromFile = readConfigBackupSettings(unreadable ? {} : raw);
+  if (!fromFile.enabled && !opts.force) return null;
+  const dir = resolveConfigBackupDir(fromFile, getDataDir());
+  await probeBackupDir(fromFile, dir);
   sweepConfigBackupTemps(dir);
+  const origin = configBackupOrigin(getDataDir());
+  // No backup settings in the file (reset, or unreadable): keep the retention the newest snapshot recorded.
+  const settings =
+    unreadable || !hasConfigBackupSettings(raw)
+      ? { ...fromFile, ...(latestBackupRetention(dir, origin) ?? {}) }
+      : fromFile;
   const result = createConfigBackup({
     dataDir: getDataDir(),
     backupDir: dir,
     reason,
     appVersion: APP_VERSION,
     force: opts.force,
-  });
-  const removed = pruneConfigBackups(dir, {
     keepCount: settings.keepCount,
     keepDays: settings.keepDays,
-    origin: configBackupOrigin(getDataDir()),
   });
+  // An unreadable settings.json still gets its snapshot, but no pass deletes anything on its say-so.
+  const removed = unreadable
+    ? []
+    : pruneConfigBackups(dir, { keepCount: settings.keepCount, keepDays: settings.keepDays, origin });
   return { result, removed };
 }
 
@@ -133,6 +161,8 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
     const denied = deny(req, reply);
     if (denied) return denied;
     const { settings, dir } = await readEffectiveBackupSettings();
+    // Read-only: a listing must not create config-backup-id, and without one nothing can be ours.
+    const origin = readConfigBackupOrigin(getDataDir());
     let present: boolean;
     try {
       present = await probeBackupDir(settings, dir);
@@ -147,7 +177,7 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
         dir,
         defaultDir: defaultConfigBackupDir(getDataDir()),
         tracked: CONFIG_BACKUP_FILES,
-        backups: present ? listConfigBackups(dir, configBackupOrigin(getDataDir())) : [],
+        backups: present && origin ? listConfigBackups(dir, origin) : [],
       },
     };
   });

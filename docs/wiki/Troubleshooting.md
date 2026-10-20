@@ -142,6 +142,11 @@ which is the default, you have copies:
 2. **Restore** it, reload the page, and restart Codeman if the response's `restartRequired`
    list is not empty.
 
+A reset `settings.json` also drops the backup folder setting. If you use a custom folder, enter
+it again and save before looking for the list; until then the list shows the default folder.
+After a reinstall of the data directory the old backups are unlisted because the instance has a
+new id; see [Config Backups](Config-Backups) for how to make them visible again.
+
 Without the UI: the backups are plain folders in `~/.codeman/backups/config/`
 (`cfg-YYYYMMDD-HHMMSS`); copy the file you need back over the one in `~/.codeman/`.
 

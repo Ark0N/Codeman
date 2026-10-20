@@ -90,7 +90,7 @@ Two limits, applied after every backup:
 | **Keep this many backups** (`configBackupKeepCount`) | 2 – 500 | 20 | Keep the newest N; older ones are removed. (1 is not offered: every change would delete the state before it.) |
 | **Delete backups older than (days)** (`configBackupKeepDays`) | 0 – 3650 | 30 | Also remove a backup once it has been replaced for longer than this. `0` means no age limit. |
 
-Both apply together. Three guarantees:
+Both apply together. Four guarantees:
 
 - **The newest backup is never removed**, whatever the numbers say, so there is always one to
   go back to.
@@ -125,7 +125,11 @@ From the list, press **Restore** on a backup and confirm. Codeman then:
 1. **Verifies** every file in the backup against the SHA-256 in its manifest. If any file is
    missing or does not match, nothing is changed and you get an error. It also refuses a backup
    folder or file that is a symlink or that group or others can read or write (Codeman never
-   makes one like that, and writing it back as `0600` would turn it into trusted config).
+   makes one like that, and writing it back as `0600` would turn it into trusted config). The
+   permission test is skipped when the backup folder's filesystem does not keep file modes
+   (FAT/exFAT drives, SMB shares, WSL's `/mnt/d` without the `metadata` option report the same
+   mode for every file, so it would refuse every backup there). The symlink test is not. Compare
+   applies the same checks to the backups it reads.
 2. **Takes a `pre-restore` backup** of the files about to be replaced, so a restore can itself
    be undone.
 3. **Replaces each file atomically** (written beside it, then renamed) with mode `0600`.
@@ -147,7 +151,9 @@ When the backup folder is shared (a synced folder used by two machines, or prod 
 each snapshot records a random id that the instance made once and keeps in its data directory
 (`config-backup-id`; not the hostname, which a Docker container changes on every recreate). Every
 instance only snapshots, lists, prunes, compares and restores its own. Deleting that file makes
-the instance a new owner, and its earlier snapshots stop being listed (they stay on disk).
+the instance a new owner, and its earlier snapshots stop being listed (they stay on disk). The
+same happens after a reinstall of the data directory. To see them again, copy the `origin` value
+from any of their `manifest.json` files into `<data dir>/config-backup-id`.
 
 You can also restore by hand: the files in a backup folder are the originals, so copying one back
 over the file in the data directory is equivalent (stop Codeman first if you are replacing
@@ -178,11 +184,14 @@ query and fragment.
 ## Security
 
 - Some tracked files carry credentials (`.env`, `users.json`, `custom-model-hosts.json`,
-  `push-keys.json`). Each backup folder is mode `0700` and its files `0600`, so the default
+  `push-keys.json`, `webhook.json`). Each backup folder is mode `0700` and its files `0600`, so the default
   location exposes nothing the data directory does not already.
 - **A custom folder is your decision.** Putting it on a shared drive, a synced folder or a
   network share copies those credentials there, with whatever permissions that location has.
   Choose a private location, or turn the feature off if you cannot.
+- **Retention survives a bad `settings.json`.** If it does not parse, a pass still takes its
+  snapshot but deletes nothing. If the four backup settings are missing (a reset file), the pass
+  prunes with the retention the newest backup recorded, not the 20 copies and 30 days defaults.
 - **Anyone who can write to a custom backup folder can plant a backup that Restore applies.**
   Restore refuses symlinks and files others can write, but a file of your own user's making
   passes, so keep the folder private.
