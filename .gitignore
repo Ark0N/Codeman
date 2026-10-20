@@ -8,8 +8,9 @@ DECISIONS.md
 # Written by install.sh into end-user clones when setup finishes
 .install-complete
 
-# Dependencies
-node_modules/
+# Dependencies. No trailing slash: `node_modules/` matches only a directory, so a
+# worktree's `node_modules` symlink to a shared install got committed (#658, #662).
+node_modules
 
 # Build output
 dist/
