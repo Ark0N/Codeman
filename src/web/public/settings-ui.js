@@ -1388,6 +1388,13 @@ Object.assign(CodemanApp.prototype, {
     const data = body.data;
     const dirInput = this.$('appSettingsConfigBackupDir') || document.getElementById('appSettingsConfigBackupDir');
     if (dirInput && data.defaultDir) dirInput.placeholder = `default: ${data.defaultDir}`;
+    // A reset settings.json has none of the four keys, but the passes keep the retention the newest backup
+    // recorded: show that, or a Save would write 20 / 30 over it.
+    const saved = this.loadAppSettingsFromStorage();
+    const countInput = document.getElementById('appSettingsConfigBackupKeepCount');
+    const daysInput = document.getElementById('appSettingsConfigBackupKeepDays');
+    if (countInput && saved.configBackupKeepCount === undefined && data.settings) countInput.value = data.settings.keepCount;
+    if (daysInput && saved.configBackupKeepDays === undefined && data.settings) daysInput.value = data.settings.keepDays;
     if (!data.backups.length) {
       out.innerHTML = `No backups yet in <code>${escapeHtml(data.dir)}</code>.`;
       return;

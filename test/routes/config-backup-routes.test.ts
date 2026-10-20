@@ -189,12 +189,16 @@ describe('retention survives an unreadable or reset settings.json', () => {
   const BASE = Date.UTC(2025, 0, 1);
   const dir = () => defaultConfigBackupDir(getDataDir());
   /** 30 snapshots a day apart, made under a long-history retention (100 copies, no age limit). */
-  function seed() {
+  function seed(withKeys = true) {
     settings({ configBackupKeepCount: 100, configBackupKeepDays: 0 });
     for (let i = 0; i < 30; i++) {
       writeFileSync(
         SETTINGS_PATH,
-        JSON.stringify({ displayName: `v${i}`, configBackupKeepCount: 100, configBackupKeepDays: 0 })
+        JSON.stringify(
+          withKeys
+            ? { displayName: `v${i}`, configBackupKeepCount: 100, configBackupKeepDays: 0 }
+            : { displayName: `v${i}` }
+        )
       );
       createConfigBackup({
         dataDir: getDataDir(),
@@ -225,6 +229,26 @@ describe('retention survives an unreadable or reset settings.json', () => {
     // aged manifests (a year old) and keepDays 0: the defaults (20 copies, 30 days) would leave 20
     expect(listConfigBackups(dir())).toHaveLength(31);
   });
+
+  it.each([true, false])(
+    'a restore after a reset keeps the retention (the backup %s the four keys)',
+    async (withKeys) => {
+      seed(withKeys);
+      const oldest = listConfigBackups(dir()).at(-1)!.id;
+      writeFileSync(SETTINGS_PATH, '{}'); // the reset
+      expect((await runConfigBackup('auto'))?.removed).toEqual([]);
+
+      const { app } = await createRouteTestHarness(registerConfigBackupRoutes);
+      const res = await app.inject({ method: 'POST', url: `/api/config-backups/${oldest}/restore` });
+      expect(res.statusCode).toBe(200);
+      // the restored file carries the retention, or the recorded one still applies via the pre-restore copy
+      const out = await runConfigBackup('auto');
+      expect(out?.removed).toEqual([]);
+      expect(listConfigBackups(dir()).length).toBeGreaterThanOrEqual(32);
+      const status = (await app.inject({ method: 'GET', url: '/api/config-backups' })).json().data.settings;
+      expect(status).toMatchObject({ keepCount: 100, keepDays: 0 }); // what the form shows is what the pass uses
+    }
+  );
 
   it('a settings.json that sets the retention still wins', async () => {
     seed();

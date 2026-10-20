@@ -62,3 +62,47 @@ describe('restoreConfigBackup (Settings UI)', () => {
     expect(confirms[0]).toMatch(/users\.json, \.env\)/);
   });
 });
+
+describe('loadConfigBackups (retention fields)', () => {
+  function load(saved: Record<string, unknown>) {
+    const inputs: Record<string, { value: string; placeholder: string }> = {
+      appSettingsConfigBackupKeepCount: { value: '20', placeholder: '' },
+      appSettingsConfigBackupKeepDays: { value: '30', placeholder: '' },
+      appSettingsConfigBackupDir: { value: '', placeholder: '' },
+    };
+    function CodemanApp(this: unknown) {}
+    const ctx = vm.createContext({
+      CodemanApp,
+      window: {},
+      document: { getElementById: (id: string) => inputs[id] ?? null },
+      escapeHtml: (s: string) => s,
+    });
+    vm.runInContext(SRC, ctx);
+    const app = Object.create((CodemanApp as unknown as { prototype: object }).prototype) as Record<string, unknown>;
+    Object.assign(app, {
+      $: () => ({ textContent: '', innerHTML: '' }),
+      loadAppSettingsFromStorage: () => saved,
+      _api: async () => ({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: { settings: { keepCount: 100, keepDays: 0 }, dir: '/d', defaultDir: '/d', backups: [] },
+        }),
+      }),
+    });
+    return { app, inputs };
+  }
+
+  it('shows the retention the passes use when settings.json has none of the keys (a reset file)', async () => {
+    const { app, inputs } = load({});
+    await (app.loadConfigBackups as () => Promise<void>)();
+    expect(inputs.appSettingsConfigBackupKeepCount.value).toBe(100);
+    expect(inputs.appSettingsConfigBackupKeepDays.value).toBe(0);
+  });
+
+  it('leaves the form alone when the saved settings state the retention', async () => {
+    const { app, inputs } = load({ configBackupKeepCount: 7, configBackupKeepDays: 9 });
+    await (app.loadConfigBackups as () => Promise<void>)();
+    expect(inputs.appSettingsConfigBackupKeepCount.value).toBe('20'); // the open-settings code owns it
+  });
+});

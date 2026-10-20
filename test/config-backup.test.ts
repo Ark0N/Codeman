@@ -32,6 +32,7 @@ import {
   resolveConfigBackupDir,
   restoreConfigBackup,
   configBackupOrigin,
+  latestBackupRetention,
   sweepConfigBackupTemps,
 } from '../src/config-backup.js';
 
@@ -541,6 +542,19 @@ describe('restore trusts only what this module wrote', () => {
     expect(() => restoreConfigBackup({ dataDir: data, backupDir: backups, id, keepsModes: false })).toThrow(/symlink/);
   });
 
+  it('the mode probe never writes through a planted symlink or trips over a planted directory', () => {
+    put('settings.json', '{"a":1}');
+    const { id } = made();
+    const target = join(root, 'victim.txt');
+    writeFileSync(target, 'precious', { mode: 0o644 });
+    symlinkSync(target, join(backups, `.mode-probe-${process.pid}`));
+    mkdirSync(join(backups, '.mode-probe-0'));
+    expect(() => restoreConfigBackup({ dataDir: data, backupDir: backups, id })).not.toThrow();
+    expect(() => diffConfigBackups({ dataDir: data, backupDir: backups, from: id, to: 'current' })).not.toThrow();
+    expect(readFileSync(target, 'utf8')).toBe('precious');
+    expect(statSync(target).mode & 0o777).toBe(0o644);
+  });
+
   it('compare applies the same check to a snapshot file', () => {
     put('settings.json', '{"a":1}');
     const { id } = made();
@@ -557,6 +571,35 @@ describe('restore trusts only what this module wrote', () => {
     expect(() => restoreConfigBackup({ dataDir: data, backupDir: backups, id })).toThrow(ConfigBackupCorruptError);
     chmodSync(join(backups, id), 0o700);
     expect(() => restoreConfigBackup({ dataDir: data, backupDir: backups, id })).not.toThrow();
+  });
+
+  it('keeps the backup retention when the live settings.json was reset and has none of the four keys', () => {
+    put('settings.json', JSON.stringify({ displayName: 'old', configBackupKeepCount: 100, configBackupKeepDays: 0 }));
+    const { id } = made();
+    put('settings.json', '{}');
+    restoreConfigBackup({ dataDir: data, backupDir: backups, id });
+    expect(JSON.parse(readFileSync(join(data, 'settings.json'), 'utf8'))).toEqual({
+      displayName: 'old',
+      configBackupKeepCount: 100,
+      configBackupKeepDays: 0,
+    });
+  });
+
+  it('latestBackupRetention skips a newer snapshot that recorded none, and a pre-restore copy records it', () => {
+    put('settings.json', '{"a":1}');
+    createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0, keepCount: 100, keepDays: 0 });
+    put('settings.json', '{"a":2}');
+    createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 + 1000 }); // an older build
+    const origin = configBackupOrigin(data);
+    expect(latestBackupRetention(backups, origin)).toEqual({ keepCount: 100, keepDays: 0 });
+    const id = listConfigBackups(backups, origin).at(-1)!.id;
+    const r = restoreConfigBackup({ dataDir: data, backupDir: backups, id, now: T0 + 2000 });
+    expect(r.safetySnapshot).toBeTruthy();
+    const pre = listConfigBackups(backups, origin).find((b) => b.id === r.safetySnapshot)!;
+    expect(JSON.parse(readFileSync(join(backups, pre.id, 'manifest.json'), 'utf8'))).toMatchObject({
+      keepCount: 100,
+      keepDays: 0,
+    });
   });
 
   it('keeps the current folder and retention when settings.json is restored', () => {

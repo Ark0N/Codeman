@@ -404,11 +404,30 @@ export function sweepConfigBackupTemps(dir: string, now: number = Date.now()): v
 
 /** The retention recorded in this instance's newest snapshot, or null when it recorded none. */
 export function latestBackupRetention(dir: string, origin: string): { keepCount: number; keepDays: number } | null {
-  const [newest] = listConfigBackups(dir, origin);
-  const m = newest ? readManifest(dir, newest.id, origin) : null;
-  return m && typeof m.keepCount === 'number' && typeof m.keepDays === 'number'
-    ? { keepCount: m.keepCount, keepDays: m.keepDays }
-    : null;
+  // The newest manifest that recorded one: a snapshot from before this field existed must not hide it.
+  for (const b of listConfigBackups(dir, origin)) {
+    const m = readManifest(dir, b.id, origin);
+    if (m && typeof m.keepCount === 'number' && typeof m.keepDays === 'number') {
+      return { keepCount: m.keepCount, keepDays: m.keepDays };
+    }
+  }
+  return null;
+}
+
+/**
+ * The settings in effect when `raw` (the parsed settings.json) has none of the four `configBackup*`
+ * keys, as after a reset: the retention the newest backup recorded instead of the defaults. One
+ * place for the timer pass and for what the GET route reports, so they cannot disagree.
+ */
+export function withRecordedRetention(
+  settings: ConfigBackupSettings,
+  raw: Record<string, unknown>,
+  dir: string,
+  origin: string | null
+): ConfigBackupSettings {
+  if (hasConfigBackupSettings(raw) || !origin) return settings;
+  const kept = latestBackupRetention(dir, origin);
+  return kept ? { ...settings, ...kept } : settings;
 }
 
 export interface PruneOptions {
@@ -473,19 +492,25 @@ function assertTrustedSnapshotEntry(path: string, label: string, checkMode: bool
  * Whether the backup folder's filesystem keeps a file's mode: vfat/exFAT, CIFS shares and WSL's
  * `/mnt/d` report 0755 or 0777 for everything, so the group/world test would refuse every backup
  * there even though snapshots succeed (`createConfigBackup` already expects mode-less filesystems).
- * Probed with a 0600 temp file; if the probe cannot run, the strict test stays on.
+ * Probed with a 0600 temp file made with `wx` under a random name; if the probe cannot run, the
+ * strict test stays on.
  */
 function folderKeepsModes(dir: string): boolean {
   if (process.platform === 'win32') return false;
-  const probe = join(dir, `.mode-probe-${process.pid}`);
+  // A random name and 'wx' (fail if anything is there): a planted symlink or directory with a
+  // guessable name must neither be written through nor break the probe. Only a file this call
+  // created is removed.
+  const probe = join(dir, `.mode-probe-${randomUUID()}`);
+  let created = false;
   try {
-    writeFileSync(probe, '', { mode: 0o600 });
+    writeFileSync(probe, '', { mode: 0o600, flag: 'wx' });
+    created = true;
     chmodSync(probe, 0o600);
     return (lstatSync(probe).mode & 0o777 & 0o077) === 0;
   } catch {
     return true;
   } finally {
-    rmSync(probe, { force: true });
+    if (created) rmSync(probe, { force: true });
   }
 }
 
@@ -498,7 +523,11 @@ function keepCurrentBackupSettings(snapshot: Buffer, livePath: string): Buffer {
     const live = JSON.parse(readFileSync(livePath, 'utf8')) as Record<string, unknown>;
     if (!restored || typeof restored !== 'object' || !live || typeof live !== 'object') return snapshot;
     let changed = false;
+    // A reset live file has none of the four keys. Taking "absent" for the retention too would bring
+    // the defaults back (20 copies, 30 days) on the next pass, so the backup's own retention stays.
+    const liveHasSettings = hasConfigBackupSettings(live);
     for (const key of BACKUP_SETTING_KEYS) {
+      if (!liveHasSettings && (key === 'configBackupKeepCount' || key === 'configBackupKeepDays')) continue;
       if (JSON.stringify(restored[key]) === JSON.stringify(live[key])) continue;
       changed = true;
       if (key in live) restored[key] = live[key];
@@ -535,7 +564,7 @@ export function restoreConfigBackup(opts: {
 }): RestoreResult {
   const origin = readConfigBackupOrigin(opts.dataDir);
   const manifest = origin ? readManifest(opts.backupDir, opts.id, origin) : null;
-  if (!manifest) throw new ConfigBackupNotFoundError(`No config backup named ${opts.id}`);
+  if (!manifest || !origin) throw new ConfigBackupNotFoundError(`No config backup named ${opts.id}`);
 
   const allowed = new Set<string>(CONFIG_BACKUP_FILES);
   const loaded: Array<{ name: string; data: Buffer }> = [];
@@ -563,6 +592,8 @@ export function restoreConfigBackup(opts: {
     appVersion: opts.appVersion,
     force: true,
     now: opts.now,
+    // The retention in force, so this newest snapshot does not hide it from the next pass.
+    ...(latestBackupRetention(opts.backupDir, origin) ?? {}),
   });
 
   mkdirSync(opts.dataDir, { recursive: true });

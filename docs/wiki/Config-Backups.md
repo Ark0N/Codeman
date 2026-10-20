@@ -138,7 +138,10 @@ Only the tracked names are ever written, whatever a manifest lists.
 
 Restoring `settings.json` keeps the four backup settings (on or off, folder, how many, how many
 days) at their current values, so a restore from before a folder change does not point the list
-at the old folder and hide the `pre-restore` copy it just made.
+at the old folder and hide the `pre-restore` copy it just made. The exception is a live
+`settings.json` that has none of the four (a reset file): the restore then keeps the backup's own
+how-many and how-many-days, so the next pass does not fall back to 20 copies and 30 days. The
+`pre-restore` copy records the retention in force too.
 
 Settings are re-read on the next request, so reload the page. `.env` and `push-keys.json` are
 read once per process: **restart Codeman** for those to take effect (the response lists which).
@@ -191,7 +194,11 @@ query and fragment.
   Choose a private location, or turn the feature off if you cannot.
 - **Retention survives a bad `settings.json`.** If it does not parse, a pass still takes its
   snapshot but deletes nothing. If the four backup settings are missing (a reset file), the pass
-  prunes with the retention the newest backup recorded, not the 20 copies and 30 days defaults.
+  prunes with the retention the newest backup that recorded one holds, not the 20 copies and 30
+  days defaults, and Settings shows those values until you save. While `settings.json` does not
+  parse, a pass reads it as empty, so its snapshot goes to the default folder even if a custom
+  folder is set or backups are switched off; nothing is widened (same modes, inside the data
+  directory).
 - **Anyone who can write to a custom backup folder can plant a backup that Restore applies.**
   Restore refuses symlinks and files others can write, but a file of your own user's making
   passes, so keep the folder private.

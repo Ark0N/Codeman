@@ -40,8 +40,7 @@ import {
   resolveConfigBackupDir,
   restoreConfigBackup,
   configBackupOrigin,
-  hasConfigBackupSettings,
-  latestBackupRetention,
+  withRecordedRetention,
   readConfigBackupOrigin,
   sweepConfigBackupTemps,
   type ConfigBackupResult,
@@ -73,8 +72,10 @@ export interface ConfigBackupStatus {
 
 export async function readEffectiveBackupSettings(): Promise<{ settings: ConfigBackupSettings; dir: string }> {
   const raw = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {});
-  const settings = readConfigBackupSettings(raw);
-  return { settings, dir: resolveConfigBackupDir(settings, getDataDir()) };
+  const base = readConfigBackupSettings(raw);
+  const dir = resolveConfigBackupDir(base, getDataDir());
+  // The same fallback the timer pass uses, so the form never shows 20 / 30 while a pass keeps 100 / 0.
+  return { settings: withRecordedRetention(base, raw, dir, readConfigBackupOrigin(getDataDir())), dir };
 }
 
 /** A user-chosen backup folder that is not safe to touch (bounded probe, as for case paths, #516). */
@@ -128,10 +129,7 @@ export async function runConfigBackup(
   sweepConfigBackupTemps(dir);
   const origin = configBackupOrigin(getDataDir());
   // No backup settings in the file (reset, or unreadable): keep the retention the newest snapshot recorded.
-  const settings =
-    unreadable || !hasConfigBackupSettings(raw)
-      ? { ...fromFile, ...(latestBackupRetention(dir, origin) ?? {}) }
-      : fromFile;
+  const settings = withRecordedRetention(fromFile, unreadable ? {} : raw, dir, origin);
   const result = createConfigBackup({
     dataDir: getDataDir(),
     backupDir: dir,
