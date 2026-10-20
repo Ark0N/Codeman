@@ -465,6 +465,32 @@ describe('diffConfigBackups', () => {
   });
 });
 
+describe('createConfigBackup: a snapshot dated ahead of the clock', () => {
+  it('is not written again on every pass once the clock is corrected', () => {
+    put('settings.json', '{"v":0}');
+    createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 });
+    put('settings.json', '{"v":1}');
+    const ahead = createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 + 2 * 3_600_000 });
+    expect(ahead.status).toBe('created');
+    put('settings.json', '{"v":2}'); // the clock is back at T0 + 1 minute
+    const corrected = createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 + 60_000 });
+    expect(corrected.status).toBe('created');
+    const [newest, second] = listConfigBackups(backups);
+    expect(newest.id).toBe((corrected as { id: string }).id); // dated no earlier than the one before it
+    expect(newest.createdAt).toBeGreaterThan(second.createdAt);
+    for (let i = 0; i < 24; i++) {
+      const r = createConfigBackup({
+        dataDir: data,
+        backupDir: backups,
+        reason: 'auto',
+        now: T0 + 120_000 + i * 300_000,
+      });
+      expect(r.status, `pass ${i}`).toBe('unchanged');
+    }
+    expect(listConfigBackups(backups)).toHaveLength(3);
+  });
+});
+
 describe('instances sharing one backup folder', () => {
   it('keeps to its own snapshots: no churn, no prune, no restore of the other', () => {
     const other = join(root, 'other-data');
@@ -608,6 +634,12 @@ describe('restore trusts only what this module wrote', () => {
     put('settings.json', JSON.stringify({ displayName: 'new', configBackupDir: '/new', configBackupKeepDays: 7 }));
     restoreConfigBackup({ dataDir: data, backupDir: backups, id });
     const after = JSON.parse(readFileSync(join(data, 'settings.json'), 'utf8'));
-    expect(after).toEqual({ displayName: 'old', configBackupDir: '/new', configBackupKeepDays: 7 });
+    // the folder and days follow the live file; the live file has no keep count (reset), so the backup's 5 stays
+    expect(after).toEqual({
+      displayName: 'old',
+      configBackupDir: '/new',
+      configBackupKeepCount: 5,
+      configBackupKeepDays: 7,
+    });
   });
 });

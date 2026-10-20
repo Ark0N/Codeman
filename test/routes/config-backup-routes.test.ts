@@ -250,6 +250,39 @@ describe('retention survives an unreadable or reset settings.json', () => {
     }
   );
 
+  it("re-entering a custom folder after a reset finds that folder's recorded retention", async () => {
+    const folder = join(custom, 'kept');
+    settings({ configBackupDir: folder, configBackupKeepCount: 100, configBackupKeepDays: 0 });
+    for (let i = 0; i < 30; i++) {
+      createConfigBackup({
+        dataDir: getDataDir(),
+        backupDir: folder,
+        reason: 'auto',
+        force: true,
+        now: BASE + i * DAY,
+        keepCount: 100,
+        keepDays: 0,
+      });
+    }
+    writeFileSync(SETTINGS_PATH, '{}'); // the reset drops the folder too
+    await runConfigBackup('auto'); // goes to the default folder, which holds none of those manifests
+    // the user enters the folder again and saves; the form no longer sends retention it only displayed
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ configBackupDir: folder, configBackupEnabled: true }));
+    const { app } = await createRouteTestHarness(registerConfigBackupRoutes);
+    const reported = (await app.inject({ method: 'GET', url: '/api/config-backups' })).json().data.settings;
+    expect(reported).toMatchObject({ keepCount: 100, keepDays: 0 });
+    const out = await runConfigBackup('auto');
+    expect(out?.removed).toEqual([]);
+    expect(listConfigBackups(folder).length).toBeGreaterThanOrEqual(30);
+  });
+
+  it('only the retention key the file lacks falls back to the recorded one', async () => {
+    seed();
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ configBackupKeepDays: 3650 }));
+    await runConfigBackup('auto');
+    expect(listConfigBackups(dir())).toHaveLength(31); // keepCount 100 from the manifests, not the default 20
+  });
+
   it('a settings.json that sets the retention still wins', async () => {
     seed();
     writeFileSync(SETTINGS_PATH, JSON.stringify({ configBackupKeepCount: 5, configBackupKeepDays: 0 }));

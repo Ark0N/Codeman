@@ -208,13 +208,6 @@ export function readConfigBackupOrigin(dataDir: string): string | null {
   }
 }
 
-/** True when any of the four `configBackup*` keys is present (the Settings form always sends all four). */
-export function hasConfigBackupSettings(raw: Record<string, unknown>): boolean {
-  return ['configBackupEnabled', 'configBackupDir', 'configBackupKeepCount', 'configBackupKeepDays'].some(
-    (k) => k in raw
-  );
-}
-
 const sha256 = (data: Buffer | string): string => createHash('sha256').update(data).digest('hex');
 
 /**
@@ -352,8 +345,12 @@ export function createConfigBackup(opts: CreateConfigBackupOptions): ConfigBacku
     if (latest && latest.hash === hash) return { status: 'unchanged', id: latest.id };
   }
 
+  // Never dated earlier than this instance's newest snapshot. One written while the clock read ahead
+  // (a dual-boot machine, a VM resumed with a stale clock) would otherwise stay newest after the
+  // correction, differ from every later pass, and have each one write a copy until real time caught up.
+  const createdAt = existing[0] ? Math.max(now, existing[0].createdAt + 1) : now;
   mkdirSync(opts.backupDir, { recursive: true, mode: 0o700 });
-  const base = `cfg-${stamp(now)}`;
+  const base = `cfg-${stamp(createdAt)}`;
   let id = base;
   for (let n = 2; existsSync(join(opts.backupDir, id)); n++) id = `${base}-${n}`;
 
@@ -363,7 +360,7 @@ export function createConfigBackup(opts: CreateConfigBackupOptions): ConfigBacku
   try {
     const manifest: ConfigBackupManifest = {
       id,
-      createdAt: now,
+      createdAt,
       reason: opts.reason,
       appVersion: opts.appVersion ?? '',
       hash,
@@ -415,9 +412,11 @@ export function latestBackupRetention(dir: string, origin: string): { keepCount:
 }
 
 /**
- * The settings in effect when `raw` (the parsed settings.json) has none of the four `configBackup*`
- * keys, as after a reset: the retention the newest backup recorded instead of the defaults. One
- * place for the timer pass and for what the GET route reports, so they cannot disagree.
+ * The settings in effect, with each retention key that `raw` (the parsed settings.json) lacks, as
+ * after a reset, taken from what the newest backup recorded in `dir` instead of the defaults. It
+ * looks at the retention keys only (not the folder), so re-entering a custom folder after a reset
+ * finds that folder's own manifests. One place for the timer pass and for what the GET route
+ * reports, so they cannot disagree.
  */
 export function withRecordedRetention(
   settings: ConfigBackupSettings,
@@ -425,9 +424,16 @@ export function withRecordedRetention(
   dir: string,
   origin: string | null
 ): ConfigBackupSettings {
-  if (hasConfigBackupSettings(raw) || !origin) return settings;
+  const lacksCount = !('configBackupKeepCount' in raw);
+  const lacksDays = !('configBackupKeepDays' in raw);
+  if ((!lacksCount && !lacksDays) || !origin) return settings;
   const kept = latestBackupRetention(dir, origin);
-  return kept ? { ...settings, ...kept } : settings;
+  if (!kept) return settings;
+  return {
+    ...settings,
+    ...(lacksCount && { keepCount: kept.keepCount }),
+    ...(lacksDays && { keepDays: kept.keepDays }),
+  };
 }
 
 export interface PruneOptions {
@@ -523,11 +529,10 @@ function keepCurrentBackupSettings(snapshot: Buffer, livePath: string): Buffer {
     const live = JSON.parse(readFileSync(livePath, 'utf8')) as Record<string, unknown>;
     if (!restored || typeof restored !== 'object' || !live || typeof live !== 'object') return snapshot;
     let changed = false;
-    // A reset live file has none of the four keys. Taking "absent" for the retention too would bring
-    // the defaults back (20 copies, 30 days) on the next pass, so the backup's own retention stays.
-    const liveHasSettings = hasConfigBackupSettings(live);
+    // A reset live file lacks the retention keys. Taking "absent" for them would bring the defaults
+    // back (20 copies, 30 days) on the next pass, so the backup's own retention stays.
     for (const key of BACKUP_SETTING_KEYS) {
-      if (!liveHasSettings && (key === 'configBackupKeepCount' || key === 'configBackupKeepDays')) continue;
+      if (!(key in live) && (key === 'configBackupKeepCount' || key === 'configBackupKeepDays')) continue;
       if (JSON.stringify(restored[key]) === JSON.stringify(live[key])) continue;
       changed = true;
       if (key in live) restored[key] = live[key];

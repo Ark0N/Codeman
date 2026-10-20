@@ -3264,14 +3264,14 @@
                       <span class="set-row-label">Keep this many backups</span>
                       <span class="set-row-desc">2 to 500 (with 1, every change would delete the state before it). The newest backup is always kept.</span>
                     </div>
-                    <input type="number" id="appSettingsConfigBackupKeepCount" class="set-input" min="2" max="500" step="1" placeholder="20">
+                    <input type="number" id="appSettingsConfigBackupKeepCount" oninput="this.dataset.touched=1" class="set-input" min="2" max="500" step="1" placeholder="20">
                   </div>
                   <div class="set-row has-field" data-search="config backup retention keep days age">
                     <div class="set-row-text">
                       <span class="set-row-label">Delete backups older than (days)</span>
                       <span class="set-row-desc">A backup is removed once a newer one has existed this many days. 0 keeps backups until the count above pushes them out.</span>
                     </div>
-                    <input type="number" id="appSettingsConfigBackupKeepDays" class="set-input" min="0" max="3650" step="1" placeholder="30">
+                    <input type="number" id="appSettingsConfigBackupKeepDays" oninput="this.dataset.touched=1" class="set-input" min="0" max="3650" step="1" placeholder="30">
                   </div>
                   <div class="set-row" data-search="config backup now restore list">
                     <div class="set-row-text">

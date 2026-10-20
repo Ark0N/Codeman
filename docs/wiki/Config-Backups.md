@@ -61,7 +61,8 @@ Each backup is one folder named for the moment it was made, in the server's loca
 ```
 ~/.codeman/backups/config/
   cfg-20261011-120305/
-    manifest.json        id, createdAt (epoch ms), reason, appVersion, SHA-256 + size per file
+    manifest.json        id, createdAt (epoch ms), reason, appVersion, hash, origin,
+                         keepCount and keepDays in force, SHA-256 + size per file
     settings.json        the original file names, unchanged
     clis.json
     custom-model-hosts.json
@@ -73,7 +74,7 @@ Each backup is one folder named for the moment it was made, in the server's loca
 | Part | Meaning |
 | ---- | ------- |
 | `cfg-YYYYMMDD-HHMMSS` | Date and time (server local time) the backup was made. A collision in the same second gets `-2`, `-3`, … |
-| `manifest.json` | The record of the backup: `reason`, `appVersion`, and a SHA-256 and size for every file. |
+| `manifest.json` | The record of the backup: `reason`, `appVersion`, the change-check `hash`, the `origin` id, the retention in force (`keepCount`, `keepDays`), and a SHA-256 and size for every file. |
 | `reason` | `startup`, `auto` (a change was detected), `manual` (Back up now) or `pre-restore`. It is in the manifest and the Settings list, not in the folder name. |
 | `.tmp-…` | A backup being written. It is renamed into place when complete and is never listed. |
 
@@ -193,9 +194,12 @@ query and fragment.
   network share copies those credentials there, with whatever permissions that location has.
   Choose a private location, or turn the feature off if you cannot.
 - **Retention survives a bad `settings.json`.** If it does not parse, a pass still takes its
-  snapshot but deletes nothing. If the four backup settings are missing (a reset file), the pass
+  snapshot but deletes nothing. If a retention setting is missing (a reset file), the pass
   prunes with the retention the newest backup that recorded one holds, not the 20 copies and 30
-  days defaults, and Settings shows those values until you save. While `settings.json` does not
+  days defaults, and Settings shows those values. Saving sends a retention value only if it was
+  saved before or you edited it there, so saving other settings (or re-entering a custom folder
+  after a reset) does not write the displayed 20 and 30 over it; the first pass in the re-entered
+  folder finds the retention its own backups recorded. While `settings.json` does not
   parse, a pass reads it as empty, so its snapshot goes to the default folder even if a custom
   folder is set or backups are switched off; nothing is widened (same modes, inside the data
   directory).
