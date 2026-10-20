@@ -70,12 +70,23 @@ export interface ConfigBackupStatus {
   backups: ConfigBackupSummary[];
 }
 
-export async function readEffectiveBackupSettings(): Promise<{ settings: ConfigBackupSettings; dir: string }> {
+/**
+ * The settings in effect and the folder they name. A custom folder is probed (bounded, #516) BEFORE
+ * the recorded-retention fallback reads it, so this throws `BackupDirUnavailableError` for a folder
+ * that does not answer and never lists it; `present` is false for a custom folder that does not exist yet.
+ */
+export async function readEffectiveBackupSettings(): Promise<{
+  settings: ConfigBackupSettings;
+  dir: string;
+  present: boolean;
+}> {
   const raw = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {});
   const base = readConfigBackupSettings(raw);
   const dir = resolveConfigBackupDir(base, getDataDir());
+  const present = await probeBackupDir(base, dir);
   // The same fallback the timer pass uses, so the form never shows 20 / 30 while a pass keeps 100 / 0.
-  return { settings: withRecordedRetention(base, raw, dir, readConfigBackupOrigin(getDataDir())), dir };
+  const settings = present ? withRecordedRetention(base, raw, dir, readConfigBackupOrigin(getDataDir())) : base;
+  return { settings, dir, present };
 }
 
 /** A user-chosen backup folder that is not safe to touch (bounded probe, as for case paths, #516). */
@@ -158,16 +169,16 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
   app.get('/api/config-backups', async (req, reply): Promise<ApiResponse<ConfigBackupStatus>> => {
     const denied = deny(req, reply);
     if (denied) return denied;
-    const { settings, dir } = await readEffectiveBackupSettings();
-    // Read-only: a listing must not create config-backup-id, and without one nothing can be ours.
-    const origin = readConfigBackupOrigin(getDataDir());
-    let present: boolean;
+    let eff: Awaited<ReturnType<typeof readEffectiveBackupSettings>>;
     try {
-      present = await probeBackupDir(settings, dir);
+      eff = await readEffectiveBackupSettings();
     } catch (err) {
       reply.code(503);
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }
+    const { settings, dir, present } = eff;
+    // Read-only: a listing must not create config-backup-id, and without one nothing can be ours.
+    const origin = readConfigBackupOrigin(getDataDir());
     return {
       success: true,
       data: {
@@ -201,8 +212,7 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, '`from` is required (a backup id or "current")');
     }
     try {
-      const { settings, dir } = await readEffectiveBackupSettings();
-      await probeBackupDir(settings, dir);
+      const { dir } = await readEffectiveBackupSettings();
       const data = diffConfigBackups({
         dataDir: getDataDir(),
         backupDir: dir,
@@ -229,8 +239,7 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
     if (denied) return denied;
     const { id } = req.params as { id: string };
     try {
-      const { settings, dir } = await readEffectiveBackupSettings();
-      await probeBackupDir(settings, dir);
+      const { dir } = await readEffectiveBackupSettings();
       const out = restoreConfigBackup({ dataDir: getDataDir(), backupDir: dir, id, appVersion: APP_VERSION });
       // IntentStore caches the file and rewrites it whole on the next prompt, which would undo the restore.
       if (out.restored.includes('intents.json')) intentStore.reload();

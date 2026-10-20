@@ -193,7 +193,8 @@ mode, the **Users** administration entry is injected here.
 The **Config backups** group controls timestamped copies of your configuration files: an
 on/off switch (on by default), the backup folder (default `~/.codeman/backups/config`), how
 many backups to keep (2 to 500, default 20) and how many days to keep them (0 to 3650, default
-30; 0 means no age limit), plus **Back up now** and a list with **Restore**. These are
+30; 0 means no age limit). A value that is not saved in `settings.json` (a reset file) is whatever
+the newest backup in that folder recorded, and the default only when none did, plus **Back up now** and a list with **Restore**. These are
 server-side settings, read fresh. Details, naming and restore behaviour are on
 [Config Backups](Config-Backups).
 

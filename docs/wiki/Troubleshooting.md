@@ -147,6 +147,10 @@ it again and save before looking for the list; until then the list shows the def
 After a reinstall of the data directory the old backups are unlisted because the instance has a
 new id; see [Config Backups](Config-Backups) for how to make them visible again.
 
+A backup is never dated earlier than the newest one, so if the clock was once set to a far
+future date, every later backup keeps that date. Delete the future-dated backup folder to
+return to normal dating.
+
 Without the UI: the backups are plain folders in `~/.codeman/backups/config/`
 (`cfg-YYYYMMDD-HHMMSS`); copy the file you need back over the one in `~/.codeman/`.
 

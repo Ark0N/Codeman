@@ -106,3 +106,49 @@ describe('loadConfigBackups (retention fields)', () => {
     expect(inputs.appSettingsConfigBackupKeepCount.value).toBe('20'); // the open-settings code owns it
   });
 });
+
+describe('Save and the displayed retention', () => {
+  function payload(
+    prev: Record<string, unknown>,
+    touched: { count?: boolean; days?: boolean },
+    count = '100',
+    days = '0'
+  ) {
+    const inputs: Record<string, { value: string; dataset: Record<string, string> }> = {
+      appSettingsConfigBackupKeepCount: { value: count, dataset: touched.count ? { touched: '1' } : {} },
+      appSettingsConfigBackupKeepDays: { value: days, dataset: touched.days ? { touched: '1' } : {} },
+    };
+    function CodemanApp(this: unknown) {}
+    const ctx = vm.createContext({
+      CodemanApp,
+      window: {},
+      document: { getElementById: (id: string) => inputs[id] },
+    });
+    vm.runInContext(SRC, ctx);
+    const app = Object.create((CodemanApp as unknown as { prototype: object }).prototype) as Record<string, unknown>;
+    return (app._configBackupRetentionPayload as (p: Record<string, unknown>) => Record<string, unknown>).call(
+      app,
+      prev
+    );
+  }
+
+  it('leaves out a retention value that was only displayed (a reset settings.json)', () => {
+    expect(payload({}, {})).toEqual({});
+  });
+
+  it('sends a value that was saved before, or edited here, and only that one', () => {
+    expect(payload({ configBackupKeepCount: 100 }, {})).toEqual({ configBackupKeepCount: 100 });
+    expect(payload({}, { days: true })).toEqual({ configBackupKeepDays: 0 });
+    expect(payload({}, { count: true, days: true }, '5', '7')).toEqual({
+      configBackupKeepCount: 5,
+      configBackupKeepDays: 7,
+    });
+  });
+
+  it('clamps like the form always did', () => {
+    expect(payload({}, { count: true, days: true }, '1', '99999')).toEqual({
+      configBackupKeepCount: 2,
+      configBackupKeepDays: 3650,
+    });
+  });
+});
