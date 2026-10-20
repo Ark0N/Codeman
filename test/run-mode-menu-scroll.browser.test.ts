@@ -5,6 +5,10 @@
  * Before the fix the menu (anchored `bottom: 100%`) had no max-height and no overflow, so with
  * enough entries its top ran off the top of the screen and could not be scrolled to.
  *
+ * The stock CLI list alone outgrows this 640px-tall phone (eleven entries since GitHub Copilot),
+ * so the short-menu case hides the whole CLI block rather than assuming the stock menu fits:
+ * every new CLI would otherwise break that assumption again.
+ *
  * Browser-driven, so excluded from `npm run test:ci` (config/test-suites.ts). Run locally:
  *   npm run test:browser -- test/run-mode-menu-scroll.browser.test.ts
  *
@@ -69,6 +73,7 @@ describe('Run dropdown on a phone', () => {
         scrollHeight: menu.scrollHeight,
         clientHeight: menu.clientHeight,
         viewport: window.innerHeight,
+        maxHeight: parseFloat(getComputedStyle(menu).maxHeight),
         overflowY: getComputedStyle(menu).overflowY,
       };
     });
@@ -118,11 +123,23 @@ describe('Run dropdown on a phone', () => {
 
   it('a short menu is not stretched or squashed (no scrollbar when it fits)', async () => {
     await openWithEntries(0);
+    // Hide the container, not its buttons: those are rebuilt from the registry and would lose a
+    // per-button style on the next render.
     await page.evaluate(() => {
+      document.getElementById('runModeCliOptions')!.style.display = 'none';
       document.getElementById('runModeCustomModelSep')!.style.display = 'none';
       document.getElementById('runModeCustomModelHeader')!.style.display = 'none';
     });
-    const g = await geometry();
-    expect(g.scrollHeight).toBeLessThanOrEqual(g.clientHeight + 1);
+    try {
+      const g = await geometry();
+      // Border-box height: clientHeight leaves out the border, so a menu stretched to its cap
+      // would still read just under it.
+      expect(g.bottom - g.top).toBeLessThan(g.maxHeight); // not stretched to its cap
+      expect(g.scrollHeight).toBeLessThanOrEqual(g.clientHeight + 1); // not squashed into a scrollbar
+    } finally {
+      await page.evaluate(() => {
+        document.getElementById('runModeCliOptions')!.style.display = '';
+      });
+    }
   });
 });
