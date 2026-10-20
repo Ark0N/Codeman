@@ -694,8 +694,8 @@ describe('pageKeysForGesture, the pure gesture rules both panes share', () => {
     expect(steps.map((s) => s.keys)).toEqual([UP, '', '', UP]);
   });
 
-  it('responds immediately to a notch without paging for every later notch', () => {
-    // Five 4-row notches 400ms apart share the pre-paid page debt.
+  it('accumulates a notch-sized opening event, and carries plain travel across notches', () => {
+    // Five 4-row notches 400 ms apart: each is a new gesture, none pages alone.
     const steps = run([
       [-4, 0],
       [-4, 400],

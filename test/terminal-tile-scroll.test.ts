@@ -660,7 +660,7 @@ describe("gesture handling is the primary pane's, through the shared pure helper
     };
   }
 
-  it('pages a Codex tile, which draws on the alternate screen and ignores SGR wheel reports', async () => {
+  it('pages an untracked Codex tile through the hollow-pane fallback', async () => {
     const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'codex' } }), { mode: 'codex' });
 
     mount.fire('wheel', wheelLines(-18));
@@ -765,6 +765,7 @@ describe("gesture handling is the primary pane's, through the shared pure helper
     primary._flushWheelSgrQueue();
 
     expect(tileBytes).toContain(PAGE_UP);
+    expect(tileBytes).toContain(PAGE_DOWN);
     expect(tileBytes).toBe(sent.join(''));
   });
 
@@ -792,7 +793,7 @@ describe("gesture handling is the primary pane's, through the shared pure helper
     const tileBytes = flushed(ws)
       .map((f) => f.d)
       .join('');
-    // One page for the slow ticks, one for the wobble's opening event, nothing more.
+    // One page for the slow ticks; the wobble cancels its unsent opening page on reversal.
     expect(tileBytes).toBe(PAGE_UP); // the first slow tick flushed before the later wobble
 
     const primary = makeApp({ other: { mode: 'codex' } }, 'other') as App & {

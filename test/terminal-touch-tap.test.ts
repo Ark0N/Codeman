@@ -853,7 +853,7 @@ describe('terminal touch tap mouse guard', () => {
     expect(app._wheelScrollLinesFloat({ shiftKey: true, deltaX: -5, deltaY: 0 })).toBe(-0.2);
   });
 
-  it('wheel: encodes SGR 64/65 ticks, caps per event, and coalesces into one flush', () => {
+  it('wheel: encodes SGR 64/65 ticks, caps per event, and sends the first report before batching the rest', () => {
     const { app } = loadTerminalUiHarness();
     const sent: Array<{ id: string; data: string }> = [];
     app.activeSessionId = 'sess-1';
