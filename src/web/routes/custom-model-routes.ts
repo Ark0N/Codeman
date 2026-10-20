@@ -57,27 +57,13 @@ export const CLAUDE_MIN_SAFE_CONTEXT_TOKENS = 40000;
 export function exceedsSafeContextFloor(
   entry: Pick<CliEntry, 'capabilities'>,
   contextLength: number | undefined,
-  slotCount?: number,
-  serverContext?: number
+  slotCount?: number
 ): boolean {
   const cap = entry.capabilities.customModelInjection;
   if (cap.kind !== 'env' || !cap.contextLengthVar) return false;
   if (typeof contextLength !== 'number') return false;
   if (contextLength < CLAUDE_MIN_SAFE_CONTEXT_TOKENS) return true;
-  return perSlotContext(slotPoolContext(contextLength, serverContext), slotCount) < CLAUDE_MIN_SAFE_CONTEXT_TOKENS;
-}
-
-/**
- * The context the slots actually share. `contextLength` comes from the launch command and,
- * for llama-swap's `--fit-ctx`, is only the auto-fitter's FLOOR (the real context is at least
- * that), so when the server reported a larger figure through `/props` that one is the pool.
- * Never lower than `contextLength`: a smaller report cannot be right when the floor is
- * guaranteed, and this only ever keeps a warning from firing on a server with room to spare.
- */
-export function slotPoolContext(contextLength: number, serverContext: number | undefined): number {
-  return typeof serverContext === 'number' && Number.isFinite(serverContext) && serverContext > contextLength
-    ? serverContext
-    : contextLength;
+  return perSlotContext(contextLength, slotCount) < CLAUDE_MIN_SAFE_CONTEXT_TOKENS;
 }
 
 /**
@@ -155,7 +141,6 @@ function applyDiscoveredFields(incoming: CustomModelHost, existing: CustomModelH
     ...incoming,
     modelContextLengths: existing.modelContextLengths,
     modelSlotCounts: existing.modelSlotCounts,
-    modelServerContexts: existing.modelServerContexts,
     modelSizesGB: existing.modelSizesGB,
   };
 }
@@ -177,8 +162,6 @@ export interface DiscoveryResult {
   contextLengths: Record<string, number>;
   /** See `CustomModelHost.modelSlotCounts`; populated on the same loaded-models-only basis as `contextLengths`. */
   slotCounts: Record<string, number>;
-  /** See `CustomModelHost.modelServerContexts`; only present for a model whose `/props` was probed. */
-  serverContexts: Record<string, number>;
   /** See `CustomModelHost.modelSizesGB` — populated for every model whose own listing states one. */
   sizesGB: Record<string, number>;
 }
@@ -217,17 +200,27 @@ function parseSizeGB(description: unknown): number | undefined {
  * (below), which reads the actual launch flag `/running` reports, is the primary source;
  * this is only used when that parse comes up empty (no recognized flag in `cmd`, or `cmd`
  * itself unavailable).
+ *
+ * ⚠️ `/props` only ever RAISES the slot warning, never skips it: its `n_ctx` is the context
+ * fallback when `cmd` states no context flag at all, and `total_slots` is the slot count when
+ * `cmd` has no `--parallel`. It never widens the pool the slot check divides. And it is not
+ * free: llama-swap routes it through the model's process handler, which refreshes the model's
+ * last-use time, so probing a model with a `ttl` on every 5-minute sweep would keep it loaded
+ * forever. `discoverModels` therefore probes once per launch command (`propsByCmd`).
+ *
+ * Returns `undefined` when the server did not answer; a model that answered without the
+ * fields gives an object with them unset.
  */
 async function fetchServerProps(
   host: Pick<CustomModelHost, 'baseUrl'>,
   modelId: string,
   headers: Record<string, string>
-): Promise<{ nCtx?: number; totalSlots?: number }> {
+): Promise<{ nCtx?: number; totalSlots?: number } | undefined> {
   try {
     const url = new URL(`${host.baseUrl.replace(/\/+$/, '')}/props`);
     url.searchParams.set('model', modelId);
     const res = await webviewFetch(url, { headers, signal: AbortSignal.timeout(PROPS_TIMEOUT_MS) });
-    if (!res.ok) return {};
+    if (!res.ok) return undefined;
     const body = (await res.json()) as {
       n_ctx?: unknown;
       total_slots?: unknown;
@@ -238,7 +231,7 @@ async function fetchServerProps(
       typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
     return { nCtx: positive(nCtx), totalSlots: positive(body.total_slots) };
   } catch {
-    return {};
+    return undefined;
   }
 }
 
@@ -275,6 +268,37 @@ function parseSlotsFromCmd(cmd: unknown): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+/** The `/props` answer for the launch command a model was last probed under, by host and model id. */
+const propsByCmd = new Map<string, { cmd: string; props: { nCtx?: number; totalSlots?: number } }>();
+
+/** Forget what was probed (tests, and a host whose server was replaced behind the same URL). */
+export function clearPropsProbeCache(): void {
+  propsByCmd.clear();
+}
+
+/**
+ * `/props` for one loaded model, but only once per launch command: the probe refreshes the model's
+ * last-use time in llama-swap, so repeating it on every rediscovery sweep would stop a model with a
+ * `ttl` from ever unloading. A changed `cmd` (a reloaded or reconfigured model) probes again; a
+ * `cmd` that is not a string cannot be told apart, so it is probed each time; a probe that did not
+ * answer is not remembered. Held in memory only, so a restart probes once more.
+ */
+async function propsForLaunch(
+  host: Pick<CustomModelHost, 'baseUrl'>,
+  modelId: string,
+  cmd: unknown,
+  headers: Record<string, string>
+): Promise<{ nCtx?: number; totalSlots?: number } | undefined> {
+  const key = `${host.baseUrl}\0${modelId}`;
+  if (typeof cmd === 'string') {
+    const cached = propsByCmd.get(key);
+    if (cached?.cmd === cmd) return cached.props;
+  }
+  const props = await fetchServerProps(host, modelId, headers);
+  if (props && typeof cmd === 'string') propsByCmd.set(key, { cmd, props });
+  return props;
+}
+
 async function discoverModels(
   host: Pick<CustomModelHost, 'baseUrl' | 'apiKey' | 'authStyle'>
 ): Promise<DiscoveryResult> {
@@ -304,7 +328,6 @@ async function discoverModels(
   const hasStatusField = entries.some((m) => m && typeof m === 'object' && 'status' in m);
   const contextLengths: Record<string, number> = {};
   const slotCounts: Record<string, number> = {};
-  const serverContexts: Record<string, number> = {};
   if (hasStatusField) {
     const loadedIds = entries
       .filter((m) => m.status && typeof m.status === 'object' && (m.status as { value?: unknown }).value === 'loaded')
@@ -320,23 +343,28 @@ async function discoverModels(
       for (const id of loadedIds) {
         const cmd = cmdById.get(id);
         let ctx = parseCtxFromCmd(cmd);
-        let slots = parseSlotsFromCmd(cmd);
+        const cmdSlots = parseSlotsFromCmd(cmd);
+        let slots = cmdSlots;
         // /props is only needed for whatever the launch command did not answer. The context
         // still comes from the command whenever it states one (see fetchServerProps's doc
         // comment for why /props's n_ctx is only a fallback); the slot count usually cannot
         // come from the command at all, since an unset --parallel is chosen by the server.
         if (ctx === undefined || slots === undefined) {
-          const props = await fetchServerProps(host, id, headers);
-          if (props.nCtx !== undefined) serverContexts[id] = props.nCtx;
-          ctx ??= props.nCtx;
-          slots ??= props.totalSlots;
+          const props = await propsForLaunch(host, id, cmd, headers);
+          const ctxFromProps = ctx === undefined && props?.nCtx !== undefined;
+          ctx ??= props?.nCtx;
+          slots ??= props?.totalSlots;
+          // With an explicit --parallel N, llama.cpp reports /props's n_ctx PER SLOT (the unified
+          // KV pool is only the default when the count is auto), so it is already the figure one
+          // request can use: recording N would divide it a second time.
+          if (cmdSlots !== undefined && ctxFromProps) slots = undefined;
         }
         if (ctx !== undefined) contextLengths[id] = ctx;
         if (slots !== undefined) slotCounts[id] = slots;
       }
     }
   }
-  return { models, contextLengths, slotCounts, serverContexts, sizesGB };
+  return { models, contextLengths, slotCounts, sizesGB };
 }
 
 /**
@@ -651,7 +679,7 @@ export function triggerLlamaSwapLoad(
 }
 
 function applyDiscoveredModels(host: CustomModelHost, result: DiscoveryResult): CustomModelHost {
-  const { models, contextLengths, slotCounts, serverContexts, sizesGB } = result;
+  const { models, contextLengths, slotCounts, sizesGB } = result;
   const defaultModelId = host.defaultModelId && models.includes(host.defaultModelId) ? host.defaultModelId : undefined;
   // Merge onto what's already known rather than replacing: a model not probed this round
   // (not currently loaded) keeps whatever context length an earlier round already learned
@@ -663,9 +691,6 @@ function applyDiscoveredModels(host: CustomModelHost, result: DiscoveryResult): 
   const mergedSlots = { ...host.modelSlotCounts, ...slotCounts };
   const keptSlots = Object.fromEntries(Object.entries(mergedSlots).filter(([id]) => models.includes(id)));
   const modelSlotCounts = Object.keys(keptSlots).length > 0 ? keptSlots : undefined;
-  const mergedServer = { ...host.modelServerContexts, ...serverContexts };
-  const keptServer = Object.fromEntries(Object.entries(mergedServer).filter(([id]) => models.includes(id)));
-  const modelServerContexts = Object.keys(keptServer).length > 0 ? keptServer : undefined;
   // sizesGB, unlike contextLengths, is populated for every model in the SAME pass (no
   // loaded-only restriction — see parseSizeGB), so this is closer to a plain replace, but
   // still merges onto the previous round rather than dropping a size for a model whose
@@ -679,7 +704,6 @@ function applyDiscoveredModels(host: CustomModelHost, result: DiscoveryResult): 
     defaultModelId,
     modelContextLengths,
     modelSlotCounts,
-    modelServerContexts,
     modelSizesGB,
     lastDiscoveredAt: new Date().toISOString(),
   };

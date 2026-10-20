@@ -1281,7 +1281,7 @@ describe("Custom Model Endpoint Profiles: requiresContextWarning (this CLI's own
 
     await app.runCustomModelEntry('claude', 'llama-box', 'qwen3');
 
-    expect(confirmArgs).toEqual(['qwen3', 16384, 40000, undefined, undefined]);
+    expect(confirmArgs).toEqual(['qwen3', 16384, 40000, undefined]);
     expect(applyBodies).toEqual([
       { endpointId: 'llama-box', modelId: 'qwen3' },
       { endpointId: 'llama-box', modelId: 'qwen3', confirmedContext: true },
@@ -1297,7 +1297,6 @@ describe("Custom Model Endpoint Profiles: requiresContextWarning (this CLI's own
         contextLength: 131072,
         minSafeContextTokens: 40000,
         slotCount: 4,
-        poolContext: 262144,
       },
       { customModel: { endpointId: 'llama-box' }, restarted: true, modelSwapInProgress: false },
     ]);
@@ -1309,7 +1308,7 @@ describe("Custom Model Endpoint Profiles: requiresContextWarning (this CLI's own
 
     await app.runCustomModelEntry('claude', 'llama-box', 'qwen3');
 
-    expect(confirmArgs).toEqual(['qwen3', 131072, 40000, 4, 262144]);
+    expect(confirmArgs).toEqual(['qwen3', 131072, 40000, 4]);
     expect(applyBodies).toHaveLength(2);
   });
 
@@ -1401,13 +1400,11 @@ describe('Custom Model Endpoint Profiles: _confirmContextWarning (in-app modal, 
     app._resolveContextWarningConfirm(false);
   });
 
-  it('uses the server-reported pool for the per-slot figure when one is given', async () => {
+  it('says the context is split across the slots, about N each, from the discovered context alone', async () => {
     const { win, app } = bootApp({});
-    void app._confirmContextWarning('qwen3', 65536, 40000, 4, 131072);
+    void app._confirmContextWarning('qwen3', 65536, 40000, 4);
     const message = win.document.getElementById('customModelContextWarningMessage')!.textContent!;
-    expect(message).toContain('131,072');
-    expect(message).toContain('32,768'); // 131,072 / 4
-    expect(message).not.toContain('16,384'); // not the floor divided by four
+    expect(message).toContain('65,536 tokens of context are split across 4 parallel server slots, about 16,384 each');
     app._resolveContextWarningConfirm(false);
   });
 

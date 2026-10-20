@@ -1114,7 +1114,7 @@ Object.assign(CodemanApp.prototype, {
    * history yet for compaction to trim. Same promise-based pattern as
    * `_confirmModelSwap`; `_resolveContextWarningConfirm` settles it.
    */
-  _confirmContextWarning(modelId, contextLength, minSafeContextTokens, slotCount, poolContext) {
+  _confirmContextWarning(modelId, contextLength, minSafeContextTokens, slotCount) {
     const modal = document.getElementById('customModelContextWarningModal');
     const messageEl = document.getElementById('customModelContextWarningMessage');
     if (messageEl) {
@@ -1125,11 +1125,9 @@ Object.assign(CodemanApp.prototype, {
       // session plus each parallel subagent), so several 40k-token requests spend the shared
       // pool and the server answers HTTP 500 "Context size has been exceeded".
       if (known && slots > 1 && contextLength >= minSafeContextTokens) {
-        // The server's own figure when it reported a larger one; the launch command's --fit-ctx is only a floor.
-        const pool = Number.isFinite(poolContext) && poolContext > contextLength ? poolContext : contextLength;
         messageEl.textContent =
-          `${modelId} runs ${slots} parallel server slots that share ${pool.toLocaleString()} tokens of ` +
-          `context, roughly ${Math.floor(pool / slots).toLocaleString()} each when all are busy. This CLI ` +
+          `${modelId}'s ${contextLength.toLocaleString()} tokens of context are split across ${slots} parallel ` +
+          `server slots, about ${Math.floor(contextLength / slots).toLocaleString()} each. This CLI ` +
           `needs roughly ${minSafeContextTokens.toLocaleString()}+ tokens just for its own system prompt and tools on ` +
           `every request, and it sends several requests at once (the main session plus each parallel subagent). ` +
           `Concurrent requests can use up the shared context, and the server then fails them with ` +
@@ -1282,13 +1280,12 @@ Object.assign(CodemanApp.prototype, {
     let answered = {};
     let data = await post(bodyObj);
     if (data?.data?.requiresContextWarning) {
-      const { modelId, contextLength, minSafeContextTokens, slotCount, poolContext } = data.data;
+      const { modelId, contextLength, minSafeContextTokens, slotCount } = data.data;
       const proceed = await this._confirmContextWarning(
         modelId,
         contextLength,
         minSafeContextTokens,
-        slotCount,
-        poolContext
+        slotCount
       );
       if (!proceed) {
         this._lastCustomModelLaunchResult = undefined;
@@ -1406,8 +1403,7 @@ Object.assign(CodemanApp.prototype, {
         payload.modelId,
         payload.contextLength,
         payload.minSafeContextTokens,
-        payload.slotCount,
-        payload.poolContext
+        payload.slotCount
       );
       if (!proceed) {
         switchingToast?.dismiss();

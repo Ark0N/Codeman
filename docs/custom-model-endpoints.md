@@ -97,6 +97,13 @@ llama-swap's own launch command instead (`GET /running`'s `cmd` field —
 hand-written command might use), and only falls back to the `/props` probe
 when `cmd` states no recognizable flag at all.
 
+**Parallel slots are read the same way.** `--parallel N` / `-np N` from `cmd` gives
+the slot count (`modelSlotCounts`); only when `cmd` has none does discovery read
+`total_slots` from `/props`, because a server started without the flag picks the
+number itself. `/props` never widens the context the slot check divides, and it is
+probed once per launch command rather than on every sweep, because llama-swap
+treats the call as use of the model and a `ttl` would otherwise never expire.
+
 **File size is discovered too, when the server states one.** llama-swap
 writes a GB figure into an auto-discovered model's own `description`
 (`"Auto-discovered 16.35 GB - parameters auto-fitted by llama.cpp"`), parsed
@@ -438,11 +445,11 @@ construction, never a hardcoded mode check). If the model's discovered
 context (`modelContextLengths`, from discovery above) is below
 `CLAUDE_MIN_SAFE_CONTEXT_TOKENS` (40000, comfortably above the measured
 ~36.4K overhead), the response is `{requiresContextWarning: true, modelId,
-contextLength, minSafeContextTokens}` instead of applying — nothing is
+contextLength, minSafeContextTokens}` (plus `slotCount` when the model runs more than one parallel slot) instead of applying — nothing is
 restarted or created yet. A context length that was never discovered at
 all skips the check entirely (nothing to compare, so it fails open rather
 than warning on every model an endpoint hasn't reported a size for).
-Retrying with `confirmedContext: true` launches anyway (the legacy `confirmed: true` still means both questions).
+The same warning fires when the context divided across the model's parallel slots (`contextLength / slotCount`) is below the floor, because Claude Code sends several 40K-token requests at once and the slots share one pool. Retrying with `confirmedContext: true` launches anyway (the legacy `confirmed: true` still means both questions).
 
 The Run-menu picker shows this as an in-app modal
 (`#customModelContextWarningModal`, matching the llama-swap conflict

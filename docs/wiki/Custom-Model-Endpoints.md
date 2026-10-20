@@ -162,8 +162,10 @@ Discovery therefore also records how many slots each loaded model has. It reads 
 `total_slots`, because a server started without the flag chooses the number itself. When the
 context divided by the slot count drops below what Claude Code needs, picking that model shows
 the same in-app dialog, this time explaining the shared slots. The division uses the context
-the server itself reports rather than the launch command's `--fit-ctx`, which is only the
-auto-fitter's floor, so a server with plenty of room is not warned about. The fix is a single slot:
+Codeman read from the launch command (`--fit-ctx` or `-c`), never a larger figure from the
+server's `/props`, which has been measured reporting far more than the server really runs
+with. So a default llama-swap model with auto slots shows the dialog, which names the fix and
+lets you launch anyway. The fix is a single slot:
 
 ```yaml
 cmd: >-

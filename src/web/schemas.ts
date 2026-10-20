@@ -2267,7 +2267,6 @@ export const CustomModelHostSchema = z.object({
   modelContextLengths: z.record(z.string().max(200), z.number().int().positive().max(100_000_000)).optional(),
   // Same reasoning as modelContextLengths above.
   modelSlotCounts: z.record(z.string().max(200), z.number().int().positive().max(4096)).optional(),
-  modelServerContexts: z.record(z.string().max(200), z.number().int().positive().max(100_000_000)).optional(),
   // Same reasoning as modelContextLengths above.
   modelSizesGB: z.record(z.string().max(200), z.number().positive().max(100_000)).optional(),
 });

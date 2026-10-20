@@ -316,6 +316,47 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
       expect(ctx.sessions.size).toBe(2);
     });
 
+    describe('parallel slots share the context (the quick-start path has its own slot branch)', () => {
+      const slotEndpoint = (contextLength: number, slots: number): CustomModelHost => ({
+        id: 'ep-slots',
+        label: 'multi-slot box',
+        baseUrl: 'http://192.168.1.52:8080',
+        apiKey: 'k',
+        modelContextLengths: { m: contextLength },
+        modelSlotCounts: { m: slots },
+      });
+
+      it('warns when the context divided across the slots is below the floor, and reports the slot count', async () => {
+        await writeCustomModelHosts(getDataDir(), [ENDPOINT, slotEndpoint(131072, 4)]); // ~33k per slot
+
+        const res = await quickStart({
+          caseName: 'cm-slots-warn',
+          mode: 'claude',
+          customModel: { endpointId: 'ep-slots', modelId: 'm' },
+        });
+
+        const body = res.json();
+        expect(body.requiresContextWarning).toBe(true);
+        expect(body.contextLength).toBe(131072);
+        expect(body.slotCount).toBe(4);
+        expect(ctx.sessions.size).toBe(1); // nothing was created
+      });
+
+      it('launches when every slot can hold the floor', async () => {
+        await writeCustomModelHosts(getDataDir(), [ENDPOINT, slotEndpoint(262144, 4)]); // 65,536 per slot
+
+        const res = await quickStart({
+          caseName: 'cm-slots-ok',
+          mode: 'claude',
+          customModel: { endpointId: 'ep-slots', modelId: 'm' },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json().requiresContextWarning).toBeUndefined();
+        expect(ctx.sessions.size).toBe(2);
+      });
+    });
+
     it('does not warn when nothing about context was discovered', async () => {
       const res = await quickStart({
         caseName: 'cm-no-ctx-data',

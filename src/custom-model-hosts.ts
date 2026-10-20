@@ -74,16 +74,6 @@ export interface CustomModelHost {
    */
   modelSlotCounts?: Record<string, number>;
   /**
-   * The context the running server itself reports (`/props`'s `n_ctx`) per model id, recorded
-   * whenever discovery had to probe `/props` for the slot count. NOT a replacement for
-   * `modelContextLengths`, which keeps coming from the launch command: it is used only to
-   * divide the context across `modelSlotCounts`. A launch command's `--fit-ctx` is just the
-   * auto-fitter's floor, so the real context is at least that and often far larger (a small
-   * model on a big card was measured at 262,144 against a floor of 65,536); dividing the
-   * floor by the slot count would warn about a server that has plenty of room.
-   */
-  modelServerContexts?: Record<string, number>;
-  /**
    * Discovered file size (GB) per model id, keyed by the same strings as `models`.
    * Populated during discovery by parsing llama-swap's own `description` field for an
    * auto-discovered model ("Auto-discovered 16.35 GB - parameters auto-fitted by

@@ -452,14 +452,13 @@ describe('POST /api/sessions/:id/custom-model', () => {
     // llama-server splits its context across --parallel slots, and Claude Code sends several
     // requests at once, so a context that clears the floor as a whole can still fail per slot.
     describe('parallel slots share the context', () => {
-      const slotEndpoint = (contextLength: number, slots?: number, serverContext?: number): CustomModelHost => ({
+      const slotEndpoint = (contextLength: number, slots?: number): CustomModelHost => ({
         id: 'ep-slots',
         label: 'multi-slot box',
         baseUrl: 'http://192.168.1.52:8080',
         apiKey: 'k',
         modelContextLengths: { m: contextLength },
         ...(slots === undefined ? {} : { modelSlotCounts: { m: slots } }),
-        ...(serverContext === undefined ? {} : { modelServerContexts: { m: serverContext } }),
       });
 
       async function apply(endpoint: CustomModelHost) {
@@ -482,23 +481,15 @@ describe('POST /api/sessions/:id/custom-model', () => {
         expect(body.requiresContextWarning).toBe(true);
         expect(body.contextLength).toBe(131072);
         expect(body.slotCount).toBe(4);
-        expect(body.poolContext).toBe(131072);
         expect(session.setCustomModel).not.toHaveBeenCalled();
       });
 
-      it('divides the server-reported context, not the --fit-ctx floor, across the slots', async () => {
-        // a floor of 65,536 over 4 slots would be 16,384, but the server really has 262,144 (65,536 each)
-        const roomy = await apply(slotEndpoint(65536, 4, 262144));
-        expect(roomy.body.requiresContextWarning).toBeUndefined();
-        expect(roomy.session.setCustomModel).toHaveBeenCalledTimes(1);
-      });
-
-      it('warns with the server-reported pool when that is still too small per slot', async () => {
-        const { body } = await apply(slotEndpoint(65536, 4, 131072));
+      it('divides the discovered context across the slots even when it clears the floor as a whole', async () => {
+        // 65,536 over 4 slots is 16,384 each: nothing the server reports can widen this pool
+        const { body } = await apply(slotEndpoint(65536, 4));
 
         expect(body.requiresContextWarning).toBe(true);
         expect(body.contextLength).toBe(65536);
-        expect(body.poolContext).toBe(131072);
         expect(body.slotCount).toBe(4);
       });
 

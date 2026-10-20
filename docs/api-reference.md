@@ -990,7 +990,9 @@ confirmed? } | { clear: true }` applies (or clears) the session's
     just because a swap is needed at all — only when it would disrupt
     someone else.
   - `{requiresContextWarning: true, modelId, contextLength,
-minSafeContextTokens}` — Claude Code's own fixed per-turn overhead
+minSafeContextTokens, slotCount?}` — `slotCount` (above 1) is present when the
+    context divided across the model's parallel llama.cpp slots is below the
+    floor even though the whole context is not. Claude Code's own fixed per-turn overhead
     (system prompt + tool schemas) can exceed a small model's entire
     discovered context on its own, before any conversation history exists
     to compact, guaranteeing the very first message fails regardless of

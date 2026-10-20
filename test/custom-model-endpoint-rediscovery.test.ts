@@ -15,7 +15,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getDataDir } from '../src/config/instance.js';
 import { readCustomModelHosts, writeCustomModelHosts, type CustomModelHost } from '../src/custom-model-hosts.js';
-import { refreshAllCustomModelHosts } from '../src/web/routes/custom-model-routes.js';
+import { clearPropsProbeCache, refreshAllCustomModelHosts } from '../src/web/routes/custom-model-routes.js';
 import { webviewFetch } from '../src/web/webview-egress.js';
 
 vi.mock('../src/web/webview-egress.js', async () => {
@@ -31,6 +31,7 @@ function host(overrides: Partial<CustomModelHost> & Pick<CustomModelHost, 'id' |
 
 beforeEach(() => {
   fetchMock.mockReset();
+  clearPropsProbeCache();
 });
 
 describe('refreshAllCustomModelHosts (the periodic re-discovery sweep)', () => {
@@ -247,8 +248,7 @@ describe('refreshAllCustomModelHosts: context-length enrichment (llama.cpp/llama
     const [updated] = await readCustomModelHosts(dir);
     expect(updated.modelContextLengths).toEqual({ 'qwen3.8-27b': 16384 });
     expect(updated.modelSlotCounts).toEqual({ 'qwen3.8-27b': 4 });
-    // the server's own figure is kept apart, only for dividing the context across the slots
-    expect(updated.modelServerContexts).toEqual({ 'qwen3.8-27b': 154112 });
+    // /props's 154112 never becomes the context, and nothing else stores it
   });
 
   it('falls back to /props when /running has no cmd, or the cmd states no recognizable context flag', async () => {
@@ -333,7 +333,6 @@ describe('refreshAllCustomModelHosts: parallel-slot enrichment (llama.cpp splits
 
     const [updated] = await readCustomModelHosts(dir);
     expect(updated.modelSlotCounts).toEqual({ m: slots });
-    expect(updated.modelServerContexts).toBeUndefined(); // /props was never probed
     expect(updated.modelContextLengths).toEqual({ m: 65536 });
   });
 
@@ -349,9 +348,40 @@ describe('refreshAllCustomModelHosts: parallel-slot enrichment (llama.cpp splits
 
     const [updated] = await readCustomModelHosts(dir);
     expect(updated.modelSlotCounts).toEqual({ m: 4 });
-    expect(updated.modelServerContexts).toEqual({ m: 133888 });
     // the context still comes from the command's floor, never from /props's n_ctx
     expect(updated.modelContextLengths).toEqual({ m: 65536 });
+  });
+
+  it('probes /props once per launch command: a repeat sweep reuses the answer, a changed command probes again', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    let probes = 0;
+    const answer = () => (probes++, new Response(JSON.stringify({ n_ctx: 133888, total_slots: 4 }), { status: 200 }));
+    serve('llama-server -m /models/m.gguf --fit-ctx 65536', answer);
+    await refreshAllCustomModelHosts();
+    await refreshAllCustomModelHosts();
+    expect(probes).toBe(1); // a /props call refreshes the model's last-use time in llama-swap, so not every sweep
+    expect((await readCustomModelHosts(dir))[0].modelSlotCounts).toEqual({ m: 4 });
+
+    serve('llama-server -m /models/m.gguf --fit-ctx 65536 --flash-attn on', answer);
+    await refreshAllCustomModelHosts();
+    expect(probes).toBe(2);
+  });
+
+  it('does not divide a /props context a second time when --parallel is explicit and the command states no context', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    // with an explicit count llama.cpp reports n_ctx per slot: 65,536 each is already what one request gets
+    serve(
+      'llama-server -m /models/m.gguf --parallel 4',
+      () => new Response(JSON.stringify({ n_ctx: 65536, total_slots: 4 }), { status: 200 })
+    );
+
+    await refreshAllCustomModelHosts();
+
+    const [updated] = await readCustomModelHosts(dir);
+    expect(updated.modelContextLengths).toEqual({ m: 65536 });
+    expect(updated.modelSlotCounts).toBeUndefined();
   });
 
   it('treats -np -1 (llama.cpp auto) as unstated and falls back to /props', async () => {

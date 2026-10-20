@@ -15,7 +15,6 @@ import {
   CLAUDE_MIN_SAFE_CONTEXT_TOKENS,
   exceedsSafeContextFloor,
   perSlotContext,
-  slotPoolContext,
 } from '../src/web/routes/custom-model-routes.js';
 import type { CliEntry } from '../src/config/cli-registry/types.js';
 
@@ -44,34 +43,19 @@ describe('perSlotContext', () => {
   );
 });
 
-describe('slotPoolContext', () => {
-  it('uses the server-reported context when it is larger than the launch command floor', () => {
-    // llama-swap's --fit-ctx is only the auto-fitter's floor; the real context is at least that
-    expect(slotPoolContext(65536, 262144)).toBe(262144);
-  });
-
-  it.each([undefined, 0, -1, 1000, 65536, Number.NaN, Number.POSITIVE_INFINITY])(
-    'never goes below the floor, and ignores an unusable report (%s)',
-    (reported) => {
-      expect(slotPoolContext(65536, reported as number | undefined)).toBe(65536);
-    }
-  );
-});
-
 describe('exceedsSafeContextFloor with a slot count', () => {
-  it('divides the server-reported context, not the floor, across the slots', () => {
-    // measured: a 0.8B model on a 24 GB card, floor 65,536, real context 262,144, 4 slots => 65,536 each
-    expect(exceedsSafeContextFloor(withContextVar, 65536, 4, 262144)).toBe(false);
-    // no server figure known: fall back to the floor, which is 16,384 per slot
+  it('divides only the context it is given, so a larger /props figure can never skip the warning', () => {
+    // a --fit-ctx floor of 65,536 over 4 slots is 16,384 each, whatever /props might say about the server
     expect(exceedsSafeContextFloor(withContextVar, 65536, 4)).toBe(true);
-    // the measured failure: ~131k pool over 4 slots is ~33k each
-    expect(exceedsSafeContextFloor(withContextVar, 65536, 4, 131072)).toBe(true);
-    expect(exceedsSafeContextFloor(withContextVar, 65536, 1, 262144)).toBe(false);
+    expect(exceedsSafeContextFloor(withContextVar, 65536, 1)).toBe(false);
+    // the measured failure: ~131k over 4 slots is ~33k each
+    expect(exceedsSafeContextFloor(withContextVar, 131072, 4)).toBe(true);
+    expect(exceedsSafeContextFloor(withContextVar, 262144, 4)).toBe(false);
   });
 
-  it('still warns when the floor itself is below the minimum, whatever the server reports', () => {
-    expect(exceedsSafeContextFloor(withContextVar, 16384, 4, 262144)).toBe(true);
-    expect(exceedsSafeContextFloor(withContextVar, 16384, 1, 262144)).toBe(true);
+  it('still warns when the context itself is below the minimum', () => {
+    expect(exceedsSafeContextFloor(withContextVar, 16384, 4)).toBe(true);
+    expect(exceedsSafeContextFloor(withContextVar, 16384, 1)).toBe(true);
   });
 
   it('keeps its existing behaviour when no slot count is given', () => {
