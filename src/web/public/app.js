@@ -3557,7 +3557,7 @@ class CodemanApp {
     }
   }
 
-  // Claude + Codex plan usage limits — account-global, so the latest sample
+  // Claude, Codex and Copilot plan usage limits — account-global, so the latest sample
   // drives the shared header chip.
   _onSessionStatusTelemetry(data) {
     this.updatePlanUsageChip(data);

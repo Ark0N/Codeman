@@ -74,7 +74,7 @@ export interface ReadCopilotPlanUsageOptions {
 
 /** The monthly premium-request window, or null when there is no token, no meter or any failure. */
 export async function readCopilotPlanUsage(opts: ReadCopilotPlanUsageOptions = {}): Promise<StatusTelemetry | null> {
-  const token = opts.token === undefined ? resolveCopilotToken() : opts.token;
+  const token = opts.token === undefined ? await resolveCopilotToken() : opts.token;
   if (!token) return null;
   const doFetch = opts.fetchFn ?? fetch;
   try {

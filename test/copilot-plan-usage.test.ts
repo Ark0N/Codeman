@@ -187,6 +187,20 @@ describe('readCopilotPlanUsage', () => {
     expect(init.redirect).toBe('error');
   });
 
+  it('resolves the token itself when none is passed, and sends it in the header', async () => {
+    vi.stubEnv('COPILOT_GITHUB_TOKEN', 'env-token');
+    try {
+      const fetchFn = ok(RESPONSE);
+      expect(await readCopilotPlanUsage({ fetchFn })).not.toBeNull();
+      const init = (fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+        headers: Record<string, string>;
+      };
+      expect(init.headers.Authorization).toBe('Bearer env-token');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('sends nothing when there is no token', async () => {
     const fetchFn = ok(RESPONSE);
     expect(await readCopilotPlanUsage({ token: null, fetchFn })).toBeNull();
