@@ -42,7 +42,8 @@ cron jobs.
   were): `custom-model-hosts.json` `lastDiscoveredAt` (the model-discovery poll, every five
   minutes), `users.json` `lastLoginAt`, `settings.json` `lastUsedCase`, `intents.json`
   `recentPrompts` and `updatedAt` (every captured prompt) and `docker-cases.json`
-  `lastClaudeSessionId` (a Docker case's conversation id after a `/clear`). Without that, every
+  `lastClaudeSessionId` (a Docker case's conversation id after a `/clear`) and `webviews.json`
+  `lastOpenedAt` (opening a web tab). Without that, every
   tick looked like an edit and 20 copies covered only about 100 minutes. So Compare shows
   `intents.json` as unchanged when only prompts differ, yet a restore drops the prompts captured
   since.
@@ -122,12 +123,18 @@ list and **Back up now** use the **saved** folder and retention: apply your edit
 From the list, press **Restore** on a backup and confirm. Codeman then:
 
 1. **Verifies** every file in the backup against the SHA-256 in its manifest. If any file is
-   missing or does not match, nothing is changed and you get an error.
+   missing or does not match, nothing is changed and you get an error. It also refuses a backup
+   folder or file that is a symlink or that group or others can read or write (Codeman never
+   makes one like that, and writing it back as `0600` would turn it into trusted config).
 2. **Takes a `pre-restore` backup** of the files about to be replaced, so a restore can itself
    be undone.
 3. **Replaces each file atomically** (written beside it, then renamed) with mode `0600`.
 
 Only the tracked names are ever written, whatever a manifest lists.
+
+Restoring `settings.json` keeps the four backup settings (on or off, folder, how many, how many
+days) at their current values, so a restore from before a folder change does not point the list
+at the old folder and hide the `pre-restore` copy it just made.
 
 Settings are re-read on the next request, so reload the page. `.env` and `push-keys.json` are
 read once per process: **restart Codeman** for those to take effect (the response lists which).
@@ -176,8 +183,12 @@ query and fragment.
 - **A custom folder is your decision.** Putting it on a shared drive, a synced folder or a
   network share copies those credentials there, with whatever permissions that location has.
   Choose a private location, or turn the feature off if you cannot.
+- **Anyone who can write to a custom backup folder can plant a backup that Restore applies.**
+  Restore refuses symlinks and files others can write, but a file of your own user's making
+  passes, so keep the folder private.
 - In [multi-user mode](Multi-User-Mode) all of it is admin only: the list, Back up now,
-  Restore and Compare.
+  Restore and Compare, and each restore is written to the admin audit log
+  (`config_backup_restore`).
 - Listing returns file names and sizes, never contents. A comparison returns changed values but
   never a credential's (see [Comparing backups](#comparing-backups)).
 

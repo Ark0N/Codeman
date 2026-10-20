@@ -206,11 +206,12 @@ const VOLATILE_KEYS: Readonly<Record<string, readonly string[]>> = {
   'custom-model-hosts.json': ['lastDiscoveredAt'],
   // Rewritten by activity, not by anything the user set: a Basic-auth login (at most once a minute
   // per user), a session started in another case, every captured prompt, and a Docker case's
-  // conversation id after a /clear.
+  // conversation id after a /clear, and a web tab being opened.
   'users.json': ['lastLoginAt'],
   'settings.json': ['lastUsedCase'],
   'intents.json': ['recentPrompts', 'updatedAt'],
   'docker-cases.json': ['lastClaudeSessionId'],
+  'webviews.json': ['lastOpenedAt'],
 };
 
 function withoutKeys(value: unknown, drop: ReadonlySet<string>): unknown {
@@ -412,6 +413,45 @@ export function pruneConfigBackups(dir: string, opts: PruneOptions): string[] {
 export class ConfigBackupNotFoundError extends Error {}
 export class ConfigBackupCorruptError extends Error {}
 
+/**
+ * Restore refuses what this module never writes. Snapshots are 0700/0600 real files, and a restore
+ * writes the file as 0600: a symlink, or a file with a group/world bit, was planted or loosened
+ * after the snapshot, and rewriting it as 0600 would turn it into trusted config (`clis.json`
+ * selects the binaries Codeman spawns; `isUnsafePermissions` refuses the same bits there).
+ * POSIX only, like `isUnsafePermissions`.
+ */
+function assertTrustedSnapshotEntry(path: string, label: string): void {
+  if (process.platform === 'win32') return;
+  const st = lstatSync(path, { throwIfNoEntry: false });
+  if (!st) return; // missing is reported by the read that follows
+  if (st.isSymbolicLink()) throw new ConfigBackupCorruptError(`${label} is a symlink, so it is not restored`);
+  if ((st.mode & 0o077) !== 0) {
+    throw new ConfigBackupCorruptError(`${label} is readable or writable by group or others, so it is not restored`);
+  }
+}
+
+/** The folder's own backup settings stay as they are now: restoring an old `configBackupDir` hides the `pre-restore` copy. */
+const BACKUP_SETTING_KEYS = ['configBackupEnabled', 'configBackupDir', 'configBackupKeepCount', 'configBackupKeepDays'];
+
+function keepCurrentBackupSettings(snapshot: Buffer, livePath: string): Buffer {
+  try {
+    const restored = JSON.parse(snapshot.toString('utf8')) as Record<string, unknown>;
+    const live = JSON.parse(readFileSync(livePath, 'utf8')) as Record<string, unknown>;
+    if (!restored || typeof restored !== 'object' || !live || typeof live !== 'object') return snapshot;
+    let changed = false;
+    for (const key of BACKUP_SETTING_KEYS) {
+      if (JSON.stringify(restored[key]) === JSON.stringify(live[key])) continue;
+      changed = true;
+      if (key in live) restored[key] = live[key];
+      else delete restored[key];
+    }
+    if (!changed) return snapshot; // byte-identical to the snapshot when the folder settings did not move
+    return Buffer.from(JSON.stringify(restored, null, 2) + '\n');
+  } catch {
+    return snapshot; // not JSON, or no live file to take the values from
+  }
+}
+
 export interface RestoreResult {
   restored: string[];
   /** Tracked files present now that the snapshot did not hold; a restore leaves them as they are. */
@@ -437,9 +477,11 @@ export function restoreConfigBackup(opts: {
 
   const allowed = new Set<string>(CONFIG_BACKUP_FILES);
   const loaded: Array<{ name: string; data: Buffer }> = [];
+  assertTrustedSnapshotEntry(join(opts.backupDir, opts.id), `Backup ${opts.id}`);
   for (const f of manifest.files) {
     if (!allowed.has(f.name)) continue;
     let data: Buffer;
+    assertTrustedSnapshotEntry(join(opts.backupDir, opts.id, f.name), `${f.name} in ${opts.id}`);
     try {
       data = readFileSync(join(opts.backupDir, opts.id, f.name));
     } catch {
@@ -466,7 +508,9 @@ export function restoreConfigBackup(opts: {
     const target = join(opts.dataDir, f.name);
     const tmp = `${target}.restore-${process.pid}`;
     try {
-      writeFileSync(tmp, f.data, { mode: 0o600 });
+      writeFileSync(tmp, f.name === 'settings.json' ? keepCurrentBackupSettings(f.data, target) : f.data, {
+        mode: 0o600,
+      });
       renameSync(tmp, target);
     } catch (err) {
       rmSync(tmp, { force: true });

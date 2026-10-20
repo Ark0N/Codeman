@@ -11,6 +11,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -148,6 +149,22 @@ describe('createConfigBackup', () => {
   });
 
   it.each([
+    [
+      'webviews.json',
+      (n: number) =>
+        JSON.stringify([
+          {
+            id: 'w1',
+            name: 'Grafana',
+            url: 'http://localhost:3001',
+            embedMode: 'proxy',
+            trusted: false,
+            createdAt: 1,
+            lastOpenedAt: n,
+          },
+        ]),
+      'name',
+    ],
     [
       'docker-cases.json',
       (n: number) => JSON.stringify([{ name: 'app', hostId: 'h', lastClaudeSessionId: `c${n}` }]),
@@ -484,5 +501,46 @@ describe('instances sharing one backup folder', () => {
     mkdirSync(stale);
     sweepConfigBackupTemps(backups, Date.now() + 2 * 3_600_000);
     expect(existsSync(stale)).toBe(false);
+  });
+});
+
+describe('restore trusts only what this module wrote', () => {
+  const made = () =>
+    createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 }) as { id: string };
+
+  it('refuses a symlinked snapshot file and a snapshot file with group or world bits', () => {
+    put('settings.json', '{"a":1}');
+    put('clis.json', '{"clis":{}}');
+    const { id } = made();
+    const file = join(backups, id, 'clis.json');
+    chmodSync(file, 0o644);
+    expect(() => restoreConfigBackup({ dataDir: data, backupDir: backups, id })).toThrow(ConfigBackupCorruptError);
+
+    chmodSync(file, 0o600);
+    const real = join(root, 'elsewhere.json');
+    writeFileSync(real, '{"clis":{}}');
+    rmSync(file);
+    symlinkSync(real, file);
+    expect(() => restoreConfigBackup({ dataDir: data, backupDir: backups, id })).toThrow(/symlink/);
+    // nothing was written and no pre-restore copy was taken for a refused restore
+    expect(listConfigBackups(backups)).toHaveLength(1);
+  });
+
+  it('refuses a snapshot folder that others can write to', () => {
+    put('settings.json', '{"a":1}');
+    const { id } = made();
+    chmodSync(join(backups, id), 0o777);
+    expect(() => restoreConfigBackup({ dataDir: data, backupDir: backups, id })).toThrow(ConfigBackupCorruptError);
+    chmodSync(join(backups, id), 0o700);
+    expect(() => restoreConfigBackup({ dataDir: data, backupDir: backups, id })).not.toThrow();
+  });
+
+  it('keeps the current folder and retention when settings.json is restored', () => {
+    put('settings.json', JSON.stringify({ displayName: 'old', configBackupDir: '/old', configBackupKeepCount: 5 }));
+    const { id } = made();
+    put('settings.json', JSON.stringify({ displayName: 'new', configBackupDir: '/new', configBackupKeepDays: 7 }));
+    restoreConfigBackup({ dataDir: data, backupDir: backups, id });
+    const after = JSON.parse(readFileSync(join(data, 'settings.json'), 'utf8'));
+    expect(after).toEqual({ displayName: 'old', configBackupDir: '/new', configBackupKeepDays: 7 });
   });
 });

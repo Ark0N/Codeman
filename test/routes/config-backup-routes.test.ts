@@ -137,6 +137,22 @@ describe('/api/config-backups', () => {
     }
   });
 
+  it('multi-user: a restore is written to the admin audit log', async () => {
+    process.env.CODEMAN_MULTIUSER = '1';
+    const { app } = await createRouteTestHarness(registerConfigBackupRoutes, {
+      authUser: { username: 'root', role: 'admin' },
+    });
+    const id = (await app.inject({ method: 'POST', url: '/api/config-backups' })).json().data.id;
+    await app.inject({ method: 'POST', url: `/api/config-backups/${id}/restore` });
+    const auditPath = join(getDataDir(), 'admin-audit.jsonl');
+    const written = () => existsSync(auditPath) && readFileSync(auditPath, 'utf8').includes('config_backup_restore');
+    for (let i = 0; i < 40 && !written(); i++) await new Promise((r) => setTimeout(r, 25));
+    const last = JSON.parse(readFileSync(auditPath, 'utf8').trim().split('\n').pop()!);
+    expect(last).toMatchObject({ admin: 'root', action: 'config_backup_restore', target: id });
+    expect(last.detail.restored).toContain('settings.json');
+    rmSync(auditPath, { force: true });
+  });
+
   it('multi-user: an admin is allowed', async () => {
     process.env.CODEMAN_MULTIUSER = '1';
     const { app } = await createRouteTestHarness(registerConfigBackupRoutes, {

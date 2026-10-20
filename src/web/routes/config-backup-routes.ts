@@ -17,7 +17,8 @@
 import { createRequire } from 'node:module';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
-import { isAdmin, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
+import { getAuthUser, isAdmin, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
+import { appendAdminAudit } from '../admin-audit.js';
 import { reloadCliRegistry } from '../../config/cli-registry/registry.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { getDataDir } from '../../config/instance.js';
@@ -207,6 +208,16 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
       if (out.restored.includes('intents.json')) intentStore.reload();
       // restoreConfigBackup writes clis.json directly (the one writer besides mutateRegistryFile).
       if (out.restored.includes('clis.json')) reloadCliRegistry();
+      // A restore of users.json replaces accounts, password hashes, roles and bypass grants.
+      if (isMultiUserMode()) {
+        void appendAdminAudit({
+          admin: getAuthUser(req).username,
+          action: 'config_backup_restore',
+          target: id,
+          ip: req.ip,
+          detail: { restored: out.restored },
+        });
+      }
       return {
         success: true,
         data: {
