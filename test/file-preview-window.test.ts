@@ -339,7 +339,7 @@ describe('file viewer Alt+arrow chord', () => {
 });
 
 describe('file viewer resize grip', () => {
-  function drag(to: [number, number]) {
+  function drag(to: [number, number], button = 0) {
     const { app, elements } = loadApp();
     const listeners: Record<string, (e: unknown) => void> = {};
     const win = { offsetWidth: 400, offsetHeight: 300, style: {} as Record<string, string> };
@@ -350,10 +350,15 @@ describe('file viewer resize grip', () => {
       removeEventListener: () => {},
     };
     app._bindFilePreviewResize();
-    listeners.pointerdown({ preventDefault: () => {}, clientX: 100, clientY: 100, pointerId: 1 });
+    listeners.pointerdown({ preventDefault: () => {}, clientX: 100, clientY: 100, pointerId: 1, button });
+    if (!listeners.pointermove) return win.style; // a refused pointerdown binds no move handler
     listeners.pointermove({ clientX: 100 + to[0], clientY: 100 + to[1] });
     return win.style;
   }
+
+  it('ignores a pointerdown that is not the primary button', () => {
+    expect(drag([100, 50], 2)).toEqual({});
+  });
 
   it('doubles the pointer delta, because the window is centred', () => {
     expect(drag([100, 50])).toMatchObject({ width: '600px', height: '400px' });

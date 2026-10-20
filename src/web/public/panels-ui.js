@@ -4666,6 +4666,7 @@ Object.assign(CodemanApp.prototype, {
     const win = grip?.parentElement;
     if (!grip || !win) return;
     grip.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return; // a right-click on the grip must not start a resize
       ev.preventDefault();
       const startX = ev.clientX;
       const startY = ev.clientY;
