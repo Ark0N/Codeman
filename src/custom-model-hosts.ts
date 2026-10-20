@@ -70,7 +70,11 @@ export interface CustomModelHost {
    * they share one unified KV pool) and Claude Code sends several requests at once (the
    * main session plus each parallel subagent), so with N slots each request can only rely
    * on roughly `contextLength / N` tokens. Used only by the context warning; a model this
-   * has no entry for is treated as a single slot, never a guess.
+   * has no entry for is treated as a single slot, never a guess. The division always uses
+   * `modelContextLengths` (the launch command's figure, or `/props` only when the command states
+   * none): `/props` never widens the pool. An explicit `--parallel N` whose context came from
+   * `/props` is recorded as 1 slot, because that figure is already per slot, and that also
+   * overwrites any count an earlier round stored.
    */
   modelSlotCounts?: Record<string, number>;
   /**

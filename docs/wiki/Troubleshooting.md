@@ -170,8 +170,10 @@ session carries on. The server runs several parallel slots that share one pool o
 and every Claude Code request carries about 40K tokens of its own system prompt and tools, so
 a few concurrent requests use the pool up. Start the model with a single slot by adding
 `--parallel 1` to its launch command, or give it a context large enough that each slot holds
-40K tokens. Check the current count with `GET /props` on the server: `total_slots` is the
-number of slots and `n_ctx` the shared context.
+40K tokens. Check the current count with `GET /props` on the server (on llama-swap,
+`GET /props?model=<id>` for a loaded model): `total_slots` is the number of slots. `n_ctx` is the
+shared context only when the slot count is automatic; with an explicit `--parallel N` it is the
+size of each slot.
 
 ## The terminal
 

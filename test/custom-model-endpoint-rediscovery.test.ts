@@ -381,7 +381,57 @@ describe('refreshAllCustomModelHosts: parallel-slot enrichment (llama.cpp splits
 
     const [updated] = await readCustomModelHosts(dir);
     expect(updated.modelContextLengths).toEqual({ m: 65536 });
-    expect(updated.modelSlotCounts).toBeUndefined();
+    expect(updated.modelSlotCounts).toEqual({ m: 1 }); // already per slot, so one request gets all of it
+  });
+
+  it('a later round with an explicit --parallel replaces the slot count an earlier round learned', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    // round 1: auto slots, the server chose 4 sharing 131,072 tokens
+    serve(
+      'llama-server -m /models/m.gguf',
+      () => new Response(JSON.stringify({ n_ctx: 131072, total_slots: 4 }), { status: 200 })
+    );
+    await refreshAllCustomModelHosts();
+    expect((await readCustomModelHosts(dir))[0].modelSlotCounts).toEqual({ m: 4 });
+
+    // round 2: the user followed the dialog and added --parallel 1
+    serve(
+      'llama-server -m /models/m.gguf --parallel 1',
+      () => new Response(JSON.stringify({ n_ctx: 131072, total_slots: 1 }), { status: 200 })
+    );
+    await refreshAllCustomModelHosts();
+    expect((await readCustomModelHosts(dir))[0].modelSlotCounts).toEqual({ m: 1 });
+
+    // round 3: --parallel 2 with a per-slot /props context must not bring a pool back
+    serve(
+      'llama-server -m /models/m.gguf --parallel 2',
+      () => new Response(JSON.stringify({ n_ctx: 65536, total_slots: 2 }), { status: 200 })
+    );
+    await refreshAllCustomModelHosts();
+    const [updated] = await readCustomModelHosts(dir);
+    expect(updated.modelSlotCounts).toEqual({ m: 1 });
+    expect(updated.modelContextLengths).toEqual({ m: 65536 });
+  });
+
+  it('remembers a /props that answers non-2xx per launch command, but retries a network failure', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    let probes = 0;
+    serve('llama-server -m /models/m.gguf --fit-ctx 65536', () => (probes++, new Response('nope', { status: 404 })));
+    await refreshAllCustomModelHosts();
+    await refreshAllCustomModelHosts();
+    expect(probes).toBe(1); // no probe every sweep: a /props call keeps a model with a ttl loaded
+
+    clearPropsProbeCache();
+    probes = 0;
+    serve('llama-server -m /models/m.gguf --fit-ctx 65536', () => {
+      probes++;
+      throw new TypeError('fetch failed');
+    });
+    await refreshAllCustomModelHosts();
+    await refreshAllCustomModelHosts();
+    expect(probes).toBe(2); // a network error says nothing about the server, so it is tried again
   });
 
   it('treats -np -1 (llama.cpp auto) as unstated and falls back to /props', async () => {

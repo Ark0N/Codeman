@@ -208,8 +208,9 @@ function parseSizeGB(description: unknown): number | undefined {
  * last-use time, so probing a model with a `ttl` on every 5-minute sweep would keep it loaded
  * forever. `discoverModels` therefore probes once per launch command (`propsByCmd`).
  *
- * Returns `undefined` when the server did not answer; a model that answered without the
- * fields gives an object with them unset.
+ * Returns `undefined` when the request itself failed (network error, timeout, unreadable body),
+ * which is retried next sweep; a non-2xx status, or a 2xx without the fields, gives an object with
+ * them unset, which `propsForLaunch` remembers.
  */
 async function fetchServerProps(
   host: Pick<CustomModelHost, 'baseUrl'>,
@@ -220,7 +221,9 @@ async function fetchServerProps(
     const url = new URL(`${host.baseUrl.replace(/\/+$/, '')}/props`);
     url.searchParams.set('model', modelId);
     const res = await webviewFetch(url, { headers, signal: AbortSignal.timeout(PROPS_TIMEOUT_MS) });
-    if (!res.ok) return undefined;
+    // A non-2xx answer (an upstream that does not serve /props) is a real answer: empty, so it is
+    // remembered per launch command instead of being re-probed every sweep.
+    if (!res.ok) return {};
     const body = (await res.json()) as {
       n_ctx?: unknown;
       total_slots?: unknown;
@@ -271,7 +274,7 @@ function parseSlotsFromCmd(cmd: unknown): number | undefined {
 /** The `/props` answer for the launch command a model was last probed under, by host and model id. */
 const propsByCmd = new Map<string, { cmd: string; props: { nCtx?: number; totalSlots?: number } }>();
 
-/** Forget what was probed (tests, and a host whose server was replaced behind the same URL). */
+/** Forget what was probed (tests only: a changed launch command already probes again). */
 export function clearPropsProbeCache(): void {
   propsByCmd.clear();
 }
@@ -281,7 +284,7 @@ export function clearPropsProbeCache(): void {
  * last-use time in llama-swap, so repeating it on every rediscovery sweep would stop a model with a
  * `ttl` from ever unloading. A changed `cmd` (a reloaded or reconfigured model) probes again; a
  * `cmd` that is not a string cannot be told apart, so it is probed each time; a probe that did not
- * answer is not remembered. Held in memory only, so a restart probes once more.
+ * answer (network error, timeout) is not remembered; a non-2xx status is. Held in memory only, so a restart probes once more.
  */
 async function propsForLaunch(
   host: Pick<CustomModelHost, 'baseUrl'>,
@@ -356,8 +359,10 @@ async function discoverModels(
           slots ??= props?.totalSlots;
           // With an explicit --parallel N, llama.cpp reports /props's n_ctx PER SLOT (the unified
           // KV pool is only the default when the count is auto), so it is already the figure one
-          // request can use: recording N would divide it a second time.
-          if (cmdSlots !== undefined && ctxFromProps) slots = undefined;
+          // request can use, so the count is 1: recording N would divide it a second time, and
+          // recording nothing would leave an earlier round's count in place (applyDiscoveredModels
+          // merges onto what was learned before).
+          if (cmdSlots !== undefined && ctxFromProps) slots = 1;
         }
         if (ctx !== undefined) contextLengths[id] = ctx;
         if (slots !== undefined) slotCounts[id] = slots;
