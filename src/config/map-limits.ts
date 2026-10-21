@@ -47,7 +47,7 @@ function resolveMaxConcurrentSessions(): number {
 /**
  * Maximum concurrent sessions allowed.
  * Each session consumes significant resources (PTY, buffers, watchers).
- * 50 unless `CODEMAN_MAX_SESSIONS` says otherwise (1 to 500); read once at startup.
+ * 50 unless `CODEMAN_MAX_SESSIONS` says otherwise (1 to 462); read once at startup.
  */
 export const MAX_CONCURRENT_SESSIONS = resolveMaxConcurrentSessions();
 
