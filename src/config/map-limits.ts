@@ -22,21 +22,31 @@
 const DEFAULT_MAX_CONCURRENT_SESSIONS = 50;
 
 /**
- * Resolve the session cap from `CODEMAN_MAX_SESSIONS` (a positive integer).
- * Anything else (unset, empty, 0, negative, fractional, not a number) falls back
- * to {@link DEFAULT_MAX_CONCURRENT_SESSIONS}, so a typo never locks session creation.
+ * Highest value `CODEMAN_MAX_SESSIONS` can raise the cap to. Other bounds assume
+ * the session count stays small: an owner's tab layout holds at most
+ * `MAX_TAB_REFS` (512) refs and `PUT /api/session-order` accepts at most 500 ids,
+ * so a larger cap would let session creation fail with a 500 instead of the
+ * capacity message.
  */
-function resolveMaxConcurrentSessions(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.CODEMAN_MAX_SESSIONS?.trim();
+export const MAX_CONCURRENT_SESSIONS_CEILING = 500;
+
+/**
+ * Resolve the session cap from `CODEMAN_MAX_SESSIONS` (a positive integer,
+ * clamped to {@link MAX_CONCURRENT_SESSIONS_CEILING}). Anything else (unset,
+ * empty, 0, negative, fractional, not a number) falls back to
+ * {@link DEFAULT_MAX_CONCURRENT_SESSIONS}, so a typo never locks session creation.
+ */
+function resolveMaxConcurrentSessions(): number {
+  const raw = process.env.CODEMAN_MAX_SESSIONS?.trim();
   if (!raw || !/^\d+$/.test(raw)) return DEFAULT_MAX_CONCURRENT_SESSIONS;
   const n = Number(raw);
-  return Number.isSafeInteger(n) && n >= 1 ? n : DEFAULT_MAX_CONCURRENT_SESSIONS;
+  return n >= 1 ? Math.min(n, MAX_CONCURRENT_SESSIONS_CEILING) : DEFAULT_MAX_CONCURRENT_SESSIONS;
 }
 
 /**
  * Maximum concurrent sessions allowed.
  * Each session consumes significant resources (PTY, buffers, watchers).
- * 50 unless `CODEMAN_MAX_SESSIONS` says otherwise; read once at startup.
+ * 50 unless `CODEMAN_MAX_SESSIONS` says otherwise (1 to 500); read once at startup.
  */
 export const MAX_CONCURRENT_SESSIONS = resolveMaxConcurrentSessions();
 

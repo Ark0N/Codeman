@@ -18,10 +18,10 @@ function sessionsOf(n: number, owner?: string): ReadonlyMap<string, never> {
 /** Fresh module graph, so map-limits re-reads the environment at import. */
 async function loadWithEnv(env: Record<string, string | undefined>): Promise<Helpers> {
   vi.resetModules();
-  vi.stubEnv('CODEMAN_MAX_SESSIONS', undefined as unknown as string);
-  vi.stubEnv('CODEMAN_MAX_SESSIONS_PER_USER', undefined as unknown as string);
-  vi.stubEnv('CODEMAN_MULTIUSER', undefined as unknown as string);
-  for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value as string);
+  vi.stubEnv('CODEMAN_MAX_SESSIONS', undefined);
+  vi.stubEnv('CODEMAN_MAX_SESSIONS_PER_USER', undefined);
+  vi.stubEnv('CODEMAN_MULTIUSER', undefined);
+  for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
   return import('../../src/web/route-helpers.js');
 }
 
@@ -52,14 +52,18 @@ describe('global session cap (CODEMAN_MAX_SESSIONS)', () => {
     expect(sessionCapacityState(sessionsOf(3)).atGlobalCap).toBe(true);
   });
 
-  it.each(['', '0', '-5', '2.5', 'abc', '1e3', '99999999999999999999'])(
-    'falls back to 50 for an unusable value %j',
-    async (value) => {
-      const { sessionCapacityState } = await loadWithEnv({ CODEMAN_MAX_SESSIONS: value });
-      expect(sessionCapacityState(sessionsOf(49)).atGlobalCap).toBe(false);
-      expect(sessionCapacityState(sessionsOf(50)).atGlobalCap).toBe(true);
-    }
-  );
+  it.each(['1000', '501', '99999999999999999999'])('clamps %j to the ceiling of 500', async (value) => {
+    const { sessionCapacityState, sessionCapacityMessage } = await loadWithEnv({ CODEMAN_MAX_SESSIONS: value });
+    expect(sessionCapacityState(sessionsOf(499)).atGlobalCap).toBe(false);
+    expect(sessionCapacityState(sessionsOf(500)).atGlobalCap).toBe(true);
+    expect(sessionCapacityMessage(sessionsOf(500))).toContain('(500)');
+  });
+
+  it.each(['', '0', '-5', '2.5', 'abc', '1e3'])('falls back to 50 for an unusable value %j', async (value) => {
+    const { sessionCapacityState } = await loadWithEnv({ CODEMAN_MAX_SESSIONS: value });
+    expect(sessionCapacityState(sessionsOf(49)).atGlobalCap).toBe(false);
+    expect(sessionCapacityState(sessionsOf(50)).atGlobalCap).toBe(true);
+  });
 
   it('derives the multi-user per-user cap (half the global cap) from it', async () => {
     const { sessionCapacityState, sessionCapacityMessage } = await loadWithEnv({

@@ -221,6 +221,7 @@ Some things are configured before the server starts, not in the UI:
 | `CODEMAN_FILE_PICKER_ROOTS`         | Extra roots for the path picker.                                        |
 | `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledges exposing the server with no password.                  |
 | `CODEMAN_BASE_URL`                  | Mounts Codeman under a sub-path behind a reverse proxy that forwards the prefix unchanged. See [Remote Access](Remote-Access). |
+| `CODEMAN_MAX_SESSIONS`              | Cap on concurrent sessions. 50 by default, 1 to 500 (a larger value is clamped to 500, anything that is not a positive integer falls back to 50). Read at startup. In multi-user mode the per-user cap defaults to half of it unless `CODEMAN_MAX_SESSIONS_PER_USER` is set. |
 | `CODEMAN_MAX_DOWNLOAD_BYTES`        | Cap on raw file bodies and downloads. 2 GB by default, `0` for none.    |
 | `CODEMAN_MAX_PASTE_IMAGE_BYTES`     | Cap on one pasted, dropped or attached image or document. 50 MB by default. |
 | `CODEMAN_MAX_PASTE_VIDEO_BYTES`     | Cap on one attached video (phone Attach, drop). 1 GB by default; videos stream to disk, so this bounds disk use, not memory. |

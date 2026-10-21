@@ -376,7 +376,7 @@ boot. Sessions the jobs create persist through the normal session-recovery path.
 | Readiness settle         | 2000ms                | `CRON_READY_SETTLE_MS`                           |
 | Run-history cap (global) | 500                   | `MAX_CRON_RUN_HISTORY` (`config/map-limits.ts`)  |
 | Saved-jobs cap           | 100                   | `MAX_CRON_JOBS` (`config/map-limits.ts`)         |
-| Concurrent-session cap   | 50                    | `MAX_CONCURRENT_SESSIONS`                        |
+| Concurrent-session cap   | 50                    | `MAX_CONCURRENT_SESSIONS` (env `CODEMAN_MAX_SESSIONS`) |
 | Prompt-file size cap     | 1 MiB                 | `MAX_PROMPT_FILE_BYTES` (`cron-service.ts`)      |
 | `name` length            | 1–200                 | `CronJobSchema`                                  |
 | `promptText` length      | ≤ 100000              | `CronJobSchema`                                  |
