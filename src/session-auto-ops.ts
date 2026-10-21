@@ -20,7 +20,7 @@
 
 import { EventEmitter } from 'node:events';
 import { detectUsageLimitPause } from './usage-limit-patterns.js';
-import { toSingleLine } from './utils/single-line.js';
+import { toSingleLine } from './utils/index.js';
 
 // ============================================================================
 // Timing Constants

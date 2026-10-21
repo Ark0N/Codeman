@@ -5,9 +5,9 @@
  * auto-compact focus prompt's schema accepts line breaks, so a saved config can hold
  * several lines. `TmuxManager.sendInput()` used to strip every `\n`, which ran the
  * lines together; it now pastes multi-line text as one block. These senders run
- * unattended, and the check that re-presses a stranded Enter cannot recognise a
- * multi-line paste in the composer, so they join the lines with a space before the
- * write (`toSingleLine()`) instead of leaning on the mux to drop them.
+ * unattended, and the check that re-presses a stranded Enter cannot reliably
+ * recognise a multi-line paste in the composer, so they join the lines with a space
+ * before the write (`toSingleLine()`) instead of leaning on the mux to drop them.
  *
  * Strategy: drive the respawn step methods against a MockSession, and feed a real
  * Session a token count over its auto-compact threshold, then read what reached
@@ -36,6 +36,22 @@ describe('toSingleLine', () => {
 
   it('returns a single-line prompt unchanged', () => {
     expect(toSingleLine('  keep "quotes" and $vars  ')).toBe('  keep "quotes" and $vars  ');
+  });
+
+  it('drops leading and trailing blank lines instead of leaving a space there', () => {
+    expect(toSingleLine('\n  compact the log  \n\n')).toBe('compact the log');
+  });
+
+  it('stays linear on a long whitespace run', () => {
+    // A regex that folds the whitespace around each break backtracks over every
+    // start position in the run: 50,000 spaces took well over a second that way.
+    // The split takes well under a millisecond, so the bound leaves room either side.
+    const run = ' '.repeat(50_000);
+    const started = performance.now();
+    const joined = toSingleLine(`a${run}b\nc${run}`);
+    const elapsed = performance.now() - started;
+    expect(joined).toBe(`a${run}b c`);
+    expect(elapsed).toBeLessThan(250);
   });
 });
 
