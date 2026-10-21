@@ -27,7 +27,7 @@ import { execSync, exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
-import { existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { homedir } from 'node:os';
@@ -182,6 +182,22 @@ const DEFAULT_REMOTE_RECONNECT_INTERVAL_MS = 5000;
 
 /** Stable cwd for tmux server/pane launch; actual session cwd is reached inside the pane. */
 const TMUX_LAUNCH_CWD = '/tmp';
+
+/**
+ * TMUX_LAUNCH_CWD in every spelling a pane can report it. tmux reads a pane's
+ * directory from its process, which comes back resolved (`/private/tmp` on
+ * macOS, where `/tmp` is a symlink), so the literal and the resolved spelling
+ * both count. Computed once.
+ */
+const TMUX_LAUNCH_CWD_SPELLINGS: ReadonlySet<string> = (() => {
+  const spellings = new Set([TMUX_LAUNCH_CWD]);
+  try {
+    spellings.add(realpathSync(TMUX_LAUNCH_CWD));
+  } catch {
+    // Unresolvable launch directory: the literal spelling is all there is.
+  }
+  return spellings;
+})();
 
 /** Claude Code native macOS recommendation for avoiding low nofile startup failures. */
 export const CLAUDE_CODE_NOFILE_LIMIT = 2147483646;
@@ -3128,14 +3144,24 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const output = execSync(`${this.tmux()} list-panes -a -F '${PANE_LIST_FORMAT}' 2>/dev/null || true`, {
         encoding: 'utf-8',
         timeout: EXEC_TIMEOUT_MS,
-      }).trim();
+      });
+      // Not trimmed: the directory is the last field, so trimming would cut a
+      // trailing space off the last row's path. parsePaneRows skips empty lines.
       const rows = parsePaneRows(output);
       active = new Map(rows.map((row) => [row.sessionName, row.pid]));
       // A discovered session's directory, from its first pane with a usable path.
       // The path is admitted only if it passes the same check createSession and
       // respawnPane apply, since it was set by whoever owns the pane, not by us.
+      // The launch directory counts as no answer: every pane starts there, and a
+      // remote or docker pane never cds out of it, so for such a session it is
+      // not the workspace — and a rediscovered record cannot tell it is one.
       for (const row of rows) {
-        if (row.currentPath && !paneDirs.has(row.sessionName) && isValidPath(row.currentPath)) {
+        if (
+          row.currentPath &&
+          !TMUX_LAUNCH_CWD_SPELLINGS.has(row.currentPath) &&
+          !paneDirs.has(row.sessionName) &&
+          isValidPath(row.currentPath)
+        ) {
           paneDirs.set(row.sessionName, row.currentPath);
         }
       }
@@ -3197,7 +3223,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         mode: 'claude',
         attached: false,
         name: `Restored: ${sessionName}`,
-        // Every field above except the name and the pid is a guess: this record
+        // Every field above except the name, the pid and, when tmux reported a
+        // usable one, the directory is a guess: this record
         // was rebuilt from the socket because Codeman's own bookkeeping did not
         // have it. The synthetic id also cannot find the session's state.json
         // entry, so a remote or docker session rediscovered this way arrives

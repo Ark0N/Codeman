@@ -52,11 +52,24 @@ vi.mock('node:child_process', async () => {
   };
 });
 
+// Paths realpathSync should resolve differently than this host does, e.g. a
+// macOS `/tmp` -> `/private/tmp`. Hoisted so it survives vi.resetModules().
+const realpathOverrides = vi.hoisted(() => new Map<string, string>());
+
 // Mock fs to avoid file I/O
 vi.mock('node:fs', async () => {
-  const actual = await vi.importActual('node:fs');
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  const realpathSync = Object.assign(
+    vi.fn((path: string, ...rest: unknown[]) =>
+      realpathOverrides.has(String(path))
+        ? realpathOverrides.get(String(path))
+        : (actual.realpathSync as (...args: unknown[]) => string)(path, ...rest)
+    ),
+    { native: actual.realpathSync.native }
+  );
   return {
     ...actual,
+    realpathSync,
     existsSync: vi.fn().mockReturnValue(false),
     readFileSync: vi.fn(),
     mkdirSync: vi.fn(),
@@ -916,6 +929,10 @@ describe('TmuxManager (unit)', () => {
             'codeman-cccc3333|104|0|||/home/user/$(touch pwned)',
             // A tmux that reported no path.
             'codeman-dddd4444|105|0|||',
+            // The launch directory every pane starts in; a remote or docker pane never leaves it.
+            'codeman-eeee5555|106|0|||/tmp',
+            // Last row, path ending in a space: the output must not be trimmed.
+            'codeman-ffff6666|107|0|||/home/user/trailing ',
           ].join('\n');
         }
         return '';
@@ -930,6 +947,8 @@ describe('TmuxManager (unit)', () => {
           'restored-bbbb2222',
           'restored-cccc3333',
           'restored-dddd4444',
+          'restored-eeee5555',
+          'restored-ffff6666',
         ]);
         const dirs = Object.fromEntries(nonTestManager.getSessions().map((s) => [s.muxName, s.workingDir]));
         expect(dirs).toEqual({
@@ -937,6 +956,8 @@ describe('TmuxManager (unit)', () => {
           'codeman-bbbb2222': '/home/user/project-b',
           'codeman-cccc3333': process.cwd(),
           'codeman-dddd4444': process.cwd(),
+          'codeman-eeee5555': process.cwd(),
+          'codeman-ffff6666': '/home/user/trailing ',
         });
 
         // The directory comes from the same list-panes call, as its last field.
@@ -947,6 +968,33 @@ describe('TmuxManager (unit)', () => {
         expect(listCalls[0]).toContain("|#{pane_current_path}'");
       } finally {
         nonTestManager.destroy();
+      }
+    });
+
+    it('treats the resolved spelling of the launch directory as no answer too (macOS /private/tmp)', async () => {
+      // On macOS /tmp is a symlink and a pane reports its process cwd resolved.
+      realpathOverrides.set('/tmp', '/private/tmp');
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes(' list-panes ')) {
+          return ['codeman-aaaa1111|101|0|||/private/tmp', 'codeman-bbbb2222|102|0|||/tmp'].join('\n');
+        }
+        return '';
+      });
+      try {
+        const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+        const nonTestManager = new NonTestTmuxManager();
+        try {
+          await nonTestManager.reconcileSessions();
+          const dirs = Object.fromEntries(nonTestManager.getSessions().map((s) => [s.muxName, s.workingDir]));
+          expect(dirs).toEqual({
+            'codeman-aaaa1111': process.cwd(),
+            'codeman-bbbb2222': process.cwd(),
+          });
+        } finally {
+          nonTestManager.destroy();
+        }
+      } finally {
+        realpathOverrides.clear();
       }
     });
   });
