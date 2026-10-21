@@ -304,7 +304,11 @@ Codeman types the text and sends Enter **only when the input contains a carriage
 return**; without it your command sits unsubmitted on the worker's prompt and
 everything downstream times out. No response field catches this: `delivered:true`
 means "written to the pane", **not** "submitted". With `useMux`, newlines are kept: the
-text goes in as one paste, and the `\r` submits all of it. Build the body with `jq -n`
+text goes in as one paste, and the `\r` submits all of it. **`sendwait` takes one line,
+though:** its Enter loop and the server's submit check cannot reliably recognise a
+multi-line paste, so a multi-line prompt to a freshly spawned worker can sit unsent in
+Claude Code's Enter-ignore window. Join the lines, or put long multi-line content in a
+file ([§5.9](#59-big-input-via-the-workspace)). Build the body with `jq -n`
 for any prompt you did not author as a literal, because the inline
 `-d '{"input":"'"$P"'\r"}'` pattern breaks on the first double quote, backslash or `$`
 in a real prompt:
