@@ -31,6 +31,23 @@ Three ways to get one, all under **New or link a case…** at the bottom of the 
 Linked cases keep living where they are. Deleting a case in Codeman removes the
 registration, and for a linked case that is all it removes.
 
+**Renaming a case.** In the case manager (Settings, or the case picker's manage view) the pencil
+button renames a case and its folder. A case under `~/codeman-cases` *is* its folder name, so it
+always moves. A linked case renames its name in the list only; Codeman then asks whether to rename
+the real folder as well, next to where it is (Cancel leaves the folder alone). Remote and Docker
+cases cannot be renamed. Renaming does the following for you:
+
+- **Sessions are never moved from under you.** If live sessions have the folder open, the rename is
+  refused and lists them; you can then choose to stop them (nothing is restarted). While a rename runs,
+  Codeman holds the folder so no session can start inside it half-moved.
+- **A folder another program holds open is reported, not forced.** On Windows, SMB shares and some FUSE
+  mounts a directory with an open handle cannot be renamed; Codeman retries briefly, then says the folder
+  is in use and to close whatever has it (a terminal, an editor, a file browser, a sync client).
+- **Claude Code's history follows.** It keys conversations by the folder's path, so the rename moves
+  `<claude config>/projects/<old path>` to the new path and `--resume` still finds them. Other CLIs'
+  history, Docker mounts and `git worktree` links that point at the old path are not updated.
+- **The case order, the last used case and this browser's per-case options follow the new name.**
+
 **Clone Repo never asks for credentials.** It uses whatever the server's own git already has:
 an ssh key, or a credential helper such as `gh auth setup-git`. The Docker image can include
 helpers for GitHub (`gh`) and Azure DevOps (`az`), turned on in `docker-compose.override.yml`;

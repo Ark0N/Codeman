@@ -4957,6 +4957,12 @@ Object.assign(CodemanApp.prototype, {
                     title="${reorderTitle || 'Move up'}" ${isFirst ? 'disabled' : ''}>&#x25B2;</button>
             <button class="case-manage-btn" onclick="app.moveCaseDown(${escapeHtml(JSON.stringify(c.name))})"
                     title="${reorderTitle || 'Move down'}" ${isLast ? 'disabled' : ''}>&#x25BC;</button>
+            ${
+              c.location === 'docker' || c.location === 'remote'
+                ? ''
+                : `<button class="case-manage-btn" onclick="app.renameCase(${escapeHtml(JSON.stringify(c.name))})"
+                    title="Rename case (and its folder)">&#x270E;</button>`
+            }
             <button class="case-manage-btn case-manage-btn-delete" onclick="app.deleteCase(${escapeHtml(JSON.stringify(c.name))})"
                     title="Delete case">&#x2715;</button>
           </div>
@@ -4987,6 +4993,67 @@ Object.assign(CodemanApp.prototype, {
     this.cases = reordered;
     this.renderCaseManageList();
     await this.saveCaseOrder(reordered.map(c => c.name));
+  },
+
+  /**
+   * Rename a case and its folder (POST /api/cases/:name/rename). A linked case asks whether the real folder
+   * should be renamed too (Cancel renames only the alias). When live sessions have the folder open the server
+   * refuses and lists them; they are only stopped after a second, explicit confirmation.
+   */
+  async renameCase(name) {
+    const info = (this.cases || []).find((c) => c.name === name);
+    const entered = prompt(`Rename case "${name}" to (letters, numbers, - and _):`, name);
+    const newName = (entered || '').trim();
+    if (!newName || newName === name) return;
+    if (!/^[a-zA-Z0-9_-]+$/.test(newName)) {
+      this.showToast('Use only letters, numbers, hyphens and underscores', 'error');
+      return;
+    }
+    const body = { newName };
+    if (info?.linked) {
+      body.renameFolder = confirm(
+        `Also rename the folder on disk?\n\n${info.path}\n\nOK renames the folder to "${newName}" next to it. ` +
+          `Cancel keeps the folder and only changes the case name.`
+      );
+    }
+    const send = async () => {
+      const res = await fetch(`/api/cases/${encodeURIComponent(name)}/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return res.json().catch(() => ({ success: false, error: 'Unexpected response' }));
+    };
+    try {
+      let data = await send();
+      if (data.requiresStop) {
+        const list = (data.sessions || []).map((s) => `  - ${s.name}`).join('\n');
+        if (!confirm(`These sessions have the folder open and will be stopped (nothing is restarted):\n\n${list}\n\nStop them and rename?`)) {
+          return;
+        }
+        body.stopSessions = true;
+        data = await send();
+      }
+      if (!data.success) {
+        this.showToast(data.error || 'Failed to rename case', 'error');
+        return;
+      }
+      this.showToast(`Case renamed to "${newName}"`, 'success');
+      // The per-case run options are stored under the case name in this browser.
+      try {
+        const stored = localStorage.getItem('caseSettings_' + name);
+        if (stored !== null) {
+          localStorage.setItem('caseSettings_' + newName, stored);
+          localStorage.removeItem('caseSettings_' + name);
+        }
+      } catch { /* storage blocked: the options fall back to their defaults */ }
+      const select = document.getElementById('quickStartCase');
+      const current = select?.value;
+      await this.loadQuickStartCases(current === name ? newName : current);
+      this.renderCaseManageList();
+    } catch (err) {
+      this.showToast('Failed to rename case: ' + err.message, 'error');
+    }
   },
 
   async deleteCase(name) {

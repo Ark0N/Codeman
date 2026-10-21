@@ -458,6 +458,8 @@ export const CaseCreated = 'case:created' as const;
 export const CaseLinked = 'case:linked' as const;
 /** Case deleted or unlinked. */
 export const CaseDeleted = 'case:deleted' as const;
+/** Case renamed (name and folder). */
+export const CaseRenamed = 'case:renamed' as const;
 /** Case ordering changed. */
 export const CaseOrderChanged = 'case:order-changed' as const;
 
@@ -702,6 +704,7 @@ export const SseEvent = {
   CaseCreated,
   CaseLinked,
   CaseDeleted,
+  CaseRenamed,
   CaseOrderChanged,
 
   // Docker cases
