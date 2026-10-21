@@ -348,6 +348,7 @@ sendwait() {
   case "$p" in *$'\n'*|*$'\r'*)
     p=$(printf '%s\n' "$p" | tr '\r' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' | paste -sd ' ' -) ;;
   esac
+  [ -n "$p" ] || { echo "sendwait: empty prompt" >&2; return 1; }
   # `wait:"stop,exit"`, never the `wait:true` default set: that set also carries
   # `idle`, which is INFERRED from output stabilization and flaps mid-turn. On a
   # dsh worker whose TUI repaints rarely the session reads `idle` while the model

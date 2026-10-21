@@ -47,6 +47,7 @@ function sentInput(prompt: string): string {
   `;
   try {
     execFileSync('bash', ['-c', script], {
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         PATH: process.env.PATH,
         HOME: process.env.HOME,
@@ -72,6 +73,10 @@ describe.skipIf(!hasJq)('preamble sendwait', () => {
   it('joins the same way as toSingleLine (trimmed lines, blank lines dropped, \\r\\n as a break)', () => {
     const prompt = '  first line  \r\n\n\t second\n\n   \nthird\n';
     expect(sentInput(prompt)).toBe(toSingleLine(prompt) + '\r');
+  });
+
+  it('refuses a prompt made only of blank lines instead of sending a bare Enter', () => {
+    expect(() => sentInput('  \n \t\n')).toThrow(/sendwait: empty prompt/);
   });
 
   it('leaves a single-line prompt, glob characters included, as it was', () => {
