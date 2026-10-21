@@ -1,15 +1,17 @@
 /**
- * Respawn prompts go out as ONE line, whatever the config holds.
+ * The senders that run unattended write a prompt as ONE line, whatever the config holds.
  *
- * The update and kickstart prompts are textareas in the settings, so a saved config
- * can hold several lines. `TmuxManager.sendInput()` used to strip every `\n`, which
- * ran the lines together; it now pastes multi-line text as one block. Respawn runs
+ * Respawn's update and kickstart prompts are textareas in the settings, and the
+ * auto-compact focus prompt's schema accepts line breaks, so a saved config can hold
+ * several lines. `TmuxManager.sendInput()` used to strip every `\n`, which ran the
+ * lines together; it now pastes multi-line text as one block. These senders run
  * unattended, and the check that re-presses a stranded Enter cannot recognise a
- * multi-line paste in the composer, so the controller joins the lines with a space
- * before the write instead of leaning on the mux to drop them.
+ * multi-line paste in the composer, so they join the lines with a space before the
+ * write (`toSingleLine()`) instead of leaning on the mux to drop them.
  *
- * Strategy: drive the step methods directly against a MockSession and read what
- * reached `writeViaMux`. No real tmux.
+ * Strategy: drive the respawn step methods against a MockSession, and feed a real
+ * Session a token count over its auto-compact threshold, then read what reached
+ * `writeViaMux`. No real tmux.
  *
  * Port: N/A (no server / no real tmux)
  */
@@ -20,19 +22,20 @@ vi.mock('node:child_process', async (orig) => {
   return { ...actual, exec: vi.fn((_cmd: string, cb?: (e: Error | null, o: string) => void) => cb?.(null, '')) };
 });
 
-import { RespawnController, singleLineRespawnPrompt } from '../src/respawn-controller.js';
+import { RespawnController } from '../src/respawn-controller.js';
+import { toSingleLine } from '../src/utils/single-line.js';
 import { Session } from '../src/session.js';
 import { MockSession } from './mocks/index.js';
 
-describe('singleLineRespawnPrompt', () => {
+describe('toSingleLine', () => {
   it('joins lines with one space, folding the whitespace around each break', () => {
-    expect(singleLineRespawnPrompt('update the docs\n\n  then CLAUDE.md\r\nand continue')).toBe(
+    expect(toSingleLine('update the docs\n\n  then CLAUDE.md\r\nand continue')).toBe(
       'update the docs then CLAUDE.md and continue'
     );
   });
 
   it('returns a single-line prompt unchanged', () => {
-    expect(singleLineRespawnPrompt('  keep "quotes" and $vars  ')).toBe('  keep "quotes" and $vars  ');
+    expect(toSingleLine('  keep "quotes" and $vars  ')).toBe('  keep "quotes" and $vars  ');
   });
 });
 
@@ -89,5 +92,39 @@ describe('respawn steps send a multi-line prompt as one line', () => {
   it('a single-line prompt is sent as before', async () => {
     const writes = await written({ updatePrompt: 'update all the docs and CLAUDE.md' }, 'sendUpdateDocs');
     expect(writes).toEqual(['update all the docs and CLAUDE.md\r']);
+  });
+});
+
+describe('auto-compact sends a multi-line focus prompt as one line', () => {
+  afterEach(() => vi.useRealTimers());
+
+  /**
+   * Feed a Session a status line over the threshold and return what its auto-compact
+   * wrote through `writeViaMux`: the session's own token parser, the trigger and its
+   * timers, and the `writeCommand` wiring all run as in production.
+   */
+  async function compactWrites(prompt?: string): Promise<string[]> {
+    vi.useFakeTimers();
+    const session = new Session({ workingDir: '/tmp' });
+    const writeViaMux = vi.spyOn(session, 'writeViaMux').mockResolvedValue(true);
+    session.setAutoCompact(true, 1_000, prompt);
+    (session as never as { parseTokensFromStatusLine(s: string): void }).parseTokensFromStatusLine('5.0k tokens');
+    // The trigger waits AUTO_INITIAL_DELAY_MS (1 s) before it writes.
+    await vi.advanceTimersByTimeAsync(1_500);
+    return writeViaMux.mock.calls.map((call) => call[0]);
+  }
+
+  it('focus prompt with line breaks', async () => {
+    expect(await compactWrites('keep the open tasks\n\n  and the test results\r\nfrom today')).toEqual([
+      '/compact keep the open tasks and the test results from today\r',
+    ]);
+  });
+
+  it('a single-line focus prompt is sent as before', async () => {
+    expect(await compactWrites('keep the open tasks')).toEqual(['/compact keep the open tasks\r']);
+  });
+
+  it('no focus prompt sends a bare /compact', async () => {
+    expect(await compactWrites()).toEqual(['/compact\r']);
   });
 });

@@ -49,7 +49,13 @@ import { Session } from './session.js';
 import { AiIdleChecker, type AiCheckState } from './ai-idle-checker.js';
 import { AiPlanChecker } from './ai-plan-checker.js';
 import type { TeamWatcher } from './team-watcher.js';
-import { BufferAccumulator, ANSI_ESCAPE_PATTERN_SIMPLE, assertNever, CleanupManager } from './utils/index.js';
+import {
+  BufferAccumulator,
+  ANSI_ESCAPE_PATTERN_SIMPLE,
+  assertNever,
+  CleanupManager,
+  toSingleLine,
+} from './utils/index.js';
 import { MAX_RESPAWN_BUFFER_SIZE, TRIM_RESPAWN_BUFFER_TO as RESPAWN_BUFFER_TRIM_SIZE } from './config/buffer-limits.js';
 import {
   isCompletionMessage,
@@ -501,19 +507,6 @@ interface ActionLogEntry {
  */
 function formatRemainingSeconds(ms: number): number {
   return Math.max(0, Math.ceil(ms / 1000));
-}
-
-/**
- * A respawn prompt as the one line it is sent as: every run of line breaks, with the
- * whitespace around it, becomes a single space; a single-line prompt is returned as
- * is. The config may hold several lines (the settings fields are textareas), but the
- * steps run unattended through `writeViaMux`, and the check that re-presses a stranded
- * Enter cannot recognise a multi-line paste in the composer. Cron rejects multi-line
- * prompts for the same reason; respawn joins them instead, so a saved multi-line
- * config is still sent rather than refused.
- */
-export function singleLineRespawnPrompt(prompt: string): string {
-  return prompt.replace(/\s*[\r\n]+\s*/g, ' ');
 }
 
 /** Default configuration values */
@@ -1634,7 +1627,7 @@ export class RespawnController extends EventEmitter {
       this.config.interStepDelayMs,
       async () => {
         if (this._state === 'stopped') return;
-        const prompt = singleLineRespawnPrompt(this.config.kickstartPrompt!);
+        const prompt = toSingleLine(this.config.kickstartPrompt!);
         this.logAction('command', `Sending kickstart: "${prompt.substring(0, 40)}..."`);
         await this.session.writeViaMux(prompt + '\r'); // \r triggers key.return in Ink/Claude CLI
         // COD-51: stop() may have run during the await; re-check before reviving the
@@ -2839,11 +2832,11 @@ export class RespawnController extends EventEmitter {
 
         // Use RALPH_STATUS RECOMMENDATION if available, otherwise fall back to config
         const statusBlock = this.session.ralphTracker?.lastStatusBlock;
-        let updatePrompt = singleLineRespawnPrompt(this.config.updatePrompt);
+        let updatePrompt = toSingleLine(this.config.updatePrompt);
 
         if (statusBlock?.recommendation) {
           // Append RECOMMENDATION to the update prompt, on the same single line
-          // (see singleLineRespawnPrompt)
+          // (see toSingleLine)
           const rec = statusBlock.recommendation.replace(/\n/g, ' ').substring(0, 200);
           updatePrompt = `${updatePrompt} (Claude's last recommendation: ${rec})`;
           this.logAction('ralph', `Using RECOMMENDATION: ${rec.substring(0, 50)}...`);
