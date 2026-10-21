@@ -27,7 +27,11 @@
  * per tmux server in practice.
  *
  * That tolerance is server-wide like every key table: while such an alias is
- * bound, a browser tab's client can detach itself with it too.
+ * bound, a browser tab's client can detach itself with it too. The same goes
+ * for the `root` keys an attach claims, including Alt+1..9, which run
+ * `switch-client`: a tab that receives Esc then a digit within tmux's
+ * `escape-time` is moved onto another session for as long as those bindings
+ * exist. Leaving `root` alone keeps the attach working; it does not close that.
  *
  * @module tmux-prefix-table
  */

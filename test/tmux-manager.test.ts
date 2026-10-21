@@ -734,9 +734,10 @@ describe('TmuxManager (unit)', () => {
       mockedExecSync.mockImplementation((cmd: string) => {
         if (typeof cmd === 'string' && cmd.includes('which tmux')) return '/usr/bin/tmux\n';
         if (typeof cmd === 'string' && cmd.includes('display-message') && cmd.includes('#{pane_pid}')) return '4242\n';
-        if (typeof cmd === 'string' && cmd.includes(' show-options -gv prefix')) return 'C-b\n';
+        // Not tmux's stock C-b, so a hardcoded prefix cannot pass for the one read from tmux.
+        if (typeof cmd === 'string' && cmd.includes(' show-options -gv prefix')) return 'C-a\n';
         if (typeof cmd === 'string' && cmd.includes(' list-keys -T prefix')) {
-          return 'bind-key    -T prefix C-b send-prefix\nbind-key    -T prefix ) switch-client -n\n';
+          return 'bind-key    -T prefix C-a send-prefix\nbind-key    -T prefix ) switch-client -n\n';
         }
         return '';
       });
@@ -751,7 +752,7 @@ describe('TmuxManager (unit)', () => {
         });
         const commands = mockedExecSync.mock.calls.map(([cmd]) => String(cmd));
         expect(commands).toContain(`tmux -L 'codeman' unbind-key -a -T prefix`);
-        const bind = commands.indexOf(`tmux -L 'codeman' bind-key -T prefix 'C-b' send-prefix`);
+        const bind = commands.indexOf(`tmux -L 'codeman' bind-key -T prefix 'C-a' send-prefix`);
         expect(bind).toBeGreaterThan(commands.indexOf(`tmux -L 'codeman' unbind-key -a -T prefix`));
         expect(bind).toBeLessThan(commands.findIndex((c) => c.includes(' respawn-pane ')));
       } finally {
