@@ -247,16 +247,44 @@ describe('buildUpstreamRequestHeaders', () => {
     expect(headers.referer).toBe('http://127.0.0.1:4000/panel');
   });
 
-  it('drops hop-by-hop and recomputed headers', () => {
+  it('drops hop-by-hop headers, and a length that a transfer-encoding contradicts', () => {
     const headers = buildUpstreamRequestHeaders(
       { host: 'codeman.local', connection: 'keep-alive', 'transfer-encoding': 'chunked', 'content-length': '5' },
       upstream,
-      { forwardCookies: false, sessionCookieName: 'codeman_session' }
+      { forwardCookies: false, sessionCookieName: 'codeman_session', relayBodyLength: true }
     );
     expect(headers.host).toBeUndefined();
     expect(headers.connection).toBeUndefined();
     expect(headers['transfer-encoding']).toBeUndefined();
     expect(headers['content-length']).toBeUndefined();
+  });
+
+  // A streamed body without a length goes upstream chunked, and a dashboard that
+  // reads only Content-Length (Python's http.server) then sees an empty body.
+  it('relays the browser content-length alongside a body', () => {
+    const headers = buildUpstreamRequestHeaders(
+      { 'content-length': '16', 'content-type': 'application/json' },
+      upstream,
+      { forwardCookies: false, sessionCookieName: 'codeman_session', relayBodyLength: true }
+    );
+    expect(headers['content-length']).toBe('16');
+  });
+
+  it('never relays a content-length without a body, or one that is not a plain number', () => {
+    const opts = { forwardCookies: false, sessionCookieName: 'codeman_session' };
+    expect(buildUpstreamRequestHeaders({ 'content-length': '16' }, upstream, opts)['content-length']).toBeUndefined();
+    expect(
+      buildUpstreamRequestHeaders({ 'content-length': '16' }, upstream, { ...opts, relayBodyLength: false })[
+        'content-length'
+      ]
+    ).toBeUndefined();
+    for (const bad of ['-1', '16, 16', ' 16', '0x10', '']) {
+      expect(
+        buildUpstreamRequestHeaders({ 'content-length': bad }, upstream, { ...opts, relayBodyLength: true })[
+          'content-length'
+        ]
+      ).toBeUndefined();
+    }
   });
 });
 

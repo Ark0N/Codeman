@@ -473,6 +473,7 @@ async function proxyRequest(
     sessionCookieName: AUTH_COOKIE_NAME,
     refererPath:
       typeof req.headers.referer === 'string' ? stripProxyPrefix(req.headers.referer, cap, basePath) : undefined,
+    relayBodyLength: hasBody && req.body !== undefined,
   });
 
   // #237: the timeout bounds TIME-TO-HEADERS only. A plain AbortSignal.timeout on
