@@ -2829,7 +2829,8 @@ export class RespawnController extends EventEmitter {
         let updatePrompt = this.config.updatePrompt;
 
         if (statusBlock?.recommendation) {
-          // Append RECOMMENDATION to the update prompt (single-line — writeViaMux breaks on newlines)
+          // Append RECOMMENDATION to the update prompt (single-line: the submit check cannot
+          // recognise a multi-line paste in the composer)
           const rec = statusBlock.recommendation.replace(/\n/g, ' ').substring(0, 200);
           updatePrompt = `${this.config.updatePrompt} (Claude's last recommendation: ${rec})`;
           this.logAction('ralph', `Using RECOMMENDATION: ${rec.substring(0, 50)}...`);

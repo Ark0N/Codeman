@@ -420,8 +420,9 @@ callers send no body at all.
   **or Enter is never sent**: the text is typed onto the worker's prompt and sits
   there unsubmitted. This is [symptom 1](#1-deliveredtrue-then-every-wait-times-out),
   the number-one silent failure.
-- Newlines in `input` are kept: the text goes in as one bracketed paste and the `\r`
-  submits all lines. To send a bare Enter (confirm a dialog), send `{"input":"\r"}`.
+- With `useMux`, newlines in `input` are kept: the text goes in as one bracketed paste
+  and the `\r` submits all lines (without `useMux`, multi-line input is written straight
+  into the pane). To send a bare Enter (confirm a dialog), send `{"input":"\r"}`.
 - `input` is capped at **65536** characters. ⚠️ **Two caps disagree and the smaller one
   is the real one**: the Zod schema allows 100000 (`schemas.ts:1035`), so a 65537-to-100000
   character body passes validation and *then* 400s at the route against

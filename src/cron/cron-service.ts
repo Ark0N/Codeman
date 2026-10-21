@@ -97,7 +97,7 @@ const CRON_PSEUDO_FS_TREES: readonly string[] = ['/proc', '/sys', '/dev'];
 /** Sync blocklist for the create/update workingDir gate (no settings extras). */
 const CRON_WORKING_DIR_BLOCKED_TREES: readonly string[] = [...DEFAULT_BLOCKED_TREES, ...CRON_PSEUDO_FS_TREES];
 
-/** Prompt delivery is single-line only (writeViaMux/Ink constraint). */
+/** Prompt delivery is single-line only: the submit check cannot recognise a multi-line paste. */
 const HAS_NEWLINE = /[\r\n]/;
 
 /** The three session calls prompt delivery needs, so it can be tested without a PTY. */
