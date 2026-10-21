@@ -3827,11 +3827,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * - Text followed by `\r` goes in as ONE bracketed paste (buildPasteTextCommands),
    *   so Codex cannot fold the Enter into a paste burst; a single character is typed
    *   with `send-keys -l` instead, so a dialog answer selects (submitsAsKeys)
-   * - Text without `\r` is typed literally with `send-keys -l` (no key interpretation)
+   * - Single-line text without `\r` is typed literally with `send-keys -l` (no key
+   *   interpretation)
    * - A `\n` inside the text is kept (`\r\n` loses only its `\r`), and multi-line text
    *   always goes in as ONE bracketed paste, with or without a following Enter: inside
-   *   the paste markers an agent CLI inserts the line breaks into its composer, where
-   *   typed as keys each one could submit a line on its own
+   *   the paste markers a CLI that enabled bracketed paste receives the line breaks as
+   *   pasted text, where typed as keys each one could submit a line on its own
    * - `Enter` key is sent as a SEPARATE tmux invocation after a small delay
    * - Ink (Claude CLI) needs text and Enter split to avoid treating Enter as a newline
    */

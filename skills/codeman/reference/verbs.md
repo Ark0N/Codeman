@@ -590,7 +590,8 @@ allowlist in §4.
 
 The composer is capped at 65536 characters, and a multi-line paste cannot be confirmed
 as submitted, which makes it a bad channel for a spec, a diff or a file list. The
-workspace is the good one, and for a local or docker case you are on the same filesystem as the worker.
+workspace is the good one, and for a local or docker case you are on the same
+filesystem as the worker.
 
 1. Write `TASK.md` into the worker's workspace with your own file tools. The path is
    `.data.casePath` from `quick-start`, or the `workingDir` you passed to
@@ -600,10 +601,10 @@ workspace is the good one, and for a local or docker case you are on the same fi
 3. Wait on `DONE_<token>` with `wait-output` ([§5.5](#55-markers-for-hook-less-workers)),
    then read `RESULT.json` back with your own tools.
 
-This sidesteps the byte cap, the newline stripping and the quoting hazards in one
-move, and it makes the marker **split by construction**: the token lives in the file,
-never in the line you type, so the echo of your own keystrokes cannot match it. The
-worker also gets to re-read the task instead of holding it in one echoed line.
+This sidesteps the byte cap, the unconfirmed multi-line paste and the quoting hazards
+in one move, and it makes the marker **split by construction**: the token lives in the
+file, never in the line you type, so the echo of your own keystrokes cannot match it.
+The worker also gets to re-read the task instead of holding it in one echoed line.
 
 ⚠️ Two places it does not work: a **remote-SSH case** runs on another host whose
 filesystem you cannot see, and any worker **currently editing** the directory you are
