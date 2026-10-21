@@ -437,7 +437,9 @@ the raw write, and an explicit `"useMux": false` forces it.
 With `"useMux": true`, a line feed is kept: the text goes in as one bracketed paste
 (`\r\n` read as `\n`, leading and trailing line breaks dropped), then Enter if the
 input carried a `\r`; a pane that has not enabled bracketed paste receives each line
-break as a carriage return and runs the lines as they arrive.
+break as a carriage return and runs the lines as they arrive. The check that
+re-presses a stranded Enter cannot reliably recognise a multi-line paste, so a long
+multi-line prompt to a just-started agent is still safer in a file it is told to read.
 
 ```bash
 curl -s -X POST "$API/api/v1/sessions/$SID/input" \

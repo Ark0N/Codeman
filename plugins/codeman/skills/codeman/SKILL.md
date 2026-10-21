@@ -70,7 +70,7 @@ later call opens with, and your first REAL call performs them anyway:
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
-[ "${CODEMAN_PREAMBLE:-}" = 1.42.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.43.1 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 ```
 
 ⚠️ **Never spend a Bash call on this check alone.** §1's block opens with this same
@@ -98,8 +98,8 @@ PRE="${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh"
 mkdir -p "$(dirname "$PRE")"
 # Rewrite unless the file already ends with THIS version's stamp, so a stale or a
 # half-written file self-heals here instead of costing you a round trip to rm it.
-grep -qs '^CODEMAN_PREAMBLE=1.42.0$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
-# ---- Codeman agent preamble 1.42.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+grep -qs '^CODEMAN_PREAMBLE=1.43.1$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
+# ---- Codeman agent preamble 1.43.1 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
 # Positional parameters are always written with braces, ${1} and never a bare dollar-digit: Claude Code
 # replaces a bare one in a skill body with the matching word of the skill's arguments, and §0 is pasted
 # from that body (test/agent-skill.test.ts pins it).
@@ -339,6 +339,15 @@ spawn_workers() {
 # pane clearly finished means that profile, so switch that worker to markers.
 sendwait() {
   local sid="${1:?}" p="${2:?}" seq="${3:-$(date +%s)}" body r c head n=0 tmp bg i
+  # One line, like every other waiting sender (`toSingleLine`, `codeman agent send`,
+  # the TUI): the server pastes a multi-line prompt as one block, and the loop below,
+  # like the server's own submit check, cannot recognise a pasted block that is still
+  # on the composer, so a prompt like `Review this:\n- item 1` would sit unsent for
+  # the whole re-wait. Each line is trimmed, blank lines are dropped, the rest are
+  # joined with a space. For a long multi-line task, write a file and send its path.
+  case "$p" in *$'\n'*|*$'\r'*)
+    p=$(printf '%s\n' "$p" | tr '\r' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' | paste -sd ' ' -) ;;
+  esac
   # `wait:"stop,exit"`, never the `wait:true` default set: that set also carries
   # `idle`, which is INFERRED from output stabilization and flaps mid-turn. On a
   # dsh worker whose TUI repaints rarely the session reads `idle` while the model
@@ -410,10 +419,10 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.42.0
+CODEMAN_PREAMBLE=1.43.1
 PREAMBLE
 )
-. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.42.0 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
+. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.43.1 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
 ```
 
 Every later Bash call that touches the API starts with the same two loader lines from
@@ -464,7 +473,7 @@ and no per-call body to hand-build.
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null   # §0 loader
-[ "${CODEMAN_PREAMBLE:-}" = 1.42.0 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.43.1 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 N=(alpha beta)                    # INVENT one fresh case name per worker; never list cases first
                                   # (a name may carry a mode: `beta:deepseek`, see below)
 T=('reply with one line: the absolute path of your working directory'
