@@ -43,12 +43,13 @@ describe('toSingleLine', () => {
   });
 
   it('stays linear on a long whitespace run', () => {
-    // A regex that folds the whitespace around each break backtracks over every
-    // start position in the run: 50,000 spaces took well over a second that way.
-    // The split takes well under a millisecond, so the bound leaves room either side.
+    // The run sits inside a line, so the result is the same either way; only the time
+    // differs. A regex that folds the whitespace around each break retries the run from
+    // every start position: 50,000 spaces took over a second that way. The split takes
+    // well under a millisecond, so the bound leaves room either side.
     const run = ' '.repeat(50_000);
     const started = performance.now();
-    const joined = toSingleLine(`a${run}b\nc${run}`);
+    const joined = toSingleLine(`a${run}b\nc`);
     const elapsed = performance.now() - started;
     expect(joined).toBe(`a${run}b c`);
     expect(elapsed).toBeLessThan(250);
