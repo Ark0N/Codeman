@@ -183,7 +183,7 @@ curl -u admin:$PASS -X POST http://127.0.0.1:3000/api/v1/sessions \
   -H 'Content-Type: application/json' \
   -d '{"workingDir":"/home/me/project","mode":"claude"}'
 
-# Send a prompt (single-line only, and it must end with \r: Enter is sent only
+# Send a prompt (it must end with \r: Enter is sent only
 # when the input contains a carriage return; without it the text sits on the
 # session's prompt unsubmitted)
 curl -u admin:$PASS -X POST http://127.0.0.1:3000/api/v1/sessions/$ID/input \

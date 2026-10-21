@@ -587,7 +587,7 @@ One row per job. Acting on this table alone is correct; the §5 links are the de
 | know if it is stuck | `GET .../active-tools` and `GET .../run-summary` are structured and free; two `terminal?tail=` samples are the crude fallback | [§5.6](reference/verbs.md#56-alive-and-stuck) |
 | make a runaway worker stop | `POST .../input {"input":"\u001b"}` (ESC, **no** `\r`). Deleting the session would destroy the conversation instead | [§5.7](reference/verbs.md#57-interrupt-without-destroying) |
 | resume a worker halted on a usage limit | `POST .../auto-resume {"enabled":true}`. Respawn and Ralph are **not** the remedy: respawn runs `/clear` | [§5.8](reference/verbs.md#58-usage-limits) |
-| give a worker big input | write a file into its workspace with your own tools and send one short line pointing at it. The composer takes 65536 characters, single-line, newlines stripped | [§5.9](reference/verbs.md#59-big-input-via-the-workspace) |
+| give a worker big input | write a file into its workspace with your own tools and send one short line pointing at it. The composer takes 65536 characters, and `send` takes one line | [§5.9](reference/verbs.md#59-big-input-via-the-workspace) |
 | watch N workers at once | one in-flight wait per worker (per-session waiter cap 16); fan-out shapes differ for claude and shell | [§5.10](reference/verbs.md#510-fan-out) |
 | find yourself, list what exists | `GET /api/v1/sessions`, match your `$SELF` by **prefix** | [§5.11](reference/verbs.md#511-list-and-find-yourself) |
 | read or record what the user wants | `GET/PUT .../intent`, and `POST .../readmymind` to predict | [§5.12](reference/verbs.md#512-read-my-mind) |

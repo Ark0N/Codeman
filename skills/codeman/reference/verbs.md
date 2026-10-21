@@ -303,8 +303,8 @@ duplicate resend costs nothing.
 Codeman types the text and sends Enter **only when the input contains a carriage
 return**; without it your command sits unsubmitted on the worker's prompt and
 everything downstream times out. No response field catches this: `delivered:true`
-means "written to the pane", **not** "submitted". Newlines are stripped, so input is
-single-line by construction. Build the body with `jq -n` for any prompt you did not
+means "written to the pane", **not** "submitted". Newlines are kept: the text goes in
+as one paste, and the `\r` submits all of it. Build the body with `jq -n` for any prompt you did not
 author as a literal, because the inline `-d '{"input":"'"$P"'\r"}'` pattern breaks on
 the first double quote, backslash or `$` in a real prompt:
 

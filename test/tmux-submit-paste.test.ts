@@ -11,16 +11,27 @@
  * a one-line prompt). With `paste-buffer -p` the paste is marked and the separate
  * Enter submits.
  *
+ * Also the line breaks of a multi-line `sendInput`: kept, and pasted as ONE block
+ * with or without the Enter, where they used to be stripped and the lines joined.
+ *
  * Strategy: pure command shape, plus a round trip through a real shell with a fake
  * `tmux` that prints its argv, so quoting and tmux's trailing-`;` rule are checked
  * on the bytes a shell actually hands over. `pasteText` runs against a recording
- * runner. No real tmux.
+ * runner, and `sendInput` against a subclass whose `inputRunner()` records the
+ * commands instead of running them. No real tmux.
  *
  * Port: N/A (no server / no real tmux)
  */
 import { execSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { buildPasteTextCommands, escapeTmuxTrailingSemicolon, pasteText, submitsAsKeys } from '../src/tmux-manager.js';
+import type { MuxSession } from '../src/mux-interface.js';
+import {
+  TmuxManager,
+  buildPasteTextCommands,
+  escapeTmuxTrailingSemicolon,
+  pasteText,
+  submitsAsKeys,
+} from '../src/tmux-manager.js';
 
 const FAKE_TMUX = `${JSON.stringify(process.execPath)} -e 'console.log(JSON.stringify(process.argv.slice(1)))' --`;
 
@@ -136,8 +147,8 @@ describe('pasteText', () => {
 });
 
 describe('sendInput wiring', () => {
-  // sendInput() returns before touching tmux under vitest (IS_TEST_MODE), so the
-  // branch that submits text is pinned on the source instead.
+  // These pin the branch shapes on the source; the commands sendInput actually runs
+  // are recorded in 'sendInput line breaks' below.
   async function source(): Promise<string> {
     const { readFileSync } = await import('node:fs');
     return readFileSync(new URL('../src/tmux-manager.ts', import.meta.url), 'utf-8');
@@ -176,5 +187,80 @@ describe('sendInput wiring', () => {
     const typedHere = typed.filter((cmd) => inSend.includes(cmd));
     expect(typedHere.length).toBe(4);
     for (const cmd of typedHere) expect(cmd).toContain('escapeTmuxTrailingSemicolon(textPart)');
+  });
+});
+
+describe('sendInput line breaks', () => {
+  class RecordingManager extends TmuxManager {
+    ran: string[] = [];
+    protected override inputRunner(): (cmd: string) => Promise<unknown> {
+      return async (cmd: string) => {
+        this.ran.push(cmd);
+      };
+    }
+  }
+
+  function managerWithSession(): RecordingManager {
+    const manager = new RecordingManager();
+    manager.registerSession({
+      sessionId: 's1',
+      muxName: 'codeman-abc12345',
+      pid: 100,
+      createdAt: 0,
+      workingDir: '/tmp',
+      mode: 'claude',
+      attached: true,
+    } as MuxSession);
+    return manager;
+  }
+
+  /** The text a recorded `set-buffer` command hands to tmux, as a shell delivers it. */
+  function bufferText(setBufferCmd: string): string {
+    return argvOf(setBufferCmd.replace(/^.*? set-buffer /, `${FAKE_TMUX} set-buffer `)).at(-1) as string;
+  }
+
+  it('submits a multi-line prompt as one paste with its line breaks, then Enter', async () => {
+    const manager = managerWithSession();
+    expect(await manager.sendInput('s1', 'line one\nline two\n\nparagraph three\r')).toBe(true);
+
+    expect(manager.ran).toHaveLength(3);
+    const [set, paste, enter] = manager.ran;
+    expect(bufferText(set)).toBe('line one\nline two\n\nparagraph three');
+    expect(paste).toMatch(/ paste-buffer -p -d -b \S+ -t 'codeman-abc12345'$/);
+    expect(enter).toMatch(/ send-keys -t "codeman-abc12345" Enter$/);
+  });
+
+  it('turns CRLF line endings into plain line breaks', async () => {
+    const manager = managerWithSession();
+    await manager.sendInput('s1', 'one\r\ntwo\r');
+    expect(bufferText(manager.ran[0])).toBe('one\ntwo');
+  });
+
+  it('pastes multi-line text without Enter too, and never types it as keys', async () => {
+    const manager = managerWithSession();
+    await manager.sendInput('s1', 'one\ntwo');
+
+    expect(manager.ran).toHaveLength(2);
+    expect(bufferText(manager.ran[0])).toBe('one\ntwo');
+    expect(manager.ran[1]).toContain(' paste-buffer -p ');
+    for (const cmd of manager.ran) expect(cmd).not.toContain('send-keys');
+  });
+
+  it('drops trailing line breaks instead of pasting an empty last line', async () => {
+    const manager = managerWithSession();
+    await manager.sendInput('s1', 'one\ntwo\n\n\r');
+    expect(bufferText(manager.ran[0])).toBe('one\ntwo');
+  });
+
+  it('leaves single-line input as it was: pasted with Enter, typed without', async () => {
+    const submitted = managerWithSession();
+    await submitted.sendInput('s1', 'read your inbox\r');
+    expect(bufferText(submitted.ran[0])).toBe('read your inbox');
+    expect(submitted.ran.at(-1)).toMatch(/ send-keys -t "codeman-abc12345" Enter$/);
+
+    const typed = managerWithSession();
+    await typed.sendInput('s1', 'just type');
+    expect(typed.ran).toHaveLength(1);
+    expect(typed.ran[0]).toMatch(/ send-keys -t "codeman-abc12345" -l 'just type'$/);
   });
 });
