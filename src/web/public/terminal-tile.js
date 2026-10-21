@@ -1074,11 +1074,11 @@
 
     // SGR wheel forwarding, the twin of the primary pane's capture-phase wheel
     // handler and _forwardScrollToApp (terminal-ui.js; keep them in step).
-    // Claude's fullscreen renderer (claude 2.1.187+ while its mouse tracking is
-    // on, cliMouseTracking) scrolls its own transcript on SGR wheel reports,
+    // Fullscreen Claude (2.1.187+) and measured tracked Codex scroll their own
+    // transcripts on SGR wheel reports while cliMouseTracking is on,
     // while this xterm holds only Codeman's replayed repaint frames (tmux keeps
     // no history for such a pane). Left to xterm, the wheel dragged those stale
-    // frames, Claude's pinned input box with them, up the tile, or scrolled
+    // frames, including the CLI's pinned input box, up the tile, or scrolled
     // nothing at all. The gate is the primary pane's own, asked for THIS pane
     // (its terminal, its session, never the active one), so the CLI rules stay
     // in terminal-ui.js and this file names no CLI; the reports go to this

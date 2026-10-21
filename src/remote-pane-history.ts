@@ -48,7 +48,13 @@ import { exec } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
 import type { SessionRemote } from './types/session.js';
-import { buildSshConnectionArgs, classifyRemoteAliveExit, remoteSshTarget, shellescape } from './remote-hosts.js';
+import {
+  buildSshConnectionArgs,
+  classifyRemoteAliveExit,
+  remoteSshTarget,
+  shellescape,
+  withRemotePathBootstrap,
+} from './remote-hosts.js';
 import { RemoteSshSlotTimeoutError, runWithRemoteSshLimit } from './remote-ssh-limiter.js';
 import { remoteTmuxLocation } from './tmux-manager.js';
 
@@ -153,7 +159,10 @@ export function buildRemoteScrollbackCommand(
   marker: string
 ): string {
   const { socket, sessionName } = remoteTmuxLocation(remote, sessionId);
-  const script = buildRemoteScrollbackScript(socket, sessionName, historyLines, tailBytes, marker);
+  // Non-interactive macOS shells omit Homebrew and other per-user CLI paths.
+  const script = withRemotePathBootstrap(
+    buildRemoteScrollbackScript(socket, sessionName, historyLines, tailBytes, marker)
+  );
   // `exec` so a timeout kill reaches ssh itself, not only the local `sh -c`.
   return ['exec', ...buildSshConnectionArgs(remote), remoteSshTarget(remote), shellescape(script)].join(' ');
 }

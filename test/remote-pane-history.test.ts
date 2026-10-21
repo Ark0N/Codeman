@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -76,6 +76,40 @@ describe('buildRemoteScrollbackCommand', () => {
 
   it('a byte cap of 0 (unbounded) runs no tail', () => {
     expect(buildRemoteScrollbackCommand(remote, SESSION_ID, 10000, 0, MARKER)).not.toContain('tail -c');
+  });
+});
+
+describe('remote history PATH bootstrap', () => {
+  it('finds tmux installed under the remote home when the login shell omits it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'remote-history-path-'));
+    const home = join(root, 'remote home');
+    const sshBin = join(root, 'local-bin');
+    const remoteBin = join(home, '.local', 'bin');
+    mkdirSync(sshBin, { recursive: true });
+    mkdirSync(remoteBin, { recursive: true });
+    writeFileSync(join(sshBin, 'ssh'), '#!/bin/sh\nfor arg do command="$arg"; done\nexec /bin/sh -c "$command"\n', {
+      mode: 0o755,
+    });
+    writeFileSync(
+      join(remoteBin, 'tmux'),
+      `#!/bin/sh
+printf 'older row\\n${MARKER}\\n1\\ncurrent screen\\n'
+`,
+      { mode: 0o755 }
+    );
+    try {
+      const command = buildRemoteScrollbackCommand(remote, SESSION_ID, 100, 0, MARKER);
+      const stdout = execFileSync('/bin/sh', ['-c', command], {
+        encoding: 'utf-8',
+        env: { ...process.env, HOME: home, PATH: `${sshBin}:/usr/bin:/bin` },
+      });
+      expect(parseRemoteScrollbackOutput(stdout, MARKER, 0)).toEqual({
+        scrollback: 'older row\n',
+        screen: 'current screen\n',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

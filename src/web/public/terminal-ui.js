@@ -137,9 +137,9 @@
     return `\x1b[<${btn};${pos.col};${pos.row}M`.repeat(ticks);
   }
 
-  // A deliberate opening event pre-pays a tick, so a lone small mouse click
-  // responds immediately. The signed remainder is debt repaid by subsequent
-  // same-direction travel: ten 0.1-line events still total one tick. Debt and
+  // A deliberate opening event preserves upstream rounding and pre-pays at
+  // least one tick, so isolated clicks retain their travel. The signed remainder
+  // is repaid by subsequent same-direction travel: ten 0.1-line events still total one tick. Debt and
   // fractions expire with a 150ms gesture gap or reversal; a reversal within
   // the gesture accumulates without another pre-payment (like page gestures).
   function wheelTicksForGesture(state, lines, now) {
@@ -147,8 +147,12 @@
     const dir = Math.sign(lines);
     const fresh = !state || typeof state.lastAt !== 'number' || now - state.lastAt > PAGE_KEY_GESTURE_GAP_MS;
     const reversed = state?.dir && state.dir !== dir;
-    if (fresh && Math.abs(lines) >= PAGE_KEY_MIN_START_ROWS && Math.abs(lines) < 1) {
-      return { state: { dir, lastAt: now, pending: lines - dir }, ticks: dir };
+    if (fresh && Math.abs(lines) >= PAGE_KEY_MIN_START_ROWS) {
+      const rounded = dir * Math.max(1, Math.round(Math.abs(lines)));
+      return {
+        state: { dir, lastAt: now, pending: lines - rounded },
+        ticks: dir * Math.min(Math.abs(rounded), SGR_WHEEL_MAX_TICKS),
+      };
     }
     const total = (fresh || reversed ? 0 : state.pending || 0) + lines;
     const whole = Math.trunc(total + Math.sign(total) * 1e-9);
@@ -5852,9 +5856,9 @@ Object.assign(CodemanApp.prototype, {
     if (sessionMode === 'copilot') return session?.cliMouseTracking === true;
     if (sessionMode !== 'claude' && sessionMode !== 'codex') return false;
     if (sessionMode === 'claude' && !this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
-    // Only while Claude is actually listening for the mouse. In its default
-    // inline renderer (2.1.280 measured: alternate_on=0, mouse_any_flag=0) the
-    // transcript lives in real scrollback, like codex, and SGR wheel reports are
+    // Only while Claude or Codex is actually listening for the mouse. Claude's
+    // inline renderer (2.1.280 measured: alternate_on=0, mouse_any_flag=0), like
+    // older inline Codex, keeps its transcript in real scrollback; SGR reports are
     // ignored, so forwarding made every swipe and wheel tick dead. Fullscreen
     // (CLAUDE_CODE_NO_FLICKER=1, or "tui": "fullscreen" in ~/.claude/settings.json)
     // turns on alt-screen + mode 1003/1006, which the server records as

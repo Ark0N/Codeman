@@ -909,6 +909,25 @@ describe('consistent scroll gesture adapters', () => {
     expect(loadTerminalUiHarness().windowRef.CodemanTerminalInput.PAGE_KEY_IMMEDIATE_MAX_ROWS).toBe(2);
   });
 
+  it('preserves rounded travel for isolated coarse clicks without accumulating a capped backlog', () => {
+    const { wheelTicksForGesture } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
+    for (const direction of [-1, 1]) {
+      expect(wheelTicksForGesture(null, direction * 4.8, 0).ticks).toBe(direction * 5); // 120px
+      expect(wheelTicksForGesture(null, direction * 1.6, 0).ticks).toBe(direction * 2); // 40px
+      let state = null;
+      let ticks = 0;
+      for (let i = 0; i < 5; i++) {
+        const step = wheelTicksForGesture(state, direction * 4.8, i * 300);
+        state = step.state;
+        ticks += step.ticks;
+      }
+      expect(ticks).toBe(direction * 25);
+      const capped = wheelTicksForGesture(null, direction * 40, 0);
+      expect(capped.ticks).toBe(direction * 5);
+      expect(capped.state.pending).toBe(0); // don't retain travel discarded by the event cap
+    }
+  });
+
   it('pre-pays an isolated deliberate opening tick and repays its signed debt', () => {
     const { wheelTicksForGesture } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
     const opening = wheelTicksForGesture(null, -0.16, 0); // a 4px mouse click
