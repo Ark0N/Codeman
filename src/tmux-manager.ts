@@ -3863,9 +3863,14 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     try {
       const hasCarriageReturn = input.includes('\r');
-      // Leading and trailing line breaks are dropped, so `"\nfix it\r"` does not paste
-      // an empty first line (nor `"fix it\n\r"` an empty last one).
-      const textPart = input.replace(/\r/g, '').replace(/^\n+/, '').trimEnd();
+      // Leading and trailing blank lines are dropped, so neither `"\nfix it\r"` nor
+      // `"  \nfix it\r"` pastes an empty first line (nor `"fix it\n\r"` an empty last
+      // one). The leading match ends at a line break, so the first real line keeps its
+      // indentation.
+      const textPart = input
+        .replace(/\r/g, '')
+        .replace(/^\s*\n/, '')
+        .trimEnd();
 
       if (textPart && hasCarriageReturn) {
         // Send text first, then Enter as a SEPARATE tmux command after a short delay.

@@ -261,6 +261,11 @@ describe('sendInput line breaks', () => {
     await multi.sendInput('s1', '\r\n\r\none\ntwo\r');
     expect(bufferText(multi.ran[0])).toBe('one\ntwo');
 
+    // A blank first line made of spaces is dropped too; the first real line keeps its indentation.
+    const spaced = managerWithSession();
+    await spaced.sendInput('s1', '  \n\t\n  fix it\nnow\r');
+    expect(bufferText(spaced.ran[0])).toBe('  fix it\nnow');
+
     // Without an Enter, what is left is one line, so it is typed like any other.
     const typed = managerWithSession();
     await typed.sendInput('s1', '\n\njust type');
