@@ -208,9 +208,9 @@ trailing carriage return:
 | `paste` | `session.write()` — writes directly to the PTY/mux              | Bulk paste-style delivery.                       |
 
 > ⚠️ **Single-line only — enforced.** A job fires unattended, and the submit
-> check that re-presses an ignored Enter cannot recognise a multi-line paste in
-> the composer, so a stranded prompt would go unnoticed (in paste mode the
-> newlines reach the CLI as keys). So newlines are **rejected**: the
+> check that re-presses an ignored Enter cannot reliably recognise a multi-line
+> paste in the composer, so a stranded prompt would go unnoticed (in paste mode
+> the newlines reach the CLI as keys). So newlines are **rejected**: the
 > schema and the form refuse a multi-line `promptText`, and at fire time a
 > prompt file whose content is multi-line (after stripping trailing newlines)
 > fails the run with a clear `errorMessage`. Put multi-line instructions in a
