@@ -773,6 +773,37 @@ describe('TmuxManager (unit)', () => {
       }
     });
 
+    it("reduces the socket's prefix table to send-prefix before the agent starts", async () => {
+      // Browser keystrokes reach the attach client; with the stock table Ctrl+B ) or s
+      // would move a tab onto another session (the behavior itself: tmux-prefix-table.test.ts).
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes('which tmux')) return '/usr/bin/tmux\n';
+        if (typeof cmd === 'string' && cmd.includes('display-message') && cmd.includes('#{pane_pid}')) return '4242\n';
+        if (typeof cmd === 'string' && cmd.includes(' show-options -gv prefix')) return 'C-b\n';
+        if (typeof cmd === 'string' && cmd.includes(' list-keys -T prefix')) {
+          return 'bind-key    -T prefix C-b send-prefix\nbind-key    -T prefix ) switch-client -n\n';
+        }
+        return '';
+      });
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+
+      try {
+        await nonTestManager.createSession({
+          sessionId: 'abc12345-1234-5678-90ab-cdef12345678',
+          workingDir: '/project',
+          mode: 'shell',
+        });
+        const commands = mockedExecSync.mock.calls.map(([cmd]) => String(cmd));
+        expect(commands).toContain(`tmux -L 'codeman' unbind-key -a -T prefix`);
+        const bind = commands.indexOf(`tmux -L 'codeman' bind-key -T prefix 'C-b' send-prefix`);
+        expect(bind).toBeGreaterThan(commands.indexOf(`tmux -L 'codeman' unbind-key -a -T prefix`));
+        expect(bind).toBeLessThan(commands.findIndex((c) => c.includes(' respawn-pane ')));
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
     it('changes the global history default on tmux versions that cannot resize panes', async () => {
       const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
       const nonTestManager = new NonTestTmuxManager();

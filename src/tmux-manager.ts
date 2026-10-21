@@ -125,6 +125,7 @@ import {
 
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 import { ensureDeepSeekStatusShim } from './deepseek-status-shim.js';
+import { restrictTmuxPrefixTable } from './tmux-prefix-table.js';
 
 /** How long a cached process snapshot stays usable. */
 const PROC_SNAPSHOT_TTL_MS = 2000;
@@ -2466,6 +2467,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       } catch {
         /* Non-critical */
       }
+
+      // Browser keystrokes reach the attach client, so tmux's stock prefix table would
+      // let Ctrl+B ( or s move a tab onto another session. Before the agent starts.
+      restrictTmuxPrefixTable(this.tmux());
 
       // Per-CLI env: API keys, config blobs, config-sourced vars, status bridges. All of
       // it is registry data, so this is one unconditional call rather than a per-mode ladder.
