@@ -52,11 +52,19 @@ describe('global session cap (CODEMAN_MAX_SESSIONS)', () => {
     expect(sessionCapacityState(sessionsOf(3)).atGlobalCap).toBe(true);
   });
 
-  it.each(['1000', '501', '99999999999999999999'])('clamps %j to the ceiling of 500', async (value) => {
+  it.each(['1000', '500', '463', '99999999999999999999'])('clamps %j to the ceiling of 462', async (value) => {
     const { sessionCapacityState, sessionCapacityMessage } = await loadWithEnv({ CODEMAN_MAX_SESSIONS: value });
-    expect(sessionCapacityState(sessionsOf(499)).atGlobalCap).toBe(false);
-    expect(sessionCapacityState(sessionsOf(500)).atGlobalCap).toBe(true);
-    expect(sessionCapacityMessage(sessionsOf(500))).toContain('(500)');
+    expect(sessionCapacityState(sessionsOf(461)).atGlobalCap).toBe(false);
+    expect(sessionCapacityState(sessionsOf(462)).atGlobalCap).toBe(true);
+    expect(sessionCapacityMessage(sessionsOf(462))).toContain('(462)');
+  });
+
+  it('keeps the ceiling inside the tab-layout budget next to the saved web tabs', async () => {
+    vi.resetModules();
+    const { MAX_CONCURRENT_SESSIONS_CEILING } = await import('../../src/config/map-limits.js');
+    const { MAX_WEBVIEWS } = await import('../../src/config/webview-limits.js');
+    const { MAX_TAB_REFS } = await import('../../src/tab-layout.js');
+    expect(MAX_CONCURRENT_SESSIONS_CEILING + MAX_WEBVIEWS).toBeLessThanOrEqual(MAX_TAB_REFS);
   });
 
   it.each(['', '0', '-5', '2.5', 'abc', '1e3'])('falls back to 50 for an unusable value %j', async (value) => {

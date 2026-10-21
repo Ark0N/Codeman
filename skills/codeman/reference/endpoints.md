@@ -113,7 +113,7 @@ Every JSON response: `{"success":true,"data":…}` or
 | `UNAUTHORIZED` | 401 | auth required or failed (send `-u user:password`). ⚠️ The 401 body is plain text, NOT this envelope, see [Auth and credentials](#auth-and-credentials) |
 | `FORBIDDEN` | 403 | authenticated but not permitted: an admin-only route in multi-user mode, a `workingDir`/case path outside your own workspace, or a shell session without the can-bypass-permissions grant. ⚠️ **Not** what an ownership miss on a session returns: a session you do not own answers 404 `NOT_FOUND`, identically to one that does not exist (deliberate, it leaks no existence) |
 | `NOT_FOUND` | 404 | no such session, or one this caller does not own. Also quick-start's answer for an unknown remote or docker host |
-| `SESSION_BUSY` | 409 | on a **wait**: this session's waiter cap (16, combined signal+output) is full. On **quick-start**: a session cap is full, so clean up before starting more. Two different caps can raise it: the global cap, 50 by default (`MAX_CONCURRENT_SESSIONS`, env `CODEMAN_MAX_SESSIONS`, 1 to 500), and in multi-user mode the per-user cap, which defaults to half the global cap, **25** by default (`maxSessionsPerUser()`, `config/multiuser.ts:59-63`). The message tells you which |
+| `SESSION_BUSY` | 409 | on a **wait**: this session's waiter cap (16, combined signal+output) is full. On **quick-start**: a session cap is full, so clean up before starting more. Two different caps can raise it: the global cap, 50 by default (`MAX_CONCURRENT_SESSIONS`, env `CODEMAN_MAX_SESSIONS`, 1 to 462), and in multi-user mode the per-user cap, which defaults to half the global cap, **25** by default (`maxSessionsPerUser()`, `config/multiuser.ts:59-63`). The message tells you which |
 | `CONFLICT` / `ALREADY_EXISTS` | 409 | conflicts with current state |
 | `OPERATION_FAILED` | 422 | well-formed but could not be completed |
 | `RATE_LIMITED` | 429 | per-owner or process-wide waiter pool is full; back off, switching sessions will not help |
@@ -796,7 +796,7 @@ response echoes.
 | `match` string | 1–200 characters, literal only | 400; `regex=` is rejected outright |
 | `from=buffer` scan window | 256 KB tail of the terminal buffer | a marker older than that tail is invisible even with `from=buffer` |
 | wait-output snippet context | 80 characters either side | `wait.snippet` is bounded, not the whole line |
-| sessions, process-wide | 50 by default (`MAX_CONCURRENT_SESSIONS`, env `CODEMAN_MAX_SESSIONS`, 1 to 500) | 409 `SESSION_BUSY` on quick-start |
+| sessions, process-wide | 50 by default (`MAX_CONCURRENT_SESSIONS`, env `CODEMAN_MAX_SESSIONS`, 1 to 462) | 409 `SESSION_BUSY` on quick-start |
 | sessions, per user | half the global cap (25 by default) in multi-user mode | the same 409, with a different message |
 | SSE clients, process-wide | 100 (`MAX_SSE_CLIENTS`) | plain-text `503 Too many SSE connections`; shared with every browser tab |
 | active bash tools tracked | 20 per session | oldest entries drop off `active-tools` |

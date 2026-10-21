@@ -185,7 +185,7 @@ curl -s -X POST "$API/api/sessions/$ID/custom-model" -H 'Content-Type: applicati
 
 | Limit                 | Default                                    |
 | --------------------- | ------------------------------------------ |
-| Max sessions          | 50                                          |
+| Max sessions          | 50 (`CODEMAN_MAX_SESSIONS`)                 |
 | Max agent windows     | 500                                         |
 | Max SSE clients       | 100                                         |
 | Terminal buffer       | 32 MB per session                           |

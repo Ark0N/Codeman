@@ -1981,7 +1981,7 @@ export const CaseOrderSchema = z.object({
 /** PUT /api/session-order — global tab order (ordered sessionIds), COD-131 */
 export const SessionOrderUpdateSchema = z.object({
   // Bounded defensively: ids are uuid-ish (<=100 chars) and the client pushes only
-  // its open-tab order (max sessions is 50 by default, at most 500 via CODEMAN_MAX_SESSIONS,
+  // its open-tab order (max sessions is 50 by default, at most 462 via CODEMAN_MAX_SESSIONS,
   // see MAX_CONCURRENT_SESSIONS_CEILING) — 500 leaves enough room while
   // keeping a hostile/buggy client from persisting megabytes into state.json.
   order: z.array(z.string().max(100)).max(500),
