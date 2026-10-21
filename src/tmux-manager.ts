@@ -4019,7 +4019,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
   /**
    * Send input to a specific pane within a tmux session.
-   * Uses the same literal text approach as sendInput() but targets a specific pane.
+   * Types the text literally with `send-keys -l`, line breaks stripped, then Enter
+   * when the input carried a `\r`. Unlike sendInput(), it neither pastes nor keeps
+   * the line breaks of multi-line text.
    */
   sendInputToPane(muxName: string, paneTarget: string, input: string): boolean {
     if (IS_TEST_MODE) return true;
