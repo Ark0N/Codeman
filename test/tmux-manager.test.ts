@@ -903,6 +903,52 @@ describe('TmuxManager (unit)', () => {
         nonTestManager.destroy();
       }
     });
+
+    it('gives a discovered session the directory tmux reports for its pane, not the server cwd', async () => {
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes(' list-panes ')) {
+          return [
+            'codeman-aaaa1111|101|0|||/home/user/project-a',
+            // A hand-split session answers with the pane tmux lists first.
+            'codeman-bbbb2222|102|0|||/home/user/project-b',
+            'codeman-bbbb2222|103|0|||/home/user/project-b/sub',
+            // Set by whoever owns the pane, so it must pass the same check as any workingDir.
+            'codeman-cccc3333|104|0|||/home/user/$(touch pwned)',
+            // A tmux that reported no path.
+            'codeman-dddd4444|105|0|||',
+          ].join('\n');
+        }
+        return '';
+      });
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+
+      try {
+        const { discovered } = await nonTestManager.reconcileSessions();
+        expect(discovered).toEqual([
+          'restored-aaaa1111',
+          'restored-bbbb2222',
+          'restored-cccc3333',
+          'restored-dddd4444',
+        ]);
+        const dirs = Object.fromEntries(nonTestManager.getSessions().map((s) => [s.muxName, s.workingDir]));
+        expect(dirs).toEqual({
+          'codeman-aaaa1111': '/home/user/project-a',
+          'codeman-bbbb2222': '/home/user/project-b',
+          'codeman-cccc3333': process.cwd(),
+          'codeman-dddd4444': process.cwd(),
+        });
+
+        // The directory comes from the same list-panes call, as its last field.
+        const listCalls = mockedExecSync.mock.calls
+          .map(([cmd]) => cmd)
+          .filter((cmd): cmd is string => typeof cmd === 'string' && cmd.includes(' list-panes '));
+        expect(listCalls).toHaveLength(1);
+        expect(listCalls[0]).toContain("|#{pane_current_path}'");
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
   });
 });
 
@@ -1011,6 +1057,23 @@ describe('parsePaneRows', () => {
   it('calls a non-numeric dead flag unknown rather than false', () => {
     const [row] = parsePaneRows('codeman-aaaa|1234|?||');
     expect(row.dead).toBeUndefined();
+  });
+
+  it('reads the pane directory from the last field', () => {
+    const [row] = parsePaneRows('codeman-aaaa|1234|0|||/home/user/project');
+    expect(row.pid).toBe(1234);
+    expect(row.dead).toBe(false);
+    expect(row.currentPath).toBe('/home/user/project');
+  });
+
+  it('keeps a pane directory that contains the separator whole', () => {
+    const [row] = parsePaneRows('codeman-aaaa|1234|0|||/home/user/a|b');
+    expect(row.currentPath).toBe('/home/user/a|b');
+  });
+
+  it('leaves the pane directory undefined when tmux reported none', () => {
+    expect(parsePaneRows('codeman-aaaa|1234')[0].currentPath).toBeUndefined();
+    expect(parsePaneRows('codeman-aaaa|1234|0|||')[0].currentPath).toBeUndefined();
   });
 
   it('returns one row per pane of a split session, in tmux order', () => {

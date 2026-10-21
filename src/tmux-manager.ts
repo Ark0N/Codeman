@@ -252,10 +252,14 @@ const PANE_LIST_SEP = '|';
  * know a variable substitutes the empty string rather than failing, which is how
  * tmux 3.2a answers `#{pane_dead_signal}` (added in 3.4), and the parser reads a
  * short row as "pid known, deadness unknown" rather than discarding it.
+ *
+ * `#{pane_current_path}` comes last on purpose: a directory name may contain the
+ * separator, and only the final field can absorb it without ambiguity.
  */
 const PANE_LIST_FORMAT =
   `#{session_name}${PANE_LIST_SEP}#{pane_pid}` +
-  `${PANE_LIST_SEP}#{pane_dead}${PANE_LIST_SEP}#{pane_dead_status}${PANE_LIST_SEP}#{pane_dead_signal}`;
+  `${PANE_LIST_SEP}#{pane_dead}${PANE_LIST_SEP}#{pane_dead_status}${PANE_LIST_SEP}#{pane_dead_signal}` +
+  `${PANE_LIST_SEP}#{pane_current_path}`;
 
 /**
  * 构建 pane 启动前的 nofile 修复命令。
@@ -282,6 +286,8 @@ export interface PaneRow {
   exitStatus?: number;
   /** `#{pane_dead_signal}` — the killing signal, absent before tmux 3.4 and when unsignalled. */
   exitSignal?: number;
+  /** `#{pane_current_path}` — the pane's current directory, absent when tmux reported none. */
+  currentPath?: string;
 }
 
 /**
@@ -347,6 +353,8 @@ export function parsePaneRows(output: string): PaneRow[] {
       dead: deadFlag === '1' ? true : deadFlag === '0' ? false : undefined,
       exitStatus: paneField(fields, 3),
       exitSignal: paneField(fields, 4),
+      // Everything after the fifth separator, so a path containing `|` stays whole.
+      currentPath: fields.slice(5).join(PANE_LIST_SEP) || undefined,
     });
   }
   return rows;
@@ -3115,6 +3123,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // socket tag to reconcile and no cross-socket ambiguity that could mark a
     // live session dead (the root cause of vanished/duplicate tabs).
     let active: Map<string, number>;
+    const paneDirs = new Map<string, string>();
     try {
       const output = execSync(`${this.tmux()} list-panes -a -F '${PANE_LIST_FORMAT}' 2>/dev/null || true`, {
         encoding: 'utf-8',
@@ -3122,6 +3131,14 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       }).trim();
       const rows = parsePaneRows(output);
       active = new Map(rows.map((row) => [row.sessionName, row.pid]));
+      // A discovered session's directory, from its first pane with a usable path.
+      // The path is admitted only if it passes the same check createSession and
+      // respawnPane apply, since it was set by whoever owns the pane, not by us.
+      for (const row of rows) {
+        if (row.currentPath && !paneDirs.has(row.sessionName) && isValidPath(row.currentPath)) {
+          paneDirs.set(row.sessionName, row.currentPath);
+        }
+      }
       // The same read answers both questions, so recovery starts with a pane-exit
       // reading rather than waiting for the first stats tick — which may never
       // come, since the collector only starts when boot found a live session.
@@ -3175,7 +3192,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         muxName: sessionName,
         pid,
         createdAt: Date.now(),
-        workingDir: process.cwd(),
+        // Where the pane actually works, when tmux said; the server's cwd is only a fallback.
+        workingDir: paneDirs.get(sessionName) ?? process.cwd(),
         mode: 'claude',
         attached: false,
         name: `Restored: ${sessionName}`,
