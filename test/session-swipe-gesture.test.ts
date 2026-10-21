@@ -165,3 +165,99 @@ describe('terminal touch handler hands sideways drags to the swipe', () => {
     expect(load().swipe.maxVerticalDrift).toBe(50);
   });
 });
+
+describe('the swipe walks the order the strip draws', () => {
+  type Proto = Record<string, (this: Record<string, unknown>, ...args: unknown[]) => unknown>;
+  function loadAppProto() {
+    const document = {
+      addEventListener: vi.fn(),
+      documentElement: { dataset: {} },
+      getElementById: (_id: string): unknown => null,
+    };
+    const context = vm.createContext({
+      console,
+      setInterval: vi.fn(),
+      clearInterval: vi.fn(),
+      setTimeout,
+      clearTimeout,
+      requestAnimationFrame: vi.fn(),
+      HTMLCanvasElement: class HTMLCanvasElement {},
+      WebSocket: { OPEN: 1 },
+      fetch: vi.fn(),
+      URLSearchParams,
+      document,
+      localStorage: { length: 0, key: vi.fn(), getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
+      window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+      MobileDetection: { isTouchDevice: () => true, isHandheldDevice: () => true, getDeviceType: () => 'mobile' },
+    });
+    const read = (f: string) => readFileSync(resolve(import.meta.dirname, '../src/web/public', f), 'utf8');
+    vm.runInContext(`${read('constants.js')}\n${read('app.js')}\nglobalThis.__App = CodemanApp;`, context);
+    return { proto: (context as unknown as { __App: { prototype: Proto } }).__App.prototype, document };
+  }
+
+  /** The real next/prev over a strip drawn as `rows` (ids; 'web' is a web tab) with `active` selected. */
+  function walk(rows: string[], active: string | null) {
+    const { proto, document } = loadAppProto();
+    const row = (id: string) =>
+      id === 'web' ? { dataset: { webviewId: 'web' } } : { dataset: { id }, classList: { contains: () => false } };
+    const strip = {
+      getAttribute: () => 'tablist',
+      classList: { contains: () => false },
+      querySelectorAll: () => rows.map(row),
+    };
+    const selected: string[] = [];
+    const app: Record<string, unknown> = {
+      sessionOrder: ['w1', 'w2', 'homelab', 'w3'],
+      sessions: new Map(['w1', 'w2', 'homelab', 'w3'].map((id) => [id, {}])),
+      activeSessionId: active,
+      isTabRailSorted: () => false,
+      selectSession: (id: string) => selected.push(id),
+    };
+    for (const name of ['_visibleTabRows', '_stripSessionOrder', 'nextSession', 'prevSession']) app[name] = proto[name];
+    document.getElementById = () => strip;
+    const next = (o?: unknown) => (app.nextSession as (o?: unknown) => void).call(app, o);
+    const prev = (o?: unknown) => (app.prevSession as (o?: unknown) => void).call(app, o);
+    return { selected, next, prev };
+  }
+
+  it('follows the case boxes, not the creation order', () => {
+    // Created w1, w2, homelab, w3; the 'case' layout boxes md-viewer's tabs together.
+    const { selected, next, prev } = walk(['w1', 'w2', 'w3', 'web', 'homelab'], 'w3');
+    next({ visual: true });
+    prev({ visual: true });
+    next();
+    // Visual: w3 -> homelab (next), w3 -> w2 (prev). Canonical (no option) keeps sessionOrder: w3 -> w1.
+    expect(selected).toEqual(['homelab', 'w2', 'w1']);
+  });
+
+  it('steps in at the first or last drawn row when the active session is not drawn', () => {
+    // A filter hid the active tab (or nothing is active on the home screen).
+    const { selected, next, prev } = walk(['w1', 'w2', 'homelab'], 'w3');
+    next({ visual: true });
+    prev({ visual: true });
+    expect(selected).toEqual(['w1', 'homelab']);
+  });
+
+  it('reaches a lone drawn row that is not the active one, and goes nowhere from a lone active one', () => {
+    const lone = walk(['w2'], 'w3');
+    lone.next({ visual: true });
+    expect(lone.selected).toEqual(['w2']);
+    const self = walk(['w3'], 'w3');
+    self.next({ visual: true });
+    self.prev({ visual: true });
+    expect(self.selected).toEqual([]);
+  });
+
+  it('goes nowhere when every row is filtered out, instead of falling back to a hidden session', () => {
+    const { selected, next, prev } = walk([], 'w3');
+    next({ visual: true });
+    prev({ visual: true });
+    expect(selected).toEqual([]);
+  });
+
+  it('the swipe asks for the visual order', () => {
+    const { app, gesture } = load();
+    gesture({ clientX: 300, clientY: 400 }, { clientX: 150, clientY: 400 });
+    expect(app.nextSession).toHaveBeenCalledWith({ visual: true });
+  });
+});

@@ -373,11 +373,11 @@ describe('Tab Navigation', () => {
           var origPrev = app.prevSession;
           app.nextSession = function() {
             window.__swipeLog.push('next');
-            if (origNext) origNext.call(app);
+            if (origNext) origNext.apply(app, arguments);
           };
           app.prevSession = function() {
             window.__swipeLog.push('prev');
-            if (origPrev) origPrev.call(app);
+            if (origPrev) origPrev.apply(app, arguments);
           };
         }
       `);
@@ -482,7 +482,7 @@ describe('Tab Navigation', () => {
             var origNext = app.nextSession;
             app.nextSession = function() {
               window.__swipeLog.push('next');
-              if (origNext) origNext.call(app);
+              if (origNext) origNext.apply(app, arguments);
             };
           }
         `);
@@ -520,7 +520,7 @@ describe('Tab Navigation', () => {
             var origPrev = app.prevSession;
             app.prevSession = function() {
               window.__swipeLog.push('prev');
-              if (origPrev) origPrev.call(app);
+              if (origPrev) origPrev.apply(app, arguments);
             };
           }
         `);
