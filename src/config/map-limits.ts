@@ -26,8 +26,10 @@ const DEFAULT_MAX_CONCURRENT_SESSIONS = 50;
  * holds at most `MAX_TAB_REFS` (512) refs, and those count saved web tabs as well
  * as sessions; an owner can save up to `MAX_WEBVIEWS` (50 by default) web tabs.
  * 512 - 50 = 462 keeps session creation answering with the capacity message
- * instead of failing with a 500 on the layout limit. (`PUT /api/session-order`
- * accepts up to 500 ids, which stays above this.)
+ * instead of failing with a 500 on the layout limit, at the default `MAX_WEBVIEWS`
+ * and with no pinned closed sessions: a pinned session stays in the layout as a
+ * stopped record after it is closed, and it shares the same 512-ref budget.
+ * (`PUT /api/session-order` accepts up to 500 ids, which stays above this.)
  */
 export const MAX_CONCURRENT_SESSIONS_CEILING = 462;
 

@@ -666,8 +666,9 @@ You are yourself a session on this server, and the API has **no undo**.
   user's repository state, so say that you did; **removing** one discards any
   uncommitted work inside it, so ask first ([§5.1](reference/verbs.md#51-where-to-spawn)).
 - Never `tmux kill-session`, `pkill tmux`, `pkill claude`. The API is the only interface.
-- Sessions count against a **global cap of 50** (and, in multi-user mode, a per-user
-  cap of 25 that fires the same 409). Case creation is uncapped and writes real
+- Sessions count against a **global cap, 50 by default** (`CODEMAN_MAX_SESSIONS`), and,
+  in multi-user mode, a per-user cap (half the global cap, 25 by default) that fires
+  the same 409. Case creation is uncapped and writes real
   directories. Clean up every session you start, and never retry `quick-start` in a
   loop.
 

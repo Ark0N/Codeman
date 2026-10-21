@@ -284,7 +284,7 @@ automatically after **Run Now**.
 > ⚠️ **Session-cap math if you disable auto-close.** With
 > `autoClosePreviousSession: false`, nothing ever closes the sessions a
 > recurring job creates — an interval job every 30 min creates 48 tabs/day and
-> hits the global 50-session cap in ~25 hours (sooner with existing tabs), after
+> hits the global session cap (50 by default, `CODEMAN_MAX_SESSIONS`) in ~25 hours (sooner with existing tabs), after
 > which **every** fire of **every** job fails with "Maximum concurrent sessions
 > reached" until you delete tabs by hand. Leave auto-close on for unattended
 > recurring jobs, or clean up sessions yourself.

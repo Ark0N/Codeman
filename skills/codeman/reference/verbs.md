@@ -101,8 +101,9 @@ Differences from `quick-start` worth knowing before you debug one:
 - hitting the session cap here is `OPERATION_FAILED`, where `quick-start` returns
   `SESSION_BUSY` for the identical condition.
 
-`quick-start` failure codes are `SESSION_BUSY` (the global 50-session cap, or the
-per-user cap of 25 in multi-user mode), `FORBIDDEN`, `CONFLICT`, `NOT_FOUND` (a
+`quick-start` failure codes are `SESSION_BUSY` (the global session cap, 50 by default via
+`CODEMAN_MAX_SESSIONS`, or the per-user cap in multi-user mode, half the global cap,
+25 by default), `FORBIDDEN`, `CONFLICT`, `NOT_FOUND` (a
 remote or docker host named by the case no longer exists), `OPERATION_FAILED` and
 `INVALID_INPUT`. **None of them are retryable in a loop.** Always branch on
 `.success` before reading `.data.sessionId`: on failure the field is absent, `jq -r`
