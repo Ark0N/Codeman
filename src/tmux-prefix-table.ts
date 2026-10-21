@@ -21,9 +21,13 @@
  * the length of an attach it claims a held-Ctrl detach alias (`C-d`) in the
  * prefix table, and its one-key way out (F1) and Alt+1..9 in the `root` table.
  * `root` is never touched here, and a `C-<letter> detach-client` binding is left
- * alone, so creating a session while a TUI attach is open does not take the
- * attach's way out away. The reset only runs while the table holds anything
- * else, i.e. once per tmux server in practice.
+ * alone (and put back when a reset clears the rest of the table around it), so
+ * creating a session while a TUI attach is open does not take the attach's way
+ * out away. The reset only runs while the table holds anything else, i.e. once
+ * per tmux server in practice.
+ *
+ * That tolerance is server-wide like every key table: while such an alias is
+ * bound, a browser tab's client can detach itself with it too.
  *
  * @module tmux-prefix-table
  */
@@ -67,6 +71,18 @@ export function prefixTableNeedsReset(listKeysOutput: string, prefix: string = D
   return prefix === 'None' ? false : !hasSendPrefix;
 }
 
+/** The `C-<letter> detach-client` bindings in a `list-keys -T prefix` listing (see prefixTableNeedsReset). */
+function tuiDetachAliases(listKeysOutput: string, prefix: string): string[] {
+  const keys: string[] = [];
+  for (const raw of listKeysOutput.split('\n')) {
+    const match = PREFIX_LINE.exec(raw.trim());
+    if (match && match[2].trim() === 'detach-client' && TUI_DETACH_ALIAS.test(match[1]) && match[1] !== prefix) {
+      keys.push(match[1]);
+    }
+  }
+  return keys;
+}
+
 /** Runs one tmux command line and returns its stdout. */
 export type TmuxRunner = (command: string) => string;
 
@@ -95,6 +111,10 @@ export function restrictTmuxPrefixTable(tmux: string, run: TmuxRunner = defaultR
   try {
     run(`${tmux} unbind-key -a -T prefix`);
     if (prefix !== 'None') run(`${tmux} bind-key -T prefix ${shellescape(prefix)} send-prefix`);
+    // `unbind-key -a` also took a running TUI attach's held-Ctrl way out; give it back.
+    for (const key of tuiDetachAliases(listing ?? '', prefix)) {
+      run(`${tmux} bind-key -T prefix ${shellescape(key)} detach-client`);
+    }
     return true;
   } catch {
     return false;

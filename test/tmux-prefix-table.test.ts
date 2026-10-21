@@ -182,6 +182,25 @@ describe.skipIf(!hasTmux)('restrictTmuxPrefixTable against a real tmux (private 
     expect(keys('root')).toMatch(/-T root M-1\s+switch-client -t alpha/);
   });
 
+  it("gives a running attach's held-Ctrl way out back when the reset clears a stock table", () => {
+    // A tmux server whose table is still stock while a codeman tui attach holds C-d:
+    // `unbind-key -a` takes C-d along with the rest.
+    try {
+      run(`${tmux} bind-key -T prefix d detach-client`);
+      run(`${tmux} bind-key -T prefix ')' switch-client -n`);
+      run(`${tmux} bind-key -T prefix C-d detach-client`);
+      expect(restrictTmuxPrefixTable(tmux, run)).toBe(true);
+      const prefix = keys('prefix')
+        .split('\n')
+        .filter((l) => l.trim());
+      expect(prefix).toHaveLength(2);
+      expect(keys('prefix')).toMatch(/-T prefix C-b\s+send-prefix/);
+      expect(keys('prefix')).toMatch(/-T prefix C-d\s+detach-client/);
+    } finally {
+      run(`${tmux} unbind-key -T prefix C-d`);
+    }
+  });
+
   it('binds send-prefix to the configured prefix when the socket uses another one', () => {
     run(`${tmux} set-option -g prefix C-a`);
     try {
