@@ -3863,7 +3863,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     try {
       const hasCarriageReturn = input.includes('\r');
-      const textPart = input.replace(/\r/g, '').trimEnd();
+      // Leading and trailing line breaks are dropped, so `"\nfix it\r"` does not paste
+      // an empty first line (nor `"fix it\n\r"` an empty last one).
+      const textPart = input.replace(/\r/g, '').replace(/^\n+/, '').trimEnd();
 
       if (textPart && hasCarriageReturn) {
         // Send text first, then Enter as a SEPARATE tmux command after a short delay.
@@ -3885,7 +3887,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         await run(`${this.tmux()} send-keys -t "${session.muxName}" Enter`);
       } else if (textPart.includes('\n')) {
         // Multi-line text, no Enter: pasted, because typed as keys every `\n` would
-        // reach the pane as a key the CLI may read as submit.
+        // reach the pane as a key the CLI may read as submit. A pane that has not
+        // enabled bracketed paste (POSIX sh, macOS /bin/bash 3.2) still gets every line
+        // break as a CR, so there every line but the last runs; before line breaks were
+        // kept, the joined text was typed and nothing ran.
         await pasteText(run, buildPasteTextCommands(this.tmux(), session.muxName, textPart));
       } else if (textPart) {
         // Text only, no Enter

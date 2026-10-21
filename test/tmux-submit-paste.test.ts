@@ -252,6 +252,21 @@ describe('sendInput line breaks', () => {
     expect(bufferText(manager.ran[0])).toBe('one\ntwo');
   });
 
+  it('drops leading line breaks instead of pasting an empty first line', async () => {
+    const single = managerWithSession();
+    await single.sendInput('s1', '\nfix it\r');
+    expect(bufferText(single.ran[0])).toBe('fix it');
+
+    const multi = managerWithSession();
+    await multi.sendInput('s1', '\r\n\r\none\ntwo\r');
+    expect(bufferText(multi.ran[0])).toBe('one\ntwo');
+
+    // Without an Enter, what is left is one line, so it is typed like any other.
+    const typed = managerWithSession();
+    await typed.sendInput('s1', '\n\njust type');
+    expect(typed.ran).toEqual([expect.stringMatching(/ send-keys -t "codeman-abc12345" -l 'just type'$/)]);
+  });
+
   it('leaves single-line input as it was: pasted with Enter, typed without', async () => {
     const submitted = managerWithSession();
     await submitted.sendInput('s1', 'read your inbox\r');

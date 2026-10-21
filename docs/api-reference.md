@@ -434,6 +434,10 @@ about a hundred characters or more is taken as a paste by Claude Code, its `\r`
 becomes a newline, and the prompt stays unsent (measured on 2.1.283). Any other
 input (escape sequences, a bracketed-paste frame, a line feed, a bare `\r`) keeps
 the raw write, and an explicit `"useMux": false` forces it.
+With `"useMux": true`, a line feed is kept: the text goes in as one bracketed paste
+(`\r\n` read as `\n`, leading and trailing line breaks dropped), then Enter if the
+input carried a `\r`; a pane that has not enabled bracketed paste receives each line
+break as a carriage return and runs the lines as they arrive.
 
 ```bash
 curl -s -X POST "$API/api/v1/sessions/$SID/input" \
