@@ -261,8 +261,8 @@ Sequence in `CronService.launch()`:
 4. **Auto-close previous session** (recurring schedules, unless
    `autoClosePreviousSession: false`): any still-open session created by this
    job's previous runs is closed via the normal session-cleanup path.
-5. The global session cap is checked (`MAX_CONCURRENT_SESSIONS = 50`). At cap →
-   **`failed`**.
+5. The global session cap is checked (`MAX_CONCURRENT_SESSIONS`, 50 unless
+   `CODEMAN_MAX_SESSIONS` sets it). At cap → **`failed`**.
 6. A `Session` is created **with `useMux: true`** (so it runs inside tmux),
    registered, listeners attached, and started via `startInteractive()`
    (`startShell()` for `shell` mode). Model/claudeMode come from global config.

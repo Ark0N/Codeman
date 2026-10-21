@@ -18,11 +18,27 @@
 // Session Tracking Limits
 // ============================================================================
 
+/** Default cap on concurrent sessions when `CODEMAN_MAX_SESSIONS` is not set. */
+const DEFAULT_MAX_CONCURRENT_SESSIONS = 50;
+
+/**
+ * Resolve the session cap from `CODEMAN_MAX_SESSIONS` (a positive integer).
+ * Anything else (unset, empty, 0, negative, fractional, not a number) falls back
+ * to {@link DEFAULT_MAX_CONCURRENT_SESSIONS}, so a typo never locks session creation.
+ */
+function resolveMaxConcurrentSessions(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.CODEMAN_MAX_SESSIONS?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return DEFAULT_MAX_CONCURRENT_SESSIONS;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n >= 1 ? n : DEFAULT_MAX_CONCURRENT_SESSIONS;
+}
+
 /**
  * Maximum concurrent sessions allowed.
  * Each session consumes significant resources (PTY, buffers, watchers).
+ * 50 unless `CODEMAN_MAX_SESSIONS` says otherwise; read once at startup.
  */
-export const MAX_CONCURRENT_SESSIONS = 50;
+export const MAX_CONCURRENT_SESSIONS = resolveMaxConcurrentSessions();
 
 // ============================================================================
 // SSE Client Limits
