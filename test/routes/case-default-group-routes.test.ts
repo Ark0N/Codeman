@@ -157,21 +157,17 @@ describe('case default group: create routes', () => {
   });
 
   it('POST /api/sessions without a workingDir infers no case from the server cwd', async () => {
-    const cwd = process.cwd();
-    process.chdir(caseDir); // the server's own cwd happens to be a case folder
-    try {
-      const res = await harness.app.inject({
-        method: 'POST',
-        url: '/api/sessions',
-        payload: { name: 'w1-nowd', mode: 'shell' },
-      });
-      expect(res.statusCode).toBe(200);
-      const data = unwrap(res.body);
-      expect(Object.keys(data)).toEqual(['session']);
-      expect(groupOf(world.layouts[OWNER], data.session.id)).toBeNull();
-    } finally {
-      process.chdir(cwd);
-    }
+    vi.spyOn(process, 'cwd').mockReturnValue(caseDir); // the server's own cwd happens to be a case folder
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { name: 'w1-nowd', mode: 'shell' },
+    });
+    expect(res.statusCode).toBe(200);
+    const data = unwrap(res.body);
+    expect(data.session.workingDir).toBe(caseDir);
+    expect(Object.keys(data)).toEqual(['session']);
+    expect(groupOf(world.layouts[OWNER], data.session.id)).toBeNull();
   });
 
   it('POST /api/sessions outside any case gets no case default and keeps its response shape', async () => {
