@@ -153,6 +153,20 @@ export function decideKeepWarm(f: KeepWarmFacts): KeepWarmDecision {
   return { action: 'nudge' };
 }
 
+/**
+ * Whether a session could be nudged once the settings are known: its own switch is not off, its
+ * launch reports the cache, and the last report is warm. Only such a session has anything to
+ * lose while the settings cannot be read, so only it retries on its own.
+ */
+function couldNudge(s: KeepWarmSessionView): boolean {
+  return (
+    s.keepWarmEnabled !== false &&
+    s.statusLineExporter === 'injected' &&
+    !!s.promptCache?.warm &&
+    !!s.promptCache.expiresAt
+  );
+}
+
 /** What the service needs from a session; `Session` satisfies it structurally. */
 export interface KeepWarmSessionView {
   readonly id: string;
@@ -226,6 +240,8 @@ export class PromptCacheKeepWarmService implements KeepWarmScheduler {
    * `rescheduleAll()` drops it, and the settings PUT calls that whenever either key changes.
    */
   private settings: Promise<KeepWarmSettings> | undefined;
+  /** The last settings read failure logged, so one that persists is logged once; cleared by a good read. */
+  private settingsFailure: string | undefined;
   private stopped = false;
 
   constructor(private readonly ports: KeepWarmPorts) {}
@@ -252,8 +268,8 @@ export class PromptCacheKeepWarmService implements KeepWarmScheduler {
     const run = this.evaluate(sessionId)
       .catch((err) => {
         this.ports.log?.(`[KeepWarm] ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
-        // A failed settings read or write is transient, and an idle session gets no other
-        // trigger until its next turn.
+        // A failed write or pane read is transient, and an idle session gets no other trigger
+        // until its next turn. (A failed settings read is handled in evaluate().)
         // Not after `remove()`, which drops this run: the session is being deleted.
         if (!this.stopped && this.running.get(sessionId) === run) this.arm(sessionId, Date.now() + KEEP_WARM_RETRY_MS);
       })
@@ -318,7 +334,22 @@ export class PromptCacheKeepWarmService implements KeepWarmScheduler {
       this.clearTimer(id);
       const session = this.ports.getSession(id);
       if (!session) return;
-      const settings = await this.readSettings();
+      let settings: KeepWarmSettings;
+      try {
+        settings = await this.readSettings();
+      } catch (err) {
+        // A read that lands mid-write is retried. A settings.json that stays broken (a hand edit
+        // with a trailing comma) fails every read until it is fixed, so it is logged once rather
+        // than once a minute per session, and only a session that could nudge retries.
+        const message = err instanceof Error ? err.message : String(err);
+        if (message !== this.settingsFailure) {
+          this.settingsFailure = message;
+          this.ports.log?.(`[KeepWarm] ${id.slice(0, 8)}: cannot read the settings: ${message}`);
+        }
+        if (!cancelled() && couldNudge(session)) this.arm(id, Date.now() + KEEP_WARM_RETRY_MS);
+        return;
+      }
+      this.settingsFailure = undefined;
       if (cancelled()) return;
       const tally = this.tallies.get(id) ?? { nudges: 0 };
       const facts: KeepWarmFacts = {

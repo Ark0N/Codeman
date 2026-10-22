@@ -720,6 +720,79 @@ describe('PromptCacheKeepWarmService', () => {
     service.stop();
   });
 
+  /**
+   * A settings.json left broken (a hand edit with a trailing comma) fails every read until it is
+   * fixed. Only a session that could nudge retries on its own, and the failure is logged once
+   * rather than once a minute per session.
+   */
+  it.each([
+    { label: 'keep-warm off', set: (s: FakeSession) => (s.keepWarmEnabled = false) },
+    { label: 'no exporter on this launch', set: (s: FakeSession) => (s.statusLineExporter = 'remote' as never) },
+    { label: 'no cache report', set: (s: FakeSession) => (s.promptCache = null) },
+    { label: 'a cold cache', set: (s: FakeSession) => (s.promptCache = { ...warmCache(NOW + HOUR), warm: false }) },
+  ])('does not retry an unreadable settings file for a session that cannot nudge ($label)', async ({ set }) => {
+    const session = new FakeSession();
+    session.promptCache = warmCache(NOW + KEEP_WARM_LEAD_MS - 1000);
+    set(session);
+    let reads = 0;
+    const logged: string[] = [];
+    const { ports, published } = makePorts(session, {
+      readSettings: async () => {
+        reads += 1;
+        throw new Error('Unexpected token } in JSON at position 812');
+      },
+      log: (m) => logged.push(m),
+    });
+    const service = new PromptCacheKeepWarmService(ports);
+    await service.schedule(session.id);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(10 * KEEP_WARM_RETRY_MS);
+    await settle();
+    expect(reads).toBe(1);
+    expect(logged).toEqual([expect.stringContaining('Unexpected token')]);
+    expect(published).toHaveLength(0);
+    service.stop();
+  });
+
+  it('retries an unreadable settings file every minute for a session that can nudge, logging it once', async () => {
+    const session = new FakeSession();
+    session.promptCache = warmCache(NOW + 30 * 60_000);
+    let reads = 0;
+    let fail = true;
+    const logged: string[] = [];
+    const { ports, last } = makePorts(session, {
+      readSettings: async () => {
+        reads += 1;
+        if (fail) throw new Error('Unexpected token } in JSON at position 812');
+        return { keepWarmDefault: true, maxHours: 2 };
+      },
+      log: (m) => logged.push(m),
+    });
+    const service = new PromptCacheKeepWarmService(ports);
+    await service.schedule(session.id);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(10 * KEEP_WARM_RETRY_MS);
+    await settle();
+    expect(reads).toBe(11);
+    expect(logged).toEqual([expect.stringContaining('Unexpected token')]);
+
+    // Fixed: the next retry reads it and the session is kept warm from there.
+    fail = false;
+    await vi.advanceTimersByTimeAsync(KEEP_WARM_RETRY_MS);
+    await settle();
+    expect(reads).toBe(12);
+    expect(last()).toMatchObject({ enabled: true, state: 'armed' });
+
+    // Broken again later: logged again, once.
+    fail = true;
+    service.rescheduleAll();
+    await settle();
+    await vi.advanceTimersByTimeAsync(3 * KEEP_WARM_RETRY_MS);
+    await settle();
+    expect(logged).toHaveLength(2);
+    service.stop();
+  });
+
   it('runs one follow-up for triggers that land during an evaluation, and resolves after it', async () => {
     const session = new FakeSession();
     session.keepWarmEnabled = true;
