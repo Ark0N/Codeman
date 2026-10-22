@@ -470,6 +470,7 @@ export class WebServer extends EventEmitter {
       // Fresh, not the 2s cache: the settings PUT does not invalidate it, and a
       // flip must apply to the very next spawn.
       childrenFollowParent: async () => (await this.readSettings(true)).spawnedTabsFollowParent === true,
+      caseDefaults: this.store,
     });
     if (this.testMode) this.tabLayouts.markRestorationSkipped();
 
@@ -725,8 +726,8 @@ export class WebServer extends EventEmitter {
   /**
    * Add a tentative session only after its owner layout accepts the creation.
    * The session enters the live map inside the layout service's owner lock, so
-   * the placement it asked for (`tabGroupId`) lands in the same versioned write
-   * that first records it.
+   * the placement it asked for (`tabGroupId`, else its case's default group)
+   * lands in the same versioned write that first records it.
    */
   private async registerSessionWithLayout(session: Session, placement?: SessionPlacementHint): Promise<TabLayout> {
     return this.tabLayouts.sessionCreated(ownerLayoutKey(session.owner), session.id, placement, () => {

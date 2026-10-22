@@ -4,9 +4,9 @@
  * auto-clear, auto-compact, image watcher, flicker filter, and logout.
  */
 
-import { FastifyInstance, type FastifyReply } from 'fastify';
+import { FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { join, dirname, extname, basename } from 'node:path';
+import { join, dirname, extname, basename, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
@@ -76,7 +76,7 @@ import {
 } from './custom-model-routes.js';
 import { matchesPattern } from '../../config/cli-registry/patterns.js';
 import { ownerLayoutKey } from '../../tab-layout-persistence.js';
-import { TabLayoutValidationError } from '../../tab-layout.js';
+import { TabLayoutValidationError, type TabLayout } from '../../tab-layout.js';
 import {
   sessionWaits,
   resolveWaitSignals,
@@ -107,6 +107,7 @@ import {
   ownerFor,
   parseBody,
   persistAndBroadcastSession,
+  readJsonConfig,
   resolveAgentCaseOrigin,
   resolveCasesDir,
   resolveParentSessionId,
@@ -203,6 +204,35 @@ import { UPLOADS_DIR } from '../paste-image-gc.js';
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
 const CODEMAN_CONFIG_DIR = getDataDir();
+
+const SAFE_CASE_NAME = /^[a-zA-Z0-9_-]+$/;
+
+/** Did the committed layout put this session in a named group (not Ungrouped)? */
+function landedInGroup(layout: TabLayout | undefined, sessionId: string): boolean {
+  return !!layout?.groups.some((group) => group.refs.some((ref) => ref.kind === 'session' && ref.id === sessionId));
+}
+
+/**
+ * The case a POST /api/sessions `workingDir` belongs to, for its default session
+ * group: a direct child of the caller's case space, or (admin / single-user, as
+ * GET /api/cases lists them) a linked case's exact path. Lexical only: the
+ * browser sends the path the case list gave it, and this must never touch a
+ * possibly-dead mount. Anything else is no case, which keeps today's placement.
+ */
+async function inferLocalCaseName(req: FastifyRequest, workingDir: string): Promise<string | undefined> {
+  const target = resolvePath(workingDir);
+  const user = getAuthUser(req);
+  if (dirname(target) === resolvePath(resolveCasesDir(user))) {
+    const name = basename(target);
+    if (SAFE_CASE_NAME.test(name)) return name;
+  }
+  if (isMultiUserMode() && !isAdmin(req)) return undefined;
+  const linked = await readJsonConfig<Record<string, string>>(LINKED_CASES_FILE, 'linked cases', {});
+  for (const [name, path] of Object.entries(linked)) {
+    if (SAFE_CASE_NAME.test(name) && typeof path === 'string' && resolvePath(path) === target) return name;
+  }
+  return undefined;
+}
 
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
 // eslint-disable-next-line no-control-regex
@@ -1412,9 +1442,13 @@ export function registerSessionRoutes(
       parentSessionId: resolveParentSessionId(ctx, req, body.parentSessionId, owner),
     });
 
-    const tabLayout = body.tabGroupId
-      ? await ctx.addSession(session, { tabGroupId: body.tabGroupId })
-      : await ctx.addSession(session);
+    const placementCase = remote ? undefined : await inferLocalCaseName(req, workingDir);
+    const placement = {
+      ...(body.tabGroupId ? { tabGroupId: body.tabGroupId } : {}),
+      ...(placementCase ? { caseName: placementCase } : {}),
+    };
+    const tabLayout =
+      Object.keys(placement).length > 0 ? await ctx.addSession(session, placement) : await ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -1432,9 +1466,13 @@ export function registerSessionRoutes(
     // Avoids serializing 2-3MB of terminal+text buffers per session creation.
     const lightState = ctx.getSessionStateWithRespawn(session);
     ctx.broadcast(SseEvent.SessionCreated, lightState);
-    // A grouped creation also returns the layout that placed it, so the browser
-    // draws the tab inside its group at once instead of after a re-read.
-    return { session: lightState, ...(body.tabGroupId ? { tabLayout } : {}) };
+    // A grouped creation (asked for, or its case's default group) also returns the
+    // layout that placed it, so the browser draws the tab inside its group at once
+    // instead of after a re-read.
+    return {
+      session: lightState,
+      ...(body.tabGroupId || landedInGroup(tabLayout, session.id) ? { tabLayout } : {}),
+    };
   });
 
   // ========== Rename Session ==========
@@ -4461,7 +4499,7 @@ export function registerSessionRoutes(
       }
     }
 
-    const tabLayout = tabGroupId ? await ctx.addSession(session, { tabGroupId }) : await ctx.addSession(session);
+    const tabLayout = await ctx.addSession(session, { caseName, ...(tabGroupId ? { tabGroupId } : {}) });
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -4553,7 +4591,7 @@ export function registerSessionRoutes(
         caseName,
         ...(worktree ? { worktree, workingDir: workspacePath } : {}),
         ...(customModel ? { modelSwapInProgress: qsCustomModelSwapInProgress } : {}),
-        ...(tabGroupId ? { tabLayout } : {}),
+        ...(tabGroupId || landedInGroup(tabLayout, session.id) ? { tabLayout } : {}),
       };
     } catch (err) {
       // Clean up session on error to prevent orphaned resources

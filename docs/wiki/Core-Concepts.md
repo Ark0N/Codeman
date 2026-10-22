@@ -13,6 +13,10 @@ Codeman-side configuration:
 
 - Which CLI the Run button should default to.
 - Per-case toggles (Agent Teams, 1M Opus context).
+- A **Default session group** (Case settings…): new sessions of the case land in that tab group of the
+  vertical rail unless you start them from a group's own *New session* or they follow the session that
+  spawned them. *Ungrouped* turns it off. It follows you across devices, never moves existing tabs, and a
+  deleted group simply falls back to Ungrouped.
 - Where it runs, if it is not the local filesystem: see [Location overlays](#location-overlays).
 
 Three ways to get one, all under **New or link a case…** at the bottom of the case picker
