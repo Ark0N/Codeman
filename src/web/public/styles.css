@@ -12223,10 +12223,15 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 }
 
 .file-preview-window {
-  width: 80vw;
-  max-width: 900px;
-  height: 80vh;
-  max-height: 700px;
+  position: relative;
+  width: min(80vw, 900px);
+  height: min(80vh, 700px);
+  /* A dragged size (inline width/height) and the expanded state may exceed the
+     default 900x700, but never the screen. */
+  max-width: 96vw;
+  max-height: 94vh;
+  min-width: min(320px, 96vw);
+  min-height: min(240px, 94vh);
   background: var(--floating-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
@@ -12236,6 +12241,36 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Expanded: fills the screen (a dragged size is ignored while it is on). */
+.file-preview-window.expanded {
+  width: 96vw !important;
+  height: 94vh !important;
+}
+
+/* Corner grip (panels-ui.js _bindFilePreviewResize). The window is centred, so a
+   drag moves both edges: the handler doubles the pointer delta to keep the corner
+   under the pointer. Only phones hide it (with Expand, mobile.css under 600px), since
+   the window is full screen there; tablets show and use it. */
+.file-preview-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background: linear-gradient(135deg, transparent 50%, var(--text-muted, #888) 50%, var(--text-muted, #888) 58%, transparent 58%, transparent 72%, var(--text-muted, #888) 72%, var(--text-muted, #888) 80%, transparent 80%);
+  opacity: 0.6;
+}
+
+.file-preview-resize:hover {
+  opacity: 1;
+}
+
+.file-preview-window.expanded .file-preview-resize {
+  display: none;
 }
 
 .file-preview-header {

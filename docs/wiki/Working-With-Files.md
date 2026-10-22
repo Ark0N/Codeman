@@ -27,6 +27,11 @@ stream rather than server memory). Sensitive paths (`.env`, anything
 matching credentials, `~/.ssh`, AWS credentials) are blocked from download, and SVG and HTML
 are served as downloads rather than rendered, so they cannot execute in the page.
 
+The preview window has **Back** and **Forward** buttons (also `Alt+←` and `Alt+→`) once you
+have opened a second file, so a link into another document is no longer one way. **Expand**
+fills the screen and is remembered per device, and the corner grip resizes the window. On a
+phone the window is always full screen, so Expand and the grip are hidden there.
+
 Closing the preview pauses and unloads any playing media. A video that keeps playing after
 you close the panel means you are on an old version.
 

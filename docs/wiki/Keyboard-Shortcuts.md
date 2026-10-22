@@ -57,11 +57,12 @@ default. See [Tile Grid](Tile-Grid).
 
 ## Everything else
 
-| Shortcut       | Action                          |
-| -------------- | ------------------------------- |
-| `Ctrl+Shift+V` | Toggle voice input.              |
-| `Ctrl+?`       | Shortcut reference overlay.      |
-| `Escape`       | Close panels and modals.         |
+| Shortcut          | Action                                                       |
+| ----------------- | ------------------------------------------------------------ |
+| `Ctrl+Shift+V`    | Toggle voice input.                                          |
+| `Ctrl+?`          | Shortcut reference overlay.                                  |
+| `Escape`          | Close panels and modals.                                     |
+| `Alt+←` / `Alt+→` | File Viewer window: back / forward between previewed files.  |
 
 ## Rebinding
 
