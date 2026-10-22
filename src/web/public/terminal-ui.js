@@ -1141,9 +1141,13 @@ Object.assign(CodemanApp.prototype, {
     // (_shouldForwardWheelToApp), a touch drag must go there too, or every
     // phone/tablet swipe scrolls the local buffer of stale repaint frames and
     // drags the CLI's pinned input box off the screen (issue #205's mobile
-    // half). Same gate, so Shift has no touch analog but the local-scrollback
-    // opt-out setting and the version/tracking gate apply to touch exactly as they
-    // do to the wheel — including the PageUp/PageDown fallback the wheel uses
+    // half). Touch asks _shouldForwardTouchToApp, which is the wheel's gate
+    // plus one branch of its own: a drag also forwards as SGR wheel reports
+    // while xterm itself tracks the mouse with SGR encoding (an app in the
+    // pane asked for it), since the wheel needs no help there (xterm encodes
+    // it) but a drag does. Shift has no touch analog, but the local-scrollback
+    // opt-out setting and the version/tracking gate apply to touch as they
+    // do to the wheel, including the PageUp/PageDown fallback the wheel uses
     // when that gate is false and there is no local scrollback to scroll
     // (_maybePageCliTranscript), which is what keeps a swipe from being a
     // complete no-op on a phone.
@@ -5830,12 +5834,15 @@ Object.assign(CodemanApp.prototype, {
     return window.CodemanTerminalInput.wheelDeltaLines(ev, this.terminal?.rows);
   },
 
-  // `target` ({ terminal, sessionId }) asks the question for a TerminalTile:
-  // its own terminal's tracking mode and its own session, never the active one.
-  // Either field left out means the primary pane's.
-  // xterm encodes native wheel events when mouse tracking is enabled, but
-  // our touch listeners consume finger drags themselves. Forward those
-  // explicitly: local scrollLines() cannot move an alternate-screen buffer.
+  // The touch listeners' forwarding gate: the wheel's gate below, plus one
+  // branch of its own. While xterm itself tracks the mouse (an app in the pane
+  // asked for it, a shell's htop or vim), xterm encodes a native wheel event on
+  // its own, but the touch listeners consume finger drags themselves, so those
+  // are forwarded explicitly. Scrolling locally instead shows nothing useful in
+  // either kind of session: on a direct PTY the app draws on xterm's alternate
+  // screen, which scrollLines() cannot move, and in a tmux-backed session xterm
+  // stays in the normal buffer, so a local scroll only drags stale tmux
+  // repaints up the screen.
   _shouldForwardTouchToApp() {
     if (this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback) return false;
     const mode = this.terminal?.modes?.mouseTrackingMode;
@@ -5845,6 +5852,9 @@ Object.assign(CodemanApp.prototype, {
     return !!(mode && mode !== 'none' && mode !== 'x10' && sgr) || this._shouldForwardWheelToApp({ shiftKey: false });
   },
 
+  // `target` ({ terminal, sessionId }) asks the question for a TerminalTile:
+  // its own terminal's tracking mode and its own session, never the active one.
+  // Either field left out means the primary pane's.
   _shouldForwardWheelToApp(ev, target = {}) {
     if (ev.shiftKey) return false;
     // Opt-out (App Settings → Input → "Wheel scrolls local history"): pin the
