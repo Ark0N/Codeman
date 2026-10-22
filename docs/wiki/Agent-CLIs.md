@@ -72,7 +72,7 @@ output. The other CLIs expose no equivalent.
 | Docker cases, remote SSH cases                    | Yes    | Yes                                                  |
 | Precise idle detection                            | Yes    | Codex, Pi, OpenCode, OMP, Copilot, Gemini and Antigravity: same screen check, via their own prompt and working line. DeepSeek: reports its end of turn itself. Grok: generic cues only, unreliable |
 | Auto-resume when a usage limit resets             | Yes    | No                                                   |
-| Plan usage chip                                   | Yes    | No                                                   |
+| Plan usage chip                                   | Yes    | Codex (limits) and Copilot (monthly premium requests); the others no |
 | Approvals Inbox                                   | Yes    | DeepSeek and Codex as alerts (answer in the terminal); others no |
 | Read My Mind                                      | Yes    | No                                                   |
 | Ralph loop and its task tracker                   | Yes    | No                                                   |
@@ -279,6 +279,15 @@ Guide: [`docs/omp-integration.md`](https://github.com/Ark0N/Codeman/blob/master/
 GitHub's `copilot`, installed with `npm install -g @github/copilot` (CLI management can run
 that for you). Codeman recognises it only when `--version` answers `GitHub Copilot CLI`, and
 `GET /api/copilot/status` reports the path and version that resolved.
+
+**Quota in the plan usage chip.** While Copilot CLI is installed and signed in, the chip gains
+a **Copilot** row with the calendar-month premium-request quota (requests used and the reset in
+the tooltip). This is **on by default**, like the Codex usage poll: every 10 minutes the server
+asks `api.github.com` for the quota with Copilot's own sign-in token (read-only, redirects
+refused, the token never logged or stored). The token is read from `COPILOT_GITHUB_TOKEN`,
+`GH_TOKEN` or `GITHUB_TOKEN`, or from the plain-text `~/.copilot/config.json`, so a sign-in kept
+in the OS keychain (a macOS or desktop Linux keyring) shows no row. Any failure just leaves the row out. Turn off
+**Plan Usage Limits** in App Settings to stop the request.
 
 **Signing in.** Codeman does not log it in: run `copilot` once and use `/login`, or sign in
 inside a Codeman tab. Copilot keeps the token in the OS keychain when there is one; a headless

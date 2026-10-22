@@ -57,6 +57,7 @@ Codeman never logs Copilot in or stores its credentials.
 | Model detection | The right-hand field of the footer's last row, at rest and mid-turn. |
 | Status probe | `GET /api/copilot/status`, plus an entry in the CLI-installed probes and `codeman doctor`. |
 | MCP | The entry declares `mcpConfig` (`~/.copilot/mcp-config.json`, dialect `copilot-json`, relocated by `COPILOT_HOME`), so [MCP server sync](./cli-registry.md) treats it as a target and a source. `copilot mcp disable` is honoured (read from `settings.json`, never written). |
+| Plan usage | The header chip's **Copilot** row: the monthly premium-request quota from `GET https://api.github.com/copilot_internal/user`, read at startup and every 10 minutes with Copilot's own sign-in token (`COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`, else the plain-text token in `<COPILOT_HOME or ~/.copilot>/config.json`; a sign-in kept in the OS keychain shows no row). On by default, like the Codex usage poll: it rides Plan Usage Limits (`showPlanUsageLimits`), and turning that off stops the request. Read-only, redirects refused, the token never logged or stored; any failure leaves the row out. |
 | Docker | The agent image installs `@github/copilot`. No credential directory is seeded (see below). |
 
 ### Your own endpoint (BYOK)

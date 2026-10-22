@@ -119,8 +119,9 @@ Recent Claude Code builds can compact a large idle session on their own shortly 
 
 ## The plan usage chip
 
-**Claude only.** A header chip showing live subscription usage, on by default on desktop and
-off on phones.
+A header chip showing live subscription usage: Claude (the 5-hour and weekly windows), Codex
+(its limits) and, while Copilot CLI is installed and signed in, Copilot's monthly premium-request
+quota. On by default on desktop and off on phones.
 
 It works through a status line exporter that Codeman hands to `claude` as an ephemeral
 setting when it spawns the session, never written to disk, which posts Claude's own rate
@@ -128,7 +129,8 @@ limit data back to Codeman. Your own status line (project-local, project, then
 `~/.claude/settings.json`) is wrapped and printed through, and a `claude` you run by hand
 outside Codeman sees nothing of it. Workspaces an older Codeman wrote the exporter into are
 cleaned up the first time a session starts there. Codex limits come from a read-only poll of
-its own app-server. Known limit: sessions inside a Docker case do not feed the chip yet.
+its own app-server, and the Copilot quota from a read-only request to `api.github.com` every
+10 minutes with Copilot's own token (on by default; Plan Usage Limits off stops it). Known limit: sessions inside a Docker case do not feed the chip yet.
 
 The chip and the exporter are the same setting. Turning the chip on without the exporter
 would leave it showing a dash forever, so resolve it in one place: **App Settings**. A
