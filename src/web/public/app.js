@@ -685,6 +685,14 @@ const DEFAULT_SHORTCUTS = [
     label: 'Close Panels',
     displayBindings: ['Escape'],
   },
+  // Handled by the File Viewer's own capture-phase listener while it is open
+  // (_bindFilePreviewChrome, panels-ui.js), never through the registry.
+  {
+    id: 'file-preview-history',
+    group: 'Panels',
+    label: 'File Viewer Back / Forward',
+    displayBindings: ['Alt/Option+ArrowLeft', 'Alt/Option+ArrowRight'],
+  },
 ];
 
 

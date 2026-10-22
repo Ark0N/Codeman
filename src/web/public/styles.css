@@ -12251,7 +12251,8 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 
 /* Corner grip (panels-ui.js _bindFilePreviewResize). The window is centred, so a
    drag moves both edges: the handler doubles the pointer delta to keep the corner
-   under the pointer. Touch devices use the Expand button instead. */
+   under the pointer. Only phones hide it (with Expand, mobile.css under 600px), since
+   the window is full screen there; tablets show and use it. */
 .file-preview-resize {
   position: absolute;
   right: 0;

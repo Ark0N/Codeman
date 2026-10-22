@@ -51,6 +51,7 @@ describe('help modal shortcuts', () => {
     expect(helpModal).not.toMatch(/Ctrl<\/kbd>\s*\+\s*<kbd>\/<\/kbd>.*?Show Shortcuts/i);
     expectShortcut(helpModal, ['Ctrl', 'Shift', 'V'], 'Voice Input');
     expectShortcut(helpModal, ['Escape'], 'Close Panels');
+    expectShortcut(helpModal, ['Alt/Option', 'ArrowLeft'], 'File Viewer Back / Forward');
   });
 
   it('documents the tile grid chords', () => {
