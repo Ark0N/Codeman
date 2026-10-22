@@ -2178,25 +2178,91 @@ function findFilePathLinks(text) {
   while ((match = urlPattern.exec(value)) !== null) urls.push({ index: match.index, path: match[0] });
   const inUrl = (index, length) => urls.some((u) => index < u.index + u.path.length && u.index < index + length);
 
+  // A path with spaces is taken whole, or the span it covers links nothing
+  // (spacedFilePathOnLine). Either way no detector below may cut a fragment out of it.
+  const reserved = [];
+  let lineStart = 0;
+  for (const line of value.split('\n')) {
+    const spaced = spacedFilePathOnLine(line);
+    if (spaced && !inUrl(lineStart + spaced.index, spaced.path.length)) {
+      const index = lineStart + spaced.index;
+      reserved.push({ index, path: spaced.path });
+      if (spaced.link) found.push({ path: spaced.path, index });
+    }
+    lineStart += line.length + 1;
+  }
+  const isReserved = (index, length) =>
+    reserved.some((r) => index < r.index + r.path.length && r.index < index + length);
+
   const absolute = absoluteFilePathPattern();
   while ((match = absolute.exec(value)) !== null) {
-    if (!inUrl(match.index, match[1].length)) found.push({ path: match[1], index: match.index });
+    if (!inUrl(match.index, match[1].length) && !isReserved(match.index, match[1].length)) {
+      found.push({ path: match[1], index: match.index });
+    }
   }
   const relative = new RegExp(RELATIVE_FILE_PATH_LINK_PATTERN.source, 'g');
   while ((match = relative.exec(value)) !== null) {
     const path = match[2];
     const index = match.index + match[1].length;
-    if (overlaps(index, path.length) || inUrl(index, path.length)) continue;
+    if (overlaps(index, path.length) || inUrl(index, path.length) || isReserved(index, path.length)) continue;
     found.push({ path, index });
   }
   const folders = new RegExp(FOLDER_PATH_LINK_PATTERN.source, 'g');
   while ((match = folders.exec(value)) !== null) {
     const path = folderLinkPath(match[2]);
     const index = match.index + match[1].length;
-    if (!path || overlaps(index, path.length) || inUrl(index, path.length)) continue;
+    if (!path || overlaps(index, path.length) || inUrl(index, path.length) || isReserved(index, path.length)) continue;
     found.push({ path, index, folder: true });
   }
   return found.sort((a, b) => a.index - b.index);
+}
+
+/**
+ * A file path WITH SPACES on one line, or null.
+ *
+ * Every path pattern ends a path at whitespace, so `/mnt/c/OneDrive - Contoso/a.docx`
+ * linked `/mnt/c/OneDrive` plus a relative `Contoso/a.docx`, two links to the
+ * wrong targets. A space is only safe inside a path where the line itself bounds
+ * the path, so a spaced path is recognised in exactly these shapes:
+ *
+ *   /mnt/c/My Docs/report.docx              the whole line is the path
+ *   - /mnt/c/My Docs/report.docx            after a list marker (`-`, `*`, `•`, `1.`, `2)`)
+ *   Saved to: 03 Attachments/plan.pptx      after a short label (one to four words + `:`)
+ *
+ * An absolute path may stand alone; a relative or `~/` one needs a marker or a
+ * label, since a bare spaced relative candidate is ordinary prose. One trailing
+ * sentence mark is left out. The candidate must read as ONE path: it ends on a
+ * known extension, and no earlier word ends on one, starts a new `/` path, ends
+ * in `:` or is an arrow, so two paths on a line are never merged.
+ *
+ * A candidate that is one path but not a linkable one (an unknown root such as
+ * `/etc`, a `.`/`..`/empty segment) comes back with `link: false`: its span links
+ * nothing, rather than the fragment after its last space.
+ *
+ * Linear: one bounded prefix match, then string scans.
+ *
+ * @param {string} line One line, no newline.
+ * @returns {{path: string, index: number, link: boolean} | null}
+ */
+function spacedFilePathOnLine(line) {
+  const text = String(line || '');
+  const prefix = /^[ \t]*((?:\d{1,3}[.)]|[-*•])[ \t]+)?((?:[A-Za-z][\w-]{0,30}(?: [\w-]{1,30}){0,3}):[ \t]+)?/.exec(text);
+  const index = prefix[0].length;
+  const path = text.slice(index).replace(/\s+$/, '').replace(/[.,;:!?]$/, '');
+  if (!path.includes(' ') || !path.includes('/') || path.length > 1000) return null;
+  if (!path.startsWith('/') && !prefix[1] && !prefix[2]) return null;
+  if (!PATH_TOKEN_ENDS_WITH_EXTENSION.test(path)) return null;
+  if (/[\t"'`<>|;&\x00-\x1f\\]/.test(path) || path.includes('://')) return null;
+  const words = path.split(' ');
+  for (const word of words.slice(0, -1)) {
+    if (word.endsWith(':') || /^(?:—|–|→|=>|->|<-)$/.test(word)) return null;
+    if (PATH_TOKEN_ENDS_WITH_EXTENSION.test(word.replace(/[.,;:!?)\]}]+$/, ''))) return null;
+  }
+  if (words.slice(1).some((word) => word.startsWith('/'))) return null;
+  const rooted = SPACED_PATH_ROOT.test(path) || path.startsWith('~/');
+  const segments = path.replace(/^~?\//, '').split('/');
+  const link = (rooted || !path.startsWith('/')) && segments.every((seg) => seg && seg !== '.' && seg !== '..');
+  return { path, index, link };
 }
 
 /**
@@ -2385,6 +2451,8 @@ const FILE_LINK_ROOT_GROUP = /^\(\\\/\(\?:([^()]*)\)/.exec(FILE_PATH_LINK_PATTER
 const PATH_TOKEN_ENDS_WITH_EXTENSION = new RegExp(`\\.${FILE_LINK_EXTENSION_GROUP}$`);
 const PATH_TOKEN_HAS_EXTENSION = new RegExp(`\\.${FILE_LINK_EXTENSION_GROUP}\\b`);
 const PATH_TOKEN_STARTS_NEW_PATH = new RegExp(`^(?:~\\/|\\/(?:${FILE_LINK_ROOT_GROUP})\\/)`);
+/** A rooted path's start (`/home/`, `/mnt/`, …), for {@link spacedFilePathOnLine}. */
+const SPACED_PATH_ROOT = new RegExp(`^\\/(?:${FILE_LINK_ROOT_GROUP})\\/`);
 /** A relative head that names its own location (`./a`, `../a`) is an entry of its own. */
 const PATH_TOKEN_STARTS_EXPLICIT_RELATIVE = /^\.{1,2}\//;
 /** First directory of a path, a leading `/` or `./` ignored: `src` for `src/a.ts` and `/src/a.ts`. */
