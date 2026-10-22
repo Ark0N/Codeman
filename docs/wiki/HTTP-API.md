@@ -72,7 +72,7 @@ Roughly 235 handlers across 26 route modules. By domain:
 | ------------------- | -------- | --------------------------------------------------- |
 | System              | 56       | Status, settings, digest, updates, tunnel.           |
 | Sessions            | 34       | Create, input, terminal, wait, last response, kill.  |
-| Cases               | 37       | Create, link, clone, worktrees, remote and docker cases. |
+| Cases               | 39       | Create, link, clone, worktrees, remote and docker cases. |
 | Files               | 17       | Preview, edit, raw, attachments, path picker.        |
 | Orchestrator        | 10       | Plans and phases.                                     |
 | Ralph               | 9        | Loop control and configuration.                       |
