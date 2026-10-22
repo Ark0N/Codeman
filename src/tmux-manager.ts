@@ -3869,7 +3869,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         // highlighted option (see submitsAsKeys).
         if (submitsAsKeys(textPart)) {
           await execAsync(
-            `${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+            `${this.tmux()} send-keys -t "${session.muxName}" -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
             { timeout: EXEC_TIMEOUT_MS }
           );
         } else {
@@ -3885,7 +3885,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       } else if (textPart) {
         // Text only, no Enter
         await execAsync(
-          `${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+          `${this.tmux()} send-keys -t "${session.muxName}" -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
           { timeout: EXEC_TIMEOUT_MS }
         );
       } else if (hasCarriageReturn) {
@@ -4030,7 +4030,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       if (textPart && hasCarriageReturn) {
         execSync(
-          `${tmux} send-keys -t ${shellescape(target)} -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+          `${tmux} send-keys -t ${shellescape(target)} -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
           {
             encoding: 'utf-8',
             timeout: EXEC_TIMEOUT_MS,
@@ -4042,7 +4042,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         });
       } else if (textPart) {
         execSync(
-          `${tmux} send-keys -t ${shellescape(target)} -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+          `${tmux} send-keys -t ${shellescape(target)} -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
           {
             encoding: 'utf-8',
             timeout: EXEC_TIMEOUT_MS,
