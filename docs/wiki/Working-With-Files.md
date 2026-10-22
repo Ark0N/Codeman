@@ -154,10 +154,12 @@ their workspace is bind-mounted at the same path.
 
 ## The path picker
 
-For choosing a path rather than typing one. It appears in two places:
+For choosing a path rather than typing one. It appears in three places:
 
 - **Browse** in **Add Case → Link Existing**.
 - The **📁 Path** key on the mobile keyboard bar.
+- The **📂** quick-browser button in the Files panel header, so a desktop browser gets the
+  same fast browser as a phone.
 
 It browses one directory at a time and can show hidden entries on request. The current
 folder is an editable field: type or paste a path and press Enter (or **Go**) to jump
@@ -167,6 +169,16 @@ quick way to the file an agent just wrote), with folders always ahead of files; 
 choice is remembered per device. The picker inserts the path into your prompt
 **without** pressing Enter, so nothing is submitted by accident. Its sibling **⌫ All**
 key clears the unsent prompt, and never sends the agent's `/clear` command.
+
+Opened from the Path key or the Files panel, it also transfers files: every file row has a
+**⬇** download link (any file type, sent as a download, never rendered), and **⬆ Upload**
+sends one or more files from your device into the folder on screen. An upload never
+overwrites: a name already taken is saved as `name (1).ext`, and the uploaded file is
+selected afterwards, so **Insert Path** puts it on the prompt in one tap. Uploads are capped
+at 1GB per file (`CODEMAN_MAX_PICKER_UPLOAD_BYTES`) and 60 per minute; downloads follow the
+global download cap. Both reach exactly what the picker can list, under the same roots and
+blocks, and a sensitive name (`credentials.json`, a key file) is refused for upload as it is
+for download. Link Existing's picker stays browse-only.
 
 This is a separate file-serving surface from the viewer, with its own rules: it allowlists
 your home directory, the cases directory, and anything in `CODEMAN_FILE_PICKER_ROOTS`, and
