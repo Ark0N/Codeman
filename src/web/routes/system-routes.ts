@@ -1113,7 +1113,11 @@ export function registerSystemRoutes(
       toggleService((merged.subagentTrackingEnabled as boolean) ?? true, subagentWatcher, 'Subagent watcher');
       // The prompt-cache keep-warm keeps its default and cap in memory; a changed default or cap
       // makes it re-read them and re-evaluate every session now rather than at its next cache report.
-      if ('promptCacheKeepWarm' in settingsToStore || 'promptCacheKeepWarmMaxHours' in settingsToStore) {
+      // Compared on `merged`, not tested for in the body: the browser sends both keys on every save.
+      if (
+        merged.promptCacheKeepWarm !== existing.promptCacheKeepWarm ||
+        merged.promptCacheKeepWarmMaxHours !== existing.promptCacheKeepWarmMaxHours
+      ) {
         ctx.keepWarm.rescheduleAll();
       }
 
