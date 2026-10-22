@@ -931,6 +931,9 @@ describe('TmuxManager (unit)', () => {
             'codeman-dddd4444|105|0|||',
             // The launch directory every pane starts in; a remote or docker pane never leaves it.
             'codeman-eeee5555|106|0|||/tmp',
+            // A directory deleted while its pane ran, as tmux 3.4 on Linux reports it. isValidPath()
+            // rejects it for the parentheses; a relaxed path pattern must not adopt a dead directory.
+            'codeman-abcd7777|108|0|||/home/user/gone (deleted)',
             // Last row, path ending in a space: the output must not be trimmed.
             'codeman-ffff6666|107|0|||/home/user/trailing ',
           ].join('\n');
@@ -948,6 +951,7 @@ describe('TmuxManager (unit)', () => {
           'restored-cccc3333',
           'restored-dddd4444',
           'restored-eeee5555',
+          'restored-abcd7777',
           'restored-ffff6666',
         ]);
         const dirs = Object.fromEntries(nonTestManager.getSessions().map((s) => [s.muxName, s.workingDir]));
@@ -957,6 +961,7 @@ describe('TmuxManager (unit)', () => {
           'codeman-cccc3333': process.cwd(),
           'codeman-dddd4444': process.cwd(),
           'codeman-eeee5555': process.cwd(),
+          'codeman-abcd7777': process.cwd(),
           'codeman-ffff6666': '/home/user/trailing ',
         });
 
