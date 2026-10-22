@@ -117,7 +117,7 @@ describe('response viewer file-path linkifier', () => {
     const root = linkify(
       `<p><a href="${path}" target="_blank" rel="noopener noreferrer">Our incident record</a> and ` +
         `<a href="src/a%20b.ts:42:7">a b</a>, <a href="docs/#L3">docs</a>, <a href="/tmp/renders">renders</a>, ` +
-        `<a href="/tmp/release%3A12">release</a></p>`
+        `<a href="/tmp/release%3A12">release</a>, <a href="/tmp/a.json?raw=true">raw</a>, <a href="/tmp/">tmp</a></p>`
     );
 
     const links = paths(root);
@@ -128,6 +128,9 @@ describe('response viewer file-path linkifier', () => {
       '/tmp/renders',
       // An encoded colon is part of the name, never a line suffix.
       '/tmp/release:12',
+      // A query names a view of the file, not the file.
+      '/tmp/a.json',
+      '/tmp/',
     ]);
     for (const a of links) {
       expect(a.getAttribute('href')).toBe('#');
@@ -136,9 +139,13 @@ describe('response viewer file-path linkifier', () => {
       expect(a.getAttribute('data-linkified')).toBe('1');
     }
     expect(links[0].textContent).toBe('Our incident record');
+    // A label, not a path: the second class keeps it in the prose font (styles.css).
+    expect(links.every((a) => a.classList.contains('rv-path-link'))).toBe(true);
     // A trailing slash and a rooted folder path without one both open the folder grid
     // (`:` ends a folder match in findFilePathLinks, so `release:12` previews instead).
-    expect(links.map((a) => a.hasAttribute('data-folder'))).toEqual([false, false, true, true, false]);
+    // findFilePathLinks finds no folder in a bare `/tmp/`, so only the trailing-slash
+    // check marks that one.
+    expect(links.map((a) => a.hasAttribute('data-folder'))).toEqual([false, false, true, true, false, false, true]);
   });
 
   it('opens a clicked markdown path link in the file preview through the click delegate', () => {

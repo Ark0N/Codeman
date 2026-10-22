@@ -14926,6 +14926,14 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   cursor: pointer;
 }
 
+/* A markdown link whose target is a path (`[Our incident record](/tmp/x.json)`)
+   takes the rv-path shape for the click delegate, but its text is a label, not a
+   path: keep it in the prose font and never break it mid-word. */
+.rv-text a.rv-path.rv-path-link {
+  font: inherit;
+  word-break: normal;
+}
+
 /* Tables — scroll wrapper keeps table proper while allowing horizontal overflow */
 .rv-table-wrap {
   margin: 1em 0;

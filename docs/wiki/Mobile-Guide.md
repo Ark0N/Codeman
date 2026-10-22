@@ -131,7 +131,7 @@ already writing in the editor.
 
 ## Tapping, links and copying
 
-- **Tap a link** in terminal output and it opens in a new tab. Same for a link in an agent's
+- **Tap a link** in terminal output and it opens in a new tab. Same for a web link in an agent's
   answer in the response viewer — it opens a tab rather than navigating the dashboard away,
   which on a phone would unload the whole session view.
 - **Tap a file path** an agent printed, or a link to one in its answer (Codex writes

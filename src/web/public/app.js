@@ -2959,6 +2959,12 @@ class CodemanApp {
    * output. Subtrees already inside an `<a>` are skipped so an autolinked URL
    * is never re-cut, and the anchor's textContent is the path verbatim, so
    * "copy code" still yields exactly what the agent printed.
+   *
+   * Before that walk it also rewrites an existing anchor whose href is a path
+   * (no scheme, not `//host`, not a bare `#fragment`) into the same `a.rv-path`
+   * shape, on purpose WITHOUT `FILE_PATH_LINK_PATTERN`'s root and extension
+   * filter: the agent chose that href as a link target, and left alone it opens
+   * as a same-origin URL (a 404 page in a new tab).
    */
   _linkifyFilePaths(root) {
     if (!root || typeof document === 'undefined') return;
@@ -2984,7 +2990,9 @@ class CodemanApp {
       }
       // A bare `#fragment` (and every `.rv-path`, whose href is `#`) ends up empty.
       if (!path) continue;
-      a.className = 'rv-path';
+      // rv-path-link keeps the label in the prose font (styles.css): it is a label,
+      // not a path, and break-all would split it mid-word on a phone.
+      a.className = 'rv-path rv-path-link';
       a.dataset.path = path;
       a.dataset.linkified = '1';
       if (path.endsWith('/') || findFilePathLinks(path).some((f) => f.folder && f.path === path)) a.dataset.folder = '1';
