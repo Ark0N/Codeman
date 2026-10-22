@@ -4,7 +4,7 @@ import { WebServer } from '../src/web/server.js';
 
 // Adversarial browser layout fixture, not evidence of native Codex history:
 // authentic CLI behavior is measured separately in an isolated live pane.
-describe('tracked remote Codex wheel routing (#13)', () => {
+describe('tracked Codex wheel routing in the primary pane', () => {
   let server: WebServer;
   let browser: Browser;
   beforeAll(async () => {
