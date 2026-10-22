@@ -317,6 +317,18 @@ export function detachChord(prefix?: string, key?: string): string {
   return `${formatPrefixKey(prefix)} then ${key || DEFAULT_DETACH_KEY}`;
 }
 
+/**
+ * The chord an attach advertises when it could not claim the one-key way out.
+ *
+ * With no key bound to `detach-client` in the prefix table there is no stock
+ * `d` to name: Codeman keeps only `send-prefix` there (src/tmux-prefix-table.ts),
+ * so the held-Ctrl alias the attach claimed is the chord that works.
+ */
+export function fallbackDetachChord(prefix?: string, detachKey?: string, heldAlias?: string): string {
+  if (!detachKey && heldAlias) return detachChord(prefix, formatPrefixKey(heldAlias));
+  return detachChord(prefix, detachKey);
+}
+
 /** `#` opens `#[…]`/`#{…}` in a tmux format, so a name carrying one must double it. */
 function escapeTmuxFormat(value: string): string {
   return value.replace(/#/g, '##');
@@ -355,10 +367,10 @@ export function buildAttachBanner(options: {
   /** Alt+1..9 really switch sessions, so the bar may say so. */
   switchKeys?: boolean;
 }): Record<string, string> {
-  const chord = escapeTmuxFormat(detachChord(options.prefix, options.detachKey));
+  const chord = escapeTmuxFormat(fallbackDetachChord(options.prefix, options.detachKey, options.heldAlias));
   // Named on the bar because it is what people actually type: keeping Ctrl held
   // is the common way to press this, and the bar has to say that it works.
-  const held = options.heldAlias ? escapeTmuxFormat(formatPrefixKey(options.heldAlias)) : '';
+  const held = options.heldAlias && options.detachKey ? escapeTmuxFormat(formatPrefixKey(options.heldAlias)) : '';
   const alias = held ? ` (or ${held})` : '';
   const label = escapeTmuxFormat(truncateLabel((options.label ?? '').trim(), ATTACH_BANNER_LABEL_MAX));
   // ONE option, not `status-left`/`status-right`/`status-style`: `status-format[0]`
@@ -624,7 +636,7 @@ export async function beginAttachHandoff(
     if (target === muxName) await client.followAttachingClient(target);
   }
   return {
-    chord: oneKey ? ONE_KEY_DETACH : detachChord(prefix, detachKey),
+    chord: oneKey ? ONE_KEY_DETACH : fallbackDetachChord(prefix, detachKey, claimed && alias ? alias : undefined),
     async restore(): Promise<void> {
       for (const key of switchKeys) await client.unbindSwitchKey(key);
       if (oneKey) await client.unbindDetachKey(ONE_KEY_DETACH, 'root');
@@ -702,7 +714,7 @@ export interface TuiKeymapContext {
   /** False in degraded mode, where the only verb that works is attach. */
   server: boolean;
   approval?: TuiApprovalKeys;
-  /** tmux's detach chord as this socket reports it. Defaults to the stock `Ctrl+B D`. */
+  /** How the last attach said to leave it. Defaults to F1, the key an attach claims. */
   detach?: string;
   /** A dead-row card is offering `r` to resume, so the footer has to say so. */
   resumeOffer?: boolean;
@@ -761,7 +773,7 @@ export function helpKeysFor(glyphs: TuiGlyphSet, context: TuiKeymapContext): Arr
     ['tab', 'next session'],
     // The one key that is not the TUI's: an attach hands the terminal to tmux,
     // and leaving it is the question every first attach asks.
-    [context.detach ?? detachChord(), 'detach from an attached session, back to here'],
+    [context.detach ?? ONE_KEY_DETACH, 'detach from an attached session, back to here'],
   ];
   if (context.server) {
     keys.push(
@@ -1109,11 +1121,12 @@ class TuiApp {
   private readonly glyphs: TuiGlyphSet;
   private readonly socket = resolveTmuxSocketName();
   /**
-   * How to leave an attach, in the local tmux's own prefix. Read per attach
-   * (a session can override the prefix) and remembered so the help overlay
-   * names the real chord even before the first attach.
+   * How to leave an attach. Read per attach (F1 may be the user's, a session
+   * can override the prefix) and remembered for the help overlay; until the
+   * first attach it names F1, what an attach claims unless the user's config
+   * already holds it.
    */
-  private detachChordLabel = detachChord();
+  private detachChordLabel: string = ONE_KEY_DETACH;
   /** True for the length of one resume. The only thing standing between a resume and a loop. */
   private resuming = false;
 

@@ -97,7 +97,10 @@ would. That indirection buys:
 - **Real scrollback.** History is held by tmux, so reconnecting replays what happened while
   you were gone instead of starting from blank.
 - **Attach from anywhere else.** The same session is reachable from a terminal over SSH
-  with `codeman tui`, or plain `tmux -L codeman attach`.
+  with `codeman tui` (F1 detaches), `./scripts/tmux-manager.sh` (likewise F1), or plain
+  `tmux -L codeman attach`. A plain attach has no detach key: Codeman keeps tmux's prefix
+  table on its socket down to `send-prefix`, so `Ctrl+B d` does nothing there; leave it
+  with `tmux -L codeman detach-client` from another shell, or bind a key yourself.
 - **Secrets off the command line.** Environment overrides are injected with socket-scoped
   `tmux setenv` rather than being visible in the spawn command.
 
