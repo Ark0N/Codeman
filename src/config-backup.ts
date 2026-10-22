@@ -654,15 +654,19 @@ export interface RestoreResult {
   restored: string[];
   /** Tracked files present now that the snapshot did not hold; a restore leaves them as they are. */
   untouched: string[];
-  /** The snapshot taken of the live files before they were overwritten. */
+  /**
+   * The snapshot holding the live files as they were before the restore: the `pre-restore` copy, or the
+   * newest backup when it already held exactly that state. Null only when no tracked file existed.
+   */
   safetySnapshot: string | null;
 }
 
 /**
  * Put a snapshot's files back into the data dir. Every file is checked against the manifest's digest
- * BEFORE anything is written, a `pre-restore` snapshot of the live files is taken first, and each
- * file is replaced atomically (temp + rename) with mode 0600. A file that cannot be written does not
- * stop the others; it throws {@link ConfigBackupPartialRestoreError} at the end, naming both lists.
+ * BEFORE anything is written, a `pre-restore` snapshot of the live files is taken first (unless the
+ * newest backup already holds that state, which is then reported instead), and each file is replaced
+ * atomically (temp + rename) with mode 0600. A file that cannot be written does not stop the others;
+ * it throws {@link ConfigBackupPartialRestoreError} at the end, naming both lists.
  */
 export function restoreConfigBackup(opts: {
   dataDir: string;
@@ -704,7 +708,8 @@ export function restoreConfigBackup(opts: {
       backupDir: opts.backupDir,
       reason: 'pre-restore',
       appVersion: opts.appVersion,
-      force: true,
+      // Not forced: when the live files equal the newest backup, that backup already is the undo copy,
+      // and a forced duplicate would spend a retention slot on nothing.
       now: opts.now,
       // The retention in force, so this newest snapshot does not hide it from the next pass.
       ...(latestBackupRetention(opts.backupDir, origin, existing) ?? {}),
@@ -742,7 +747,7 @@ export function restoreConfigBackup(opts: {
       !failed.some((x) => x.name === n) &&
       lstatSync(join(opts.dataDir, n), { throwIfNoEntry: false })?.isFile()
   );
-  const safetySnapshot = safety.status === 'created' ? safety.id : null;
+  const safetySnapshot = safety.status === 'empty' ? null : safety.id;
   if (failed.length) throw new ConfigBackupPartialRestoreError(restored, failed, untouched, safetySnapshot);
   return { restored, untouched, safetySnapshot };
 }

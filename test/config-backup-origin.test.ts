@@ -51,6 +51,7 @@ describe('configBackupOrigin', () => {
     host.name = 'container-b'; // the container was recreated
     const origin = configBackupOrigin(data);
     expect(listConfigBackups(backups, origin)).toHaveLength(2);
+    writeFileSync(join(data, 'settings.json'), '{"a":2}'); // a change, so the restore takes a pre-restore copy
     expect(() => restoreConfigBackup({ dataDir: data, backupDir: backups, id: made.id })).not.toThrow();
     const removed = pruneConfigBackups(backups, { keepCount: 1, keepDays: 0, origin });
     expect(removed).toHaveLength(2); // 3 now: the restore took a pre-restore copy

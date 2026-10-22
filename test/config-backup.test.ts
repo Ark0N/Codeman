@@ -346,6 +346,19 @@ describe('restoreConfigBackup', () => {
     }
   });
 
+  it('reuses the newest backup as the undo copy when the live files already equal it', () => {
+    put('settings.json', '{"a":1}');
+    const first = createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 }) as { id: string };
+    put('settings.json', '{"a":2}');
+    const newest = createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 + DAY }) as {
+      id: string;
+    };
+    const r = restoreConfigBackup({ dataDir: data, backupDir: backups, id: first.id, now: T0 + 2 * DAY });
+    expect(r.safetySnapshot).toBe(newest.id);
+    expect(listConfigBackups(backups).map((b) => b.id)).toEqual([newest.id, first.id]); // no duplicate
+    expect(readFileSync(join(data, 'settings.json'), 'utf8')).toBe('{"a":1}');
+  });
+
   it('a file it cannot write does not stop the others, and the error names both lists', () => {
     put('settings.json', '{"good":true}');
     put('clis.json', '{"clis":{}}');
@@ -644,9 +657,12 @@ describe('restore trusts only what this module wrote', () => {
     const origin = configBackupOrigin(data);
     expect(latestBackupRetention(backups, origin)).toEqual({ keepCount: 100, keepDays: 0 });
     const id = listConfigBackups(backups, origin).at(-1)!.id;
+    // A change since the newest backup, so the restore makes a pre-restore copy rather than reusing it.
+    put('settings.json', '{"a":3}');
     const r = restoreConfigBackup({ dataDir: data, backupDir: backups, id, now: T0 + 2000 });
     expect(r.safetySnapshot).toBeTruthy();
     const pre = listConfigBackups(backups, origin).find((b) => b.id === r.safetySnapshot)!;
+    expect(pre.reason).toBe('pre-restore');
     expect(JSON.parse(readFileSync(join(backups, pre.id, 'manifest.json'), 'utf8'))).toMatchObject({
       keepCount: 100,
       keepDays: 0,

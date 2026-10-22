@@ -48,7 +48,8 @@ cron jobs.
   `intents.json` as unchanged when only prompts differ, yet a restore drops the prompts captured
   since.
 - **On demand**, with **Back up now** (always writes one, even if nothing changed).
-- **Before a restore**, as a `pre-restore` safety copy of the files about to be replaced.
+- **Before a restore**, as a `pre-restore` safety copy of the files about to be replaced (unless
+  nothing changed since the newest backup).
 
 ## Where they go and what they are called
 
@@ -132,16 +133,17 @@ From the list, press **Restore** on a backup and confirm. Codeman then:
    mode for every file, so it would refuse every backup there). The symlink test is not. Compare
    applies the same checks to the backups it reads.
 2. **Takes a `pre-restore` backup** of the files about to be replaced, so a restore can itself
-   be undone.
+   be undone. When nothing changed since the newest backup (the same comparison an automatic
+   backup makes), no copy is made and the response names that backup instead (`safetySnapshot`).
 3. **Replaces each file atomically** (written beside it, then renamed) with mode `0600`.
 
 Only the tracked names are ever written, whatever a manifest lists.
 
 If a file cannot be written (a full disk, a folder where the file should be), the restore still
 writes the others and then reports an error that names the files it restored, the ones it could
-not write, and the `pre-restore` backup that holds the files as they were before. The restored
-files are in effect as after a full restore (Settings re-reads `settings.json` into the form), so
-fix the cause and restore again, or restore the `pre-restore` backup to go back.
+not write, and the backup that holds the files as they were before. The restored files are in
+effect as after a full restore (Settings re-reads `settings.json` into the form), so fix the cause
+and restore again, or restore that backup to go back.
 
 Restoring `settings.json` keeps the four backup settings (on or off, folder, how many, how many
 days) at their current values, so a restore from before a folder change does not point the list
