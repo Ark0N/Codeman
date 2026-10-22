@@ -278,9 +278,11 @@ export function registerHookEventRoutes(
     // Claude pane; only the ones where the conversation actually moved (a /clear
     // successor) carry information, and recording the rest would push a row into
     // the Summary timeline and /api/search per turn and evict useful rows from
-    // the 1000-event FIFO (#367 merge-time fix).
+    // the 1000-event FIFO (#367 merge-time fix). A keep-alive turn's stop and idle prompt are
+    // left out too: the summary files a `stop` as a warning, which the Away digest lists under
+    // Needs Attention, and that turn is Codeman's own, not the agent's.
     const summaryTracker = ctx.runSummaryTrackers.get(sessionId);
-    if (summaryTracker && (event !== 'prompt_submitted' || conversationChanged)) {
+    if (summaryTracker && !keepAliveReason && (event !== 'prompt_submitted' || conversationChanged)) {
       summaryTracker.recordHookEvent(event, safeData);
     }
 

@@ -427,6 +427,36 @@ describe('hook-event-routes', () => {
       expect(mockTracker.recordHookEvent).toHaveBeenCalledWith('stop', expect.any(Object));
     });
 
+    /**
+     * The run summary files every `stop` as a warning, and the Away digest lists warnings under
+     * Needs Attention, so a keep-alive turn's hooks would add a row there (and to the session's
+     * Summary timeline) for every nudge. They are Codeman's own turn, not the agent's.
+     */
+    it("keeps a keep-alive turn's stop and idle prompt out of the run summary", async () => {
+      const sessionId = harness.ctx._sessionId;
+      const mockTracker = { recordHookEvent: vi.fn() };
+      harness.ctx.runSummaryTrackers.set(sessionId, mockTracker as never);
+      harness.ctx._session.keepAliveTurnActive = true;
+      for (const event of ['stop', 'idle_prompt']) {
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: '/api/hook-event',
+          payload: { event, sessionId, data: null },
+        });
+        expect(res.statusCode).toBe(200);
+      }
+      approvalInbox.resolveForSession(sessionId, 'dismissed');
+      expect(mockTracker.recordHookEvent).not.toHaveBeenCalled();
+
+      // The next real turn is recorded as before.
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/hook-event',
+        payload: { event: 'stop', sessionId, data: null },
+      });
+      expect(mockTracker.recordHookEvent).toHaveBeenCalledWith('stop', expect.any(Object));
+    });
+
     it('starts transcript watcher when transcript_path is provided', async () => {
       const res = await harness.app.inject({
         method: 'POST',
