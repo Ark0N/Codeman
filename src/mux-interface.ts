@@ -63,7 +63,8 @@ export interface MuxSession {
   statusLine?: StatusLineExporter;
   /**
    * This record was rebuilt from the tmux socket rather than from Codeman's own
-   * bookkeeping, so everything on it but the name and the pid is a guess. Its
+   * bookkeeping, so everything on it but the name, the pid and, when tmux
+   * reported a usable one, the directory is a guess. Its
    * synthetic `restored-<fragment>` id cannot find the session's `state.json`
    * entry either, which means a remote or docker session rediscovered this way
    * arrives with no `remote`/`docker` metadata and looks local. Anything that

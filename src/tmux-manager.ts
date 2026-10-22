@@ -27,7 +27,7 @@ import { execSync, exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
-import { existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { homedir } from 'node:os';
@@ -183,6 +183,22 @@ const DEFAULT_REMOTE_RECONNECT_INTERVAL_MS = 5000;
 /** Stable cwd for tmux server/pane launch; actual session cwd is reached inside the pane. */
 const TMUX_LAUNCH_CWD = '/tmp';
 
+/**
+ * TMUX_LAUNCH_CWD in every spelling a pane can report it. tmux reads a pane's
+ * directory from its process, which comes back resolved (`/private/tmp` on
+ * macOS, where `/tmp` is a symlink), so the literal and the resolved spelling
+ * both count. Computed once.
+ */
+const TMUX_LAUNCH_CWD_SPELLINGS: ReadonlySet<string> = (() => {
+  const spellings = new Set([TMUX_LAUNCH_CWD]);
+  try {
+    spellings.add(realpathSync(TMUX_LAUNCH_CWD));
+  } catch {
+    // Unresolvable launch directory: the literal spelling is all there is.
+  }
+  return spellings;
+})();
+
 /** Claude Code native macOS recommendation for avoiding low nofile startup failures. */
 export const CLAUDE_CODE_NOFILE_LIMIT = 2147483646;
 
@@ -252,10 +268,14 @@ const PANE_LIST_SEP = '|';
  * know a variable substitutes the empty string rather than failing, which is how
  * tmux 3.2a answers `#{pane_dead_signal}` (added in 3.4), and the parser reads a
  * short row as "pid known, deadness unknown" rather than discarding it.
+ *
+ * `#{pane_current_path}` comes last on purpose: a directory name may contain the
+ * separator, and only the final field can absorb it without ambiguity.
  */
 const PANE_LIST_FORMAT =
   `#{session_name}${PANE_LIST_SEP}#{pane_pid}` +
-  `${PANE_LIST_SEP}#{pane_dead}${PANE_LIST_SEP}#{pane_dead_status}${PANE_LIST_SEP}#{pane_dead_signal}`;
+  `${PANE_LIST_SEP}#{pane_dead}${PANE_LIST_SEP}#{pane_dead_status}${PANE_LIST_SEP}#{pane_dead_signal}` +
+  `${PANE_LIST_SEP}#{pane_current_path}`;
 
 /**
  * 构建 pane 启动前的 nofile 修复命令。
@@ -282,6 +302,8 @@ export interface PaneRow {
   exitStatus?: number;
   /** `#{pane_dead_signal}` — the killing signal, absent before tmux 3.4 and when unsignalled. */
   exitSignal?: number;
+  /** `#{pane_current_path}` — the pane's current directory, absent when tmux reported none. */
+  currentPath?: string;
 }
 
 /**
@@ -347,6 +369,8 @@ export function parsePaneRows(output: string): PaneRow[] {
       dead: deadFlag === '1' ? true : deadFlag === '0' ? false : undefined,
       exitStatus: paneField(fields, 3),
       exitSignal: paneField(fields, 4),
+      // Everything after the fifth separator, so a path containing `|` stays whole.
+      currentPath: fields.slice(5).join(PANE_LIST_SEP) || undefined,
     });
   }
   return rows;
@@ -3115,13 +3139,32 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // socket tag to reconcile and no cross-socket ambiguity that could mark a
     // live session dead (the root cause of vanished/duplicate tabs).
     let active: Map<string, number>;
+    const paneDirs = new Map<string, string>();
     try {
       const output = execSync(`${this.tmux()} list-panes -a -F '${PANE_LIST_FORMAT}' 2>/dev/null || true`, {
         encoding: 'utf-8',
         timeout: EXEC_TIMEOUT_MS,
-      }).trim();
+      });
+      // Not trimmed: the directory is the last field, so trimming would cut a
+      // trailing space off the last row's path. parsePaneRows skips empty lines.
       const rows = parsePaneRows(output);
       active = new Map(rows.map((row) => [row.sessionName, row.pid]));
+      // A discovered session's directory, from its first pane with a usable path.
+      // The path is admitted only if it passes the same check createSession and
+      // respawnPane apply, since it was set by whoever owns the pane, not by us.
+      // The launch directory counts as no answer: every pane starts there, and a
+      // remote or docker pane never cds out of it, so for such a session it is
+      // not the workspace — and a rediscovered record cannot tell it is one.
+      for (const row of rows) {
+        if (
+          row.currentPath &&
+          !TMUX_LAUNCH_CWD_SPELLINGS.has(row.currentPath) &&
+          !paneDirs.has(row.sessionName) &&
+          isValidPath(row.currentPath)
+        ) {
+          paneDirs.set(row.sessionName, row.currentPath);
+        }
+      }
       // The same read answers both questions, so recovery starts with a pane-exit
       // reading rather than waiting for the first stats tick — which may never
       // come, since the collector only starts when boot found a live session.
@@ -3175,11 +3218,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         muxName: sessionName,
         pid,
         createdAt: Date.now(),
-        workingDir: process.cwd(),
+        // Where the pane actually works, when tmux said; the server's cwd is only a fallback.
+        workingDir: paneDirs.get(sessionName) ?? process.cwd(),
         mode: 'claude',
         attached: false,
         name: `Restored: ${sessionName}`,
-        // Every field above except the name and the pid is a guess: this record
+        // Every field above except the name, the pid and, when tmux reported a
+        // usable one, the directory is a guess: this record
         // was rebuilt from the socket because Codeman's own bookkeeping did not
         // have it. The synthetic id also cannot find the session's state.json
         // entry, so a remote or docker session rediscovered this way arrives
