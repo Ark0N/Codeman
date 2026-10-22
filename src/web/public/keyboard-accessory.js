@@ -23,7 +23,9 @@
  *   use, on a second tap, on any other accessory key, on a session switch
  *   (refreshForActiveSession) and when the keyboard is dismissed (hide).
  * - PathPicker (singleton object) — Lazy server-side file/folder browser shared
- *   by Link Existing and the extended mobile keyboard bar.
+ *   by Link Existing, the extended mobile keyboard bar and the Files panel's
+ *   quick browser. With `fileTransfer` it also downloads files and uploads into
+ *   the folder on screen (`/api/filesystem/download` and `/upload`).
  *
  * - FocusTrap (class) — Traps Tab/Shift+Tab keyboard focus within a modal element.
  *   Saves and restores previously focused element on deactivate. Used by Ralph wizard
@@ -76,11 +78,17 @@ const PathPicker = {
   _previewPreviousFocus: null,
   _showHidden: false,
   _sortMode: PATH_PICKER_DEFAULT_SORT,
+  _uploading: false,
+  _uploadXhr: null,
 
   /**
    * Open the lazy filesystem browser.
    * @param {{sessionId?: string, initialPath?: string, directoriesOnly?: boolean,
-   *   title?: string, onSelect: (path: string) => void}} options
+   *   title?: string, confirmLabel?: string, fileTransfer?: boolean,
+   *   onSelect: (path: string) => void}} options
+   *   `fileTransfer` adds per-file Download links and an Upload button for the
+   *   folder on screen. Ignored with `fetchListing` (a container listing is not
+   *   this host's filesystem).
    */
   open(options) {
     this.close(false);
@@ -119,6 +127,8 @@ const PathPicker = {
         </div>
         <div class="path-picker-toolbar">
           <div class="path-picker-status" aria-live="polite">Loading...</div>
+          <button type="button" class="path-picker-upload" title="Upload files to this folder" aria-label="Upload files to this folder" hidden>&#x2B06; Upload</button>
+          <input type="file" class="path-picker-upload-input" multiple hidden tabindex="-1" aria-hidden="true">
           <label class="path-picker-sort-label">Sort
             <select class="path-picker-sort" aria-label="Sort entries"></select>
           </label>
@@ -126,7 +136,7 @@ const PathPicker = {
         <div class="path-picker-list" role="listbox"></div>
         <div class="path-picker-selection">
           <span class="path-picker-selection-label">Selected</span>
-          <span class="path-picker-selection-value">None</span>
+          <span class="path-picker-selection-value" data-i18n-skip>None</span>
         </div>
         <div class="path-picker-actions">
           <button type="button" class="path-picker-current-select">Select Current Folder</button>
@@ -138,6 +148,18 @@ const PathPicker = {
 
     this.overlay = overlay;
     overlay.querySelector('.path-picker-title').textContent = options.title || 'Select a Path';
+    if (options.confirmLabel) overlay.querySelector('.path-picker-confirm').textContent = options.confirmLabel;
+    if (this._transferEnabled()) {
+      const uploadBtn = overlay.querySelector('.path-picker-upload');
+      const uploadInput = overlay.querySelector('.path-picker-upload-input');
+      uploadBtn.hidden = false;
+      uploadBtn.addEventListener('click', () => uploadInput.click());
+      uploadInput.addEventListener('change', () => {
+        const files = Array.from(uploadInput.files || []);
+        uploadInput.value = '';
+        if (files.length) this.uploadFiles(files);
+      });
+    }
     overlay.querySelector('.path-picker-close').addEventListener('click', () => this.close(true));
     overlay.querySelector('.path-picker-cancel').addEventListener('click', () => this.close(true));
     overlay.querySelector('.path-picker-confirm').addEventListener('click', () => this.confirm());
@@ -408,6 +430,7 @@ const PathPicker = {
       icon.textContent = entry.type === 'directory' ? '\uD83D\uDCC1' : '\uD83D\uDCC4';
       const name = document.createElement('span');
       name.className = 'path-picker-item-name';
+      name.setAttribute('data-i18n-skip', '');
       name.textContent = entry.name;
       open.append(icon, name);
       const modified = this._formatModified(entry.mtimeMs);
@@ -445,6 +468,17 @@ const PathPicker = {
       }
       row.appendChild(open);
 
+      if (entry.type === 'file' && this._transferEnabled()) {
+        const download = document.createElement('a');
+        download.className = 'path-picker-item-download';
+        download.href = this._transferUrl('download', entry.path);
+        download.setAttribute('download', entry.name);
+        download.textContent = '\u2B07';
+        download.title = `Download ${entry.name}`;
+        download.setAttribute('aria-label', `Download ${entry.name}`);
+        row.appendChild(download);
+      }
+
       if (entry.type === 'directory' || !this._options.directoriesOnly) {
         const choose = document.createElement('button');
         choose.type = 'button';
@@ -455,6 +489,88 @@ const PathPicker = {
       }
       list.appendChild(row);
     }
+  },
+
+  _transferEnabled() {
+    return !!(this._options?.fileTransfer && !this._options.fetchListing);
+  },
+
+  /** Picker download/upload URL for `path` (a file to fetch, or the folder to write into). */
+  _transferUrl(kind, path) {
+    const params = new URLSearchParams({ path });
+    if (this._options?.sessionId) params.set('sessionId', this._options.sessionId);
+    // Hidden entries resolve only with the toggle on, exactly like browse.
+    if (this._showHidden) params.set('showHidden', 'true');
+    return (window.CodemanBase?.url || ((p) => p))(`/api/filesystem/${kind}?${params.toString()}`);
+  },
+
+  /**
+   * Upload `files` one at a time into the folder on screen, then reload it and
+   * select the last file written, so Select (or Insert) is one tap away. Sequential
+   * on purpose: one progress line, and a failure names the file it stopped at
+   * instead of interleaving errors.
+   */
+  async uploadFiles(files) {
+    if (!this.overlay || this._uploading || !this._currentPath) return;
+    const folder = this._currentPath;
+    const loadSequence = this._loadSequence;
+    const status = this.overlay.querySelector('.path-picker-status');
+    const uploadBtn = this.overlay.querySelector('.path-picker-upload');
+    this._uploading = true;
+    uploadBtn.disabled = true;
+    let lastPath = '';
+    let done = 0;
+    try {
+      for (const file of files) {
+        const label = files.length > 1 ? `Uploading ${done + 1}/${files.length}: ${file.name}` : `Uploading ${file.name}`;
+        status.classList.remove('error');
+        status.textContent = `${label}...`;
+        const data = await this._uploadOne(folder, file, (percent) => {
+          if (this.overlay) status.textContent = `${label} (${percent}%)`;
+        });
+        lastPath = data.path;
+        done += 1;
+      }
+    } catch (error) {
+      if (this.overlay) {
+        status.textContent = `Upload failed: ${error.message || 'unknown error'}`;
+        status.classList.add('error');
+      }
+    } finally {
+      this._uploading = false;
+      this._uploadXhr = null;
+      if (this.overlay) uploadBtn.disabled = false;
+    }
+    if (!done || !this.overlay) return;
+    app.showToast?.(done === 1 ? `Uploaded ${lastPath}` : `Uploaded ${done} files`, 'success');
+    // Stay put if the user navigated away mid-upload; otherwise show the new file.
+    if (loadSequence === this._loadSequence && this._currentPath === folder) {
+      await this.load(folder);
+      if (this._entries.some((entry) => entry.path === lastPath)) this.select(lastPath);
+    }
+  },
+
+  /** POST one file; resolves with the server's `{path, name, size}`. XHR for upload progress. */
+  _uploadOne(folder, file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      this._uploadXhr = xhr;
+      xhr.open('POST', this._transferUrl('upload', folder));
+      xhr.responseType = 'json';
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) onProgress(Math.floor((event.loaded / event.total) * 100));
+      };
+      xhr.onload = () => {
+        const body = xhr.response;
+        if (xhr.status >= 200 && xhr.status < 300 && body?.success) resolve(body.data);
+        else reject(new Error(body?.error || `HTTP ${xhr.status}`));
+      };
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.onabort = () => reject(new Error('Upload cancelled'));
+      const form = new FormData();
+      form.append('file', file, file.name);
+      xhr.send(form);
+    });
   },
 
   select(path) {
@@ -577,6 +693,8 @@ const PathPicker = {
   },
 
   close(restoreFocus = true) {
+    this._uploadXhr?.abort();
+    this._uploadXhr = null;
     if (this._keydownHandler) document.removeEventListener('keydown', this._keydownHandler);
     this._keydownHandler = null;
     this._loadSequence += 1;
@@ -1178,10 +1296,12 @@ const KeyboardAccessoryBar = {
     if (!app.activeSessionId) return;
     const session = app.sessions?.get(app.activeSessionId);
     PathPicker.open({
-      title: 'Insert File or Folder Path',
+      title: 'Files',
+      confirmLabel: 'Insert Path',
       sessionId: app.activeSessionId,
       initialPath: session?.workingDir || '',
       directoriesOnly: false,
+      fileTransfer: true,
       onSelect: (path) => {
         app.insertTerminalText?.(path);
         setTimeout(() => app.terminal?.focus(), 100);

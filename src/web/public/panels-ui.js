@@ -15,6 +15,9 @@
 
 const AWAY_DIGEST_LAST_VIEWED_KEY = 'codeman-away-digest-last-viewed';
 const FILE_BROWSER_SHOW_HIDDEN_KEY = 'codeman:fileBrowserShowHidden';
+// Per-device like the path picker's sort, and the same four modes.
+const FILE_BROWSER_SORT_KEY = 'codeman:fileBrowserSort';
+const FILE_BROWSER_SORT_MODES = ['name-asc', 'name-desc', 'mtime-desc', 'mtime-asc'];
 // Bounds for the by-id text preview, mirroring what the workspace text preview
 // already does server-side (500 lines). The byte cap rides a Range request, so
 // a huge log is a partial read rather than a download the viewer throws away.
@@ -3163,6 +3166,7 @@ Object.assign(CodemanApp.prototype, {
     state.view = 'normal';
     this.fileBrowserData = null;
     this.fileBrowserFilter = '';
+    this.fileBrowserLocalFilter = '';
     this.fileBrowserExpandedDirs?.clear?.();
     this.fileBrowserAllExpanded = false;
 
@@ -3205,6 +3209,7 @@ Object.assign(CodemanApp.prototype, {
     state.view = 'normal';
     this.fileBrowserData = null;
     this.fileBrowserFilter = '';
+    this.fileBrowserLocalFilter = '';
     this.fileBrowserExpandedDirs?.clear?.();
     this.fileBrowserAllExpanded = false;
 
@@ -3240,7 +3245,8 @@ Object.assign(CodemanApp.prototype, {
     const statusEl = this.$('fileBrowserStatus');
     if (!statusEl || !data) return;
     const { totalFiles, totalDirectories, truncated } = data;
-    statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${truncated ? ' (truncated)' : ''}${showHidden ? ' · hidden shown' : ''}`;
+    const loaded = data.lazy ? ' loaded' : '';
+    statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${loaded}${truncated ? ' (truncated)' : ''}${showHidden ? ' · hidden shown' : ''}`;
   },
 
   _isFileBrowserNormalCompatible(candidate, sessionId, showHidden, treeEpoch) {
@@ -3408,6 +3414,20 @@ Object.assign(CodemanApp.prototype, {
     );
   },
 
+  /**
+   * Open the lazy path picker (the mobile keyboard's Path key) from the Files
+   * panel: one folder per request instead of a 5,000-node tree walk, any allowed
+   * root rather than only this workspace, plus Upload and Download. Its Insert
+   * puts the chosen path on the prompt without Enter, like the Path key.
+   */
+  openQuickFileBrowser() {
+    if (!this.activeSessionId) {
+      this.showToast?.('Select a session first', 'info');
+      return;
+    }
+    KeyboardAccessoryBar.pickPath();
+  },
+
   async toggleFileBrowserHidden() {
     const state = this._ensureFileBrowserState();
     const rawInput = typeof state.filter === 'string' ? state.filter : '';
@@ -3455,6 +3475,8 @@ Object.assign(CodemanApp.prototype, {
     const state = this._ensureFileBrowserState();
     const treeEl = this.$('fileBrowserTree');
     this._syncFileBrowserHiddenBtn();
+    const sortSelect = this.$?.('fileBrowserSort');
+    if (sortSelect) sortSelect.value = this._fileBrowserSortMode();
     if (!treeEl) return undefined;
     if (!state.ownerSessionId) state.ownerSessionId = sessionId;
     if (state.ownerSessionId !== sessionId) return undefined;
@@ -3490,7 +3512,7 @@ Object.assign(CodemanApp.prototype, {
     const request = (async () => {
       try {
         const res = await fetch(
-          `/api/sessions/${encodeURIComponent(sessionId)}/files?depth=5&showHidden=${showHidden}`,
+          `/api/sessions/${encodeURIComponent(sessionId)}/files?lazy=1&showHidden=${showHidden}`,
         );
         if (!res.ok) throw new Error('Failed to load files');
         const result = await res.json();
@@ -3546,10 +3568,32 @@ Object.assign(CodemanApp.prototype, {
     }
 
     const html = [];
+    // Local filter: only what is already loaded is searched (never a server walk).
+    // A node shows when it matches or a loaded descendant does; matched folders'
+    // ancestors render open so the hit is in context.
+    const filterParts = this._fileBrowserLocalFilterParts();
+    const filtering = filterParts.length > 0;
+    let filterMatches = 0;
+    const visible = new Set();
+    if (filtering) {
+      const mark = (node) => {
+        let keep = this._fileBrowserNameMatches(node.name, filterParts);
+        if (keep) filterMatches++;
+        if (node.type === 'directory' && Array.isArray(node.children)) {
+          for (const child of node.children) if (mark(child)) keep = true;
+        }
+        if (keep) visible.add(node);
+        return keep;
+      };
+      for (const node of tree) mark(node);
+    }
+    const pendingLoads = [];
 
     const renderNode = (node, depth) => {
+      if (filtering && !visible.has(node)) return;
       const isDir = node.type === 'directory';
-      const isExpanded = this.fileBrowserExpandedDirs.has(node.path);
+      const hasVisibleChild = filtering && isDir && Array.isArray(node.children) && node.children.some((c) => visible.has(c));
+      const isExpanded = filtering ? hasVisibleChild : this.fileBrowserExpandedDirs.has(node.path);
 
       const icon = isDir
         ? (isExpanded ? '\uD83D\uDCC2' : '\uD83D\uDCC1')
@@ -3579,19 +3623,32 @@ Object.assign(CodemanApp.prototype, {
         </div>
       `);
 
-      // Render children if directory is expanded
-      if (isDir && isExpanded && node.children) {
-        for (const child of node.children) {
-          renderNode(child, depth + 1);
+      // Render children if directory is expanded. `children` undefined = not
+      // loaded yet (lazy listing): fetch it, showing a placeholder row meanwhile.
+      if (isDir && isExpanded) {
+        if (Array.isArray(node.children)) {
+          for (const child of this._sortFileBrowserNodes(node.children)) {
+            renderNode(child, depth + 1);
+          }
+        } else if (!filtering) {
+          const label = node._loadError ? `Failed to load: ${node._loadError}` : 'Loading...';
+          html.push(`<div class="file-tree-placeholder" style="padding-left:${(1.25 + (depth + 1) * 0.75).toFixed(2)}rem">${escapeHtml(label)}</div>`);
+          if (!node._loading && !node._loadError) pendingLoads.push(node);
         }
       }
     };
 
-    for (const node of tree) {
+    for (const node of this._sortFileBrowserNodes(tree)) {
       renderNode(node, 0);
     }
 
-    treeEl.innerHTML = html.join('');
+    treeEl.innerHTML = html.join('') || '<div class="file-browser-empty">No matches in loaded folders</div>';
+    if (filtering) {
+      const statusEl = this.$('fileBrowserStatus');
+      if (statusEl) {
+        statusEl.textContent = `${filterMatches} ${filterMatches === 1 ? 'match' : 'matches'} in loaded folders · Enter searches the whole workspace`;
+      }
+    }
 
     // Add click handlers
     treeEl.querySelectorAll('.file-tree-item').forEach(item => {
@@ -3600,17 +3657,166 @@ Object.assign(CodemanApp.prototype, {
         const type = item.dataset.type;
 
         if (type === 'directory') {
-          this.toggleFileBrowserFolder(path);
+          if (filtering) this._jumpFileBrowserToDirectory(path);
+          else this.toggleFileBrowserFolder(path);
         } else {
           this.openFilePreview(path, owner);
         }
       });
     });
+    for (const node of pendingLoads) this._loadFileBrowserChildren(node, owner);
+  },
+
+  _fileBrowserSortMode() {
+    if (!this._fileBrowserSort) {
+      let stored = null;
+      try {
+        stored = localStorage.getItem(FILE_BROWSER_SORT_KEY);
+      } catch {}
+      this._fileBrowserSort = FILE_BROWSER_SORT_MODES.includes(stored) ? stored : 'name-asc';
+    }
+    return this._fileBrowserSort;
+  },
+
+  setFileBrowserSort(mode) {
+    if (!FILE_BROWSER_SORT_MODES.includes(mode)) return;
+    this._fileBrowserSort = mode;
+    try {
+      localStorage.setItem(FILE_BROWSER_SORT_KEY, mode);
+    } catch {}
+    const select = this.$?.('fileBrowserSort');
+    if (select && select.value !== mode) select.value = mode;
+    if (this._ensureFileBrowserState().view === 'normal' && this.fileBrowserData) this.renderFileBrowserTree();
+  },
+
+  /** Folders first in every mode, like the path picker; a missing mtime sorts last, then by name. */
+  _sortFileBrowserNodes(nodes) {
+    const [key, direction] = this._fileBrowserSortMode().split('-');
+    const sign = direction === 'desc' ? -1 : 1;
+    const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    return nodes.slice().sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+      if (key === 'mtime') {
+        const at = typeof a.mtimeMs === 'number' ? a.mtimeMs : null;
+        const bt = typeof b.mtimeMs === 'number' ? b.mtimeMs : null;
+        if (at !== null && bt !== null && at !== bt) return sign * (at - bt);
+        if (at === null && bt !== null) return 1;
+        if (at !== null && bt === null) return -1;
+        return byName(a, b);
+      }
+      return sign * byName(a, b);
+    });
+  },
+
+  /** Lowercased `*`-separated parts of the local filter (empty = no filter). */
+  _fileBrowserLocalFilterParts() {
+    const query = String(this.fileBrowserLocalFilter || '').trim().toLowerCase();
+    return query ? query.split('*').filter(Boolean) : [];
+  },
+
+  /** Ordered substring match, linear: `*` is a wildcard, never a RegExp. */
+  _fileBrowserNameMatches(name, parts) {
+    const lower = String(name).toLowerCase();
+    let from = 0;
+    for (const part of parts) {
+      const at = lower.indexOf(part, from);
+      if (at < 0) return false;
+      from = at + part.length;
+    }
+    return true;
+  },
+
+  /**
+   * Fetch one folder's entries for the lazy tree and attach them as `children`.
+   * Dropped when anything that scopes the tree changed meanwhile (owner, refresh,
+   * hidden toggle), the same epoch rules the root load uses.
+   */
+  _loadFileBrowserChildren(node, ownerSessionId) {
+    const state = this._ensureFileBrowserState();
+    const data = this.fileBrowserData;
+    if (!node || node._loading || !data || !ownerSessionId) return undefined;
+    const context = { sessionId: ownerSessionId, treeEpoch: state.treeEpoch, showHidden: this.fileBrowserShowHidden === true };
+    node._loading = true;
+    node._loadError = '';
+    const url = `/api/sessions/${encodeURIComponent(ownerSessionId)}/files?lazy=1&showHidden=${context.showHidden}&path=${encodeURIComponent(node.path)}`;
+    return (async () => {
+      try {
+        const res = await fetch(url);
+        const result = await res.json().catch(() => null);
+        const listing = res.ok ? this._validateFileBrowserTreeEnvelope(result) : null;
+        if (!listing) throw new Error(result?.error || 'Failed to load folder');
+        if (!this._isFileBrowserTreeContextCurrent(context) || this.fileBrowserData !== data) return;
+        node.children = listing.tree;
+        data.totalFiles += listing.totalFiles;
+        data.totalDirectories += listing.totalDirectories;
+        if (listing.truncated) data.truncated = true;
+      } catch (error) {
+        if (!this._isFileBrowserTreeContextCurrent(context) || this.fileBrowserData !== data) return;
+        node._loadError = this._normalizeFileBrowserTreeError(error);
+      } finally {
+        node._loading = false;
+      }
+      if (state.view === 'normal' && this.activeSessionId === ownerSessionId) {
+        this.renderFileBrowserTree(ownerSessionId);
+        if (!this._fileBrowserLocalFilterParts().length) this._renderFileBrowserNormalStatus(data, context.showHidden);
+      }
+    })();
+  },
+
+  /** From a local-filter hit: clear the filter and open the folder in the full tree. */
+  _jumpFileBrowserToDirectory(path) {
+    const found = this._findFileBrowserDirectory(this.fileBrowserData?.tree, path);
+    this.fileBrowserLocalFilter = '';
+    const input = this.$?.('fileBrowserSearch');
+    if (input) input.value = '';
+    this._syncFileBrowserExpandBtn();
+    if (found) for (const p of [...found.ancestors, path]) this.fileBrowserExpandedDirs.add(p);
+    this.renderFileBrowserTree();
+    if (this.fileBrowserData) this._renderFileBrowserNormalStatus(this.fileBrowserData, this.fileBrowserShowHidden === true);
+  },
+
+  /**
+   * Typing in the Files search box filters what is already loaded, in the
+   * browser, with no request: a workspace-wide search walks the whole tree on
+   * the server (seconds on a slow mount), so it only runs on Enter
+   * (filterFileBrowser). Typing again leaves any server results behind.
+   */
+  filterFileBrowserLoaded(value) {
+    const state = this._ensureFileBrowserState();
+    if (state.view !== 'normal' || state.inFlight) {
+      if (state.inFlight?.timer !== undefined && state.inFlight?.timer !== null) clearTimeout(state.inFlight.timer);
+      state.inFlight = null;
+      state.searchEpoch++;
+      state.filter = '';
+      state.matches = [];
+      state.deferredDirectoryTarget = null;
+      state.view = 'normal';
+      this.fileBrowserFilter = '';
+    }
+    this.fileBrowserLocalFilter = String(value ?? '');
+    this._syncFileBrowserExpandBtn();
+    const normal = state.normalState;
+    if (normal?.phase === 'ready' && this._canRenderFileBrowserNormal(normal)) {
+      this.fileBrowserData = normal.data;
+      this.renderFileBrowserTree(normal.sessionId);
+      if (!this._fileBrowserLocalFilterParts().length) this._renderFileBrowserNormalStatus(normal.data, normal.showHidden);
+    }
+  },
+
+  /** Enter in the Files search box: the explicit, workspace-wide server search. */
+  onFileBrowserSearchKeydown(event) {
+    if (event?.key !== 'Enter' || event.isComposing) return;
+    event.preventDefault?.();
+    this.fileBrowserLocalFilter = '';
+    this.filterFileBrowser(event.target?.value ?? '');
   },
 
   toggleFileBrowserFolder(path) {
     if (this.fileBrowserExpandedDirs.has(path)) {
       this.fileBrowserExpandedDirs.delete(path);
+      // Collapsing a folder whose lazy load failed lets the next expand retry.
+      const found = this._findFileBrowserDirectory(this.fileBrowserData?.tree, path);
+      if (found?.target?._loadError) found.target._loadError = '';
     } else {
       this.fileBrowserExpandedDirs.add(path);
     }
@@ -3841,7 +4047,8 @@ Object.assign(CodemanApp.prototype, {
 
     const found = this._findFileBrowserDirectory(normalState.data?.tree, target.path);
     if (!found) {
-      this._promptFileBrowserDirectoryReload();
+      if (normalState.data?.lazy) this._revealLazyFileBrowserDirectory(target.path, normalState);
+      else this._promptFileBrowserDirectoryReload();
       return;
     }
     this._leaveFileBrowserSearchForDirectory([...found.ancestors, found.target.path], normalState);
@@ -3875,6 +4082,10 @@ Object.assign(CodemanApp.prototype, {
 
     const found = this._findFileBrowserDirectory(normalState.data?.tree, target.path);
     if (!found) {
+      if (normalState.data?.lazy) {
+        this._revealLazyFileBrowserDirectory(target.path, normalState);
+        return true;
+      }
       this._promptFileBrowserDirectoryReload();
       return false;
     }
@@ -3905,9 +4116,40 @@ Object.assign(CodemanApp.prototype, {
     this._renderFileBrowserNormalState(normalState);
   },
 
+  // Lazy tree: only folders already loaded open, so Expand never fans out into a
+  // request per folder.
+  /**
+   * A server-search hit can name a folder the lazy tree has not loaded yet: leave
+   * search, then load and open each ancestor in turn (one listing per level). The
+   * server builds every relative path with '/', so the chain is its prefixes.
+   */
+  async _revealLazyFileBrowserDirectory(path, normalState) {
+    this._leaveFileBrowserSearchForDirectory([], normalState);
+    const data = normalState.data;
+    const owner = normalState.sessionId;
+    const segments = String(path).split('/').filter(Boolean);
+    let nodes = data.tree;
+    for (let i = 0; i < segments.length; i++) {
+      const prefix = segments.slice(0, i + 1).join('/');
+      const node = Array.isArray(nodes) ? nodes.find((n) => n.type === 'directory' && n.path === prefix) : null;
+      if (!node || this.fileBrowserData !== data) {
+        this._promptFileBrowserDirectoryReload();
+        return;
+      }
+      this.fileBrowserExpandedDirs.add(prefix);
+      if (node.children === undefined) {
+        const load = this._loadFileBrowserChildren(node, owner);
+        if (load) await load;
+        if (!Array.isArray(node.children)) return;
+      }
+      nodes = node.children;
+    }
+    this.renderFileBrowserTree(owner);
+  },
+
   expandAllDirectories(nodes) {
     for (const node of nodes) {
-      if (node.type === 'directory') {
+      if (node.type === 'directory' && node.children !== undefined) {
         this.fileBrowserExpandedDirs.add(node.path);
         if (node.children) {
           this.expandAllDirectories(node.children);
@@ -3950,6 +4192,7 @@ Object.assign(CodemanApp.prototype, {
     state.deferredDirectoryTarget = null;
     state.view = 'normal';
     this.fileBrowserFilter = '';
+    this.fileBrowserLocalFilter = '';
     this.fileBrowserExpandedDirs.clear();
     this.fileBrowserAllExpanded = false;
     const expandBtn = this.$('fileBrowserExpandBtn');

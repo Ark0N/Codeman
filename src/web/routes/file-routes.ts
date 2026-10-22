@@ -8,8 +8,9 @@
 
 import { FastifyInstance, type FastifyReply } from 'fastify';
 import { basename as pathBasename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { createReadStream, realpathSync } from 'node:fs';
+import { constants as fsConstants, createReadStream, realpathSync } from 'node:fs';
 import type { Readable } from 'node:stream';
+import { finished } from 'node:stream/promises';
 import fs from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -19,6 +20,7 @@ import type {
   FilesystemBrowseEntry,
   FilesystemBrowseRoot,
   FilesystemPreviewKind,
+  FilesystemUploadData,
   FileWriteData,
 } from '../../types.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
@@ -56,6 +58,7 @@ import {
   canAccessOwned,
   findSessionOrFail,
   getAuthUser,
+  isSameOriginMultipartRequest,
   parseBody,
   validateSessionFilePath,
   validateSessionFilePathLexical,
@@ -69,12 +72,17 @@ import {
   remoteReadFile,
   type RemoteProbe,
 } from '../../remote-files.js';
-import { downloadTooLargeMessage, exceedsDownloadLimit } from '../../config/buffer-limits.js';
+import { MAX_PICKER_UPLOAD_BYTES, downloadTooLargeMessage, exceedsDownloadLimit } from '../../config/buffer-limits.js';
 import { parseByteRange } from '../http-range.js';
 import { isSensitivePath } from '../sensitive-path.js';
 import { SseEvent } from '../sse-events.js';
 import type { ConfigPort, EventPort, SessionPort } from '../ports/index.js';
-import { FilesystemBrowseQuerySchema, FilesystemPreviewQuerySchema, FileWriteSchema } from '../schemas.js';
+import {
+  FilesystemBrowseQuerySchema,
+  FilesystemPreviewQuerySchema,
+  FilesystemUploadQuerySchema,
+  FileWriteSchema,
+} from '../schemas.js';
 import {
   MAX_EDITABLE_BYTES,
   applyEol,
@@ -761,6 +769,8 @@ type AttachmentHistoryRouteItem = Omit<SessionAttachmentHistoryItem, 'externalPa
 };
 
 const FILESYSTEM_PICKER_ENTRY_LIMIT = 500;
+/** Entries one lazy File Viewer directory listing returns (`?lazy=1`). */
+const LAZY_FILE_TREE_ENTRY_LIMIT = 2000;
 const FILESYSTEM_TEXT_PREVIEW_LIMIT = 2 * 1024 * 1024;
 const FILESYSTEM_BINARY_PREVIEW_LIMIT = 50 * 1024 * 1024;
 const FILESYSTEM_IMAGE_PREVIEW_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']);
@@ -998,6 +1008,61 @@ async function resolveFilesystemPickerPath(
     ),
   };
 }
+
+// ===== Path picker file transfer =====
+// Download and upload ride the picker's own confinement (resolveFilesystemPickerPath:
+// allowlisted roots, realpath containment, hidden opt-in, blocked/sensitive trees),
+// so they reach exactly what the picker can already list, and nothing more.
+
+/** Uploads per client IP per minute: a disk-fill bound, generous for a batch pick. */
+const PICKER_UPLOADS_PER_MINUTE = 60;
+const pickerUploadBuckets = new Map<string, { windowStart: number; count: number }>();
+
+function consumePickerUploadToken(key: string, now = Date.now()): boolean {
+  const bucket = pickerUploadBuckets.get(key);
+  if (!bucket || now - bucket.windowStart >= 60_000) {
+    if (pickerUploadBuckets.size > 1000) pickerUploadBuckets.clear();
+    pickerUploadBuckets.set(key, { windowStart: now, count: 1 });
+    return true;
+  }
+  if (bucket.count >= PICKER_UPLOADS_PER_MINUTE) return false;
+  bucket.count += 1;
+  return true;
+}
+
+/** Longest file name an upload keeps, in UTF-16 code units (ext4 allows 255 bytes). */
+const PICKER_UPLOAD_NAME_MAX = 120;
+
+/**
+ * The name an uploaded file is written under. The client-supplied name is only a
+ * hint: anything that could leave the folder or hide the file is removed (path
+ * separators, control characters, leading dots and spaces), and the stem is cut
+ * so the name stays well inside a filesystem's length limit with its extension.
+ */
+export function sanitizePickerUploadName(raw: string | undefined): string {
+  let name = String(raw ?? '')
+    .split(/[\\/]/)
+    .pop()!
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .trim()
+    .replace(/^[.\s]+/, '');
+  if (name.length > PICKER_UPLOAD_NAME_MAX) {
+    const ext = extname(name).slice(0, 20);
+    name = name.slice(0, PICKER_UPLOAD_NAME_MAX - ext.length) + ext;
+  }
+  return name || 'upload';
+}
+
+/** `name`, then `stem (1).ext`, `stem (2).ext`, ... so an upload never overwrites. */
+function pickerUploadCandidateName(name: string, attempt: number): string {
+  if (attempt === 0) return name;
+  const ext = extname(name);
+  const stem = ext && ext !== name ? name.slice(0, -ext.length) : name;
+  return `${stem} (${attempt})${ext && ext !== name ? ext : ''}`;
+}
+
+const PICKER_UPLOAD_MAX_RENAMES = 100;
 
 function appendDownloadFlag(url: string): string {
   return `${url}${url.includes('?') ? '&' : '?'}download=true`;
@@ -1505,11 +1570,267 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     );
   });
 
+  // Download any regular file the picker can list (the preview route serves only
+  // the previewable kinds). Served as an attachment, never rendered.
+  app.get('/api/filesystem/download', { compress: false }, async (req, reply): Promise<void> => {
+    const { path: requestedPath, sessionId, showHidden } = parseBody(FilesystemPreviewQuerySchema, req.query);
+    const { candidatePath, resolvedPath, blockedTrees } = await resolveFilesystemPickerPath(
+      ctx,
+      req,
+      requestedPath,
+      sessionId,
+      wantsHiddenPickerEntries(showHidden)
+    );
+    if (isBlockedPickerPath(resolvedPath, blockedTrees)) {
+      throwFilesystemPickerError(403, ApiErrorCode.INVALID_INPUT, 'Access to this file is blocked');
+    }
+    let stat;
+    try {
+      stat = await fs.stat(resolvedPath);
+    } catch {
+      throwFilesystemPickerError(404, ApiErrorCode.NOT_FOUND, `File not found: ${candidatePath}`);
+    }
+    if (!stat.isFile()) {
+      throwFilesystemPickerError(400, ApiErrorCode.INVALID_INPUT, 'Only files can be downloaded');
+    }
+    const fileName = pathBasename(candidatePath);
+    reply.header('Cache-Control', 'no-cache');
+    await serveRawFile(
+      reply,
+      { kind: 'local', resolvedPath, relativePath: '' },
+      stat.size,
+      fileName,
+      extname(fileName).slice(1).toLowerCase(),
+      true,
+      req.headers.range
+    );
+  });
+
+  // Upload one file into the folder the picker is showing. Multipart field `file`;
+  // the destination folder is the `path` query, confined like a browse. The file is
+  // created exclusively (never overwrites, never follows a planted symlink): a name
+  // already taken gets a ` (n)` suffix, and the answer carries the path written.
+  app.post('/api/filesystem/upload', async (req, reply): Promise<ApiResponse<FilesystemUploadData>> => {
+    if (!isSameOriginMultipartRequest(req)) {
+      reply.code(403);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'CSRF check failed');
+    }
+    if (!consumePickerUploadToken(req.ip)) {
+      reply.code(429);
+      reply.header('Retry-After', '60');
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        `Rate limit exceeded (${PICKER_UPLOADS_PER_MINUTE} uploads/min)`
+      );
+    }
+    const { path: requestedPath, sessionId, showHidden } = parseBody(FilesystemUploadQuerySchema, req.query);
+    const includeHidden = wantsHiddenPickerEntries(showHidden);
+    const { candidatePath, resolvedPath, blockedTrees } = await resolveFilesystemPickerPath(
+      ctx,
+      req,
+      requestedPath,
+      sessionId,
+      includeHidden
+    );
+    if (isBlockedPickerPath(resolvedPath, blockedTrees, true)) {
+      reply.code(403);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Access to this folder is blocked');
+    }
+    // The folder can sit on a network mount that stopped answering (#516): probe
+    // it bounded before the first write, as paste-image does for a workspace.
+    const kind = await probePathKind(resolvedPath, { pastCap: true });
+    if (kind === 'unknown') {
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        describeUnknownPath('Folder', candidatePath, { pastCap: true })
+      );
+    }
+    if (kind !== 'directory') {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'The upload path must be a folder');
+    }
+    if (!req.isMultipart()) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Expected multipart/form-data');
+    }
+
+    let part: import('@fastify/multipart').MultipartFile | undefined;
+    try {
+      part = await req.file({ limits: { fileSize: MAX_PICKER_UPLOAD_BYTES }, throwFileSizeLimit: false });
+    } catch (err: unknown) {
+      reply.code(413);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err) || 'Invalid multipart payload');
+    }
+    if (!part || part.fieldname !== 'file') {
+      if (part) await finished(part.file.resume()).catch(() => {});
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Expected one file in the "file" field');
+    }
+
+    const baseName = sanitizePickerUploadName(part.filename);
+    let finalName = '';
+    let handle: import('node:fs/promises').FileHandle | undefined;
+    for (let attempt = 0; attempt < PICKER_UPLOAD_MAX_RENAMES && !handle; attempt++) {
+      const name = pickerUploadCandidateName(baseName, attempt);
+      if (isBlockedPickerPath(join(resolvedPath, name), blockedTrees)) {
+        await finished(part.file.resume()).catch(() => {});
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Uploading a file named "${name}" is blocked`);
+      }
+      try {
+        handle = await fs.open(
+          join(resolvedPath, name),
+          fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+          0o644
+        );
+        finalName = name;
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+          await finished(part.file.resume()).catch(() => {});
+          reply.code(403);
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'This folder cannot be written');
+        }
+      }
+    }
+    if (!handle) {
+      await finished(part.file.resume()).catch(() => {});
+      reply.code(409);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Too many files named like "${baseName}"`);
+    }
+
+    const target = join(resolvedPath, finalName);
+    let size = 0;
+    try {
+      for await (const chunk of part.file) {
+        size += chunk.length;
+        // writeFile loops until the whole chunk is on disk; a bare write() may be short.
+        await handle.writeFile(chunk);
+      }
+    } catch (err: unknown) {
+      await handle.close().catch(() => {});
+      await fs.unlink(target).catch(() => {});
+      throw err;
+    }
+    await handle.close();
+    if (part.file.truncated) {
+      await fs.unlink(target).catch(() => {});
+      reply.code(413);
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        `File too large (max ${Math.round(MAX_PICKER_UPLOAD_BYTES / (1024 * 1024))}MB)`
+      );
+    }
+    return { success: true, data: { path: join(candidatePath, finalName), name: finalName, size } };
+  });
+
   // File tree listing
-  app.get('/api/sessions/:id/files', async (req) => {
+  app.get('/api/sessions/:id/files', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { depth, showHidden, q } = req.query as { depth?: string; showHidden?: string; q?: string };
+    const {
+      depth,
+      showHidden,
+      q,
+      lazy,
+      path: lazyPath,
+    } = req.query as {
+      depth?: string;
+      showHidden?: string;
+      q?: string;
+      lazy?: string;
+      path?: string;
+    };
     const session = findSessionOrFail(ctx, id, req);
+
+    // ===== Lazy mode =====
+    // `?lazy=1[&path=<workspace-relative dir>]` lists ONE directory, the way the
+    // path picker browses: on a slow mount (WSL /mnt/<drive> is 9P, a stat per
+    // entry) the depth-5 walk below took 14 s for a 5,000-node workspace, one
+    // folder takes well under a second. Directories come back WITHOUT `children`
+    // (= not loaded yet; the client fetches them on expand), every entry carries
+    // `mtimeMs` for date sorting, and the generated-directory excludes do not
+    // apply: nothing below is walked, so node_modules costs one row, not a scan.
+    if (lazy === '1' || lazy === 'true') {
+      const includeHidden = showHidden === 'true';
+      const relativeDir = typeof lazyPath === 'string' ? lazyPath : '';
+      const resolved = validateSessionFilePath(session.workingDir, relativeDir || '.');
+      if (!resolved) {
+        reply.code(404);
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Folder not found in this workspace');
+      }
+      if (!includeHidden && relativeDir.split(/[\\/]/).some((segment) => segment.startsWith('.'))) {
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Hidden folders are not shown');
+      }
+      let entries;
+      try {
+        entries = await fs.readdir(resolved.resolvedPath, { withFileTypes: true });
+      } catch {
+        reply.code(400);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'This folder cannot be read');
+      }
+      const base = relativeDir.replace(/[\\/]+$/, '');
+      const nodes: Array<{
+        name: string;
+        path: string;
+        type: 'file' | 'directory';
+        size?: number;
+        extension?: string;
+        mtimeMs?: number;
+      }> = [];
+      let files = 0;
+      let directories = 0;
+      let lazyTruncated = false;
+      for (const entry of entries) {
+        if (!includeHidden && entry.name.startsWith('.')) continue;
+        if (nodes.length >= LAZY_FILE_TREE_ENTRY_LIMIT) {
+          lazyTruncated = true;
+          break;
+        }
+        const fullPath = join(resolved.resolvedPath, entry.name);
+        let isDirectory = entry.isDirectory();
+        let stat: import('node:fs').Stats | undefined;
+        try {
+          // stat (not lstat): a symlinked folder lists as a folder, and its
+          // children are re-confined to the workspace when it is expanded.
+          stat = await fs.stat(fullPath);
+          isDirectory = stat.isDirectory();
+        } catch {
+          if (entry.isSymbolicLink()) continue; // dangling link
+        }
+        if (!isDirectory && !entry.isFile() && !stat?.isFile()) continue;
+        const path = base ? `${base}/${entry.name}` : entry.name;
+        if (isDirectory) {
+          directories++;
+          nodes.push({ name: entry.name, path, type: 'directory', mtimeMs: stat?.mtimeMs });
+        } else {
+          files++;
+          nodes.push({
+            name: entry.name,
+            path,
+            type: 'file',
+            size: stat?.size,
+            extension: entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined,
+            mtimeMs: stat?.mtimeMs,
+          });
+        }
+      }
+      nodes.sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      return {
+        success: true,
+        data: {
+          root: session.workingDir,
+          path: base,
+          lazy: true,
+          tree: nodes,
+          totalFiles: files,
+          totalDirectories: directories,
+          truncated: lazyTruncated,
+        },
+      };
+    }
 
     const maxDepth = Math.min(parseInt(depth || '5', 10), 10);
     const includeHidden = showHidden === 'true';

@@ -11932,12 +11932,16 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 }
 
 .file-browser-search {
+  display: flex;
+  gap: 0.3rem;
   padding: 0.4rem;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
 .file-browser-search input {
+  flex: 1;
+  min-width: 0;
   width: 100%;
   padding: 0.3rem 0.5rem;
   font-size: 0.75rem;
@@ -11950,6 +11954,25 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 .file-browser-search input:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+.file-browser-sort {
+  flex: 0 0 auto;
+  max-width: 7.5rem;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.7rem;
+  color: var(--text);
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+/* Lazy tree: the row under an expanded folder while its listing loads (or failed). */
+.file-tree-placeholder {
+  padding: 0.2rem 0.5rem;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  font-style: italic;
 }
 
 .file-browser-body {
@@ -15655,6 +15678,53 @@ body.touch-device.cjk-input-visible .main {
 
 .path-picker-status.error {
   color: var(--danger, #ef4444);
+}
+
+/* Upload (fileTransfer pickers only): sits between the status line and Sort,
+ * which the status line's flex pushes to the right. */
+.path-picker-toolbar:has(.path-picker-upload:not([hidden])) .path-picker-status {
+  flex: 1;
+}
+
+.path-picker-upload {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  color: var(--accent);
+  font-size: 0.7rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.path-picker-upload[hidden] {
+  display: none;
+}
+
+.path-picker-upload:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.path-picker-item-download {
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 30px;
+  margin-right: 6px;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.path-picker-item-download:hover,
+.path-picker-item-download:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .path-picker-list {
