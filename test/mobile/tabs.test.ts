@@ -420,11 +420,11 @@ describe('Tab Navigation', () => {
       expect(log).toEqual([]);
     });
 
-    it('slow swipe (>300ms) does not trigger navigation', async () => {
+    it('slow swipe (past the time limit) does not trigger navigation', async () => {
       await clearSwipeLog();
       await installSwipeSpy();
       // Duration exceeds MAX_TIME threshold
-      await swipeViaCDP(page, 'left', { distance: SWIPE.MIN_DISTANCE + 20, duration: 400 });
+      await swipeViaCDP(page, 'left', { distance: SWIPE.MIN_DISTANCE + 20, duration: SWIPE.MAX_TIME + 150 });
       await page.waitForTimeout(200);
       const log = await getSwipeLog();
       expect(log).toEqual([]);
