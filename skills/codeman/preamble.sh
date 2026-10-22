@@ -1,4 +1,4 @@
-# ---- Codeman agent preamble 1.43.1 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+# ---- Codeman agent preamble 1.44.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
 # Positional parameters are always written with braces, ${1} and never a bare dollar-digit: Claude Code
 # replaces a bare one in a skill body with the matching word of the skill's arguments, and §0 is pasted
 # from that body (test/agent-skill.test.ts pins it).
@@ -319,4 +319,4 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.43.1
+CODEMAN_PREAMBLE=1.44.0
