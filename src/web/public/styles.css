@@ -6669,6 +6669,27 @@ html[data-skin="og"] .welcome-primary:hover {
   display: none;
 }
 
+/* Default session group selector (Case settings, desktop and phone popovers) */
+.case-default-group-label {
+  display: block;
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.case-default-group-select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--bg-input, var(--bg-card));
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+}
+
 .case-settings-popover .form-hint {
   margin-top: 0.2rem;
   font-size: 0.6rem;

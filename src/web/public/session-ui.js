@@ -3361,6 +3361,7 @@ Object.assign(CodemanApp.prototype, {
       document.getElementById('caseAgentTeams').checked = settings.agentTeams;
       document.getElementById('caseOpusContext1m').checked = settings.opusContext1m;
       popover.classList.remove('hidden');
+      this._loadCaseDefaultGroup();
 
       // Close on outside click (one-shot listener)
       const closeHandler = (e) => {
@@ -3409,6 +3410,7 @@ Object.assign(CodemanApp.prototype, {
       document.getElementById('caseAgentTeamsMobile').checked = settings.agentTeams;
       document.getElementById('caseOpusContext1mMobile').checked = settings.opusContext1m;
       popover.classList.remove('hidden');
+      this._loadCaseDefaultGroup();
 
       const closeHandler = (e) => {
         if (!popover.contains(e.target) && !e.target.classList.contains('btn-case-settings-mobile')) {
@@ -3433,6 +3435,103 @@ Object.assign(CodemanApp.prototype, {
     if (desktopCheckbox) desktopCheckbox.checked = settings.agentTeams;
     const desktopOpusCheckbox = document.getElementById('caseOpusContext1m');
     if (desktopOpusCheckbox) desktopOpusCheckbox.checked = settings.opusContext1m;
+  },
+
+  // ── Default session group (server-side, per owner + case) ──
+  //
+  // Unlike the two checkboxes above (this browser's localStorage), the default
+  // group lives on the server, because the server places a new session in it in
+  // the same layout write that registers it. The value is a group ID; '' in the
+  // <select> is Ungrouped (null on the wire). Desktop and phone popovers mirror.
+
+  _caseDefaultGroupSelects() {
+    return ['caseDefaultGroup', 'caseDefaultGroupMobile']
+      .map((id) => document.getElementById(id))
+      .filter(Boolean);
+  },
+
+  /** Rebuild both selectors from `groups`, keeping `groupId` if it still exists. */
+  _renderCaseDefaultGroupSelects(groups, groupId) {
+    const known = groups.some((group) => group.id === groupId);
+    const value = known ? groupId : '';
+    for (const select of this._caseDefaultGroupSelects()) {
+      const ungrouped = document.createElement('option');
+      ungrouped.value = '';
+      ungrouped.textContent = 'Ungrouped';
+      const options = groups.map((group) => {
+        const option = document.createElement('option');
+        option.value = group.id;
+        option.textContent = group.name;
+        option.setAttribute('data-i18n-skip', '');
+        return option;
+      });
+      select.replaceChildren(ungrouped, ...options);
+      select.value = value;
+    }
+    return value;
+  },
+
+  /** Read the selected case's default group from the server (popover open). */
+  async _loadCaseDefaultGroup() {
+    const caseName = document.getElementById('quickStartCase')?.value;
+    const selects = this._caseDefaultGroupSelects();
+    if (!caseName || selects.length === 0) return;
+    for (const select of selects) select.disabled = true;
+    const data = await this._apiJson(`/api/cases/${encodeURIComponent(caseName)}/default-group`);
+    if (document.getElementById('quickStartCase')?.value !== caseName) return; // case switched meanwhile
+    const groups = Array.isArray(data?.groups) ? data.groups : [];
+    const groupId = typeof data?.groupId === 'string' ? data.groupId : null;
+    this._caseDefaultGroupState = { caseName, groupId, groups };
+    this._renderCaseDefaultGroupSelects(groups, groupId);
+    for (const select of selects) select.disabled = !data;
+  },
+
+  /** Save a selector change; on refusal restore the last confirmed value. */
+  async onCaseDefaultGroupChanged(select) {
+    const state = this._caseDefaultGroupState;
+    if (!state) return;
+    const groupId = select.value || null;
+    const selects = this._caseDefaultGroupSelects();
+    for (const other of selects) {
+      other.value = select.value;
+      other.disabled = true;
+    }
+    const res = await this._apiPut(`/api/cases/${encodeURIComponent(state.caseName)}/default-group`, { groupId });
+    let saved = null;
+    if (res?.ok) {
+      try {
+        saved = (await res.json())?.data ?? null;
+      } catch {
+        saved = null;
+      }
+    }
+    if (saved) {
+      state.groupId = typeof saved.groupId === 'string' ? saved.groupId : null;
+      if (Array.isArray(saved.groups)) state.groups = saved.groups;
+    } else {
+      this.showToast?.('Could not save the default session group.', 'error');
+    }
+    this._renderCaseDefaultGroupSelects(state.groups, state.groupId);
+    for (const other of selects) other.disabled = false;
+  },
+
+  /**
+   * The tab layout changed (a group was created, renamed or deleted): redraw the
+   * options from it. A deleted selection shows as Ungrouped, which is where the
+   * server now places new sessions (it forgets the stale ID at the next creation).
+   * Every create, delete and reorder broadcasts a layout, so an unchanged group
+   * list is left alone: rebuilding it would reset a dropdown the user has open.
+   */
+  _refreshCaseDefaultGroupOptions(layout) {
+    const state = this._caseDefaultGroupState;
+    if (!state || !layout || !Array.isArray(layout.groups)) return;
+    const groups = layout.groups.map((group) => ({ id: group.id, name: group.name }));
+    const unchanged = groups.length === state.groups.length
+      && groups.every((group, i) => group.id === state.groups[i].id && group.name === state.groups[i].name);
+    if (unchanged) return;
+    state.groups = groups;
+    const value = this._renderCaseDefaultGroupSelects(state.groups, state.groupId);
+    if (!value) state.groupId = null;
   },
 
   // ═══════════════════════════════════════════════════════════════

@@ -413,8 +413,8 @@ export function registerRalphRoutes(
     const promptPath = join(casePath, '@ralph_prompt.md');
     writeFileSync(promptPath, fullPrompt, 'utf-8');
 
-    // Register session
-    await ctx.addSession(session);
+    // Register session (in its case's default session group, if one is set)
+    await ctx.addSession(session, { caseName });
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);

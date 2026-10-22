@@ -50,6 +50,11 @@ interface TabLayoutServiceDeps {
    * from then on; on, it keeps following its parent until moved by hand.
    */
   childrenFollowParent?(): boolean | Promise<boolean>;
+  /**
+   * Where per-case default session groups live (StateStore). Optional so a
+   * harness without it simply never applies a case default.
+   */
+  caseDefaults?: Pick<StateStore, 'getCaseDefaultGroup' | 'setCaseDefaultGroup' | 'deleteCaseDefaultGroup'>;
   now?: () => string;
 }
 
@@ -78,6 +83,17 @@ export interface RemovedTabLayoutSession {
 /** Where a newly created session asked to be placed. Advisory: an unknown group is ignored. */
 export interface SessionPlacementHint {
   tabGroupId?: string;
+  /**
+   * The case the session was started for. Its default session group (if any)
+   * is the fallback when neither `tabGroupId` nor a parent places the session.
+   */
+  caseName?: string;
+}
+
+/** A case's default session group plus the owner's current named groups to choose from. */
+export interface CaseDefaultGroupView {
+  groupId: string | null;
+  groups: Array<{ id: string; name: string }>;
 }
 
 /**
@@ -156,6 +172,20 @@ function pinCreatedChild(layout: TabLayout, sessionId: string, metadata: readonl
     to++;
   if (to === from) return pinned;
   return moveRef(pinned, { kind: 'session', id: sessionId }, { groupId: group?.id ?? null, index: to }, metadata);
+}
+
+/**
+ * Does the just-created session have a parent that places it (right after that
+ * parent)? Mirrors the conditions under which normalization and
+ * {@link pinCreatedChild} treat it as a child.
+ */
+function hasPlacingParent(layout: TabLayout, sessionId: string, metadata: readonly TabRefMetadata[]): boolean {
+  const item = metadata.find((fact) => fact.kind === 'session' && fact.id === sessionId);
+  const parentId = item?.parentSessionId;
+  if (!item?.ownerValid || !parentId) return false;
+  const parentValid = metadata.some((fact) => fact.kind === 'session' && fact.id === parentId && fact.ownerValid);
+  const refs = [...layout.groups.flatMap((group) => group.refs), ...layout.ungrouped];
+  return parentValid && refs.some((ref) => ref.kind === 'session' && ref.id === parentId);
 }
 
 /** Move a just-created session to the end of `groupId`, or leave the layout alone. */
@@ -550,21 +580,79 @@ export class TabLayoutService {
   ): Promise<TabLayout> {
     return this.withOwner(owner, async () => {
       const follow = sessionId ? (await this.deps.childrenFollowParent?.()) === true : true;
+      const caseName = sessionId ? placement.caseName : undefined;
+      const caseDefault = caseName ? this.deps.caseDefaults?.getCaseDefaultGroup(owner, caseName) : undefined;
+      let staleCaseDefault = false;
       const rollback = register?.();
+      let layout: TabLayout;
       try {
         const groupId = placement.tabGroupId;
         const adjust =
-          sessionId && (groupId || !follow)
+          sessionId && (groupId || !follow || typeof caseDefault === 'string')
             ? (layout: TabLayout, metadata: readonly TabRefMetadata[]) => {
-                const placed = groupId ? placeCreatedSession(layout, sessionId, groupId, metadata) : layout;
+                // Precedence: explicit group > parent placement > case default > none.
+                const explicit = groupId && layout.groups.some((group) => group.id === groupId) ? groupId : undefined;
+                let placed = explicit ? placeCreatedSession(layout, sessionId, explicit, metadata) : layout;
+                if (!explicit && typeof caseDefault === 'string') {
+                  if (!layout.groups.some((group) => group.id === caseDefault)) staleCaseDefault = true;
+                  else if (!hasPlacingParent(layout, sessionId, metadata))
+                    placed = placeCreatedSession(layout, sessionId, caseDefault, metadata);
+                }
                 return follow ? placed : pinCreatedChild(placed, sessionId, metadata);
               }
             : undefined;
-        return await this.getUnlocked(owner, adjust);
+        layout = await this.getUnlocked(owner, adjust);
       } catch (error) {
         if (typeof rollback === 'function') rollback();
         throw error;
       }
+      // A default whose group was deleted is ignored above and forgotten here, only once the
+      // creation's own write has landed, and outside the rollback: the session is committed by now,
+      // and nothing this cleanup does may drop it from the live map.
+      if (staleCaseDefault && caseName) this.deps.caseDefaults?.deleteCaseDefaultGroup(owner, caseName);
+      return layout;
+    });
+  }
+
+  /**
+   * A case's default session group and the owner's named groups to choose from.
+   * A stored id that is no longer one of this owner's groups is reported as
+   * `null` (Ungrouped), which is also where creation would put it. Read-only:
+   * the next creation for the case forgets the stale id.
+   */
+  async caseDefaultGroup(owner: string, caseName: string): Promise<CaseDefaultGroupView> {
+    return this.withOwner(owner, async () => {
+      const { authoritative } = await this.prepareUnlocked(owner);
+      const groups = authoritative.groups.map((group) => ({ id: group.id, name: group.name }));
+      const stored = this.deps.caseDefaults?.getCaseDefaultGroup(owner, caseName);
+      const known = typeof stored === 'string' && groups.some((group) => group.id === stored);
+      return { groupId: known ? stored : null, groups };
+    });
+  }
+
+  /**
+   * Set a case's default session group: one of this owner's current groups, or
+   * `null` for Ungrouped. Only future creations read it; nothing is moved.
+   * Throws {@link TabLayoutValidationError} for an id not in the owner's layout.
+   */
+  async setCaseDefaultGroup(owner: string, caseName: string, groupId: string | null): Promise<CaseDefaultGroupView> {
+    return this.withOwner(owner, async () => {
+      const caseDefaults = this.deps.caseDefaults;
+      if (!caseDefaults) throw new Error('Case default groups are not available');
+      const { authoritative } = await this.prepareUnlocked(owner);
+      const groups = authoritative.groups.map((group) => ({ id: group.id, name: group.name }));
+      if (groupId !== null && !groups.some((group) => group.id === groupId)) {
+        throw new TabLayoutValidationError('Unknown tab group');
+      }
+      caseDefaults.setCaseDefaultGroup(owner, caseName, groupId);
+      return { groupId, groups };
+    });
+  }
+
+  /** Forget a case's default session group (the case was deleted or unlinked). */
+  async forgetCaseDefaultGroup(owner: string, caseName: string): Promise<void> {
+    await this.withOwner(owner, async () => {
+      this.deps.caseDefaults?.deleteCaseDefaultGroup(owner, caseName);
     });
   }
 

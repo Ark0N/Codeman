@@ -7758,6 +7758,8 @@ class CodemanApp {
       this._tabLayoutEditor = null;
     }
     this.tabLayout = next;
+    // An open Case settings popover lists the groups as its Default session group options.
+    this._refreshCaseDefaultGroupOptions?.(next);
     const storage = this._getTabCollapseStorage();
     const collapsed = storage && next
       ? window.CodemanTabLayout.loadCollapsedGroupIds(storage, next.groups.map((group) => group.id))

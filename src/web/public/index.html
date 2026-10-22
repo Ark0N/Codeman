@@ -778,6 +778,11 @@
                 <span>1M Opus Context</span>
               </label>
               <span class="form-hint">Use 1M token context window for new sessions</span>
+              <label class="case-default-group-label" for="caseDefaultGroup">Default session group</label>
+              <select id="caseDefaultGroup" class="case-default-group-select" onchange="app.onCaseDefaultGroupChanged(this)">
+                <option value="">Ungrouped</option>
+              </select>
+              <span class="form-hint">New sessions for this case land in this group</span>
             </div>
           </div>
           <!-- Mobile-only case button + gear -->
@@ -822,6 +827,11 @@
               <span>1M Opus Context</span>
             </label>
             <span class="form-hint">Use 1M token context window</span>
+            <label class="case-default-group-label" for="caseDefaultGroupMobile">Default session group</label>
+            <select id="caseDefaultGroupMobile" class="case-default-group-select" onchange="app.onCaseDefaultGroupChanged(this)">
+              <option value="">Ungrouped</option>
+            </select>
+            <span class="form-hint">New sessions for this case land in this group</span>
           </div>
         </div>
 

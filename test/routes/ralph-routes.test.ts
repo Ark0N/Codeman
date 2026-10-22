@@ -476,6 +476,8 @@ describe('ralph-routes', () => {
         payload: { taskDescription: 'test task', completionPhrase: 'DONE', caseName: 'registration-order' },
       });
       await vi.waitFor(() => expect(harness.ctx.addSession).toHaveBeenCalledTimes(1));
+      // The case rides the registration, so the session lands in the case's default session group.
+      expect(harness.ctx.addSession).toHaveBeenCalledWith(expect.anything(), { caseName: 'registration-order' });
       expect(harness.ctx.persistSessionState).not.toHaveBeenCalled();
       expect(harness.ctx.setupSessionListeners).not.toHaveBeenCalled();
 

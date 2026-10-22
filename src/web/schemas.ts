@@ -1997,6 +1997,15 @@ export const CaseOrderSchema = z.object({
   order: z.array(z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format')),
 });
 
+/**
+ * PUT /api/cases/:name/default-group — the tab group new sessions of this case
+ * land in: one of the caller's own group ids, or null for Ungrouped. Same bounds
+ * as tabGroupIdSchema; the route checks the id against the caller's layout.
+ */
+export const CaseDefaultGroupSchema = z.object({
+  groupId: z.string().min(1).max(100).nullable(),
+});
+
 /** PUT /api/session-order — global tab order (ordered sessionIds), COD-131 */
 export const SessionOrderUpdateSchema = z.object({
   // Bounded defensively: ids are uuid-ish (<=100 chars) and the client pushes only

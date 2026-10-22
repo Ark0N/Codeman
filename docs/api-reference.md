@@ -784,6 +784,28 @@ deleted group, another user's group) is ignored and the session lands where it
 otherwise would, never a `400`. A malformed value (`null`, an empty string, a
 non-string) is a `400 INVALID_INPUT`. Requests without the field are unchanged.
 
+### A case's default session group
+
+- `GET /api/v1/cases/:name/default-group` → `{ caseName, groupId, groups }`: `groupId` is a
+  group id from the caller's own tab layout or `null` (Ungrouped), `groups` the caller's
+  current named groups (`{ id, name }`, in layout order). A stored id whose group was
+  deleted reads back as `null` (the read changes nothing; the next session created for the
+  case forgets it).
+- `PUT /api/v1/cases/:name/default-group` with `{ "groupId": string | null }` saves it. An
+  id not in the caller's layout is a `400 INVALID_INPUT` that leaves the old value in place.
+
+Both answer `404 NOT_FOUND` for a case the caller cannot see (the same rules as
+`GET /api/v1/cases`). The value is stored per owner and case, so in multi-user mode it is
+never shared and needs no admin role. A new session of the case is placed in that group in
+its creating write when nothing stronger applies; the order is: an explicit `tabGroupId`,
+then the session it was spawned from (`parentSessionId`), then the case default, else
+Ungrouped. `POST /api/v1/quick-start` uses its `caseName` (local, linked, remote and Docker
+cases); `POST /api/v1/sessions` uses the case whose folder `workingDir` is (a direct child of
+the caller's case space, a linked case's exact path, or a Claude worktree of either,
+`<case>/.claude/worktrees/<name>`); without a `workingDir` there is no case. When a case default places the
+session, the create response carries `tabLayout` as it does for `tabGroupId`. Deleting the
+case forgets the value; existing sessions never move.
+
 ## Approvals Inbox
 
 Cross-session queue of prompts waiting on a human (permission dialogs,

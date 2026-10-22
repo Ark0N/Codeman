@@ -678,6 +678,9 @@
     'Agent Teams': '智能体团队',
     'Claude Model': 'Claude 模型',
     '1M Opus Context': 'Opus 100 万上下文',
+    'Default session group': '默认会话分组',
+    'New sessions for this case land in this group': '此案例的新会话将放入此分组',
+    'Could not save the default session group.': '无法保存默认会话分组。',
     'Remote auto-reconnect': '远程自动重连',
     'Pin tab names on the CLI': '在 CLI 上固定标签名',
     "Launch every Claude session with its tab name, so the CLI's prompt label and /resume list match your tabs. Claude then stops generating its own titles for those sessions, and a rename in Codeman holds only until the next turn. Applies from the next session start or respawn, no server restart needed.":
