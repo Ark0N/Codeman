@@ -394,6 +394,42 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
     expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(false);
   });
 
+  it('falls through to local scrolling when tmux still holds the scrollback the replay left out', () => {
+    // After a server restart a tab switch replays a byte tail that is only the
+    // tmux client's attach repaint: baseY 0, while the same response reported
+    // tmux scrollback (`paneHistoryLines`). Paging there sent PageUp into an
+    // inline Claude's composer; the local path's scroll-to-top pull
+    // (_maybeRefetchFullHistory) is what loads that scrollback.
+    const { app, sent, logs } = hollowApp();
+    app._pageKeyGesture = { stale: true };
+    // A page key queued before the count was known must not reach the CLI either.
+    app._wheelSgrQueue = '\x1b[5~';
+    app._paneHistoryLines = new Map([['sess-1', 64]]);
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(false);
+    expect(app._maybePageCliTranscript({ shiftKey: false }, 18)).toBe(false);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([]);
+    expect(app._pageKeyGesture).toBeNull();
+    // No routing line of its own: the caller's `local-scrollback` line (with
+    // `localScrollbackRows=0`) is the record, and a second line per frame
+    // would alternate with it until the pull lands.
+    expect(logs).toEqual([]);
+
+    // 0 is a pane that keeps no scrollback (fullscreen claude, codex, opencode):
+    // paged as before, and so is unknown (no capture yet, an older server).
+    app._paneHistoryLines.set('sess-1', 0);
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(true);
+    app._paneHistoryLines.delete('sess-1');
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(true);
+    delete app._paneHistoryLines;
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(true);
+
+    // An open dialog still wins: nothing scrolls under it and no pull starts.
+    app._paneHistoryLines = new Map([['sess-1', 64]]);
+    app.tabAlerts = new Map([['sess-1', 'action']]);
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -18)).toBe(true);
+  });
+
   it('pages a Codex transcript only while its local scrollback is empty', () => {
     // Codex without observed mouse tracking retains its PageUp/PageDown fallback.
     const { app, sent } = hollowApp();

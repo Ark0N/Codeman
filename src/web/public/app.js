@@ -3351,11 +3351,15 @@ class CodemanApp {
         headersReceivedAt = capture.headersAt;
         data = capture.json?.data ?? {};
       }
-      this._notePaneHistory?.(sessionId, data);
       // Bail on a tab switch mid-fetch: writing here would paint this session's
       // history into the terminal the user is now looking at. The window is two
-      // fetches wide in the fallback case, so this guard is not optional.
+      // fetches wide in the fallback case, so this guard is not optional. The
+      // pane count is recorded only past it: a refresh that lost its owner is
+      // older than whatever the switch back read (it would have overwritten a
+      // fresh 0 with a stale count and held the paging fallback off a hollow
+      // pane), and an error envelope is not a capture at all.
       if (this.activeSessionId !== sessionId || this._terminalRefreshOwner !== refreshOwner) return false;
+      if (capture.json?.success !== false) this._notePaneHistory?.(sessionId, data);
       if (data.terminalBuffer) {
         // This refresh is SERVER-triggered, so a user quietly reading scrollback
         // did not ask for it and must not be dragged to the bottom by it (#259).
@@ -9238,10 +9242,23 @@ class CodemanApp {
     // `force` is the user pressing "Load full history" (#258): they asked once,
     // explicitly, so the scroll-gesture cooldown does not apply. The downgrade
     // guard below still does — a forced pull must not destroy history either.
-    const cooldown = this._fullHistoryRepullUseless?.has(sessionId) ? 60000 : 4000;
+    // A refused pull latches 60 s because the browser then held MORE than tmux
+    // (the downgrade guard below). A tab switch that replayed a hollow tail has
+    // voided that premise: one screen in the browser while the pane holds
+    // scrollback, the state `_maybePageCliTranscript` hands to this pull instead
+    // of paging the CLI. Hold such a buffer to the normal cooldown only, or the
+    // gesture is dead for up to a minute.
+    const unloaded =
+      (this._paneHistoryLines?.get(sessionId) ?? 0) > 0 && (this.terminal?.buffer?.active?.baseY ?? 0) === 0;
+    const cooldown = !unloaded && this._fullHistoryRepullUseless?.has(sessionId) ? 60000 : 4000;
     if (!force && now - (this._fullHistoryRepullAt.get(sessionId) || 0) < cooldown) return;
     this._fullHistoryRepullAt.set(sessionId, now);
     this._fullHistoryRepullInFlight = true;
+    // The session-id check below cannot see a tab switch that came BACK during
+    // the fetch (A -> B -> A): the id matches again while `selectSession` is
+    // replaying its own capture, and the reset below would land in the middle
+    // of that write. The select generation moves on every switch, so it can.
+    const selectGen = this._selectGeneration;
     try {
       const requestStartedAt = performance.now();
       const capture = await this._fetchTerminalCapture(
@@ -9253,7 +9270,13 @@ class CodemanApp {
       const headersReceivedAt = capture.headersAt;
       const payload = capture.json?.data ?? {};
       const bodyParsedAt = performance.now();
-      this._notePaneHistory?.(sessionId, payload);
+      // A completion that outlived a tab switch is older than whatever that
+      // switch recorded about the pane (a switch back re-reads it): keep its
+      // count out of the memory, or it can overwrite a fresh count with a stale one.
+      // An error envelope (a JSON 5xx, `success: false`) is not a capture:
+      // recording its empty data would forget the count and hand the next
+      // gesture back to the paging fallback, the bug this pull exists to avoid.
+      if (selectGen === this._selectGeneration && capture.json?.success !== false) this._notePaneHistory?.(sessionId, payload);
       const buffer = payload.terminalBuffer;
       const timing = {
         trigger: force ? 'full-history-button' : 'full-history-scroll',
@@ -9269,8 +9292,9 @@ class CodemanApp {
         refused: false,
       };
       // Bail on a tab switch mid-fetch: writing here would paint another session's
-      // history into the terminal the user is now looking at.
-      if (!buffer || this.activeSessionId !== sessionId) return;
+      // history into the terminal the user is now looking at, or this session's
+      // over the load a switch back has started.
+      if (!buffer || this.activeSessionId !== sessionId || selectGen !== this._selectGeneration) return;
       const windowRows = this._estimateReplayRows(buffer, this.terminal.cols);
       // A bounded window no longer than the browser's buffer buys nothing, and
       // resetting to rewrite it would jump the viewport on every scroll that
@@ -9342,7 +9366,7 @@ class CodemanApp {
         this._bufferLoadFinishOpts(payload, headersReceivedAt)
       );
       timing.resetAndParseMs = parsedAt - replayStartedAt;
-      if (!completed || this.activeSessionId !== sessionId) return;
+      if (!completed || this.activeSessionId !== sessionId || selectGen !== this._selectGeneration) return;
       // Keep shell tab restores bounded too. A user-triggered full-history pull
       // may be tens of MB; caching it would replay that whole payload again on
       // the next tab switch before the normal 1MB tail fetch replaces it.
@@ -9364,6 +9388,10 @@ class CodemanApp {
       // reached only from a scroll-up gesture, so being dragged down is the
       // exact opposite of what the user asked for.
       this._syncStickyScrollBaseline();
+      // The prompt row moved with the rewrite: re-position the local-echo
+      // overlay there, as the refresh path does (a phone swipe reaches this
+      // pull with unsent text on the overlay).
+      this._localEchoOverlay?.rerender();
       timing.totalMs = performance.now() - requestStartedAt;
       this._recordTerminalLoadTiming(timing);
     } catch {
