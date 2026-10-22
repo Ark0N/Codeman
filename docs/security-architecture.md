@@ -149,7 +149,7 @@ by presence in a server‑side map, so they cannot be forged offline.
 
 ### Rate limiting / lockout recovery
 
-Failed auth is tracked **per IP**: 10 failures → `429`, with a 15‑minute decay.
+Failed logins are tracked **per IP**: 50 failures (`AUTH_IP_FAILURE_MAX`) → `429`, with a 15‑minute decay. In multi-user mode a separate **per-username** bucket still returns `429` after 10 failed guesses (`AUTH_FAILURE_MAX`), so the wider per-IP cap (for clients sharing one egress IP) does not widen guessing against any one account.
 The QR path has its own separate limiter.
 
 The lockout check sits **after** the cookie/credential checks (step 4, not first).

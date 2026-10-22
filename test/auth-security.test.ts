@@ -15,6 +15,7 @@ import { WebServer } from '../src/web/server.js';
 import { TmuxManager } from '../src/tmux-manager.js';
 import { SettingsUpdateSchema } from '../src/web/schemas.js';
 import { getHookSecret, HOOK_SECRET_HEADER } from '../src/config/hook-secret.js';
+import { AUTH_FAILURE_MAX, AUTH_IP_FAILURE_MAX } from '../src/config/auth-config.js';
 
 const TEST_USER = 'admin';
 const TEST_PASS = 'test-password-12345';
@@ -46,7 +47,7 @@ async function getSessionCookie(baseUrl: string): Promise<string> {
 }
 
 async function exhaustAuthFailures(baseUrl: string, prefix: string): Promise<void> {
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < AUTH_IP_FAILURE_MAX; i++) {
     const res = await fetch(`${baseUrl}/api/status`, {
       headers: { Authorization: basicAuthHeader(TEST_USER, `${prefix}-${i}`) },
     });
@@ -205,6 +206,20 @@ describe('Auth Security', () => {
 
       expect(res.status).toBe(429);
       expect(res.headers.get('retry-after')).toMatch(/^\d+$/);
+    });
+
+    it('leaves per-IP headroom above the per-account cap before throttling', async () => {
+      // One egress IP (NAT, tunnel, an automated client) can carry more failures
+      // than one person does, so the per-IP login bucket is wider than the
+      // per-username one.
+      expect(AUTH_IP_FAILURE_MAX).toBe(50);
+      expect(AUTH_IP_FAILURE_MAX).toBeGreaterThan(AUTH_FAILURE_MAX);
+      for (let i = 0; i <= AUTH_FAILURE_MAX; i++) {
+        const res = await fetch(`${rateBaseUrl}/api/status`, {
+          headers: { Authorization: basicAuthHeader(TEST_USER, `ip-headroom-${i}`) },
+        });
+        expect(res.status).toBe(401);
+      }
     });
 
     it('should allow an existing valid session cookie during auth failure lockout', async () => {

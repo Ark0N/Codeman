@@ -17,6 +17,7 @@ import {
   AUTH_SESSION_TTL_MS,
   MAX_AUTH_SESSIONS,
   AUTH_FAILURE_MAX,
+  AUTH_IP_FAILURE_MAX,
   AUTH_FAILURE_WINDOW_MS,
 } from '../../config/auth-config.js';
 import { getHookSecret, HOOK_SECRET_HEADER } from '../../config/hook-secret.js';
@@ -447,7 +448,7 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
 
     // Rate limit only requests that failed to authenticate on this attempt.
     const failures = authFailures.get(clientIp) ?? 0;
-    if (failures >= AUTH_FAILURE_MAX) {
+    if (failures >= AUTH_IP_FAILURE_MAX) {
       sendAuthRateLimit(reply, authFailures, clientIp);
       return;
     }
@@ -573,7 +574,7 @@ function registerMultiUserAuthHook(
     // Per-IP pre-gate bounds scrypt CPU cost from one source (does NOT gate on the
     // per-username bucket here; see below).
     const ipFail = authFailures.get(clientIp) ?? 0;
-    if (ipFail >= AUTH_FAILURE_MAX) {
+    if (ipFail >= AUTH_IP_FAILURE_MAX) {
       sendAuthRateLimit(reply, authFailures, clientIp);
       return;
     }
