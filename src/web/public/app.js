@@ -3938,8 +3938,8 @@ class CodemanApp {
     // Both transports refuse a frame over the server's limit (issue #484), and a
     // refused frame used to sit at the head of the durable queue for good. So an
     // oversized paste goes out as several in-limit frames, delivered in seq order
-    // as one contiguous stream. A mux write is line-oriented (it strips newlines
-    // and sends Enter on its own), so it is never split: refuse it instead.
+    // as one contiguous stream. A mux write is one paste that sends Enter on its
+    // own, so it is never split: refuse it instead.
     const limit = window.CodemanInputLimit;
     if (limit && input.length > limit.FRAME_MAX_CHARS) {
       if (useMux || input.length > limit.PASTE_MAX_CHARS) {

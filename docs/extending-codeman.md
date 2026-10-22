@@ -183,7 +183,7 @@ curl -u admin:$PASS -X POST http://127.0.0.1:3000/api/v1/sessions \
   -H 'Content-Type: application/json' \
   -d '{"workingDir":"/home/me/project","mode":"claude"}'
 
-# Send a prompt (single-line only, and it must end with \r: Enter is sent only
+# Send a prompt (it must end with \r: Enter is sent only
 # when the input contains a carriage return; without it the text sits on the
 # session's prompt unsubmitted)
 curl -u admin:$PASS -X POST http://127.0.0.1:3000/api/v1/sessions/$ID/input \
@@ -294,8 +294,8 @@ if ! jq -e '.data.wait.matched' <<<"$R" >/dev/null; then
 fi
 
 # 3. Send the prompt AND register the wait in one call, so the answer cannot be
-#    the previous turn's idle state. Single line only, ending in \r (otherwise
-#    Enter is never sent and this wait times out on a turn that never started).
+#    the previous turn's idle state. It must end in \r (otherwise Enter is never
+#    sent and this wait times out on a turn that never started).
 W=$("${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" \
   -H 'Content-Type: application/json' \
   -d '{"input":"Run the test suite and summarize the failures\r","useMux":true,
@@ -414,14 +414,16 @@ Every one of these has cost somebody real time.
   shipped bugs more than once.
 - **`text/plain` bodies stay raw.** Auto-parsing them as JSON enabled
   simple-request CSRF, so it is deliberate. Send `application/json`.
-- **Prompts are single-line and must end with `\r`.** The server splits your text
-  and Enter into two separate tmux writes (Ink needs them apart), but it sends the
-  Enter **only when the input contains a carriage return**. Without it your text
-  sits on the prompt unsubmitted, which is the single most common "the wait
-  endpoints don't work" report: the wait runs its full timeout on a turn that never
-  started. Newlines inside the string are stripped rather than rejected, so
-  `"echo A\necho B\r"` runs the single joined command `echo Aecho B`: send one line
-  per call.
+- **Prompts must end with `\r`.** The server splits your text and Enter into two
+  separate tmux writes (Ink needs them apart), but it sends the Enter **only when
+  the input contains a carriage return**. Without it your text sits on the prompt
+  unsubmitted, which is the single most common "the wait endpoints don't work"
+  report: the wait runs its full timeout on a turn that never started. With
+  `useMux`, newlines inside the string are kept: the text goes in as one paste and
+  the Enter after it submits all of it, so `"echo A\necho B\r"` runs both commands
+  in a shell. The check that re-presses a stranded Enter cannot reliably recognise
+  a multi-line paste, so a long multi-line prompt to a just-started agent is still
+  safer in a file it is told to read.
 - **`wait-output`'s `from=now` is not "printed after you asked".** tmux repaints
   the visible screen on attach, on resize, and on any TUI redraw, and a repaint
   arrives as ordinary output, so text already on screen can satisfy a fresh wait.

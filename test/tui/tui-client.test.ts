@@ -327,7 +327,7 @@ describe('TuiClient.sendInput', () => {
     expect(JSON.parse(recorded[0].body)).toMatchObject({ input: 'hello world\r', useMux: true });
   });
 
-  it('collapses embedded newlines into spaces (multi-line breaks Ink)', async () => {
+  it('collapses embedded newlines into spaces (a multi-line paste cannot be confirmed as submitted)', async () => {
     await client().sendInput('abc', 'echo A\necho B\r\nline three  ');
     expect(JSON.parse(recorded[0].body).input).toBe('echo A echo B line three\r');
   });

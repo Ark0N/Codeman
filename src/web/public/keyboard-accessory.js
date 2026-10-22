@@ -1432,9 +1432,10 @@ const KeyboardAccessoryBar = {
     overlay.querySelector('.prompt-composer-terminal').addEventListener('click', () => {
       // Hand the text BACK to the terminal prompt so both surfaces hold the same
       // prompt, the mirror of the adoption composePrompt() does on open. Only a
-      // single-line draft can make the trip: the prompt transport is single-line
-      // and strips embedded newlines, so a multi-line draft would arrive mangled
-      // and instead stays parked as a draft (the dot on the Compose key shows it).
+      // single-line draft can make the trip: the terminal prompt is one line and
+      // its text reaches the PTY as typed input, where an embedded newline is a
+      // key, so a multi-line draft would arrive mangled and instead stays parked
+      // as a draft (the dot on the Compose key shows it).
       const text = textarea.value;
       if (!text || text.includes('\n')) {
         close({ focusTerminal: true });

@@ -97,7 +97,7 @@ const CRON_PSEUDO_FS_TREES: readonly string[] = ['/proc', '/sys', '/dev'];
 /** Sync blocklist for the create/update workingDir gate (no settings extras). */
 const CRON_WORKING_DIR_BLOCKED_TREES: readonly string[] = [...DEFAULT_BLOCKED_TREES, ...CRON_PSEUDO_FS_TREES];
 
-/** Prompt delivery is single-line only (writeViaMux/Ink constraint). */
+/** Prompt delivery is single-line only: the submit check cannot reliably recognise a multi-line paste. */
 const HAS_NEWLINE = /[\r\n]/;
 
 /** The three session calls prompt delivery needs, so it can be tested without a PTY. */
@@ -536,11 +536,11 @@ export class CronService {
   }
 
   /**
-   * Resolves the prompt text and enforces the single-line constraint: prompt
-   * delivery rides writeViaMux/PTY writes where a newline is Enter, so a
-   * multi-line prompt would be silently corrupted (typed mode fuses lines,
-   * paste mode submits the first line and dribbles the rest in as separate
-   * messages). Rather than mangle an unattended agent's instructions, fail the
+   * Resolves the prompt text and enforces the single-line constraint: a job
+   * fires unattended, and the submit check that re-presses an ignored Enter
+   * cannot reliably recognise a multi-line paste in the composer (typed mode), so a
+   * stranded prompt would go unnoticed; in paste mode the newlines reach the
+   * CLI as keys. Rather than risk an unattended agent's instructions, fail the
    * run with a clear error. A prompt FILE may end with trailing newline(s)
    * (every editor writes one) — those are stripped before the check.
    */

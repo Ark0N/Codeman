@@ -3882,7 +3882,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * - Text followed by `\r` goes in as ONE bracketed paste (buildPasteTextCommands),
    *   so Codex cannot fold the Enter into a paste burst; a single character is typed
    *   with `send-keys -l` instead, so a dialog answer selects (submitsAsKeys)
-   * - Text without `\r` is typed literally with `send-keys -l` (no key interpretation)
+   * - Single-line text without `\r` is typed literally with `send-keys -l` (no key
+   *   interpretation)
+   * - A `\n` inside the text is kept (`\r\n` loses only its `\r`), and multi-line text
+   *   always goes in as ONE bracketed paste, with or without a following Enter: inside
+   *   the paste markers a CLI that enabled bracketed paste receives the line breaks as
+   *   pasted text, where typed as keys each one could submit a line on its own
    * - `Enter` key is sent as a SEPARATE tmux invocation after a small delay
    * - Ink (Claude CLI) needs text and Enter split to avoid treating Enter as a newline
    */
@@ -3895,8 +3900,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return false;
     }
 
-    // TEST MODE: No-op — don't send input to real tmux sessions
-    if (IS_TEST_MODE) {
+    // TEST MODE: No-op — don't send input to real tmux sessions. The gate lives in
+    // inputRunner() so a test subclass can record what WOULD reach tmux.
+    const run = this.inputRunner();
+    if (!run) {
       return true;
     }
 
@@ -3911,7 +3918,14 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     try {
       const hasCarriageReturn = input.includes('\r');
-      const textPart = input.replace(/\r/g, '').replace(/\n/g, '').trimEnd();
+      // Leading and trailing blank lines are dropped, so neither `"\nfix it\r"` nor
+      // `"  \nfix it\r"` pastes an empty first line (nor `"fix it\n\r"` an empty last
+      // one). The leading match ends at a line break, so the first real line keeps its
+      // indentation.
+      const textPart = input
+        .replace(/\r/g, '')
+        .replace(/^\s*\n/, '')
+        .trimEnd();
 
       if (textPart && hasCarriageReturn) {
         // Send text first, then Enter as a SEPARATE tmux command after a short delay.
@@ -3923,31 +3937,29 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         // selection dialog ignores a pasted `3` and Enter then confirms the
         // highlighted option (see submitsAsKeys).
         if (submitsAsKeys(textPart)) {
-          await execAsync(
-            `${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
-            { timeout: EXEC_TIMEOUT_MS }
+          await run(
+            `${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`
           );
         } else {
-          await pasteText(
-            (cmd) => execAsync(cmd, { timeout: EXEC_TIMEOUT_MS }),
-            buildPasteTextCommands(this.tmux(), session.muxName, textPart)
-          );
+          await pasteText(run, buildPasteTextCommands(this.tmux(), session.muxName, textPart));
         }
         await new Promise((resolve) => setTimeout(resolve, 50));
-        await execAsync(`${this.tmux()} send-keys -t "${session.muxName}" Enter`, {
-          timeout: EXEC_TIMEOUT_MS,
-        });
+        await run(`${this.tmux()} send-keys -t "${session.muxName}" Enter`);
+      } else if (textPart.includes('\n')) {
+        // Multi-line text, no Enter: pasted, because typed as keys every `\n` would
+        // reach the pane as a key the CLI may read as submit. A pane that has not
+        // enabled bracketed paste (POSIX sh, macOS /bin/bash 3.2) still gets every line
+        // break as a CR, so there every line but the last runs; before line breaks were
+        // kept, the joined text was typed and nothing ran.
+        await pasteText(run, buildPasteTextCommands(this.tmux(), session.muxName, textPart));
       } else if (textPart) {
         // Text only, no Enter
-        await execAsync(
-          `${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
-          { timeout: EXEC_TIMEOUT_MS }
+        await run(
+          `${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`
         );
       } else if (hasCarriageReturn) {
         // Enter only
-        await execAsync(`${this.tmux()} send-keys -t "${session.muxName}" Enter`, {
-          timeout: EXEC_TIMEOUT_MS,
-        });
+        await run(`${this.tmux()} send-keys -t "${session.muxName}" Enter`);
       }
 
       return true;
@@ -3955,6 +3967,16 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       console.error('[TmuxManager] Failed to send input:', err);
       return false;
     }
+  }
+
+  /**
+   * How {@link sendInput} reaches tmux, or null where it must not (vitest). Split
+   * out like {@link readPaneRows}: with the test-mode gate at the top of sendInput,
+   * no test could see which commands a submit actually sends.
+   */
+  protected inputRunner(): ((cmd: string) => Promise<unknown>) | null {
+    if (IS_TEST_MODE) return null;
+    return (cmd) => execAsync(cmd, { timeout: EXEC_TIMEOUT_MS });
   }
 
   // ========== Pane Methods (for Agent Team teammate panes) ==========
@@ -4062,7 +4084,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
   /**
    * Send input to a specific pane within a tmux session.
-   * Uses the same literal text approach as sendInput() but targets a specific pane.
+   * Types the text literally with `send-keys -l`, line breaks stripped, then Enter
+   * when the input carried a `\r`. Unlike sendInput(), it neither pastes nor keeps
+   * the line breaks of multi-line text.
    */
   sendInputToPane(muxName: string, paneTarget: string, input: string): boolean {
     if (IS_TEST_MODE) return true;

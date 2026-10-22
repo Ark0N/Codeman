@@ -136,9 +136,9 @@ instead of failing silently; `Enter` and `1-9` keep working.
 
 ### `p` sends exactly one line
 
-The composer is a single line by design, ending in a carriage return: that is the
-input contract every Codeman path follows, because multi-line text breaks the
-agent's own composer. Pasted newlines become spaces rather than being rejected, so
+The composer is a single line by design, ending in a carriage return, because the
+server's submit check cannot reliably recognise a multi-line paste: a prompt it cannot
+see on the composer line is not re-submitted when the agent ignored the first Enter. Pasted newlines become spaces rather than being rejected, so
 a paste cannot silently run a different command than the one you read.
 
 ## Answering approvals

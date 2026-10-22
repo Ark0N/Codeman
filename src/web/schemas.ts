@@ -1905,7 +1905,7 @@ export const ScheduledRunSchema = z.object({
 /** 'HH:MM' 24-hour time. */
 const hhmmSchema = z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/, 'Time must be HH:MM (24-hour)');
 
-/** Prompt delivery is single-line only (writeViaMux/Ink constraint) — reject newlines outright. */
+/** Prompt delivery is single-line only (the submit check cannot reliably recognise a multi-line paste) — reject newlines outright. */
 const noNewlines = (v: string) => !/[\r\n]/.test(v);
 
 /** Shared field shape for creating/updating a scheduled job. */
