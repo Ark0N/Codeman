@@ -34,18 +34,15 @@ import {
   ConfigBackupCorruptError,
   ConfigBackupNotFoundError,
   ConfigBackupPartialRestoreError,
-  createConfigBackup,
   defaultConfigBackupDir,
   diffConfigBackups,
   listConfigBackups,
-  pruneConfigBackups,
   readConfigBackupSettings,
   resolveConfigBackupDir,
   restoreConfigBackup,
-  configBackupOrigin,
+  runConfigBackupPass,
   withRecordedRetention,
   readConfigBackupOrigin,
-  sweepConfigBackupTemps,
   type ConfigBackupResult,
   type ConfigBackupSettings,
   type ConfigBackupSummary,
@@ -140,24 +137,17 @@ export async function runConfigBackup(
   if (!fromFile.enabled && !opts.force) return null;
   const dir = resolveConfigBackupDir(fromFile, getDataDir());
   await probeBackupDir(fromFile, dir);
-  sweepConfigBackupTemps(dir);
-  const origin = configBackupOrigin(getDataDir());
-  // No backup settings in the file (reset, or unreadable): keep the retention the newest snapshot recorded.
-  const settings = withRecordedRetention(fromFile, unreadable ? {} : raw, dir, origin);
-  const result = createConfigBackup({
+  return runConfigBackupPass({
     dataDir: getDataDir(),
     backupDir: dir,
     reason,
     appVersion: APP_VERSION,
     force: opts.force,
-    keepCount: settings.keepCount,
-    keepDays: settings.keepDays,
+    settings: fromFile,
+    raw: unreadable ? {} : raw,
+    // An unreadable settings.json still gets its snapshot, but no pass deletes anything on its say-so.
+    prune: !unreadable,
   });
-  // An unreadable settings.json still gets its snapshot, but no pass deletes anything on its say-so.
-  const removed = unreadable
-    ? []
-    : pruneConfigBackups(dir, { keepCount: settings.keepCount, keepDays: settings.keepDays, origin });
-  return { result, removed };
 }
 
 export function registerConfigBackupRoutes(app: FastifyInstance): void {

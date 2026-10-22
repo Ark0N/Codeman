@@ -274,32 +274,46 @@ function readManifest(dir: string, id: string, origin?: string): ConfigBackupMan
   }
 }
 
+/** A folder's entry names; none when it cannot be read (absent, or not a folder). */
+function folderEntries(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The manifests of the snapshots this module made among `names` in `dir`, newest first. Foreign
+ * folders and files are ignored, and so are other instances' snapshots when `origin` is given (see
+ * {@link configBackupOrigin}). Each one is a file read, so a pass does this once and passes the
+ * result on (see {@link runConfigBackupPass}).
+ */
+function manifestsIn(dir: string, names: readonly string[], origin?: string): ConfigBackupManifest[] {
+  const out: ConfigBackupManifest[] = [];
+  for (const id of names) {
+    const m = readManifest(dir, id, origin);
+    if (m) out.push(m);
+  }
+  return out.sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1));
+}
+
 /**
  * Snapshots this module made in `dir`, newest first. Foreign folders and files are ignored, and so
  * are other instances' snapshots when `origin` is given (see {@link configBackupOrigin}).
  */
 export function listConfigBackups(dir: string, origin?: string): ConfigBackupSummary[] {
-  let names: string[];
-  try {
-    names = readdirSync(dir);
-  } catch {
-    return [];
-  }
-  const out: ConfigBackupSummary[] = [];
-  for (const id of names) {
-    const m = readManifest(dir, id, origin);
-    if (!m) continue;
+  return manifestsIn(dir, folderEntries(dir), origin).map((m) => {
     const files = m.files.map((f) => ({ name: f.name, bytes: f.bytes }));
-    out.push({
-      id,
+    return {
+      id: m.id,
       createdAt: m.createdAt,
       reason: m.reason,
       appVersion: m.appVersion,
       files,
       bytes: files.reduce((n, f) => n + f.bytes, 0),
-    });
-  }
-  return out.sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1));
+    };
+  });
 }
 
 export type ConfigBackupResult =
@@ -322,6 +336,17 @@ export interface CreateConfigBackupOptions {
 
 /** Snapshot the tracked files that exist, unless the latest snapshot already holds exactly this state. */
 export function createConfigBackup(opts: CreateConfigBackupOptions): ConfigBackupResult {
+  return snapshotConfig(opts).result;
+}
+
+/**
+ * {@link createConfigBackup}, also returning the manifest it wrote, over this instance's snapshots
+ * when the caller has already listed them (`listed`, newest first): one walk of the folder per pass.
+ */
+function snapshotConfig(
+  opts: CreateConfigBackupOptions,
+  listed?: { origin: string; existing: ConfigBackupManifest[] }
+): { result: ConfigBackupResult; manifest: ConfigBackupManifest | null } {
   const now = opts.now ?? Date.now();
   const present: Array<{ name: string; data: Buffer; sha: string; change: string }> = [];
   for (const name of CONFIG_BACKUP_FILES) {
@@ -335,14 +360,13 @@ export function createConfigBackup(opts: CreateConfigBackupOptions): ConfigBacku
       /* absent or unreadable: simply not part of this snapshot */
     }
   }
-  if (present.length === 0) return { status: 'empty' };
+  if (present.length === 0) return { result: { status: 'empty' }, manifest: null };
 
   const hash = sha256(present.map((f) => `${f.name}\0${f.change}`).join('\n'));
-  const origin = configBackupOrigin(opts.dataDir);
-  const existing = listConfigBackups(opts.backupDir, origin);
-  if (!opts.force && existing[0]) {
-    const latest = readManifest(opts.backupDir, existing[0].id, origin);
-    if (latest && latest.hash === hash) return { status: 'unchanged', id: latest.id };
+  const origin = listed?.origin ?? configBackupOrigin(opts.dataDir);
+  const existing = listed?.existing ?? manifestsIn(opts.backupDir, folderEntries(opts.backupDir), origin);
+  if (!opts.force && existing[0] && existing[0].hash === hash) {
+    return { result: { status: 'unchanged', id: existing[0].id }, manifest: null };
   }
 
   // Never dated earlier than this instance's newest snapshot. One written while the clock read ahead
@@ -357,18 +381,18 @@ export function createConfigBackup(opts: CreateConfigBackupOptions): ConfigBacku
   const tmp = join(opts.backupDir, `.tmp-${id}-${process.pid}`);
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { mode: 0o700 });
+  const manifest: ConfigBackupManifest = {
+    id,
+    createdAt,
+    reason: opts.reason,
+    appVersion: opts.appVersion ?? '',
+    hash,
+    origin,
+    ...(opts.keepCount !== undefined && { keepCount: opts.keepCount }),
+    ...(opts.keepDays !== undefined && { keepDays: opts.keepDays }),
+    files: present.map((f) => ({ name: f.name, bytes: f.data.length, sha256: f.sha })),
+  };
   try {
-    const manifest: ConfigBackupManifest = {
-      id,
-      createdAt,
-      reason: opts.reason,
-      appVersion: opts.appVersion ?? '',
-      hash,
-      origin,
-      ...(opts.keepCount !== undefined && { keepCount: opts.keepCount }),
-      ...(opts.keepDays !== undefined && { keepDays: opts.keepDays }),
-      files: present.map((f) => ({ name: f.name, bytes: f.data.length, sha256: f.sha })),
-    };
     for (const f of present) writeFileSync(join(tmp, f.name), f.data, { mode: 0o600 });
     writeFileSync(join(tmp, MANIFEST), JSON.stringify(manifest, null, 2) + '\n', { mode: 0o600 });
     renameSync(tmp, join(opts.backupDir, id));
@@ -381,17 +405,16 @@ export function createConfigBackup(opts: CreateConfigBackupOptions): ConfigBacku
     rmSync(tmp, { recursive: true, force: true });
     throw err;
   }
-  return { status: 'created', id, files: present.length, bytes: present.reduce((n, f) => n + f.data.length, 0) };
+  const bytes = present.reduce((n, f) => n + f.data.length, 0);
+  return { result: { status: 'created', id, files: present.length, bytes }, manifest };
 }
 
 /** Remove `.tmp-cfg-*` build folders a crashed snapshot left behind (older than an hour, so a live one on a shared folder is safe). */
 export function sweepConfigBackupTemps(dir: string, now: number = Date.now()): void {
-  let names: string[];
-  try {
-    names = readdirSync(dir);
-  } catch {
-    return;
-  }
+  sweepTemps(dir, folderEntries(dir), now);
+}
+
+function sweepTemps(dir: string, names: readonly string[], now: number): void {
   for (const n of names) {
     if (!/^\.tmp-cfg-\d{8}-\d{6}(?:-\d{1,3})?-\d+$/.test(n)) continue;
     const st = lstatSync(join(dir, n), { throwIfNoEntry: false });
@@ -399,12 +422,18 @@ export function sweepConfigBackupTemps(dir: string, now: number = Date.now()): v
   }
 }
 
-/** The retention recorded in this instance's newest snapshot, or null when it recorded none. */
-export function latestBackupRetention(dir: string, origin: string): { keepCount: number; keepDays: number } | null {
+/**
+ * The retention recorded in this instance's newest snapshot, or null when it recorded none. `listed`
+ * is this instance's manifests in `dir`, newest first, when the caller already read them.
+ */
+export function latestBackupRetention(
+  dir: string,
+  origin: string,
+  listed?: readonly ConfigBackupManifest[]
+): { keepCount: number; keepDays: number } | null {
   // The newest manifest that recorded one: a snapshot from before this field existed must not hide it.
-  for (const b of listConfigBackups(dir, origin)) {
-    const m = readManifest(dir, b.id, origin);
-    if (m && typeof m.keepCount === 'number' && typeof m.keepDays === 'number') {
+  for (const m of listed ?? manifestsIn(dir, folderEntries(dir), origin)) {
+    if (typeof m.keepCount === 'number' && typeof m.keepDays === 'number') {
       return { keepCount: m.keepCount, keepDays: m.keepDays };
     }
   }
@@ -422,12 +451,13 @@ export function withRecordedRetention(
   settings: ConfigBackupSettings,
   raw: Record<string, unknown>,
   dir: string,
-  origin: string | null
+  origin: string | null,
+  listed?: readonly ConfigBackupManifest[]
 ): ConfigBackupSettings {
   const lacksCount = !('configBackupKeepCount' in raw);
   const lacksDays = !('configBackupKeepDays' in raw);
   if ((!lacksCount && !lacksDays) || !origin) return settings;
-  const kept = latestBackupRetention(dir, origin);
+  const kept = latestBackupRetention(dir, origin, listed);
   if (!kept) return settings;
   return {
     ...settings,
@@ -449,8 +479,12 @@ export interface PruneOptions {
  * that. The newest snapshot always survives. Returns the ids removed.
  */
 export function pruneConfigBackups(dir: string, opts: PruneOptions): string[] {
+  return pruneListed(dir, manifestsIn(dir, folderEntries(dir), opts.origin), opts);
+}
+
+/** {@link pruneConfigBackups} over a listing already made (`all`, newest first). */
+function pruneListed(dir: string, all: ReadonlyArray<{ id: string; createdAt: number }>, opts: PruneOptions): string[] {
   const now = opts.now ?? Date.now();
-  const all = listConfigBackups(dir, opts.origin);
   const cutoff = opts.keepDays > 0 ? now - opts.keepDays * 86_400_000 : null;
   const removed: string[] = [];
   all.forEach((b, index) => {
@@ -460,7 +494,7 @@ export function pruneConfigBackups(dir: string, opts: PruneOptions): string[] {
     // createdAt deleted the last good copy on the first change after a quiet month.
     const tooOld = cutoff !== null && all[index - 1].createdAt < cutoff;
     if (!tooMany && !tooOld) return;
-    // listConfigBackups already proved this is one of ours (name pattern + manifest).
+    // The listing already proved this is one of ours (name pattern + manifest).
     const target = join(dir, b.id);
     if (!target.startsWith(resolve(dir) + sep)) return;
     try {
@@ -471,6 +505,57 @@ export function pruneConfigBackups(dir: string, opts: PruneOptions): string[] {
     }
   });
   return removed;
+}
+
+export interface ConfigBackupPassOptions {
+  dataDir: string;
+  backupDir: string;
+  reason: string;
+  appVersion?: string;
+  /** Snapshot even if nothing changed (Back up now). */
+  force?: boolean;
+  /** As read from settings.json ({@link readConfigBackupSettings}), before the recorded-retention fallback. */
+  settings: ConfigBackupSettings;
+  /** The parsed settings.json (`{}` when it did not parse): the fallback tells an absent key from a set one. */
+  raw: Record<string, unknown>;
+  /** False when settings.json did not parse: the pass still snapshots, but deletes nothing on its say-so. */
+  prune: boolean;
+  now?: number;
+}
+
+/**
+ * One pass of the timer or of Back up now: sweep stale temp folders, snapshot when the state changed,
+ * apply retention. The folder is read and each manifest parsed ONCE, and that listing feeds the
+ * recorded-retention fallback, the change check and the prune. It used to be listed for each of the
+ * three, which on a network folder is every manifest read three times every five minutes.
+ */
+export function runConfigBackupPass(opts: ConfigBackupPassOptions): {
+  result: ConfigBackupResult;
+  removed: string[];
+} {
+  const names = folderEntries(opts.backupDir);
+  sweepTemps(opts.backupDir, names, Date.now());
+  const origin = configBackupOrigin(opts.dataDir);
+  const existing = manifestsIn(opts.backupDir, names, origin);
+  // No retention in the file (reset, or unreadable): keep what the newest snapshot recorded.
+  const { keepCount, keepDays } = withRecordedRetention(opts.settings, opts.raw, opts.backupDir, origin, existing);
+  const { result, manifest } = snapshotConfig(
+    {
+      dataDir: opts.dataDir,
+      backupDir: opts.backupDir,
+      reason: opts.reason,
+      appVersion: opts.appVersion,
+      force: opts.force,
+      keepCount,
+      keepDays,
+      now: opts.now,
+    },
+    { origin, existing }
+  );
+  if (!opts.prune) return { result, removed: [] };
+  // A snapshot made now is dated after existing[0], so it heads the listing retention counts.
+  const all = manifest ? [manifest, ...existing] : existing;
+  return { result, removed: pruneListed(opts.backupDir, all, { keepCount, keepDays, now: opts.now }) };
 }
 
 export class ConfigBackupNotFoundError extends Error {}
@@ -611,16 +696,21 @@ export function restoreConfigBackup(opts: {
   }
   if (loaded.length === 0) throw new ConfigBackupCorruptError(`${opts.id} holds no restorable files`);
 
-  const safety = createConfigBackup({
-    dataDir: opts.dataDir,
-    backupDir: opts.backupDir,
-    reason: 'pre-restore',
-    appVersion: opts.appVersion,
-    force: true,
-    now: opts.now,
-    // The retention in force, so this newest snapshot does not hide it from the next pass.
-    ...(latestBackupRetention(opts.backupDir, origin) ?? {}),
-  });
+  // One walk of the folder serves both the recorded retention and the snapshot below.
+  const existing = manifestsIn(opts.backupDir, folderEntries(opts.backupDir), origin);
+  const { result: safety } = snapshotConfig(
+    {
+      dataDir: opts.dataDir,
+      backupDir: opts.backupDir,
+      reason: 'pre-restore',
+      appVersion: opts.appVersion,
+      force: true,
+      now: opts.now,
+      // The retention in force, so this newest snapshot does not hide it from the next pass.
+      ...(latestBackupRetention(opts.backupDir, origin, existing) ?? {}),
+    },
+    { origin, existing }
+  );
 
   mkdirSync(opts.dataDir, { recursive: true });
   const restored: string[] = [];
