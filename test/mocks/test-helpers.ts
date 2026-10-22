@@ -61,7 +61,8 @@ export function isSandboxedHome(): boolean {
 
 /**
  * Throw unless the suite is running under `test/setup.ts`'s temp HOME. The shared route harness
- * calls this, so every route test refuses to start against a real `~/.codeman`.
+ * (`createRouteTestHarness`) calls this, so a route test built on it refuses to start against a real
+ * `~/.codeman`. A route test that builds its own app from `createMockRouteContext` is not covered.
  */
 export function assertSandboxedHome(what = 'this test'): void {
   if (!isSandboxedHome()) {
