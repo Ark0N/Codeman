@@ -190,6 +190,14 @@ Cloudflare tunnel controls including the tunnel URL. The **Diagnostics** group r
 tools with their versions and install hints (admin only in multi-user mode). In multi-user
 mode, the **Users** administration entry is injected here.
 
+The **Config backups** group controls timestamped copies of your configuration files: an
+on/off switch (on by default), the backup folder (default `~/.codeman/backups/config`), how
+many backups to keep (2 to 500, default 20) and how many days to keep them (0 to 3650, default
+30; 0 means no age limit). A value that is not saved in `settings.json` (a reset file) is whatever
+the newest backup in that folder recorded, and the default only when none did, plus **Back up now** and a list with **Restore**. These are
+server-side settings, read fresh. Details, naming and restore behaviour are on
+[Config Backups](Config-Backups).
+
 ## Session Options
 
 Per session, from the tab.
@@ -244,3 +252,4 @@ Some things are configured before the server starts, not in the UI:
 - [The Dashboard](The-Dashboard) - what each control does once visible.
 - [Keeping Agents Running](Keeping-Agents-Running) - the Respawn panel in depth.
 - [Agent CLIs](Agent-CLIs) - model, effort, and permission modes.
+- [Config Backups](Config-Backups) - copies of your settings, and how to restore them.

@@ -555,6 +555,12 @@ Object.assign(CodemanApp.prototype, {
     this._mcpSyncSavedOn = settings.mcpSyncEnabled === true;
     document.getElementById('appSettingsMcpSync').checked = this._mcpSyncSavedOn;
     this.applyMcpSyncVisibility();
+    // Config backups: absent means ON, 20 copies, 30 days.
+    document.getElementById('appSettingsConfigBackup').checked = settings.configBackupEnabled !== false;
+    document.getElementById('appSettingsConfigBackupDir').value = settings.configBackupDir || '';
+    document.getElementById('appSettingsConfigBackupKeepCount').value = settings.configBackupKeepCount ?? 20;
+    document.getElementById('appSettingsConfigBackupKeepDays').value = settings.configBackupKeepDays ?? 30;
+    this.loadConfigBackups();
     this._applyDoctorAdminGate();
     this.loadWebhook();
     // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
@@ -1365,10 +1371,178 @@ Object.assign(CodemanApp.prototype, {
    * wired to `codeman:me` for the same late-resolving role as the groups above.
    */
   _applyDoctorAdminGate() {
-    const group = document.getElementById('doctorGroup');
-    if (!group) return;
     const me = window.__codemanUser || {};
-    group.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+    for (const id of ['doctorGroup', 'configBackupGroup']) {
+      const group = document.getElementById(id);
+      if (group) group.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+    }
+  },
+
+  // ── Config backups ──────────────────────────────────────────────────────────
+  // Server-side files, so these read the SAVED settings: a folder or retention edit applies after Save.
+
+  /**
+   * The retention keys a Save sends: a value only once it was saved before or edited here. After a reset
+   * the form merely DISPLAYS what the passes use (the retention the backups recorded), and writing that back
+   * would replace it with whatever a different folder or an older default says.
+   */
+  _configBackupRetentionPayload(prev) {
+    const count = document.getElementById('appSettingsConfigBackupKeepCount');
+    const days = document.getElementById('appSettingsConfigBackupKeepDays');
+    const out = {};
+    if (prev.configBackupKeepCount !== undefined || count.dataset.touched) {
+      out.configBackupKeepCount = Math.min(500, Math.max(2, parseInt(count.value, 10) || 20));
+    }
+    if (prev.configBackupKeepDays !== undefined || days.dataset.touched) {
+      const n = parseInt(days.value, 10);
+      out.configBackupKeepDays = Math.min(3650, Math.max(0, Number.isNaN(n) ? 30 : n));
+    }
+    return out;
+  },
+
+  /** Fill the backup list, and show the default folder as the input's placeholder. */
+  async loadConfigBackups() {
+    const out = this.$('configBackupList');
+    if (!out) return;
+    const res = await this._api('/api/config-backups');
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      out.textContent = body?.error || 'Backups are not available here (admin only in multi-user mode).';
+      return;
+    }
+    const data = body.data;
+    const dirInput = this.$('appSettingsConfigBackupDir') || document.getElementById('appSettingsConfigBackupDir');
+    if (dirInput && data.defaultDir) dirInput.placeholder = `default: ${data.defaultDir}`;
+    // A reset settings.json has none of the four keys, but the passes keep the retention the newest backup
+    // recorded: show that, or a Save would write 20 / 30 over it.
+    const saved = this.loadAppSettingsFromStorage();
+    const countInput = document.getElementById('appSettingsConfigBackupKeepCount');
+    const daysInput = document.getElementById('appSettingsConfigBackupKeepDays');
+    if (countInput && saved.configBackupKeepCount === undefined && data.settings) countInput.value = data.settings.keepCount;
+    if (daysInput && saved.configBackupKeepDays === undefined && data.settings) daysInput.value = data.settings.keepDays;
+    if (!data.backups.length) {
+      out.innerHTML = `No backups yet in <code>${escapeHtml(data.dir)}</code>.`;
+      return;
+    }
+    const kb = (n) => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`);
+    this._configBackups = data.backups;
+    const rows = data.backups.map((b, i) => {
+      const when = new Date(b.createdAt).toLocaleString();
+      const names = b.files.map((f) => escapeHtml(f.name)).join(', ');
+      const id = escapeHtml(b.id);
+      // The list is newest first, so the next row is the backup this one followed.
+      const prev = data.backups[i + 1];
+      const vsPrev = prev ? `<button class="btn-toolbar btn-sm" onclick="app.showConfigDiff('${escapeHtml(prev.id)}','${id}')">Changes in this backup</button>` : '';
+      return `<li><b>${escapeHtml(when)}</b> <span class="set-row-desc">(${escapeHtml(b.reason)}, ${kb(b.bytes)})</span>
+        <button class="btn-toolbar btn-sm" onclick="app.restoreConfigBackup('${id}')">Restore</button>
+        <button class="btn-toolbar btn-sm" onclick="app.showConfigDiff('${id}','current')">Compare with current</button>
+        ${vsPrev}
+        <div class="set-row-desc">${names}</div></li>`;
+    });
+    const options = (sel) => [`<option value="current"${sel === 'current' ? ' selected' : ''}>Current config</option>`]
+      .concat(data.backups.map((b) => `<option value="${escapeHtml(b.id)}"${sel === b.id ? ' selected' : ''}>${escapeHtml(new Date(b.createdAt).toLocaleString())} (${escapeHtml(b.reason)})</option>`))
+      .join('');
+    const picker = data.backups.length
+      ? `<div class="set-row-desc">Compare <select id="configDiffFrom">${options(data.backups[0].id)}</select> with <select id="configDiffTo">${options('current')}</select>
+        <button class="btn-toolbar btn-sm" onclick="app.showConfigDiff(app.$('configDiffFrom').value, app.$('configDiffTo').value)">Show changes</button></div>`
+      : '';
+    out.innerHTML = `<div>${data.backups.length} backup${data.backups.length === 1 ? '' : 's'} in <code>${escapeHtml(data.dir)}</code></div>${picker}<ul>${rows.join('')}</ul><div id="configBackupDiff"></div>`;
+  },
+
+  /** What differs between two states of the config files: a backup id or `current` (the running config). */
+  async showConfigDiff(from, to) {
+    const out = this.$('configBackupDiff');
+    if (!out) return;
+    out.textContent = 'Comparing…';
+    const res = await this._api(`/api/config-backups/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      out.textContent = body?.error || 'Could not compare these';
+      return;
+    }
+    const label = (id) => {
+      if (id === 'current') return 'the current config';
+      const b = (this._configBackups || []).find((x) => x.id === id);
+      return b ? new Date(b.createdAt).toLocaleString() : id;
+    };
+    const d = body.data;
+    const verb = { added: 'added', removed: 'removed', changed: 'changed' };
+    const files = d.files.filter((f) => f.status !== 'unchanged').map((f) => {
+      let detail;
+      if (f.detail === 'bytes') {
+        detail = '<div class="set-row-desc">Differs (not a key/value file, so no detail).</div>';
+      } else {
+        const rows = f.changes.map((c) => {
+          const val = (v) => `<code>${escapeHtml(v ?? '')}</code>`;
+          const text = c.redacted ? `${verb[c.kind]} <span class="set-row-desc">(value hidden: credential)</span>`
+            : c.kind === 'added' ? `added ${val(c.after)}`
+            : c.kind === 'removed' ? `removed (was ${val(c.before)})`
+            : `${val(c.before)} → ${val(c.after)}`;
+          return `<li><code>${escapeHtml(c.path)}</code>: ${text}</li>`;
+        });
+        const more = f.truncated ? '<li class="set-row-desc">More changes not shown.</li>' : '';
+        detail = f.changes.length ? `<ul>${rows.join('')}${more}</ul>` : '';
+      }
+      const whole = f.status === 'added' ? ' (new file)' : f.status === 'removed' ? ' (file gone)' : '';
+      return `<div><b>${escapeHtml(f.name)}</b>${whole}${detail}</div>`;
+    });
+    const same = d.files.filter((f) => f.status === 'unchanged').map((f) => escapeHtml(f.name));
+    out.innerHTML = `<div><b>${escapeHtml(label(d.from))}</b> → <b>${escapeHtml(label(d.to))}</b>: ${
+      d.changed ? `${d.changed} file${d.changed === 1 ? '' : 's'} differ` : 'no differences'}</div>${files.join('')}${
+      same.length ? `<div class="set-row-desc">Unchanged: ${same.join(', ')}</div>` : ''}`;
+  },
+
+  async backupConfigNow() {
+    const btn = this.$('configBackupNowBtn');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await this._apiPost('/api/config-backups', {});
+      let body = null;
+      try { body = res ? await res.json() : null; } catch { /* fall through */ }
+      if (!res || !res.ok || !body || body.success === false) {
+        this.showToast(body?.error || 'Backup failed', 'error');
+      } else if (body.data.status === 'empty') {
+        this.showToast('Nothing to back up yet', 'warning');
+      } else {
+        this.showToast(`Backed up ${body.data.files} file${body.data.files === 1 ? '' : 's'}`, 'success');
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+      this.loadConfigBackups();
+    }
+  },
+
+  async restoreConfigBackup(id) {
+    const names = ((this._configBackups || []).find((b) => b.id === id)?.files || []).map((f) => f.name);
+    const secret = names.filter((n) => ['.env', 'users.json', 'push-keys.json', 'custom-model-hosts.json', 'webhook.json'].includes(n));
+    const list = names.length ? `\n\nFiles replaced: ${names.join(', ')}` : '';
+    const warn = secret.length ? `\n\nThis rolls back credentials and accounts (${secret.join(', ')}): passwords, disabled accounts and keys return to how they were then.` : '';
+    if (!confirm(`Restore this backup? Its files replace the current ones (a copy of the current files is made first). Some files only take effect after a restart.${list}${warn}`)) return;
+    const res = await this._apiPost(`/api/config-backups/${encodeURIComponent(id)}/restore`, {});
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    const ok = res && res.ok && body && body.success !== false;
+    const d = body?.data;
+    // A restore that failed partway still answers with what it wrote (`restored`, `failed`, `safetySnapshot`):
+    // those files are the backup's now and need the same refill as a full restore.
+    if (!ok && !Array.isArray(d?.restored)) {
+      this.showToast(body?.error || 'Restore failed', 'error');
+      return;
+    }
+    const restart = d.restartRequired?.length ? ` Restart Codeman to apply: ${d.restartRequired.join(', ')}.` : '';
+    // The form still holds the pre-restore values, and Save would PUT them over the restored file.
+    if (d.restored.includes('settings.json')) {
+      await this.loadAppSettingsFromServer();
+      this.openAppSettings();
+    }
+    if (ok) {
+      this.showToast(`Restored ${d.restored.length} file${d.restored.length === 1 ? '' : 's'}.${restart}`, 'success');
+    } else {
+      this.showToast(`${body.error || 'Restore failed partway'}.${restart}`, 'error');
+    }
+    this.loadConfigBackups();
   },
 
   /** Preview (apply=false) or run (apply=true) the MCP server sync across enabled CLIs. */
@@ -2744,6 +2918,9 @@ Object.assign(CodemanApp.prototype, {
       customModelEndpointsEnabled: document.getElementById('appSettingsCustomModelEndpoints').checked,
       cliManagementEnabled: document.getElementById('appSettingsCliManagement').checked,
       mcpSyncEnabled: document.getElementById('appSettingsMcpSync').checked,
+      configBackupEnabled: document.getElementById('appSettingsConfigBackup').checked,
+      configBackupDir: document.getElementById('appSettingsConfigBackupDir').value.trim(),
+      ...this._configBackupRetentionPayload(_prev),
       readMyMindEnabled: document.getElementById('appSettingsReadMyMind').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,

@@ -223,6 +223,8 @@ import {
   registerWebviewRoutes,
   registerTabLayoutRoutes,
   registerMcpSyncRoutes,
+  registerConfigBackupRoutes,
+  runConfigBackup,
   registerWebhookRoutes,
   registerDoctorRoutes,
   registerCustomModelRoutes,
@@ -246,6 +248,10 @@ const SSE_CLIENT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const CODEX_USAGE_POLL_INTERVAL_MS = 5 * 60_000;
 // Copilot's quota is read over the network from GitHub, and a monthly figure moves slowly.
 const COPILOT_USAGE_POLL_INTERVAL_MS = 10 * 60_000;
+
+// Config backups: one cheap read-and-hash of a handful of small files; a snapshot is written only when
+// their content changed since the latest one, so this is one entry per real change, not per tick.
+const CONFIG_BACKUP_INTERVAL_MS = 5 * 60_000;
 const CUSTOM_MODEL_REDISCOVER_INTERVAL_MS = 5 * 60_000;
 // Much shorter than the model-LIST refresh above on purpose: this catches an actual
 // eviction (a session's model no longer loaded, silently swapped out by another
@@ -1243,6 +1249,7 @@ export class WebServer extends EventEmitter {
     registerWebviewRoutes(this.app, ctx, this.basePath);
     registerTabLayoutRoutes(this.app, ctx);
     registerMcpSyncRoutes(this.app);
+    registerConfigBackupRoutes(this.app);
     registerWebhookRoutes(this.app, {
       notifier: this.webhookNotifier,
       configDir: getDataDir(),
@@ -3163,6 +3170,18 @@ export class WebServer extends EventEmitter {
     // Ensure the COD-54 hook secret exists on disk before any session exports
     // $CODEMAN_HOOK_SECRET_FILE — hook curls cat that path at execution time.
     getHookSecret();
+
+    // Config backups: a snapshot at start (the state the process found) and then on change.
+    if (!this.testMode) {
+      const backup = (reason: string) =>
+        void runConfigBackup(reason).catch((err) =>
+          console.warn('[config-backup] snapshot failed:', err instanceof Error ? err.message : err)
+        );
+      backup('startup');
+      this.cleanup.setInterval(() => backup('auto'), CONFIG_BACKUP_INTERVAL_MS, {
+        description: 'Config backup',
+      });
+    }
 
     // Main Codex subscription limits come from the signed-in local CLI. Keep
     // this read-only and host-scoped; multi-user SSE routing makes it admin-only.

@@ -3258,6 +3258,48 @@
                 </div>
               </div>
 
+              <div class="set-group" id="configBackupGroup">
+                <div class="set-group-head"><h4>Config backups</h4><span class="set-scope">server</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="config backup snapshot settings clis restore retention keep">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Back up my configuration</span>
+                      <span class="set-row-desc">Keeps timestamped copies of your settings, CLI overrides, custom endpoints, webhook, linked cases and (in multi-user mode) accounts. A copy is made at startup and whenever one of them changes. Some of these files hold credentials, so each copy is private to this user (mode 0700/0600).</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsConfigBackup"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row has-field" data-search="config backup folder location path directory">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Backup folder</span>
+                      <span class="set-row-desc">An absolute path (a leading <code>~</code> is expanded). Leave empty for the default shown. Only folders Codeman created there are ever pruned.</span>
+                    </div>
+                    <input type="text" id="appSettingsConfigBackupDir" class="set-input" placeholder="default: ~/.codeman/backups/config" data-i18n-skip>
+                  </div>
+                  <div class="set-row has-field" data-search="config backup retention keep count snapshots">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Keep this many backups</span>
+                      <span class="set-row-desc">2 to 500 (with 1, every change would delete the state before it). The newest backup is always kept.</span>
+                    </div>
+                    <input type="number" id="appSettingsConfigBackupKeepCount" oninput="this.dataset.touched=1" class="set-input" min="2" max="500" step="1" placeholder="20">
+                  </div>
+                  <div class="set-row has-field" data-search="config backup retention keep days age">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Delete backups older than (days)</span>
+                      <span class="set-row-desc">A backup is removed once a newer one has existed this many days. 0 keeps backups until the count above pushes them out.</span>
+                    </div>
+                    <input type="number" id="appSettingsConfigBackupKeepDays" oninput="this.dataset.touched=1" class="set-input" min="0" max="3650" step="1" placeholder="30">
+                  </div>
+                  <div class="set-row" data-search="config backup now restore list">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Backups</span>
+                      <span class="set-row-desc">Folder and retention changes apply after you save. Restoring puts a backup's files back and makes a copy of the current ones first. Compare shows what changed between two backups, or between a backup and the running config; credential values are never shown.</span>
+                    </div>
+                    <button class="btn-toolbar btn-sm btn-primary" id="configBackupNowBtn" onclick="app.backupConfigNow()">Back up now</button>
+                  </div>
+                  <div id="configBackupList" class="set-note" data-i18n-skip>Loading…</div>
+                </div>
+              </div>
+
               <div class="set-group">
                 <div class="set-group-head"><h4>Automation</h4><span class="set-scope">synced</span></div>
                 <div class="set-group-body">

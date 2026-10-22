@@ -131,6 +131,32 @@ That prompt comes from Claude Code, not Codeman. Codeman's default is to start w
 permission prompts skipped, which is what the security model is built around. If you would
 rather it prompted, change **App Settings → Agents & CLIs → Claude → Startup Mode**.
 
+### My settings were reset, or a CLI I enabled is gone
+
+Something rewrote a file in `~/.codeman/` (a hand edit, a restart that loaded a bad file, a
+test run pointed at the real data directory). If [Config Backups](Config-Backups) was on,
+which is the default, you have copies:
+
+1. Open **Settings → System → Config backups** and pick the newest backup from before the
+   change. The list shows when each was made and what it holds.
+2. **Restore** it, reload the page, and restart Codeman if the response's `restartRequired`
+   list is not empty.
+
+A reset `settings.json` also drops the backup folder setting. If you use a custom folder, enter
+it again and save before looking for the list; until then the list shows the default folder.
+After a reinstall of the data directory the old backups are unlisted because the instance has a
+new id; see [Config Backups](Config-Backups) for how to make them visible again.
+
+A backup is never dated earlier than the newest one, so if the clock was once set to a far
+future date, every later backup keeps that date. Delete the future-dated backup folder to
+return to normal dating.
+
+Without the UI: the backups are plain folders in `~/.codeman/backups/config/`
+(`cfg-YYYYMMDD-HHMMSS`); copy the file you need back over the one in `~/.codeman/`.
+
+Not covered: `state.json` (cron jobs and respawn presets live there). A backup only exists
+from the moment the feature first ran, so a reset that happened before that cannot be undone.
+
 ### Sessions vanished after a reboot
 
 Expected. tmux does not survive a reboot, so the sessions are gone. Conversations are not:
