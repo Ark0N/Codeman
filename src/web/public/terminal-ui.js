@@ -1141,9 +1141,13 @@ Object.assign(CodemanApp.prototype, {
     // (_shouldForwardWheelToApp), a touch drag must go there too, or every
     // phone/tablet swipe scrolls the local buffer of stale repaint frames and
     // drags the CLI's pinned input box off the screen (issue #205's mobile
-    // half). Same gate, so Shift has no touch analog but the local-scrollback
-    // opt-out setting and the version/tracking gate apply to touch exactly as they
-    // do to the wheel — including the PageUp/PageDown fallback the wheel uses
+    // half). Touch asks _shouldForwardTouchToApp, which is the wheel's gate
+    // plus one branch of its own: a drag also forwards as SGR wheel reports
+    // while xterm itself tracks the mouse with SGR encoding (an app in the
+    // pane asked for it), since the wheel needs no help there (xterm encodes
+    // it) but a drag does. Shift has no touch analog, but the local-scrollback
+    // opt-out setting and the version/tracking gate apply to touch as they
+    // do to the wheel, including the PageUp/PageDown fallback the wheel uses
     // when that gate is false and there is no local scrollback to scroll
     // (_maybePageCliTranscript), which is what keeps a swipe from being a
     // complete no-op on a phone.
@@ -1168,7 +1172,7 @@ Object.assign(CodemanApp.prototype, {
           // Momentum phase — convert pixel velocity to lines
           const lines = Math.round(velocity / cellHeight());
           if (lines !== 0) {
-            if (this._shouldForwardWheelToApp({ shiftKey: false })) {
+            if (this._shouldForwardTouchToApp()) {
               // Flick momentum keeps feeding the CLI's transcript from the last
               // touch point; the 40ms coalescer batches the per-frame reports.
               this._forwardScrollToApp(touchLastX, touchLastY, lines);
@@ -1347,7 +1351,7 @@ Object.assign(CodemanApp.prototype, {
             const ch = cellHeight();
             const lines = Math.trunc(pixelAccum / ch);
             if (lines !== 0) {
-              if (this._shouldForwardWheelToApp({ shiftKey: false })) {
+              if (this._shouldForwardTouchToApp()) {
                 this._logScrollRouting('forward-sgr');
                 this._forwardScrollToApp(touchLastX, touchLastY, lines);
               } else if (!this._maybePageCliTranscript({ shiftKey: false, touchId: touchContactId }, lines)) {
@@ -5830,6 +5834,24 @@ Object.assign(CodemanApp.prototype, {
     return window.CodemanTerminalInput.wheelDeltaLines(ev, this.terminal?.rows);
   },
 
+  // The touch listeners' forwarding gate: the wheel's gate below, plus one
+  // branch of its own. While xterm itself tracks the mouse (an app in the pane
+  // asked for it, a shell's htop or vim), xterm encodes a native wheel event on
+  // its own, but the touch listeners consume finger drags themselves, so those
+  // are forwarded explicitly. Scrolling locally instead shows nothing useful in
+  // either kind of session: on a direct PTY the app draws on xterm's alternate
+  // screen, which scrollLines() cannot move, and in a tmux-backed session xterm
+  // stays in the normal buffer, so a local scroll only drags stale tmux
+  // repaints up the screen.
+  _shouldForwardTouchToApp() {
+    if (this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback) return false;
+    const mode = this.terminal?.modes?.mouseTrackingMode;
+    // The existing synthetic sender uses SGR; tracking alone does not imply
+    // that encoding (legacy/X10 applications must not receive SGR bytes).
+    const sgr = this.terminal?._core?.coreMouseService?.activeEncoding === 'SGR';
+    return !!(mode && mode !== 'none' && mode !== 'x10' && sgr) || this._shouldForwardWheelToApp({ shiftKey: false });
+  },
+
   // `target` ({ terminal, sessionId }) asks the question for a TerminalTile:
   // its own terminal's tracking mode and its own session, never the active one.
   // Either field left out means the primary pane's.
@@ -6060,19 +6082,24 @@ Object.assign(CodemanApp.prototype, {
     const session = this.sessions?.get(sessionId);
     const optOut = !!this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback;
     const tracking = this.terminal?.modes?.mouseTrackingMode || 'none';
+    // The encoding xterm would report in (DEFAULT, SGR, SGR_PIXELS): touch
+    // forwards to xterm's own tracking only when it is SGR
+    // (_shouldForwardTouchToApp).
+    const encoding = this.terminal?._core?.coreMouseService?.activeEncoding || 'unknown';
     // xterm's own mode above stays 'none' for a strip mode (the server removes
     // the DECSETs), so the CLI's real tracking state is reported separately.
     const cliTracking = session?.cliMouseTracking === true;
     const baseY = this.terminal?.buffer?.active?.baseY ?? -1;
     const signature =
-      `${decision}|${session?.mode}|${session?.cliVersion}|${optOut}|${tracking}|${cliTracking}|${baseY > 0}`;
+      `${decision}|${session?.mode}|${session?.cliVersion}|${optOut}|` +
+      `${tracking}|${encoding}|${cliTracking}|${baseY > 0}`;
     if (!this._scrollRoutingLogged) this._scrollRoutingLogged = new Map();
     if (this._scrollRoutingLogged.get(sessionId) === signature) return;
     this._scrollRoutingLogged.set(sessionId, signature);
     console.log(
       `[scroll] ${sessionId} → ${decision} (mode=${session?.mode || '?'}, cliVersion=${session?.cliVersion || 'unknown'}, ` +
-        `localScrollbackOptOut=${optOut}, mouseTracking=${tracking}, cliMouseTracking=${cliTracking}, ` +
-        `localScrollbackRows=${baseY})`
+        `localScrollbackOptOut=${optOut}, mouseTracking=${tracking}, mouseEncoding=${encoding}, ` +
+        `cliMouseTracking=${cliTracking}, localScrollbackRows=${baseY})`
     );
   },
 
