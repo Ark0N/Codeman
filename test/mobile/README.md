@@ -130,7 +130,7 @@ The unified `showKeyboard(page, height, options?)` tries Layer 1 → 2 → 3 aut
 | **CDP `Input.dispatchTouchEvent`** | Chromium | `true` | Default for swipe/tap tests |
 | **Synthetic `TouchEvent`** | Cross-engine | `false` | WebKit fallback, still triggers handlers |
 
-Swipe simulation includes intermediate move points and timing to satisfy `SwipeHandler` thresholds (≥80px distance, ≤300ms duration, ≤100px vertical drift).
+Swipe simulation includes intermediate move points and timing to satisfy `SwipeHandler` thresholds (≥80px distance, ≤500ms duration, ≤50px vertical drift).
 
 ### Visual Regression
 

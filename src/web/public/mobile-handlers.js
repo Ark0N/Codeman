@@ -758,13 +758,23 @@ const SwipeHandler = {
   startY: 0,
   startTime: 0,
   minSwipeDistance: 80, // Minimum pixels for a valid swipe
-  maxSwipeTime: 300, // Maximum ms for a swipe gesture
-  maxVerticalDrift: 100, // Max vertical movement allowed
+  // 300ms rejected an unhurried but deliberate swipe outright, which read as an
+  // unresponsive gesture rather than as "too slow".
+  maxSwipeTime: 500, // Maximum ms for a swipe gesture
+  maxVerticalDrift: 50, // Max vertical movement allowed, at any point of the gesture
 
   _touchStartHandler: null,
+  _touchMoveHandler: null,
   _touchEndHandler: null,
   _element: null,
   _ignoreGesture: false,
+
+  /**
+   * Surfaces inside `.main` that own their own gestures or controls: a swipe
+   * there must not switch sessions. The phone overview and welcome screen are
+   * deliberately NOT listed: swiping from home into a session is a feature.
+   */
+  IGNORE_SELECTOR: '.tile-grid, .term-select-bar, #cjkInput, .history-trunc-bar',
 
   /** Initialize swipe handling */
   init() {
@@ -776,8 +786,10 @@ const SwipeHandler = {
 
     this._element = terminal;
     this._touchStartHandler = (e) => this.onTouchStart(e);
+    this._touchMoveHandler = (e) => this.onTouchMove(e);
     this._touchEndHandler = (e) => this.onTouchEnd(e);
     terminal.addEventListener('touchstart', this._touchStartHandler, { passive: true });
+    terminal.addEventListener('touchmove', this._touchMoveHandler, { passive: true });
     terminal.addEventListener('touchend', this._touchEndHandler, { passive: true });
   },
 
@@ -785,9 +797,11 @@ const SwipeHandler = {
   cleanup() {
     if (this._element && this._touchStartHandler) {
       this._element.removeEventListener('touchstart', this._touchStartHandler);
+      this._element.removeEventListener('touchmove', this._touchMoveHandler);
       this._element.removeEventListener('touchend', this._touchEndHandler);
     }
     this._touchStartHandler = null;
+    this._touchMoveHandler = null;
     this._touchEndHandler = null;
     this._element = null;
   },
@@ -797,20 +811,43 @@ const SwipeHandler = {
     // here. Swiping across the open session drawer — the natural "dismiss it"
     // gesture — would otherwise fire nextSession() and drop the user into a
     // session they never tapped.
+    // The terminal's touch handler publishes the axis it locks for a gesture
+    // that starts on it; a touch that starts elsewhere in `.main` (the home
+    // screen) must not inherit the last one, or a terminal scroll a moment
+    // earlier vetoes a swipe from home. Reset before any early return.
+    if (typeof app !== 'undefined') app._terminalGestureAxis = null;
     this._ignoreGesture = !!e.target?.closest?.('.session-sidebar');
     if (this._ignoreGesture) return;
-    if (!e.touches || e.touches.length !== 1) return;
+    // A second finger makes this a different gesture (pinch, two-finger scroll):
+    // never measure a later lift against the first finger's start. Stays set
+    // until the next touchstart, so the first finger's lift cannot clear it.
+    if (!e.touches || e.touches.length !== 1) {
+      this._ignoreGesture = true;
+      return;
+    }
+    this._ignoreGesture = !!e.target?.closest?.(this.IGNORE_SELECTOR);
     this.startX = e.touches[0].clientX;
     this.startY = e.touches[0].clientY;
     this.startTime = Date.now();
   },
 
+  onTouchMove(e) {
+    if (this._ignoreGesture || !e.touches || e.touches.length !== 1) return;
+    if (Math.abs(e.touches[0].clientY - this.startY) > this.maxVerticalDrift) this._ignoreGesture = true;
+  },
+
   onTouchEnd(e) {
-    if (this._ignoreGesture) {
-      this._ignoreGesture = false;
-      return;
-    }
+    if (this._ignoreGesture) return;
     if (!e.changedTouches || e.changedTouches.length !== 1) return;
+    if (typeof app === 'undefined') return;
+    // The terminal's own touch handler (terminal-ui.js) runs first, on the same
+    // gesture: a drag it locked as a scroll or a pan is not a session swipe,
+    // and neither is a lift it consumed (its long-press selection gesture
+    // preventDefaults the touchend, even on blank space where no selection
+    // survives the lift). A swipe must not extend or drop a touch selection.
+    if (e.defaultPrevented) return;
+    if (app._terminalGestureAxis === 'y' || app._terminalGestureAxis === 'x') return;
+    if (app._touchSelecting || app._touchSelectionActive) return;
 
     const endX = e.changedTouches[0].clientX;
     const endY = e.changedTouches[0].clientY;
@@ -824,13 +861,8 @@ const SwipeHandler = {
     if (deltaY > this.maxVerticalDrift) return; // Too much vertical movement
     if (Math.abs(deltaX) < this.minSwipeDistance) return; // Too short
 
-    // Valid swipe detected
-    if (deltaX > 0) {
-      // Swipe right -> previous session
-      if (typeof app !== 'undefined') app.prevSession();
-    } else {
-      // Swipe left -> next session
-      if (typeof app !== 'undefined') app.nextSession();
-    }
+    // Valid swipe detected. Swipe right -> previous session, left -> next.
+    if (deltaX > 0) app.prevSession();
+    else app.nextSession();
   },
 };
