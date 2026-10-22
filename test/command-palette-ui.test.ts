@@ -341,6 +341,166 @@ describe('Command-K session palette', () => {
   });
 });
 
+const PALETTE_CATALOG = [
+  { id: 'claude', label: 'Claude Code', kind: 'agent', enabled: true },
+  { id: 'shell', label: 'Shell', kind: 'shell', enabled: true },
+  { id: 'codex', label: 'Codex', kind: 'agent', enabled: true },
+  { id: 'opencode', label: 'OpenCode', kind: 'agent', enabled: true },
+  { id: 'gemini', label: 'Gemini', kind: 'agent', enabled: false },
+];
+
+/** A palette whose agent list comes from the injected CLI catalog, codex not installed. */
+function loadAgentPalette(catalog: any[] = PALETTE_CATALOG) {
+  const available: Record<string, boolean> = { claude: true, shell: true, codex: false, opencode: true, gemini: true };
+  const harness = loadPaletteHarness({ window: { __codemanCliCatalog: catalog, __codemanCliAvailable: available } });
+  // Mirrors settings-ui.js isCliAvailable(): unknown reads as available.
+  harness.app.isCliAvailable = (id: string) => available[id] !== false;
+  harness.app._runMode = 'claude';
+  return harness;
+}
+
+function arrow(key: 'ArrowLeft' | 'ArrowRight', caret: number, value = '') {
+  return {
+    key,
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+    target: { value, selectionStart: caret, selectionEnd: caret },
+  };
+}
+
+describe('Command-K new-session agent picker', () => {
+  it('offers the enabled, installed CLIs from the registry catalog, in catalog order', () => {
+    const { app } = loadAgentPalette();
+
+    expect(app._commandPaletteAgentChoices().map((c: any) => c.id)).toEqual(['claude', 'shell', 'opencode']);
+  });
+
+  it('starts on the Run button mode and labels the row from the catalog', () => {
+    const { app, elements } = loadAgentPalette();
+    app._runMode = 'opencode';
+
+    app.openCommandPalette();
+    const item = app.buildCommandPaletteItems('flux').find((i: any) => i.type === 'new-session');
+
+    expect(item).toMatchObject({ mode: 'opencode', subtitle: 'Run OpenCode in flux-player' });
+    expect(elements.commandPaletteList.innerHTML).toContain('data-palette-agent-cycle="next"');
+    expect(elements.commandPaletteList.innerHTML).toContain('run-mode-dot opencode');
+  });
+
+  it('falls back to the first offered agent when the Run button mode is not offered', () => {
+    const { app } = loadAgentPalette();
+    app._runMode = 'codex'; // not installed
+
+    app.openCommandPalette();
+
+    expect(app.buildCommandPaletteItems('').find((i: any) => i.type === 'new-session').mode).toBe('claude');
+  });
+
+  it('cycles the agent with Right/Left on the new-session row, wrapping', async () => {
+    const { app, listeners, elements } = loadAgentPalette();
+    app.openCommandPalette();
+    elements.commandPaletteSearch.value = 'nomatch';
+    app.renderCommandPalette();
+    expect(app.commandPaletteItems[app.commandPaletteActiveIndex].type).toBe('new-session');
+
+    const right = arrow('ArrowRight', 7, 'nomatch');
+    await listeners['search:keydown'](right);
+    expect(right.preventDefault).toHaveBeenCalled();
+    expect(app.commandPaletteItems[app.commandPaletteActiveIndex]).toMatchObject({ mode: 'shell' });
+    expect(elements.commandPaletteList.innerHTML).toContain('Run Shell in');
+
+    await listeners['search:keydown'](arrow('ArrowLeft', 0, 'nomatch'));
+    await listeners['search:keydown'](arrow('ArrowLeft', 0, 'nomatch'));
+    expect(app.commandPaletteItems[app.commandPaletteActiveIndex]).toMatchObject({ mode: 'opencode' });
+  });
+
+  it('leaves Left/Right to the caret when they would move it', async () => {
+    const { app, listeners, elements } = loadAgentPalette();
+    app.openCommandPalette();
+    elements.commandPaletteSearch.value = 'nomatch';
+    app.renderCommandPalette();
+
+    const left = arrow('ArrowLeft', 7, 'nomatch');
+    const right = arrow('ArrowRight', 3, 'nomatch');
+    await listeners['search:keydown'](left);
+    await listeners['search:keydown'](right);
+
+    expect(left.preventDefault).not.toHaveBeenCalled();
+    expect(right.preventDefault).not.toHaveBeenCalled();
+    expect(app.commandPaletteItems[app.commandPaletteActiveIndex].mode).toBe('claude');
+  });
+
+  it('does not cycle while a session row is highlighted', async () => {
+    const { app, listeners } = loadAgentPalette();
+    app.openCommandPalette();
+    expect(app.commandPaletteItems[0].type).toBe('session');
+
+    const right = arrow('ArrowRight', 0);
+    await listeners['search:keydown'](right);
+
+    expect(right.preventDefault).not.toHaveBeenCalled();
+    expect(app.buildCommandPaletteItems('').find((i: any) => i.type === 'new-session').mode).toBe('claude');
+  });
+
+  it('cycles from the row arrows without launching', async () => {
+    const { app, listeners } = loadAgentPalette();
+    app.openCommandPalette();
+    const cycle = { dataset: { paletteAgentCycle: 'next' } };
+    const event = {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+      target: { closest: (sel: string) => (sel === '[data-palette-agent-cycle]' ? cycle : null) },
+    };
+
+    listeners['list:click'](event);
+
+    expect(app.run).not.toHaveBeenCalled();
+    expect(app.buildCommandPaletteItems('').find((i: any) => i.type === 'new-session').mode).toBe('shell');
+  });
+
+  it('launches the chosen agent once, without changing the Run button mode', async () => {
+    const { app } = loadAgentPalette();
+    app.setRunMode = vi.fn();
+    let modeDuringRun: string | undefined;
+    app.run = vi.fn(async () => {
+      modeDuringRun = app._runMode;
+    });
+    app.openCommandPalette();
+    app._cycleCommandPaletteAgent(2); // claude -> shell -> opencode
+
+    app.commandPaletteItems = app.buildCommandPaletteItems('nomatch');
+    app.commandPaletteActiveIndex = 0;
+    await app.activateCommandPaletteItem();
+
+    expect(app.run).toHaveBeenCalledTimes(1);
+    expect(modeDuringRun).toBe('opencode');
+    expect(app._runMode).toBe('claude');
+    expect(app.setRunMode).not.toHaveBeenCalled();
+  });
+
+  it('restores the Run button mode even when the launch throws', async () => {
+    const { app } = loadAgentPalette();
+    app.run = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    app.openCommandPalette();
+    app._cycleCommandPaletteAgent(1);
+    app.commandPaletteItems = app.buildCommandPaletteItems('nomatch');
+    app.commandPaletteActiveIndex = 0;
+
+    await expect(app.activateCommandPaletteItem()).rejects.toThrow('boom');
+    expect(app._runMode).toBe('claude');
+  });
+
+  it('draws no picker when only one agent is offered', () => {
+    const { app, elements } = loadAgentPalette([{ id: 'claude', label: 'Claude Code', kind: 'agent', enabled: true }]);
+
+    app.openCommandPalette();
+
+    expect(elements.commandPaletteList.innerHTML).not.toContain('data-palette-agent-cycle');
+  });
+});
+
 describe('Session Manager unified list', () => {
   it('maps UnifiedSessionItem fields to the history-record shape and routes clicks by liveness', async () => {
     const { app, elements } = loadPaletteHarness({
