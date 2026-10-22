@@ -10,7 +10,7 @@ import { FastifyInstance } from 'fastify';
 import { existsSync, lstatSync, mkdirSync, writeFileSync, readdirSync, readFileSync, createReadStream } from 'node:fs';
 import { exec } from 'node:child_process';
 import fs from 'node:fs/promises';
-import { join, resolve, basename } from 'node:path';
+import { join, resolve, basename, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import type {
@@ -1799,7 +1799,6 @@ export function registerCaseRoutes(
     const casesBase = resolveCasesDir(user);
     const linkedCases = await readLinkedCases();
     const isLinked = Boolean(linkedCases[name]) && (!isMultiUserMode() || isAdmin(req));
-    if (isLinked && !isAdmin(req)) return fail(403, ApiErrorCode.FORBIDDEN, 'Admin only in multi-user mode');
     const oldPath = isLinked ? linkedCases[name] : join(casesBase, name);
 
     // The new name must be free in every namespace the list merges.
@@ -1813,7 +1812,8 @@ export function registerCaseRoutes(
 
     const state = await probePath(oldPath);
     if (state === 'absent') return fail(404, ApiErrorCode.NOT_FOUND, `Case "${name}" not found`);
-    if (state === 'unknown') {
+    // An alias-only rename never touches the folder, so an unreachable one does not block it.
+    if (state === 'unknown' && (!isLinked || body.renameFolder === true)) {
       return fail(503, ApiErrorCode.OPERATION_FAILED, describeUnknownPath('Case folder', oldPath, { pastCap: true }));
     }
 
@@ -1824,10 +1824,14 @@ export function registerCaseRoutes(
     }
 
     // Sessions with the folder open. Only a move disturbs them; an alias-only rename leaves them running.
+    // Remote sessions carry the remote path as their workingDir, so they are not this folder's.
+    const heldRoot = resolve(oldPath);
     const open = moveFolder
-      ? Array.from(ctx.sessions.values()).filter(
-          (s) => s.workingDir === oldPath || s.workingDir.startsWith(oldPath + '/')
-        )
+      ? Array.from(ctx.sessions.values()).filter((s) => {
+          if (s.remote) return false;
+          const dir = resolve(s.workingDir);
+          return dir === heldRoot || dir.startsWith(heldRoot + sep);
+        })
       : [];
     if (open.some((s) => !canAccessOwned(user, s.owner))) {
       return fail(403, ApiErrorCode.FORBIDDEN, "Another user's session has this case open");
@@ -1845,25 +1849,36 @@ export function registerCaseRoutes(
       await withCaseLock(oldPath, newPath, async () => {
         for (const s of open) await ctx.cleanupSession(s.id, true, 'case_rename');
         if (moveFolder) await moveCaseFolder(oldPath, newPath);
+        const originalLinks = isLinked ? await readLinkedCases() : undefined;
         try {
-          if (isLinked) {
-            const links = await readLinkedCases();
+          // settings.json is server-wide and caseOrder/lastUsedCase name the admin's cases, so only the
+          // admin's rename touches it (a non-admin's own rename must not rewrite someone else's list).
+          // Written before linked-cases.json so a failure here leaves the registry untouched.
+          if (isAdmin(req)) {
+            const existing = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {});
+            const order = renameInOrder(existing.caseOrder, name, newName);
+            const last = existing.lastUsedCase === name ? newName : undefined;
+            if (order || last) {
+              await fs.writeFile(
+                SETTINGS_PATH,
+                JSON.stringify(
+                  { ...existing, ...(order ? { caseOrder: order } : {}), ...(last ? { lastUsedCase: last } : {}) },
+                  null,
+                  2
+                )
+              );
+            }
+          }
+          if (originalLinks) {
+            const links = { ...originalLinks };
             delete links[name];
             links[newName] = newPath;
-            await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(links, null, 2));
-          }
-          const existing = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {});
-          const order = renameInOrder(existing.caseOrder, name, newName);
-          const last = existing.lastUsedCase === name ? newName : undefined;
-          if (order || last) {
-            await fs.writeFile(
-              SETTINGS_PATH,
-              JSON.stringify(
-                { ...existing, ...(order ? { caseOrder: order } : {}), ...(last ? { lastUsedCase: last } : {}) },
-                null,
-                2
-              )
-            );
+            try {
+              await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(links, null, 2));
+            } catch (err) {
+              await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(originalLinks, null, 2)).catch(() => {});
+              throw err;
+            }
           }
         } catch (err) {
           // The folder moved but the registries did not follow: put it back rather than leave a case
@@ -1872,6 +1887,15 @@ export function registerCaseRoutes(
           throw err;
         }
         if (moveFolder) await moveClaudeHistory(oldPath, newPath);
+        // The owner's default session group is keyed by case name: carry it over, best effort.
+        const layoutOwner = ownerLayoutKey(ownerFor(req));
+        try {
+          const { groupId } = await ctx.tabLayouts.caseDefaultGroup(layoutOwner, name);
+          if (groupId) await ctx.tabLayouts.setCaseDefaultGroup(layoutOwner, newName, groupId);
+        } catch {
+          /* the group is a convenience; the rename already happened */
+        }
+        await ctx.tabLayouts.forgetCaseDefaultGroup(layoutOwner, name).catch(() => undefined);
       });
       ctx.broadcast(SseEvent.CaseRenamed, { oldName: name, newName, oldPath, newPath, folderMoved: moveFolder });
       return {
@@ -1881,7 +1905,13 @@ export function registerCaseRoutes(
     } catch (err) {
       if (err instanceof CaseRenameError) {
         const status = err.code === 'BUSY' ? 409 : err.code === 'EXISTS' ? 409 : err.code === 'LOCKED' ? 423 : 400;
-        return fail(status, ApiErrorCode.OPERATION_FAILED, err.message, { renameCode: err.code });
+        const code =
+          err.code === 'EXISTS'
+            ? ApiErrorCode.ALREADY_EXISTS
+            : err.code === 'BUSY'
+              ? ApiErrorCode.CONFLICT
+              : ApiErrorCode.OPERATION_FAILED;
+        return fail(status, code, err.message, { renameCode: err.code });
       }
       return fail(500, ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }

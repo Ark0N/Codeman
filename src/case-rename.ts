@@ -113,7 +113,7 @@ export async function moveCaseFolder(from: string, to: string, attempts = 4, del
         throw new CaseRenameError(
           'LOCKED',
           `The folder is in use by another program (${code}), so it could not be renamed. Close anything that has it open ` +
-            '(a terminal, an editor, a file browser or a sync client), or stop the sessions using it, and try again.'
+            '(an editor, a file browser or a sync client) and try again.'
         );
       }
       if (code === 'ENOTEMPTY' || code === 'EEXIST') {

@@ -4,14 +4,14 @@
  * registries (caseOrder, lastUsedCase, linked-cases.json) and Claude's history follow. Real filesystem under
  * test/setup.ts's temp HOME; every folder is removed through safeRmHomeTree. Port: N/A (app.inject()).
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerCaseRoutes } from '../../src/web/routes/case-routes.js';
 import { dataPath } from '../../src/config/instance.js';
-import { SETTINGS_PATH } from '../../src/web/route-helpers.js';
+import { SETTINGS_PATH, resolveCasesDir } from '../../src/web/route-helpers.js';
 import { claudeProjectDirName } from '../../src/case-rename.js';
 import { safeRmHomeTree } from '../mocks/index.js';
 
@@ -109,6 +109,36 @@ describe('POST /api/cases/:name/rename (a case under the cases directory)', () =
     expect(existsSync(join(CASES_DIR(), 'beta'))).toBe(true);
   });
 
+  it('does not stop a remote session whose remote path equals the local folder', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerCaseRoutes);
+    const dir = localCase('alpha');
+    (ctx.sessions as Map<string, unknown>).set('s-remote', { id: 's-remote', name: 'r', workingDir: dir, remote: {} });
+    const res = await rename(app, 'alpha', { newName: 'beta' });
+    made.push(join(CASES_DIR(), 'beta'));
+    expect(res.statusCode).toBe(200);
+    expect(ctx.cleanupSession).not.toHaveBeenCalled();
+  });
+
+  it("carries the owner's default session group to the new name", async () => {
+    const { app, ctx } = await createRouteTestHarness(registerCaseRoutes);
+    localCase('alpha');
+    vi.mocked(ctx.tabLayouts.caseDefaultGroup).mockResolvedValueOnce({ groupId: 'g1', groups: [] });
+    const res = await rename(app, 'alpha', { newName: 'beta' });
+    made.push(join(CASES_DIR(), 'beta'));
+    expect(res.statusCode).toBe(200);
+    expect(ctx.tabLayouts.setCaseDefaultGroup).toHaveBeenCalledWith(expect.any(String), 'beta', 'g1');
+    expect(ctx.tabLayouts.forgetCaseDefaultGroup).toHaveBeenCalledWith(expect.any(String), 'alpha');
+  });
+
+  it('answers a folder that appears at the target with ALREADY_EXISTS and keeps renameCode', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    localCase('alpha');
+    localCase('beta');
+    const res = await rename(app, 'alpha', { newName: 'beta' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().errorCode).toBe('ALREADY_EXISTS');
+  });
+
   it('does not touch a case whose name merely starts with the same letters', async () => {
     const { app, ctx } = await createRouteTestHarness(registerCaseRoutes);
     localCase('alpha');
@@ -166,14 +196,41 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     expect(existsSync(join(work, 'renamed'))).toBe(false);
   });
 
-  it('is admin only in multi-user mode', async () => {
+  it('puts the folder and the registry back when settings.json cannot be written', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    const real = join(work, 'my-project');
+    mkdirSync(real);
+    writeFileSync(LINKED(), JSON.stringify({ proj: real, other: join(work, 'x') }));
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ caseOrder: ['proj'] }));
+    chmodSync(SETTINGS_PATH, 0o444);
+    const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
+    chmodSync(SETTINGS_PATH, 0o644);
+    expect(res.statusCode).toBe(500);
+    expect(existsSync(real)).toBe(true);
+    expect(linked()).toEqual({ proj: real, other: join(work, 'x') });
+  });
+
+  it('answers 404 for a linked case a non-admin cannot see in multi-user mode', async () => {
     process.env.CODEMAN_MULTIUSER = '1';
     const { app } = await createRouteTestHarness(registerCaseRoutes, { authUser: { username: 'bob', role: 'user' } });
     const real = join(work, 'p');
     mkdirSync(real);
     writeFileSync(LINKED(), JSON.stringify({ proj: real }));
     const res = await rename(app, 'proj', { newName: 'renamed' });
-    expect(res.statusCode).not.toBe(200);
+    expect(res.statusCode).toBe(404);
     expect(linked()).toEqual({ proj: real });
+  });
+
+  it('leaves the server-wide settings.json alone when a non-admin renames their own case', async () => {
+    process.env.CODEMAN_MULTIUSER = '1';
+    const { app } = await createRouteTestHarness(registerCaseRoutes, { authUser: { username: 'bob', role: 'user' } });
+    const bobsDir = join(resolveCasesDir({ username: 'bob', role: 'user' } as never), 'alpha');
+    mkdirSync(bobsDir, { recursive: true });
+    made.push(dirname(bobsDir));
+    const before = readFileSync(SETTINGS_PATH, 'utf8');
+    const res = await rename(app, 'alpha', { newName: 'bobs' });
+    expect(res.statusCode).toBe(200);
+    expect(existsSync(join(dirname(bobsDir), 'bobs'))).toBe(true);
+    expect(readFileSync(SETTINGS_PATH, 'utf8')).toBe(before);
   });
 });

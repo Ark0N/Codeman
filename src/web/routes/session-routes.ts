@@ -4,6 +4,7 @@
  * auto-clear, auto-compact, image watcher, flicker filter, and logout.
  */
 
+import { claudeProjectDirName } from '../../case-rename.js';
 import { FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { join, dirname, extname, basename, resolve as resolvePath } from 'node:path';
@@ -5118,6 +5119,7 @@ export function registerSessionRoutes(
     if (!stat?.isDirectory()) return out;
 
     const workingDir = await decodeProjectKey(projDir);
+    const staleCwd = new Map<string, boolean>();
     const entries = await fs.readdir(projPath).catch(() => [] as string[]);
 
     for (const entry of entries) {
@@ -5222,13 +5224,35 @@ export function registerSessionRoutes(
         worktreeRepo: headGit.worktreeRepo ?? tailGit.worktreeRepo,
       };
 
+      // A case rename moves the project directory but leaves the old path in each transcript's
+      // cwd. When that cwd is gone and the decoded key is a real folder that encodes back to this
+      // very key (not the $HOME collapse of #265), the key is the truer answer.
+      let cwd = git.cwd;
+      if (cwd !== undefined && cwd !== workingDir) {
+        let stale = staleCwd.get(cwd);
+        if (stale === undefined) {
+          stale =
+            claudeProjectDirName(workingDir) === projDir &&
+            (await fs.stat(cwd).then(
+              () => false,
+              () => true
+            )) &&
+            (await fs.stat(workingDir).then(
+              (s) => s.isDirectory(),
+              () => false
+            ));
+          staleCwd.set(cwd, stale);
+        }
+        if (stale) cwd = undefined;
+      }
+
       out.push({
         sessionId,
         // The transcript's literal cwd beats decodeProjectKey's stat-walked guess,
         // which silently collapses to $HOME once the directory is gone (#265).
         // Absent cwd falls back to the old behaviour rather than inventing a path.
-        workingDir: git.cwd ?? workingDir,
-        workingDirExact: git.cwd !== undefined,
+        workingDir: cwd ?? workingDir,
+        workingDirExact: cwd !== undefined,
         projectKey: projDir,
         sizeBytes: fileStat.size,
         lastModified: fileStat.mtime.toISOString(),
