@@ -22,6 +22,7 @@ import {
   CONFIG_BACKUP_FILES,
   ConfigBackupCorruptError,
   ConfigBackupNotFoundError,
+  ConfigBackupPartialRestoreError,
   createConfigBackup,
   defaultConfigBackupDir,
   diffConfigBackups,
@@ -343,6 +344,30 @@ describe('restoreConfigBackup', () => {
         ConfigBackupNotFoundError
       );
     }
+  });
+
+  it('a file it cannot write does not stop the others, and the error names both lists', () => {
+    put('settings.json', '{"good":true}');
+    put('clis.json', '{"clis":{}}');
+    put('webhook.json', '{"enabled":false}');
+    const made = createConfigBackup({ dataDir: data, backupDir: backups, reason: 'auto', now: T0 }) as { id: string };
+    put('settings.json', '{"polluted":true}');
+    put('webhook.json', '{"enabled":true}');
+    rmSync(join(data, 'clis.json'));
+    mkdirSync(join(data, 'clis.json')); // between the other two in the tracked list
+    let caught: unknown;
+    try {
+      restoreConfigBackup({ dataDir: data, backupDir: backups, id: made.id, now: T0 + 1000 });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ConfigBackupPartialRestoreError);
+    const err = caught as ConfigBackupPartialRestoreError;
+    expect(err.restored).toEqual(['settings.json', 'webhook.json']);
+    expect(err.failed.map((f) => f.name)).toEqual(['clis.json']);
+    expect(err.safetySnapshot).toBeTruthy();
+    expect(readFileSync(join(data, 'webhook.json'), 'utf8')).toBe('{"enabled":false}');
+    expect(readdirSync(data).filter((n) => n.includes('.restore-'))).toEqual([]); // no temp left behind
   });
 
   it('only ever writes allowlisted names, even if a manifest lists others', () => {

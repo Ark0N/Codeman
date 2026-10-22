@@ -11,7 +11,9 @@
  * are admin only. Responses carry file NAMES and sizes, never file content, except the diff, which shows
  * changed values but never a credential's (`.env`, `users.json`, `push-keys.json`, `webhook.json`, `intents.json` and any key that looks
  * like a token/secret/password are reported as "changed" only). Restore replaces files the running server
- * may have cached: `restartRequired` says which ones only apply after a restart.
+ * may have cached: `restartRequired` says which ones only apply after a restart. A restore that could not
+ * write every file answers 500 with the error envelope plus `data` (`restored`, `failed`, `untouched`,
+ * `safetySnapshot`, `restartRequired`): the files it wrote stay restored and are reloaded like a full one.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -31,6 +33,7 @@ import {
   CONFIG_DIFF_CURRENT,
   ConfigBackupCorruptError,
   ConfigBackupNotFoundError,
+  ConfigBackupPartialRestoreError,
   createConfigBackup,
   defaultConfigBackupDir,
   diffConfigBackups,
@@ -234,6 +237,28 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
     }
   });
 
+  /**
+   * What a restore that wrote files must do, whether or not every file made it: reload what the running
+   * server caches, audit it, and name the files that only apply after a restart.
+   */
+  const afterRestore = (req: FastifyRequest, id: string, restored: string[], failed: string[] = []): string[] => {
+    // IntentStore caches the file and rewrites it whole on the next prompt, which would undo the restore.
+    if (restored.includes('intents.json')) intentStore.reload();
+    // restoreConfigBackup writes clis.json directly (the one writer besides mutateRegistryFile).
+    if (restored.includes('clis.json')) reloadCliRegistry();
+    // A restore of users.json replaces accounts, password hashes, roles and bypass grants.
+    if (isMultiUserMode()) {
+      void appendAdminAudit({
+        admin: getAuthUser(req).username,
+        action: 'config_backup_restore',
+        target: id,
+        ip: req.ip,
+        detail: { restored, ...(failed.length > 0 && { failed }) },
+      });
+    }
+    return restored.filter((n) => RESTART_REQUIRED.has(n));
+  };
+
   app.post('/api/config-backups/:id/restore', async (req, reply) => {
     const denied = deny(req, reply);
     if (denied) return denied;
@@ -241,27 +266,13 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
     try {
       const { dir } = await readEffectiveBackupSettings();
       const out = restoreConfigBackup({ dataDir: getDataDir(), backupDir: dir, id, appVersion: APP_VERSION });
-      // IntentStore caches the file and rewrites it whole on the next prompt, which would undo the restore.
-      if (out.restored.includes('intents.json')) intentStore.reload();
-      // restoreConfigBackup writes clis.json directly (the one writer besides mutateRegistryFile).
-      if (out.restored.includes('clis.json')) reloadCliRegistry();
-      // A restore of users.json replaces accounts, password hashes, roles and bypass grants.
-      if (isMultiUserMode()) {
-        void appendAdminAudit({
-          admin: getAuthUser(req).username,
-          action: 'config_backup_restore',
-          target: id,
-          ip: req.ip,
-          detail: { restored: out.restored },
-        });
-      }
       return {
         success: true,
         data: {
           restored: out.restored,
           untouched: out.untouched,
           safetySnapshot: out.safetySnapshot,
-          restartRequired: out.restored.filter((n) => RESTART_REQUIRED.has(n)),
+          restartRequired: afterRestore(req, id, out.restored),
         },
       };
     } catch (err) {
@@ -272,6 +283,23 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
       if (err instanceof ConfigBackupCorruptError) {
         reply.code(409);
         return createErrorResponse(ApiErrorCode.CONFLICT, `${err.message}. Nothing was changed.`);
+      }
+      if (err instanceof ConfigBackupPartialRestoreError) {
+        // Some files are the backup's now: the client must learn which (Settings re-reads a restored
+        // settings.json, or its next Save writes the old values back) and where the undo copy is.
+        const failedNames = err.failed.map((f) => f.name);
+        const restartRequired = afterRestore(req, id, err.restored, failedNames);
+        reply.code(500);
+        return {
+          ...createErrorResponse(ApiErrorCode.OPERATION_FAILED, err.message),
+          data: {
+            restored: err.restored,
+            failed: err.failed,
+            untouched: err.untouched,
+            safetySnapshot: err.safetySnapshot,
+            restartRequired,
+          },
+        };
       }
       reply.code(err instanceof BackupDirUnavailableError ? 503 : 500);
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Restore failed: ${getErrorMessage(err)}`);

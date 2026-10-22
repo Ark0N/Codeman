@@ -137,6 +137,12 @@ From the list, press **Restore** on a backup and confirm. Codeman then:
 
 Only the tracked names are ever written, whatever a manifest lists.
 
+If a file cannot be written (a full disk, a folder where the file should be), the restore still
+writes the others and then reports an error that names the files it restored, the ones it could
+not write, and the `pre-restore` backup that holds the files as they were before. The restored
+files are in effect as after a full restore (Settings re-reads `settings.json` into the form), so
+fix the cause and restore again, or restore the `pre-restore` backup to go back.
+
 Restoring `settings.json` keeps the four backup settings (on or off, folder, how many, how many
 days) at their current values, so a restore from before a folder change does not point the list
 at the old folder and hide the `pre-restore` copy it just made. The exception is the two

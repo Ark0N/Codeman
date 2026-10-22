@@ -1516,18 +1516,25 @@ Object.assign(CodemanApp.prototype, {
     const res = await this._apiPost(`/api/config-backups/${encodeURIComponent(id)}/restore`, {});
     let body = null;
     try { body = res ? await res.json() : null; } catch { /* fall through */ }
-    if (!res || !res.ok || !body || body.success === false) {
+    const ok = res && res.ok && body && body.success !== false;
+    const d = body?.data;
+    // A restore that failed partway still answers with what it wrote (`restored`, `failed`, `safetySnapshot`):
+    // those files are the backup's now and need the same refill as a full restore.
+    if (!ok && !Array.isArray(d?.restored)) {
       this.showToast(body?.error || 'Restore failed', 'error');
       return;
     }
-    const d = body.data;
     const restart = d.restartRequired?.length ? ` Restart Codeman to apply: ${d.restartRequired.join(', ')}.` : '';
     // The form still holds the pre-restore values, and Save would PUT them over the restored file.
     if (d.restored.includes('settings.json')) {
       await this.loadAppSettingsFromServer();
       this.openAppSettings();
     }
-    this.showToast(`Restored ${d.restored.length} file${d.restored.length === 1 ? '' : 's'}.${restart}`, 'success');
+    if (ok) {
+      this.showToast(`Restored ${d.restored.length} file${d.restored.length === 1 ? '' : 's'}.${restart}`, 'success');
+    } else {
+      this.showToast(`${body.error || 'Restore failed partway'}.${restart}`, 'error');
+    }
     this.loadConfigBackups();
   },
 

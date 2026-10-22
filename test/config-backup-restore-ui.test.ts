@@ -9,9 +9,14 @@ import vm from 'node:vm';
 
 const SRC = readFileSync(new URL('../src/web/public/settings-ui.js', import.meta.url), 'utf-8');
 
-function makeApp(restored: string[], confirmed = true) {
+function makeApp(
+  restored: string[],
+  confirmed = true,
+  reply: { ok: boolean; body: unknown } = { ok: true, body: { success: true, data: { restored, restartRequired: [] } } }
+) {
   const calls: string[] = [];
   const confirms: string[] = [];
+  const toasts: Array<[string, string]> = [];
   function CodemanApp(this: unknown) {}
   const ctx = vm.createContext({
     CodemanApp,
@@ -29,16 +34,13 @@ function makeApp(restored: string[], confirmed = true) {
         files: [{ name: 'settings.json' }, { name: 'users.json' }, { name: '.env' }, { name: 'clis.json' }],
       },
     ],
-    _apiPost: async () => ({
-      ok: true,
-      json: async () => ({ success: true, data: { restored, restartRequired: [] } }),
-    }),
+    _apiPost: async () => ({ ok: reply.ok, json: async () => reply.body }),
     loadAppSettingsFromServer: async () => void calls.push('reload-settings'),
     openAppSettings: () => void calls.push('refill-form'),
     loadConfigBackups: () => void calls.push('reload-list'),
-    showToast: () => {},
+    showToast: (m: string, type: string) => void toasts.push([m, type]),
   });
-  return { app, calls, confirms };
+  return { app, calls, confirms, toasts };
 }
 
 describe('restoreConfigBackup (Settings UI)', () => {
@@ -52,6 +54,38 @@ describe('restoreConfigBackup (Settings UI)', () => {
     const { app, calls } = makeApp(['clis.json']);
     await (app.restoreConfigBackup as (id: string) => Promise<void>)('cfg-1');
     expect(calls).toEqual(['reload-list']);
+  });
+
+  it('a restore that failed partway still refills the form when settings.json was among the files written', async () => {
+    const { app, calls, toasts } = makeApp([], true, {
+      ok: false,
+      body: {
+        success: false,
+        errorCode: 'OPERATION_FAILED',
+        error: 'Restore incomplete: could not write clis.json (EISDIR); settings.json restored',
+        data: {
+          restored: ['settings.json'],
+          failed: [{ name: 'clis.json', error: 'EISDIR' }],
+          safetySnapshot: 'cfg-2',
+          restartRequired: ['settings.json'],
+        },
+      },
+    });
+    await (app.restoreConfigBackup as (id: string) => Promise<void>)('cfg-1');
+    expect(calls).toEqual(['reload-settings', 'refill-form', 'reload-list']);
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0][1]).toBe('error');
+    expect(toasts[0][0]).toContain('clis.json');
+  });
+
+  it('a refused restore (nothing written) only reports the error', async () => {
+    const { app, calls, toasts } = makeApp([], true, {
+      ok: false,
+      body: { success: false, errorCode: 'CONFLICT', error: 'settings.json does not match its checksum' },
+    });
+    await (app.restoreConfigBackup as (id: string) => Promise<void>)('cfg-1');
+    expect(calls).toEqual([]);
+    expect(toasts).toEqual([['settings.json does not match its checksum', 'error']]);
   });
 
   it('names the files being replaced and calls out the credential ones', async () => {

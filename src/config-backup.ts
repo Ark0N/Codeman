@@ -477,6 +477,26 @@ export class ConfigBackupNotFoundError extends Error {}
 export class ConfigBackupCorruptError extends Error {}
 
 /**
+ * A restore that wrote some files and could not write others (a full disk, a directory where a file
+ * should be). Every file passed verification first, so the ones written are the backup's: the caller
+ * still has to reload what they feed and tell the user which files are which.
+ */
+export class ConfigBackupPartialRestoreError extends Error {
+  constructor(
+    readonly restored: string[],
+    readonly failed: Array<{ name: string; error: string }>,
+    readonly untouched: string[],
+    readonly safetySnapshot: string | null
+  ) {
+    const done = restored.length ? `${restored.join(', ')} restored` : 'nothing was restored';
+    const undo = safetySnapshot ? `; the files from before the restore are in backup ${safetySnapshot}` : '';
+    super(
+      `Restore incomplete: could not write ${failed.map((f) => f.name).join(', ')} (${failed[0]?.error}); ${done}${undo}`
+    );
+  }
+}
+
+/**
  * Restore refuses what this module never writes. Snapshots are 0700/0600 real files, and a restore
  * writes the file as 0600: a symlink, or a file with a group/world bit, was planted or loosened
  * after the snapshot, and rewriting it as 0600 would turn it into trusted config (`clis.json`
@@ -556,7 +576,8 @@ export interface RestoreResult {
 /**
  * Put a snapshot's files back into the data dir. Every file is checked against the manifest's digest
  * BEFORE anything is written, a `pre-restore` snapshot of the live files is taken first, and each
- * file is replaced atomically (temp + rename) with mode 0600.
+ * file is replaced atomically (temp + rename) with mode 0600. A file that cannot be written does not
+ * stop the others; it throws {@link ConfigBackupPartialRestoreError} at the end, naming both lists.
  */
 export function restoreConfigBackup(opts: {
   dataDir: string;
@@ -603,6 +624,7 @@ export function restoreConfigBackup(opts: {
 
   mkdirSync(opts.dataDir, { recursive: true });
   const restored: string[] = [];
+  const failed: Array<{ name: string; error: string }> = [];
   for (const f of loaded) {
     const target = join(opts.dataDir, f.name);
     const tmp = `${target}.restore-${process.pid}`;
@@ -611,17 +633,28 @@ export function restoreConfigBackup(opts: {
         mode: 0o600,
       });
       renameSync(tmp, target);
+      restored.push(f.name);
     } catch (err) {
-      rmSync(tmp, { force: true });
-      throw err;
+      try {
+        rmSync(tmp, { force: true });
+      } catch {
+        /* the temp is a leftover at worst; the failure below is what matters */
+      }
+      // Keep going: each file is replaced on its own, and the files written before this one are the
+      // backup's already. Stopping here used to answer a bare 500 that named neither list.
+      failed.push({ name: f.name, error: err instanceof Error ? err.message : String(err) });
     }
-    restored.push(f.name);
   }
   // A restore never deletes: tracked files the snapshot did not hold stay as they are.
   const untouched = CONFIG_BACKUP_FILES.filter(
-    (n) => !restored.includes(n) && lstatSync(join(opts.dataDir, n), { throwIfNoEntry: false })?.isFile()
+    (n) =>
+      !restored.includes(n) &&
+      !failed.some((x) => x.name === n) &&
+      lstatSync(join(opts.dataDir, n), { throwIfNoEntry: false })?.isFile()
   );
-  return { restored, untouched, safetySnapshot: safety.status === 'created' ? safety.id : null };
+  const safetySnapshot = safety.status === 'created' ? safety.id : null;
+  if (failed.length) throw new ConfigBackupPartialRestoreError(restored, failed, untouched, safetySnapshot);
+  return { restored, untouched, safetySnapshot };
 }
 
 /** The live files in the data dir, as a side of a diff. */

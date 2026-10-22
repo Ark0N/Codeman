@@ -90,6 +90,36 @@ describe('/api/config-backups', () => {
     expect(JSON.parse(readFileSync(SETTINGS_PATH, 'utf8')).displayName).toBe('before');
   });
 
+  it('a restore that fails partway names what it restored, what failed and the pre-restore copy', async () => {
+    const { app } = await createRouteTestHarness(registerConfigBackupRoutes);
+    const clis = join(dirname(SETTINGS_PATH), 'clis.json');
+    writeFileSync(clis, '{"schemaVersion":1,"clis":{}}', { mode: 0o600 });
+    const id = (await app.inject({ method: 'POST', url: '/api/config-backups' })).json().data.id;
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ displayName: 'polluted' }));
+    // A file the server cannot replace: settings.json (first in the list) goes back, clis.json cannot.
+    rmSync(clis);
+    mkdirSync(clis);
+    try {
+      const res = await app.inject({ method: 'POST', url: `/api/config-backups/${id}/restore` });
+      expect(res.statusCode).toBe(500);
+      const body = res.json();
+      expect(body).toMatchObject({ success: false, errorCode: 'OPERATION_FAILED' });
+      expect(body.error).toContain('clis.json');
+      expect(body.data.restored).toContain('settings.json');
+      expect(body.data.failed.map((f: { name: string }) => f.name)).toEqual(['clis.json']);
+      expect(body.data.restartRequired).toContain('settings.json');
+      expect(JSON.parse(readFileSync(SETTINGS_PATH, 'utf8')).displayName).toBe('before');
+      // The undo copy exists, holds the state the restore replaced, and is the one named.
+      const safety = body.data.safetySnapshot;
+      expect(safety).toBeTruthy();
+      expect(body.error).toContain(safety);
+      const listed = (await app.inject({ method: 'GET', url: '/api/config-backups' })).json().data.backups;
+      expect(listed.find((b: { id: string }) => b.id === safety)?.reason).toBe('pre-restore');
+    } finally {
+      rmSync(clis, { recursive: true, force: true });
+    }
+  });
+
   it('a restored intents.json is not reverted by the next captured prompt', async () => {
     const { app } = await createRouteTestHarness(registerConfigBackupRoutes);
     const dir = mkdtempSync(join(tmpdir(), 'cfg-backup-intent-'));
