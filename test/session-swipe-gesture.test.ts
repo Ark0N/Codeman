@@ -147,15 +147,20 @@ describe('terminal touch handler hands sideways drags to the swipe', () => {
   it('locks a dominant sideways drag as a swipe unless the terminal can pan', () => {
     expect(TERMINAL_SOURCE).toContain("panAxis = travelX > travelY ? (canPanHorizontally() ? 'x' : 'swipe') : 'y';");
     expect(TERMINAL_SOURCE).toContain('this._terminalGestureAxis = panAxis;');
-    // A 'swipe' is neither a scroll nor (didScroll is set) a tap, until the
-    // finger passes the swipe's own vertical drift limit: the swipe has given
-    // up by then, so the drag is handed back to the scroll.
+    // A 'swipe' is neither a scroll nor (didScroll is set) a tap.
     expect(TERMINAL_SOURCE).toContain("if (panAxis === 'swipe') {");
-    expect(TERMINAL_SOURCE).toContain(
-      "const drift = typeof SwipeHandler !== 'undefined' ? SwipeHandler.maxVerticalDrift : 50;"
-    );
-    expect(TERMINAL_SOURCE).toContain('if (Math.abs(touchY - touchStartY) <= drift) return;');
-    expect(TERMINAL_SOURCE).toContain("this._terminalGestureAxis = 'y';");
+  });
+
+  it("hands a 'swipe' drag back to the scroll once it passes the swipe's own drift limit", () => {
+    // A thumb arc whose first move leans sideways (+9 px across, +5 px down) locks
+    // as 'swipe'; SwipeHandler drops it past maxVerticalDrift, so without the
+    // handback the 300 px of downward travel that follows would do nothing.
+    const start = TERMINAL_SOURCE.indexOf("if (panAxis === 'swipe') {");
+    const block = TERMINAL_SOURCE.slice(start, TERMINAL_SOURCE.indexOf("if (panAxis === 'x') {", start));
+    expect(block).toContain('SwipeHandler.maxVerticalDrift');
+    expect(block).toContain('if (Math.abs(touchY - touchStartY) <= drift) return;');
+    expect(block).toContain("panAxis = 'y';");
+    expect(block).toContain("this._terminalGestureAxis = 'y';");
     // The terminal reads the swipe's limit by name; its fallback is the same value.
     expect(load().swipe.maxVerticalDrift).toBe(50);
   });

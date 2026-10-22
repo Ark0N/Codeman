@@ -38,7 +38,7 @@ the hinge, and opening or closing the device is treated as the device changing s
 as the keyboard appearing.
 
 **Swipe left and right** on the terminal to switch sessions. A visible text selection pauses
-the swipe, and a terminal wider than the screen pans sideways instead of switching.
+the swipe, and a terminal wider than the screen pans sideways instead.
 
 ## The home screen
 
