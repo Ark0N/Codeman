@@ -1200,7 +1200,8 @@ Object.assign(CodemanApp.prototype, {
       // slop, so a diagonal drag cannot pan and scroll at the same time. 'swipe'
       // is a sideways drag on a terminal that cannot pan: it is the session
       // swipe's (SwipeHandler, mobile-handlers.js), so it neither scrolls nor
-      // ends as a tap on the session being left. Published per gesture as
+      // ends as a tap on the session being left, until it drifts past the
+      // swipe's vertical limit and becomes a 'y' scroll. Published per gesture as
       // `this._terminalGestureAxis`, which SwipeHandler reads to stand aside
       // for a scroll or a pan.
       let panAxis = null;
@@ -1335,7 +1336,18 @@ Object.assign(CodemanApp.prototype, {
             // fling, so a jittery tap would both position the cursor AND scroll.
             if (!didScroll) return;
             ev.preventDefault();
-            if (panAxis === 'swipe') return;
+            if (panAxis === 'swipe') {
+              // Past the swipe's own vertical drift limit the session swipe has
+              // given up, so the drag is a scroll after all (a thumb arc whose
+              // first move leaned sideways): hand it to 'y'.
+              const drift = typeof SwipeHandler !== 'undefined' ? SwipeHandler.maxVerticalDrift : 50;
+              if (Math.abs(touchY - touchStartY) <= drift) return;
+              panAxis = 'y';
+              this._terminalGestureAxis = 'y';
+              touchLastX = touchX;
+              touchLastY = touchY;
+              return;
+            }
             if (panAxis === 'x') {
               // Pan the container, and touch nothing the vertical path owns —
               // no pixelAccum, no velocity, so touchend cannot turn a sideways
