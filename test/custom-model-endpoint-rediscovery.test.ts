@@ -15,7 +15,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getDataDir } from '../src/config/instance.js';
 import { readCustomModelHosts, writeCustomModelHosts, type CustomModelHost } from '../src/custom-model-hosts.js';
-import { refreshAllCustomModelHosts } from '../src/web/routes/custom-model-routes.js';
+import { clearPropsProbeCache, refreshAllCustomModelHosts } from '../src/web/routes/custom-model-routes.js';
 import { webviewFetch } from '../src/web/webview-egress.js';
 
 vi.mock('../src/web/webview-egress.js', async () => {
@@ -31,6 +31,7 @@ function host(overrides: Partial<CustomModelHost> & Pick<CustomModelHost, 'id' |
 
 beforeEach(() => {
   fetchMock.mockReset();
+  clearPropsProbeCache();
 });
 
 describe('refreshAllCustomModelHosts (the periodic re-discovery sweep)', () => {
@@ -211,8 +212,9 @@ describe('refreshAllCustomModelHosts: context-length enrichment (llama.cpp/llama
   it('prefers the REAL configured context size parsed from /running’s launch command over /props’s unreliable n_ctx', async () => {
     // Confirmed live: llama-swap launched a model with --fit-ctx 16384 (the real, working
     // limit — the actual server then refused a request over it), but /props reported
-    // n_ctx: 154112 for the same model, well over what it would really accept. /props must
-    // never be reached at all once the /running command parse already answered it.
+    // n_ctx: 154112 for the same model, well over what it would really accept. The context
+    // must therefore keep coming from the /running command; /props is now also probed, but
+    // only for `total_slots`, which the command does not state.
     const dir = getDataDir();
     await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
     fetchMock.mockImplementation(async (url: URL) => {
@@ -235,7 +237,9 @@ describe('refreshAllCustomModelHosts: context-length enrichment (llama.cpp/llama
           { status: 200 }
         );
       }
-      if (url.pathname === '/props') throw new Error('must never be reached — the cmd parse already answered it');
+      if (url.pathname === '/props') {
+        return new Response(JSON.stringify({ n_ctx: 154112, total_slots: 4 }), { status: 200 });
+      }
       throw new Error(`unexpected request: ${url.href}`);
     });
 
@@ -243,6 +247,8 @@ describe('refreshAllCustomModelHosts: context-length enrichment (llama.cpp/llama
 
     const [updated] = await readCustomModelHosts(dir);
     expect(updated.modelContextLengths).toEqual({ 'qwen3.8-27b': 16384 });
+    expect(updated.modelSlotCounts).toEqual({ 'qwen3.8-27b': 4 });
+    // /props's 154112 never becomes the context, and nothing else stores it
   });
 
   it('falls back to /props when /running has no cmd, or the cmd states no recognizable context flag', async () => {
@@ -283,13 +289,197 @@ describe('refreshAllCustomModelHosts: context-length enrichment (llama.cpp/llama
           { status: 200 }
         );
       }
-      throw new Error(`unexpected request: ${url.href}`); // /props must never be reached
+      if (url.pathname === '/props') return new Response('not found', { status: 404 }); // slot probe only
+      throw new Error(`unexpected request: ${url.href}`);
     });
 
     await refreshAllCustomModelHosts();
 
     const [updated] = await readCustomModelHosts(dir);
     expect(updated.modelContextLengths).toEqual({ a: 8192 });
+    expect(updated.modelSlotCounts).toBeUndefined();
+  });
+});
+
+describe('refreshAllCustomModelHosts: parallel-slot enrichment (llama.cpp splits its context across --parallel slots)', () => {
+  /** One loaded model whose launch command is `cmd`; `/props` behaviour is supplied by the test. */
+  function serve(cmd: string, props: () => Response) {
+    fetchMock.mockImplementation(async (url: URL) => {
+      if (url.pathname === '/v1/models') {
+        return new Response(JSON.stringify({ data: [{ id: 'm', status: { value: 'loaded' } }] }), { status: 200 });
+      }
+      if (url.pathname === '/running') {
+        return new Response(JSON.stringify({ running: [{ model: 'm', state: 'ready', cmd }] }), { status: 200 });
+      }
+      if (url.pathname === '/props') return props();
+      throw new Error(`unexpected request: ${url.href}`);
+    });
+  }
+  const propsMustNotBeReached = () => {
+    throw new Error('/props must not be probed: the launch command already answered both questions');
+  };
+
+  it.each([
+    ['--parallel 1', 1],
+    ['-np 2', 2],
+    ['--parallel=3', 3],
+    ['--fit-ctx 65536 --parallel 1 --host 0.0.0.0', 1],
+  ])('reads an explicit %s from the launch command without probing /props', async (flags, slots) => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    serve(`llama-server -m /models/m.gguf --ctx-size 65536 ${flags}`, propsMustNotBeReached);
+
+    await refreshAllCustomModelHosts();
+
+    const [updated] = await readCustomModelHosts(dir);
+    expect(updated.modelSlotCounts).toEqual({ m: slots });
+    expect(updated.modelContextLengths).toEqual({ m: 65536 });
+  });
+
+  it('asks /props for total_slots when the command states no --parallel (llama-server picks the count itself)', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    serve(
+      'llama-server -m /models/m.gguf --fit-ctx 65536',
+      () => new Response(JSON.stringify({ n_ctx: 133888, total_slots: 4 }), { status: 200 })
+    );
+
+    await refreshAllCustomModelHosts();
+
+    const [updated] = await readCustomModelHosts(dir);
+    expect(updated.modelSlotCounts).toEqual({ m: 4 });
+    // the context still comes from the command's floor, never from /props's n_ctx
+    expect(updated.modelContextLengths).toEqual({ m: 65536 });
+  });
+
+  it('probes /props once per launch command: a repeat sweep reuses the answer, a changed command probes again', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    let probes = 0;
+    const answer = () => (probes++, new Response(JSON.stringify({ n_ctx: 133888, total_slots: 4 }), { status: 200 }));
+    serve('llama-server -m /models/m.gguf --fit-ctx 65536', answer);
+    await refreshAllCustomModelHosts();
+    await refreshAllCustomModelHosts();
+    expect(probes).toBe(1); // a /props call refreshes the model's last-use time in llama-swap, so not every sweep
+    expect((await readCustomModelHosts(dir))[0].modelSlotCounts).toEqual({ m: 4 });
+
+    serve('llama-server -m /models/m.gguf --fit-ctx 65536 --flash-attn on', answer);
+    await refreshAllCustomModelHosts();
+    expect(probes).toBe(2);
+  });
+
+  it('does not divide a /props context a second time when --parallel is explicit and the command states no context', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    // with an explicit count llama.cpp reports n_ctx per slot: 65,536 each is already what one request gets
+    serve(
+      'llama-server -m /models/m.gguf --parallel 4',
+      () => new Response(JSON.stringify({ n_ctx: 65536, total_slots: 4 }), { status: 200 })
+    );
+
+    await refreshAllCustomModelHosts();
+
+    const [updated] = await readCustomModelHosts(dir);
+    expect(updated.modelContextLengths).toEqual({ m: 65536 });
+    expect(updated.modelSlotCounts).toEqual({ m: 1 }); // already per slot, so one request gets all of it
+  });
+
+  it('a later round with an explicit --parallel replaces the slot count an earlier round learned', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    // round 1: auto slots, the server chose 4 sharing 131,072 tokens
+    serve(
+      'llama-server -m /models/m.gguf',
+      () => new Response(JSON.stringify({ n_ctx: 131072, total_slots: 4 }), { status: 200 })
+    );
+    await refreshAllCustomModelHosts();
+    expect((await readCustomModelHosts(dir))[0].modelSlotCounts).toEqual({ m: 4 });
+
+    // round 2: the user followed the dialog and added --parallel 1
+    serve(
+      'llama-server -m /models/m.gguf --parallel 1',
+      () => new Response(JSON.stringify({ n_ctx: 131072, total_slots: 1 }), { status: 200 })
+    );
+    await refreshAllCustomModelHosts();
+    expect((await readCustomModelHosts(dir))[0].modelSlotCounts).toEqual({ m: 1 });
+
+    // round 3: --parallel 2 with a per-slot /props context must not bring a pool back
+    serve(
+      'llama-server -m /models/m.gguf --parallel 2',
+      () => new Response(JSON.stringify({ n_ctx: 65536, total_slots: 2 }), { status: 200 })
+    );
+    await refreshAllCustomModelHosts();
+    const [updated] = await readCustomModelHosts(dir);
+    expect(updated.modelSlotCounts).toEqual({ m: 1 });
+    expect(updated.modelContextLengths).toEqual({ m: 65536 });
+  });
+
+  it('remembers a /props that answers non-2xx per launch command, but retries a network failure', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    let probes = 0;
+    serve('llama-server -m /models/m.gguf --fit-ctx 65536', () => (probes++, new Response('nope', { status: 404 })));
+    await refreshAllCustomModelHosts();
+    await refreshAllCustomModelHosts();
+    expect(probes).toBe(1); // no probe every sweep: a /props call keeps a model with a ttl loaded
+
+    clearPropsProbeCache();
+    probes = 0;
+    serve('llama-server -m /models/m.gguf --fit-ctx 65536', () => {
+      probes++;
+      throw new TypeError('fetch failed');
+    });
+    await refreshAllCustomModelHosts();
+    await refreshAllCustomModelHosts();
+    expect(probes).toBe(2); // a network error says nothing about the server, so it is tried again
+  });
+
+  it('treats -np -1 (llama.cpp auto) as unstated and falls back to /props', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    serve(
+      'llama-server -m /models/m.gguf --fit-ctx 65536 -np -1',
+      () => new Response(JSON.stringify({ total_slots: 4 }), { status: 200 })
+    );
+
+    await refreshAllCustomModelHosts();
+
+    const [updated] = await readCustomModelHosts(dir);
+    expect(updated.modelSlotCounts).toEqual({ m: 4 });
+  });
+
+  it('a failed or slot-less /props leaves no slot count rather than failing the sweep or guessing one', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [host({ id: 'ep', baseUrl: 'http://localhost:8080' })]);
+    serve(
+      'llama-server -m /models/m.gguf --fit-ctx 65536',
+      () => new Response(JSON.stringify({ n_ctx: 8192 }), { status: 200 })
+    );
+
+    await expect(refreshAllCustomModelHosts()).resolves.toBeUndefined();
+
+    const [updated] = await readCustomModelHosts(dir);
+    expect(updated.modelSlotCounts).toBeUndefined();
+    expect(updated.modelContextLengths).toEqual({ m: 65536 });
+  });
+
+  it('keeps a previously-learned slot count for a model that is no longer loaded, and drops it once the model disappears', async () => {
+    const dir = getDataDir();
+    await writeCustomModelHosts(dir, [
+      host({
+        id: 'ep',
+        baseUrl: 'http://localhost:8080',
+        models: ['a', 'b'],
+        modelContextLengths: { a: 65536, b: 65536 },
+        modelSlotCounts: { a: 4, b: 2 },
+      }),
+    ]);
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'a' }] }), { status: 200 }));
+
+    await refreshAllCustomModelHosts();
+
+    const [updated] = await readCustomModelHosts(dir);
+    expect(updated.modelSlotCounts).toEqual({ a: 4 });
   });
 });
 

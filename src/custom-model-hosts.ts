@@ -62,6 +62,22 @@ export interface CustomModelHost {
    */
   modelContextLengths?: Record<string, number>;
   /**
+   * Discovered number of parallel server slots per model id, keyed like `modelContextLengths`
+   * and populated on the same loaded-models-only basis. Read from the launch command's
+   * `--parallel`/`-np` when it states one, otherwise from llama.cpp's own `/props`
+   * `total_slots` (a llama-server started without `--parallel` picks the count itself, so
+   * the command cannot say). llama-server splits its context across these slots (by default
+   * they share one unified KV pool) and Claude Code sends several requests at once (the
+   * main session plus each parallel subagent), so with N slots each request can only rely
+   * on roughly `contextLength / N` tokens. Used only by the context warning; a model this
+   * has no entry for is treated as a single slot, never a guess. The division always uses
+   * `modelContextLengths` (the launch command's figure, or `/props` only when the command states
+   * none): `/props` never widens the pool. An explicit `--parallel N` whose context came from
+   * `/props` is recorded as 1 slot, because that figure is already per slot, and that also
+   * overwrites any count an earlier round stored.
+   */
+  modelSlotCounts?: Record<string, number>;
+  /**
    * Discovered file size (GB) per model id, keyed by the same strings as `models`.
    * Populated during discovery by parsing llama-swap's own `description` field for an
    * auto-discovered model ("Auto-discovered 16.35 GB - parameters auto-fitted by

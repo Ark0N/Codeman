@@ -1114,11 +1114,33 @@ Object.assign(CodemanApp.prototype, {
    * history yet for compaction to trim. Same promise-based pattern as
    * `_confirmModelSwap`; `_resolveContextWarningConfirm` settles it.
    */
-  _confirmContextWarning(modelId, contextLength, minSafeContextTokens) {
+  _confirmContextWarning(modelId, contextLength, minSafeContextTokens, slotCount) {
     const modal = document.getElementById('customModelContextWarningModal');
     const messageEl = document.getElementById('customModelContextWarningMessage');
     if (messageEl) {
       const known = typeof contextLength === 'number';
+      const slots = Number.isFinite(slotCount) && slotCount > 1 ? Math.floor(slotCount) : 1;
+      // Enough total context, but split across parallel server slots: llama-server shares its
+      // context between --parallel slots, and this CLI sends concurrent requests (the main
+      // session plus each parallel subagent), so several 40k-token requests spend the shared
+      // pool and the server answers HTTP 500 "Context size has been exceeded".
+      if (known && slots > 1 && contextLength >= minSafeContextTokens) {
+        messageEl.textContent =
+          `${modelId}'s ${contextLength.toLocaleString()} tokens of context are split across ${slots} parallel ` +
+          `server slots, about ${Math.floor(contextLength / slots).toLocaleString()} each. This CLI ` +
+          `needs roughly ${minSafeContextTokens.toLocaleString()}+ tokens just for its own system prompt and tools on ` +
+          `every request, and it sends several requests at once (the main session plus each parallel subagent). ` +
+          `Concurrent requests can use up the shared context, and the server then fails them with ` +
+          `"Context size has been exceeded".\n\n` +
+          `To fix this, start the model with a single slot: add "--parallel 1" to its llama-swap cmd. The active ` +
+          `conversation then gets the whole context, other requests queue instead of failing, and the CLI's ` +
+          `repeated prompt prefix stays cached. Alternatively give the model a larger context (raise --fit-ctx or ` +
+          `--ctx-size) so every slot has at least ${minSafeContextTokens.toLocaleString()} tokens.`;
+        modal?.classList.add('active');
+        return new Promise((resolve) => {
+          this._resolveContextWarningConfirmPromise = resolve;
+        });
+      }
       messageEl.textContent =
         `${modelId} is configured with ` +
         (known ? `only ${contextLength.toLocaleString()} tokens of` : 'an unknown (too small)') +
@@ -1129,7 +1151,11 @@ Object.assign(CodemanApp.prototype, {
         `instead of relying on auto-fit (--fit-ctx), which optimizes for the biggest MODEL that fits, not the ` +
         `biggest CONTEXT — e.g. add "-c 65536" (or as large a --ctx-size as your hardware holds) to its llama-swap ` +
         `config entry. A smaller model at a much larger explicit context often fits in the same VRAM a bigger ` +
-        `model's auto-fit context gets shrunk to make room for.`;
+        `model's auto-fit context gets shrunk to make room for.` +
+        (slots > 1
+          ? `\n\nThis server also runs ${slots} parallel slots that share that context; add "--parallel 1" to ` +
+            `the same cmd so a single conversation gets all of it.`
+          : '');
     }
     modal?.classList.add('active');
     return new Promise((resolve) => {
@@ -1254,8 +1280,13 @@ Object.assign(CodemanApp.prototype, {
     let answered = {};
     let data = await post(bodyObj);
     if (data?.data?.requiresContextWarning) {
-      const { modelId, contextLength, minSafeContextTokens } = data.data;
-      const proceed = await this._confirmContextWarning(modelId, contextLength, minSafeContextTokens);
+      const { modelId, contextLength, minSafeContextTokens, slotCount } = data.data;
+      const proceed = await this._confirmContextWarning(
+        modelId,
+        contextLength,
+        minSafeContextTokens,
+        slotCount
+      );
       if (!proceed) {
         this._lastCustomModelLaunchResult = undefined;
         return { success: false, error: 'Launch cancelled — context window too small' };
@@ -1371,7 +1402,8 @@ Object.assign(CodemanApp.prototype, {
       const proceed = await this._confirmContextWarning(
         payload.modelId,
         payload.contextLength,
-        payload.minSafeContextTokens
+        payload.minSafeContextTokens,
+        payload.slotCount
       );
       if (!proceed) {
         switchingToast?.dismiss();
