@@ -141,6 +141,39 @@ describe('case default group: create routes', () => {
     expect(data.tabLayout).toEqual(world.layouts[OWNER]);
   });
 
+  it('POST /api/sessions in a Claude worktree of the case lands in the case default group too', async () => {
+    // What the Git worktrees modal sends for Claude; every other CLI goes through quick-start with the case name.
+    const worktree = join(caseDir, '.claude', 'worktrees', 'feat');
+    await mkdir(worktree, { recursive: true });
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { name: 'w1-cdg-wt', mode: 'shell', workingDir: worktree },
+    });
+    expect(res.statusCode).toBe(200);
+    const data = unwrap(res.body);
+    expect(groupOf(world.layouts[OWNER], data.session.id)).toBe('g-ops');
+    expect(data.tabLayout).toEqual(world.layouts[OWNER]);
+  });
+
+  it('POST /api/sessions without a workingDir infers no case from the server cwd', async () => {
+    const cwd = process.cwd();
+    process.chdir(caseDir); // the server's own cwd happens to be a case folder
+    try {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/sessions',
+        payload: { name: 'w1-nowd', mode: 'shell' },
+      });
+      expect(res.statusCode).toBe(200);
+      const data = unwrap(res.body);
+      expect(Object.keys(data)).toEqual(['session']);
+      expect(groupOf(world.layouts[OWNER], data.session.id)).toBeNull();
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
   it('POST /api/sessions outside any case gets no case default and keeps its response shape', async () => {
     const res = await harness.app.inject({
       method: 'POST',

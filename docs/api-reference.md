@@ -794,7 +794,8 @@ its creating write when nothing stronger applies; the order is: an explicit `tab
 then the session it was spawned from (`parentSessionId`), then the case default, else
 Ungrouped. `POST /api/v1/quick-start` uses its `caseName` (local, linked, remote and Docker
 cases); `POST /api/v1/sessions` uses the case whose folder `workingDir` is (a direct child of
-the caller's case space, or a linked case's exact path). When a case default places the
+the caller's case space, a linked case's exact path, or a Claude worktree of either,
+`<case>/.claude/worktrees/<name>`); without a `workingDir` there is no case. When a case default places the
 session, the create response carries `tabLayout` as it does for `tabGroupId`. Deleting the
 case forgets the value; existing sessions never move.
 
