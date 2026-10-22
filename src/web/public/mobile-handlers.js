@@ -9,7 +9,7 @@
  *   toolbar/accessory bar repositioning, terminal resize on keyboard open/close,
  *   and input scroll-into-view. Uses 100px threshold for iOS address bar drift.
  * - SwipeHandler — Horizontal swipe detection on the terminal area for session switching.
- *   80px minimum distance, 300ms maximum time, 100px max vertical drift.
+ *   80px minimum distance, 500ms maximum time, 50px max vertical drift.
  *
  * All three have init()/cleanup() lifecycle methods. They are re-initialized after SSE
  * reconnect (in handleInit) to prevent stale closures.
