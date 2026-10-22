@@ -1,6 +1,7 @@
 /**
  * @fileoverview A custom backup folder that stops answering (a network mount) must never be listed or
- * read before the bounded probe says it is there: GET, diff and restore answer 503 without touching it.
+ * read before the bounded probe says it is there: GET, Back up now, diff and restore answer 503 without
+ * touching it.
  * With only `configBackupDir` in settings.json the recorded-retention fallback would otherwise
  * `readdirSync` the folder first (found in review of #661).
  *
@@ -65,6 +66,7 @@ afterEach(() => {
 describe('a custom backup folder that does not answer', () => {
   it.each([
     ['GET', '/api/config-backups'],
+    ['POST', '/api/config-backups'],
     ['GET', '/api/config-backups/diff?from=cfg-20261001-120000'],
     ['POST', '/api/config-backups/cfg-20261001-120000/restore'],
   ] as const)('%s %s answers 503 without reading the folder', async (method, url) => {
