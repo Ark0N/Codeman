@@ -23,6 +23,7 @@ type Swipe = {
   onTouchMove(e: unknown): void;
   onTouchEnd(e: unknown): void;
   maxSwipeTime: number;
+  maxVerticalDrift: number;
   startTime: number;
 };
 
@@ -146,7 +147,16 @@ describe('terminal touch handler hands sideways drags to the swipe', () => {
   it('locks a dominant sideways drag as a swipe unless the terminal can pan', () => {
     expect(TERMINAL_SOURCE).toContain("panAxis = travelX > travelY ? (canPanHorizontally() ? 'x' : 'swipe') : 'y';");
     expect(TERMINAL_SOURCE).toContain('this._terminalGestureAxis = panAxis;');
-    // A 'swipe' is neither a scroll nor (didScroll is set) a tap.
-    expect(TERMINAL_SOURCE).toContain("if (panAxis === 'swipe') return;");
+    // A 'swipe' is neither a scroll nor (didScroll is set) a tap, until the
+    // finger passes the swipe's own vertical drift limit: the swipe has given
+    // up by then, so the drag is handed back to the scroll.
+    expect(TERMINAL_SOURCE).toContain("if (panAxis === 'swipe') {");
+    expect(TERMINAL_SOURCE).toContain(
+      "const drift = typeof SwipeHandler !== 'undefined' ? SwipeHandler.maxVerticalDrift : 50;"
+    );
+    expect(TERMINAL_SOURCE).toContain('if (Math.abs(touchY - touchStartY) <= drift) return;');
+    expect(TERMINAL_SOURCE).toContain("this._terminalGestureAxis = 'y';");
+    // The terminal reads the swipe's limit by name; its fallback is the same value.
+    expect(load().swipe.maxVerticalDrift).toBe(50);
   });
 });
