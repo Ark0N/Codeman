@@ -261,8 +261,8 @@ Sequence in `CronService.launch()`:
 4. **Auto-close previous session** (recurring schedules, unless
    `autoClosePreviousSession: false`): any still-open session created by this
    job's previous runs is closed via the normal session-cleanup path.
-5. The global session cap is checked (`MAX_CONCURRENT_SESSIONS = 50`). At cap →
-   **`failed`**.
+5. The global session cap is checked (`MAX_CONCURRENT_SESSIONS`, 50 unless
+   `CODEMAN_MAX_SESSIONS` sets it). At cap → **`failed`**.
 6. A `Session` is created **with `useMux: true`** (so it runs inside tmux),
    registered, listeners attached, and started via `startInteractive()`
    (`startShell()` for `shell` mode). Model/claudeMode come from global config.
@@ -284,7 +284,7 @@ automatically after **Run Now**.
 > ⚠️ **Session-cap math if you disable auto-close.** With
 > `autoClosePreviousSession: false`, nothing ever closes the sessions a
 > recurring job creates — an interval job every 30 min creates 48 tabs/day and
-> hits the global 50-session cap in ~25 hours (sooner with existing tabs), after
+> hits the global session cap (50 by default, `CODEMAN_MAX_SESSIONS`) in ~25 hours (sooner with existing tabs), after
 > which **every** fire of **every** job fails with "Maximum concurrent sessions
 > reached" until you delete tabs by hand. Leave auto-close on for unattended
 > recurring jobs, or clean up sessions yourself.
@@ -376,7 +376,7 @@ boot. Sessions the jobs create persist through the normal session-recovery path.
 | Readiness settle         | 2000ms                | `CRON_READY_SETTLE_MS`                           |
 | Run-history cap (global) | 500                   | `MAX_CRON_RUN_HISTORY` (`config/map-limits.ts`)  |
 | Saved-jobs cap           | 100                   | `MAX_CRON_JOBS` (`config/map-limits.ts`)         |
-| Concurrent-session cap   | 50                    | `MAX_CONCURRENT_SESSIONS`                        |
+| Concurrent-session cap   | 50                    | `MAX_CONCURRENT_SESSIONS` (env `CODEMAN_MAX_SESSIONS`) |
 | Prompt-file size cap     | 1 MiB                 | `MAX_PROMPT_FILE_BYTES` (`cron-service.ts`)      |
 | `name` length            | 1–200                 | `CronJobSchema`                                  |
 | `promptText` length      | ≤ 100000              | `CronJobSchema`                                  |
