@@ -702,6 +702,7 @@ Object.assign(CodemanApp.prototype, {
       scrollback: scrollback,
       allowTransparency: true,
       allowProposedApi: true,
+      linkHandler: this._terminalOsc8LinkHandler(),
     });
 
     this.fitAddon = new FitAddon.FitAddon();
@@ -2143,8 +2144,11 @@ Object.assign(CodemanApp.prototype, {
         // links as the one file it is.
         // Bounded so a screenful of full-width output (wide tables, box drawing)
         // cannot make every hover stitch and re-scan the entire viewport.
+        // `terminalLinkLine` widens that once more to the rows of a URL the CLI
+        // wrapped short of the edge (a table cell or an indented paragraph),
+        // where nothing marks the break and no row is full width.
         const MAX_STITCHED_ROWS = 12;
-        const logical = window.CodemanTerminalLines?.terminalPathLine(
+        const logical = window.CodemanTerminalLines?.terminalLinkLine(
           buffer,
           bufferLineNumber - 1,
           terminal.cols,
@@ -2162,8 +2166,16 @@ Object.assign(CodemanApp.prototype, {
           return { x: cell.col + 1, y: cell.row + 1 };
         };
 
+        // Paths a CLI word-wrapped inside a table cell (terminalCellWrappedPaths,
+        // constants.js). They follow their own cell down the rows, which the
+        // linear stitch above cannot do for a multi-column table, so they are
+        // found from the buffer directly and claim their cells over the rest.
+        const cellWrappedPaths = (
+          window.CodemanTerminalLines?.terminalCellWrappedPaths?.(buffer, bufferLineNumber - 1, 4) ?? []
+        ).filter((hit) => !/(^|\/)\.\.(\/|$)/.test(hit.path));
+
         // A path needs a `/` or an extension's `.`; a line with neither has no link.
-        if (!lineText || (!lineText.includes('/') && !lineText.includes('.'))) {
+        if (!lineText || (!lineText.includes('/') && !lineText.includes('.') && cellWrappedPaths.length === 0)) {
           callback(undefined);
           return;
         }
@@ -2175,44 +2187,46 @@ Object.assign(CodemanApp.prototype, {
         const taken = [];
         const isTaken = (start, length) => taken.some((t) => start < t.end && t.start < start + length);
 
-        // Pattern 0: URLs (https://, http://) — matched first so they take priority
-        //
-        // A single `&` is PART of the URL: it separates query parameters, so excluding
-        // it truncated every real query string (`?post=1479&action=edit` linked only
-        // through `1479`, landing on the wrong page). `&&` is still a boundary, since
-        // that is the shell operator and never appears inside a URL. A lone trailing
-        // `&` is trimmed below with the other trailing punctuation.
-        const urlPattern = /https?:\/\/(?:[^\s"'<>|;&)\]\x00-\x1f]|&(?!&))+/g;
-
-        const addUrlLink = (url, matchIndex) => {
-          // Strip trailing punctuation that's likely not part of the URL
-          const cleaned = url.replace(/[.,;:!?)&]+$/, '');
-          const startCol = lineText.indexOf(cleaned, matchIndex);
-          if (startCol === -1) return;
-
-          const start = coordAt(startCol);
-          const end = coordAt(startCol + cleaned.length);
+        // Pattern 0: URLs (https://, http://) — matched first so they take priority.
+        // The grammar (balanced parens, `&` vs `&&`, trailing punctuation) is
+        // findTerminalUrls() in constants.js, which the wrap-continuation extent
+        // above reads URLs with too, so the two cannot disagree.
+        const addUrlLink = ({ url, startIndex }) => {
+          const start = coordAt(startIndex);
           if (links.some((l) => l.range.start.x === start.x && l.range.start.y === start.y)) return;
-          taken.push({ start: startCol, end: startCol + cleaned.length });
+          taken.push({ start: startIndex, end: startIndex + url.length });
 
-          links.push({
-            text: cleaned,
-            range: { start, end },
-            decorations: { pointerCursor: true, underline: true },
-            activate(_event, text) {
-              // A `localhost` link tapped from another device can only work
-              // through the server: route it into a proxied web tab
-              // (webview-tabs.js). Anything else opens as before.
-              if (self.openLinkThroughWebTabIfLoopback?.(text)) return;
-              window.open(text, '_blank', 'noopener,noreferrer');
-            },
-            hover() {
-              setHovered(true);
-            },
-            leave() {
-              setHovered(false);
-            },
-          });
+          // One link per terminal row the URL occupies, each opening the WHOLE
+          // URL. A single range spanning rows would also underline (and make
+          // clickable) the indent and table columns between the pieces of a
+          // URL the CLI wrapped. A single-row URL keeps its original range.
+          const endIndex = startIndex + url.length;
+          const pieces = [];
+          let pieceStart = startIndex;
+          for (let i = startIndex + 1; i < endIndex; i++) {
+            if (coordAt(i).y !== coordAt(i - 1).y) {
+              pieces.push([pieceStart, i]);
+              pieceStart = i;
+            }
+          }
+          pieces.push([pieceStart, endIndex]);
+          for (let n = 0; n < pieces.length; n++) {
+            const [from, to] = pieces[n];
+            links.push({
+              text: url,
+              range: { start: coordAt(from), end: pieces.length === 1 ? coordAt(to) : coordAt(to - 1) },
+              decorations: { pointerCursor: true, underline: true },
+              activate() {
+                self._openTerminalUrl(url);
+              },
+              hover() {
+                setHovered(true);
+              },
+              leave() {
+                setHovered(false);
+              },
+            });
+          }
         };
 
         // Pattern 1: Commands with file paths (tail -f, cat, head, grep pattern, etc.)
@@ -2235,6 +2249,41 @@ Object.assign(CodemanApp.prototype, {
         // Pattern 3: Bash() tool output
         const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
 
+        const activateFilePath = (text, folder = false) => {
+          // Tailing a PNG in the log viewer shows binary noise; the file preview
+          // already renders images, PDFs, documents and media inline — and it
+          // now reaches files outside the workspace too, which is where an
+          // agent's screenshots and scratchpad captures actually land.
+          //
+          // Text goes to the log viewer, which follows a file that is still
+          // being written — but ONLY where it can actually read: it spawns
+          // `tail -f` and allows the workspace, /var/log and ~/logs, so an
+          // out-of-workspace path there answered "Path must be within
+          // working directory or allowed log directories" while the SAME
+          // path clicked in the response viewer previewed fine. The preview
+          // reads those through the guarded attachment routes, so external
+          // paths route there and the two surfaces agree.
+          //
+          // A relative path is resolved against the session's working
+          // directory first, and a `~/` path always previews (only the
+          // server knows that host's home, and the log viewer cannot ask).
+          const sessionId = getSessionId();
+          const target = self._resolveLinkedFilePath(text, sessionId);
+          // A folder path opens the folder grid (which falls back to the
+          // preview if the server finds a file there after all).
+          if (folder) {
+            self.openFolderGrid(target, sessionId);
+            return;
+          }
+          // An HTML file renders as a page in the preview, never as source
+          // in the log viewer (markdown is in FILE_PREVIEW_EXTENSIONS).
+          if (previewsInFileViewer(target) || rendersAsPage(target) || self._isExternalPreviewPath(target, sessionId)) {
+            self.openFilePreview(target, sessionId);
+            return;
+          }
+          self.openLogViewerWindow(target, sessionId);
+        };
+
         const addLink = (filePath, matchIndex, folder = false) => {
           const startCol = lineText.indexOf(filePath, matchIndex);
           if (startCol === -1) return;
@@ -2253,43 +2302,8 @@ Object.assign(CodemanApp.prototype, {
               pointerCursor: true,
               underline: true,
             },
-            activate(event, text) {
-              // Tailing a PNG in the log viewer shows binary noise; the file preview
-              // already renders images, PDFs, documents and media inline — and it
-              // now reaches files outside the workspace too, which is where an
-              // agent's screenshots and scratchpad captures actually land.
-              //
-              // Text goes to the log viewer, which follows a file that is still
-              // being written — but ONLY where it can actually read: it spawns
-              // `tail -f` and allows the workspace, /var/log and ~/logs, so an
-              // out-of-workspace path there answered "Path must be within
-              // working directory or allowed log directories" while the SAME
-              // path clicked in the response viewer previewed fine. The preview
-              // reads those through the guarded attachment routes, so external
-              // paths route there and the two surfaces agree.
-              //
-              // A relative path is resolved against the session's working
-              // directory first, and a `~/` path always previews (only the
-              // server knows that host's home, and the log viewer cannot ask).
-              const sessionId = getSessionId();
-              const target = self._resolveLinkedFilePath(text, sessionId);
-              // A folder path opens the folder grid (which falls back to the
-              // preview if the server finds a file there after all).
-              if (folder) {
-                self.openFolderGrid(target, sessionId);
-                return;
-              }
-              // An HTML file renders as a page in the preview, never as source
-              // in the log viewer (markdown is in FILE_PREVIEW_EXTENSIONS).
-              if (
-                previewsInFileViewer(target) ||
-                rendersAsPage(target) ||
-                self._isExternalPreviewPath(target, sessionId)
-              ) {
-                self.openFilePreview(target, sessionId);
-                return;
-              }
-              self.openLogViewerWindow(target, sessionId);
+            activate(_event, text) {
+              activateFilePath(text, folder);
             },
             hover() {
               setHovered(true);
@@ -2303,9 +2317,8 @@ Object.assign(CodemanApp.prototype, {
         // Match all patterns — URLs first so they take priority
         let match;
 
-        urlPattern.lastIndex = 0;
-        while ((match = urlPattern.exec(lineText)) !== null) {
-          addUrlLink(match[0], match.index);
+        for (const reference of window.CodemanTerminalLines?.findTerminalUrls?.(lineText) ?? []) {
+          addUrlLink(reference);
         }
 
         cmdPattern.lastIndex = 0;
@@ -2320,6 +2333,54 @@ Object.assign(CodemanApp.prototype, {
         bashPattern.lastIndex = 0;
         while ((match = bashPattern.exec(lineText)) !== null) {
           addLink(match[1], match.index);
+        }
+
+        // One link per row segment, each opening the WHOLE path (as for a wrapped
+        // URL). A fragment of the same cells linked by another detector (a
+        // relative `243/after-overview.png`, say) would open the wrong file, so
+        // the cell-wrapped path displaces it.
+        // A path the line stitch already joined whole (a single-column wrap, which
+        // terminalPathLine handles) keeps its one link.
+        const cellOnlyPaths = cellWrappedPaths.filter(
+          (hit) =>
+            !links.some(
+              (l) =>
+                l.text === hit.path &&
+                l.range.start.y === hit.segments[0].row + 1 &&
+                l.range.start.x === hit.segments[0].startCol + 1
+            )
+        );
+        if (cellOnlyPaths.length > 0) {
+          const claimed = cellOnlyPaths.flatMap((hit) => hit.segments);
+          const overlapsClaim = (link) =>
+            claimed.some((seg) => {
+              const y = seg.row + 1;
+              if (y < link.range.start.y || y > link.range.end.y) return false;
+              const from = y === link.range.start.y ? link.range.start.x : 1;
+              const to = y === link.range.end.y ? link.range.end.x : Number.MAX_SAFE_INTEGER;
+              return from <= seg.endCol && to >= seg.startCol + 1;
+            });
+          for (let i = links.length - 1; i >= 0; i--) {
+            if (overlapsClaim(links[i])) links.splice(i, 1);
+          }
+          for (const hit of cellOnlyPaths) {
+            for (const seg of hit.segments) {
+              links.push({
+                text: hit.path,
+                range: { start: { x: seg.startCol + 1, y: seg.row + 1 }, end: { x: seg.endCol, y: seg.row + 1 } },
+                decorations: { pointerCursor: true, underline: true },
+                activate() {
+                  activateFilePath(hit.path);
+                },
+                hover() {
+                  setHovered(true);
+                },
+                leave() {
+                  setHovered(false);
+                },
+              });
+            }
+          }
         }
 
         if (links.length > 0) {
@@ -2342,6 +2403,29 @@ Object.assign(CodemanApp.prototype, {
 
     console.log('[LinkProvider] File path link provider registered');
     return provider;
+  },
+
+  /**
+   * xterm's handler for OSC 8 hyperlinks (a program's own `ESC ]8;;url` links),
+   * which take precedence over the text link provider. Routed through the same
+   * opener, and only for web URLs: any other scheme a program sends is ignored.
+   */
+  _terminalOsc8LinkHandler() {
+    return {
+      activate: (_event, text) => {
+        if (!/^https?:\/\/[^\s\x00-\x1f]+$/i.test(text)) return;
+        this._openTerminalUrl(text);
+      },
+    };
+  },
+
+  /** Open a URL clicked in a terminal (text link or OSC 8). */
+  _openTerminalUrl(text) {
+    // A `localhost` link tapped from another device can only work through the
+    // server: route it into a proxied web tab (webview-tabs.js). Anything else
+    // opens in a new tab.
+    if (this.openLinkThroughWebTabIfLoopback?.(text)) return;
+    window.open(text, '_blank', 'noopener,noreferrer');
   },
 
   /**

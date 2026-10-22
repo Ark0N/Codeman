@@ -244,6 +244,8 @@
         scrollback: this.scrollback ?? DEFAULT_SCROLLBACK,
         allowTransparency: true,
         allowProposedApi: true,
+        // OSC 8 hyperlinks open through the primary pane's opener (terminal-ui.js).
+        linkHandler: global.app?._terminalOsc8LinkHandler?.(),
       });
 
       this.fitAddon = new FitAddon.FitAddon();

@@ -1,0 +1,337 @@
+// Port: none (pure functions + the link provider in a vm context — no browser, no server).
+//
+// Terminal URL links that stopped short.
+//
+// 1. `)` ended every URL, so a path like `…/Team-Space(QA)Archive/…` linked only as
+//    far as `(QA`. The grammar now keeps a `)` that closes a `(` inside the URL and
+//    still leaves out the closing paren of `(https://…)` / `[text](https://…)`.
+// 2. A CLI that word-wraps inside a table cell (codex) breaks a long URL at `/`, `?`,
+//    `-` well short of the right edge and indents the rest to the cell's column.
+//    Nothing is `isWrapped` and no row is full width, so each row linked a fragment.
+//
+// All URLs here are synthetic (example.com); none come from real output.
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import vm from 'node:vm';
+import { describe, expect, it, vi } from 'vitest';
+
+const CONSTANTS = readFileSync(resolve(import.meta.dirname, '../src/web/public/constants.js'), 'utf8');
+const TERMINAL_UI = readFileSync(resolve(import.meta.dirname, '../src/web/public/terminal-ui.js'), 'utf8');
+
+type UrlRef = { url: string; startIndex: number; endIndex: number; rawEnd: number };
+type Extent = { startRow: number; endRow: number } | null;
+type Row = { text: string; isWrapped?: boolean };
+type Link = {
+  text: string;
+  range: { start: { x: number; y: number }; end: { x: number; y: number } };
+  activate: (event: unknown, text: string) => void;
+};
+
+function loadPure() {
+  const context = vm.createContext({ console, window: undefined });
+  vm.runInContext(
+    `${CONSTANTS}\nglobalThis.__urls = findTerminalUrls; globalThis.__extent = terminalUrlContinuationExtent;`,
+    context,
+    { filename: 'constants.js' }
+  );
+  const ctx = context as unknown as {
+    __urls: (text: string) => UrlRef[];
+    __extent: (buffer: unknown, row: number, cols: number, maxRows?: number) => Extent;
+  };
+  return { findTerminalUrls: ctx.__urls, terminalUrlContinuationExtent: ctx.__extent };
+}
+
+function fakeBuffer(rows: Row[], cols: number) {
+  const lines = rows.map((row) => ({
+    isWrapped: row.isWrapped ?? false,
+    translateToString(trimRight?: boolean) {
+      const padded = row.text.padEnd(cols, ' ');
+      return trimRight ? padded.trimEnd() : padded;
+    },
+    getCell(index: number) {
+      const padded = row.text.padEnd(cols, ' ');
+      if (index >= padded.length) return undefined;
+      return { getChars: () => (padded[index] === ' ' ? '' : padded[index]), getWidth: () => 1 };
+    },
+  }));
+  return { length: lines.length, getLine: (i: number) => lines[i] };
+}
+
+// A codex-style markdown table row: number, reason, then a `name (url)` cell whose
+// URL the CLI wrapped across three rows, each continuation indented to the cell.
+const URL =
+  'https://docs.example.com/sites/Team-Space(QA)Archive/_layouts/15/Doc.aspx?' +
+  'sourcedoc=%7B11111111-2222-3333-4444-555555555555%7D&file=Quarterly%20Plan%20(Draft).xlsx&action=default&' +
+  'mobileredirect=true';
+const CELL = 26;
+const TABLE: Row[] = [
+  { text: '  11   Unrelated row         plain text only' },
+  {
+    text: '  12   New to trending       Quarterly Plan.xlsx (https://docs.example.com/sites/Team-Space(QA)Archive/_layouts/15/Doc.aspx?',
+  },
+  {
+    text:
+      ' '.repeat(CELL) +
+      'sourcedoc=%7B11111111-2222-3333-4444-555555555555%7D&file=Quarterly%20Plan%20(Draft).xlsx&action=default&',
+  },
+  { text: ' '.repeat(CELL) + 'mobileredirect=true)' },
+  { text: '  13   Next row              another cell' },
+];
+const COLS = 160;
+const TABLE_CELL_START = TABLE[1].text.indexOf('Quarterly');
+const TABLE_WITH_TRAILING_COLUMNS: Row[] = [
+  TABLE[0],
+  {
+    text: TABLE[1].text + '           2026-09-16 18:00:54    Document Owner',
+  },
+  { text: ' '.repeat(TABLE_CELL_START) + TABLE[2].text.slice(CELL) },
+  { text: ' '.repeat(TABLE_CELL_START) + TABLE[3].text.slice(CELL) },
+  TABLE[4],
+];
+const TABLE_COLS = 220;
+
+describe('findTerminalUrls (grammar)', () => {
+  const { findTerminalUrls } = loadPure();
+  const urls = (text: string) => findTerminalUrls(text).map((u) => u.url);
+
+  it('keeps a paren pair that is part of the URL', () => {
+    expect(urls('see https://example.com/wiki/Widget_(tool) now')).toEqual(['https://example.com/wiki/Widget_(tool)']);
+    expect(urls('https://example.com/Team-Space(QA)Archive/x')).toEqual([
+      'https://example.com/Team-Space(QA)Archive/x',
+    ]);
+  });
+
+  it('leaves out the paren that wraps the URL', () => {
+    expect(urls('(https://example.com/a(b)c)')).toEqual(['https://example.com/a(b)c']);
+    expect(urls('file (https://example.com/doc?x=1).')).toEqual(['https://example.com/doc?x=1']);
+  });
+
+  it('leaves out the closing paren of a markdown link', () => {
+    expect(urls('[the docs](https://example.com/docs?a=1&b=2) for details')).toEqual([
+      'https://example.com/docs?a=1&b=2',
+    ]);
+  });
+
+  it('still keeps query ampersands and stops at the shell &&', () => {
+    expect(urls('open https://example.com/p?post=1&action=edit&& echo done')).toEqual([
+      'https://example.com/p?post=1&action=edit',
+    ]);
+  });
+
+  it('trims trailing sentence punctuation', () => {
+    expect(urls('Go to https://example.com/path.')).toEqual(['https://example.com/path']);
+    expect(urls('Is it https://example.com/q?')).toEqual(['https://example.com/q']);
+  });
+
+  it('reports where the raw match ended before trimming', () => {
+    const [ref] = findTerminalUrls('x https://example.com/a) y');
+    expect(ref.url).toBe('https://example.com/a');
+    expect(ref.rawEnd).toBe('x https://example.com/a)'.length);
+  });
+});
+
+describe('terminalUrlContinuationExtent (wrap joining)', () => {
+  const { terminalUrlContinuationExtent } = loadPure();
+
+  it('spans all three rows of a URL wrapped inside a table cell, from any of them', () => {
+    const buffer = fakeBuffer(TABLE, COLS);
+    for (const row of [1, 2, 3]) {
+      expect(terminalUrlContinuationExtent(buffer, row, COLS, 12)).toEqual({ startRow: 1, endRow: 3 });
+    }
+  });
+
+  it('spans a table URL even when date and owner columns follow its first fragment', () => {
+    const buffer = fakeBuffer(TABLE_WITH_TRAILING_COLUMNS, TABLE_COLS);
+    for (const row of [1, 2, 3]) {
+      expect(terminalUrlContinuationExtent(buffer, row, TABLE_COLS, 12)).toMatchObject({ startRow: 1, endRow: 3 });
+    }
+  });
+
+  it('starts at the URL row when a full-width table divider precedes it', () => {
+    const rows = [{ text: '─'.repeat(TABLE_COLS) }, ...TABLE_WITH_TRAILING_COLUMNS.slice(1, 4)];
+    const buffer = fakeBuffer(rows, TABLE_COLS);
+    for (const row of [1, 2, 3]) {
+      expect(terminalUrlContinuationExtent(buffer, row, TABLE_COLS, 12)).toMatchObject({ startRow: 1, endRow: 3 });
+    }
+  });
+
+  it('does not treat the next numbered table row as a URL continuation', () => {
+    const rows = [TABLE_WITH_TRAILING_COLUMNS[1], { text: '  13   New to trending       Another document' }];
+    const buffer = fakeBuffer(rows, TABLE_COLS);
+    expect(terminalUrlContinuationExtent(buffer, 0, TABLE_COLS, 12)).toBeNull();
+    expect(terminalUrlContinuationExtent(buffer, 1, TABLE_COLS, 12)).toBeNull();
+  });
+
+  it('leaves the neighbouring table rows alone', () => {
+    const buffer = fakeBuffer(TABLE, COLS);
+    expect(terminalUrlContinuationExtent(buffer, 0, COLS, 12)).toBeNull();
+    expect(terminalUrlContinuationExtent(buffer, 4, COLS, 12)).toBeNull();
+  });
+
+  it('does not glue a following prose line onto a URL that ends a line', () => {
+    const buffer = fakeBuffer(
+      [{ text: 'Download from https://example.com/files/' }, { text: 'then run the installer' }],
+      80
+    );
+    expect(terminalUrlContinuationExtent(buffer, 0, 80, 12)).toBeNull();
+    expect(terminalUrlContinuationExtent(buffer, 1, 80, 12)).toBeNull();
+  });
+
+  it('does not join a second URL on the next row', () => {
+    const buffer = fakeBuffer([{ text: '- https://example.com/one/' }, { text: '  https://example.com/two' }], 80);
+    expect(terminalUrlContinuationExtent(buffer, 0, 80, 12)).toBeNull();
+  });
+
+  it('does not join a row indented to the right of where the URL started', () => {
+    const buffer = fakeBuffer([{ text: 'x https://example.com/a/b?' }, { text: '          q=1&r=2' }], 80);
+    expect(terminalUrlContinuationExtent(buffer, 0, 80, 12)).toBeNull();
+  });
+
+  it('does not join when the URL line ends on a character a wrapper would not break after', () => {
+    const buffer = fakeBuffer([{ text: 'see https://example.com/page' }, { text: 'v2-notes.txt follows' }], 80);
+    expect(terminalUrlContinuationExtent(buffer, 0, 80, 12)).toBeNull();
+  });
+
+  it('stays within the row bound', () => {
+    const rows: Row[] = [{ text: 'u https://example.com/' }];
+    for (let i = 0; i < 20; i++) rows.push({ text: `  seg${i}-` });
+    const extent = terminalUrlContinuationExtent(fakeBuffer(rows, 80), 0, 80, 5);
+    expect(extent).not.toBeNull();
+    expect(extent!.endRow - extent!.startRow + 1).toBeLessThanOrEqual(5);
+  });
+});
+
+describe('native OSC 8 terminal URLs', () => {
+  it('opens complete HTTP links through the terminal opener and rejects unsafe schemes', () => {
+    const open = vi.fn();
+    const context = vm.createContext({
+      console,
+      CodemanApp: class CodemanApp {},
+      document: { addEventListener: vi.fn() },
+      window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    });
+    vm.runInContext(`${CONSTANTS}\n${TERMINAL_UI}\nglobalThis.__proto = CodemanApp.prototype;`, context);
+    const proto = (
+      context as unknown as {
+        __proto: { _terminalOsc8LinkHandler: () => { activate: (event: unknown, url: string) => void } };
+      }
+    ).__proto;
+    const handler = proto._terminalOsc8LinkHandler.call({ _openTerminalUrl: open });
+    const url = 'https://docs.example.com/Doc.aspx?file=Q3%20Plan&action=default&mobileredirect=true';
+    handler.activate(null, url);
+    expect(open).toHaveBeenCalledExactlyOnceWith(url);
+    for (const unsafe of ['javascript:alert(1)', 'data:text/html,hello', 'file:///etc/passwd']) {
+      handler.activate(null, unsafe);
+    }
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('terminal link provider with wrapped table URLs', () => {
+  function harness(rows: Row[], cols: number) {
+    const openSpy = vi.fn();
+    const context = vm.createContext({
+      console: { ...console, debug: vi.fn(), log: vi.fn() },
+      CodemanApp: class CodemanApp {},
+      setInterval: vi.fn(),
+      clearInterval: vi.fn(),
+      setTimeout,
+      clearTimeout,
+      requestAnimationFrame: vi.fn(),
+      document: { addEventListener: vi.fn(), getElementById: vi.fn(), documentElement: { dataset: {} } },
+      window: {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        open: openSpy,
+        document: { documentElement: { dataset: {} } },
+      },
+    });
+    vm.runInContext(`${CONSTANTS}\n${TERMINAL_UI}\nglobalThis.__proto = CodemanApp.prototype;`, context);
+    const proto = (context as unknown as { __proto: Record<string, (...args: unknown[]) => unknown> }).__proto;
+    let provider: { provideLinks: (line: number, cb: (links?: Link[]) => void) => void } | undefined;
+    const app = {
+      terminal: {
+        cols,
+        rows: 24,
+        registerLinkProvider(value: typeof provider) {
+          provider = value;
+        },
+        buffer: { active: { viewportY: 0, ...fakeBuffer(rows, cols) } },
+      },
+      activeSessionId: 's1',
+      sessions: new Map([['s1', { workingDir: '/workspace/project' }]]),
+      openFilePreview: vi.fn(),
+      openLogViewerWindow: vi.fn(),
+      _openTerminalUrl: proto._openTerminalUrl,
+      _resolveLinkedFilePath: proto._resolveLinkedFilePath,
+      _isExternalPreviewPath: () => false,
+      registerFilePathLinkProvider: proto.registerFilePathLinkProvider,
+    };
+    app.registerFilePathLinkProvider.call(app);
+    const provide = (line: number): Link[] => {
+      let links: Link[] | undefined;
+      provider!.provideLinks(line, (value) => {
+        links = value;
+      });
+      return links ?? [];
+    };
+    return { provide, openSpy };
+  }
+
+  it('opens the whole URL from any of its rows', () => {
+    const { provide, openSpy } = harness(TABLE, COLS);
+    for (const line of [2, 3, 4]) {
+      const urlLinks = provide(line).filter((link) => link.text.startsWith('https://'));
+      expect(urlLinks.length).toBeGreaterThan(0);
+      for (const link of urlLinks) expect(link.text).toBe(URL);
+      const onRow = urlLinks.find((link) => link.range.start.y === line);
+      expect(onRow).toBeDefined();
+      onRow!.activate(null, onRow!.text);
+      expect(openSpy).toHaveBeenLastCalledWith(URL, '_blank', 'noopener,noreferrer');
+    }
+  });
+
+  it('opens the whole table URL without including the adjacent date and owner columns', () => {
+    const { provide, openSpy } = harness(TABLE_WITH_TRAILING_COLUMNS, TABLE_COLS);
+    for (const line of [2, 3, 4]) {
+      const links = provide(line).filter((link) => link.text.startsWith('https://'));
+      expect(links.length).toBeGreaterThan(0);
+      for (const link of links) expect(link.text).toBe(URL);
+      links[0].activate(null, links[0].text);
+      expect(openSpy).toHaveBeenLastCalledWith(URL, '_blank', 'noopener,noreferrer');
+    }
+    const firstRowLink = provide(2).find((link) => link.text === URL && link.range.start.y === 2);
+    expect(firstRowLink?.range.end.x).toBe(TABLE[1].text.length);
+  });
+
+  it('opens every segment after a full-width table divider', () => {
+    const rows = [{ text: '─'.repeat(TABLE_COLS) }, ...TABLE_WITH_TRAILING_COLUMNS.slice(1, 4)];
+    const { provide, openSpy } = harness(rows, TABLE_COLS);
+    for (const line of [2, 3, 4]) {
+      const link = provide(line).find((item) => item.text === URL && item.range.start.y === line);
+      expect(link).toBeDefined();
+      link!.activate(null, link!.text);
+      expect(openSpy).toHaveBeenLastCalledWith(URL, '_blank', 'noopener,noreferrer');
+    }
+  });
+
+  it('underlines only the URL cells on each row, never the indent between pieces', () => {
+    const { provide } = harness(TABLE, COLS);
+    const segments = provide(3).filter((link) => link.text === URL);
+    expect(segments.map((link) => link.range.start.y)).toEqual([2, 3, 4]);
+    for (const link of segments) expect(link.range.start.y).toBe(link.range.end.y);
+    expect(segments[0].range.start.x).toBe(TABLE[1].text.indexOf('https://') + 1);
+    expect(segments[0].range.end.x).toBe(TABLE[1].text.length);
+    expect(segments[1].range.start.x).toBe(CELL + 1);
+    expect(segments[2].range.start.x).toBe(CELL + 1);
+    // Ends on `true`, not on the closing paren after it.
+    expect(segments[2].range.end.x).toBe(TABLE[3].text.length - 1);
+  });
+
+  it('keeps a single-row URL with a paren pair whole', () => {
+    const line = 'Open https://example.com/wiki/Widget_(tool) please';
+    const { provide } = harness([{ text: line }], 80);
+    const [link] = provide(1).filter((l) => l.text.startsWith('https://'));
+    expect(link.text).toBe('https://example.com/wiki/Widget_(tool)');
+  });
+});
