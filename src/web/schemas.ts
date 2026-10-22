@@ -1483,6 +1483,10 @@ export const SettingsUpdateSchema = z
      * broadcast and /api/search, which is the user's choice to make.
      */
     autoNameSessions: z.boolean().optional(),
+    /** Prompt-cache keep-warm default for sessions that have not chosen (Session Options overrides it). */
+    promptCacheKeepWarm: z.boolean().optional(),
+    /** Hours after the last real prompt during which keep-alives are sent (default 2, DEFAULT_KEEP_WARM_MAX_HOURS). */
+    promptCacheKeepWarmMaxHours: z.number().min(0.5).max(24).optional(),
     /**
      * Spawned tabs follow their parent: a session created by another one keeps
      * following its parent's tab (into its group, moving with it) until moved by
@@ -1870,6 +1874,9 @@ export const AutoCompactSchema = z.object({
 export const AutoResumeSchema = z.object({
   enabled: z.boolean(),
 });
+
+/** `POST /api/sessions/:id/keep-warm`: `null` clears the session's choice so the app-wide default applies. */
+export const KeepWarmSchema = z.object({ enabled: z.boolean().nullable() });
 
 /** POST /api/sessions/:id/pin (COD-139) — explicit pin state for idempotency. */
 export const PinSessionSchema = z.object({

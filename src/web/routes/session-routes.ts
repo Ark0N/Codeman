@@ -55,6 +55,7 @@ import {
   AutoClearSchema,
   AutoCompactSchema,
   AutoResumeSchema,
+  KeepWarmSchema,
   PinSessionSchema,
   ImageWatcherSchema,
   FlickerFilterSchema,
@@ -155,7 +156,15 @@ import {
   setHistoryIndexRefresher,
   setHistorySessionIndex,
 } from '../session-history-index.js';
-import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort, TabLayoutPort } from '../ports/index.js';
+import type {
+  SessionPort,
+  EventPort,
+  ConfigPort,
+  InfraPort,
+  AuthPort,
+  TabLayoutPort,
+  KeepWarmPort,
+} from '../ports/index.js';
 import { RunSummaryTracker } from '../../run-summary.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
@@ -1024,7 +1033,7 @@ function wakeableHost(host: RemoteHost): WakeableRemote {
 
 export function registerSessionRoutes(
   app: FastifyInstance,
-  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort,
+  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort & KeepWarmPort,
   /** Test seam: inject a registry with fake IO instead of the real TCP/WoL probes. */
   options: { remoteWake?: RemoteWakeRegistry } = {}
 ): RemoteWakeRegistry {
@@ -3551,6 +3560,39 @@ export function registerSessionRoutes(
           enabled: session.autoCompactEnabled,
           threshold: session.autoCompactThreshold,
           prompt: session.autoCompactPrompt,
+        },
+      },
+    };
+  });
+
+  // ========== Prompt-cache keep-warm ==========
+
+  // Per-session opt-in for the keep-alive nudge (prompt-cache-keepwarm.ts). `enabled: null`
+  // clears the choice so the app-wide default applies again. Refused for a CLI that reports
+  // no cache telemetry on its statusline: without `expires_at` there is nothing to schedule.
+  app.post('/api/sessions/:id/keep-warm', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = parseBody(KeepWarmSchema, req.body, 'Invalid request body');
+    const session = findSessionOrFail(ctx, id, req);
+    if (!getCli(session.mode)?.capabilities.statusLineTelemetry) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Prompt-cache keep-warm needs the cache telemetry this CLI does not report'
+      );
+    }
+
+    session.setKeepWarmEnabled(body.enabled ?? undefined);
+    // Re-evaluate BEFORE the state broadcast and the response: both carry `keepWarm`, and a
+    // page that received the previous status would overwrite the one the toggle just produced.
+    await ctx.keepWarm.schedule(id);
+    persistAndBroadcastSession(ctx, session);
+
+    return {
+      success: true,
+      data: {
+        keepWarm: {
+          enabled: session.keepWarmEnabled ?? null,
+          status: session.keepWarm,
         },
       },
     };

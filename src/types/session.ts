@@ -797,6 +797,33 @@ export interface PromptCacheStatus {
  */
 export type StatusLineExporter = 'injected' | 'collection-off' | 'workspace-statusline' | 'remote';
 
+/**
+ * What the prompt-cache keep-warm (`prompt-cache-keepwarm.ts`) is doing for a session, for
+ * the Session Options readout. Ephemeral: published through `toState()` and the
+ * `session:keepWarm` event, never restored.
+ */
+export interface KeepWarmStatus {
+  /** Effective opt-in: the session's own flag, else the app-wide default (see `keepWarmOn`). */
+  enabled: boolean;
+  /**
+   * Whether this launch carries `idleCompaction: false` (`MuxSession.idleCompactionOff`). False
+   * on a session switched on after launch: Claude Code's own idle compaction may still run
+   * until its next launch.
+   */
+  idleCompactionOff: boolean;
+  /** `armed` = waiting for the due time, `waiting` = due but deferred by a guard, `nudged` = sent, waiting for the next cache report. */
+  state: 'off' | 'armed' | 'waiting' | 'nudged' | 'stopped';
+  /** Next evaluation, epoch ms (armed, waiting, nudged). */
+  nextCheckAt?: number;
+  /** Why it is waiting or stopped, in words. */
+  reason?: string;
+  /** Nudges sent this session so far. */
+  nudges: number;
+  lastNudgeAt?: number;
+  /** When the keep-warm window after the last real prompt closes, epoch ms. */
+  budgetEndsAt?: number;
+}
+
 export interface SessionState {
   /** Unique session identifier */
   id: string;
@@ -819,7 +846,9 @@ export interface SessionState {
    *
    * ⚠️ UI DECORATION ONLY — it draws the lineage lines between tabs. It is never an
    * ownership, permission, or lifecycle signal: a child outlives its parent, and an
-   * unresolvable value is dropped rather than failing the spawn.
+   * unresolvable value is dropped rather than failing the spawn. Its one non-visual reader
+   * picks a default, nothing more: a session an agent spawned does not inherit the app-wide
+   * prompt-cache keep-warm default (`keepWarmOn`), though its own switch still works.
    */
   parentSessionId?: string;
   /** ID of currently assigned task, null if none */
@@ -858,6 +887,10 @@ export interface SessionState {
   promptCache?: PromptCacheStatus;
   /** Why a cache report will or will not arrive (see `StatusLineExporter`); absent when unknown. */
   statusLineExporter?: StatusLineExporter;
+  /** Prompt-cache keep-warm opt-in; absent = follow the app-wide `promptCacheKeepWarm` default. */
+  keepWarmEnabled?: boolean;
+  /** What the keep-warm is doing right now; ephemeral, never restored. */
+  keepWarm?: KeepWarmStatus;
   /** Pinned to the top of the session manager list (COD-139) */
   pinned?: boolean;
   /** When the session was pinned (epoch ms) — orders the pinned group, most-recent-first */
@@ -972,6 +1005,13 @@ export interface SessionState {
    * again until the pane's own Enter is known.
    */
   lastSubmitAt?: number;
+  /**
+   * Wall-clock ms of the last submit that was NOT the prompt-cache keep-alive
+   * (Session.lastRealPromptAt): the keep-warm cap's clock. Persisted so a restart
+   * does not reopen the window, which `lastSubmitAt` cannot do since every nudge
+   * moves it.
+   */
+  lastRealPromptAt?: number;
   /**
    * Claude conversations this pane has been on, oldest first, current last.
    * Written ONLY from a first-hand `UserPromptSubmit`/`Stop` hook payload —

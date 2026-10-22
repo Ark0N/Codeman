@@ -2631,6 +2631,10 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('modalAutoResumeEnabled').checked = session.autoResumeEnabled ?? false;
     this.updateAutoResumeStatus(sessionId);
     this.updatePromptCacheStatus(sessionId);
+    // Effective opt-in: the server publishes it in the status (session flag, else the app default).
+    document.getElementById('modalKeepWarmEnabled').checked =
+      session.keepWarm?.enabled ?? session.keepWarmEnabled ?? false;
+    this.updateKeepWarmStatus(sessionId);
     document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
     document.getElementById('modalFlickerFilterEnabled').checked = session.flickerFilterEnabled ?? false;
 
@@ -2913,6 +2917,59 @@ Object.assign(CodemanApp.prototype, {
     if (!session) return;
     session.promptCache = promptCache;
     this.updatePromptCacheStatus(sessionId);
+  },
+
+  /**
+   * Session Options → Respawn → Prompt cache: the keep-warm line on the Status row (what the
+   * keep-warm service is doing, `session.keepWarm`, worded by `CodemanPromptCache.formatKeepWarm`,
+   * hidden when it has nothing to say) and the state of the "Keep the cache warm while idle" switch.
+   */
+  updateKeepWarmStatus(sessionId) {
+    const el = document.getElementById('keepWarmStatus');
+    if (!el || this.editingSessionId !== sessionId) return;
+    const session = this.sessions.get(sessionId);
+    const status = session?.keepWarm;
+    const text = window.CodemanPromptCache.formatKeepWarm(status, Date.now(), session?.statusLineExporter);
+    el.textContent = text;
+    el.hidden = !text;
+    // A launch without cache reports can never keep warm: grey the row and refuse to switch it on,
+    // but a switch that is already on stays reachable so it can be turned off. Same inert-switch
+    // pattern as the context switch in settings-ui.js _applyModelSelection().
+    const box = document.getElementById('modalKeepWarmEnabled');
+    if (!box) return;
+    const inert = window.CodemanPromptCache.keepWarmUnavailable(session?.statusLineExporter);
+    box.closest('.set-row')?.classList.toggle('set-row-disabled', inert);
+    box.disabled = inert && !box.checked;
+  },
+
+  _onSessionKeepWarm(data) {
+    const { sessionId, ...status } = data;
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.keepWarm = status;
+    if (this.editingSessionId === sessionId) {
+      const box = document.getElementById('modalKeepWarmEnabled');
+      if (box) box.checked = status.enabled;
+    }
+    this.updateKeepWarmStatus(sessionId);
+  },
+
+  async autoSaveKeepWarm() {
+    if (!this.editingSessionId) return;
+    const enabled = document.getElementById('modalKeepWarmEnabled').checked;
+    try {
+      // _apiPost unwraps the envelope; the route answers with the status for the NEW choice.
+      const data = await this._apiPost(`/api/sessions/${this.editingSessionId}/keep-warm`, { enabled });
+      const session = this.sessions.get(this.editingSessionId);
+      if (session) {
+        session.keepWarmEnabled = enabled;
+        if (data?.keepWarm?.status) session.keepWarm = data.keepWarm.status;
+      }
+      this.updateKeepWarmStatus(this.editingSessionId);
+      this.showToast(`Prompt-cache keep-warm ${enabled ? 'enabled' : 'disabled'}`, 'success');
+    } catch (err) {
+      this.showToast('Failed to toggle keep-warm: ' + err.message, 'error');
+    }
   },
 
   async toggleSessionImageWatcher() {

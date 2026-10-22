@@ -962,6 +962,19 @@
     'Enable Respawn': '启用重生',
     'Stop Respawn': '停止重生',
     'Auto-resume when usage limit resets': '使用限制重置后自动继续',
+    // Prompt-cache keep-warm (Session Options → Respawn, App Settings → System → Automation, session-ui.js toasts).
+    'Keep the cache warm while idle': '空闲时保持缓存预热',
+    "Sends a one-line keep-alive just before the cache expires, so your next prompt still reads from cache. Runs only while idle, up to the limit in App Settings → System → Automation; switch on before launch to also stop Claude Code's own idle compaction.":
+      '在缓存即将过期前发送一行保活消息，让您的下一条提示仍能从缓存读取。仅在空闲时运行，最长不超过“应用设置 → 系统 → 自动化”中的上限；在启动前开启还会关闭 Claude Code 自带的空闲压缩。',
+    'Keep prompt caches warm': '保持提示缓存预热',
+    "Default for Claude sessions that have not chosen on their Respawn tab (a session an agent started needs its own switch): shortly before an idle session's prompt cache would expire, send a one-line keep-alive turn so the next prompt still reads the conversation from cache instead of re-processing it.":
+      '未在“重生”标签页中单独设置的 Claude 会话的默认值（由智能体启动的会话需单独开启）：在空闲会话的提示缓存即将过期前发送一行保活消息，让下一条提示仍从缓存读取对话，而不必重新处理。',
+    'Keep warm for at most': '最长保持预热',
+    'Hours after your last prompt in a session during which keep-alives are sent; past that the cache is left to expire. A keep-alive costs a small fraction of the re-write it prevents, so a few hours of them pay off, an overnight gap does not.':
+      '会话中最后一条提示之后发送保活消息的小时数；超过之后任由缓存过期。一次保活的开销只是它所避免的重新写入的一小部分，因此几个小时的保活是值得的，整夜的空档则不值得。',
+    hours: '小时',
+    'Prompt-cache keep-warm enabled': '提示缓存预热已开启',
+    'Prompt-cache keep-warm disabled': '提示缓存预热已关闭',
     'Auto-restart sessions when context fills up (usually not needed)': '上下文已满时自动重启会话（通常不需要）',
     'Auto-Compact': '自动压缩',
     'Auto-Clear': '自动清空',

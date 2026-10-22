@@ -83,6 +83,9 @@ export function createMockRouteContext(options?: {
     restoreRespawnController: vi.fn(),
     saveRespawnConfig: vi.fn(),
 
+    // -- KeepWarmPort --
+    keepWarm: { schedule: vi.fn(), rescheduleAll: vi.fn(), remove: vi.fn() },
+
     // -- ConfigPort --
     store: {
       getConfig: vi.fn(() => ({ ralphEnabled: false, maxConcurrentSessions: 5 })),

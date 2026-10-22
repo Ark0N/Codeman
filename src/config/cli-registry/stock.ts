@@ -329,7 +329,12 @@ const CLAUDE: CliEntry = {
       'CLAUDE_CODE_MAX_CONTEXT_TOKENS',
       'CLAUDE_CONFIG_DIR',
     ],
-    gates: { nameFlag: { minVersion: '2.1.224', failClosed: true } },
+    // idleCompactionSetting: the `idleCompaction` settings key first ships in 2.1.290 (2.1.289
+    // already idle-compacts with no opt-out); see TmuxManager._resolveIdleCompactionOptOut.
+    gates: {
+      nameFlag: { minVersion: '2.1.224', failClosed: true },
+      idleCompactionSetting: { minVersion: '2.1.290', failClosed: true },
+    },
     // claude reads `$CLAUDE_CONFIG_DIR/.claude.json` when that is set (checked in 2.1.289).
     mcpConfig: {
       path: '.claude.json',

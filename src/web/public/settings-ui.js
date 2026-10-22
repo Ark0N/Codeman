@@ -72,6 +72,10 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _onHookStop(data) {
+    // The end of Codeman's own keep-alive turn (prompt-cache keep-warm): nothing finished
+    // that a person asked for, and an idle alert still pending is theirs to spend, so this
+    // neither clears it nor raises "Response Complete".
+    if (data.acknowledgedReason) return;
     // Clear all pending hooks when Claude finishes responding
     if (data.sessionId) {
       this.clearPendingHooks(data.sessionId);
@@ -597,6 +601,9 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? defaults.subagentTrackingEnabled ?? true;
     document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? defaults.subagentActiveTabOnly ?? true;
     document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? defaults.imageWatcherEnabled ?? false;
+    // Prompt-cache keep-warm: synced, default OFF, cap default 2 h (DEFAULT_KEEP_WARM_MAX_HOURS).
+    document.getElementById('appSettingsPromptCacheKeepWarm').checked = settings.promptCacheKeepWarm === true;
+    document.getElementById('appSettingsPromptCacheKeepWarmMaxHours').value = settings.promptCacheKeepWarmMaxHours ?? 2;
     document.getElementById('appSettingsTunnelEnabled').checked = settings.tunnelEnabled ?? false;
     this.loadTunnelStatus();
     document.getElementById('appSettingsLocalEcho').checked = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
@@ -2760,6 +2767,10 @@ Object.assign(CodemanApp.prototype, {
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
       imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
+      promptCacheKeepWarm: document.getElementById('appSettingsPromptCacheKeepWarm').checked,
+      promptCacheKeepWarmMaxHours:
+        // Clamped to the schema's range: one value outside it fails the whole save.
+        Math.min(24, Math.max(0.5, parseFloat(document.getElementById('appSettingsPromptCacheKeepWarmMaxHours').value) || 2)),
       tunnelEnabled: document.getElementById('appSettingsTunnelEnabled').checked,
       localEchoEnabled: document.getElementById('appSettingsLocalEcho').checked,
       autoCopySelection: document.getElementById('appSettingsAutoCopySelection').checked,

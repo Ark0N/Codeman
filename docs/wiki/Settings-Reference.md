@@ -184,7 +184,7 @@ Rebinding for the shortcut registry. See [Keyboard Shortcuts](Keyboard-Shortcuts
 
 ### System
 
-`CLAUDE.md` template for new cases, default working directory, the image watcher, and
+`CLAUDE.md` template for new cases, default working directory, the image watcher, the prompt-cache keep-warm default (**Keep prompt caches warm**, off) and its cap (**Keep warm for at most**, 2 hours after a session's last prompt; see [Keeping Agents Running](Keeping-Agents-Running)), and
 Cloudflare tunnel controls including the tunnel URL. The **Diagnostics** group runs
 `codeman doctor` on the server and lists the agent CLIs, tmux, Node and the optional office
 tools with their versions and install hints (admin only in multi-user mode). In multi-user
@@ -196,7 +196,7 @@ Per session, from the tab.
 
 | Panel            | Contains                                                                                   |
 | ---------------- | ------------------------------------------------------------------------------------------- |
-| **Respawn**      | Auto-resume on usage limit, the respawn cycle configuration, presets, duration. See [Keeping Agents Running](Keeping-Agents-Running). |
+| **Respawn**      | Auto-resume on usage limit, the prompt cache readout and keep-warm switch, the respawn cycle configuration, presets, duration. See [Keeping Agents Running](Keeping-Agents-Running). |
 | **Session**      | Name, working directory, environment overrides, per-tab pop-out override.                    |
 | **Ralph / Todo** | Loop configuration, iteration and todo caps, circuit breaker reset. See [Autonomous Loops](Autonomous-Loops). |
 | **Summary**      | What this session has done: tokens, activity, run summary.                                   |
