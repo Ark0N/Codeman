@@ -4622,13 +4622,9 @@ Object.assign(CodemanApp.prototype, {
     const on = this._filePreviewPref('expanded');
     const win = this.$('filePreviewOverlay')?.querySelector?.('.file-preview-window');
     win?.classList?.toggle('expanded', on);
-    const btn = this.$('filePreviewExpandBtn');
-    if (btn) {
-      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-      const label = on ? 'Restore size' : 'Expand';
-      btn.title = label;
-      btn.setAttribute('aria-label', label);
-    }
+    // The label stays "Expand" and aria-pressed carries the state, like MD, Lines and
+    // Wrap, so a screen reader never announces "Restore size, pressed".
+    this.$('filePreviewExpandBtn')?.setAttribute('aria-pressed', on ? 'true' : 'false');
   },
 
   /**

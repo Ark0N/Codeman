@@ -196,16 +196,22 @@ describe('file viewer back/forward', () => {
 describe('file viewer expand', () => {
   it('toggles the window class, the pref and the button state', () => {
     const { app, winClasses, store, expand } = loadApp();
+    // As index.html ships it.
+    expand.title = 'Expand';
+    expand.attrs['aria-label'] = 'Expand';
 
     app.toggleFilePreviewExpanded();
     expect(winClasses.has('expanded')).toBe(true);
     expect(store['codeman:filePreviewExpanded']).toBe('1');
     expect(expand.attrs['aria-pressed']).toBe('true');
-    expect(expand.title).toBe('Restore size');
+    // aria-pressed carries the state; the label stays fixed, like the MD/Lines/Wrap toggles.
+    expect(expand.title).toBe('Expand');
+    expect(expand.attrs['aria-label']).toBe('Expand');
 
     app.toggleFilePreviewExpanded();
     expect(winClasses.has('expanded')).toBe(false);
     expect(expand.attrs['aria-pressed']).toBe('false');
+    expect(expand.title).toBe('Expand');
   });
 
   it('re-applies a remembered expanded state when a preview opens', async () => {
