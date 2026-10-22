@@ -3429,12 +3429,18 @@ Object.assign(CodemanApp.prototype, {
   /**
    * The tab layout changed (a group was created, renamed or deleted): redraw the
    * options from it. A deleted selection shows as Ungrouped, which is where the
-   * server now places new sessions (it forgets the stale ID on its next read).
+   * server now places new sessions (it forgets the stale ID at the next creation).
+   * Every create, delete and reorder broadcasts a layout, so an unchanged group
+   * list is left alone: rebuilding it would reset a dropdown the user has open.
    */
   _refreshCaseDefaultGroupOptions(layout) {
     const state = this._caseDefaultGroupState;
     if (!state || !layout || !Array.isArray(layout.groups)) return;
-    state.groups = layout.groups.map((group) => ({ id: group.id, name: group.name }));
+    const groups = layout.groups.map((group) => ({ id: group.id, name: group.name }));
+    const unchanged = groups.length === state.groups.length
+      && groups.every((group, i) => group.id === state.groups[i].id && group.name === state.groups[i].name);
+    if (unchanged) return;
+    state.groups = groups;
     const value = this._renderCaseDefaultGroupSelects(state.groups, state.groupId);
     if (!value) state.groupId = null;
   },

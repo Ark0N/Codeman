@@ -137,6 +137,27 @@ describe('Case settings: Default session group selector', () => {
     expect(h.elements.caseDefaultGroupMobile.value).toBe('');
   });
 
+  it('leaves the options alone when a layout broadcast does not change the groups', async () => {
+    const h = harness({
+      groups: [
+        { id: 'g1', name: 'Core' },
+        { id: 'g2', name: 'Ops' },
+      ],
+      groupId: 'g2',
+    });
+    await h.app._loadCaseDefaultGroup();
+    const before = h.elements.caseDefaultGroup.options;
+    // A session created or moved elsewhere: same groups, other refs.
+    h.app._refreshCaseDefaultGroupOptions({
+      groups: [
+        { id: 'g1', name: 'Core', refs: [{ kind: 'session', id: 's9' }] },
+        { id: 'g2', name: 'Ops', refs: [] },
+      ],
+    });
+    expect(h.elements.caseDefaultGroup.options).toBe(before); // not rebuilt, so an open dropdown stays open
+    expect(h.elements.caseDefaultGroup.value).toBe('g2');
+  });
+
   it('the layout refresh is wired into _applyTabLayout', () => {
     const app = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
     const body = app.slice(app.indexOf('  _applyTabLayout(layout) {'));
