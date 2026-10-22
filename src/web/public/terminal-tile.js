@@ -18,13 +18,14 @@
  * What it does carry over from the primary pane, through the primary pane's
  * own code aimed at THIS pane (its terminal, its session, never the active
  * one):
- *  - SGR wheel forwarding (_maybeForwardWheelToCli): Claude's fullscreen
- *    renderer scrolls its own transcript on SGR wheel reports, while this
- *    xterm holds only replayed repaint frames, so the wheel goes to the CLI
- *    as reports at the pointer's cell in this pane, through the primary
- *    pane's forwarding gate and its encoding (sgrWheelReports). Shift+wheel
- *    scrolls the local scrollback itself (_maybeScrollLocalOnShift), as the
- *    primary pane does, since xterm turns it into a horizontal no-op.
+ *  - SGR wheel forwarding (_maybeForwardWheelToCli): a tracked CLI
+ *    (fullscreen Claude, tracked Codex) scrolls its own transcript on SGR
+ *    wheel reports, while this xterm holds only replayed repaint frames, so
+ *    the wheel goes to the CLI as reports at the pointer's cell in this pane,
+ *    through the primary pane's forwarding gate and its encoding
+ *    (sgrWheelReports). Shift+wheel scrolls the local scrollback itself
+ *    (_maybeScrollLocalOnShift), as the primary pane does, since xterm turns
+ *    it into a horizontal no-op.
  *  - Hollow-buffer paging (#555): a CLI that draws in place (opencode and codex
  *    on the alternate screen, Claude's repaint mode) leaves the xterm no
  *    scrollback, so the wheel pages the CLI's own transcript with
@@ -1052,7 +1053,7 @@
     // Capture phase, because xterm's own wheel handler stopPropagation()s every
     // event it consumes, so a bubbling listener here would never see the wheel
     // while the pane still has scrollback to scroll. Not passive: the three
-    // routes this pane takes over, forwarding the wheel to Claude's fullscreen
+    // routes this pane takes over, forwarding the wheel to a tracked CLI's
     // renderer (_maybeForwardWheelToCli), paging a hollow buffer's CLI
     // transcript (_maybePageCliTranscript) and Shift+wheel's local scrollback
     // (_maybeScrollLocalOnShift), are consumed right here (preventDefault plus
@@ -1186,9 +1187,9 @@
       const tracking = this.terminal.modes?.mouseTrackingMode;
       if (tracking && tracking !== 'none') return false;
       const target = { terminal: this.terminal, sessionId: this.sessionId };
-      // A wheel for Claude's fullscreen renderer was forwarded as SGR reports
-      // before this ran (_maybeForwardWheelToCli); the gate is repeated so a
-      // forwarding session is never paged.
+      // A wheel for any tracked CLI (a session the forwarding gate accepts) was
+      // forwarded as SGR reports before this ran (_maybeForwardWheelToCli); the
+      // gate is repeated so a forwarding session is never paged.
       if (app._shouldForwardWheelToApp?.(ev, target)) return false;
       if (!app._localScrollbackIsHollow?.({ ...target, localRows: this._localRows() })) return false;
       // Only from the live screen. The one gate the primary pane never needs: a
