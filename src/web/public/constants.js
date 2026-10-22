@@ -783,6 +783,15 @@ function formatPromptCacheStatus(cache, now, statusLine) {
 // Pure: no DOM, no timers, no side effects. `now` is passed in.
 const SSE_STALE_TIMEOUT_MS = 45000; // three missed 15s heartbeats
 
+// The watchdog above cannot see a connect attempt that never opens: an
+// EventSource whose request gets no response headers (a resumed phone on a
+// VPN, a proxy that accepted the socket and went silent) stays CONNECTING
+// without firing `open` or `error`, and its status is never 'connected'.
+// connectSSE() bounds each attempt by this much and then retries it through
+// the normal backoff. Generous next to a healthy open (well under a second)
+// so a slow link is not cut off mid-handshake.
+const SSE_CONNECT_TIMEOUT_MS = 15000;
+
 function computeSseStale(input) {
   const {
     lastMessageAt = null,
@@ -1500,6 +1509,7 @@ if (typeof window !== 'undefined') {
   window.CodemanSseStale = {
     compute: computeSseStale,
     TIMEOUT_MS: SSE_STALE_TIMEOUT_MS,
+    CONNECT_TIMEOUT_MS: SSE_CONNECT_TIMEOUT_MS,
   };
   window.CodemanPromptCache = {
     format: formatPromptCacheStatus,
