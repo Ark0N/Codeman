@@ -89,14 +89,6 @@ export function remoteLoginShellCommand(command: string): string {
   return `exec ${REMOTE_LOGIN_SHELL} -i -l -c ${shellescape(command)}`;
 }
 
-/** Standard CLI locations missing from non-interactive SSH shells (notably Homebrew). */
-export const REMOTE_PATH_BOOTSTRAP =
-  'export PATH=$HOME/.opencode/bin:$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH';
-
-export function withRemotePathBootstrap(command: string): string {
-  return `${REMOTE_PATH_BOOTSTRAP}; ${command}`;
-}
-
 /**
  * The CLI text a location overlay should launch for `mode`, or null when this build has no
  * entry for it. `overlays.<location>.command` when the entry names one, otherwise the bare
