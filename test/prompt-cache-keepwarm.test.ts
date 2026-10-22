@@ -337,6 +337,10 @@ class FakeSession implements KeepWarmSessionView {
   beginKeepAliveTurn(windowMs: number): void {
     this.keepAliveWindows.push(windowMs);
   }
+  keepAliveWindowsEnded = 0;
+  endKeepAliveTurn(): void {
+    this.keepAliveWindowsEnded += 1;
+  }
   async writeViaMux(data: string): Promise<boolean> {
     this.writes.push(data);
     return this.writeOk;
@@ -474,7 +478,12 @@ describe('PromptCacheKeepWarmService', () => {
     service.stop();
   });
 
-  it('keeps a failed write out of the tally and retries after the lead time', async () => {
+  /**
+   * A nudge only goes out inside the last five minutes before the expiry, so a retry armed a
+   * whole lead time later would land past it and stop: the failed write ends the keep-alive
+   * window (no turn is running) and retries a minute later, never past the last-chance line.
+   */
+  it('keeps a failed write out of the tally, ends the keep-alive window and retries a minute later', async () => {
     const session = new FakeSession();
     session.keepWarmEnabled = true;
     session.writeOk = false;
@@ -484,11 +493,38 @@ describe('PromptCacheKeepWarmService', () => {
     service.schedule(session.id);
     await settle();
     expect(session.writes).toHaveLength(1);
+    expect(session.keepAliveWindowsEnded).toBe(1);
     expect(last()).toMatchObject({
       state: 'waiting',
       nudges: 0,
+      nextCheckAt: NOW + KEEP_WARM_RETRY_MS,
       reason: expect.stringContaining('could not be written'),
     });
+
+    session.writeOk = true;
+    await vi.advanceTimersByTimeAsync(KEEP_WARM_RETRY_MS);
+    await settle();
+    expect(session.writes).toEqual([`${KEEP_WARM_NUDGE}\r`, `${KEEP_WARM_NUDGE}\r`]);
+    expect(session.keepAliveWindowsEnded).toBe(1);
+    expect(last()).toMatchObject({ state: 'nudged', nudges: 1 });
+    service.stop();
+  });
+
+  it('never arms the retry after a failed write past the last-chance line', async () => {
+    const session = new FakeSession();
+    session.keepWarmEnabled = true;
+    session.writeOk = false;
+    // Due, with only 30 s left before the last-chance line.
+    session.promptCache = warmCache(NOW + KEEP_WARM_LAST_CHANCE_MS + 30_000);
+    const { ports, last } = makePorts(session);
+    const service = new PromptCacheKeepWarmService(ports);
+    await service.schedule(session.id);
+    expect(last()).toMatchObject({ state: 'waiting', nextCheckAt: NOW + 30_000 });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await settle();
+    expect(session.writes).toHaveLength(1);
+    expect(last()).toMatchObject({ state: 'stopped', reason: 'too close to expiry to land a turn' });
+    expect(vi.getTimerCount()).toBe(0);
     service.stop();
   });
 

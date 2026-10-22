@@ -173,6 +173,8 @@ export interface KeepWarmSessionView {
   readonly lastRealPromptAt: number;
   isIdle(): boolean;
   beginKeepAliveTurn(windowMs: number): void;
+  /** Close the window `beginKeepAliveTurn()` opened, when the nudge never went out. */
+  endKeepAliveTurn(): void;
   writeViaMux(data: string): Promise<boolean>;
 }
 
@@ -368,8 +370,16 @@ export class PromptCacheKeepWarmService implements KeepWarmScheduler {
         this.ports.log?.(
           `[KeepWarm] ${ok ? 'nudged' : 'failed to nudge'} ${id.slice(0, 8)} with ${facts.cache?.recacheTokensIfCold ?? '?'} tokens at stake (nudge ${tally.nudges})`
         );
-        // The nudge's own cache report re-schedules; this timer is the fallback if none arrives.
-        const nextCheckAt = Date.now() + KEEP_WARM_LEAD_MS;
+        // Sent: the nudge's own cache report re-schedules, and this timer is the fallback if none
+        // arrives. Not sent: no turn is running, so the window closes now rather than at its
+        // ceiling, and the retry lands inside the last minutes before the expiry, where a nudge
+        // can still go out (a lead time later would be past it).
+        let nextCheckAt = Date.now() + KEEP_WARM_LEAD_MS;
+        if (!ok) {
+          session.endKeepAliveTurn();
+          const expiresAt = facts.cache?.expiresAt ?? 0;
+          nextCheckAt = Math.min(Date.now() + KEEP_WARM_RETRY_MS, expiresAt - KEEP_WARM_LAST_CHANCE_MS);
+        }
         this.arm(id, nextCheckAt);
         this.ports.publish(id, {
           ...base,
