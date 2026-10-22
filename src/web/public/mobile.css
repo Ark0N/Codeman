@@ -3473,6 +3473,46 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   .subagent-dropdown-trigger:focus + .subagent-dropdown-menu {
     display: block;
   }
+
+  /* Press feedback for the touch bars. The pressed look is transform + filter,
+     never a background or a shadow: the skin block (html:not([data-skin="og"]),
+     specificity 0,2,1) and the per-run-mode colors own the background and its
+     hover rules own box-shadow, so a background or shadow :active lost to them
+     on every non-og skin. Nothing on these buttons sets transform or filter
+     (the base .btn-toolbar:active nudge sits at lower specificity), so one rule
+     reads the same on all of them. 80ms so a quick tap shows the press at all. */
+  .toolbar .btn-toolbar,
+  .btn-voice-mobile,
+  .btn-attach-mobile,
+  .btn-settings-mobile,
+  .accessory-btn {
+    -webkit-tap-highlight-color: transparent;
+    transition: all 80ms ease;
+  }
+
+  .toolbar .btn-toolbar:active,
+  .btn-voice-mobile:active,
+  .btn-attach-mobile-wrap:active .btn-attach-mobile,
+  .btn-settings-mobile:active,
+  .accessory-btn:active {
+    transform: scale(0.94);
+    filter: brightness(1.25);
+  }
+
+  /* Light skins darken on press instead of brightening (white on white reads as nothing). */
+  html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.toolbar .btn-toolbar:active, .btn-voice-mobile:active, .btn-attach-mobile-wrap:active .btn-attach-mobile, .btn-settings-mobile:active, .accessory-btn:active) {
+    filter: brightness(0.9);
+  }
+}
+
+@media (hover: none) and (pointer: coarse) and (prefers-reduced-motion: reduce) {
+  .toolbar .btn-toolbar:active,
+  .btn-voice-mobile:active,
+  .btn-attach-mobile-wrap:active .btn-attach-mobile,
+  .btn-settings-mobile:active,
+  .accessory-btn:active {
+    transform: none;
+  }
 }
 
 @media (max-width: 599px) {
