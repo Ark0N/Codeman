@@ -299,7 +299,7 @@ describe('TabLayoutService case default placement', () => {
 });
 
 describe('TabLayoutService case default reads and writes', () => {
-  it('reports the selection with the owner group options, clearing a stale id', async () => {
+  it('reports the selection with the owner group options, and a stale id as Ungrouped without writing', async () => {
     const h = createHarness({ layouts: { alice: grouped() }, live: facts() });
     expect(await h.service.caseDefaultGroup('alice', 'app')).toEqual({
       groupId: null,
@@ -310,7 +310,9 @@ describe('TabLayoutService case default reads and writes', () => {
     });
     h.defaults.alice = { app: 'gone' };
     expect((await h.service.caseDefaultGroup('alice', 'app')).groupId).toBeNull();
-    expect(h.caseDefaults.getCaseDefaultGroup('alice', 'app')).toBeUndefined();
+    // A read never writes: the next creation for the case is what forgets the stale id.
+    expect(h.caseDefaults.deleteCaseDefaultGroup).not.toHaveBeenCalled();
+    expect(h.caseDefaults.getCaseDefaultGroup('alice', 'app')).toBe('gone');
   });
 
   it('saves a known group or null, and refuses an id that is not in the owner layout', async () => {

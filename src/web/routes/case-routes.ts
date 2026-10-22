@@ -1717,7 +1717,8 @@ export function registerCaseRoutes(
    * The tab group new sessions of this case land in when the create request names
    * no group and no parent places them. Scoped to the caller's own tab layout: the
    * options are their groups, and a stored id that is no longer one of them reads
-   * as Ungrouped (null) and is forgotten. Not admin-gated in multi-user mode: the
+   * as Ungrouped (null); the read writes nothing (the next creation for the case
+   * forgets it). Not admin-gated in multi-user mode: the
    * value is per owner (like the layout it points into), never server-wide.
    */
   app.get('/api/cases/:name/default-group', async (req, reply) => {

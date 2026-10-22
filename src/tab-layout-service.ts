@@ -584,6 +584,7 @@ export class TabLayoutService {
       const caseDefault = caseName ? this.deps.caseDefaults?.getCaseDefaultGroup(owner, caseName) : undefined;
       let staleCaseDefault = false;
       const rollback = register?.();
+      let layout: TabLayout;
       try {
         const groupId = placement.tabGroupId;
         const adjust =
@@ -600,33 +601,32 @@ export class TabLayoutService {
                 return follow ? placed : pinCreatedChild(placed, sessionId, metadata);
               }
             : undefined;
-        const layout = await this.getUnlocked(owner, adjust);
-        // A default whose group was deleted is ignored above and forgotten here,
-        // only once the creation's own write has landed.
-        if (staleCaseDefault && caseName) this.deps.caseDefaults?.deleteCaseDefaultGroup(owner, caseName);
-        return layout;
+        layout = await this.getUnlocked(owner, adjust);
       } catch (error) {
         if (typeof rollback === 'function') rollback();
         throw error;
       }
+      // A default whose group was deleted is ignored above and forgotten here, only once the
+      // creation's own write has landed, and outside the rollback: the session is committed by now,
+      // and nothing this cleanup does may drop it from the live map.
+      if (staleCaseDefault && caseName) this.deps.caseDefaults?.deleteCaseDefaultGroup(owner, caseName);
+      return layout;
     });
   }
 
   /**
    * A case's default session group and the owner's named groups to choose from.
-   * A stored id that is no longer one of this owner's groups is forgotten and
-   * reported as `null` (Ungrouped), which is also where creation would put it.
+   * A stored id that is no longer one of this owner's groups is reported as
+   * `null` (Ungrouped), which is also where creation would put it. Read-only:
+   * the next creation for the case forgets the stale id.
    */
   async caseDefaultGroup(owner: string, caseName: string): Promise<CaseDefaultGroupView> {
     return this.withOwner(owner, async () => {
       const { authoritative } = await this.prepareUnlocked(owner);
       const groups = authoritative.groups.map((group) => ({ id: group.id, name: group.name }));
       const stored = this.deps.caseDefaults?.getCaseDefaultGroup(owner, caseName);
-      if (typeof stored === 'string' && !groups.some((group) => group.id === stored)) {
-        this.deps.caseDefaults?.deleteCaseDefaultGroup(owner, caseName);
-        return { groupId: null, groups };
-      }
-      return { groupId: typeof stored === 'string' ? stored : null, groups };
+      const known = typeof stored === 'string' && groups.some((group) => group.id === stored);
+      return { groupId: known ? stored : null, groups };
     });
   }
 

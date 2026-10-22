@@ -783,7 +783,8 @@ non-string) is a `400 INVALID_INPUT`. Requests without the field are unchanged.
 - `GET /api/v1/cases/:name/default-group` → `{ caseName, groupId, groups }`: `groupId` is a
   group id from the caller's own tab layout or `null` (Ungrouped), `groups` the caller's
   current named groups (`{ id, name }`, in layout order). A stored id whose group was
-  deleted reads back as `null` and is forgotten.
+  deleted reads back as `null` (the read changes nothing; the next session created for the
+  case forgets it).
 - `PUT /api/v1/cases/:name/default-group` with `{ "groupId": string | null }` saves it. An
   id not in the caller's layout is a `400 INVALID_INPUT` that leaves the old value in place.
 

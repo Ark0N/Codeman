@@ -343,10 +343,11 @@ describe('case default group: GET/PUT /api/cases/:name/default-group', () => {
     expect(data.groups[1]).toEqual({ id: 'g-ops', name: 'Operations' });
   });
 
-  it('a deleted group reads back as Ungrouped and is cleared', async () => {
+  it('a deleted group reads back as Ungrouped, and the read changes nothing', async () => {
     world.defaults[OWNER] = { [CASE]: 'g-gone' };
     expect((await get()).json().data.groupId).toBeNull();
-    expect(CASE in world.defaults[OWNER]).toBe(false);
+    // GET is read-only; the next session created for the case forgets the stale id.
+    expect(world.defaults[OWNER][CASE]).toBe('g-gone');
   });
 
   it.each([
