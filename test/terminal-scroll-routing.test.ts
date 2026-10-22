@@ -876,6 +876,20 @@ describe('scroll routing diagnostic (issue #205 round 2)', () => {
     app._logScrollRouting('page-keys');
     expect(logs[0]).toContain('cliVersion=unknown');
   });
+
+  it("reports xterm's mouse encoding, the input touch forwarding to native tracking reads", () => {
+    const { app, logs } = hollowApp({ mode: 'shell' });
+    app._logScrollRouting('local-scrollback'); // no readable xterm private
+    expect(logs[0]).toContain('mouseEncoding=unknown');
+
+    // An app switching to SGR changes what touch does, so it prints again.
+    app.terminal.modes.mouseTrackingMode = 'any';
+    app.terminal._core = { coreMouseService: { activeEncoding: 'SGR' } };
+    app._logScrollRouting('local-scrollback');
+    expect(logs).toHaveLength(2);
+    expect(logs[1]).toContain('mouseTracking=any');
+    expect(logs[1]).toContain('mouseEncoding=SGR');
+  });
 });
 
 describe('touch scrolling when xterm owns native mouse tracking', () => {
@@ -895,6 +909,13 @@ describe('touch scrolling when xterm owns native mouse tracking', () => {
     expect(app._shouldForwardTouchToApp()).toBe(false);
     app.terminal._core.coreMouseService.activeEncoding = 'SGR';
     app.terminal.modes.mouseTrackingMode = 'x10';
+    expect(app._shouldForwardTouchToApp()).toBe(false);
+  });
+
+  it('does not send cell-based SGR reports to an app that asked for SGR pixel coordinates', () => {
+    const { app } = hollowApp({ mode: 'shell' });
+    app.terminal.modes.mouseTrackingMode = 'any';
+    app.terminal._core = { coreMouseService: { activeEncoding: 'SGR_PIXELS' } };
     expect(app._shouldForwardTouchToApp()).toBe(false);
   });
 

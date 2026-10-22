@@ -6082,19 +6082,24 @@ Object.assign(CodemanApp.prototype, {
     const session = this.sessions?.get(sessionId);
     const optOut = !!this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback;
     const tracking = this.terminal?.modes?.mouseTrackingMode || 'none';
+    // The encoding xterm would report in (DEFAULT, SGR, SGR_PIXELS): touch
+    // forwards to xterm's own tracking only when it is SGR
+    // (_shouldForwardTouchToApp).
+    const encoding = this.terminal?._core?.coreMouseService?.activeEncoding || 'unknown';
     // xterm's own mode above stays 'none' for a strip mode (the server removes
     // the DECSETs), so the CLI's real tracking state is reported separately.
     const cliTracking = session?.cliMouseTracking === true;
     const baseY = this.terminal?.buffer?.active?.baseY ?? -1;
     const signature =
-      `${decision}|${session?.mode}|${session?.cliVersion}|${optOut}|${tracking}|${cliTracking}|${baseY > 0}`;
+      `${decision}|${session?.mode}|${session?.cliVersion}|${optOut}|` +
+      `${tracking}|${encoding}|${cliTracking}|${baseY > 0}`;
     if (!this._scrollRoutingLogged) this._scrollRoutingLogged = new Map();
     if (this._scrollRoutingLogged.get(sessionId) === signature) return;
     this._scrollRoutingLogged.set(sessionId, signature);
     console.log(
       `[scroll] ${sessionId} → ${decision} (mode=${session?.mode || '?'}, cliVersion=${session?.cliVersion || 'unknown'}, ` +
-        `localScrollbackOptOut=${optOut}, mouseTracking=${tracking}, cliMouseTracking=${cliTracking}, ` +
-        `localScrollbackRows=${baseY})`
+        `localScrollbackOptOut=${optOut}, mouseTracking=${tracking}, mouseEncoding=${encoding}, ` +
+        `cliMouseTracking=${cliTracking}, localScrollbackRows=${baseY})`
     );
   },
 
