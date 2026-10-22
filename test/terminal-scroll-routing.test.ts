@@ -36,7 +36,18 @@ function loadTerminalUiHarness(
   // terminal-ui.js hangs CodemanTerminalInput off window; tests read it there.
   const windowRef: Record<string, any> = { ...windowGlobals };
   // Mutable so a test can move time (gesture gaps); defaults to a frozen clock.
-  const clock = { now: () => 1_000 };
+  const timers = new Map<number, { due: number; fn: () => void }>();
+  let timerId = 0;
+  const clock = {
+    now: () => 1_000,
+    flushTimers: () => {
+      for (const [id, timer] of timers)
+        if (timer.due <= clock.now()) {
+          timers.delete(id);
+          timer.fn();
+        }
+    },
+  };
   const context = vm.createContext({
     window: windowRef,
     CodemanApp,
@@ -44,7 +55,12 @@ function loadTerminalUiHarness(
     _crashDiag: { log: vi.fn() },
     performance: clock,
     requestAnimationFrame: (_fn: () => void) => 1,
-    setTimeout: (_fn: () => void) => 1,
+    setTimeout: (fn: () => void, ms = 0) => {
+      const id = ++timerId;
+      timers.set(id, { due: clock.now() + ms, fn });
+      return id;
+    },
+    clearTimeout: (id: number) => timers.delete(id),
     Blob: function Blob() {},
     URL: { createObjectURL: () => 'blob:yield', revokeObjectURL: () => {} },
     Worker: function Worker(this: any) {
@@ -205,26 +221,30 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
     app._maybePageCliTranscript({ shiftKey: false }, -1); // first event: one PageUp
     app._maybePageCliTranscript({ shiftKey: false }, 1); // reversal inside the gap: accumulates, no page
     now += 200;
+    clock.flushTimers();
     app._maybePageCliTranscript({ shiftKey: false }, -1); // a reversal after the gap: a PageUp at once
     now += 1_100;
+    clock.flushTimers();
     app._maybePageCliTranscript({ shiftKey: false }, 1); // after a pause: a PageDown at once
     app._maybePageCliTranscript({ shiftKey: false }, 0.05); // sub-row jitter in the same gesture: nothing
     app._flushWheelSgrQueue();
-    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~\x1b[5~\x1b[6~' }]);
+    expect(sent).toEqual([
+      { id: 'sess-1', data: '\x1b[5~' },
+      { id: 'sess-1', data: '\x1b[6~' },
+    ]);
   });
 
-  it('lets wheel notches accumulate instead of paging a full screen on each one', () => {
-    // A 100 px notch is 4 rows. Only a trackpad-sized opening event (under 2 rows)
-    // pages at once; a notch adds up toward half a screen as it always did, so
-    // slow notches (each one its own gesture by the 150 ms gap) still page once
-    // per 18 rows here, not once per notch.
-    for (const gapMs of [250, 40]) {
+  it('accumulates coarse wheel notches across pauses instead of prepaying each opening', () => {
+    // Coarse events accumulate as on master, even across pauses; they do not
+    // pre-pay a full page each time a new gesture starts.
+    for (const gapMs of [250, 40, 1200]) {
       const { app, sent, clock } = hollowApp();
       let now = 1_000;
       clock.now = () => now;
       for (let i = 0; i < 5; i++) {
         expect(app._maybePageCliTranscript({ shiftKey: false, deltaY: -100 }, -4)).toBe(true);
         now += gapMs;
+        clock.flushTimers();
       }
       app._flushWheelSgrQueue();
       expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
@@ -375,8 +395,7 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
   });
 
   it('pages a Codex transcript only while its local scrollback is empty', () => {
-    // Codex is never sent SGR wheel reports (it ignores them); this is the
-    // separate PageUp/PageDown fallback, which codex does honour.
+    // Codex without observed mouse tracking retains its PageUp/PageDown fallback.
     const { app, sent } = hollowApp();
     app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
 
@@ -473,7 +492,14 @@ describe('page-key gestures across slow touch drags, slow wheel ticks and jitter
       h.app._flushWheelSgrQueue();
       return h.sent.map((s) => s.data).join('');
     };
-    return { ...h, keys, advance: (ms: number) => (now += ms) };
+    return {
+      ...h,
+      keys,
+      advance: (ms: number) => {
+        now += ms;
+        h.clock.flushTimers();
+      },
+    };
   }
   const count = (keys: string, key: string) => keys.split(key).length - 1;
 
@@ -558,9 +584,9 @@ describe('page-key gestures across slow touch drags, slow wheel ticks and jitter
       p.app._maybePageCliTranscript({ shiftKey: false, deltaY: dy }, dy / 25);
       p.advance(16);
     }
-    // The opening event is a fresh gesture and pages; no reversal inside the
-    // gap pre-pays, so the wobble sends nothing after it.
-    expect(p.keys()).toBe(UP);
+    // A reversal inside the 40ms batch window cancels the unsent opening
+    // PageUp; subsequent in-gesture reversals do not pre-pay another page.
+    expect(p.keys()).toBe(''); // the opening report was cancelled before its 40ms flush
   });
 
   it('still pages a deliberate reversal at once after a pause', () => {
@@ -577,10 +603,10 @@ describe('page-key gestures across slow touch drags, slow wheel ticks and jitter
     p.advance(16);
     // Downward travel just short of a page: the upward debt must not count toward it.
     p.app._maybePageCliTranscript({ shiftKey: false, deltaY: 25 * 18 }, 18);
-    expect(p.keys()).toBe(UP);
+    expect(p.keys()).toBe(''); // reversal discards the unsent UP
     p.advance(16);
     p.app._maybePageCliTranscript({ shiftKey: false, deltaY: 25 }, 1);
-    expect(p.keys()).toBe(UP + DOWN);
+    expect(p.keys()).toBe(DOWN);
   });
 
   it('ends the one-second debt lifetime once the debt is repaid, exactly or overpaid', () => {
@@ -747,8 +773,8 @@ describe('GitHub Copilot wheel forwarding', () => {
     expect(idle.app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
   });
 
-  it('does not change what other non-claude modes do', () => {
-    for (const mode of ['codex', 'opencode', 'grok', 'gemini']) {
+  it('keeps unmeasured CLI modes out of native forwarding', () => {
+    for (const mode of ['opencode', 'grok', 'gemini']) {
       const { app } = hollowApp({ mode, cliMouseTracking: true });
       expect(app._shouldForwardWheelToApp({ shiftKey: false }), mode).toBe(false);
     }
@@ -790,13 +816,13 @@ describe('the paging gates asked for another pane (a TerminalTile)', () => {
       const event = { shiftKey: false, ...extra };
       const step = pageKeysForGesture(state, event, lines, 36, 1_000);
       state = step.state;
-      expected += step.keys;
+      expected = windowRef.CodemanTerminalInput.coalesceScrollBytes(expected, step.keys) || expected;
       app._maybePageCliTranscript(event, lines);
     }
     app._flushWheelSgrQueue();
     expect(app._pageKeyGesture).toEqual(state);
     expect(expected).toContain('\x1b[5~');
-    expect(expected).toContain('\x1b[6~');
+    expect(expected).not.toContain('\x1b[6~');
     expect(sent).toEqual([{ id: 'sess-1', data: expected }]);
   });
 
@@ -931,5 +957,239 @@ describe('touch scrolling when xterm owns native mouse tracking', () => {
     expect(app._shouldForwardTouchToApp()).toBe(true);
     app.sessions.get('sess-1').cliMouseTracking = false;
     expect(app._shouldForwardTouchToApp()).toBe(false);
+  });
+});
+
+describe('consistent scroll gesture adapters', () => {
+  it('keeps the shared paging opening threshold exported', () => {
+    expect(loadTerminalUiHarness().windowRef.CodemanTerminalInput.PAGE_KEY_IMMEDIATE_MAX_ROWS).toBe(2);
+  });
+
+  it('preserves rounded travel for isolated coarse clicks without accumulating a capped backlog', () => {
+    const { wheelTicksForGesture } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
+    for (const direction of [-1, 1]) {
+      expect(wheelTicksForGesture(null, direction * 4.8, 0).ticks).toBe(direction * 5); // 120px
+      expect(wheelTicksForGesture(null, direction * 1.6, 0).ticks).toBe(direction * 2); // 40px
+      let state = null;
+      let ticks = 0;
+      for (let i = 0; i < 5; i++) {
+        const step = wheelTicksForGesture(state, direction * 4.8, i * 300);
+        state = step.state;
+        ticks += step.ticks;
+      }
+      expect(ticks).toBe(direction * 25);
+      const capped = wheelTicksForGesture(null, direction * 40, 0);
+      expect(capped.ticks).toBe(direction * 5);
+      expect(capped.state.pending).toBe(0); // don't retain travel discarded by the event cap
+    }
+  });
+
+  it('pre-pays an isolated deliberate opening tick and repays its signed debt', () => {
+    const { wheelTicksForGesture } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
+    const opening = wheelTicksForGesture(null, -0.16, 0); // a 4px mouse click
+    expect(opening.ticks).toBe(-1);
+    expect(opening.state.pending).toBeCloseTo(0.84);
+    const continued = wheelTicksForGesture(opening.state, -0.16, 20);
+    expect(continued.ticks).toBe(0);
+    expect(continued.state.pending).toBeCloseTo(0.68);
+    expect(wheelTicksForGesture(null, 0.04, 0).ticks).toBe(0); // sub-threshold jitter
+  });
+
+  it('sends each slow 4px click, in either direction, while ten 2.5px events total one tick', () => {
+    const { wheelTicksForGesture } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
+    for (const direction of [-1, 1]) {
+      let slowState;
+      const slowTicks = [];
+      for (let i = 0; i < 5; i++) {
+        const step = wheelTicksForGesture(slowState, direction * 0.16, i * 300);
+        slowState = step.state;
+        slowTicks.push(step.ticks);
+      }
+      expect(slowTicks).toEqual(Array(5).fill(direction));
+      let fineState;
+      const fineTicks = [];
+      for (let i = 0; i < 10; i++) {
+        const step = wheelTicksForGesture(fineState, direction * 0.1, i * 8);
+        fineState = step.state;
+        fineTicks.push(step.ticks);
+      }
+      expect(fineTicks).toEqual([direction, ...Array(9).fill(0)]);
+      expect(fineState.pending).toBe(0);
+    }
+  });
+
+  it('makes ten small Claude deltas equal one combined delta', () => {
+    const { wheelTicksForGesture } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
+    let state;
+    let ticks = 0;
+    for (let i = 0; i < 10; i++) {
+      const step = wheelTicksForGesture(state, -0.12, i * 8);
+      state = step.state;
+      ticks += step.ticks;
+    }
+    expect(ticks).toBe(-1);
+    let decimalState;
+    let decimalTicks = 0;
+    for (let i = 0; i < 10; i++) {
+      const step = wheelTicksForGesture(decimalState, 0.1, i * 8);
+      decimalState = step.state;
+      decimalTicks += step.ticks;
+    }
+    expect(decimalTicks).toBe(1);
+    expect(wheelTicksForGesture(null, -1.2, 0).ticks).toBe(ticks);
+  });
+
+  it('drops fractional movement on reversal, inactivity and session changes', () => {
+    const { wheelTicksForGesture } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
+    const state = wheelTicksForGesture(null, 0.9, 0).state;
+    expect(wheelTicksForGesture(state, -0.2, 10).ticks).toBe(0);
+    expect(wheelTicksForGesture(state, 0.2, 200).ticks).toBe(1);
+    const { app, sent } = hollowApp();
+    app._clientPointToCell = () => ({ col: 1, row: 1 });
+    app._sendSyntheticSgrWheel(0, 0, 0.9);
+    app.activeSessionId = 'other';
+    app._sendSyntheticSgrWheel(0, 0, 0.2);
+    expect(sent).toEqual([
+      { id: 'sess-1', data: '\x1b[<65;1;1M' },
+      { id: 'other', data: '\x1b[<65;1;1M' },
+    ]);
+    expect(app._wheelTickGesture.pending).toBeCloseTo(-0.8);
+  });
+
+  it('preserves accumulated coarse Codex wheel fallback travel', () => {
+    const { app, sent } = hollowApp({ mode: 'codex', rows: 43 });
+    app._maybePageCliTranscript({ deltaY: -100 }, -4);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([]);
+    for (let i = 0; i < 5; i++) app._maybePageCliTranscript({ deltaY: -100 }, -4);
+    app._flushWheelSgrQueue();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('preserves sustained report density and cancels obsolete direction before transport', () => {
+    const { coalesceScrollBytes } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
+    const up = '\x1b[<64;1;1M';
+    const down = '\x1b[<65;1;1M';
+    let queued = '';
+    for (let i = 0; i < 100; i++) queued = coalesceScrollBytes(queued, up);
+    expect(queued).toBe(up.repeat(100));
+    expect(coalesceScrollBytes(queued, down)).toBe(down);
+    expect(coalesceScrollBytes('\x1b[5~'.repeat(3), '\x1b[5~')).toBe('\x1b[5~'.repeat(4));
+    expect(coalesceScrollBytes('\x1b[5~', '\x1b[6~')).toBe('\x1b[6~');
+  });
+
+  it('preserves all 120 reports of a 30-frame touch fling with real batch deadlines', () => {
+    const { app, sent, clock } = hollowApp();
+    let now = 1000;
+    clock.now = () => now;
+    app._clientPointToCell = () => ({ col: 1, row: 1 });
+    for (let frame = 0; frame < 30; frame++) {
+      app._sendSyntheticSgrWheel(0, 0, -4);
+      now += 16;
+      clock.flushTimers();
+    }
+    now += 40;
+    clock.flushTimers();
+    expect(sent.map((s) => s.data).join('')).toBe('\x1b[<64;1;1M'.repeat(120));
+  });
+
+  it('does not deliver a queued wheel batch to a newly selected session', () => {
+    const { app, sent } = hollowApp();
+    app._queueScrollBytes('\x1b[5~');
+    app.activeSessionId = 'other';
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([]);
+  });
+
+  it('sends the first native report synchronously on every tab visit, batching subsequent reports', () => {
+    const { app, sent } = hollowApp();
+    const up = '\x1b[<64;1;1M';
+    app._selectGeneration = 1;
+    app._queueScrollBytes(up);
+    expect(sent).toEqual([{ id: 'sess-1', data: up }]);
+    app._queueScrollBytes(up);
+    app._queueScrollBytes(up);
+    expect(sent).toHaveLength(1);
+    app._flushWheelSgrQueue();
+    expect(sent.at(-1)).toEqual({ id: 'sess-1', data: up.repeat(2) });
+    // Returning A -> B -> A must reset onset even if B was never scrolled.
+    app._queueScrollBytes(up); // previous visit has an unsent report
+    app._selectGeneration = 3;
+    app._queueScrollBytes(up);
+    expect(sent).toHaveLength(3);
+    expect(sent.at(-1)).toEqual({ id: 'sess-1', data: up });
+    app._queueScrollBytes(up); // unsent A report must never leak to B
+    app.activeSessionId = 'other';
+    app._selectGeneration = 4;
+    app._queueScrollBytes(up);
+    expect(sent.at(-1)).toEqual({ id: 'other', data: up });
+    app._flushWheelSgrQueue();
+    expect(sent).toHaveLength(4);
+  });
+
+  it('cancels unsent Claude ticks even when reversed travel is sub-line', () => {
+    const { app, sent } = hollowApp();
+    app._clientPointToCell = () => ({ col: 1, row: 1 });
+    app._sendSyntheticSgrWheel(0, 0, -1); // leading report is already delivered
+    app._sendSyntheticSgrWheel(0, 0, -2);
+    app._sendSyntheticSgrWheel(0, 0, 0.2);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[<64;1;1M' }]);
+  });
+});
+
+describe('native Codex scrolling instead of an initial page jump', () => {
+  it('forwards only when Codex explicitly requests mouse tracking', () => {
+    for (const cliMouseTracking of [undefined, false, true]) {
+      const { app } = hollowApp({ mode: 'codex', cliMouseTracking });
+      expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(cliMouseTracking === true);
+      expect(app._shouldForwardWheelToApp({ shiftKey: true })).toBe(false);
+    }
+  });
+
+  it('keeps local-history opt-out and native xterm mouse routing', () => {
+    const { app } = hollowApp({ mode: 'codex', cliMouseTracking: true });
+    app.loadAppSettingsFromStorage = () => ({ terminalWheelLocalScrollback: true });
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+    app.loadAppSettingsFromStorage = () => ({});
+    app.terminal.modes.mouseTrackingMode = 'drag';
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+  });
+});
+
+describe('native wheel travel preserves upstream units', () => {
+  it('normalizes coarse Chrome, Firefox and page-unit wheel events without guessing the device', () => {
+    const { wheelDeltaLines } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
+    for (const [deltaY, deltaMode] of [
+      [100, 0],
+      [120, 0],
+      [1000, 0],
+      [3, 1],
+      [1, 2],
+    ]) {
+      expect(wheelDeltaLines({ deltaY, deltaMode }, 43)).toBe(
+        deltaMode === 0 ? deltaY / 25 : deltaMode === 1 ? deltaY : deltaY * 43
+      );
+      expect(wheelDeltaLines({ deltaY: -deltaY, deltaMode }, 43)).toBe(
+        -(deltaMode === 0 ? deltaY / 25 : deltaMode === 1 ? deltaY : deltaY * 43)
+      );
+    }
+  });
+
+  it('keeps fractional touchpad distance and primary/tile normalization identical', () => {
+    const { app, windowRef } = hollowApp({ mode: 'codex', cliMouseTracking: true });
+    const { wheelDeltaLines, wheelTicksForGesture } = windowRef.CodemanTerminalInput;
+    let state;
+    let ticks = 0;
+    for (let i = 0; i < 10; i++) {
+      const ev = { deltaY: -3, deltaMode: 0 };
+      const lines = wheelDeltaLines(ev, 43);
+      expect(lines).toBe(-0.12);
+      expect(app._wheelScrollLinesFloat(ev)).toBe(lines);
+      const step = wheelTicksForGesture(state, lines, i * 10);
+      state = step.state;
+      ticks += step.ticks;
+    }
+    expect(ticks).toBe(-1);
   });
 });

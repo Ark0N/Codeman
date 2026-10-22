@@ -178,8 +178,8 @@ Things to try:
 
 ### The wheel does nothing in a Codex session
 
-Codex ignores the mouse reports that forwarding would send, so Codeman does not forward
-there. Scrolling is local, and `Shift+Wheel` behaves the same way.
+Codex with mouse tracking on gets the wheel forwarded like fullscreen Claude; otherwise
+it pages its transcript or scrolls locally, while `Shift+Wheel` always uses local scrollback.
 
 ### Selected text is invisible on a light skin
 

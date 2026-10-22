@@ -235,10 +235,12 @@ Worth knowing:
 - **Wheel and touch scrolling** are forwarded into Claude's own transcript when a recent
   Claude runs fullscreen (`CLAUDE_CODE_NO_FLICKER=1`, or `"tui": "fullscreen"` in
   `~/.claude/settings.json`), so the wheel scrolls the conversation rather than the terminal.
-  Claude's default inline view keeps its history in the terminal and scrolls locally. `Shift+Wheel` is
+  Codex with mouse tracking on gets the wheel forwarded like fullscreen Claude; otherwise
+  it pages its transcript or scrolls locally. Claude's default inline view keeps its history
+  in the terminal and scrolls locally. `Shift+Wheel` is
   always local scrollback. OpenCode's wheel and swipes page its own conversation
-  (PageUp/PageDown), and so do newer Codex versions, which draw on the alternate screen
-  and leave the terminal no history of its own (an older Codex that draws inline keeps
+  (PageUp/PageDown), as do untracked fullscreen Codex versions that leave the terminal
+  no history of its own (an older Codex that draws inline keeps
   its history in the terminal and scrolls locally). The first small movement of a
   gesture pages at once, then one page per half screen of travel; one finger on the
   screen is one gesture however slowly it moves. In a grid tile or the split view's

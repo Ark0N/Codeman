@@ -146,9 +146,9 @@ Two behaviours that are deliberate and worth knowing:
   a `/` opens a live-filtering picker, arrows edit server-side state. Buffering keystrokes
   until Enter starved it, so Codex paints each keystroke at the predicted cell while the
   bytes on the wire stay byte-identical to what you typed.
-- **The wheel is not forwarded** into its transcript. Codex ignores the mouse reports
-  Codeman would send, so forwarding produced a dead wheel. Scrolling in a Codex session is
-  local scrollback.
+- **Wheel forwarding follows mouse tracking.** Codex with mouse tracking on gets the wheel
+  forwarded like fullscreen Claude; otherwise it pages its own transcript when local history
+  is empty, or scrolls locally.
 - **Work detection is Codex's own.** Codex declares its `›` composer glyph and its
   `esc to interrupt` working line, so it gets the same screen-checked idle detection Claude
   does; before 1.26.1 every Codex session reported idle for its whole life. Codex
