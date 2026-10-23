@@ -589,7 +589,14 @@ request returns. The capture runs synchronous tmux calls on the server; the
 | `lines=<n>` | With `full=1` only: read at most `<n>` lines of tmux history above the visible frame. An integer of at least 1, clamped to the configured history limit; absent or malformed, the whole limit (100,000 lines by default), as before. When a bound below the configured limit left older lines in tmux (its `history_size` is deeper), `truncated` is true with `truncationReason: 'tail'`; a byte cap still reports `'capped'`. Without it a full capture reads all of that history before `tail` cuts it, so a client that keeps a fixed number of lines (the tile grid sends its xterm's scrollback plus its rows) should send it. |
 | `alt=recording` | With `full=1` only: if the pane is in the alternate screen (a nested tmux, where tmux keeps no history, or any full-screen app such as vim or less while it is open), answer with the visible frame over the byte recording instead (`source: 'mux-visible'`, `tail` applied as without `full=1`). Shells' automatic loads send it. |
 
-## Bounded agent inspection and guarded input
+## Experimental bounded agent inspection and guarded input
+
+**Experimental:** `codeman agent inspect`, `stage` and `submit`, and their
+`/api/v1/sessions/:id/inspect|stage|submit` routes (including `/api` aliases),
+are excluded from the stable CLI/HTTP contract. Their commands, flags, paths,
+payloads and behavior may change or be removed in a minor or patch release.
+Pin a compatible Codeman version when automating them. Authentication and
+session ownership checks still apply.
 
 These authenticated routes use the standard envelope and session ownership checks.
 `/api/v1` aliases `/api`; an inaccessible session returns `404 NOT_FOUND` before

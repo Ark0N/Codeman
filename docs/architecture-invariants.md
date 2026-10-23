@@ -1245,6 +1245,10 @@ Its CLI knowledge is a GENERATED block (`npm run generate:cli-catalog`, markers 
 
 ## Agent inspection and guarded submission
 
+These three operations are experimental across both CLI and HTTP, including the
+`/api/v1` paths and unversioned aliases. See `docs/versioning-policy.md` for the
+explicit stability exception; do not infer stability from the URL prefix.
+
 `agent-session-routes.ts` is registered by `WebServer` with the other route
 modules. Ownership is checked before transcript/pane/receipt lookup. Inspection
 uses strict native metadata attribution, bounded traversal, separate prefix and

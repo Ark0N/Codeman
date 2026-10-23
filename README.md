@@ -977,7 +977,7 @@ codeman tui 3                            #      attach to session 3 of that list
 
 ### `codeman agent` — session-to-session verbs in every CLI mode
 
-The skill above drives the API with `curl` and `jq` from a preamble Codeman seeds per session. Where it does not reach (a `pi` or `shell` session, a machine without `jq`), the same environment is still there (`CODEMAN_MUX=1`, `CODEMAN_SESSION_ID`, `CODEMAN_API_URL` are exported into every pane), so `codeman agent` packages the same verbs as commands. It is a thin client over the endpoints listed under [API](#api): auth and ownership apply to every endpoint, including bounded inspection and guarded input. One line in a case's `AGENTS.md` is enough: *"other sessions: `codeman agent --help`"*.
+The skill above drives the API with `curl` and `jq` from a preamble Codeman seeds per session. Where it does not reach (a `pi` or `shell` session, a machine without `jq`), the same environment is still there (`CODEMAN_MUX=1`, `CODEMAN_SESSION_ID`, `CODEMAN_API_URL` are exported into every pane), so `codeman agent` packages the same verbs as commands. It is a thin client over the endpoints listed under [API](#api): auth and ownership apply to every endpoint, including bounded inspection and guarded input. The new `inspect`, `stage` and `submit` commands and their HTTP routes are **experimental**: commands, flags, paths, payloads and behavior may change or be removed in minor or patch releases. Pin a compatible version when automating them; see the [stability exception](docs/versioning-policy.md#experimental-agent-coordination). One line in a case's `AGENTS.md` is enough: *"other sessions: `codeman agent --help`"*.
 
 ```bash
 codeman agent ls                                          # sessions; * marks this one

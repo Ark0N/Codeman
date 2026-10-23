@@ -30,7 +30,7 @@ through: the verbs in detail (the old §5) in [reference/verbs.md](reference/ver
 worked multi-worker flows in [reference/recipes.md](reference/recipes.md), endpoint
 tables and a symptom gallery in [reference/endpoints.md](reference/endpoints.md), and
 direct messaging to claude workers in [reference/messaging.md](reference/messaging.md).
-Bounded inspection and guarded stage/submit load only when needed from
+Experimental bounded inspection and guarded stage/submit load only when needed from
 [reference/inspection-and-staging.md](reference/inspection-and-staging.md).
 
 This skill works the same whichever CLI you are: Codeman puts it where each CLI looks

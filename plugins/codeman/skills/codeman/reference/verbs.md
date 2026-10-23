@@ -767,7 +767,10 @@ Confirm cleanup with `GET /api/v1/sessions`, never with `/api/v1/sessions/unifie
 your worker forever).
 
 
-## Bounded inspection and guarded submission
+## Experimental bounded inspection and guarded submission
+
+These three commands and their HTTP routes may change or be removed in minor or
+patch releases; they are excluded from the stable CLI/HTTP contract.
 
 Use `codeman agent inspect` for bounded evidence and incremental local Codex cursors.
 Use `codeman agent stage --message-file` followed by one hash-confirmed
