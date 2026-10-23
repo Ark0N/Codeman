@@ -491,9 +491,11 @@ export function tuiSwitchGuard(tty: string): string {
 }
 
 /**
- * `set-hook` command for `TUI_SWITCH_ATTACH_HOOK`. `\#{client_pid}` is deferred
- * so tmux expands it when the hook fires, not when the hook is stored (a bare
- * `#{client_pid}` is expanded at `set-hook` time, in no client, and stored empty).
+ * `set-hook` command for `TUI_SWITCH_ATTACH_HOOK`. `\#{client_pid}` is
+ * defensive. On tmux 3.4 both this form and a bare `#{client_pid}` are stored
+ * verbatim and both record the attaching client's pid. The escape stays so a
+ * tmux that expands formats while the hook is stored (no client exists yet)
+ * cannot save an empty pid.
  */
 export function tuiSwitchAttachHook(tty: string): string {
   return (

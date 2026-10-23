@@ -682,8 +682,9 @@ describe('TUI switch-key guard', () => {
     expect(isTuiClientTty('/dev/pts/4; rm')).toBe(false);
     expect(tuiSwitchGuard('/dev/pts/4')).toContain('#{client_tty},/dev/pts/4');
     expect(tuiSwitchGuard('/dev/pts/4')).toContain('#{@codeman-tui-pid}');
-    // A bare #{client_pid} is expanded when the hook is stored, with no client
-    // attached, and the pid is then empty forever. The backslash defers it.
+    // Defensive. On tmux 3.4 a bare #{client_pid} is also stored verbatim and
+    // records the pid. The backslash stays so a tmux that expands formats while
+    // storing the hook cannot save an empty pid.
     const hook = tuiSwitchAttachHook('/dev/pts/4');
     expect(hook).toContain('/dev/pts/4');
     expect(hook).toContain('\\#{client_pid}');

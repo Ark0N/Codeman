@@ -1230,7 +1230,8 @@ export function remoteTmuxLocation(remote: SessionRemote, sessionId: string): { 
  *     'tmux -L codeman-remote new-session -A -s codeman-ssh-<id> -c <path> "cd <path> && exec <cli>" \
  *        \; set -t codeman-ssh-<id> status off \; set -t codeman-ssh-<id> mouse off \
  *        \; set -t codeman-ssh-<id> prefix C-q \; set -s escape-time 0 \; \
- *        unbind-key -a -T prefix \; bind-key -T prefix C-q send-prefix'
+ *        bind-key -T prefix C-q send-prefix \; unbind-key -a -T prefix \; \
+ *        bind-key -T prefix C-q send-prefix'
  *
  * COD-107 — the connection options (`-p`, `-i`, `-J`, SOCKS `-o ProxyCommand`,
  * arbitrary `-o`) come from the shared `buildSshConnectionArgs(remote)`, so the
@@ -1356,9 +1357,11 @@ export function buildRemoteLaunchCommand(options: {
     // The prefix TABLE is server-global (unlike `prefix C-q`, which is per
     // session). This socket is dedicated to Codeman's owned sessions, so the
     // same reduction as the local socket applies: Ctrl+Q then )/(/s/w/L must
-    // not switch-client / choose-tree onto a sibling. BEFORE remain-on-exit,
-    // which stays last because an old remote tmux rejects `failed` and aborts
-    // the rest of the chain.
+    // not switch-client / choose-tree onto a sibling. Bind, then unbind-all,
+    // then bind again: a user config that left the prefix table empty makes
+    // `unbind-key -a -T prefix` fail and abort the rest of this chain.
+    // BEFORE remain-on-exit, which stays last because an old remote tmux
+    // rejects `failed` and aborts the rest of the chain.
     ...nestedPrefixTableResetCommands(),
     // #210: keep a CRASHED pane so the failure is still on screen. Without this,
     // tmux destroys the pane -> window -> session (and, being the only session,

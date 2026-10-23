@@ -13,7 +13,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execSync } from 'node:child_process';
-import { rmSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import * as pty from 'node-pty';
 import {
   nestedPrefixTableResetCommands,
@@ -285,7 +285,7 @@ describe.skipIf(!hasTmux)('restrictTmuxPrefixTable against a real tmux (private 
 
 describe.skipIf(!hasTmux)('nested Docker/remote tmux prefix table (private socket)', () => {
   // What buildRemoteLaunchCommand / buildDockerLaunchCommand create: prefix C-q
-  // on a dedicated server, then the two commands nestedPrefixTableResetCommands
+  // on a dedicated server, then the commands nestedPrefixTableResetCommands
   // emits. The inner client is the docker-exec / ssh process; Ctrl+Q is its prefix.
   const socket = `codeman-nested-prefix-${process.pid}`;
   const tmux = `tmux -L ${socket} -f /dev/null`;
@@ -361,5 +361,40 @@ describe.skipIf(!hasTmux)('nested Docker/remote tmux prefix table (private socke
 
     client!.write('\x11\x11');
     expect(await waitFor(() => run(`${tmux} capture-pane -p -t alpha`).includes('^Q'))).toBe(true);
+  });
+
+  it('keeps the reset and the next command when the config left the prefix table empty', () => {
+    // Nested servers load the user's tmux config (no -f /dev/null). A config
+    // that empties the prefix table makes `unbind-key -a -T prefix` fail with
+    // "table prefix doesn't exist", and tmux drops every later command in the
+    // \; chain (the bind, and remain-on-exit failed). Binding send-prefix
+    // first is what lets both still run. One invocation, as the create chain is.
+    const socket = `codeman-nested-empty-${process.pid}`;
+    const config = `/tmp/${socket}.conf`;
+    writeFileSync(config, 'unbind-key -a -T prefix\n');
+    const base = `tmux -L ${socket}`;
+    const session = 'alpha';
+    const chain = [
+      `new-session -d -s ${session} -x 80 -y 24 'sleep 30'`,
+      ...nestedPrefixTableResetCommands(),
+      `set -t ${session} remain-on-exit failed`,
+    ].join(' \\; ');
+    try {
+      run(`${base} -f ${config} ${chain}`);
+      const prefix = run(`${base} list-keys -T prefix`)
+        .split('\n')
+        .filter((line) => line.trim());
+      expect(prefix).toEqual([expect.stringMatching(/-T prefix C-q\s+send-prefix$/)]);
+      expect(run(`${base} show-options -wv -t ${session} remain-on-exit`).trim()).toBe('failed');
+    } finally {
+      try {
+        const socketPath = run(`${base} display-message -p '#{socket_path}'`).trim();
+        run(`${base} kill-server`);
+        if (socketPath.endsWith(`/${socket}`)) rmSync(socketPath, { force: true });
+      } catch {
+        /* already gone */
+      }
+      rmSync(config, { force: true });
+    }
   });
 });

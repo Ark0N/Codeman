@@ -63,11 +63,21 @@ export const NESTED_TMUX_PREFIX = 'C-q';
  * Joined with `\;` onto the `new-session` that creates the server
  * (`buildRemoteLaunchCommand`, `buildDockerLaunchCommand`). No `tmux` binary
  * and no `-g`: the table is server-global, which is what we want on these
- * dedicated sockets and nowhere else. Put them BEFORE `remain-on-exit failed`
- * so a remote tmux that rejects `failed` does not drop the reduction.
+ * dedicated sockets and nowhere else.
+ *
+ * Those servers load the user's tmux config (no `-f /dev/null`). A config that
+ * leaves the prefix table empty makes `unbind-key -a -T prefix` fail with
+ * "table prefix doesn't exist", and tmux then drops every later command in the
+ * `\;` chain, including the bind and `remain-on-exit failed` (#210). The same
+ * empty table is what #669 handled on the local socket. Binding `send-prefix`
+ * first creates the table so the unbind can run; the unbind clears stock
+ * bindings (and that first bind); the second bind puts `send-prefix` back.
+ * Put them BEFORE `remain-on-exit failed` so a remote tmux that rejects
+ * `failed` does not drop the reduction.
  */
-export function nestedPrefixTableResetCommands(): readonly [string, string] {
-  return ['unbind-key -a -T prefix', `bind-key -T prefix ${NESTED_TMUX_PREFIX} send-prefix`];
+export function nestedPrefixTableResetCommands(): readonly [string, string, string] {
+  const sendPrefix = `bind-key -T prefix ${NESTED_TMUX_PREFIX} send-prefix`;
+  return [sendPrefix, 'unbind-key -a -T prefix', sendPrefix];
 }
 
 /** One `list-keys -T prefix` line: key and command. */

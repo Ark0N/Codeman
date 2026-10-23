@@ -11,7 +11,7 @@
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { execFileSync, execSync, spawn, type ChildProcess } from 'node:child_process';
-import { readlinkSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import * as pty from 'node-pty';
 import { TuiClient } from '../../src/tui/tui-client.js';
@@ -69,6 +69,9 @@ except ChildProcessError:
     pass
 os.close(master)
 `;
+
+/** Linux `/dev/pts/N` and macOS `/dev/ttysNNN`, the same ttys `isTuiClientTty` accepts. */
+const CLIENT_TTY = /^\/dev\/(?:pts\/[0-9]+|ttys[0-9]+)$/;
 
 describe.skipIf(!hasTmux)('TUI M-1..M-9 switch only the attaching client', () => {
   const socket = `codeman-tui-switch-${process.pid}`;
@@ -146,13 +149,14 @@ describe.skipIf(!hasTmux)('TUI M-1..M-9 switch only the attaching client', () =>
     helper = spawn('python3', ['-c', PTY_HELPER, socket, alpha], { stdio: ['pipe', 'pipe', 'inherit'] });
     createInterface({ input: helper.stdout! }).on('line', pushLine);
     const tty = (await nextLine()).trim();
-    expect(tty).toMatch(/^\/dev\/pts\/[0-9]+$/);
+    expect(tty).toMatch(CLIENT_TTY);
 
     expect(await client.armTuiSwitchGuard(tty)).toBe(true);
     const hooks = run(['show-hooks', '-g']);
     expect(hooks).toContain('client-attached[90]');
     expect(hooks).toContain(tty);
-    // Expanded at set-hook time this is empty and the guard never matches.
+    // The stored hook still names the format. Expanding it while the hook is
+    // stored would save an empty pid (no client yet) and the guard would never match.
     expect(hooks).toContain('#{client_pid}');
 
     helper.stdin!.write('GO\n');
@@ -185,9 +189,21 @@ describe.skipIf(!hasTmux)('TUI M-1..M-9 switch only the attaching client', () =>
       rows: 24,
       env,
     });
-    const otherTty = readlinkSync(`/proc/${other.pid}/fd/0`);
+    // list-clients is the portable tty: /proc/<pid>/fd/0 does not exist on macOS.
+    let otherTty = '';
+    expect(
+      await waitFor(() => {
+        for (const [candidate, info] of sessions()) {
+          if (candidate !== tty && info.session === alpha) {
+            otherTty = candidate;
+            return true;
+          }
+        }
+        return false;
+      })
+    ).toBe(true);
+    expect(otherTty).toMatch(CLIENT_TTY);
     expect(otherTty).not.toBe(tty);
-    expect(await waitFor(() => sessions().get(otherTty)?.session === alpha)).toBe(true);
 
     other.write('\x1b2');
     await new Promise((resolve) => setTimeout(resolve, 400));
