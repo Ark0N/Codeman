@@ -977,7 +977,7 @@ codeman tui 3                            #      attach to session 3 of that list
 
 ### `codeman agent` — session-to-session verbs in every CLI mode
 
-The skill above drives the API with `curl` and `jq` from a preamble Codeman seeds per session. Where it does not reach (a `pi` or `shell` session, a machine without `jq`), the same environment is still there (`CODEMAN_MUX=1`, `CODEMAN_SESSION_ID`, `CODEMAN_API_URL` are exported into every pane), so `codeman agent` packages the same verbs as commands. It is a thin client over the endpoints listed under [API](#api): no new route, no new transport, auth and ownership unchanged. One line in a case's `AGENTS.md` is enough: *"other sessions: `codeman agent --help`"*.
+The skill above drives the API with `curl` and `jq` from a preamble Codeman seeds per session. Where it does not reach (a `pi` or `shell` session, a machine without `jq`), the same environment is still there (`CODEMAN_MUX=1`, `CODEMAN_SESSION_ID`, `CODEMAN_API_URL` are exported into every pane), so `codeman agent` packages the same verbs as commands. It is a thin client over the endpoints listed under [API](#api): auth and ownership apply to every endpoint, including bounded inspection and guarded input. One line in a case's `AGENTS.md` is enough: *"other sessions: `codeman agent --help`"*.
 
 ```bash
 codeman agent ls                                          # sessions; * marks this one
@@ -985,6 +985,9 @@ SID=$(codeman agent spawn scratch-1 --mode claude)        # quick-start + wait f
 codeman agent send "$SID" 'review src/, then say DONE' --until stop,exit --timeout 300000   # --wait = default signal set
 codeman agent read "$SID"                                 # last answer (as the server reads it for that mode)
 codeman agent read "$SID" --tail 3000                     # terminal tail, ANSI stripped (every mode)
+codeman agent inspect "$SID" --max-bytes 8192 --json     # recent evidence + opaque cursor (pane snapshots are labeled)
+codeman agent stage "$SID" --message-file /tmp/prompt.txt --json  # no Enter; known local Codex composer only
+codeman agent submit "$SID" --stage-id "$STAGE_ID" --confirm-sha "$SHA256" --json  # one conditional Enter
 codeman agent send "$SID" 'run the tests, then print WORKDONE followed by _4711'   # hook-less modes (opencode, pi, …): ask for the marker in halves …
 codeman agent wait "$SID" --match WORKDONE_4711           # … and wait on the joined form, which the prompt's echo never contains
 codeman agent interrupt "$SID"                            # a bare ESC, conversation intact

@@ -2357,3 +2357,15 @@ export const CustomModelSelectionSchema = z.union([
   }),
   z.object({ clear: z.literal(true) }),
 ]);
+
+/** Agent inspection bounds are bytes of evidence, independent of the JSON envelope. */
+export const AgentInspectQuerySchema = z
+  .object({
+    maxBytes: z.coerce.number().int().min(1).max(65536).default(8192),
+    since: z.string().uuid().optional(),
+  })
+  .strict();
+export const AgentStageSchema = z.object({ message: z.string().min(1).max(8192) }).strict();
+export const AgentSubmitSchema = z
+  .object({ stageId: z.string().uuid(), confirmSha: z.string().regex(/^[a-f0-9]{64}$/) })
+  .strict();

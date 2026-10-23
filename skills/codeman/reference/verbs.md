@@ -764,3 +764,12 @@ Confirm cleanup with `GET /api/v1/sessions`, never with `/api/v1/sessions/unifie
 (that one folds in transcript history from the whole machine and will keep showing
 your worker forever).
 
+
+## Bounded inspection and guarded submission
+
+Use `codeman agent inspect` for bounded evidence and incremental local Codex cursors.
+Use `codeman agent stage --message-file` followed by one hash-confirmed
+`codeman agent submit --stage-id --confirm-sha` when the exact local Codex
+composer and caret can be verified. Other targets provide labeled snapshots or
+refuse guarded input. See [inspection and staging](inspection-and-staging.md)
+for budgets, receipt expiry, conflict handling and supported composers.

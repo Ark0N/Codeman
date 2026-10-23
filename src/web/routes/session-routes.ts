@@ -4,6 +4,7 @@
  * auto-clear, auto-compact, image watcher, flicker filter, and logout.
  */
 
+import { registerAgentSessionRoutes } from './agent-session-routes.js';
 import { FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { join, dirname, extname, basename, resolve as resolvePath } from 'node:path';
@@ -1112,6 +1113,8 @@ export function registerSessionRoutes(
   // ═══════════════════════════════════════════════════════════════
 
   // ========== Logout ==========
+
+  registerAgentSessionRoutes(app, ctx);
 
   app.post('/api/logout', async (req, reply) => {
     // Invalidate server-side session token (not just the browser cookie)
@@ -2466,17 +2469,20 @@ export function registerSessionRoutes(
     try {
       // Route through the dedicated Codeman socket — bare `tmux` would target the
       // user's default server and never find this session (same #80 regression class).
-      await new Promise<void>((resolve, reject) => {
-        execFile(
-          'tmux',
-          ['-L', ctx.mux.muxSocket, 'send-keys', '-H', '-t', muxName, ...hex],
-          { timeout: 5000 },
-          (err) => {
-            if (err) reject(err);
-            else resolve();
-          }
-        );
-      });
+      await session.performAuxiliaryInput(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            execFile(
+              'tmux',
+              ['-L', ctx.mux.muxSocket, 'send-keys', '-H', '-t', muxName, ...hex],
+              { timeout: 5000 },
+              (err) => {
+                if (err) reject(err);
+                else resolve();
+              }
+            );
+          })
+      );
     } catch (err) {
       console.error('[Server] send-key failed:', err);
       return createErrorResponse(ApiErrorCode.INTERNAL_ERROR, 'tmux send-keys failed');

@@ -174,13 +174,13 @@ describe('sendInput wiring', () => {
   it('types a single-character submit with send-keys -l, so a dialog answer selects', async () => {
     const body = await sendInputBody();
     const keysBranch = body.slice(body.indexOf('if (submitsAsKeys(textPart))'), body.indexOf('} else {'));
-    expect(keysBranch).toMatch(/send-keys[^`]*-l \$\{shellescape\(escapeTmuxTrailingSemicolon\(textPart\)\)\}/);
+    expect(keysBranch).toMatch(/send-keys[^`]*-l -- \$\{shellescape\(escapeTmuxTrailingSemicolon\(textPart\)\)\}/);
     expect(keysBranch).not.toContain('pasteText(');
   });
 
   it('escapes a trailing ";" on every send-keys -l in sendInput and sendInputToPane', async () => {
     const src = await source();
-    const typed = src.match(/send-keys[^`\n]*-l \$\{[^`\n]*\}/g) ?? [];
+    const typed = src.match(/send-keys[^`\n]*-l (?:-- )?\$\{[^`\n]*\}/g) ?? [];
     const inSend = [await sendInputBody(), src.slice(src.indexOf('sendInputToPane(muxName'))]
       .map((b) => b.slice(0, b.indexOf('\n  }\n')))
       .join('\n');
@@ -218,6 +218,37 @@ describe('sendInput line breaks', () => {
   function bufferText(setBufferCmd: string): string {
     return argvOf(setBufferCmd.replace(/^.*? set-buffer /, `${FAKE_TMUX} set-buffer `)).at(-1) as string;
   }
+
+  it('stages leading dashes as literal operands without Enter or flag interpretation', async () => {
+    const manager = managerWithSession();
+    try {
+      for (const text of ['-n', '--', '-t other', '-']) {
+        manager.ran = [];
+        expect(await manager.sendInput('s1', text)).toBe(true);
+        expect(manager.ran).toHaveLength(1);
+        const argv = argvOf(manager.ran[0].replace(/^.*? send-keys /, `${FAKE_TMUX} send-keys `));
+        expect(argv.slice(-3)).toEqual(['-l', '--', text]);
+        expect(argv).not.toContain('Enter');
+      }
+    } finally {
+      manager.destroy();
+    }
+  });
+
+  it('checks a conditional Enter before the actual inputRunner command', async () => {
+    const manager = managerWithSession();
+    try {
+      expect(await manager.sendInput('s1', '\r', { beforeDispatch: () => false })).toBe(false);
+      expect(manager.ran).toEqual([]);
+      expect(await manager.sendInput('s1', '\r', { beforeDispatch: () => true })).toBe(true);
+      expect(manager.ran).toEqual([expect.stringMatching(/ Enter$/)]);
+      manager.ran = [];
+      expect(await manager.sendInput('s1', 'draft\r', { beforeDispatch: () => true })).toBe(false);
+      expect(manager.ran).toEqual([]);
+    } finally {
+      manager.destroy();
+    }
+  });
 
   it('submits a multi-line prompt as one paste with its line breaks, then Enter', async () => {
     const manager = managerWithSession();
@@ -269,7 +300,7 @@ describe('sendInput line breaks', () => {
     // Without an Enter, what is left is one line, so it is typed like any other.
     const typed = managerWithSession();
     await typed.sendInput('s1', '\n\njust type');
-    expect(typed.ran).toEqual([expect.stringMatching(/ send-keys -t "codeman-abc12345" -l 'just type'$/)]);
+    expect(typed.ran).toEqual([expect.stringMatching(/ send-keys -t "codeman-abc12345" -l -- 'just type'$/)]);
   });
 
   it('leaves single-line input as it was: pasted with Enter, typed without', async () => {
@@ -281,6 +312,6 @@ describe('sendInput line breaks', () => {
     const typed = managerWithSession();
     await typed.sendInput('s1', 'just type');
     expect(typed.ran).toHaveLength(1);
-    expect(typed.ran[0]).toMatch(/ send-keys -t "codeman-abc12345" -l 'just type'$/);
+    expect(typed.ran[0]).toMatch(/ send-keys -t "codeman-abc12345" -l -- 'just type'$/);
   });
 });

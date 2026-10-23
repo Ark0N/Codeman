@@ -30,12 +30,14 @@ through: the verbs in detail (the old §5) in [reference/verbs.md](reference/ver
 worked multi-worker flows in [reference/recipes.md](reference/recipes.md), endpoint
 tables and a symptom gallery in [reference/endpoints.md](reference/endpoints.md), and
 direct messaging to claude workers in [reference/messaging.md](reference/messaging.md).
+Bounded inspection and guarded stage/submit load only when needed from
+[reference/inspection-and-staging.md](reference/inspection-and-staging.md).
 
 This skill works the same whichever CLI you are: Codeman puts it where each CLI looks
 for skills (`.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI,
 OpenCode, Antigravity, Grok, DeepSeek and OMP). A **pi** or **shell** worker never gets
 it, but has the same environment: tell it *"other sessions: `codeman agent --help`"*.
-That bundled CLI (`ls`, `spawn`, `send`, `wait`, `read`, `interrupt`, `rm`) is the same
+That bundled CLI (`ls`, `spawn`, `send`, `wait`, `read`, `inspect`, `stage`, `submit`, `interrupt`, `rm`) is the same
 verbs over the same endpoints, with the guards below (no control bytes, no self-delete,
 no guessed URL) enforced in code, and it is also your own way through when this
 machine has no `jq` for the preamble below.
