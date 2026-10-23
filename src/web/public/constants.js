@@ -2159,7 +2159,8 @@ const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LIN
  * and folder detectors then skip reserved spans, earlier matches and URLs.
  *
  * The one entry point for both consumers (terminal link provider, response
- * viewer), so a path form is clickable in both or in neither.
+ * viewer). The viewer restores a leading bold path label's context, but paths
+ * split across other inline elements are still detected per text node.
  *
  * @param {string} text
  * @returns {Array<{path: string, index: number, folder?: true}>} `index` is where `path` starts in
@@ -2217,6 +2218,10 @@ function findFilePathLinks(text) {
   return found.sort((a, b) => a.index - b.index);
 }
 
+/** Labels that explicitly identify a path, shared with the rendered-markdown linkifier. */
+const SPACED_FILE_PATH_LABEL_PATTERN =
+  /^(?:path|files?|saved (?:to|as)|wrote|written to|output|created|location|attachment):[ \t]*$/i;
+
 /**
  * A file path WITH SPACES on one line, or null.
  *
@@ -2229,10 +2234,12 @@ function findFilePathLinks(text) {
  *   - /mnt/c/My Docs/report.docx            after a list marker (`-`, `*`, `•`, `1.`, `2)`)
  *   Saved to: 03 Attachments/Build SIPOC Design/plan.pptx      after a short label (one to four words + `:`)
  *
- * An absolute path may stand alone; a relative or `~/` one needs a marker or a
- * label, since a bare spaced relative candidate is ordinary prose. One trailing
+ * An absolute path may stand alone or follow a marker. Relative and `~/`
+ * paths require an explicit path label (SPACED_FILE_PATH_LABEL_PATTERN), with
+ * an optional marker before it: generic labels and bullets also introduce prose. One trailing
  * sentence mark is left out. The candidate must read as ONE path: it ends on a
- * known extension, and no earlier word ends on one, starts a new `/` path, ends
+ * known extension, and no earlier word ends on one or `/`; later words cannot
+ * start a new `/`, `~/`, `./` or `../` path. No earlier word ends
  * in `:` or is an arrow, so two paths on a line are never merged.
  *
  * A candidate that is one path but not a linkable one (an unknown root such as
@@ -2250,23 +2257,18 @@ function spacedFilePathOnLine(line) {
   const index = prefix[0].length;
   const path = text.slice(index).trimEnd().replace(/[.,;:!?]$/, '');
   if (!path.includes(' ') || !path.includes('/') || path.length > 1000) return null;
-  if (!path.startsWith('/') && !prefix[1] && !prefix[2]) return null;
+  if (!path.startsWith('/') && !SPACED_FILE_PATH_LABEL_PATTERN.test(prefix[2] || '')) return null;
   if (!PATH_TOKEN_ENDS_WITH_EXTENSION.test(path)) return null;
   if (/[\t"'`<>|;&\x00-\x1f\\]/.test(path) || path.includes('://')) return null;
   const words = path.split(' ');
   for (const word of words.slice(0, -1)) {
-    if (word.endsWith(':') || /^(?:—|–|→|=>|->|<-)$/.test(word)) return null;
+    if (word.endsWith('/') || word.endsWith(':') || /^(?:—|–|→|=>|->|<-)$/.test(word)) return null;
     if (PATH_TOKEN_ENDS_WITH_EXTENSION.test(word.replace(/[.,;:!?)\]}]+$/, ''))) return null;
   }
-  if (words.slice(1).some((word) => word.startsWith('/'))) return null;
+  if (words.slice(1).some((word) => /^(?:\/|~\/|\.{1,2}\/)/.test(word))) return null;
   const rooted = SPACED_PATH_ROOT.test(path) || path.startsWith('~/');
   const segments = path.replace(/^~?\//, '').split('/');
   const link = (rooted || !path.startsWith('/')) && segments.every((seg) => seg && seg !== '.' && seg !== '..');
-  // A lone slash-containing final word after plain words is usually prose
-  // ("- Updated src/foo.ts"), not a spaced top-level directory. Let the
-  // ordinary detectors handle it, including explicit relative paths.
-  const firstSlash = words.findIndex((word) => word.includes('/'));
-  if (link && firstSlash === words.length - 1 && !path.startsWith('/')) return null;
   return { path, index, link };
 }
 

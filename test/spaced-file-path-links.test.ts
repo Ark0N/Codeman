@@ -5,7 +5,7 @@
 // viewer linked a fragment such as `/mnt/c/proj/My` plus a bogus relative tail
 // `Docs/report.docx`, each opening the wrong target. findFilePathLinks() now takes
 // a spaced path WHOLE where the line makes its extent unambiguous: the path is the
-// whole line, or follows a list marker and/or a short `Label:`. A spaced line that
+// whole absolute path, or a relative path after an explicit path label. A spaced line that
 // is one path but not a linkable one (unknown root, `..`) links nothing at all,
 // rather than a fragment.
 import { readFileSync } from 'node:fs';
@@ -49,19 +49,33 @@ describe('spaced file paths', () => {
     expect(paths(`${label} ${p}`)).toEqual([p]);
   });
 
-  it.each(['Path:', 'File:', 'Saved to:'])('links a relative spaced path after %s', (label) => {
+  it.each([
+    'Path:',
+    'File:',
+    'Files:',
+    'Saved to:',
+    'Saved as:',
+    'Wrote:',
+    'Written to:',
+    'Output:',
+    'Created:',
+    'Location:',
+    'Attachment:',
+    'pAtH:',
+  ])('links a relative spaced path after %s', (label) => {
     const p = '03 Attachments/Build SIPOC Design/Build-SIPOC.pptx';
     expect(paths(`${label} ${p}`)).toEqual([p]);
   });
 
   it.each(['- ', '* ', '• ', '1. ', '2) '])('links a spaced path after the list marker %j', (marker) => {
     const rel = '03 Attachments/Build SIPOC Design/Build-SIPOC.pptx';
-    expect(paths(`${marker}${rel}`)).toEqual([rel]);
+    expect(paths(`${marker}${rel}`)).toEqual(['Design/Build-SIPOC.pptx']);
+    expect(paths(`${marker}Path: ${rel}`)).toEqual([rel]);
     expect(paths(`  ${marker}${LONG}`)).toEqual([LONG]);
   });
 
-  it('works line by line inside multi-line text (the response viewer hands over text nodes)', () => {
-    const text = `Wrote two files:\n- ${LONG}\n- notes/a b/c.md\n`;
+  it('works line by line in code-block text, where list markers remain literal', () => {
+    const text = `Wrote two files:\n- ${LONG}\n- Path: notes/a b/c.md\n`;
     expect(paths(text)).toEqual([LONG, 'notes/a b/c.md']);
   });
 
@@ -73,7 +87,7 @@ describe('spaced file paths', () => {
   it('links nothing for a spaced path with a `..` or `.` segment', () => {
     expect(paths('/mnt/c/proj/../other place/docs/report.docx')).toEqual([]);
     expect(paths('File: 03 Attachments/../private/report.xlsx')).toEqual([]);
-    expect(paths('- 03 Attachments/./private/report.xlsx')).toEqual([]);
+    expect(paths('- File: 03 Attachments/./private/report.xlsx')).toEqual([]);
   });
 
   it('never merges two space-separated paths into one link', () => {
@@ -98,16 +112,37 @@ describe('spaced file paths', () => {
     ['Error: cannot open src/foo.ts', 'src/foo.ts'],
     ['Note: see src/foo.ts', 'src/foo.ts'],
     ['- Moved ../a/b.ts', '../a/b.ts'],
-    ['Saved to: 03 Attachments/plan.pptx', 'Attachments/plan.pptx'],
   ])('defers ambiguous relative prose to ordinary detectors: %s', (line, path) => {
     expect(paths(line)).toEqual([path]);
   });
 
-  it('pins residual ambiguity when spaces occur below the first directory', () => {
-    // Without filesystem knowledge these still have the shape of spaced paths.
-    expect(paths('- Fixed bug in src/My Docs/a.md')).toEqual(['Fixed bug in src/My Docs/a.md']);
+  it('requires a path label for relative candidates but retains absolute ambiguity', () => {
+    expect(paths('- Fixed bug in src/My Docs/a.md')).toEqual(['Docs/a.md']);
+    expect(paths('Saved to: 03 Attachments/plan.pptx')).toEqual(['03 Attachments/plan.pptx']);
     expect(paths('/home/me/proj contains a.md')).toEqual(['/home/me/proj contains a.md']);
     expect(paths('Saved to: ~/My Docs/plan.md')).toEqual(['~/My Docs/plan.md']);
+  });
+
+  it.each([
+    ['1. Ran 45/45 tests in test/foo.test.ts', ['test/foo.test.ts']],
+    ['- Fixed CI/CD pipeline in .github/workflows/ci.yml', ['.github/workflows/ci.yml']],
+    ['- Added read/write support in config.ts', ['config.ts']],
+    ['- Tests: 45/45 pass in test/foo.test.ts', ['test/foo.test.ts']],
+    ['Error: I/O failure reading data.json', ['data.json']],
+    ['- Moved src/ into lib/a.ts', ['src/', 'lib/a.ts']],
+    ['- Copied files from ../shared into lib/a.ts', ['lib/a.ts']],
+    ['- Ran 45/45 tests in ~/proj/foo.test.ts', ['~/proj/foo.test.ts']],
+  ])('does not swallow slash-containing prose: %s', (line, expected) => {
+    expect(paths(line)).toEqual(expected);
+  });
+
+  it.each(['~/', './', '../', '/tmp/'])('does not merge a later new path starting with %s', (prefix) => {
+    const line = `Path: notes/a ${prefix}other/file.md`;
+    expect(paths(line)).not.toContain(line.slice(6));
+  });
+
+  it('does not merge a folder token into a labelled spaced path', () => {
+    expect(paths('Path: src/ into lib/a.ts')).toEqual(['src/', 'lib/a.ts']);
   });
 
   it.each([40000, 80000])('stays linear with %i interior spaces', (length) => {
