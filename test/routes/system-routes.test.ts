@@ -343,6 +343,19 @@ describe('system-routes', () => {
       expect(harness.ctx.store.cleanupSessionsByIds).toHaveBeenCalledWith(new Set());
       expect(runStaleSessionCleanup).toHaveBeenCalledOnce();
     });
+
+    it('deletes the edit history of every session it cleaned (diffs can hold secrets)', async () => {
+      harness.ctx.tabLayouts.runStaleSessionCleanup = vi.fn(async () => ({
+        count: 2,
+        cleaned: [
+          { id: 'stale-1', name: 'a' },
+          { id: 'stale-2', name: 'b' },
+        ],
+      })) as never;
+      const res = await harness.app.inject({ method: 'POST', url: '/api/cleanup-state' });
+      expect(JSON.parse(res.body).cleanedSessions).toBe(2);
+      expect(vi.mocked(harness.ctx.forgetEditHistory).mock.calls).toEqual([['stale-1'], ['stale-2']]);
+    });
   });
 
   // ========== GET /api/subagents ==========

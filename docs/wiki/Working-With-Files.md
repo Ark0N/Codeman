@@ -269,12 +269,12 @@ Click it for a draggable window listing the active session's edits, newest first
   its worktree branch. **Main agent only** hides them. **Group by file** puts the edits under
   their file, with the totals on the file's row.
 - Images an agent produced with a shell command (a render, a plot, a screenshot) appear as rows with
-  a thumbnail: a `.png`, `.jpg`, `.gif`, `.webp` or `.avif` path named in the command or its output
-  counts when the file's modification time falls within that command's run. Images the agent sent
-  you count as well. Images outside the workspace show no thumbnail. Click one to open it in the
-  preview.
+  a thumbnail: a `.png`, `.jpg`, `.gif`, `.webp`, `.avif` or `.svg` path named in the command or
+  its output counts when the file's modification time falls within that command's run. Images the
+  agent sent you count as well. Images outside the workspace and SVGs show no thumbnail. Click one
+  to open it in the preview.
 - **Load older** reads further back in the conversation, in the main agent's transcript and the
-  subagents' alike.
+  subagents' alike (up to three transcripts per click; with more, they take turns).
 
 It works for local Claude sessions only. Remote (SSH), Docker and other CLIs' sessions say so instead.
 
@@ -294,7 +294,7 @@ How it reads:
   `~/.codeman/edit-history/<session-id>.json`, including API keys or `.env` contents it edited. The file is
   readable by your user only, capped at 500 edits and 4 MiB of diff text per session (the oldest
   are dropped), never part of search, blocked from every file route, and deleted when you delete
-  the session. A pinned session you kill keeps its record and its history until you unpin and
+  the session (a file left behind, by a crash for instance, goes at the next start). A pinned session you kill keeps its record and its history until you unpin and
   delete it.
 - **Images go through the existing file routes.** A thumbnail inside the workspace uses the File
   Viewer's route. An image outside it opens like any clicked path outside the workspace (no

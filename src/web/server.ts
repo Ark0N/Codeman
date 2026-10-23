@@ -348,6 +348,7 @@ export class WebServer extends EventEmitter {
     readSources: readClaudeEditSources,
     probe: probeLocalPaths,
     loadStore: (sessionId) => EditHistoryStore.load(sessionId),
+    sweepStores: (keep) => EditHistoryStore.sweep(keep),
   });
   private respawnControllers: Map<string, RespawnController> = new Map();
   private respawnTimers: Map<string, { timer: NodeJS.Timeout; endAt: number; startedAt: number }> = new Map();
@@ -2506,12 +2507,18 @@ export class WebServer extends EventEmitter {
       lifecycleLog.log({ event: 'stale_cleaned', sessionId: s.id, name: s.name });
       this.forgetEditHistory(s.id);
     }
+    // History files no session owns (a crash between removing a record and deleting its file).
+    const exists = (id: string) => this.sessions.has(id) || !!this.store.getSession(id);
+    await this.editHistorySync.sweep(exists).catch((err) => {
+      console.warn('[EditHistory] Sweeping orphaned histories failed:', getErrorMessage(err));
+    });
     return result.count;
   }
 
   /**
    * Delete a session's edit history (diffs can hold secrets) once its record is gone: deleted
-   * live (`cleanupSession`), deleted as a record only (DELETE route), or cleaned as stale.
+   * live (`cleanupSession`), deleted as a record only (DELETE route), or cleaned as stale
+   * (startup, `POST /api/cleanup-state`).
    */
   private forgetEditHistory(sessionId: string): void {
     void this.editHistorySync.remove(sessionId).catch((err) => {

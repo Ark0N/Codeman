@@ -15,7 +15,10 @@
  * A first read of a file starts `budget` bytes before its end (transcripts reach 100 MB+),
  * drops the cut first line and leaves `floor` there. A line longer than the budget is
  * skipped instead of blocking the cursor, reading forward (`midLine`) and backward
- * (`floorMidLine`).
+ * (`floorMidLine`); the line after it (forward) or before it (backward) is read whole.
+ * That needs every chunk to be a full budget unless it reaches the file's end (forward) or
+ * start (older): a chunk with no line end then means one line longer than the budget. The
+ * caller does not hand over a chunk that a budget shared by several files cut short.
  *
  * A new conversation (`/clear`, resume) arrives as a new `transcriptId`: cursors and
  * pending Bash calls start over, entries stay. Entries are capped at {@link MAX_ENTRIES}
@@ -25,8 +28,10 @@
  *
  * ⚠️ The file holds secrets: a diff carries whatever the agent wrote, keys and `.env`
  * contents included. So, like `intents.json`, it is written 0600 via tmp+rename, bounded,
- * deleted with the session (`remove()`), never fed to `/api/search`, and blocked from the
- * file routes by `isSensitivePath` (`web/sensitive-path.ts`).
+ * deleted with the session (`remove()`; `sweep()` at startup removes files no session owns),
+ * never fed to `/api/search`, and blocked from the file routes by `isSensitivePath`
+ * (`web/sensitive-path.ts`). `load()` takes the file as untrusted: past
+ * {@link MAX_FILE_BYTES} it is not parsed, and every part is rebuilt under the same bounds.
  *
  * Persisted as JSON under `dataPath('edit-history', '<sessionId>.json')`, written debounced.
  *
@@ -35,10 +40,11 @@
  * @module edit-history-store
  */
 
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dataPath } from './config/instance.js';
 import {
+  capHunks,
   MAX_HUNK_BYTES,
   MAX_PENDING_BASH,
   MAX_PENDING_COMMAND_CHARS,
@@ -61,6 +67,13 @@ export const MAX_AGENT_META_CHARS = 1024;
 export const MAX_AGENTS = MAX_ENTRIES + 1;
 /** Bytes read per file and pass (first read, forward step, "older" step). */
 export const READ_BUDGET_BYTES = 8 * 1024 * 1024;
+/**
+ * A store file larger than this is not parsed (starts empty). One written within the caps
+ * above stays far below it; JSON escaping at most doubles ordinary text.
+ */
+export const MAX_FILE_BYTES = 32 * 1024 * 1024;
+/** Longest id, cwd or agent id of a loaded pending Bash call; a longer one is no real one. */
+const MAX_LOADED_FIELD_CHARS = 4096;
 export const MAIN_SOURCE = 'main';
 const SAVE_DEBOUNCE_MS = 1000;
 const FILE_VERSION = 1;
@@ -137,10 +150,10 @@ function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** What an entry costs against {@link MAX_STORE_BYTES}: its path and diff lines, plus a fixed overhead. */
+/** What an entry costs against {@link MAX_STORE_BYTES}: its strings and diff lines, plus a fixed overhead. */
 export function entryBytes(e: EditHistoryEntry): number {
-  let n = 128 + Buffer.byteLength(e.path);
-  for (const h of e.hunks) if (Array.isArray(h?.lines)) for (const l of h.lines) n += Buffer.byteLength(String(l)) + 3;
+  let n = 128 + Buffer.byteLength(e.id) + Buffer.byteLength(e.path) + Buffer.byteLength(e.agentId ?? '');
+  for (const h of e.hunks) for (const l of h.lines) n += Buffer.byteLength(l) + 3;
   return n;
 }
 
@@ -185,26 +198,47 @@ function cursorFrom(raw: unknown): SourceCursor | null {
   return cursor;
 }
 
+const loadedField = (v: unknown): v is string => typeof v === 'string' && v.length <= MAX_LOADED_FIELD_CHARS;
+
 function pendingBashFrom(raw: unknown): PendingBash | null {
   if (!isObj(raw)) return null;
   const { id, ts, command, cwd, agentId } = raw;
-  if (typeof id !== 'string' || typeof ts !== 'number' || typeof command !== 'string' || typeof cwd !== 'string') {
-    return null;
-  }
-  const pending: PendingBash = { id, ts, command: command.slice(0, MAX_PENDING_COMMAND_CHARS), cwd };
-  if (typeof agentId === 'string') pending.agentId = agentId;
+  if (!loadedField(id) || !Number.isFinite(ts) || typeof command !== 'string' || !loadedField(cwd)) return null;
+  if (agentId !== undefined && !loadedField(agentId)) return null;
+  const pending: PendingBash = { id, ts: ts as number, command: command.slice(0, MAX_PENDING_COMMAND_CHARS), cwd };
+  if (agentId) pending.agentId = agentId;
   return pending;
 }
 
-function isEntry(raw: unknown): raw is EditHistoryEntry {
-  return (
-    isObj(raw) &&
-    typeof raw.id === 'string' &&
-    typeof raw.path === 'string' &&
-    typeof raw.ts === 'number' &&
-    Array.isArray(raw.hunks) &&
-    raw.hunks.every((h) => isObj(h) && Array.isArray(h.lines))
-  );
+const ENTRY_KINDS = new Set(['code', 'image']);
+const ENTRY_TOOLS = new Set(['Edit', 'Write', 'edit', 'bash', 'sent']);
+const countFrom = (v: unknown): number => (Number.isSafeInteger(v) && (v as number) >= 0 ? (v as number) : 0);
+
+/**
+ * A loaded entry rebuilt from its known fields: unknown fields and non-string diff lines are
+ * dropped and the per-edit {@link MAX_HUNK_BYTES} is applied again; null when it is unusable.
+ */
+function entryFrom(raw: unknown): EditHistoryEntry | null {
+  if (!isObj(raw) || typeof raw.id !== 'string' || !raw.id || typeof raw.path !== 'string' || !raw.path) return null;
+  if (!Number.isFinite(raw.ts) || !ENTRY_KINDS.has(raw.kind as string) || !ENTRY_TOOLS.has(raw.tool as string)) {
+    return null;
+  }
+  if (!Array.isArray(raw.hunks)) return null;
+  const { hunks, truncated } = capHunks(raw.hunks);
+  const entry: EditHistoryEntry = {
+    id: raw.id,
+    ts: raw.ts as number,
+    path: raw.path,
+    kind: raw.kind as EditHistoryEntry['kind'],
+    tool: raw.tool as EditHistoryTool,
+    created: raw.created === true,
+    added: countFrom(raw.added),
+    removed: countFrom(raw.removed),
+    hunks,
+    truncated: truncated || raw.truncated === true,
+  };
+  if (typeof raw.agentId === 'string' && raw.agentId) entry.agentId = raw.agentId;
+  return entry;
 }
 
 export class EditHistoryStore {
@@ -229,11 +263,15 @@ export class EditHistoryStore {
     this.debounceMs = opts.debounceMs ?? SAVE_DEBOUNCE_MS;
   }
 
-  /** A store with the persisted state of `sessionId`; empty when the file is missing or unreadable. */
+  /**
+   * A store with the persisted state of `sessionId`; empty when the file is missing,
+   * unreadable or larger than {@link MAX_FILE_BYTES}.
+   */
   static async load(sessionId: string, opts: EditHistoryStoreOptions = {}): Promise<EditHistoryStore> {
     const store = new EditHistoryStore(sessionId, opts);
     let data: unknown;
     try {
+      if ((await stat(store.file)).size > MAX_FILE_BYTES) return store;
       data = JSON.parse(await readFile(store.file, 'utf-8'));
     } catch {
       return store;
@@ -252,12 +290,44 @@ export class EditHistoryStore {
         .filter((p): p is PendingBash => p !== null)
         .slice(-MAX_PENDING_BASH);
     }
-    if (Array.isArray(f.entries)) store.addRecords(f.entries.filter(isEntry));
+    if (Array.isArray(f.entries)) {
+      store.addRecords(f.entries.map(entryFrom).filter((e): e is EditHistoryEntry => e !== null));
+    }
     for (const [k, raw] of Object.entries(isObj(f.agents) ? f.agents : {})) {
-      const meta = agentMetaFrom(raw);
+      const meta = k.length <= MAX_AGENT_META_CHARS ? agentMetaFrom(raw) : null;
       if (meta) store.putAgent(k, meta);
     }
     return store;
+  }
+
+  /**
+   * Delete the stored history of every session `keep` rejects, and tmp files other processes
+   * left behind (startup: a crash between removing a session's record and deleting its file,
+   * or mid-write; an older build).
+   * Returns how many sessions' files were deleted.
+   */
+  static async sweep(
+    keep: (sessionId: string) => boolean,
+    opts: Pick<EditHistoryStoreOptions, 'dir'> = {}
+  ): Promise<number> {
+    const dir = opts.dir ?? dataPath('edit-history');
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch {
+      return 0;
+    }
+    let removed = 0;
+    for (const name of names) {
+      const tmp = /^(.+)\.json\.(\d+)\.tmp$/.exec(name);
+      const stale = tmp
+        ? Number(tmp[2]) !== process.pid
+        : name.endsWith('.json') && !keep(name.slice(0, -'.json'.length));
+      if (!stale) continue;
+      await unlink(join(dir, name)).catch(() => undefined);
+      if (!tmp) removed++;
+    }
+    return removed;
   }
 
   getTranscriptId(): string | null {
@@ -338,7 +408,19 @@ export class EditHistoryStore {
     return [...this.cursors.entries()].filter(([, c]) => c.floor > 0).map(([s]) => s);
   }
 
-  /** Apply a forward chunk read at `nextRange`. Returns new entries and Bash image candidates. */
+  /**
+   * A source whose file is gone (a deleted subagent transcript): its cursor goes, so it no
+   * longer offers older lines. Its entries stay.
+   */
+  dropSource(source: string): void {
+    if (this.removed || !this.cursors.delete(source)) return;
+    this.scheduleSave();
+  }
+
+  /**
+   * Apply a forward chunk read at `nextRange`: a full budget unless it reaches the file's end.
+   * Returns new entries and Bash image candidates.
+   */
   apply(input: ApplyInput): ApplyResult {
     if (this.removed) return { added: 0, candidates: [] };
     const { transcriptId, source, startOffset, chunk, size } = input;
@@ -369,11 +451,14 @@ export class EditHistoryStore {
     }
     const lastNl = chunk.lastIndexOf(NL);
     if (lastNl < from) {
-      if (!atEof && chunk.length > 0) {
+      if (from > 0) {
+        // The skipped (or cut first) line ended here; the next one is read from its start.
+        this.setCursor(source, cursor, startOffset + from, startOffset + from, false);
+      } else if (!atEof && chunk.length > 0) {
         // One line longer than the budget: skip it instead of re-reading it forever.
-        this.setCursor(source, cursor, startOffset + chunk.length, startOffset + from, true);
+        this.setCursor(source, cursor, startOffset + chunk.length, startOffset, true);
       } else if (!cursor) {
-        this.setCursor(source, undefined, startOffset + from, startOffset + from, false);
+        this.setCursor(source, undefined, startOffset, startOffset, false);
       }
       return { added: 0, candidates: [] };
     }
@@ -387,8 +472,9 @@ export class EditHistoryStore {
   }
 
   /**
-   * Apply a chunk read at `olderRange`: it ends at the floor, which is a line start, or with
-   * `floorMidLine` lies inside a line longer than the budget (its part in this chunk is dropped).
+   * Apply a chunk read at `olderRange`: a full budget unless it reaches the file's start. It
+   * ends at the floor, which is a line start, or with `floorMidLine` lies inside a line longer
+   * than the budget (its part in this chunk is dropped).
    */
   applyOlder(input: ApplyInput): ApplyResult {
     const { transcriptId, source, startOffset, chunk } = input;
@@ -396,23 +482,39 @@ export class EditHistoryStore {
     if (transcriptId !== this.transcriptId || !cursor || startOffset + chunk.length !== cursor.floor) {
       return { added: 0, candidates: [] };
     }
-    const end = cursor.floorMidLine ? chunk.lastIndexOf(NL) + 1 : chunk.length;
+    const none = { added: 0, candidates: [] };
+    let end = chunk.length;
+    if (cursor.floorMidLine) {
+      const lastNl = chunk.lastIndexOf(NL);
+      if (lastNl === -1 && startOffset > 0) {
+        // Still inside the long line.
+        cursor.floor = startOffset;
+        this.scheduleSave();
+        return none;
+      }
+      // The long line starts at `end`: drop its part.
+      end = lastNl + 1;
+      delete cursor.floorMidLine;
+    }
     let from = 0;
-    let insideLine = false;
     if (startOffset > 0) {
       // The newline at `end - 1` closes a line that may have started before this chunk.
       const nl = chunk.subarray(0, end).indexOf(NL);
-      insideLine = nl === -1 || nl === end - 1;
-      from = insideLine ? end : nl + 1;
+      if (nl === -1 || nl === end - 1) {
+        if (end < chunk.length) {
+          // It ends where the long line starts: the next block, ending there, holds it whole.
+          cursor.floor = startOffset + end;
+        } else {
+          // No line starts in this chunk: it lies inside one line longer than the budget. Skip it.
+          cursor.floor = startOffset;
+          cursor.floorMidLine = true;
+        }
+        this.scheduleSave();
+        return none;
+      }
+      from = nl + 1;
     }
-    if (insideLine) {
-      // No line starts in this chunk: it lies inside one line longer than the budget. Skip it.
-      cursor.floor = startOffset;
-      cursor.floorMidLine = true;
-    } else {
-      cursor.floor = startOffset + from;
-      delete cursor.floorMidLine;
-    }
+    cursor.floor = startOffset + from;
     // Calls whose results lie in already-read newer lines cannot be paired here.
     const parsed = parseClaudeEditLines(chunk.subarray(from, end).toString('utf8'));
     const added = this.addRecords(parsed.records);

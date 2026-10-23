@@ -304,7 +304,7 @@ describe('Edit history panel in a real browser', () => {
     expect(await page.locator('#editHistoryBody button.edit-history-older').count()).toBe(0);
   });
 
-  it('while open it follows the session: an edit-capable tool end re-reads (debounced), other tools and sessions do not', async () => {
+  it('while open it follows the session: an edit-capable tool end or a turn end re-reads (debounced), other tools, sessions and keep-alive turns do not', async () => {
     const before = syncReads(sessionA);
     const s = state.get(sessionA)!;
     state.set(sessionA, {
@@ -325,7 +325,9 @@ describe('Edit history panel in a real browser', () => {
     expect(syncReads(sessionA)).toBe(before + 1);
     // The end of a turn re-reads too (a parallel tool call reports one tool end only, a background
     // subagent writes later): `session:idle`, since claude's transcript has no `result` line.
+    // Not another session's, and not the end of Codeman's own keep-alive turn (it edits nothing).
     (server as any).broadcast('session:idle', { id: 'someone-else' });
+    (server as any).broadcast('session:idle', { id: sessionA, keepAlive: true });
     await page.waitForTimeout(1200);
     expect(syncReads(sessionA)).toBe(before + 1);
     (server as any).broadcast('session:idle', { id: sessionA });

@@ -8,12 +8,19 @@
  * looks at. One sync per session runs at a time; requests during a run are folded into one
  * more forward read and/or one more older read afterwards.
  *
+ * HOW MUCH. A forward read shares one budget over all files, main first. A file whose chunk
+ * the shared budget cut short is not applied (the store would take a chunk with no line end
+ * for a line longer than the budget) but read in the next pass; up to
+ * {@link MAX_FORWARD_PASSES} passes per sync, the rest with the next one.
+ *
  * GONE. `remove()` (the session's record is deleted) marks the session gone before it deletes
  * the file: a run in flight stops after its current read, its store no longer writes, and a
  * later request reads nothing (`unavailable`, reason `removed`) instead of loading a new store.
+ * `sweep()` deletes, at startup, the stored history of sessions that no longer exist. A
+ * subagent transcript that vanished loses its cursor (`dropSource`), not its entries.
  *
- * OLDER. "Load older" splits the budget evenly over the sources with older lines and reads
- * only those blocks, so every source moves back with each click.
+ * OLDER. "Load older" reads a full budget block of up to {@link MAX_OLDER_SOURCES} sources
+ * with older lines per click; with more sources they take turns.
  *
  * WHICH SESSIONS. Local claude sessions. Remote, Docker and non-claude sessions answer
  * `unsupported` and are never read.
@@ -34,8 +41,10 @@ import { getCli } from '../config/cli-registry/registry.js';
 
 /** Slack around a Bash call's window for the image mtime check. */
 export const IMAGE_MTIME_SLACK_MS = 2000;
-/** Forward passes per sync when a file grew by more than one budget. */
+/** Forward passes per sync when files grew by more than one budget. */
 export const MAX_FORWARD_PASSES = 3;
+/** Sources read back per "Load older" click, a full budget each. */
+export const MAX_OLDER_SOURCES = 3;
 /** `reason` when the session has no transcript yet (no prompt yet, or not found). */
 export const NO_TRANSCRIPT = 'no-transcript';
 /** `reason` once the session's history was deleted. */
@@ -70,6 +79,8 @@ export interface EditHistorySyncDeps {
   ): Promise<EditSources | null>;
   probe(paths: readonly string[]): Promise<Array<PathProbe | null>>;
   loadStore(sessionId: string): Promise<EditHistoryStore>;
+  /** Delete the stored history of every session `keep` rejects; returns how many. */
+  sweepStores(keep: (sessionId: string) => boolean): Promise<number>;
   budget?: number;
 }
 
@@ -135,6 +146,8 @@ interface SessionSlot {
   again?: SyncWant;
   /** The history was deleted: nothing reads for this session any more. */
   gone?: boolean;
+  /** The last source the previous "Load older" read; the next one starts after it. */
+  olderAfter?: string;
 }
 
 export class EditHistorySync {
@@ -212,6 +225,14 @@ export class EditHistorySync {
     await store.remove();
   }
 
+  /**
+   * Delete the stored history of sessions that no longer exist (startup: left behind by a
+   * crash during deletion, or by an older build). A session in use here is kept.
+   */
+  sweep(exists: (sessionId: string) => boolean): Promise<number> {
+    return this.deps.sweepStores((id) => this.slots.has(id) || exists(id));
+  }
+
   private slot(sessionId: string): SessionSlot {
     let slot = this.slots.get(sessionId);
     if (!slot) {
@@ -240,7 +261,7 @@ export class EditHistorySync {
       if (!path) {
         found = false;
       } else if (older) {
-        found = await this.readOlder(path, store);
+        found = await this.readOlder(path, store, slot);
       } else {
         found = true;
         for (let pass = 0; pass < MAX_FORWARD_PASSES && found && !slot.gone; pass++) {
@@ -266,20 +287,29 @@ export class EditHistorySync {
   }
 
   /**
-   * One forward read of all sources. `more` = some file has unread bytes after it.
-   * A transcript other than the stored one (`/clear`, resume) is read like a first read.
+   * One forward read of all sources. `more` = some file has unread bytes after it, or was cut
+   * short by the shared budget and left for the next pass. A transcript other than the stored
+   * one (`/clear`, resume) is read like a first read.
    */
   private async readForward(path: string, store: EditHistoryStore): Promise<{ found: boolean; more: boolean }> {
     const known = store.getTranscriptId();
     const requests = known !== null && path.endsWith(`/${known}.jsonl`) ? this.forwardRequests(store) : [];
     const res = await this.deps.readSources(path, requests, this.budget);
     if (!res) return { found: false, more: false };
+    this.dropMissing(store, requests, res);
     for (const [agentId, text] of Object.entries(res.metas)) {
       if (!store.hasAgentMeta(agentId)) store.setAgentMeta(agentId, text);
     }
+    const requested = new Set(requests.map((r) => r.relPath));
     let more = false;
     const candidates: ImageCandidate[] = [];
     for (const f of res.files) {
+      // A requested file reads on from its cursor, a new one its tail.
+      const available = requested.has(f.relPath) ? f.size - f.startOffset : f.size;
+      if (f.chunk.length < Math.min(this.budget, available)) {
+        more = true;
+        continue;
+      }
       const r = store.apply({
         transcriptId: res.transcriptId,
         source: f.relPath,
@@ -294,20 +324,31 @@ export class EditHistorySync {
     return { found: true, more };
   }
 
-  private async readOlder(path: string, store: EditHistoryStore): Promise<boolean> {
+  private async readOlder(path: string, store: EditHistoryStore, slot: SessionSlot): Promise<boolean> {
     if (!store.backfillTruncated) return true;
-    const sources = store.sourcesWithOlder();
+    const sources = store.sourcesWithOlder().sort();
     if (sources.length === 0) return true;
-    const share = Math.max(1, Math.floor(this.budget / sources.length));
+    // Take turns: start after the last source the previous click read.
+    const after = slot.olderAfter;
+    const first =
+      after === undefined
+        ? 0
+        : Math.max(
+            0,
+            sources.findIndex((s) => s > after)
+          );
+    const picked = [...sources.slice(first), ...sources.slice(0, first)].slice(0, MAX_OLDER_SOURCES);
     const requests: EditSourceRequest[] = [];
-    for (const relPath of sources) {
-      const range = store.olderRange(relPath, share);
+    for (const relPath of picked) {
+      const range = store.olderRange(relPath, this.budget);
       if (range) requests.push({ relPath, offset: range.offset, len: range.len });
     }
     if (requests.length === 0) return true;
-    const res = await this.deps.readSources(path, requests, this.budget, { onlyRequested: true });
+    slot.olderAfter = picked[picked.length - 1];
+    const res = await this.deps.readSources(path, requests, this.budget * requests.length, { onlyRequested: true });
     if (!res) return false;
     if (res.transcriptId !== store.getTranscriptId()) return true;
+    this.dropMissing(store, requests, res);
     const wanted = new Set(requests.map((r) => r.relPath));
     const candidates: ImageCandidate[] = [];
     for (const f of res.files) {
@@ -323,6 +364,12 @@ export class EditHistorySync {
     }
     await this.addImages(store, candidates);
     return true;
+  }
+
+  /** Requested files the reader no longer lists are gone: their cursors go too. */
+  private dropMissing(store: EditHistoryStore, requests: readonly EditSourceRequest[], res: EditSources): void {
+    const listed = new Set(res.files.map((f) => f.relPath));
+    for (const r of requests) if (!listed.has(r.relPath)) store.dropSource(r.relPath);
   }
 
   private async addImages(store: EditHistoryStore, candidates: readonly ImageCandidate[]): Promise<void> {

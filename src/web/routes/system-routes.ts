@@ -801,6 +801,7 @@ export function registerSystemRoutes(
     const lifecycleLog = getLifecycleLog();
     for (const s of result.cleaned) {
       lifecycleLog.log({ event: 'stale_cleaned', sessionId: s.id, name: s.name });
+      ctx.forgetEditHistory(s.id);
     }
     return { cleanedSessions: result.count };
   });

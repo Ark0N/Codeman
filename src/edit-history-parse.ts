@@ -149,22 +149,20 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-function toHunks(patch: unknown[]): { hunks: EditHunk[]; added: number; removed: number; truncated: boolean } {
+/**
+ * The hunks of `patch` with their string lines, cut once the lines reach {@link MAX_HUNK_BYTES}
+ * (`truncated`). Also applied to hunks loaded from a store file.
+ */
+export function capHunks(patch: readonly unknown[]): { hunks: EditHunk[]; truncated: boolean } {
   const hunks: EditHunk[] = [];
-  let added = 0;
-  let removed = 0;
   let budget = MAX_HUNK_BYTES;
   let truncated = false;
   for (const h of patch) {
     if (!isRecord(h) || !Array.isArray(h.lines)) continue;
-    const lines = h.lines.filter((l): l is string => typeof l === 'string');
-    for (const l of lines) {
-      if (l.startsWith('+')) added++;
-      else if (l.startsWith('-')) removed++;
-    }
-    if (truncated) continue;
+    if (truncated) break;
     const kept: string[] = [];
-    for (const l of lines) {
+    for (const l of h.lines) {
+      if (typeof l !== 'string') continue;
       const cost = Buffer.byteLength(l) + 3;
       if (cost > budget) {
         truncated = true;
@@ -181,7 +179,21 @@ function toHunks(patch: unknown[]): { hunks: EditHunk[]; added: number; removed:
       lines: kept,
     });
   }
-  return { hunks, added, removed, truncated };
+  return { hunks, truncated };
+}
+
+function toHunks(patch: unknown[]): { hunks: EditHunk[]; added: number; removed: number; truncated: boolean } {
+  let added = 0;
+  let removed = 0;
+  for (const h of patch) {
+    if (!isRecord(h) || !Array.isArray(h.lines)) continue;
+    for (const l of h.lines) {
+      if (typeof l !== 'string') continue;
+      if (l.startsWith('+')) added++;
+      else if (l.startsWith('-')) removed++;
+    }
+  }
+  return { ...capHunks(patch), added, removed };
 }
 
 /** A new file's content as one all-added hunk, in `structuredPatch` form. */

@@ -16,6 +16,7 @@ import type {
 import {
   confirmImages,
   EditHistorySync,
+  MAX_OLDER_SOURCES,
   NO_TRANSCRIPT,
   REMOVED,
   type EditHistorySession,
@@ -24,10 +25,13 @@ import {
 } from '../src/web/edit-history-sync.js';
 
 let dir: string;
+/** Stores the tests opened; removed before the temp dir, so no late save recreates it. */
+const opened: EditHistoryStore[] = [];
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'edit-sync-'));
 });
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(opened.splice(0).map((s) => s.remove()));
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -130,7 +134,14 @@ function setup(over: Partial<EditHistorySyncDeps> = {}) {
     readSources: (path, req, budget, opts) => host.read(path, req, budget, opts),
     probe: async (paths) => paths.map((p) => probes.get(p) ?? null),
     loadStore: (id) => EditHistoryStore.load(id, { dir, debounceMs: 0 }),
+    sweepStores: async () => 0,
     ...over,
+  };
+  const load = deps.loadStore;
+  deps.loadStore = async (id) => {
+    const store = await load(id);
+    opened.push(store);
+    return store;
   };
   return { host, probes, lookups, deps, sync: new EditHistorySync(deps) };
 }
@@ -382,6 +393,111 @@ describe('EditHistorySync', () => {
     for (let i = 0; i < 20 && store.backfillTruncated; i++) await sync.sync(local, { older: true });
     expect(store.list()).toHaveLength(20);
   });
+
+  it('a file the shared budget cut short is read in the next pass, not skipped as one long line', async () => {
+    const budget = 4000;
+    const { host, sync } = setup({ budget });
+    const sub = 'subagents/agent-a1.jsonl';
+    host.append('main', editLine('m0', T0, '/w/m0.ts'));
+    host.append(sub, editLine('s0', T0 + 1, '/w/s0.ts', { agentId: 'a1' }));
+    await sync.sync(local);
+    // main grows by almost a whole budget, leaving the subagent 50 bytes of this pass
+    const filler = JSON.stringify({ type: 'user', message: { content: '' } });
+    host.append(
+      'main',
+      JSON.stringify({ type: 'user', message: { content: 'z'.repeat(budget - 51 - filler.length) } }) + '\n'
+    );
+    host.append(sub, editLine('s1', T0 + 2, '/w/s1.ts', { agentId: 'a1', pad: 'p'.repeat(100) }));
+    host.append(sub, editLine('s2', T0 + 3, '/w/s2.ts', { agentId: 'a1' }));
+    await sync.sync(local);
+    const store = await sync.getStore('s1');
+    expect(
+      store
+        .list()
+        .map((e) => e.id)
+        .sort()
+    ).toEqual(['m0', 's0', 's1', 's2']);
+    expect(store.getCursor(sub)?.midLine).toBeUndefined();
+  });
+
+  it('a first read reaches the subagents in a further pass when main fills the budget', async () => {
+    const { host, sync } = setup({ budget: 3000 });
+    for (let i = 0; i < 20; i++) host.append('main', editLine(`m${i}`, T0 + i, `/w/m${i}.ts`));
+    host.append('subagents/agent-a1.jsonl', editLine('s0', T0 + 100, '/w/s0.ts', { agentId: 'a1' }));
+    await sync.sync(local);
+    const store = await sync.getStore('s1');
+    expect(store.get('s0')?.agentId).toBe('a1');
+    expect(store.getCursor('subagents/agent-a1.jsonl')).toBeDefined();
+  });
+
+  it('load older reads a full budget per source: a line longer than the budget split over the sources is kept', async () => {
+    const budget = 2000;
+    const { host, sync } = setup({ budget });
+    host.append('main', editLine('m0', T0, '/w/m0.ts'));
+    host.append('main', editLine('big', T0 + 1, '/w/big.ts', { pad: 'p'.repeat(800) })); // > budget / 3
+    for (let i = 2; i < 12; i++) host.append('main', editLine(`m${i}`, T0 + i, `/w/m${i}.ts`));
+    for (const a of ['a1', 'a2']) {
+      for (let i = 0; i < 12; i++) {
+        host.append(
+          `subagents/agent-${a}.jsonl`,
+          editLine(`${a}-${i}`, T0 + 100 + i, `/w/${a}${i}.ts`, { agentId: a })
+        );
+      }
+    }
+    for (let i = 0; i < 3; i++) await sync.sync(local);
+    const store = await sync.getStore('s1');
+    expect(store.sourcesWithOlder()).toHaveLength(3);
+    for (let i = 0; i < 20 && store.backfillTruncated; i++) await sync.sync(local, { older: true });
+    expect(store.get('big')).toBeDefined();
+    expect(store.list()).toHaveLength(36);
+  });
+
+  it(`load older reads at most ${MAX_OLDER_SOURCES} sources per click, taking turns`, async () => {
+    const { host, sync } = setup({ budget: 600 });
+    const subs = ['a1', 'a2', 'a3', 'a4'].map((a) => `subagents/agent-${a}.jsonl`);
+    for (const relPath of ['main', ...subs]) {
+      for (let i = 0; i < 8; i++) host.append(relPath, editLine(`${relPath}-${i}`, T0 + i, `/w/${i}.ts`));
+    }
+    for (let i = 0; i < 3; i++) await sync.sync(local);
+    const store = await sync.getStore('s1');
+    expect(store.sourcesWithOlder()).toHaveLength(5);
+    const olderCall = () => host.calls.at(-1)!.map((r) => r.relPath);
+    await sync.sync(local, { older: true });
+    expect(olderCall()).toEqual(['main', subs[0], subs[1]]);
+    await sync.sync(local, { older: true });
+    expect(olderCall()).toEqual([subs[2], subs[3], 'main']);
+    for (let i = 0; i < 30 && store.backfillTruncated; i++) await sync.sync(local, { older: true });
+    expect(store.list()).toHaveLength(40);
+  });
+
+  it('a subagent transcript that vanished loses its cursor (no endless "Load older"), not its entries', async () => {
+    const { host, sync } = setup({ budget: 600 });
+    const sub = 'subagents/agent-a1.jsonl';
+    host.append('main', editLine('m0', T0, '/w/m0.ts'));
+    for (let i = 0; i < 8; i++) host.append(sub, editLine(`s${i}`, T0 + 10 + i, `/w/s${i}.ts`, { agentId: 'a1' }));
+    for (let i = 0; i < 2; i++) await sync.sync(local);
+    const store = await sync.getStore('s1');
+    expect(store.backfillTruncated).toBe(true);
+    const kept = store.list().length;
+    host.files.delete(sub);
+    await sync.sync(local, { older: true });
+    expect(store.getCursor(sub)).toBeUndefined();
+    expect(store.backfillTruncated).toBe(false);
+    expect(store.list()).toHaveLength(kept);
+  });
+
+  it('sweep keeps the sessions in use here and those that exist', async () => {
+    const asked: Record<string, boolean> = {};
+    const { sync } = setup({
+      sweepStores: async (keep) => {
+        for (const id of ['s1', 'kept', 'gone']) asked[id] = keep(id);
+        return 1;
+      },
+    });
+    await sync.getStore('s1');
+    expect(await sync.sweep((id) => id === 'kept')).toBe(1);
+    expect(asked).toEqual({ s1: true, kept: true, gone: false });
+  });
 });
 
 describe('confirmImages', () => {
@@ -442,7 +558,7 @@ describe('reads only on request (wiring guard)', () => {
   it('the server never starts a sync itself: it only hands the reader to the routes', () => {
     const server = read('src/web/server.ts');
     const uses = [...server.matchAll(/this\.editHistorySync\b(\.\w+)?/g)].map((m) => m[1] ?? '');
-    expect(uses.sort()).toEqual(['', '.flushAll', '.remove']);
+    expect(uses.sort()).toEqual(['', '.flushAll', '.remove', '.sweep']);
     expect(server).toMatch(/registerEditHistoryRoutes\(this\.app, ctx, this\.editHistorySync\)/);
   });
 

@@ -63,7 +63,12 @@ async function setup(
     transcriptPath: async () => '/p/conv1.jsonl',
     readSources: read,
     probe: async (p) => p.map(() => null),
-    loadStore: (id) => EditHistoryStore.load(id, { dir, debounceMs: 0 }),
+    loadStore: async (id) => {
+      const store = await EditHistoryStore.load(id, { dir, debounceMs: 0 });
+      opened.push(store);
+      return store;
+    },
+    sweepStores: async () => 0,
     ...deps,
   });
   const h = await createRouteTestHarness((app, ctx) => registerEditHistoryRoutes(app, ctx, sync), {
@@ -76,11 +81,14 @@ async function setup(
   return { ...h, read, sync };
 }
 
+/** Stores the tests opened; removed before the temp dir, so no late save recreates it. */
+const opened: EditHistoryStore[] = [];
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'edit-routes-'));
 });
-afterEach(() => {
+afterEach(async () => {
   delete process.env.CODEMAN_MULTIUSER;
+  await Promise.all(opened.splice(0).map((s) => s.remove()));
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -215,9 +223,9 @@ describe('POST /api/sessions/:id/edits/older', () => {
     const lines = [0, 1, 2, 3].map((i) => editLine(`t${i}`, T0 + i, `/w/${i}.ts`)).join('');
     const full = Buffer.from(lines);
     const read = vi.fn(
-      async (_path: string, requests: readonly { relPath: string; offset: number; len?: number }[]) => {
+      async (_path: string, requests: readonly { relPath: string; offset: number; len?: number }[], budget: number) => {
         const req = requests.find((r) => r.relPath === 'main');
-        const start = req ? req.offset : full.length - 400;
+        const start = req ? req.offset : full.length - budget;
         const len = req?.len ?? full.length - start;
         return {
           transcriptId: 'conv1',
@@ -226,7 +234,7 @@ describe('POST /api/sessions/:id/edits/older', () => {
         };
       }
     );
-    const { app } = await setup({ readSources: read });
+    const { app } = await setup({ readSources: read, budget: 400 });
     const first = (await app.inject({ method: 'GET', url: `${URL}?sync=1` })).json().data;
     expect(first.backfillTruncated).toBe(true);
     const older = (await app.inject({ method: 'POST', url: `${URL}/older` })).json().data;

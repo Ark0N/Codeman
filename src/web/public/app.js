@@ -3518,8 +3518,9 @@ class CodemanApp {
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) this._updateLocalEchoState();
     }
-    // An open Edit history panel re-reads at the end of its session's turn (edit-history-ui.js).
-    this.onEditHistorySessionIdle?.(data.id);
+    // An open Edit history panel re-reads at the end of its session's turn (edit-history-ui.js),
+    // not after Codeman's own keep-alive turn, which edits nothing.
+    if (!data.keepAlive) this.onEditHistorySessionIdle?.(data.id);
     // Start stuck detection timer (only if no respawn running). Not at the end of Codeman's
     // own keep-alive turn (`keepAlive`): the session has been waiting since the last real
     // turn, whose timer is still running or has already fired.
