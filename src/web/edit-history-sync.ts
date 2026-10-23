@@ -113,10 +113,11 @@ export interface SyncOptions {
 }
 
 /**
- * The conversation ids a REMOTE session's transcript lookup tries, in order, after the one its
- * claude writes now. No hook tells Codeman of a remote `/clear`, so `claudeSessionId` stays the
- * launch id; tried first, it would flip the panel back to the cleared conversation as soon as
- * the remote claude exits. The stored history's conversation is the newest the panel has read.
+ * The conversation ids a REMOTE session's transcript lookup considers when its claude writes
+ * none now; the most recently written of them wins (`buildRemoteClaudeTranscriptLocateCommand`).
+ * The stored history's conversation must be among them: no hook tells Codeman of a remote
+ * `/clear`, so `claudeSessionId` stays the launch id, and without the stored one the panel
+ * would flip back to the cleared conversation as soon as the remote claude exits.
  */
 export function remoteTranscriptIds(session: EditHistorySession, storedTranscriptId: string | null): string[] {
   return [...new Set([storedTranscriptId, session.claudeSessionId || session.id, session.id])].filter(

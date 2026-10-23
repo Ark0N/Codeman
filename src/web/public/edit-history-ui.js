@@ -369,7 +369,7 @@ Object.assign(CodemanApp.prototype, {
           ? t('Showing saved entries only: {reason}', { reason: data.reason || '' })
           : this.sessions?.get?.(h.sessionId)?.remote
             ? t(
-                'No transcript found on the remote host yet (Claude writes it with the first prompt). A CLAUDE_CONFIG_DIR set only in an interactive shell profile (.zshrc) cannot be found.'
+                'No transcript found on the remote host yet (Claude writes it with the first prompt). A CLAUDE_CONFIG_DIR set only in a shell profile (.profile, .bash_profile, .zshrc) cannot be found.'
               )
             : t(
                 'No transcript found for this session yet. It is picked up with the next prompt; until then a CLAUDE_CONFIG_DIR set outside Codeman cannot be found.'

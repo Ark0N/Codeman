@@ -179,7 +179,7 @@ describe('unsupportedReason', () => {
 });
 
 describe('remoteTranscriptIds', () => {
-  it('tries the stored conversation before the launch id: no hook tells Codeman of a remote /clear', () => {
+  it('includes the stored conversation besides the launch id: no hook tells Codeman of a remote /clear', () => {
     expect(remoteTranscriptIds(remote, 'conv2')).toEqual(['conv2', 'conv1', 's2']);
     expect(remoteTranscriptIds(remote, 'conv1')).toEqual(['conv1', 's2']);
     expect(remoteTranscriptIds(remote, null)).toEqual(['conv1', 's2']);
@@ -732,6 +732,16 @@ describe('reads only on request (wiring guard)', () => {
     const uses = [...server.matchAll(/this\.editHistorySync\b(\.\w+)?/g)].map((m) => m[1] ?? '');
     expect(uses.sort()).toEqual(['', '.flushAll', '.remove', '.sweep']);
     expect(server).toMatch(/registerEditHistoryRoutes\(this\.app, ctx, this\.editHistorySync\)/);
+  });
+
+  it('a remote session looks its transcript up with the stored conversation; a local one keeps the hook path', () => {
+    const server = read('src/web/server.ts');
+    const start = server.indexOf('new EditHistorySync({');
+    const lookup = server.slice(start, server.indexOf('readSources:', start));
+    expect(lookup).toMatch(
+      /remoteLocateClaudeTranscript\(\s*session\.remote,\s*remoteTranscriptIds\(session, storedTranscriptId\)/
+    );
+    expect(lookup).toMatch(/resolveClaudeTranscript\(\s*this\.transcriptWatchers\.get\(session\.id\)\?\.getPath\(\)/);
   });
 
   it('no other module holds the reader, and the edit history modules run no timer or watcher', () => {

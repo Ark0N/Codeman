@@ -478,9 +478,9 @@ export function isRemoteClaudeTranscriptPath(path: string): boolean {
  * Shell lines that set `cfg` to claude's config dir on the remote host: an absolute
  * `CLAUDE_CONFIG_DIR` from the ssh command's environment, else `$HOME/.claude` — claude's own
  * rule. ⚠️ The remote claude runs under `$SHELL -i -l -c` (`remoteLoginShellCommand`), this
- * script under a plain non-interactive `sh`: a `CLAUDE_CONFIG_DIR` set only in an interactive
- * rc file (`.zshrc`) is not seen here; one from `.zshenv`, sshd `SetEnv` or the system
- * environment is.
+ * script under a plain non-interactive `sh` from sshd's `$SHELL -c`: a `CLAUDE_CONFIG_DIR` set
+ * only in a login or interactive profile (`.profile`, `.bash_profile`, `.zshrc`) is not seen
+ * here; one from `.zshenv`, sshd `SetEnv` or the system environment is.
  */
 function claudeConfigDirLines(): string[] {
   return ['cfg=$HOME/.claude', 'case ${CLAUDE_CONFIG_DIR:-} in /*) cfg=$CLAUDE_CONFIG_DIR ;; esac'];
@@ -519,10 +519,13 @@ function liveClaudeIdLines(pane: RemoteClaudePane | undefined): string[] {
 /**
  * Script that finds a remote claude session's main transcript and prints `\0<path>\0`;
  * exit {@link TRANSCRIPT_NOT_FOUND_EXIT} when there is none. First the conversation the
- * claude in `pane` writes now ({@link liveClaudeIdLines}), then each of `ids`; per id the
- * newest `<config dir>/projects/*\/<id>.jsonl` ({@link claudeConfigDirLines}). `$HOME` is
- * expanded by the REMOTE shell: the transcript lives in the remote user's home, which the
- * server cannot know.
+ * claude in `pane` writes now ({@link liveClaudeIdLines}); without one, the most recently
+ * written transcript of ALL `ids`, not the first id that has one: the conversation claude
+ * wrote last is the current one whether a `/clear` moved on from the launch id or a respawn
+ * resumed it again, and no order of the ids gets both right. Each id is looked up as
+ * `<config dir>/projects/*\/<id>.jsonl` ({@link claudeConfigDirLines}). `$HOME` is expanded
+ * by the REMOTE shell: the transcript lives in the remote user's home, which the server
+ * cannot know.
  *
  * ⚠️ Runs under an explicit `sh` with `LC_ALL=C`: sshd runs a command in the remote user's
  * LOGIN shell, and on a zsh host `ls` can be an alias and an unmatched glob aborts the whole
@@ -538,14 +541,18 @@ export function buildRemoteClaudeTranscriptLocateCommand(ids: readonly string[],
     'export LC_ALL',
     'best=',
     ...claudeConfigDirLines(),
-    ...liveLines,
-    `for id in ${liveLines.length ? '$live ' : ''}${safeIds.map((id) => shellescape(id)).join(' ')}; do`,
-    '  for f in "$cfg"/projects/*/"$id".jsonl; do',
+    // newest <id>: `best` becomes that id's transcript if it is newer than the current best.
+    'newest() {',
+    '  for f in "$cfg"/projects/*/"$1".jsonl; do',
     '    [ -f "$f" ] || continue',
     '    if [ -z "$best" ] || [ "$f" -nt "$best" ]; then best=$f; fi',
     '  done',
-    '  [ -n "$best" ] && break',
-    'done',
+    '}',
+    ...liveLines,
+    ...(liveLines.length ? ['[ -z "$live" ] || newest "$live"'] : []),
+    'if [ -z "$best" ]; then',
+    `  for id in ${safeIds.map((id) => shellescape(id)).join(' ')}; do newest "$id"; done`,
+    'fi',
     `[ -n "$best" ] || exit ${TRANSCRIPT_NOT_FOUND_EXIT}`,
     'printf \'\\0%s\\0\' "$best"',
   ].join('\n');

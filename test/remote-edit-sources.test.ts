@@ -105,9 +105,16 @@ describe('the transcript lookup on a real shell', () => {
     expect(command).not.toMatch(/(^|[\s;|(])ls\s/m);
   });
 
-  it('finds the newest <id>.jsonl of the first id that has one', () => {
+  it('takes the most recently written transcript of all ids, not the first id that has one', () => {
+    // conv-1 lies in old/ (1000 s) and new/ (2000 s); solo is older than both, then newest.
+    const solo = join(projects(), 'old', 'solo.jsonl');
+    utimesSync(solo, 1_500, 1_500);
     expect(locate(['conv-1', 'solo'])).toBe(join(projects(), 'new', 'conv-1.jsonl'));
-    expect(locate(['missing', 'solo'])).toBe(join(projects(), 'old', 'solo.jsonl'));
+    expect(locate(['solo', 'conv-1'])).toBe(join(projects(), 'new', 'conv-1.jsonl'));
+    expect(locate(['missing', 'solo'])).toBe(solo);
+    // A respawn resumed the launch conversation after a /clear: the one written last wins.
+    utimesSync(solo, 3_000, 3_000);
+    expect(locate(['conv-1', 'solo'])).toBe(solo);
   });
 
   it('exits 3 when no id has a transcript, and drops ids that are not plain tokens', () => {

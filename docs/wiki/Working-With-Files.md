@@ -324,9 +324,10 @@ How it reads:
   directory. A `CLAUDE_CONFIG_DIR` set outside Codeman (in a shell profile or a wrapper script)
   is only known after the next prompt; until then the window says "No transcript found for this
   session yet". A remote session's transcript is looked up on its host over SSH: the
-  conversation its Claude writes now, else the one the window showed last, else the session's
-  own, under the remote user's `~/.claude`, or under `CLAUDE_CONFIG_DIR` when the host sets it
-  for every SSH command (`.zshenv`, `/etc/environment`); one set only in `.zshrc` is not seen.
+  conversation its Claude writes now, else the most recently written of the one the window
+  showed last and the session's own, under the remote user's `~/.claude`, or under
+  `CLAUDE_CONFIG_DIR` when the host sets it for every SSH command (`.zshenv`,
+  `/etc/environment`); one set only in `.profile`, `.bash_profile` or `.zshrc` is not seen.
 - **The history is stored, and it holds secrets.** Every diff an agent wrote is copied to
   `~/.codeman/edit-history/<session-id>.json`, including API keys or `.env` contents it edited. The file is
   readable by your user only, capped at 500 edits and 4 MiB of diff text per session (the oldest

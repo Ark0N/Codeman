@@ -389,17 +389,20 @@ describe('Edit history panel in a real browser', () => {
       w.__openFilePreview = w.app.openFilePreview;
       w.app.openFilePreview = (p: string, s: string) => w.__previewed.push([p, s]);
     }, sessionA);
-    await reload();
-    await page.locator('#editHistoryBody .edit-history-entry', { hasText: 'shot.png' }).waitFor();
-    expect(await thumbs()).toBe(0);
-    await page.locator('#editHistoryBody .edit-history-entry', { hasText: 'shot.png' }).click();
-    expect(await page.evaluate(() => (window as any).__previewed)).toEqual([[join(root, 'shot.png'), sessionA]]);
-    await page.evaluate((sid) => {
-      const w = window as any;
-      delete w.app.sessions.get(sid).remote;
-      w.app.openFilePreview = w.__openFilePreview;
-    }, sessionA);
-    await reload();
+    try {
+      await reload();
+      await page.locator('#editHistoryBody .edit-history-entry', { hasText: 'shot.png' }).waitFor();
+      expect(await thumbs()).toBe(0);
+      await page.locator('#editHistoryBody .edit-history-entry', { hasText: 'shot.png' }).click();
+      expect(await page.evaluate(() => (window as any).__previewed)).toEqual([[join(root, 'shot.png'), sessionA]]);
+    } finally {
+      await page.evaluate((sid) => {
+        const w = window as any;
+        delete w.app.sessions.get(sid).remote;
+        w.app.openFilePreview = w.__openFilePreview;
+      }, sessionA);
+      await reload();
+    }
     await page.locator('#editHistoryBody img.edit-history-thumb').waitFor();
   });
 
@@ -473,15 +476,20 @@ describe('Edit history panel in a real browser', () => {
     await page.evaluate((sid) => {
       (window as any).app.sessions.get(sid).remote = { hostId: 'h', label: 'h', host: '192.0.2.1' };
     }, sessionA);
-    await reload();
-    const remoteNote = page.locator('#editHistoryBody .edit-history-note--warn', {
-      hasText: 'No transcript found on the remote host yet',
-    });
-    await remoteNote.waitFor();
-    expect(await remoteNote.textContent()).not.toContain('next prompt');
-    await page.evaluate((sid) => delete (window as any).app.sessions.get(sid).remote, sessionA);
-    state.set(sessionA, s);
-    await reload();
+    try {
+      await reload();
+      const remoteNote = page.locator('#editHistoryBody .edit-history-note--warn', {
+        hasText: 'No transcript found on the remote host yet',
+      });
+      await remoteNote.waitFor();
+      const text = (await remoteNote.textContent()) ?? '';
+      expect(text).not.toContain('next prompt');
+      expect(text).toContain('.bash_profile');
+    } finally {
+      await page.evaluate((sid) => delete (window as any).app.sessions.get(sid).remote, sessionA);
+      state.set(sessionA, s);
+      await reload();
+    }
   });
 
   it('follows the active session, and says when a session is not a Claude session', async () => {
