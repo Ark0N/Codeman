@@ -26,6 +26,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/tab-rail-search.browser.test.ts',
   'test/tab-focus.browser.test.ts',
   'test/session-sidebar-ux.browser.test.ts',
+  'test/header-divider.browser.test.ts',
   'test/session-options-responsive.browser.test.ts',
   'test/inline-rename.test.ts',
   'test/opencode-resize.test.ts',

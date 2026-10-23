@@ -3680,7 +3680,9 @@ class CodemanApp {
         seg('mo', pct(usage?.monthly), false),
       ].filter(Boolean);
       if (!windows.length) return '';
-      const label = labelled ? `<span class="pu-provider">${provider}</span>` : '';
+      // data-short is what the narrowest header densities show instead of the name (header-divider.js).
+      const short = { Claude: 'CL', Codex: 'CX', Copilot: 'CP' }[provider] ?? provider.slice(0, 2).toUpperCase();
+      const label = labelled ? `<span data-short="${short}" class="pu-provider">${provider}</span>` : '';
       return `<span class="pu-row">${label}<span class="pu-windows">${windows.join('<span class="pu-sep">·</span>')}</span></span>`;
     };
     const rows = [row('Claude', data, true), row('Codex', data.codex, false), row('Copilot', data.copilot, false)].filter(

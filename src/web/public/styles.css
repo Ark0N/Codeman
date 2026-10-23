@@ -2249,6 +2249,97 @@ html[data-tab-orientation='vertical'].tab-rail-compact
   margin-left: auto;
   padding-left: 0.75rem;
   border-left: 1px solid var(--glass-border);
+  position: relative;
+}
+
+/* Draggable edge of the toolbar (header-divider.js). Absolute, so it takes no layout room and the
+   existing border-left stays the visible line. */
+.header-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  width: 12px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 2;
+}
+
+.header-divider:hover,
+.header-divider:focus-visible {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  outline: none;
+}
+
+.header-divider:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* A width the user chose: the toolbar keeps it and wraps onto a second line when its content is wider. */
+html[data-header-right-width]:not([data-tab-orientation='vertical']):not([data-session-list='sidebar'])
+  body:not(.solo-mode)
+  .header-right {
+  flex: 0 0 var(--header-right-width);
+  width: var(--header-right-width);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-content: center;
+  row-gap: 0.25rem;
+  min-height: var(--header-height);
+}
+
+/* The narrower the toolbar, the less each usage reading shows (data-header-density, header-divider.js):
+   tight drops the window and CPU/MEM labels, dense shortens the provider names, tiny keeps only the rings.
+   The same rules apply under every header-stats style. */
+html[data-header-density] .header-system-stats .stat-label,
+html[data-header-density] .header-plan-usage .pu-label {
+  display: none;
+}
+
+html[data-header-density] .header-system-stats,
+html[data-header-density] .header-plan-usage {
+  gap: 8px;
+  padding: 0 8px;
+}
+
+html[data-header-density='dense'] .header-plan-usage .pu-provider,
+html[data-header-density='tiny'] .header-plan-usage .pu-provider {
+  font-size: 0;
+}
+
+html[data-header-density='dense'] .header-plan-usage .pu-provider::after,
+html[data-header-density='tiny'] .header-plan-usage .pu-provider::after {
+  content: attr(data-short);
+  font-size: 0.6rem;
+}
+
+html[data-header-density='tiny'] .header-system-stats .stat-value,
+html[data-header-density='tiny'] .header-plan-usage .pu-val {
+  display: none;
+}
+
+body.header-divider-dragging,
+body.header-divider-dragging * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* Only where the tabs share the header with the toolbar. */
+html[data-tab-orientation='vertical'] .header-divider,
+html[data-session-list='sidebar'] .header-divider,
+body.solo-mode .header-divider {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .header-divider {
+    display: none;
+  }
+
+  html[data-header-right-width] .header-right {
+    flex: 0 1 auto;
+    width: auto;
+  }
 }
 
 /* Connection Indicator */
