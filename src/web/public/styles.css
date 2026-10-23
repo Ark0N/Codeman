@@ -22298,6 +22298,297 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
   font-size: 0.68rem;
 }
 
+/* ── Edit history: header button + panel (edit-history-ui.js) ───────────────── */
+
+/* "Edit history" header button — opt-in (App Settings → Header & Panels), hidden by default.
+   Same marker pattern as the Attachments button: a base inline-flex !important so an inline
+   style can't override it, and a more-specific marker rule to hide. Phones hide it regardless
+   (mobile.css). */
+.btn-edit-history {
+  display: inline-flex !important;
+}
+.btn-edit-history.btn-edit-history--hidden {
+  display: none !important;
+}
+
+.btn-edit-history[aria-expanded='true'] {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
+/* Same frame as the Git and Files windows: draggable by the header, resizable at the corner. */
+.edit-history-panel {
+  position: fixed;
+  top: calc(var(--header-height) + 10px);
+  /* Left of the Git window's default spot; on a narrow viewport slide right so the left edge stays on screen. */
+  right: clamp(8px, calc(100vw - 428px), 410px);
+  width: 420px;
+  max-width: calc(100vw - 16px);
+  height: calc(100vh - var(--header-height) - var(--toolbar-height) - 40px);
+  height: calc(100dvh - var(--header-height) - var(--toolbar-height) - 40px);
+  max-height: 640px;
+  min-width: 260px;
+  min-height: 220px;
+  background: var(--floating-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  resize: both;
+}
+
+.edit-history-panel.visible {
+  display: flex;
+}
+
+.edit-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.edit-history-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.edit-history-count {
+  margin-left: 0.4rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.edit-history-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.edit-history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.9rem;
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.edit-history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+}
+
+.edit-history-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.74rem;
+  color: var(--text);
+}
+
+.edit-history-empty,
+.edit-history-note,
+.edit-history-more {
+  color: var(--text-muted);
+  padding: 0.25rem 0;
+}
+
+.edit-history-note--warn {
+  color: #e0a030;
+}
+
+.edit-history-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.15rem 0.25rem;
+  border-radius: 4px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.edit-history-entry:hover,
+.edit-history-entry:focus-visible,
+.edit-history-entry--open {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.edit-history-time {
+  flex: 0 0 auto;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.edit-history-badge {
+  flex: 0 0 auto;
+  min-width: 2rem;
+  text-align: center;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #e0a030;
+}
+
+.edit-history-badge--new {
+  color: rgb(34, 197, 94);
+}
+
+.edit-history-badge--image {
+  color: var(--text-muted);
+  align-self: center;
+}
+
+.edit-history-badge--image svg {
+  display: block;
+  margin: 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Only the name itself opens the preview: the rest of the row (the spacer) toggles the diff. */
+/* The folder part gives way first, so the file name stays readable (…/icons/bremse_alt1.png). */
+.edit-history-path {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.edit-history-path-dir {
+  /* Shrinks long before the name does; the name only gives way once the folder is at min-width. */
+  flex: 0 10000 auto;
+  min-width: 1.2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Ellipsis at the START of the folder (rtl); the inner <bdi dir="ltr"> keeps its text in order. */
+  direction: rtl;
+  text-align: left;
+  opacity: 0.7;
+}
+
+.edit-history-path-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.edit-history-path:hover,
+.edit-history-path:focus-visible {
+  text-decoration: underline;
+}
+
+.edit-history-spacer {
+  flex: 1;
+  align-self: stretch;
+  min-width: 0.5rem;
+  min-height: 1em;
+}
+
+.edit-history-stats {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 0.3rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.64rem;
+}
+
+.edit-history-add {
+  color: rgb(34, 197, 94);
+}
+
+.edit-history-del {
+  color: #e5534b;
+}
+
+.edit-history-agent {
+  flex: 0 1 auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.62rem;
+  color: var(--text-muted);
+}
+
+.edit-history-thumb {
+  display: block;
+  max-width: 160px;
+  max-height: 90px;
+  margin: 0.15rem 0 0.35rem 3.2rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+
+.edit-history-diff {
+  margin: 0.2rem 0 0.5rem 0.25rem;
+}
+
+.edit-history-group {
+  margin-bottom: 0.45rem;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.edit-history-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.2rem 0.25rem;
+  min-width: 0;
+}
+
+.edit-history-group-head .edit-history-path {
+  font-weight: 600;
+}
+
+.edit-history-group-count {
+  flex: 0 0 auto;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.edit-history-older {
+  margin: 0.5rem auto 0.25rem;
+}
+
 /* ============================================================
    Tab grouping by state (tabArrangement: 'state', opt-in;
    Discussion #426 option C)

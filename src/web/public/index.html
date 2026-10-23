@@ -192,6 +192,13 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
           <span class="attachment-history-badge" id="attachmentHistoryBadge" style="display:none;">0</span>
         </button>
+        <!-- Edit history of the active session (edit-history-ui.js), next to Attachments: both show
+             what the session produced, and the panel opens right below. Optional and per-device
+             (App Settings → Header & Panels → Header, default OFF): hidden by its marker class,
+             never on phones (mobile.css). -->
+        <button type="button" class="btn-icon-header btn-edit-history btn-edit-history--hidden" id="editHistoryBtn" aria-expanded="false" aria-controls="editHistoryPanel" title="Edit history" aria-label="Open edit history" onclick="app.toggleEditHistoryPanel()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+        </button>
         <button class="btn-icon-header btn-file-viewer" onclick="app.toggleFileBrowserButton()" title="File Viewer" aria-label="Open file viewer" aria-expanded="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="icon-folder-closed" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><g class="icon-folder-open"><path d="M3 17V7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1.5"/><path d="M3 17l2.3-5.4A2 2 0 0 1 7.2 10.5H20a1.5 1.5 0 0 1 1.4 2l-1.9 5.2A2 2 0 0 1 17.6 19H5a2 2 0 0 1-2-2z"/></g></svg></button>
         <button class="btn-icon-header btn-multimonitor btn-multimonitor--hidden" onclick="app.launchMultiMonitor()" title="Open Codeman across all displays" aria-label="Open Codeman across all displays"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="13" height="9" rx="1.5"/><rect x="11" y="9" width="11" height="8" rx="1.5"/></svg></button>
         <button class="btn-icon-header btn-split btn-split--hidden" onclick="app.openSplitPicker(event)" title="Split: open a second session beside this one" aria-label="Split: open a second session beside this one" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg></button>
@@ -606,6 +613,22 @@
       </div>
       <div class="git-status-body" id="gitStatusBody" data-i18n-skip></div>
       <div class="git-status-footer" id="gitStatusFooter" data-i18n-skip></div>
+    </div>
+
+    <!-- Edit history panel (edit-history-ui.js): every file edit the active session's agents made. -->
+    <div class="edit-history-panel" id="editHistoryPanel" role="dialog" aria-label="Edit history">
+      <div class="edit-history-header">
+        <span class="edit-history-title">Edit history <span class="edit-history-count" id="editHistoryCount" data-i18n-skip></span></span>
+        <div class="edit-history-actions">
+          <button class="btn-icon-sm" onclick="app.refreshEditHistory()" title="Refresh" aria-label="Refresh edit history">&#x21BB;</button>
+          <button class="btn-icon-sm" onclick="app.closeEditHistoryPanel()" title="Close" aria-label="Close edit history">&times;</button>
+        </div>
+      </div>
+      <div class="edit-history-controls">
+        <label class="edit-history-toggle"><input type="checkbox" id="editHistoryGroupToggle" onchange="app.setEditHistoryGrouped(this.checked)"><span>Group by file</span></label>
+        <label class="edit-history-toggle"><input type="checkbox" id="editHistoryMainOnlyToggle" onchange="app.setEditHistoryMainOnly(this.checked)"><span>Main agent only</span></label>
+      </div>
+      <div class="edit-history-body" id="editHistoryBody" data-i18n-skip></div>
     </div>
 
     <!-- File Preview Overlay -->
@@ -2102,6 +2125,7 @@
                     <label class="set-chip" data-preview="header" data-preview-order="5"><input type="checkbox" id="appSettingsShowAwayDigestButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg><span>Away Digest</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="6"><input type="checkbox" id="appSettingsShowSessionButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg><span>Session Manager</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="9"><input type="checkbox" id="appSettingsShowAttachmentsButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg><span>Attachments</span></label>
+                    <label class="set-chip" data-search="edit history edits changed files diffs" data-preview="header" data-preview-order="9.5"><input type="checkbox" id="appSettingsShowEditHistory"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg><span>Edit history</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="10"><input type="checkbox" id="appSettingsShowFileViewerButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>File Viewer</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="11"><input type="checkbox" id="appSettingsShowMultiMonitorButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="13" height="9" rx="1.5"/><rect x="11" y="9" width="11" height="8" rx="1.5"/></svg><span>Multi-monitor</span></label>
                     <label class="set-chip" data-search="split pane side by side two sessions" data-preview="header" data-preview-order="11.5"><input type="checkbox" id="appSettingsShowSplitButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg><span>Split</span></label>
@@ -4366,6 +4390,7 @@
   <script defer src="mobile-overview.js"></script>
   <script defer src="home-sessions.js"></script>
   <script defer src="git-status-ui.js"></script>
+  <script defer src="edit-history-ui.js"></script>
   <script defer src="entrance-animations.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>

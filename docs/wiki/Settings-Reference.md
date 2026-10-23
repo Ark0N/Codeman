@@ -61,7 +61,7 @@ supervised by systemd or launchd; npm installs report as non-updatable. See
 Chips for every optional header control, with a live preview of the resulting header:
 
 Run, Font Size, System Stats, Redraw Terminal, Response Viewer, Away Digest, Session
-Manager, Attachments, File Viewer, Multi-monitor, Split, Tiles, Plan Usage, Lifecycle Log, Monitor,
+Manager, Attachments, Edit history, File Viewer, Multi-monitor, Split, Tiles, Plan Usage, Lifecycle Log, Monitor,
 Project Insights, File Browser, Subagents, Approvals Inbox, Read My Mind, Ultracode Agents,
 Ultracode Windows, Cron.
 
@@ -76,6 +76,12 @@ window; off lists every file by its full path. **Git status: max repositories** 
 several projects. **Git status: git timeout** (per device, 5 to 120 seconds, default 30) is how
 long one git command may run before that repository is reported as unreadable; raise it for
 repositories on a slow network share.
+
+**Edit history** (per device, off by default, never on phones) adds a header button for the
+active session's edit history: every edit the agent and its subagents made, with its diff, and
+images it produced. Local Claude sessions only. Nothing is read until you open the window, and it
+stores those diffs (secrets included) under `~/.codeman/edit-history/`; see
+[Working With Files](Working-With-Files#edit-history).
 
 Most default to off. The stock desktop header is system stats, File Viewer, Tiles, and the gear.
 **Header Stats Style** picks how the system stats and plan usage are drawn: *Compact*

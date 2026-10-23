@@ -586,6 +586,8 @@ html.mobile-init .file-browser-panel {
   .btn-icon-header.btn-away-digest,
   .btn-icon-header.btn-session-manager,
   .btn-icon-header.btn-file-viewer,
+  /* Edit history: a desktop panel; phones never show the button (opt-in, default OFF anyway). */
+  .btn-icon-header.btn-edit-history,
   /* Approvals bell: phones answer from the overview's NEEDS YOU rows instead
      (inline approve/deny in mobile-overview.js); the bell would only crowd the
      header it was designed to stay out of. */

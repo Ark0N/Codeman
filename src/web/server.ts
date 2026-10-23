@@ -122,6 +122,9 @@ import { SCREEN_BLOCKED_SOURCE } from './screen-blocked.js';
 import { PromptCacheKeepWarmService } from '../prompt-cache-keepwarm.js';
 import { composerIsEmpty, plainFrame } from '../session-submit-verifier.js';
 import { detectUsageLimitPause } from '../usage-limit-patterns.js';
+import { EditHistorySync } from './edit-history-sync.js';
+import { EditHistoryStore } from '../edit-history-store.js';
+import { probeLocalPaths, readClaudeEditSources, resolveClaudeTranscript } from '../edit-history-local-source.js';
 import { stopDeepSeekWeb } from '../deepseek-web-server.js';
 import {
   wireRespawnListeners,
@@ -204,6 +207,7 @@ import {
   registerRebootRestoreRoutes,
   registerReadMyMindRoutes,
   registerGitStatusRoutes,
+  registerEditHistoryRoutes,
   registerStatusTelemetryRoutes,
   registerSystemRoutes,
   registerCaseRoutes,
@@ -329,6 +333,22 @@ function getOrCreateSelfSignedCert(): { key: string; cert: string } {
 export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
+  /**
+   * The edit history panel's reader (edit-history-sync.ts). Reads only when the panel asks;
+   * the main transcript is the one the transcript watcher follows (hook-reported path), or,
+   * before the first hook after a restart, a lookup under the session's claude config dir.
+   */
+  private readonly editHistorySync = new EditHistorySync({
+    transcriptPath: (session) =>
+      resolveClaudeTranscript(
+        this.transcriptWatchers.get(session.id)?.getPath(),
+        [session.claudeSessionId || session.id, session.id],
+        session.claudeConfigDir
+      ),
+    readSources: readClaudeEditSources,
+    probe: probeLocalPaths,
+    loadStore: (sessionId) => EditHistoryStore.load(sessionId),
+  });
   private respawnControllers: Map<string, RespawnController> = new Map();
   private respawnTimers: Map<string, { timer: NodeJS.Timeout; endAt: number; startedAt: number }> = new Map();
   private runSummaryTrackers: Map<string, RunSummaryTracker> = new Map();
@@ -1232,6 +1252,7 @@ export class WebServer extends EventEmitter {
     registerRebootRestoreRoutes(this.app, ctx);
     registerReadMyMindRoutes(this.app, ctx);
     registerGitStatusRoutes(this.app, ctx);
+    registerEditHistoryRoutes(this.app, ctx, this.editHistorySync);
     registerStatusTelemetryRoutes(this.app, ctx);
     registerSystemRoutes(this.app, ctx);
     registerCaseRoutes(this.app, ctx);
@@ -1554,6 +1575,13 @@ export class WebServer extends EventEmitter {
 
     // Stop transcript watcher
     this.stopTranscriptWatcher(sessionId);
+
+    // Edit history: a killed session takes its stored history (diffs can hold secrets) with it
+    if (killMux) {
+      void this.editHistorySync.remove(sessionId).catch((err) => {
+        console.warn(`[EditHistory] Removing history of ${sessionId} failed:`, getErrorMessage(err));
+      });
+    }
 
     // Stop and remove run summary tracker
     const summaryTracker = this.runSummaryTrackers.get(sessionId);
@@ -4301,6 +4329,9 @@ export class WebServer extends EventEmitter {
     this.respawnTimers.clear();
     this.runSummaryTrackers.clear();
     this.transcriptWatchers.clear();
+    await this.editHistorySync.flushAll().catch((err) => {
+      console.warn('[EditHistory] Saving on shutdown failed:', getErrorMessage(err));
+    });
     this.sessionListenerRefs.clear();
     this.scheduledRuns.clear();
     // Dispose StaleExpirationMaps (stops internal cleanup timers)

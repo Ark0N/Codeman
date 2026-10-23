@@ -1083,6 +1083,18 @@ Both routes accept two optional query parameters, which the UI sends from its pe
 
 Lists are capped (300 files and 50 commits per repository) while the counts stay exact. A branch with no upstream reports the commits no remote has (`HEAD --not --remotes`); a repository with no remote reports `unpushedCount: 0`, since there is nothing to push to. Concurrent polls of one folder share a single git invocation; `?fresh=1` (what the panel's Refresh button and opening the panel send) skips the short-lived caches, though it still joins a computation already running.
 
+## Edit history
+
+What the Edit history panel reads (Settings → Header & Panels → Header, per-device, default off): the edits a **local claude session** made, main agent and subagents, read from its transcripts. Read-only. Every route resolves the session through `findSessionOrFail` (another user's session is `404`). Remote, Docker and non-claude sessions answer `state: 'unsupported'` and are never read.
+
+`GET /api/sessions/:id/edits[?sync=1]` lists the stored edits, newest first, without diffs: `{ state, reason?, backfillTruncated, agents, entries }`. With `sync=1` it first reads what the transcripts gained since the last read; without it the server reads nothing. `state` is `ok`, `unavailable` (stored entries only; `reason` is `no-transcript` before the session has a transcript Codeman can find, or the read error; the transcript is the one the session's hooks report, else the newest `<id>.jsonl` under the session's `CLAUDE_CONFIG_DIR` override or the server's config dir) or `unsupported` (`reason`: `remote`, `docker`, `mode`). Each entry is `{ id, ts, path, relPath, kind: 'code'|'image', tool, created, added, removed, truncated, agentId? }`, where `tool` is the edit tool, `bash` for an image a Bash call produced or `sent` for one the agent sent; `relPath` is relative to the workspace (a subagent's worktree for its edits). `agents` maps a subagent id to `{ description, agentType, worktreeBranch? }`. `backfillTruncated: true` means older edits can still be loaded.
+
+`GET /api/sessions/:id/edits/:entryId` returns one edit's diff as unified text: `{ diff, truncated }` (each hunk is capped at 64 KiB). `404` for an edit the session does not have.
+
+`POST /api/sessions/:id/edits/older` reads the next older block of the transcripts and answers like the list.
+
+The edits are stored per session in `~/.codeman/edit-history/<id>.json` (mode 0600, at most 500 edits and 4 MiB of diff text, the oldest dropped), deleted with the session and never fed into `/api/v1/search`. No route here serves a file: the panel shows images through `file-raw` and the attachment routes.
+
 ## Git worktrees of a case
 
 A local case whose folder is the top of a git repository can keep **worktrees** at `<case>/.claude/worktrees/<name>`, each on its own branch, so several agents on one repository never share a checkout. This is the layout Claude Code's own `claude --worktree <name>` uses (branch `worktree-<name>`), so either tool finds the other's worktrees. Remote (SSH) and Docker cases are refused with `400 INVALID_INPUT` before git runs, and so is a local case whose folder is at or inside a Docker case workspace: `git worktree add` runs the repository's post-checkout hook and checkout filters on this machine, and a container can write there. A case folder that is not a repository, is a bare repository, or sits below the repository's top level is `400` too. The case resolves the way quick-start resolves it (a linked case is admin-only in multi-user mode, everything else is the caller's own case space; another user's case is `404`), and a case folder on a mount that does not answer is `422 OPERATION_FAILED`, never `404`.

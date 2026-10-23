@@ -15,6 +15,7 @@ export { registerApprovalRoutes } from './approval-routes.js';
 export { registerRebootRestoreRoutes } from './reboot-restore-routes.js';
 export { registerReadMyMindRoutes } from './readmymind-routes.js';
 export { registerGitStatusRoutes } from './git-status-routes.js';
+export { registerEditHistoryRoutes } from './edit-history-routes.js';
 export { registerStatusTelemetryRoutes } from './status-telemetry-routes.js';
 export { registerCaseRoutes } from './case-routes.js';
 export { registerWorktreeRoutes } from './worktree-routes.js';
