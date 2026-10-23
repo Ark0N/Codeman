@@ -6718,7 +6718,12 @@ Object.assign(CodemanApp.prototype, {
     if (!statsEl || statsEl.style.display === 'none') return;
 
     try {
-      const res = await fetch('/api/system/stats');
+      // Opt-in readings are only requested while their header setting is on (default off).
+      const settings = this.loadAppSettingsFromStorage?.() ?? {};
+      const wanted = ['gpu', settings.showGpuStats, 'cpumhz', settings.showCpuMhz];
+      const query = [];
+      for (let i = 0; i < wanted.length; i += 2) if (wanted[i + 1] === true) query.push(`${wanted[i]}=1`);
+      const res = await fetch('/api/system/stats' + (query.length ? '?' + query.join('&') : ''));
       const stats = await res.json();
       this.updateSystemStatsDisplay(stats.data);
     } catch (err) {
@@ -6752,6 +6757,8 @@ Object.assign(CodemanApp.prototype, {
     this._setStatRing('statCpuRing', stats.cpu);
     this._setStatRing('statMemRing', stats.memory?.percent);
 
+    this._updateHostSensors(stats);
+
     if (memEl && memBar) {
       const memGB = (stats.memory.usedMB / 1024).toFixed(1);
       memEl.textContent = `${memGB}G`;
@@ -6767,6 +6774,52 @@ Object.assign(CodemanApp.prototype, {
         memBar.classList.add('medium');
       }
     }
+  },
+
+  /**
+   * The opt-in readings after CPU and MEM: GPU load, GPU memory and GPU clock (the GPU Stats setting) and the CPU clock. An item
+   * shows only while its setting is on AND the host reported it, so a machine without a readable GPU just
+   * has nothing extra in the header.
+   */
+  _updateHostSensors(stats) {
+    const settings = this.loadAppSettingsFromStorage?.() ?? {};
+    const show = (id, visible) => {
+      const el = this.$(id);
+      if (el) el.hidden = !visible;
+    };
+    const fill = (valueId, ringId, barId, percent, text) => {
+      const value = this.$(valueId);
+      if (value) {
+        value.textContent = text;
+        value.classList.toggle('high', percent > 80);
+      }
+      this._setStatRing(ringId, percent);
+      const bar = this.$(barId);
+      if (bar) bar.style.width = `${Math.min(100, percent)}%`;
+    };
+    const gpu = settings.showGpuStats === true ? stats.gpu : undefined;
+    show('statGpuItem', Boolean(gpu));
+    if (gpu) fill('statGpu', 'statGpuRing', 'statGpuBar', gpu.percent, `${gpu.percent}%`);
+    // Graphics memory: the amount in use whenever it is known, with a ring only when the total is too (an
+    // integrated GPU under WSL, where Windows reports usage but the share of RAM is a guess, may have none).
+    show('statVramItem', Boolean(gpu && gpu.memUsedMB !== undefined));
+    if (gpu && gpu.memUsedMB !== undefined) {
+      const used = `${(gpu.memUsedMB / 1024).toFixed(1)}G`;
+      const ring = this.$('statVramRing');
+      if (gpu.memPercent !== undefined) {
+        fill('statVram', 'statVramRing', 'statVramBar', gpu.memPercent, used);
+        if (ring) ring.style.display = '';
+      } else {
+        this.$('statVram').textContent = used;
+        if (ring) ring.style.display = 'none';
+      }
+    }
+    // The GPU clock is a third GPU Stats item (the host may not report one: Windows has none for Intel).
+    show('statGpuMhzItem', Boolean(gpu && gpu.mhz !== undefined));
+    if (gpu && gpu.mhz !== undefined) this.$('statGpuMhz').textContent = `${gpu.mhz} MHz`;
+    const cpuMhz = settings.showCpuMhz === true && stats.cpuMhz !== undefined ? stats.cpuMhz : undefined;
+    show('statCpuMhzItem', cpuMhz !== undefined);
+    if (cpuMhz !== undefined) this.$('statCpuMhz').textContent = `${cpuMhz} MHz`;
   },
 
   /**

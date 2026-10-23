@@ -2459,8 +2459,8 @@ class CodemanApp {
     this.renderSessionTabs();
     this.renderRalphStatePanel();  // Update ralph panel after session deleted
     this.renderProjectInsightsPanel();  // Update project insights panel after session deleted
-    // Stop stats polling when no sessions remain
-    if (this.sessions.size === 0) this.stopSystemStatsPolling();
+    // Stats polling keeps going with no session left: the header shows CPU, MEM and the opt-in readings
+    // regardless, and would sit at "--" otherwise.
   }
 
   // SSE wrappers — skip terminal events while WebSocket owns active terminal I/O.
@@ -5025,12 +5025,9 @@ class CodemanApp {
     // survive reloads and SSE reconnects (methods in approvals-ui.js).
     this.seedApprovals?.();
 
-    // Start/stop system stats polling based on session count
-    if (this.sessions.size > 0) {
-      this.startSystemStatsPolling();
-    } else {
-      this.stopSystemStatsPolling();
-    }
+    // Poll the header stats whether or not a session is open (fetchSystemStats skips the call while the
+    // stats pill is hidden); starting restarts the interval, so only start it once.
+    if (!this.systemStatsInterval) this.startSystemStatsPolling();
 
     // CRITICAL: Clean up all floating windows before loading new subagents
     // This prevents memory leaks from ResizeObservers, EventSources, and DOM elements
