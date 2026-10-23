@@ -178,6 +178,12 @@ The connection readout, CPU, MEM and the plan usage windows can be drawn three w
 
 Hiding System Stats or Plan Usage still hides them in every style.
 
+The line between the session tabs and the toolbar is a handle: drag it right to narrow the toolbar
+(it wraps onto a second line and the usage readings shed their labels, then their provider names,
+then their percentages), left to widen it. Arrow keys resize it, and double-click or Home resets it.
+It stops at the widest reading, the width is kept per device, and it is not shown on phones, in the
+sidebar layout, in the vertical rail or in a solo window.
+
 New header controls never appear on phones. Phone layout is deliberately minimal and is
 covered in [Mobile Guide](Mobile-Guide).
 

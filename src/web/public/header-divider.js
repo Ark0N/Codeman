@@ -63,8 +63,13 @@
     handle.setAttribute('role', 'separator');
     handle.setAttribute('aria-orientation', 'vertical');
     handle.setAttribute('aria-label', 'Resize the toolbar (double-click to reset)');
+    handle.setAttribute('aria-valuemin', String(MIN_WIDTH));
     handle.tabIndex = 0;
     right.insertBefore(handle, right.firstChild);
+
+    // The width the user asked for. The applied width can be smaller (a narrow window) or larger (a reading
+    // that needs more room), and the request is what comes back when the window grows again.
+    let wanted = readStored();
 
     const bounds = () => ({ header: header.clientWidth, brand: brand ? brand.offsetWidth : 0 });
     const current = () => right.getBoundingClientRect().width;
@@ -87,20 +92,20 @@
       else root.removeAttribute('data-header-density');
     }
 
-    function apply(width, persist) {
-      if (width === null) {
+    /** Apply `wanted`, settled on a width no reading overflows at the density that width gets. */
+    function settle() {
+      if (wanted === null) {
         root.style.removeProperty('--header-right-width');
         root.removeAttribute('data-header-right-width');
         root.removeAttribute('data-header-density');
         handle.removeAttribute('aria-valuenow');
-        if (persist) writeStored(null);
+        handle.removeAttribute('aria-valuemax');
         return;
       }
       const { header: h, brand: b } = bounds();
-      let clamped = clampWidth(width, h, b);
+      let clamped = clampWidth(wanted, h, b);
       root.setAttribute('data-header-right-width', 'set');
-      // A narrower toolbar sheds labels, which shrinks the readings, which lowers the minimum: settle
-      // on a width no reading overflows at the density that width gets.
+      // A narrower toolbar sheds labels, which shrinks the readings, which lowers the minimum.
       for (let i = 0; i < 3; i++) {
         root.style.setProperty('--header-right-width', clamped + 'px');
         setDensity(clamped);
@@ -109,49 +114,92 @@
         clamped = floor;
       }
       handle.setAttribute('aria-valuenow', String(clamped));
-      if (persist) writeStored(clamped);
+      handle.setAttribute('aria-valuemax', String(clampWidth(Infinity, h, b)));
     }
+
+    /** Several changes in one frame (a chip refill, a resize) settle once. */
+    let settleFrame = 0;
+    function scheduleSettle() {
+      if (wanted === null || settleFrame) return;
+      settleFrame = requestAnimationFrame(() => {
+        settleFrame = 0;
+        settle();
+      });
+    }
+
+    /** The tab strip and the subagent lines measure the header, so they re-measure after a user resize. */
+    function relayout() {
+      window.app?.updateTabOverflowMode?.();
+      window.app?.updateConnectionLines?.();
+    }
+
+    function apply(width) {
+      wanted = width === null ? null : Math.round(width);
+      writeStored(wanted);
+      settle();
+      relayout();
+    }
+
+    // Readings arrive after init (the plan-usage chip is filled in asynchronously, a Codex or Copilot row
+    // can start reporting later, a header button can be switched on): re-settle when any child changes size.
+    const resizeObserver = new ResizeObserver(scheduleSettle);
+    const watch = () => {
+      for (const child of right.children) if (child !== handle) resizeObserver.observe(child);
+    };
+    watch();
+    new MutationObserver(() => {
+      watch();
+      scheduleSettle();
+    }).observe(right, { childList: true });
 
     handle.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
       event.preventDefault();
       handle.setPointerCapture?.(event.pointerId);
       document.body.classList.add('header-divider-dragging');
-      const onMove = (e) => apply(header.getBoundingClientRect().right - e.clientX - 12, false);
-      const onUp = () => {
+      const padRight = parseFloat(getComputedStyle(header).paddingRight) || 0;
+      let moveFrame = 0;
+      let lastX = event.clientX;
+      const onMove = (e) => {
+        lastX = e.clientX;
+        if (moveFrame) return;
+        moveFrame = requestAnimationFrame(() => {
+          moveFrame = 0;
+          wanted = Math.round(header.getBoundingClientRect().right - lastX - padRight);
+          settle();
+        });
+      };
+      const finish = () => {
         handle.removeEventListener('pointermove', onMove);
-        handle.removeEventListener('pointerup', onUp);
-        handle.removeEventListener('pointercancel', onUp);
+        handle.removeEventListener('pointerup', finish);
+        handle.removeEventListener('pointercancel', finish);
+        handle.removeEventListener('lostpointercapture', finish);
+        if (moveFrame) cancelAnimationFrame(moveFrame);
+        moveFrame = 0;
         document.body.classList.remove('header-divider-dragging');
-        const width = Number.parseFloat(root.style.getPropertyValue('--header-right-width'));
-        if (Number.isFinite(width)) writeStored(width);
+        if (wanted !== null) apply(wanted);
       };
       handle.addEventListener('pointermove', onMove);
-      handle.addEventListener('pointerup', onUp);
-      handle.addEventListener('pointercancel', onUp);
+      handle.addEventListener('pointerup', finish);
+      handle.addEventListener('pointercancel', finish);
+      handle.addEventListener('lostpointercapture', finish);
     });
 
-    handle.addEventListener('dblclick', () => apply(null, true));
+    handle.addEventListener('dblclick', () => apply(null));
 
     handle.addEventListener('keydown', (event) => {
       if (event.key === 'Home' || event.key === 'Escape') {
-        apply(null, true);
+        apply(null);
       } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-        const step = event.key === 'ArrowLeft' ? KEY_STEP : -KEY_STEP;
-        apply(current() + step, true);
+        apply((wanted ?? current()) + (event.key === 'ArrowLeft' ? KEY_STEP : -KEY_STEP));
       } else {
         return;
       }
       event.preventDefault();
     });
 
-    window.addEventListener('resize', () => {
-      const width = Number.parseFloat(root.style.getPropertyValue('--header-right-width'));
-      if (Number.isFinite(width)) apply(width, false);
-    });
-
-    const stored = readStored();
-    if (stored !== null) apply(stored, false);
+    window.addEventListener('resize', scheduleSettle);
+    settle();
   }
 
   window.CodemanHeaderDivider = { clampWidth, densityFor, MIN_WIDTH, MIN_TABS_ROOM };
