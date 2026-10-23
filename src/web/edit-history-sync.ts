@@ -5,8 +5,15 @@
  *
  * WHEN. Only when the panel asks (`GET …/edits?sync=1` on open and while it follows the
  * session, `POST …/edits/older`): no timer, no hook, no background read for sessions nobody
- * looks at. One sync per session runs at a time; a request during a run is folded into one
- * more run afterwards.
+ * looks at. One sync per session runs at a time; requests during a run are folded into one
+ * more forward read and/or one more older read afterwards.
+ *
+ * GONE. `remove()` (the session's record is deleted) marks the session gone before it deletes
+ * the file: a run in flight stops after its current read, its store no longer writes, and a
+ * later request reads nothing (`unavailable`, reason `removed`) instead of loading a new store.
+ *
+ * OLDER. "Load older" splits the budget evenly over the sources with older lines and reads
+ * only those blocks, so every source moves back with each click.
  *
  * WHICH SESSIONS. Local claude sessions. Remote, Docker and non-claude sessions answer
  * `unsupported` and are never read.
@@ -20,7 +27,7 @@
  */
 
 import type { SessionRemote } from '../types/session.js';
-import type { EditSourceRequest, EditSources, PathProbe } from '../edit-history-local-source.js';
+import type { EditSourceReadOptions, EditSourceRequest, EditSources, PathProbe } from '../edit-history-local-source.js';
 import type { ImageCandidate } from '../edit-history-parse.js';
 import { EditHistoryStore, READ_BUDGET_BYTES, type ConfirmedImage } from '../edit-history-store.js';
 import { getCli } from '../config/cli-registry/registry.js';
@@ -31,6 +38,8 @@ export const IMAGE_MTIME_SLACK_MS = 2000;
 export const MAX_FORWARD_PASSES = 3;
 /** `reason` when the session has no transcript yet (no prompt yet, or not found). */
 export const NO_TRANSCRIPT = 'no-transcript';
+/** `reason` once the session's history was deleted. */
+export const REMOVED = 'removed';
 
 export type EditHistoryState = 'ok' | 'unavailable' | 'unsupported';
 
@@ -53,7 +62,12 @@ export interface EditHistorySession {
 export interface EditHistorySyncDeps {
   /** The session's main transcript path, or null when it has none yet. */
   transcriptPath(session: EditHistorySession): Promise<string | null>;
-  readSources(mainPath: string, requests: readonly EditSourceRequest[], budget: number): Promise<EditSources | null>;
+  readSources(
+    mainPath: string,
+    requests: readonly EditSourceRequest[],
+    budget: number,
+    opts?: EditSourceReadOptions
+  ): Promise<EditSources | null>;
   probe(paths: readonly string[]): Promise<Array<PathProbe | null>>;
   loadStore(sessionId: string): Promise<EditHistoryStore>;
   budget?: number;
@@ -109,11 +123,18 @@ export function confirmImages(
   return out;
 }
 
+interface SyncWant {
+  forward: boolean;
+  older: boolean;
+}
+
 interface SessionSlot {
-  store?: EditHistoryStore;
+  store?: Promise<EditHistoryStore>;
   status: EditHistoryStatus;
   running?: Promise<void>;
-  again?: { older: boolean };
+  again?: SyncWant;
+  /** The history was deleted: nothing reads for this session any more. */
+  gone?: boolean;
 }
 
 export class EditHistorySync {
@@ -124,10 +145,16 @@ export class EditHistorySync {
     this.budget = deps.budget ?? READ_BUDGET_BYTES;
   }
 
-  /** The session's store, loaded from disk on first use. */
-  async getStore(sessionId: string): Promise<EditHistoryStore> {
+  /** The session's store, loaded from disk on first use (one load for concurrent callers). */
+  getStore(sessionId: string): Promise<EditHistoryStore> {
     const slot = this.slot(sessionId);
-    if (!slot.store) slot.store = await this.deps.loadStore(sessionId);
+    if (!slot.store) {
+      const loading = this.deps.loadStore(sessionId);
+      slot.store = loading;
+      loading.catch(() => {
+        if (slot.store === loading) slot.store = undefined;
+      });
+    }
     return slot.store;
   }
 
@@ -142,18 +169,23 @@ export class EditHistorySync {
   async sync(session: EditHistorySession, opts: SyncOptions = {}): Promise<EditHistoryStatus> {
     const why = unsupportedReason(session);
     const slot = this.slot(session.id);
+    if (slot.gone) return this.getStatus(session.id);
     if (why) {
       slot.status = { state: 'unsupported', reason: why };
       return this.getStatus(session.id);
     }
+    const want: SyncWant = { forward: !opts.older, older: !!opts.older };
     if (slot.running) {
-      slot.again = { older: (slot.again?.older ?? false) || !!opts.older };
+      slot.again = {
+        forward: (slot.again?.forward ?? false) || want.forward,
+        older: (slot.again?.older ?? false) || want.older,
+      };
       await slot.running;
       // The queued run starts when the current one ends; wait for it too.
       if (slot.running) await slot.running;
       return this.getStatus(session.id);
     }
-    slot.running = this.runLoop(session, !!opts.older);
+    slot.running = this.runLoop(session, slot, want);
     try {
       await slot.running;
     } finally {
@@ -164,13 +196,19 @@ export class EditHistorySync {
 
   /** Write every loaded store's pending changes (server shutdown). */
   async flushAll(): Promise<void> {
-    await Promise.all([...this.slots.values()].map((slot) => slot.store?.flush()));
+    await Promise.all([...this.slots.values()].map(async (slot) => (await slot.store)?.flush()));
   }
 
-  /** Drop a deleted session: forget it and delete its stored history. */
+  /**
+   * Delete a session's stored history (its record is gone). The session stays marked, so a
+   * run in flight or a late request cannot load and write a new store for it.
+   */
   async remove(sessionId: string): Promise<void> {
+    const slot = this.slot(sessionId);
+    slot.gone = true;
+    slot.again = undefined;
+    slot.status = { state: 'unavailable', reason: REMOVED };
     const store = await this.getStore(sessionId);
-    this.slots.delete(sessionId);
     await store.remove();
   }
 
@@ -183,21 +221,21 @@ export class EditHistorySync {
     return slot;
   }
 
-  private async runLoop(session: EditHistorySession, older: boolean): Promise<void> {
-    const slot = this.slot(session.id);
-    let next: boolean | null = older;
-    while (next !== null) {
-      await this.runOnce(session, next);
-      next = slot.again ? slot.again.older : null;
+  private async runLoop(session: EditHistorySession, slot: SessionSlot, want: SyncWant): Promise<void> {
+    let next: SyncWant | undefined = want;
+    while (next && !slot.gone) {
+      if (next.forward) await this.runOnce(session, slot, false);
+      if (next.older && !slot.gone) await this.runOnce(session, slot, true);
+      next = slot.again;
       slot.again = undefined;
     }
   }
 
-  private async runOnce(session: EditHistorySession, older: boolean): Promise<void> {
-    const slot = this.slot(session.id);
+  private async runOnce(session: EditHistorySession, slot: SessionSlot, older: boolean): Promise<void> {
     const store = await this.getStore(session.id);
+    let status: EditHistoryStatus;
     try {
-      const path = await this.deps.transcriptPath(session);
+      const path = slot.gone ? null : await this.deps.transcriptPath(session);
       let found: boolean;
       if (!path) {
         found = false;
@@ -205,16 +243,17 @@ export class EditHistorySync {
         found = await this.readOlder(path, store);
       } else {
         found = true;
-        for (let pass = 0; pass < MAX_FORWARD_PASSES && found; pass++) {
+        for (let pass = 0; pass < MAX_FORWARD_PASSES && found && !slot.gone; pass++) {
           const r = await this.readForward(path, store);
           found = r.found;
           if (!r.more) break;
         }
       }
-      slot.status = found ? { state: 'ok' } : { state: 'unavailable', reason: NO_TRANSCRIPT };
+      status = found ? { state: 'ok' } : { state: 'unavailable', reason: NO_TRANSCRIPT };
     } catch (err) {
-      slot.status = { state: 'unavailable', reason: err instanceof Error ? err.message : String(err) };
+      status = { state: 'unavailable', reason: err instanceof Error ? err.message : String(err) };
     }
+    if (!slot.gone) slot.status = status;
   }
 
   private forwardRequests(store: EditHistoryStore): EditSourceRequest[] {
@@ -257,13 +296,16 @@ export class EditHistorySync {
 
   private async readOlder(path: string, store: EditHistoryStore): Promise<boolean> {
     if (!store.backfillTruncated) return true;
+    const sources = store.sourcesWithOlder();
+    if (sources.length === 0) return true;
+    const share = Math.max(1, Math.floor(this.budget / sources.length));
     const requests: EditSourceRequest[] = [];
-    for (const relPath of store.sourcesWithOlder()) {
-      const range = store.olderRange(relPath, this.budget);
+    for (const relPath of sources) {
+      const range = store.olderRange(relPath, share);
       if (range) requests.push({ relPath, offset: range.offset, len: range.len });
     }
     if (requests.length === 0) return true;
-    const res = await this.deps.readSources(path, requests, this.budget);
+    const res = await this.deps.readSources(path, requests, this.budget, { onlyRequested: true });
     if (!res) return false;
     if (res.transcriptId !== store.getTranscriptId()) return true;
     const wanted = new Set(requests.map((r) => r.relPath));

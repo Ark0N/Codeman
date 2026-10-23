@@ -983,6 +983,16 @@ describe('session-routes', () => {
       // with no broadcast, so other open tabs kept showing the retired row until
       // their next unrelated fetch.
       expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:deleted', { id: 'ghost-session' });
+      // Its stored edit history (diffs can hold secrets) goes with the record.
+      expect(harness.ctx.forgetEditHistory).toHaveBeenCalledWith('ghost-session');
+    });
+
+    it('keeps the edit history of a pinned persisted-only session whose record is only demoted', async () => {
+      vi.mocked(harness.ctx.store.getSession).mockReturnValueOnce({ id: 'pinned-ghost', owner: undefined } as never);
+      vi.mocked(harness.ctx.store.demoteOrRemoveSession).mockReturnValueOnce('preserved');
+      const res = await harness.app.inject({ method: 'DELETE', url: '/api/sessions/pinned-ghost' });
+      expect(res.statusCode).toBe(200);
+      expect(harness.ctx.forgetEditHistory).not.toHaveBeenCalled();
     });
 
     it('404s a persisted-only session id the state store does not recognize either', async () => {

@@ -120,6 +120,24 @@ describe('readClaudeEditSources', () => {
     const res = await readClaudeEditSources(path, [{ relPath: 'main', offset: 2 }], 100);
     expect(res?.files[0].chunk).toEqual(Buffer.from('äöü\n', 'utf8').subarray(2));
   });
+
+  it('with onlyRequested, reads the requested files and nothing else', async () => {
+    const path = put('p/sid.jsonl', 'MAIN');
+    put('p/sid/subagents/agent-a1.jsonl', 'AAAA');
+    put('p/sid/subagents/agent-b2.jsonl', 'BBBB');
+    const res = await readClaudeEditSources(path, [{ relPath: 'subagents/agent-b2.jsonl', offset: 1, len: 2 }], 100, {
+      onlyRequested: true,
+    });
+    expect(res?.files.map((f) => [f.relPath, f.startOffset, f.chunk.toString()])).toEqual([
+      ['subagents/agent-b2.jsonl', 1, 'BB'],
+    ]);
+  });
+
+  it('reads the end of a block that does not fit the budget', async () => {
+    const path = put('p/sid.jsonl', '0123456789');
+    const res = await readClaudeEditSources(path, [{ relPath: 'main', offset: 2, len: 6 }], 3);
+    expect(res?.files[0]).toMatchObject({ startOffset: 5, chunk: Buffer.from('567') });
+  });
 });
 
 describe('probeLocalPaths', () => {

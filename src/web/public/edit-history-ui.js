@@ -13,11 +13,12 @@
  *
  * - A code entry opens its diff inline (`GET /api/sessions/:id/edits/:entryId`), drawn with the Git
  *   panel's diff classes (`git-diff`, `git-diff-line--hunk|add|del`).
- * - An image entry shows a thumbnail and opens the shared file preview (panels-ui.js
- *   `openFilePreview`), as does a click on any path. Both go through the existing file routes only:
- *   inside the workspace the confined `file-raw`, outside it an id minted by the attachment route
- *   with `notify: false` (`_registerExternalPreview`, which enforces the attachment guard and its
- *   extension allowlist). A path from the transcript is never served by a route of its own.
+ * - An image entry opens the shared file preview (panels-ui.js `openFilePreview`), as does a click
+ *   on any path; inside the workspace it also shows a thumbnail. Both go through the existing file
+ *   routes only: the thumbnail is the confined `file-raw`, and the preview of a file outside the
+ *   workspace registers it on click with `notify: false` (`_registerExternalPreview`, which
+ *   enforces the attachment guard and its extension allowlist). A path from the transcript is
+ *   never served by a route of its own.
  * - `backfillTruncated` offers "Load older" (`POST /api/sessions/:id/edits/older`).
  *
  * Paths, agent descriptions and diffs are untrusted text: they are only ever written with
@@ -26,7 +27,7 @@
  * @mixin Extends CodemanApp.prototype via Object.assign
  * @dependency app.js (this.activeSessionId, this.sessions, this.loadAppSettingsFromStorage, this.getDefaultSettings, this.$)
  * @dependency api-client.js (this._api, this._apiJson; resolved at call time)
- * @dependency panels-ui.js (openFilePreview, _isExternalPreviewPath, _registerExternalPreview)
+ * @dependency panels-ui.js (openFilePreview, _isExternalPreviewPath)
  * @dependency i18n.js (window.codemanT)
  * @loadorder 12.58 of 16, after git-status-ui.js, before entrance-animations.js
  */
@@ -302,32 +303,16 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Thumbnail source for an image entry, through the routes the file preview uses: inside the
-   * workspace the confined `file-raw` route (a string), outside it the attachment `/raw` route by
-   * an id the attachment route mints with `notify: false` (a promise, one per path and panel
-   * state, resolving to the URL or null when the attachment guard refuses the file). SVGs get none
-   * (both routes serve them as a download); clicking still opens the preview.
+   * Thumbnail URL for an image entry inside the workspace: the confined `file-raw` route the file
+   * preview uses. An image outside the workspace gets none: showing it needs an attachment id
+   * (`POST …/attachments`, `notify: false`), and minting one per rendered row would push the
+   * session's real attachments out of its capped registry. Clicking it opens the file preview,
+   * which registers it like any other external file. SVGs get none either (`file-raw` serves
+   * them as a download).
    */
-  _editHistoryThumbSrc(path, sid, h) {
-    if (!path || /\.svg$/i.test(path)) return null;
-    if (!this._isExternalPreviewPath?.(path, sid)) {
-      return this._editHistoryUrl(`/api/sessions/${encodeURIComponent(sid)}/file-raw?path=${encodeURIComponent(path)}`);
-    }
-    if (typeof this._registerExternalPreview !== 'function') return null;
-    if (!h.thumbs) h.thumbs = new Map();
-    if (!h.thumbs.has(path)) {
-      h.thumbs.set(
-        path,
-        this._registerExternalPreview(path, sid).then((r) =>
-          r?.attachmentId
-            ? this._editHistoryUrl(
-                `/api/sessions/${encodeURIComponent(sid)}/attachments/${encodeURIComponent(r.attachmentId)}/raw`
-              )
-            : null
-        )
-      );
-    }
-    return h.thumbs.get(path);
+  _editHistoryThumbSrc(path, sid) {
+    if (!path || /\.svg$/i.test(path) || this._isExternalPreviewPath?.(path, sid) !== false) return null;
+    return this._editHistoryUrl(`/api/sessions/${encodeURIComponent(sid)}/file-raw?path=${encodeURIComponent(path)}`);
   },
 
   _renderEditHistoryPanel() {
@@ -528,7 +513,7 @@ Object.assign(CodemanApp.prototype, {
           open();
         }
       });
-      const src = this._editHistoryThumbSrc(e.path, h.sessionId, h);
+      const src = this._editHistoryThumbSrc(e.path, h.sessionId);
       if (src) {
         const img = el('img', 'edit-history-thumb');
         img.loading = 'lazy';
@@ -538,15 +523,7 @@ Object.assign(CodemanApp.prototype, {
           open();
         });
         img.addEventListener('error', () => img.remove());
-        if (typeof src === 'string') {
-          img.src = src;
-        } else {
-          // A re-render meanwhile replaced this element; the new one reads the same promise.
-          src.then((url) => {
-            if (url) img.src = url;
-            else img.remove();
-          });
-        }
+        img.src = src;
         out.push(img);
       }
       return out;

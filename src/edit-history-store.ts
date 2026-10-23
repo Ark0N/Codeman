@@ -14,16 +14,19 @@
  *
  * A first read of a file starts `budget` bytes before its end (transcripts reach 100 MB+),
  * drops the cut first line and leaves `floor` there. A line longer than the budget is
- * skipped instead of blocking the cursor.
+ * skipped instead of blocking the cursor, reading forward (`midLine`) and backward
+ * (`floorMidLine`).
  *
  * A new conversation (`/clear`, resume) arrives as a new `transcriptId`: cursors and
  * pending Bash calls start over, entries stay. Entries are capped at {@link MAX_ENTRIES}
- * and {@link MAX_STORE_BYTES} of diff text; the oldest by time are dropped.
+ * and {@link MAX_STORE_BYTES} of diff text; the oldest by time are dropped. Besides them
+ * the file holds the cursors, at most {@link MAX_PENDING_BASH} unanswered Bash calls and at
+ * most {@link MAX_AGENTS} subagent labels.
  *
  * ⚠️ The file holds secrets: a diff carries whatever the agent wrote, keys and `.env`
- * contents included. So, like `intents.json`, it is written 0600 via tmp+rename (in a 0700
- * dir), bounded, deleted with the session (`remove()`), never fed to `/api/search`, and
- * blocked from the file routes by `isSensitivePath` (`web/sensitive-path.ts`).
+ * contents included. So, like `intents.json`, it is written 0600 via tmp+rename, bounded,
+ * deleted with the session (`remove()`), never fed to `/api/search`, and blocked from the
+ * file routes by `isSensitivePath` (`web/sensitive-path.ts`).
  *
  * Persisted as JSON under `dataPath('edit-history', '<sessionId>.json')`, written debounced.
  *
@@ -37,6 +40,8 @@ import { join } from 'node:path';
 import { dataPath } from './config/instance.js';
 import {
   MAX_HUNK_BYTES,
+  MAX_PENDING_BASH,
+  MAX_PENDING_COMMAND_CHARS,
   parseClaudeEditLines,
   type EditRecord,
   type EditTool,
@@ -49,6 +54,11 @@ export const MAX_ENTRIES = 500;
 export const MAX_STORE_BYTES = 4 * 1024 * 1024;
 /** Longest string kept from a subagent's `meta.json` field. */
 export const MAX_AGENT_META_CHARS = 1024;
+/**
+ * Subagent labels kept; past it the oldest one no entry uses is dropped. One more than
+ * {@link MAX_ENTRIES}, so besides the newest label there always is one.
+ */
+export const MAX_AGENTS = MAX_ENTRIES + 1;
 /** Bytes read per file and pass (first read, forward step, "older" step). */
 export const READ_BUDGET_BYTES = 8 * 1024 * 1024;
 export const MAIN_SOURCE = 'main';
@@ -68,6 +78,8 @@ export interface SourceCursor {
   floor: number;
   /** The next forward read starts inside a line longer than the budget; skip to its end. */
   midLine?: boolean;
+  /** `floor` lies inside a line longer than the budget; the next older read drops its tail. */
+  floorMidLine?: boolean;
 }
 
 export interface AgentMeta {
@@ -138,12 +150,21 @@ function metaString(v: unknown): string | undefined {
 
 /** Parse an `agent-<id>.meta.json` text; null when it is not an object. */
 export function parseAgentMeta(text: string): AgentMeta | null {
-  let raw: unknown;
   try {
-    raw = JSON.parse(text);
+    return agentMetaFrom(JSON.parse(text));
   } catch {
     return null;
   }
+}
+
+function isOffset(v: unknown): v is number {
+  return Number.isSafeInteger(v) && (v as number) >= 0;
+}
+
+// The loaders below take the persisted file as untrusted: a hand-edited or damaged store
+// loses the broken parts instead of failing every request or stalling a cursor.
+
+function agentMetaFrom(raw: unknown): AgentMeta | null {
   if (!isObj(raw)) return null;
   const meta: AgentMeta = {
     description: metaString(raw.description) ?? '',
@@ -154,6 +175,36 @@ export function parseAgentMeta(text: string): AgentMeta | null {
   if (worktreePath) meta.worktreePath = worktreePath;
   if (worktreeBranch) meta.worktreeBranch = worktreeBranch;
   return meta;
+}
+
+function cursorFrom(raw: unknown): SourceCursor | null {
+  if (!isObj(raw) || !isOffset(raw.offset) || !isOffset(raw.floor) || raw.floor > raw.offset) return null;
+  const cursor: SourceCursor = { offset: raw.offset, floor: raw.floor };
+  if (raw.midLine === true) cursor.midLine = true;
+  if (raw.floorMidLine === true) cursor.floorMidLine = true;
+  return cursor;
+}
+
+function pendingBashFrom(raw: unknown): PendingBash | null {
+  if (!isObj(raw)) return null;
+  const { id, ts, command, cwd, agentId } = raw;
+  if (typeof id !== 'string' || typeof ts !== 'number' || typeof command !== 'string' || typeof cwd !== 'string') {
+    return null;
+  }
+  const pending: PendingBash = { id, ts, command: command.slice(0, MAX_PENDING_COMMAND_CHARS), cwd };
+  if (typeof agentId === 'string') pending.agentId = agentId;
+  return pending;
+}
+
+function isEntry(raw: unknown): raw is EditHistoryEntry {
+  return (
+    isObj(raw) &&
+    typeof raw.id === 'string' &&
+    typeof raw.path === 'string' &&
+    typeof raw.ts === 'number' &&
+    Array.isArray(raw.hunks) &&
+    raw.hunks.every((h) => isObj(h) && Array.isArray(h.lines))
+  );
 }
 
 export class EditHistoryStore {
@@ -168,6 +219,8 @@ export class EditHistoryStore {
   /** Sum of {@link entryBytes} over `entries`. */
   private bytes = 0;
   private saveTimer: NodeJS.Timeout | null = null;
+  /** The last queued write; `remove()` waits for it. */
+  private writing: Promise<void> | null = null;
   private removed = false;
 
   constructor(sessionId: string, opts: EditHistoryStoreOptions = {}) {
@@ -189,17 +242,20 @@ export class EditHistoryStore {
     if (data.version !== FILE_VERSION) return store;
     const f = data as unknown as StoreFile;
     store.transcriptId = typeof f.transcriptId === 'string' ? f.transcriptId : null;
-    for (const [k, c] of Object.entries(isObj(f.cursors) ? f.cursors : {})) {
-      if (isObj(c) && typeof c.offset === 'number' && typeof c.floor === 'number') store.cursors.set(k, c);
+    for (const [k, raw] of Object.entries(isObj(f.cursors) ? f.cursors : {})) {
+      const cursor = cursorFrom(raw);
+      if (cursor) store.cursors.set(k, cursor);
     }
-    if (Array.isArray(f.pendingBash)) store.pendingBash = f.pendingBash;
-    for (const [k, a] of Object.entries(isObj(f.agents) ? f.agents : {})) store.agents.set(k, a);
-    if (Array.isArray(f.entries)) {
-      const loaded = f.entries.filter(
-        (e): e is EditHistoryEntry =>
-          isObj(e) && typeof e.id === 'string' && typeof e.path === 'string' && Array.isArray(e.hunks)
-      );
-      store.addRecords(loaded);
+    if (Array.isArray(f.pendingBash)) {
+      store.pendingBash = f.pendingBash
+        .map(pendingBashFrom)
+        .filter((p): p is PendingBash => p !== null)
+        .slice(-MAX_PENDING_BASH);
+    }
+    if (Array.isArray(f.entries)) store.addRecords(f.entries.filter(isEntry));
+    for (const [k, raw] of Object.entries(isObj(f.agents) ? f.agents : {})) {
+      const meta = agentMetaFrom(raw);
+      if (meta) store.putAgent(k, meta);
     }
     return store;
   }
@@ -243,9 +299,9 @@ export class EditHistoryStore {
 
   /** Record a subagent's `meta.json`; ignored when it does not parse. */
   setAgentMeta(agentId: string, metaText: string): void {
-    const meta = parseAgentMeta(metaText);
+    const meta = this.removed ? null : parseAgentMeta(metaText);
     if (!meta) return;
-    this.agents.set(agentId, meta);
+    this.putAgent(agentId, meta);
     this.scheduleSave();
   }
 
@@ -284,6 +340,7 @@ export class EditHistoryStore {
 
   /** Apply a forward chunk read at `nextRange`. Returns new entries and Bash image candidates. */
   apply(input: ApplyInput): ApplyResult {
+    if (this.removed) return { added: 0, candidates: [] };
     const { transcriptId, source, startOffset, chunk, size } = input;
     if (transcriptId !== this.transcriptId) {
       this.transcriptId = transcriptId;
@@ -303,8 +360,9 @@ export class EditHistoryStore {
     if (cursor ? cursor.midLine : startOffset > 0) {
       const nl = chunk.indexOf(NL);
       if (nl === -1) {
-        // Still inside that line: move past it unless it is the line being written.
-        if (!atEof) this.setCursor(source, cursor, startOffset + chunk.length, startOffset, true);
+        // Still inside that line: move past it unless it is the line being written. A first
+        // read began inside it, so the floor does too.
+        if (!atEof) this.setCursor(source, cursor, startOffset + chunk.length, startOffset, true, true);
         return { added: 0, candidates: [] };
       }
       from = nl + 1;
@@ -328,22 +386,35 @@ export class EditHistoryStore {
     return { added, candidates: parsed.candidates };
   }
 
-  /** Apply a chunk read at `olderRange`: it ends at the floor, a line boundary. */
+  /**
+   * Apply a chunk read at `olderRange`: it ends at the floor, which is a line start, or with
+   * `floorMidLine` lies inside a line longer than the budget (its part in this chunk is dropped).
+   */
   applyOlder(input: ApplyInput): ApplyResult {
     const { transcriptId, source, startOffset, chunk } = input;
-    const cursor = this.cursors.get(source);
+    const cursor = this.removed ? undefined : this.cursors.get(source);
     if (transcriptId !== this.transcriptId || !cursor || startOffset + chunk.length !== cursor.floor) {
       return { added: 0, candidates: [] };
     }
+    const end = cursor.floorMidLine ? chunk.lastIndexOf(NL) + 1 : chunk.length;
     let from = 0;
+    let insideLine = false;
     if (startOffset > 0) {
-      const nl = chunk.indexOf(NL);
-      // No line start in the whole block: one oversized line, skip it.
-      from = nl === -1 ? chunk.length : nl + 1;
+      // The newline at `end - 1` closes a line that may have started before this chunk.
+      const nl = chunk.subarray(0, end).indexOf(NL);
+      insideLine = nl === -1 || nl === end - 1;
+      from = insideLine ? end : nl + 1;
     }
-    cursor.floor = startOffset + from;
+    if (insideLine) {
+      // No line starts in this chunk: it lies inside one line longer than the budget. Skip it.
+      cursor.floor = startOffset;
+      cursor.floorMidLine = true;
+    } else {
+      cursor.floor = startOffset + from;
+      delete cursor.floorMidLine;
+    }
     // Calls whose results lie in already-read newer lines cannot be paired here.
-    const parsed = parseClaudeEditLines(chunk.subarray(from).toString('utf8'));
+    const parsed = parseClaudeEditLines(chunk.subarray(from, end).toString('utf8'));
     const added = this.addRecords(parsed.records);
     this.scheduleSave();
     return { added, candidates: parsed.candidates };
@@ -351,6 +422,7 @@ export class EditHistoryStore {
 
   /** Add Bash images whose mtime was confirmed inside their call's window. */
   addImageEntries(images: readonly ConfirmedImage[]): number {
+    if (this.removed) return 0;
     const records: EditHistoryEntry[] = images.map((img) => {
       const entry: EditHistoryEntry = {
         id: `${img.toolUseId}:${img.path}`,
@@ -372,12 +444,39 @@ export class EditHistoryStore {
     return added;
   }
 
-  /** Write now (cancels a pending debounced write). */
+  /** Write now (cancels a pending debounced write). Writes run one after another. */
   async flush(): Promise<void> {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
+    const run = (this.writing ?? Promise.resolve()).then(() => this.write());
+    this.writing = run.catch(() => undefined);
+    await run;
+  }
+
+  /**
+   * Delete the persisted file (session deleted) and forget the content. The store takes no
+   * changes afterwards, so a read still in flight neither writes nor refills it.
+   */
+  async remove(): Promise<void> {
+    this.removed = true;
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    this.entries.clear();
+    this.bytes = 0;
+    this.cursors.clear();
+    this.pendingBash = [];
+    this.agents.clear();
+    // A write already under way ends first (or sees `removed`), so it cannot rename its
+    // tmp file over the deleted store afterwards.
+    await this.writing;
+    await unlink(this.file).catch(() => undefined);
+  }
+
+  private async write(): Promise<void> {
     if (this.removed) return;
     const data: StoreFile = {
       version: FILE_VERSION,
@@ -394,17 +493,24 @@ export class EditHistoryStore {
     // makes it the store, so an existing store never keeps wider bits.
     const tmp = `${this.file}.${process.pid}.tmp`;
     await writeFile(tmp, JSON.stringify(data), { mode: 0o600 });
+    if (this.removed) {
+      await unlink(tmp).catch(() => undefined);
+      return;
+    }
     await rename(tmp, this.file);
   }
 
-  /** Delete the persisted file (session deleted); later changes are no longer written. */
-  async remove(): Promise<void> {
-    this.removed = true;
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-      this.saveTimer = null;
+  private putAgent(agentId: string, meta: AgentMeta): void {
+    this.agents.delete(agentId);
+    this.agents.set(agentId, meta);
+    if (this.agents.size <= MAX_AGENTS) return;
+    const used = new Set<string>();
+    for (const e of this.entries.values()) if (e.agentId) used.add(e.agentId);
+    for (const id of this.agents.keys()) {
+      if (this.agents.size <= MAX_AGENTS) break;
+      // The newest label has no entries yet: they come with its transcript.
+      if (id !== agentId && !used.has(id)) this.agents.delete(id);
     }
-    await unlink(this.file).catch(() => undefined);
   }
 
   private setCursor(
@@ -412,10 +518,12 @@ export class EditHistoryStore {
     cursor: SourceCursor | undefined,
     offset: number,
     firstFloor: number,
-    midLine: boolean
+    midLine: boolean,
+    firstFloorMidLine = false
   ): void {
     const next: SourceCursor = { offset, floor: cursor ? cursor.floor : firstFloor };
     if (midLine) next.midLine = true;
+    if (cursor ? cursor.floorMidLine : firstFloorMidLine) next.floorMidLine = true;
     this.cursors.set(source, next);
   }
 

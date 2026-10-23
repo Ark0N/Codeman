@@ -841,6 +841,7 @@ export class WebServer extends EventEmitter {
       addSession: this.registerSessionWithLayout.bind(this),
       tabLayouts: this.tabLayouts,
       cleanupSession: this.cleanupSession.bind(this),
+      forgetEditHistory: this.forgetEditHistory.bind(this),
       setupSessionListeners: this.setupSessionListeners.bind(this),
       persistSessionState: this.persistSessionState.bind(this),
       persistSessionStateNow: this._persistSessionStateNow.bind(this),
@@ -1576,13 +1577,6 @@ export class WebServer extends EventEmitter {
     // Stop transcript watcher
     this.stopTranscriptWatcher(sessionId);
 
-    // Edit history: a killed session takes its stored history (diffs can hold secrets) with it
-    if (killMux) {
-      void this.editHistorySync.remove(sessionId).catch((err) => {
-        console.warn(`[EditHistory] Removing history of ${sessionId} failed:`, getErrorMessage(err));
-      });
-    }
-
     // Stop and remove run summary tracker
     const summaryTracker = this.runSummaryTrackers.get(sessionId);
     if (summaryTracker) {
@@ -1703,7 +1697,8 @@ export class WebServer extends EventEmitter {
       // Only remove from state.json if we're also killing the mux session.
       // When killMux=false (server shutdown), preserve state for recovery.
       if (killMux) {
-        this.store.demoteOrRemoveSession(sessionId);
+        // The edit history goes with the record; a pinned session's demoted record keeps it.
+        if (this.store.demoteOrRemoveSession(sessionId) !== 'preserved') this.forgetEditHistory(sessionId);
       }
     }
 
@@ -2509,8 +2504,19 @@ export class WebServer extends EventEmitter {
     const lifecycleLog = getLifecycleLog();
     for (const s of result.cleaned) {
       lifecycleLog.log({ event: 'stale_cleaned', sessionId: s.id, name: s.name });
+      this.forgetEditHistory(s.id);
     }
     return result.count;
+  }
+
+  /**
+   * Delete a session's edit history (diffs can hold secrets) once its record is gone: deleted
+   * live (`cleanupSession`), deleted as a record only (DELETE route), or cleaned as stale.
+   */
+  private forgetEditHistory(sessionId: string): void {
+    void this.editHistorySync.remove(sessionId).catch((err) => {
+      console.warn(`[EditHistory] Removing history of ${sessionId} failed:`, getErrorMessage(err));
+    });
   }
 
   /**

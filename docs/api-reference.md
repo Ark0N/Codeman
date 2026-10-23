@@ -1089,11 +1089,11 @@ What the Edit history panel reads (Settings → Header & Panels → Header, per-
 
 `GET /api/sessions/:id/edits[?sync=1]` lists the stored edits, newest first, without diffs: `{ state, reason?, backfillTruncated, agents, entries }`. With `sync=1` it first reads what the transcripts gained since the last read; without it the server reads nothing. `state` is `ok`, `unavailable` (stored entries only; `reason` is `no-transcript` before the session has a transcript Codeman can find, or the read error; the transcript is the one the session's hooks report, else the newest `<id>.jsonl` under the session's `CLAUDE_CONFIG_DIR` override or the server's config dir) or `unsupported` (`reason`: `remote`, `docker`, `mode`). Each entry is `{ id, ts, path, relPath, kind: 'code'|'image', tool, created, added, removed, truncated, agentId? }`, where `tool` is the edit tool, `bash` for an image a Bash call produced or `sent` for one the agent sent; `relPath` is relative to the workspace (a subagent's worktree for its edits). `agents` maps a subagent id to `{ description, agentType, worktreeBranch? }`. `backfillTruncated: true` means older edits can still be loaded.
 
-`GET /api/sessions/:id/edits/:entryId` returns one edit's diff as unified text: `{ diff, truncated }` (each hunk is capped at 64 KiB). `404` for an edit the session does not have.
+`GET /api/sessions/:id/edits/:entryId` returns one edit's diff as unified text: `{ diff, truncated }` (each edit's diff is capped at 64 KiB). `404` for an edit the session does not have.
 
-`POST /api/sessions/:id/edits/older` reads the next older block of the transcripts and answers like the list.
+`POST /api/sessions/:id/edits/older` reads the next older block of every transcript (main and subagents share the read budget) and answers like the list.
 
-The edits are stored per session in `~/.codeman/edit-history/<id>.json` (mode 0600, at most 500 edits and 4 MiB of diff text, the oldest dropped), deleted with the session and never fed into `/api/v1/search`. No route here serves a file: the panel shows images through `file-raw` and the attachment routes.
+The edits are stored per session in `~/.codeman/edit-history/<id>.json` (mode 0600, at most 500 edits and 4 MiB of diff text, the oldest dropped), deleted when the session's record is removed (a killed pinned session keeps it) and never fed into `/api/v1/search`. No route here serves a file: the panel shows thumbnails through `file-raw` inside the workspace only; an image outside it opens in the file preview, which registers it through the attachment route.
 
 ## Git worktrees of a case
 

@@ -3,15 +3,21 @@
  * "reads only on request" wiring. Reader and probe are fakes; the store is real (temp dir).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EditHistoryStore } from '../src/edit-history-store.js';
-import type { EditSourceRequest, EditSources, PathProbe } from '../src/edit-history-local-source.js';
+import type {
+  EditSourceReadOptions,
+  EditSourceRequest,
+  EditSources,
+  PathProbe,
+} from '../src/edit-history-local-source.js';
 import {
   confirmImages,
   EditHistorySync,
   NO_TRANSCRIPT,
+  REMOVED,
   type EditHistorySession,
   type EditHistorySyncDeps,
   unsupportedReason,
@@ -76,7 +82,8 @@ class FakeHost {
   read = async (
     mainPath: string,
     requests: readonly EditSourceRequest[],
-    budget: number
+    budget: number,
+    opts: EditSourceReadOptions = {}
   ): Promise<EditSources | null> => {
     this.calls.push([...requests]);
     this.paths.push(mainPath);
@@ -85,11 +92,16 @@ class FakeHost {
     const out: EditSources = { transcriptId: this.transcriptId, files: [], metas: {} };
     for (const [relPath, buf] of this.files) {
       const req = requests.find((r) => r.relPath === relPath);
+      if (!req && opts.onlyRequested) continue;
       let start: number;
       let len: number;
-      if (req) {
+      if (req?.len !== undefined) {
+        const blockEnd = Math.min(req.offset + req.len, buf.length);
+        len = Math.min(blockEnd - Math.min(req.offset, buf.length), remaining);
+        start = blockEnd - len;
+      } else if (req) {
         start = Math.min(req.offset, buf.length);
-        len = Math.min(req.len ?? remaining, remaining, buf.length - start);
+        len = Math.min(remaining, buf.length - start);
       } else {
         len = Math.min(buf.length, remaining);
         start = buf.length - len;
@@ -115,7 +127,7 @@ function setup(over: Partial<EditHistorySyncDeps> = {}) {
       lookups.push(session.id);
       return host.path;
     },
-    readSources: (path, req, budget) => host.read(path, req, budget),
+    readSources: (path, req, budget, opts) => host.read(path, req, budget, opts),
     probe: async (paths) => paths.map((p) => probes.get(p) ?? null),
     loadStore: (id) => EditHistoryStore.load(id, { dir, debounceMs: 0 }),
     ...over,
@@ -292,6 +304,83 @@ describe('EditHistorySync', () => {
     await (await sync.getStore('s1')).flush();
     await sync.remove('s1');
     expect(() => readFileSync(join(dir, 's1.json'))).toThrow();
+  });
+
+  it('a deleted session stays deleted: neither a run in flight nor a later request writes it again', async () => {
+    const { host, sync } = setup();
+    host.append('main', editLine('t1', T0, '/w/a.ts'));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const orig = host.read;
+    host.read = async (...a) => {
+      await gate;
+      return orig(...a);
+    };
+    const runs = [sync.sync(local), sync.sync(local)]; // one running, one queued
+    const removing = sync.remove('s1');
+    release();
+    await Promise.all([...runs, removing]);
+    await new Promise((r) => setTimeout(r, 20)); // past the store's debounce
+    expect(readdirSync(dir)).toEqual([]);
+    const reads = host.calls.length;
+    expect(await sync.sync(local)).toEqual({ state: 'unavailable', reason: REMOVED });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(host.calls).toHaveLength(reads);
+    expect(readdirSync(dir)).toEqual([]);
+    expect((await sync.getStore('s1')).list()).toEqual([]);
+  });
+
+  it('concurrent first callers share one store', async () => {
+    const { sync } = setup();
+    const [a, b] = await Promise.all([sync.getStore('s1'), sync.getStore('s1')]);
+    expect(a).toBe(b);
+  });
+
+  it('a forward request queued together with an older one still reads forward', async () => {
+    const { host, sync } = setup();
+    host.append('main', editLine('t1', T0, '/w/a.ts'));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const orig = host.read;
+    host.read = async (...a) => {
+      const res = await orig(...a); // the first run's bytes are taken before the append
+      await gate;
+      return res;
+    };
+    const first = sync.sync(local);
+    await new Promise((r) => setTimeout(r, 0));
+    host.append('main', editLine('t2', T0 + 1, '/w/b.ts'));
+    const queued = [sync.sync(local), sync.sync(local, { older: true })];
+    release();
+    await Promise.all([first, ...queued]);
+    expect((await sync.getStore('s1')).get('t2')).toBeDefined();
+  });
+
+  it('load older moves every source back, reading only the blocks it asked for', async () => {
+    const { host, sync } = setup({ budget: 2000 });
+    for (let i = 0; i < 10; i++) host.append('main', editLine(`m${i}`, T0 + i, `/w/m${i}.ts`));
+    for (let i = 0; i < 10; i++) {
+      host.append('subagents/agent-ab.jsonl', editLine(`s${i}`, T0 + 100 + i, `/w/s${i}.ts`, { agentId: 'ab' }));
+    }
+    await sync.sync(local);
+    await sync.sync(local); // the subagent gets its first block once main is up to date
+    const store = await sync.getStore('s1');
+    const floors = () => [store.getCursor('main')!.floor, store.getCursor('subagents/agent-ab.jsonl')!.floor];
+    const [main0, sub0] = floors();
+    expect(main0).toBeGreaterThan(0);
+    expect(sub0).toBeGreaterThan(0);
+    await sync.sync(local, { older: true });
+    const [main1, sub1] = floors();
+    expect(main1).toBeLessThan(main0);
+    expect(sub1).toBeLessThan(sub0);
+    expect(
+      host.calls
+        .at(-1)!
+        .map((r) => r.relPath)
+        .sort()
+    ).toEqual(['main', 'subagents/agent-ab.jsonl']);
+    for (let i = 0; i < 20 && store.backfillTruncated; i++) await sync.sync(local, { older: true });
+    expect(store.list()).toHaveLength(20);
   });
 });
 

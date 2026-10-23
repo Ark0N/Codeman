@@ -40,7 +40,7 @@ describe('Edit history panel in a real browser', () => {
   let sessionA: string;
   let sessionB: string;
   const settingsPutStatuses: number[] = [];
-  /** Bodies of POST /api/sessions/:id/attachments (the external thumbnail registration). */
+  /** Bodies of POST /api/sessions/:id/attachments (the file preview registering an external image). */
   const attachmentPosts: unknown[] = [];
   /** Every request to the mocked API: `METHOD url`. */
   const calls: string[] = [];
@@ -253,8 +253,10 @@ describe('Edit history panel in a real browser', () => {
 
   it('a path and an image open the shared file preview with the absolute path', async () => {
     await page.evaluate(() => {
-      (window as any).__previewed = [];
-      (window as any).app.openFilePreview = (p: string, sid: string) => (window as any).__previewed.push([p, sid]);
+      const w = window as any;
+      w.__previewed = [];
+      w.__openFilePreview = w.app.openFilePreview;
+      w.app.openFilePreview = (p: string, sid: string) => w.__previewed.push([p, sid]);
     });
     await rows().nth(2).locator('.edit-history-path').click();
     await page.locator('#editHistoryBody img.edit-history-thumb').click();
@@ -264,6 +266,10 @@ describe('Edit history panel in a real browser', () => {
     ]);
     // Clicking the path never toggles the row's diff.
     expect(await page.locator('#editHistoryBody .edit-history-diff').count()).toBe(0);
+    await page.evaluate(() => {
+      const w = window as any;
+      w.app.openFilePreview = w.__openFilePreview;
+    });
   });
 
   it('"Main agent only" hides the subagent edits; "Group by file" puts edits under their file', async () => {
@@ -338,7 +344,7 @@ describe('Edit history panel in a real browser', () => {
     expect(syncReads(sessionA)).toBe(before + 1);
   });
 
-  it('an image outside the workspace gets its thumbnail through the attachment route, without a notification', async () => {
+  it('an image outside the workspace registers nothing until clicked, then previews through the attachment route quietly', async () => {
     const s = state.get(sessionA)!;
     const outside = join(ext, 'render.png');
     state.set(sessionA, {
@@ -349,18 +355,21 @@ describe('Edit history panel in a real browser', () => {
       ],
     });
     await reload();
-    const thumb = page.locator('#editHistoryBody img.edit-history-thumb').first();
-    await page.waitForFunction(() =>
-      /\/attachments\/[^/]+\/raw$/.test(document.querySelector('img.edit-history-thumb')?.getAttribute('src') ?? '')
-    );
-    expect(attachmentPosts).toEqual([{ path: outside, notify: false }]);
-    expect(await thumb.getAttribute('src')).toMatch(new RegExp(`^/api/sessions/${sessionA}/attachments/[^/]+/raw$`));
-    await page.waitForFunction(
-      () => (document.querySelector('img.edit-history-thumb') as HTMLImageElement)?.naturalWidth === 2
-    );
-    // A re-read reuses the registration instead of minting another id.
+    const row = page.locator('#editHistoryBody .edit-history-entry', { hasText: 'render.png' });
+    await row.waitFor();
+    // No thumbnail for it (that would mint an attachment id per render), and no registration.
+    expect(
+      await page.evaluate(() =>
+        [...document.querySelectorAll('#editHistoryBody img.edit-history-thumb')].map((i) => i.getAttribute('src'))
+      )
+    ).not.toContainEqual(expect.stringContaining('render.png'));
     await reload();
-    expect(attachmentPosts).toHaveLength(1);
+    expect(attachmentPosts).toEqual([]);
+    // A click opens the shared preview, which registers the file once, without a notification.
+    await row.click();
+    await page.waitForSelector('#filePreviewOverlay.visible');
+    expect(attachmentPosts).toEqual([{ path: outside, notify: false }]);
+    await page.evaluate(() => (window as any).app.closeFilePreview());
     state.set(sessionA, s);
   });
 

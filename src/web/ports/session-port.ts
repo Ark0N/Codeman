@@ -19,6 +19,11 @@ export interface SessionPort {
    */
   addSession(session: Session, placement?: SessionPlacementHint): Promise<TabLayout>;
   cleanupSession(sessionId: string, killMux?: boolean, reason?: string): Promise<void>;
+  /**
+   * Delete a session's stored edit history once its record is gone. `cleanupSession` does it
+   * itself; this is for removing a record without a live session (DELETE route).
+   */
+  forgetEditHistory(sessionId: string): void;
   setupSessionListeners(session: Session): Promise<void>;
   persistSessionState(session: Session): void;
   persistSessionStateNow(session: Session): void;

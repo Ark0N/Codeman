@@ -2,7 +2,7 @@
  * Edit history store: byte ranges, cursors, dedupe, cap, persistence.
  * Transcript bytes are built from JSONL lines shaped like real claude records.
  */
-import { mkdtempSync, rmSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -11,6 +11,7 @@ import {
   entryBytes,
   MAIN_SOURCE,
   MAX_AGENT_META_CHARS,
+  MAX_AGENTS,
   MAX_ENTRIES,
   MAX_STORE_BYTES,
   parseAgentMeta,
@@ -255,6 +256,23 @@ describe('EditHistoryStore: older blocks', () => {
     expect(store.olderRange(MAIN_SOURCE, budget)).toBeNull();
   });
 
+  it('skips a line longer than the budget going back and reaches the lines before it', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const huge = JSON.stringify({ type: 'user', message: { content: 'x'.repeat(6000) } });
+    const older = Array.from({ length: 10 }, (_, i) => editLine(`old${i}`, i));
+    const newer = Array.from({ length: 5 }, (_, i) => editLine(`new${i}`, 100 + i));
+    const file = jsonl([...older, huge, ...newer]);
+    const budget = 4000;
+    syncForward(store, file, budget);
+    expect(ids(store).sort()).toEqual(newer.map((_, i) => `new${i}`).sort());
+    let rounds = 0;
+    while (syncOlder(store, file, budget) && rounds < 30) rounds++;
+    expect(store.list()).toHaveLength(15);
+    expect(store.getCursor(MAIN_SOURCE)).toMatchObject({ floor: 0 });
+    expect(store.getCursor(MAIN_SOURCE)?.floorMidLine).toBeUndefined();
+    expect(store.backfillTruncated).toBe(false);
+  });
+
   it('refuses an older chunk that does not end at the floor', () => {
     const store = new EditHistoryStore('s1', { dir });
     const file = jsonl(Array.from({ length: 10 }, (_, i) => editLine(`e${i}`, i)));
@@ -353,6 +371,17 @@ describe('EditHistoryStore: cap', () => {
     expect(meta?.description).toHaveLength(MAX_AGENT_META_CHARS);
     expect(meta?.agentType).toBe('coding');
   });
+
+  it(`keeps at most ${MAX_AGENTS} subagent labels, dropping the oldest no entry uses`, () => {
+    const store = new EditHistoryStore('s1', { dir });
+    syncForward(store, jsonl([editLine('e1', 1, '/work/a.ts', { agentId: 'a0' })]));
+    for (let i = 0; i <= MAX_AGENTS + 4; i++) store.setAgentMeta(`a${i}`, `{"description":"d${i}"}`);
+    const agents = store.getAgents();
+    expect(Object.keys(agents)).toHaveLength(MAX_AGENTS);
+    expect(agents.a0).toBeDefined(); // used by an entry
+    expect(agents[`a${MAX_AGENTS + 4}`]).toBeDefined(); // the newest
+    expect(agents.a1).toBeUndefined();
+  });
 });
 
 describe('EditHistoryStore: persistence', () => {
@@ -404,6 +433,33 @@ describe('EditHistoryStore: persistence', () => {
     expect(loaded.get('nohunks')).toBeUndefined();
   });
 
+  it('drops broken cursors, pending Bash calls and agent labels when loading (a damaged file)', async () => {
+    writeFileSync(
+      join(dir, 's1.json'),
+      JSON.stringify({
+        version: 1,
+        sessionId: 's1',
+        transcriptId: 'conv-1',
+        cursors: {
+          main: { offset: 1.5, floor: 0 },
+          'subagents/agent-x.jsonl': { offset: -5, floor: 0 },
+          'subagents/agent-y.jsonl': { offset: 10, floor: 20 },
+          'subagents/agent-z.jsonl': { offset: 10, floor: 5, floorMidLine: true },
+        },
+        pendingBash: [null, 7, { id: 'b1', ts: 1, command: 'render > a.png', cwd: '/work' }],
+        agents: { x: null, y: 'text', z: { description: 'd', agentType: 'coding' } },
+        entries: [{ id: 'e1', ts: 1, path: '/a.ts', hunks: [null] }],
+      })
+    );
+    const loaded = await EditHistoryStore.load('s1', { dir });
+    expect(loaded.knownSources()).toEqual(['subagents/agent-z.jsonl']);
+    expect(loaded.getCursor('subagents/agent-z.jsonl')).toEqual({ offset: 10, floor: 5, floorMidLine: true });
+    expect(loaded.getAgents()).toEqual({ z: { description: 'd', agentType: 'coding' } });
+    expect(loaded.list()).toEqual([]);
+    // The surviving pending call still pairs with its result, and nothing throws.
+    expect(syncForward(loaded, jsonl([bashResult('b1', 3)]))?.candidates[0]?.paths).toEqual(['/work/a.png']);
+  });
+
   it('ignores a file of an unknown version', async () => {
     writeFileSync(join(dir, 'v9.json'), JSON.stringify({ version: 9, entries: [{ id: 'x' }] }));
     expect((await EditHistoryStore.load('v9', { dir })).list()).toEqual([]);
@@ -436,6 +492,15 @@ describe('EditHistoryStore: persistence', () => {
     await new Promise((r) => setTimeout(r, 40));
     await store.flush();
     expect(existsSync(join(dir, 's1.json'))).toBe(false);
+    expect(store.list()).toEqual([]); // the content is forgotten too
+  });
+
+  it('remove() during a write leaves nothing behind (the write cannot rename over the deleted file)', async () => {
+    const store = new EditHistoryStore('s1', { dir, debounceMs: 60_000 });
+    syncForward(store, jsonl([editLine('e1', 1)]));
+    const writing = store.flush();
+    await Promise.all([writing, store.remove()]);
+    expect(readdirSync(dir)).toEqual([]);
   });
 
   it('defaults to the data directory', () => {

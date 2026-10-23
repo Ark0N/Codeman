@@ -13,7 +13,9 @@
  * HOW MUCH. A requested file is read from its `offset` (clamped to its size), an unrequested
  * (new) one from `budget` bytes before its end, and a new subagent's `.meta.json` (≤ 8 KB)
  * comes along. `budgetBytes` is shared by all files, main first; once spent, files still
- * report their size with an empty chunk.
+ * report their size with an empty chunk. A request with `len` is a block that must end at
+ * `offset + len` (an "older" block ends at the floor): short of budget, its end is read.
+ * With `onlyRequested` ("older" reads) unrequested files are left out.
  *
  * Tests: `test/edit-history-local-source.test.ts`.
  *
@@ -52,6 +54,11 @@ export interface EditSources {
   files: EditSourceFile[];
   /** `agent-<id>.meta.json` text of each subagent read for the first time, by agent id. */
   metas: Record<string, string>;
+}
+
+export interface EditSourceReadOptions {
+  /** Read only the requested files; the others are not listed. */
+  onlyRequested?: boolean;
 }
 
 /** What a path turned out to be (for Bash image candidates). */
@@ -135,7 +142,8 @@ export async function resolveClaudeTranscript(
 export async function readClaudeEditSources(
   mainPath: string,
   requests: readonly EditSourceRequest[],
-  budgetBytes: number
+  budgetBytes: number,
+  opts: EditSourceReadOptions = {}
 ): Promise<EditSources | null> {
   if (!isAbsolute(mainPath) || !mainPath.endsWith('.jsonl')) return null;
   const transcriptId = basename(mainPath, '.jsonl');
@@ -170,11 +178,17 @@ export async function readClaudeEditSources(
       continue;
     }
     const req = byPath.get(src.relPath);
+    if (!req && opts.onlyRequested) continue;
     let start: number;
     let len: number;
-    if (req) {
+    if (req?.len !== undefined) {
+      const blockStart = Math.min(req.offset, size);
+      const blockEnd = Math.min(req.offset + req.len, size);
+      len = Math.min(blockEnd - blockStart, remaining);
+      start = blockEnd - len;
+    } else if (req) {
       start = Math.min(req.offset, size);
-      len = Math.min(req.len ?? remaining, remaining, size - start);
+      len = Math.min(remaining, size - start);
     } else {
       len = Math.min(size, remaining);
       start = size - len;
