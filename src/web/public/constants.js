@@ -2569,7 +2569,8 @@ function findTerminalUrls(text) {
  *     started in (a table cell or list item continuation, not unrelated text);
  *   - that row's first token looks like URL material (contains one of
  *     `% & = / ? . - _`), is not a bare number/version or list marker,
- *     and is not itself a new `scheme://`.
+ *     and is not itself a new `scheme://`; without `% & = / ?`, the token
+ *     must finish its cell (row end or a gap of at least two spaces).
  * The last rule is what stops prose such as "…/files/" + "then run it" from
  * being glued into one link.
  *
@@ -2623,6 +2624,10 @@ function terminalUrlContinuationExtent(buffer, row, cols, maxRows) {
         break;
       if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token) || !/^[A-Za-z0-9%_~]/.test(token)) break;
       if (!/[%&=/?.\-_]/.test(token) || /^v?\d+(?:\.\d+)*(?:[-+][\w.-]+)?[.,;:!?)]?$/i.test(token)) break;
+      // Hyphens, underscores and dots also occur in prose. Without stronger
+      // URL punctuation, the token must finish its cell, not introduce a sentence.
+      const rest = nextText.slice(indent + token.length);
+      if (!/[%&=/?]/.test(token) && rest.trim() !== '' && !/^ {2,}/.test(rest)) break;
       const nextLogical = terminalLogicalLine(buffer, endRow + 1, cols, bound);
       if (!nextLogical) break;
       if (trailingColumns) firstRowUrlEnd = last.rawEnd;

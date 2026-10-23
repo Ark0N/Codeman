@@ -89,6 +89,19 @@ const TABLE_WITH_TRAILING_COLUMNS: Row[] = [
   TABLE[4],
 ];
 const TABLE_COLS = 220;
+const PROSE_ROWS = [
+  [
+    '⏺ The guide lives at https://example.com/guide/',
+    '  self-hosted runners need a token first.',
+    'https://example.com/guide/',
+  ],
+  ['Docs: https://example.com/guide/', 'Self-hosting is covered in chapter 3.', 'https://example.com/guide/'],
+  ['Open http://localhost:3000/', 'e.g. to check the dashboard', 'http://localhost:3000/'],
+  ['Endpoint https://api.example.com/v1/', 'user_id is required', 'https://api.example.com/v1/'],
+  ['Repo: https://github.com/org/repo/', 'well-known issues are tracked', 'https://github.com/org/repo/'],
+  ['Callback https://example.com/cb?code=', 'Re-run the login', 'https://example.com/cb?code='],
+  ['Branch https://github.com/o/r/tree/feat-', 'x.y happened', 'https://github.com/o/r/tree/feat-'],
+];
 
 describe('findTerminalUrls (grammar)', () => {
   const { findTerminalUrls } = loadPure();
@@ -177,6 +190,28 @@ describe('terminalUrlContinuationExtent (wrap joining)', () => {
     const buffer = fakeBuffer([{ text: first }, { text: next }], 100);
     for (const row of [0, 1]) expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toBeNull();
   });
+
+  it.each(PROSE_ROWS)('does not join prose after %s', (first, next) => {
+    const buffer = fakeBuffer([{ text: first }, { text: next }], 100);
+    for (const row of [0, 1]) expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toBeNull();
+  });
+
+  it.each(['my-post-title', 'user_id', 'x.html', 'my-post-title   ', 'my-post-title  Other column'])(
+    'keeps a weak-punctuation continuation that ends its cell: %s',
+    (next) => {
+      const buffer = fakeBuffer([{ text: 'Docs: https://example.com/guide/' }, { text: next }], 100);
+      for (const row of [0, 1])
+        expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toMatchObject({ startRow: 0, endRow: 1 });
+    }
+  );
+
+  it.each(['part%20two', 'x=1&y=2', 'path/slug', 'query?x=1'])(
+    'keeps stronger URL punctuation followed by prose: %s',
+    (token) => {
+      const buffer = fakeBuffer([{ text: 'Docs: https://example.com/guide/' }, { text: token + ' more text' }], 100);
+      expect(terminalUrlContinuationExtent(buffer, 0, 100, 12)).toMatchObject({ startRow: 0, endRow: 1 });
+    }
+  );
 
   it('does not glue a following prose line onto a URL that ends a line', () => {
     const buffer = fakeBuffer(
@@ -294,6 +329,15 @@ describe('terminal link provider with wrapped table URLs', () => {
     };
     return { provide, openSpy };
   }
+
+  it.each(PROSE_ROWS)('preserves the original clickable URL before prose: %s', (first, next, url) => {
+    const { provide, openSpy } = harness([{ text: first }, { text: next }], 100);
+    const links = provide(1).filter((link) => /^https?:/.test(link.text));
+    expect(links.map((link) => link.text)).toEqual([url]);
+    links[0].activate(null, links[0].text);
+    expect(openSpy).toHaveBeenCalledExactlyOnceWith(url, '_blank', 'noopener,noreferrer');
+    expect(provide(2).filter((link) => /^https?:/.test(link.text))).toEqual([]);
+  });
 
   it('opens the whole URL from any of its rows', () => {
     const { provide, openSpy } = harness(TABLE, COLS);
