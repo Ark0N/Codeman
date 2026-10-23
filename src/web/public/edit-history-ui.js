@@ -199,7 +199,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Called by _onSessionIdle() (`session:idle`, { id }): the end of a turn. Claude's interactive
+   * Called by app.js's `session:idle` handler ({ id }): the end of a turn. Claude's interactive
    * transcript has no `result` line, so the transcript watcher's `transcript:complete` never fires
    * for these sessions.
    */
