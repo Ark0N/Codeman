@@ -91,6 +91,32 @@ describe('spaced file paths', () => {
     expect(paths(`• Design committed in the isolated worktree: ${rel}`)).toEqual([rel]);
   });
 
+  it.each([
+    ['- Updated src/foo.ts', 'src/foo.ts'],
+    ['1. Added a test in test/foo.test.ts', 'test/foo.test.ts'],
+    ['• Ran npm test -- test/foo.test.ts', 'test/foo.test.ts'],
+    ['Error: cannot open src/foo.ts', 'src/foo.ts'],
+    ['Note: see src/foo.ts', 'src/foo.ts'],
+    ['- Moved ../a/b.ts', '../a/b.ts'],
+    ['Saved to: 03 Attachments/plan.pptx', 'Attachments/plan.pptx'],
+  ])('defers ambiguous relative prose to ordinary detectors: %s', (line, path) => {
+    expect(paths(line)).toEqual([path]);
+  });
+
+  it('pins residual ambiguity when spaces occur below the first directory', () => {
+    // Without filesystem knowledge these still have the shape of spaced paths.
+    expect(paths('- Fixed bug in src/My Docs/a.md')).toEqual(['Fixed bug in src/My Docs/a.md']);
+    expect(paths('/home/me/proj contains a.md')).toEqual(['/home/me/proj contains a.md']);
+    expect(paths('Saved to: ~/My Docs/plan.md')).toEqual(['~/My Docs/plan.md']);
+  });
+
+  it.each([40000, 80000])('stays linear with %i interior spaces', (length) => {
+    const line = '/home/a' + ' '.repeat(length) + 'x';
+    const start = performance.now();
+    findFilePathLinks(line);
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+
   it('leaves unspaced paths to the ordinary detectors', () => {
     expect(paths('- /mnt/c/proj/docs/report.docx')).toEqual(['/mnt/c/proj/docs/report.docx']);
     expect(paths('• committed as /tmp/x/docs/specs/design.md:1 (e7ae1b4).')).toEqual(['/tmp/x/docs/specs/design.md']);

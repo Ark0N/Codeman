@@ -2154,9 +2154,9 @@ const RELATIVE_FILE_PATH_LINK_PATTERN =
 const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LINK_PATTERN.source)[1];
 
 /**
- * Every linkable file path in `text`, in order: absolute (rooted) paths first,
- * then `~/` and relative ones, then folder paths — each only where it overlaps
- * neither an earlier one nor a URL.
+ * Every linkable file path in `text`, sorted by position. Spaced candidates
+ * reserve their whole span first, even when unlinkable; rooted, `~/`, relative
+ * and folder detectors then skip reserved spans, earlier matches and URLs.
  *
  * The one entry point for both consumers (terminal link provider, response
  * viewer), so a path form is clickable in both or in neither.
@@ -2227,7 +2227,7 @@ function findFilePathLinks(text) {
  *
  *   /mnt/c/My Docs/report.docx              the whole line is the path
  *   - /mnt/c/My Docs/report.docx            after a list marker (`-`, `*`, `•`, `1.`, `2)`)
- *   Saved to: 03 Attachments/plan.pptx      after a short label (one to four words + `:`)
+ *   Saved to: 03 Attachments/Build SIPOC Design/plan.pptx      after a short label (one to four words + `:`)
  *
  * An absolute path may stand alone; a relative or `~/` one needs a marker or a
  * label, since a bare spaced relative candidate is ordinary prose. One trailing
@@ -2248,7 +2248,7 @@ function spacedFilePathOnLine(line) {
   const text = String(line || '');
   const prefix = /^[ \t]*((?:\d{1,3}[.)]|[-*•])[ \t]+)?((?:[A-Za-z][\w-]{0,30}(?: [\w-]{1,30}){0,3}):[ \t]+)?/.exec(text);
   const index = prefix[0].length;
-  const path = text.slice(index).replace(/\s+$/, '').replace(/[.,;:!?]$/, '');
+  const path = text.slice(index).trimEnd().replace(/[.,;:!?]$/, '');
   if (!path.includes(' ') || !path.includes('/') || path.length > 1000) return null;
   if (!path.startsWith('/') && !prefix[1] && !prefix[2]) return null;
   if (!PATH_TOKEN_ENDS_WITH_EXTENSION.test(path)) return null;
@@ -2262,6 +2262,11 @@ function spacedFilePathOnLine(line) {
   const rooted = SPACED_PATH_ROOT.test(path) || path.startsWith('~/');
   const segments = path.replace(/^~?\//, '').split('/');
   const link = (rooted || !path.startsWith('/')) && segments.every((seg) => seg && seg !== '.' && seg !== '..');
+  // A lone slash-containing final word after plain words is usually prose
+  // ("- Updated src/foo.ts"), not a spaced top-level directory. Let the
+  // ordinary detectors handle it, including explicit relative paths.
+  const firstSlash = words.findIndex((word) => word.includes('/'));
+  if (link && firstSlash === words.length - 1 && !path.startsWith('/')) return null;
   return { path, index, link };
 }
 
