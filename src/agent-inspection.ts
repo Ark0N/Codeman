@@ -134,7 +134,7 @@ export class InspectionReader {
             break;
           }
           if (end + 1 > maxBytes) {
-            blockedReason = 'record-exceeds-output-budget';
+            if (consumed === 0) blockedReason = 'record-exceeds-output-budget';
             break;
           }
           consumed = end + 1;

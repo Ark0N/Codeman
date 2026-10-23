@@ -608,8 +608,13 @@ The initial read selects recent complete records; `omittedBeforeBytes` explicitl
 labels its tail omission. Cursor reads consume only complete appended records,
 keeping UTF8/JSONL boundaries. Evidence bytes exclude response metadata and JSON
 escaping. Record scans cap at 256 KiB plus bounded identity anchors; attribution
-separately caps at 8192 directory entries, eight directory levels and 1 MiB of
-metadata reads. Oversized/unfinished records report `blockedReason`; incremental
+separately caps at 8192 directory entries, eight directory levels, 8 MiB of
+negative-filter prefix reads and 1 MiB of candidate metadata reads (including
+final identity verification). Unreachable workspace/home/metadata directories
+are probed with a bounded past-cap probe before canonical reads and remain
+unattributed. A full incremental page can be continued with its cursor; only a
+first pending record too large for the budget reports an output-budget block.
+Oversized/unfinished records report `blockedReason`; incremental
 reads do not silently skip them. Other modes, remote/container sessions, and
 unprovable native attribution return `source:"pane-snapshot"`, `incremental:false`,
 `cursor:null`; these snapshots can repeat evidence.
@@ -622,7 +627,8 @@ conversation identity and do not use these observations as proof of the active
 thread, task completion or authorization.
 
 Opaque server-side cursors bind caller, session, pane generation, conversation,
-opened-file identity, byte offset and bounded content anchors. At most 1024 live
+opened-file identity, byte offset and bounded content anchors. Terminal resizes
+do not change this inspection scope. At most 1024 live
 cursors are retained for 15 minutes; restart, eviction or expiry requires a fresh
 tail baseline. Replacement, truncation, detected rewrites, reassociation, foreign
 cursors or loss of the attributed source return `409 CONFLICT`. No transcript
@@ -633,7 +639,10 @@ Guarded input initially requires a local characterized Codex composer, one
 unwrapped visible line, a recognized footer and a cursor at its exact end.
 Unknown/working/modal/shell/remote/container composers fail closed. Stage accepts
 at most 8192 UTF8 bytes, no C0/C1/DEL controls, multiline text, or trailing
-whitespace (the existing mux transport trims it). Its two-minute receipt stores
+whitespace (the existing mux transport trims it). Before typing, it checks the
+actual captured pane width and rendered composer indentation, refusing any
+message that would reach the right edge or wrap. Every declared Codex effort
+word plus `default` is recognized. Its two-minute receipt stores
 only hashes/ephemeral identities in a bounded in-memory store (1024 live receipts),
 never persisted prompt content. A receipt acknowledges typing; a delayed screen
 paint can still make submit refuse until exact verification becomes possible.
@@ -644,7 +653,7 @@ input revision; mixed or unknown sequences remain keyboard-bearing. Exact
 composer/caret checks also reject a mouse-moved caret.
 
 Submit consumes an owned receipt before awaited delivery, verifies the caller,
-confirmation hash, expiry, lifecycle/input revisions and exact composer/caret,
+confirmation hash, expiry, lifecycle/input/geometry revisions and exact composer/caret,
 then uses a session-level conditional Enter dispatch with a temporary input lease.
 Competing Codeman writes cannot enter during that dispatch. Managed restarts and
 intervening browser/API/auxiliary input invalidate receipts independently of pid

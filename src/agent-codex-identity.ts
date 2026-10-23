@@ -2,13 +2,14 @@
  * @fileoverview Bounded Codex rollout attribution for agent evidence. Never uses
  * newest-mtime, prompt timestamps or cwd alone as proof of session ownership.
  */
-import { realpathSync } from 'node:fs';
-import { open, opendir } from 'node:fs/promises';
+import { open, opendir, realpath } from 'node:fs/promises';
+import { probePathKind } from './utils/bounded-path-probe.js';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const UUID_AT_END = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 const HEAD_BYTES = 131072;
+const PREFIX_SCAN_BYTES = 8 * 1024 * 1024;
 export interface CodexAttributionOptions {
   codexHome: string;
   sessionId: string;
@@ -18,15 +19,18 @@ export interface CodexAttributionOptions {
 export interface CodexAttributionBudget {
   maxEntries: number;
   maxBytes: number;
+  /** Separate bound for cheap negative prefixes; full candidate metadata has its own budget. */
+  maxPrefixBytes?: number;
 }
 interface Metadata {
   id?: string;
   cwd?: string;
   originator?: string;
 }
-function canonical(path: string): string | undefined {
+async function canonical(path: string): Promise<string | undefined> {
+  if ((await probePathKind(path, { pastCap: true })) !== 'directory') return undefined;
   try {
-    return realpathSync.native(path);
+    return await realpath(path);
   } catch {
     return undefined;
   }
@@ -38,7 +42,7 @@ export function resolveEffectiveCodexHome(
   env: Readonly<Record<string, string | undefined>> = process.env
 ): string {
   const path = resolve(workingDir, sessionHome || env.CODEX_HOME || join(env.HOME || tmpdir(), '.codex'));
-  return canonical(path) ?? path;
+  return path;
 }
 /** Complete metadata only: a prefix or a partially flushed JSONL row proves nothing. */
 function strictMetadata(bytes: Buffer): Metadata | undefined {
@@ -72,11 +76,18 @@ export async function findExactCodexConversation(
   options: CodexAttributionOptions,
   budget: CodexAttributionBudget = { maxEntries: 8192, maxBytes: 1048576 }
 ): Promise<{ id: string; path: string } | undefined> {
-  const directories = [{ path: join(options.codexHome, 'sessions'), depth: 0 }];
+  const workspace = await canonical(options.workingDir);
+  const home = await canonical(options.codexHome);
+  if (!workspace || !home) return undefined;
+  const sessions = join(home, 'sessions');
+  if ((await probePathKind(sessions, { pastCap: true })) !== 'directory') return undefined;
+  const directories = [{ path: sessions, depth: 0 }];
   const candidates: Array<{ id: string; path: string; meta: Metadata }> = [];
   const originator = `codeman_${options.sessionId}`;
   const explicit = options.resumeSessionId;
   let entries = 0;
+  let prefixes = 0;
+  const prefixLimit = Math.min(budget.maxPrefixBytes ?? PREFIX_SCAN_BYTES, PREFIX_SCAN_BYTES);
   let scanned = HEAD_BYTES; // Reserve an independent final verification.
   while (directories.length) {
     const dir = directories.pop()!;
@@ -96,8 +107,8 @@ export async function findExactCodexConversation(
           if (!info.isFile()) return undefined;
           const id = entry.name.match(UUID_AT_END)?.[1];
           const prefixBytes = Math.min(info.size, 4096);
-          if (scanned + prefixBytes > budget.maxBytes) return undefined;
-          scanned += prefixBytes;
+          if (prefixes + prefixBytes > prefixLimit) return undefined;
+          prefixes += prefixBytes;
           const prefix = Buffer.alloc(prefixBytes);
           const first = await file.read(prefix, 0, prefixBytes, 0);
           // Cheap negative filter only; a match still needs full parsed metadata.
@@ -122,12 +133,7 @@ export async function findExactCodexConversation(
   }
   if (candidates.length !== 1) return undefined;
   const candidate = candidates[0];
-  if (
-    !candidate.meta.cwd ||
-    canonical(candidate.meta.cwd) !== canonical(options.workingDir) ||
-    !canonical(options.workingDir)
-  )
-    return undefined;
+  if (!candidate.meta.cwd || (await canonical(candidate.meta.cwd)) !== workspace) return undefined;
   const handle = await open(candidate.path, 'r').catch(() => undefined);
   if (!handle) return undefined;
   try {

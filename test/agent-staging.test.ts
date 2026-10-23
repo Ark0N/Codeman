@@ -1,6 +1,7 @@
 /** @fileoverview Guarded staging one-shot and content-verification safety. */
 import { beforeEach, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
+import { CODEX_REASONING_EFFORTS } from '../src/types/session.js';
 import { GuardedStageStore, type GuardedInputTarget } from '../src/agent-staging.js';
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 let store: GuardedStageStore;
@@ -21,7 +22,8 @@ beforeEach(() => {
   store = new GuardedStageStore(() => time, 2, 1000);
   target = {
     id: 's',
-    snapshot: () => (composer === null ? null : { generation, revision, composerSha: sha(composer) }),
+    snapshot: () =>
+      composer === null ? null : { generation, revision, composerSha: sha(composer), availableColumns: 100 },
     submit: async () => target.write('\r'),
     write: async (text) => {
       writes.push(text);
@@ -150,4 +152,19 @@ it('reserves receipt capacity before concurrent stages type', async () => {
   expect(writes).toEqual([]);
   release!();
   await first;
+});
+
+it.each([...CODEX_REASONING_EFFORTS, 'default'])(
+  'accepts the shared Codex effort word %s in the footer',
+  async (word) => {
+    const { readGuardedCodexComposer } = await import('../src/agent-staging.js');
+    expect(readGuardedCodexComposer(`› hello\n  GPT-6 ${word} · ~/case\n`)).toBe('hello');
+  }
+);
+
+it('refuses messages that reach the available pane columns before typing', async () => {
+  target.snapshot = () => ({ generation, revision, composerSha: sha(composer ?? ''), availableColumns: 4 });
+  for (const text of ['four', '界界']) await expect(store.stage(target, 'alice', text)).rejects.toThrow();
+  expect(writes).toEqual([]);
+  await expect(store.stage(target, 'alice', 'abc')).resolves.toMatchObject({ submitted: false });
 });

@@ -117,3 +117,40 @@ it.each([
     }
   }
 );
+
+it('attributes an owned rollout among 320 unrelated full-size metadata prefixes', async () => {
+  const f = await fixture();
+  const path = await f.put(A);
+  await Promise.all(
+    Array.from({ length: 320 }, (_, n) => {
+      const id = `10000000-1111-4111-8111-${String(n).padStart(12, '0')}`;
+      return f.put(id, { originator: 'codex_cli', instructions: 'x'.repeat(5000) });
+    })
+  );
+  expect(await findExactCodexConversation(f.options)).toEqual({ id: A, path });
+  expect(
+    await findExactCodexConversation(f.options, { maxEntries: 8192, maxBytes: 1048576, maxPrefixBytes: 4096 })
+  ).toBeUndefined();
+});
+
+it.each(['workspace', 'metadata'] as const)(
+  'probes %s bounded past the cap before canonical filesystem reads',
+  async (where) => {
+    const { vi } = await import('vitest');
+    const probe = await import('../src/utils/bounded-path-probe.js');
+    const f = await fixture();
+    const alias = join(f.root, 'workspace-alias');
+    await symlink(f.root, alias);
+    await f.put(A, { cwd: where === 'metadata' ? alias : f.root });
+    const blocked = where === 'workspace' ? f.root : alias;
+    const spy = vi
+      .spyOn(probe, 'probePathKind')
+      .mockImplementation(async (path) => (path === blocked ? 'unknown' : 'directory'));
+    try {
+      expect(await findExactCodexConversation(f.options)).toBeUndefined();
+      expect(spy).toHaveBeenCalledWith(blocked, { pastCap: true });
+    } finally {
+      spy.mockRestore();
+    }
+  }
+);

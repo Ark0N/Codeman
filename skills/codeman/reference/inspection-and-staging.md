@@ -1,9 +1,8 @@
 # Bounded inspection and guarded submission
 
-Use these commands inside a Codeman session. They use its authenticated HTTP API;
-no direct tmux access, second transport, or session-bridge installation is required.
-They supplement `send`, `wait` and `read`. They do not establish full parity with
-session-bridge or retire that skill.
+Use these commands inside a Codeman session. They use its authenticated HTTP API.
+They supplement `send`, `wait` and `read` over the same HTTP transport; no direct
+tmux access is required.
 
 ## Inspect recent evidence
 
@@ -31,7 +30,8 @@ falls back to a snapshot. An in-CLI `/resume` of an existing foreign-originator
 thread may leave launch metadata unchanged. Check `identity.conversationId`;
 these reads do not provide authoritative current-thread tracking.
 
-Cursors are opaque, scoped to the requesting identity, session, pane generation
+Terminal resizes preserve inspection cursors. Cursors are opaque, scoped to the
+requesting identity, session, pane lifecycle generation
 and attributed transcript, expire after 15 minutes, and disappear on server
 restart. At most 1024 are retained; capacity eviction can invalidate an older
 cursor. A replaced/truncated/rewritten source, reassociated session, foreign cursor
@@ -43,7 +43,8 @@ never split or silently skip one. Increase the byte budget for
 `record-exceeds-output-budget`; when the record exceeds the maximum or scan cap,
 use `read --tail` for a labeled terminal view or start a fresh tail baseline.
 Inspect scans at most 256 KiB of record data plus bounded generation anchors.
-Attribution separately caps directory entries and metadata bytes. Evidence and
+Attribution separately caps directory entries (8192), depth (8), negative-filter
+prefix reads (8 MiB) and candidate metadata including final verification (1 MiB). Evidence and
 activity are observations, not proof of task completion or authorization.
 
 ## Stage, inspect, then submit once
@@ -58,7 +59,9 @@ codeman agent submit "$SID" --stage-id "$STAGE_ID" --confirm-sha "$SHA256" --jso
 Stage types the file contents **without Enter**. The file must be regular, UTF8,
 one printable line, at most 8192 bytes, with no control characters or trailing
 whitespace/newline. It initially supports a local Codex composer with a recognized
-footer and an exact, unwrapped line/caret capture. Unknown, working, modal,
+footer and an exact, unwrapped line/caret capture. Before typing, stage checks
+the actual captured width and composer indentation; a message that would reach
+the right edge or wrap is refused without writing anything. Unknown, working, modal,
 wrapped, remote/container and shell composers are refused. A customized footer or
 unsupported character-width rendering can also make verification unavailable.
 Self-targets are refused by the CLI.
@@ -70,7 +73,7 @@ requires the fully painted exact composer. If typing fails or is ambiguous, stag
 issues no receipt; inspect the pane before trying again.
 
 Submit checks the caller, session, hash, expiry, pane lifecycle, input revision,
-exact composer and caret, then sends one conditional Enter at the session's input
+geometry, exact composer and caret, then sends one conditional Enter at the session's input
 boundary. Competing Codeman writes are refused during dispatch. Browser/API/key
 input and managed restarts invalidate receipts even when the visible text or pid
 is restored. Direct tmux edits are outside that input serialization; captures
@@ -82,3 +85,34 @@ replay Enter, and there is no autonomous retry. A successful response means one
 Enter was delivered; use inspection or a suitable wait signal to observe native
 acceptance. A `409` or broken connection means inspect first. Do not automatically
 stage/submit again or send an unguarded Enter to recover.
+
+## Recover after a refused submit
+
+A consumed receipt cannot be reused. First observe whether the prompt was
+accepted: use transcript evidence/wait signals and a fresh terminal capture
+(`GET /api/v1/sessions/:id/terminal?tail=8192`). If the target is working, has
+accepted the prompt, shows a dialog, or delivery is ambiguous, keep observing;
+do not clear or resend anything. A transcript prompt row alone is not proof
+that text remains unsent in the current composer.
+
+Only recover an unambiguously unsent draft in an input-ready local Codex
+composer: verify the complete draft, recognized footer and caret at its end in
+the current frame, and ensure no other writer can edit this target during
+recovery. If the frame is wrapped, incomplete or unclear, ask the user to clear
+it in the terminal instead of guessing keys. Never use `send` to overwrite a
+draft: that appends and submits both prompts together.
+
+After those checks, the known Codex line-clear chord may be sent once through
+the existing raw input route, with **no Enter**. This conditional example uses
+the authenticated `CURL`/`API` values loaded by §0 and the exact target id:
+
+```bash
+"${CURL[@]}" -X POST "$API/api/v1/sessions/$SID/input" \
+  -H 'Content-Type: application/json' -d '{"input":"\u0015","useMux":false}'
+```
+
+Do not retry a failed/ambiguous clear blindly. Read a fresh terminal frame and
+verify the composer is empty and input-ready. Only then create a **fresh** stage
+receipt for the intended prompt and submit that receipt once. If the draft did
+not clear, the target began working, or verification remains uncertain, stop and
+ask the user; do not send an unguarded Enter or replay the old prompt.

@@ -129,7 +129,7 @@ import { DEFAULT_TMUX_HISTORY_LIMIT } from './config/terminal-history.js';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 import { getCli } from './config/cli-registry/registry.js';
 import { SubmitVerifier } from './session-submit-verifier.js';
-import { promptSha256, readGuardedCodexSnapshot, type GuardedInputSnapshot } from './agent-staging.js';
+import { promptSha256, readGuardedCodexSnapshotDetails, type GuardedInputSnapshot } from './agent-staging.js';
 import { isKeyboardTerminalInput } from './terminal-input-classifier.js';
 import { stripAnsi } from './utils/regex-patterns.js';
 import { KEEP_WARM_NUDGE } from './prompt-cache-keepwarm.js';
@@ -4727,32 +4727,19 @@ export class Session extends EventEmitter {
 
   // Note: checkAutoCompact/checkAutoClear moved to SessionAutoOps (this._autoOps)
 
-  /**
-   * Sends input directly to the PTY process.
-   *
-   * For interactive sessions, this is how you send user input to Claude.
-   * Remember to include `\r` (carriage return) to simulate pressing Enter.
-   *
-   * @example
-   * ```typescript
-   * session.write('hello world');  // Text only, no Enter
-   * session.write('\r');           // Enter key
-   * session.write('ls -la\r');     // Command with Enter
-   * ```
-   *
-   * @param data - The input data to send (text, escape sequences, etc.)
-   * @returns true if the data reached a PTY. A session whose PTY is gone still
-   * discards the data, but it used to do so with no signal at all — which is how
-   * input could disappear while the caller believed it had been delivered.
-   */
   private readonly _inspectionInstance = uuidv4();
   private _guardedPaneRevision = 0;
+  private _guardedGeometryRevision = 0;
   private _guardedInputRevision = 0;
   private _guardedPendingWrites = 0;
   private _guardedSubmitInFlight = false;
   /** Ephemeral identity, never persisted or based on a potentially reused pid alone. */
   get inspectionGeneration(): string {
     return `${this._inspectionInstance}:${this._guardedPaneRevision}:${this.owner ?? ''}`;
+  }
+  /** Staging additionally binds geometry; transcript cursors survive a terminal resize. */
+  get guardedInputGeneration(): string {
+    return `${this.inspectionGeneration}:${this._guardedGeometryRevision}`;
   }
   get guardedInputPendingWrites(): number {
     return this._guardedPendingWrites;
@@ -4781,7 +4768,8 @@ export class Session extends EventEmitter {
       !this._muxSession
     )
       return null;
-    const screen = this._mux?.capturePaneBuffer?.(this._muxSession.muxName);
+    const capture: import('./mux-interface.js').PaneCaptureOptions = {};
+    const screen = this._mux?.capturePaneBuffer?.(this._muxSession.muxName, undefined, capture);
     if (!screen) return null;
     // tmux's replay has CUP addresses rather than line breaks. Read the SAME
     // fresh frame for dialog/work chrome and exact composer/caret proof.
@@ -4790,13 +4778,16 @@ export class Session extends EventEmitter {
     const working = this._workingLinePattern();
     working.lastIndex = 0;
     if (this._paneShowsBlocked(plain) || working.test(plain) || this._paneAwaitsWorkers(plain)) return null;
-    const composer = readGuardedCodexSnapshot(screen);
+    const composer = readGuardedCodexSnapshotDetails(screen);
     return composer === null
       ? null
       : {
-          generation: this.inspectionGeneration,
+          generation: this.guardedInputGeneration,
           revision: this._guardedInputRevision,
-          composerSha: promptSha256(composer),
+          composerSha: promptSha256(composer.composer),
+          availableColumns: Number.isFinite(capture.capturedGeometry?.cols)
+            ? capture.capturedGeometry!.cols - composer.prefixWidth
+            : 0,
         };
   }
   /** Stage through ordinary delivery, after cancelling any older Enter retry timer. */
@@ -4815,7 +4806,8 @@ export class Session extends EventEmitter {
       !!current &&
       current.generation === expected.generation &&
       current.revision === expected.revision &&
-      current.composerSha === expected.composerSha;
+      current.composerSha === expected.composerSha &&
+      current.availableColumns === expected.availableColumns;
     if (!matches(this.guardedInputSnapshot()) || !this._mux || !this._muxSession) return false;
     this._guardedSubmitInFlight = true;
     let dispatched = false;
@@ -4845,6 +4837,24 @@ export class Session extends EventEmitter {
       this._guardedPendingWrites--;
     }
   }
+  /**
+   * Sends input directly to the PTY process.
+   *
+   * For interactive sessions, this is how you send user input to Claude.
+   * Remember to include `\r` (carriage return) to simulate pressing Enter.
+   *
+   * @example
+   * ```typescript
+   * session.write('hello world');  // Text only, no Enter
+   * session.write('\r');           // Enter key
+   * session.write('ls -la\r');     // Command with Enter
+   * ```
+   *
+   * @param data - The input data to send (text, escape sequences, etc.)
+   * @returns true if the data reached a PTY. A session whose PTY is gone still
+   * discards the data, but it used to do so with no signal at all — which is how
+   * input could disappear while the caller believed it had been delivered.
+   */
   write(data: string, options: SessionWriteOptions = {}): boolean {
     this._observeGuardedKeyboardInput(data);
     if (this._guardedSubmitInFlight) return false;
@@ -5219,7 +5229,7 @@ export class Session extends EventEmitter {
     }
     const dimsChanged = cols !== this._ptyCols || rows !== this._ptyRows;
     if (this.ptyProcess && (dimsChanged || options.force)) {
-      this._guardedPaneRevision++;
+      this._guardedGeometryRevision++;
       this._ptyCols = cols;
       this._ptyRows = rows;
       if (!IS_TEST_MODE && this._mux && this._muxSession) {

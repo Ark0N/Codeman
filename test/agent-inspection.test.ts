@@ -159,3 +159,22 @@ it('keeps an incomplete UTF8 sequence pending until its JSONL record is complete
   await appendFile(file, row.subarray(split));
   expect((await reader.read(file, scope, 100, first.cursor)).evidence).toBe(row.toString('utf8'));
 });
+
+it('treats a full incremental page as pageable rather than a blocked oversized record', async () => {
+  await writeFile(file, '{}\n');
+  const initial = await reader.read(file, scope, 100);
+  await appendFile(file, '{}\n{}\n');
+  const page = await reader.read(file, scope, 3, initial.cursor);
+  expect(page.evidence).toBe('{}\n');
+  expect(page.truncated).toBe(true);
+  expect(page.blockedReason).toBeUndefined();
+  const next = await reader.read(file, scope, 3, page.cursor);
+  expect(next.evidence).toBe('{}\n');
+});
+
+it('still labels the first selected oversized tail record after omitted older bytes', async () => {
+  await writeFile(file, '{}\n' + JSON.stringify({ text: 'x'.repeat(100) }) + '\n');
+  const page = await reader.read(file, scope, 10);
+  expect(page.evidence).toBe('');
+  expect(page.blockedReason).toBe('record-exceeds-output-budget');
+});

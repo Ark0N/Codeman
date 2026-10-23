@@ -27,7 +27,7 @@ export function registerAgentSessionRoutes(app: FastifyInstance, ctx: SessionPor
     snapshot: () => {
       if (ctx.sessions.get(session.id) !== session) return null;
       const snapshot = session.guardedInputSnapshot?.();
-      return snapshot ? { ...snapshot, generation: generation(session) } : null;
+      return snapshot ?? null;
     },
     write: (text) => session.stageGuardedInput(text),
     submit: (expected) => session.submitGuardedInput(expected),

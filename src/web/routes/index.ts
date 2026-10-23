@@ -47,3 +47,5 @@ export {
   type CustomModelSwapDisplacement,
 } from './custom-model-routes.js';
 export { registerCliRegistryRoutes, readCliManagementEnabled, type CliListItem } from './cli-registry-routes.js';
+
+export { registerAgentSessionRoutes } from './agent-session-routes.js';
