@@ -23,15 +23,17 @@ export const MAX_AUTH_SESSIONS = 100;
 
 /**
  * Max failed auth attempts per bucket before 429 rejection. Applies to the
- * per-username lockout and the hook-secret bucket.
+ * single-user per-IP bucket, the multi-user per-username lockout and the
+ * hook-secret bucket.
  */
 export const AUTH_FAILURE_MAX = 10;
 
 /**
- * Max failed login attempts per client IP before 429 rejection. Wider than
- * AUTH_FAILURE_MAX because one egress IP (NAT, a tunnel, an automated client) can
- * carry many users' or retries' failures; the per-username lockout above still
- * caps guesses against any one account.
+ * Max failed login attempts per client IP for the multi-user pre-gate, which
+ * runs before the scrypt verify and so refuses even a correct password once
+ * reached. Wider than AUTH_FAILURE_MAX because one egress IP (NAT, a tunnel) can
+ * carry many users' failures; the per-username bucket still caps guesses against
+ * each account at AUTH_FAILURE_MAX. Single-user mode does not use this.
  */
 export const AUTH_IP_FAILURE_MAX = 50;
 

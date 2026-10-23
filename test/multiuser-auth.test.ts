@@ -33,6 +33,7 @@ function cookieFrom(res: Response): string | null {
 
 let server: WebServer;
 let rateServer: WebServer;
+let sprayServer: WebServer;
 let dataDir: string;
 let spacesDir: string;
 const saved: Record<string, string | undefined> = {};
@@ -72,6 +73,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await server?.stop();
   await rateServer?.stop().catch(() => {});
+  await sprayServer?.stop().catch(() => {});
   for (const [k, v] of Object.entries(saved)) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
@@ -183,6 +185,31 @@ describe('multi-user auth', () => {
       limited = res.status === 429;
     }
     expect(limited).toBe(true);
+  });
+
+  it('per-IP pre-gate: wrong passwords spread across accounts are throttled at 50, before scrypt', async () => {
+    // Fresh server so no earlier test's failures sit in the per-IP bucket.
+    sprayServer = new WebServer(0, false, true);
+    await sprayServer.start();
+    const surl = (p: string) => `http://localhost:${sprayServer.boundPort}${p}`;
+
+    // Spread the guesses so no single username reaches its own AUTH_FAILURE_MAX bucket:
+    // only the per-IP pre-gate can produce a 429 here.
+    const perUser = AUTH_FAILURE_MAX - 1;
+    for (let i = 0; i < 50; i++) {
+      const user = `spray${Math.floor(i / perUser)}`;
+      const res = await fetch(surl('/api/status'), { headers: { Authorization: basic(user, `bad-${i}`) } });
+      expect(res.status, `attempt ${i + 1}`).toBe(401);
+    }
+
+    // The 51st failure from the same IP is refused by the pre-gate.
+    const over = await fetch(surl('/api/status'), { headers: { Authorization: basic('spray-extra', 'bad') } });
+    expect(over.status).toBe(429);
+    expect(over.headers.get('retry-after')).toMatch(/^\d+$/);
+
+    // The pre-gate runs before the password check, so even a correct password is refused.
+    const good = await fetch(surl('/api/status'), { headers: { Authorization: basic('alice', 'alicepass1') } });
+    expect(good.status).toBe(429);
   });
 });
 

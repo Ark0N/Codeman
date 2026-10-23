@@ -448,7 +448,7 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
 
     // Rate limit only requests that failed to authenticate on this attempt.
     const failures = authFailures.get(clientIp) ?? 0;
-    if (failures >= AUTH_IP_FAILURE_MAX) {
+    if (failures >= AUTH_FAILURE_MAX) {
       sendAuthRateLimit(reply, authFailures, clientIp);
       return;
     }
@@ -572,7 +572,9 @@ function registerMultiUserAuthHook(
 
     // 2. Basic Auth against the user store (scrypt verify).
     // Per-IP pre-gate bounds scrypt CPU cost from one source (does NOT gate on the
-    // per-username bucket here; see below).
+    // per-username bucket here; see below). Wider than AUTH_FAILURE_MAX: it refuses
+    // even a correct password, so behind a shared egress IP (NAT, a tunnel) a narrow
+    // cap would let a few wrong guesses lock everyone out.
     const ipFail = authFailures.get(clientIp) ?? 0;
     if (ipFail >= AUTH_IP_FAILURE_MAX) {
       sendAuthRateLimit(reply, authFailures, clientIp);
