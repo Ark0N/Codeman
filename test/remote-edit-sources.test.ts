@@ -33,6 +33,7 @@ import {
   isRemoteClaudeTranscriptPath,
   parseRemoteClaudeEditSources,
   parseRemoteClaudeTranscriptLocate,
+  remoteEditSourcesTimeoutMs,
   remoteLocateClaudeTranscript,
   remoteReadClaudeEditSources,
 } from '../src/remote-files.js';
@@ -117,6 +118,19 @@ describe('the transcript lookup on a real shell', () => {
     expect(command).not.toContain('pwned');
   });
 
+  it('looks in an absolute CLAUDE_CONFIG_DIR instead of ~/.claude, as claude does; a relative one is ignored', () => {
+    const cfg = join(home, 'alt-config');
+    mkdirSync(join(cfg, 'projects', 'w'), { recursive: true });
+    writeFileSync(join(cfg, 'projects', 'w', 'alt-1.jsonl'), 'a\n');
+    expect(locate(['alt-1', 'conv-1'], undefined, { CLAUDE_CONFIG_DIR: cfg })).toBe(
+      join(cfg, 'projects', 'w', 'alt-1.jsonl')
+    );
+    expect(locate(['conv-1'], undefined, { CLAUDE_CONFIG_DIR: cfg })).toBe(3);
+    expect(locate(['alt-1', 'conv-1'], undefined, { CLAUDE_CONFIG_DIR: 'alt-config' })).toBe(
+      join(projects(), 'new', 'conv-1.jsonl')
+    );
+  });
+
   it('parses only an absolute transcript path after the first NUL (a login banner comes before it)', () => {
     expect(parseRemoteClaudeTranscriptLocate(Buffer.from('motd\n\0/p/conv-1.jsonl\0'))).toBe('/p/conv-1.jsonl');
     expect(parseRemoteClaudeTranscriptLocate(Buffer.from('no nul'))).toBeNull();
@@ -156,6 +170,19 @@ describe('the transcript lookup on a real shell', () => {
       expect(locateIn({ ...pane, sessionName: 'codeman-ssh-other' })).toBe(join(projects(), 'new', 'conv-1.jsonl'));
       session('{"pid":300,"sessionId":"gone"}');
       expect(locateIn(pane)).toBe(join(projects(), 'new', 'conv-1.jsonl'));
+    });
+
+    it('reads the live id from the sessions dir under CLAUDE_CONFIG_DIR', () => {
+      const cfg = join(home, 'alt-config');
+      mkdirSync(join(cfg, 'sessions'), { recursive: true });
+      mkdirSync(join(cfg, 'projects', 'w'), { recursive: true });
+      writeFileSync(join(cfg, 'projects', 'w', 'alt-1.jsonl'), 'a\n');
+      writeFileSync(join(cfg, 'projects', 'w', 'conv-1.jsonl'), 'c\n');
+      writeFileSync(join(cfg, 'sessions', '300.json'), '{"pid":300,"sessionId":"alt-1"}');
+      session('{"pid":300,"sessionId":"solo"}'); // ~/.claude's file is not claude's here
+      expect(locate(['conv-1'], pane, { PATH: `${bin}:${process.env.PATH}`, CLAUDE_CONFIG_DIR: cfg })).toBe(
+        join(cfg, 'projects', 'w', 'alt-1.jsonl')
+      );
     });
 
     it('takes only an id-shaped value from the sessions file, and only plain socket/session names', () => {
@@ -250,6 +277,16 @@ describe('parseRemoteClaudeEditSources', () => {
     expect(
       parseRemoteClaudeEditSources(Buffer.concat([Buffer.from('\0conv-1\0'), editRecord('main', 2, 1, 'ab')]))
     ).toBeNull();
+  });
+});
+
+describe('remoteEditSourcesTimeoutMs', () => {
+  it('gives a read of megabytes its transfer time at 256 KiB/s on top of the flat 30 s', () => {
+    expect(remoteEditSourcesTimeoutMs(0)).toBe(30_000);
+    expect(remoteEditSourcesTimeoutMs(-5)).toBe(30_000);
+    expect(remoteEditSourcesTimeoutMs(256 * 1024)).toBe(31_000);
+    // a forward pass: 8 MiB budget + 4 MiB metas + 1 MiB header slack
+    expect(remoteEditSourcesTimeoutMs(13 * 1024 * 1024)).toBe(82_000);
   });
 });
 

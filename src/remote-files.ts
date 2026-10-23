@@ -435,6 +435,22 @@ const EDIT_SOURCE_META_BUDGET_BYTES = 4 * 1024 * 1024;
 /** Room for the record headers (one per transcript file) on top of budget and metas. */
 const EDIT_SOURCE_HEADER_SLACK_BYTES = 1024 * 1024;
 
+/**
+ * The slowest link an edit-history read is given time for. Such a read can carry megabytes
+ * (a forward pass its budget plus the metas, "Load older" up to three budgets), which a flat
+ * {@link REMOTE_READ_TIMEOUT_MS} would cut off below ~1 MiB/s. 256 KiB/s ≈ 2 Mbit/s.
+ */
+const EDIT_SOURCE_MIN_BYTES_PER_SEC = 256 * 1024;
+
+/**
+ * Timeout of an edit-history read that may return up to `maxBytes`: the flat read timeout plus
+ * the transfer time at {@link EDIT_SOURCE_MIN_BYTES_PER_SEC}. It ends a hung read (a host that
+ * fell asleep mid-transfer; no keepalives, see the wake invariants), it does not cut a slow one.
+ */
+export function remoteEditSourcesTimeoutMs(maxBytes: number): number {
+  return REMOTE_READ_TIMEOUT_MS + Math.ceil((Math.max(0, maxBytes) / EDIT_SOURCE_MIN_BYTES_PER_SEC) * 1000);
+}
+
 const TMUX_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 /** Where a remote session's agent runs: the remote tmux socket and session (`remoteTmuxLocation`). */
@@ -459,14 +475,26 @@ export function isRemoteClaudeTranscriptPath(path: string): boolean {
 }
 
 /**
+ * Shell lines that set `cfg` to claude's config dir on the remote host: an absolute
+ * `CLAUDE_CONFIG_DIR` from the ssh command's environment, else `$HOME/.claude` — claude's own
+ * rule. ⚠️ The remote claude runs under `$SHELL -i -l -c` (`remoteLoginShellCommand`), this
+ * script under a plain non-interactive `sh`: a `CLAUDE_CONFIG_DIR` set only in an interactive
+ * rc file (`.zshrc`) is not seen here; one from `.zshenv`, sshd `SetEnv` or the system
+ * environment is.
+ */
+function claudeConfigDirLines(): string[] {
+  return ['cfg=$HOME/.claude', 'case ${CLAUDE_CONFIG_DIR:-} in /*) cfg=$CLAUDE_CONFIG_DIR ;; esac'];
+}
+
+/**
  * Shell lines that set `live` to the conversation the claude in `pane` is writing NOW,
- * or leave it empty. Codeman launches a remote claude with `--session-id <id>`, but a
- * `/clear` (or a resume picked inside claude) starts a new conversation, and with no
- * hooks from a remote host Codeman never hears of it. claude itself keeps
- * `~/.claude/sessions/<pid>.json` with the current `sessionId`, so: the pane's pid, its
- * children and grandchildren (a wrapper shell may sit in between), the first of those
- * with such a file. Only `[A-Za-z0-9._-]` survives the `sed`, the id pattern, so `$live`
- * is safe unquoted. `ps -A -o pid= -o ppid=` is POSIX (no GNU `--ppid`).
+ * or leave it empty; they need `cfg` ({@link claudeConfigDirLines}). Codeman launches a
+ * remote claude with `--session-id <id>`, but a `/clear` (or a resume picked inside claude)
+ * starts a new conversation, and with no hooks from a remote host Codeman never hears of it.
+ * claude itself keeps `<config dir>/sessions/<pid>.json` with the current `sessionId`, so: the
+ * pane's pid, its children and grandchildren (a wrapper shell may sit in between), the first
+ * of those with such a file. Only `[A-Za-z0-9._-]` survives the `sed`, the id pattern, so
+ * `$live` is safe unquoted. `ps -A -o pid= -o ppid=` is POSIX (no GNU `--ppid`).
  */
 function liveClaudeIdLines(pane: RemoteClaudePane | undefined): string[] {
   if (!pane || !TMUX_NAME_PATTERN.test(pane.socket) || !TMUX_NAME_PATTERN.test(pane.sessionName)) return [];
@@ -479,7 +507,7 @@ function liveClaudeIdLines(pane: RemoteClaudePane | undefined): string[] {
     '  kids=$(printf \'%s\\n\' "$tree" | awk -v p="$pp" \'$2 == p { print $1 }\')',
     '  grand=$(for k in $kids; do printf \'%s\\n\' "$tree" | awk -v p="$k" \'$2 == p { print $1 }\'; done)',
     '  for c in $pp $kids $grand; do',
-    '    f="$HOME/.claude/sessions/$c.json"',
+    '    f="$cfg/sessions/$c.json"',
     '    [ -f "$f" ] || continue',
     '    live=$(sed -n \'s/.*"sessionId":"\\([A-Za-z0-9._-]*\\)".*/\\1/p\' "$f" | head -n 1)',
     '    [ -n "$live" ] && break',
@@ -492,8 +520,9 @@ function liveClaudeIdLines(pane: RemoteClaudePane | undefined): string[] {
  * Script that finds a remote claude session's main transcript and prints `\0<path>\0`;
  * exit {@link TRANSCRIPT_NOT_FOUND_EXIT} when there is none. First the conversation the
  * claude in `pane` writes now ({@link liveClaudeIdLines}), then each of `ids`; per id the
- * newest `$HOME/.claude/projects/*\/<id>.jsonl`. `$HOME` is expanded by the REMOTE shell:
- * the transcript lives in the remote user's home, which the server cannot know.
+ * newest `<config dir>/projects/*\/<id>.jsonl` ({@link claudeConfigDirLines}). `$HOME` is
+ * expanded by the REMOTE shell: the transcript lives in the remote user's home, which the
+ * server cannot know.
  *
  * ⚠️ Runs under an explicit `sh` with `LC_ALL=C`: sshd runs a command in the remote user's
  * LOGIN shell, and on a zsh host `ls` can be an alias and an unmatched glob aborts the whole
@@ -508,9 +537,10 @@ export function buildRemoteClaudeTranscriptLocateCommand(ids: readonly string[],
     'LC_ALL=C',
     'export LC_ALL',
     'best=',
+    ...claudeConfigDirLines(),
     ...liveLines,
     `for id in ${liveLines.length ? '$live ' : ''}${safeIds.map((id) => shellescape(id)).join(' ')}; do`,
-    '  for f in "$HOME"/.claude/projects/*/"$id".jsonl; do',
+    '  for f in "$cfg"/projects/*/"$id".jsonl; do',
     '    [ -f "$f" ] || continue',
     '    if [ -z "$best" ] || [ "$f" -nt "$best" ]; then best=$f; fi',
     '  done',
@@ -752,12 +782,13 @@ export async function remoteReadClaudeEditSources(
   assertNotUnderTest();
   const budget = Number.isFinite(budgetBytes) ? Math.max(0, Math.floor(budgetBytes)) : 0;
   const command = buildRemoteFileCommand(remote, buildRemoteClaudeEditSourcesCommand(mainPath, requests, budget, opts));
+  const maxBytes = budget + EDIT_SOURCE_META_BUDGET_BYTES + EDIT_SOURCE_HEADER_SLACK_BYTES;
   let stdout: Buffer;
   try {
     const result = await runWithRemoteSshLimit(() =>
       execAsync(command, {
-        timeout: REMOTE_READ_TIMEOUT_MS,
-        maxBuffer: budget + EDIT_SOURCE_META_BUDGET_BYTES + EDIT_SOURCE_HEADER_SLACK_BYTES,
+        timeout: remoteEditSourcesTimeoutMs(maxBytes),
+        maxBuffer: maxBytes,
         encoding: 'buffer',
       })
     );

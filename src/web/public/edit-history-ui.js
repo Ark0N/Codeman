@@ -363,17 +363,18 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
     if (data.state === 'unavailable') {
-      body.append(
-        el(
-          'div',
-          'edit-history-note edit-history-note--warn',
-          data.reason === 'no-transcript'
+      // A remote host sends no hooks: its transcript is only ever found by the lookup over ssh.
+      const note =
+        data.reason !== 'no-transcript'
+          ? t('Showing saved entries only: {reason}', { reason: data.reason || '' })
+          : this.sessions?.get?.(h.sessionId)?.remote
             ? t(
-                'No transcript found for this session yet. It is picked up with the next prompt; until then a CLAUDE_CONFIG_DIR set outside Codeman cannot be found.'
+                'No transcript found on the remote host yet (Claude writes it with the first prompt). A CLAUDE_CONFIG_DIR set only in an interactive shell profile (.zshrc) cannot be found.'
               )
-            : t('Showing saved entries only: {reason}', { reason: data.reason || '' })
-        )
-      );
+            : t(
+                'No transcript found for this session yet. It is picked up with the next prompt; until then a CLAUDE_CONFIG_DIR set outside Codeman cannot be found.'
+              );
+      body.append(el('div', 'edit-history-note edit-history-note--warn', note));
     }
 
     const all = Array.isArray(data.entries) ? data.entries : [];

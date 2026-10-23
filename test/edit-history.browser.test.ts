@@ -469,6 +469,17 @@ describe('Edit history panel in a real browser', () => {
     const note = (await page.textContent('#editHistoryBody .edit-history-note--warn')) ?? '';
     expect(note).toContain('No transcript found for this session yet');
     expect(note).toContain('CLAUDE_CONFIG_DIR');
+    // A remote host sends no hooks: no promise that the next prompt finds it.
+    await page.evaluate((sid) => {
+      (window as any).app.sessions.get(sid).remote = { hostId: 'h', label: 'h', host: '192.0.2.1' };
+    }, sessionA);
+    await reload();
+    const remoteNote = page.locator('#editHistoryBody .edit-history-note--warn', {
+      hasText: 'No transcript found on the remote host yet',
+    });
+    await remoteNote.waitFor();
+    expect(await remoteNote.textContent()).not.toContain('next prompt');
+    await page.evaluate((sid) => delete (window as any).app.sessions.get(sid).remote, sessionA);
     state.set(sessionA, s);
     await reload();
   });

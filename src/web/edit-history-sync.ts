@@ -84,8 +84,12 @@ export interface EditHistorySession {
 }
 
 export interface EditHistorySyncDeps {
-  /** The session's main transcript path, or null when it has none yet. */
-  transcriptPath(session: EditHistorySession): Promise<string | null>;
+  /**
+   * The session's main transcript path, or null when it has none yet. `storedTranscriptId` is
+   * the conversation the stored history holds (null before the first read); see
+   * {@link remoteTranscriptIds}.
+   */
+  transcriptPath(session: EditHistorySession, storedTranscriptId: string | null): Promise<string | null>;
   /** The session's transcripts (a remote session's on its host). */
   readSources(
     session: EditHistorySession,
@@ -106,6 +110,18 @@ export interface EditHistorySyncDeps {
 
 export interface SyncOptions {
   older?: boolean;
+}
+
+/**
+ * The conversation ids a REMOTE session's transcript lookup tries, in order, after the one its
+ * claude writes now. No hook tells Codeman of a remote `/clear`, so `claudeSessionId` stays the
+ * launch id; tried first, it would flip the panel back to the cleared conversation as soon as
+ * the remote claude exits. The stored history's conversation is the newest the panel has read.
+ */
+export function remoteTranscriptIds(session: EditHistorySession, storedTranscriptId: string | null): string[] {
+  return [...new Set([storedTranscriptId, session.claudeSessionId || session.id, session.id])].filter(
+    (id): id is string => !!id
+  );
 }
 
 /** Why a session has no edit history, or undefined when it can have one. */
@@ -329,7 +345,7 @@ export class EditHistorySync {
     try {
       // This slot's store: a run still in flight after `remove()` cannot reach a later one.
       const store = await this.storeOf(session.id, slot);
-      const path = slot.gone ? null : await this.deps.transcriptPath(session);
+      const path = slot.gone ? null : await this.deps.transcriptPath(session, store.getTranscriptId());
       let found: boolean;
       if (!path) {
         found = false;

@@ -22,6 +22,7 @@ import {
   REMOVED,
   type EditHistorySession,
   type EditHistorySyncDeps,
+  remoteTranscriptIds,
   unsupportedReason,
 } from '../src/web/edit-history-sync.js';
 
@@ -177,6 +178,15 @@ describe('unsupportedReason', () => {
   });
 });
 
+describe('remoteTranscriptIds', () => {
+  it('tries the stored conversation before the launch id: no hook tells Codeman of a remote /clear', () => {
+    expect(remoteTranscriptIds(remote, 'conv2')).toEqual(['conv2', 'conv1', 's2']);
+    expect(remoteTranscriptIds(remote, 'conv1')).toEqual(['conv1', 's2']);
+    expect(remoteTranscriptIds(remote, null)).toEqual(['conv1', 's2']);
+    expect(remoteTranscriptIds({ ...remote, claudeSessionId: null }, null)).toEqual(['s2']);
+  });
+});
+
 describe('EditHistorySync', () => {
   it('reads new edits forward from the stored offset', async () => {
     const { host, sync } = setup();
@@ -311,6 +321,23 @@ describe('EditHistorySync', () => {
     expect(lookups).toEqual(['s2']);
     expect(readers).toEqual(['s2', 'probe:s2']);
     expect((await sync.getStore('s2')).list().map((e) => e.path)).toEqual(['/w/out.png', '/w/a.ts']);
+  });
+
+  it('hands the transcript lookup the conversation the stored history holds', async () => {
+    const stored: Array<string | null> = [];
+    const { host, sync } = setup({
+      transcriptPath: async (_session, storedTranscriptId) => {
+        stored.push(storedTranscriptId);
+        return host.path;
+      },
+    });
+    host.append('main', editLine('t1', T0, '/w/a.ts'));
+    await sync.sync(remote);
+    host.transcriptId = 'conv2';
+    host.files.set('main', Buffer.from(editLine('n1', T0 + 9, '/w/n.ts')));
+    await sync.sync(remote);
+    await sync.sync(remote);
+    expect(stored).toEqual([null, 'conv1', 'conv2']);
   });
 
   it('an unreachable remote host is unavailable with the stored entries kept, and the next sync reads on', async () => {

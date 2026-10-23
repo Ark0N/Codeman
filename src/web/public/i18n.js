@@ -570,6 +570,8 @@
     'Showing saved entries only: {reason}': '仅显示已保存的条目：{reason}',
     'No transcript found for this session yet. It is picked up with the next prompt; until then a CLAUDE_CONFIG_DIR set outside Codeman cannot be found.':
       '尚未找到此会话的记录。它会在下一次提示时被识别；在此之前，在 Codeman 之外设置的 CLAUDE_CONFIG_DIR 无法被找到。',
+    'No transcript found on the remote host yet (Claude writes it with the first prompt). A CLAUDE_CONFIG_DIR set only in an interactive shell profile (.zshrc) cannot be found.':
+      '远程主机上尚未找到记录（Claude 会在第一次提示时写入）。仅在交互式 shell 配置文件（.zshrc）中设置的 CLAUDE_CONFIG_DIR 无法被找到。',
     'No edits yet.': '暂无编辑。',
     'No edits by the main agent.': '主智能体没有编辑。',
     'Load older': '加载更早的编辑',
