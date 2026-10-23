@@ -2408,13 +2408,14 @@ Object.assign(CodemanApp.prototype, {
   /**
    * xterm's handler for OSC 8 hyperlinks (a program's own `ESC ]8;;url` links),
    * which take precedence over the text link provider. Routed through the same
-   * opener, and only for web URLs: any other scheme a program sends is ignored.
+   * opener after confirming the real target (the label may hide it), and only
+   * for web URLs: any other scheme a program sends is ignored.
    */
   _terminalOsc8LinkHandler() {
     return {
       activate: (_event, text) => {
         if (!/^https?:\/\/[^\s\x00-\x1f]+$/i.test(text)) return;
-        this._openTerminalUrl(text);
+        if (window.confirm(`Open this link?\n\n${text}`)) this._openTerminalUrl(text);
       },
     };
   },

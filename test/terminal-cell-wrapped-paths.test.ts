@@ -57,6 +57,14 @@ const TABLE: Row[] = [
   { text: ROW2 },
   { text: '' },
 ];
+const LISTINGS = [
+  ['/tmp/x', '/tmp/x/dir', '/tmp/x/dir/a.png'],
+  ['  ⎿  /home/u/proj/src', '     /home/u/proj/src/a.ts'],
+  ['4.0K    /tmp/foo/bar/', '8.0K    /tmp/foo/baz.png'],
+  ['/home/u/proj/docs:', 'guide.md  notes.md'],
+  ['Created /tmp/out', 'report.md written next to it'],
+];
+
 const BEFORE = '/tmp/demo-check/docs/review/BLDMESH-243/before-overview.png';
 const AFTER = '/tmp/demo-check/docs/review/BLDMESH-243/after-overview.png';
 
@@ -68,6 +76,11 @@ describe('terminalCellWrappedPaths', () => {
       const hits = find(fakeBuffer(TABLE, COLS), row);
       expect(hits.map((h) => h.path).sort()).toEqual([AFTER, BEFORE]);
     }
+  });
+
+  it.each(LISTINGS.map((lines) => [lines]))('does not join independent listing rows: %j', (lines) => {
+    const rows = lines.map((text) => ({ text }));
+    for (let row = 0; row < rows.length; row++) expect(find(fakeBuffer(rows, COLS), row)).toEqual([]);
   });
 
   it('places the segments on the path cells only', () => {
@@ -187,6 +200,20 @@ describe('terminal link provider with cell-wrapped paths', () => {
     };
     return { provide, app };
   }
+
+  it.each(LISTINGS.map((lines) => [lines]))('preserves ordinary listing links: %j', (lines) => {
+    const { provide } = harness(lines.map((text) => ({ text })));
+    const expected = [
+      ['/tmp/x', '/tmp/x/dir', '/tmp/x/dir/a.png'],
+      ['/home/u/proj/src', '/home/u/proj/src/a.ts'],
+      ['/tmp/foo/bar/', '/tmp/foo/baz.png'],
+      ['/home/u/proj/docs', 'guide.md'],
+      ['/tmp/out', 'report.md'],
+    ][LISTINGS.indexOf(lines)];
+    for (let row = 0; row < lines.length; row++) {
+      expect(provide(row + 1).map((link) => link.text)).toContain(expected[row]);
+    }
+  });
 
   it('makes both screenshot paths clickable from either row and opens the whole path', () => {
     const { provide, app } = harness(TABLE);

@@ -2568,7 +2568,8 @@ function findTerminalUrls(text) {
  *   - the next row is indented no further right than the column the URL
  *     started in (a table cell or list item continuation, not unrelated text);
  *   - that row's first token looks like URL material (contains one of
- *     `% & = / ? . - _` or a digit) and is not itself a new `scheme://`.
+ *     `% & = / ? . - _`), is not a bare number/version or list marker,
+ *     and is not itself a new `scheme://`.
  * The last rule is what stops prose such as "…/files/" + "then run it" from
  * being glued into one link.
  *
@@ -2609,7 +2610,7 @@ function terminalUrlContinuationExtent(buffer, row, cols, maxRows) {
       const nextText = next.translateToString(true) || '';
       const indent = nextText.length - nextText.replace(/^\s+/, '').length;
       const token = nextText.slice(indent).split(/\s/, 1)[0];
-      if (!token || indent > urlStartCol) break;
+      if (!token || indent > urlStartCol || /^(?:\d+[.)]|[-*•])(?:\s|$)/.test(nextText.slice(indent))) break;
       // When other table columns follow the URL, the next row must align with
       // the start of its cell. A new numbered row must not become URL text.
       if (
@@ -2621,7 +2622,7 @@ function terminalUrlContinuationExtent(buffer, row, cols, maxRows) {
       )
         break;
       if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token) || !/^[A-Za-z0-9%_~]/.test(token)) break;
-      if (!/[%&=/?.\-_0-9]/.test(token)) break;
+      if (!/[%&=/?.\-_]/.test(token) || /^v?\d+(?:\.\d+)*(?:[-+][\w.-]+)?[.,;:!?)]?$/i.test(token)) break;
       const nextLogical = terminalLogicalLine(buffer, endRow + 1, cols, bound);
       if (!nextLogical) break;
       if (trailingColumns) firstRowUrlEnd = last.rawEnd;
@@ -2716,9 +2717,9 @@ function terminalLinkLine(buffer, row, cols, maxRows) {
  * edge is where its text starts after the previous ≥2-space column gap, and the
  * continuation is the token starting at exactly that column on the next row.
  * A fragment qualifies only when it is the last thing in its cell on that row
- * (row end or a ≥2-space gap follows), and the join is accepted only when the
- * whole joined string matches the path pattern from its first character, which
- * is what keeps unrelated cell text from being glued on.
+ * (row end or a ≥2-space gap follows). Every continuation must pass
+ * pathContinuation and its cell must be no wider than the preceding cell's
+ * text, so independent listing rows and longer prose never displace links.
  *
  * Pure: reads rows only. Cells are taken one per string character (xterm rows
  * with wide glyphs would shift columns; such rows simply fail the alignment).
@@ -2768,6 +2769,7 @@ function terminalCellWrappedPaths(buffer, row, maxRows) {
       while ((e = edge.exec(upToPath)) !== null) cellCol = e.index + e[0].length;
 
       let joined = text.slice(start, end);
+      let previousCellLength = end - cellCol;
       const segments = [{ row: startRow, startCol: start, endCol: end }];
       for (let r = startRow + 1; r < startRow + bound; r++) {
         const line = buffer.getLine(r);
@@ -2776,7 +2778,11 @@ function terminalCellWrappedPaths(buffer, row, maxRows) {
         if (!next || !isPathChar(next[cellCol]) || (cellCol > 0 && next[cellCol - 1] !== ' ')) break;
         let tokenEnd = cellCol;
         while (tokenEnd < next.length && isPathChar(next[tokenEnd])) tokenEnd++;
-        const candidate = joined + next.slice(cellCol, tokenEnd);
+        const token = next.slice(cellCol, tokenEnd);
+        // Include prose after the token in this cell, but not another column.
+        const cellText = next.slice(cellCol).split(/ {2,}|[│┃║|]/, 1)[0].trimEnd();
+        if (cellText.length > previousCellLength || !pathContinuation(joined, token)) break;
+        const candidate = joined + token;
         const match = absoluteFilePathPattern().exec(candidate);
         if (match && match.index === 0 && match[0].length > joined.length) {
           segments.push({ row: r, startCol: cellCol, endCol: cellCol + match[0].length - joined.length });
@@ -2785,6 +2791,7 @@ function terminalCellWrappedPaths(buffer, row, maxRows) {
         }
         if (!endsCell(next, tokenEnd)) break;
         joined = candidate;
+        previousCellLength = cellText.length;
         segments.push({ row: r, startCol: cellCol, endCol: tokenEnd });
       }
     }

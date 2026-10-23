@@ -168,6 +168,16 @@ describe('terminalUrlContinuationExtent (wrap joining)', () => {
     expect(terminalUrlContinuationExtent(buffer, 4, COLS, 12)).toBeNull();
   });
 
+  it.each([
+    ['1. https://example.com/one/', '2. https://example.com/two/'],
+    ['Docs: https://docs.example.com/guide/', '1. Install the package'],
+    ['Fetching https://registry.example.com/pkg/', 'v1.2.3 is the latest'],
+    ['GET http://localhost:3000/api/', '200 OK in 12ms'],
+  ])('keeps list, version and status rows separate after %s', (first, next) => {
+    const buffer = fakeBuffer([{ text: first }, { text: next }], 100);
+    for (const row of [0, 1]) expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toBeNull();
+  });
+
   it('does not glue a following prose line onto a URL that ends a line', () => {
     const buffer = fakeBuffer(
       [{ text: 'Download from https://example.com/files/' }, { text: 'then run the installer' }],
@@ -204,11 +214,12 @@ describe('terminalUrlContinuationExtent (wrap joining)', () => {
 describe('native OSC 8 terminal URLs', () => {
   it('opens complete HTTP links through the terminal opener and rejects unsafe schemes', () => {
     const open = vi.fn();
+    const confirm = vi.fn(() => true);
     const context = vm.createContext({
       console,
       CodemanApp: class CodemanApp {},
       document: { addEventListener: vi.fn() },
-      window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+      window: { addEventListener: vi.fn(), removeEventListener: vi.fn(), confirm },
     });
     vm.runInContext(`${CONSTANTS}\n${TERMINAL_UI}\nglobalThis.__proto = CodemanApp.prototype;`, context);
     const proto = (
@@ -220,10 +231,16 @@ describe('native OSC 8 terminal URLs', () => {
     const url = 'https://docs.example.com/Doc.aspx?file=Q3%20Plan&action=default&mobileredirect=true';
     handler.activate(null, url);
     expect(open).toHaveBeenCalledExactlyOnceWith(url);
+    expect(confirm).toHaveBeenCalledExactlyOnceWith(`Open this link?\n\n${url}`);
+    confirm.mockReturnValue(false);
+    handler.activate(null, 'http://localhost:3000/private');
+    expect(confirm).toHaveBeenLastCalledWith('Open this link?\n\nhttp://localhost:3000/private');
+    expect(open).toHaveBeenCalledTimes(1);
     for (const unsafe of ['javascript:alert(1)', 'data:text/html,hello', 'file:///etc/passwd']) {
       handler.activate(null, unsafe);
     }
     expect(open).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledTimes(2);
   });
 });
 
