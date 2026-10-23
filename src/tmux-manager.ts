@@ -84,6 +84,7 @@ import {
   remoteLoginShellCommand,
   remoteSshTarget,
   remoteTmuxSessionAlive,
+  withRemoteTmuxPath,
 } from './remote-hosts.js';
 import {
   buildDockerBaseArgs,
@@ -1381,7 +1382,14 @@ export function buildRemoteLaunchCommand(options: {
   // `ssh -o BatchMode=yes` (preserving the historical token order), then the rest
   // of the connection args, then the target and the quoted tmux invocation.
   const [ssh, batchMode, ...connectionArgs] = buildSshConnectionArgs(remote);
-  const sshParts = [ssh, batchMode, '-t', ...connectionArgs, remoteSshTarget(remote), shellescape(tmuxInvocation)];
+  const sshParts = [
+    ssh,
+    batchMode,
+    '-t',
+    ...connectionArgs,
+    remoteSshTarget(remote),
+    shellescape(withRemoteTmuxPath(tmuxInvocation)),
+  ];
   return sshParts.join(' ');
 }
 
@@ -1398,7 +1406,7 @@ export function buildRemoteKillCommand(options: { remote: SessionRemote; session
   const remoteName = remoteTmuxSessionName(sessionId);
   const killCmd = `tmux -L ${REMOTE_TMUX_SOCKET} kill-session -t ${shellescape(remoteName)}`;
   const [ssh, ...connectionArgs] = buildSshConnectionArgs(remote);
-  return [ssh, ...connectionArgs, remoteSshTarget(remote), shellescape(killCmd)].join(' ');
+  return [ssh, ...connectionArgs, remoteSshTarget(remote), shellescape(withRemoteTmuxPath(killCmd))].join(' ');
 }
 
 // ========== Docker cases (COD-Docker) ==========
@@ -1777,7 +1785,14 @@ export function resolveDockerLaunchOptions(
 export function buildRemoteAttachCommand(remote: SessionRemote, remoteSessionName: string): string {
   const tmuxInvocation = `tmux -L codeman attach -t ${shellescape(remoteSessionName)}`;
   const [ssh, batchMode, ...connectionArgs] = buildSshConnectionArgs(remote);
-  const sshParts = [ssh, batchMode, '-t', ...connectionArgs, remoteSshTarget(remote), shellescape(tmuxInvocation)];
+  const sshParts = [
+    ssh,
+    batchMode,
+    '-t',
+    ...connectionArgs,
+    remoteSshTarget(remote),
+    shellescape(withRemoteTmuxPath(tmuxInvocation)),
+  ];
   return sshParts.join(' ');
 }
 

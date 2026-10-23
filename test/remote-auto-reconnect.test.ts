@@ -26,7 +26,12 @@ import {
   decideReconnect,
 } from '../src/remote-reconnect.js';
 import type { ReconnectSessionView } from '../src/remote-reconnect.js';
-import { buildRemoteSessionAliveCommand, classifyRemoteAliveExit } from '../src/remote-hosts.js';
+import {
+  buildRemoteSessionAliveCommand,
+  classifyRemoteAliveExit,
+  shellescape,
+  withRemoteTmuxPath,
+} from '../src/remote-hosts.js';
 import { TmuxManager } from '../src/tmux-manager.js';
 import type { SessionRemote } from '../src/types.js';
 
@@ -227,7 +232,7 @@ describe('remote has-session probe (pure)', () => {
     // Literal pin: the session name is shellescaped inside the remote command,
     // which is itself one shellescaped ssh argument.
     expect(cmd).toBe(
-      "ssh -o BatchMode=yes -o ConnectTimeout=10 -p 2222 dev@box 'tmux -L codeman-remote has-session -t '\\''codeman-ssh-abc'\\'' 2>/dev/null'"
+      `ssh -o BatchMode=yes -o ConnectTimeout=10 -p 2222 dev@box ${shellescape(withRemoteTmuxPath("tmux -L codeman-remote has-session -t 'codeman-ssh-abc' 2>/dev/null"))}`
     );
   });
 

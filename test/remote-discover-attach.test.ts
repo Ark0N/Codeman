@@ -11,7 +11,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { describe, it, expect } from 'vitest';
-import { parseRemoteSessionList } from '../src/remote-hosts.js';
+import { parseRemoteSessionList, withRemoteTmuxPath } from '../src/remote-hosts.js';
 import { buildRemoteAttachCommand } from '../src/tmux-manager.js';
 import { TmuxManager } from '../src/tmux-manager.js';
 import type { SessionRemote } from '../src/types.js';
@@ -103,7 +103,7 @@ describe('COD-105 buildRemoteAttachCommand', () => {
       .map((l) => l.slice(2));
     expect(sshArgs).toContain('ubuntu@10.0.0.42');
     const tmuxArg = sshArgs.find((a) => a.includes('attach'));
-    expect(tmuxArg).toBe("tmux -L codeman attach -t 'codeman-disco1'");
+    expect(tmuxArg).toBe(withRemoteTmuxPath("tmux -L codeman attach -t 'codeman-disco1'"));
   });
 });
 
