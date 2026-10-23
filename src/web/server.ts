@@ -2812,13 +2812,22 @@ export class WebServer extends EventEmitter {
   private applyPaneExits(): void {
     const getPaneExit = this.mux.getPaneExit?.bind(this.mux);
     if (!getPaneExit) return;
+    const getPaneCurrentPath = this.mux.getPaneCurrentPath?.bind(this.mux);
     for (const session of this.sessions.values()) {
       const muxName = session.muxName;
       // No pane, so nothing to report — and `setPaneExit()` would force UNKNOWN
       // for such a session anyway.
       if (!muxName) continue;
-      if (!session.setPaneExit(getPaneExit(muxName))) continue;
-      this.persistSessionState(session);
+      // The pane's live directory rides the same read: it is the base a relative
+      // path printed in the terminal resolves against. A session missing from
+      // the read keeps its last answer (a failed read reports nothing).
+      const cwd = getPaneCurrentPath?.(muxName);
+      const cwdChanged = cwd !== undefined && session.setCwd(cwd);
+      if (session.setPaneExit(getPaneExit(muxName))) {
+        this.persistSessionState(session);
+      } else if (!cwdChanged) {
+        continue;
+      }
       this.broadcastSessionStateDebounced(session.id);
     }
     this.closeCleanlyExitedSessions();

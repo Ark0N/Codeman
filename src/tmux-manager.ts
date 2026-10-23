@@ -423,6 +423,37 @@ export function derivePaneExits(rows: PaneRow[], now: number): Map<string, PaneE
 }
 
 /**
+ * Decide, from every pane tmux listed, which directory each tmux session's pane
+ * is in now (`#{pane_current_path}`). Exported for unit testing.
+ *
+ * This is what a relative path printed in the terminal is relative TO: a
+ * session's `workingDir` is fixed at create time and never follows a `cd`.
+ *
+ * - Only sessions with EXACTLY ONE pane answer, for the reason
+ *   {@link derivePaneExits} gives: a hand-split session has no single "the"
+ *   pane to speak for it.
+ * - Only absolute paths count. A blank field is a tmux that did not answer.
+ *
+ * The launch directory is NOT filtered here (unlike the rediscovery path): a
+ * remote or docker pane that never leaves it is refused by `Session.setCwd()`,
+ * and a local pane reporting it really is there.
+ */
+export function derivePaneCurrentPaths(rows: PaneRow[]): Map<string, string> {
+  const panesPerSession = new Map<string, number>();
+  for (const row of rows) {
+    panesPerSession.set(row.sessionName, (panesPerSession.get(row.sessionName) ?? 0) + 1);
+  }
+  const paths = new Map<string, string>();
+  for (const row of rows) {
+    if (panesPerSession.get(row.sessionName) !== 1) continue;
+    const path = row.currentPath;
+    if (!path || !path.startsWith('/')) continue;
+    paths.set(row.sessionName, path);
+  }
+  return paths;
+}
+
+/**
  * Could any of these tmux sessions ever produce a pane-exit answer? Exported
  * for unit testing.
  *
@@ -2005,6 +2036,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * raw pane reading.
    */
   private paneExits: Map<string, TrackedPaneExit> = new Map();
+  /**
+   * muxName -> `#{pane_current_path}` from the last authoritative pane read
+   * ({@link derivePaneCurrentPaths}). Replaced wholesale by each non-empty read,
+   * so it is bounded by the panes on the socket. Like {@link paneExits} it holds
+   * the raw reading; `Session.setCwd()` decides which sessions may use it.
+   */
+  private paneCurrentPaths: Map<string, string> = new Map();
   /** The pane-exit watcher's own interval. Runs whether or not stats are on. */
   private paneExitInterval: NodeJS.Timeout | null = null;
   /**
@@ -3508,6 +3546,16 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * The directory the session's pane was in at the last authoritative pane
+   * read, or `undefined` when unknown. Costs nothing: it reads the map the
+   * pane-exit watcher's batched `list-panes -a` fills, so no tmux call is made
+   * per click. A failed or empty read keeps the previous answers.
+   */
+  getPaneCurrentPath(muxName: string): string | undefined {
+    return this.paneCurrentPaths.get(muxName);
+  }
+
+  /**
    * What the last pane read saw of this tmux session's agent. `undefined` is
    * the UNKNOWN answer and must never be rendered as "alive": it covers a pane
    * that is running, a tmux session that no longer exists, a probe that failed,
@@ -3568,6 +3616,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       this.paneExitReadInFlight = false;
     }
     if (rows.length === 0) return;
+    // The directory reading rides the same read. It is applied before the
+    // generation check below: a respawn invalidates an exit observation, but the
+    // pane's directory at read time is still the best answer there is.
+    this.paneCurrentPaths = derivePaneCurrentPaths(rows);
     // A pane was respawned or killed while this read was out, so what it saw is
     // already history. Dropping it is what stops a freshly respawned pane from
     // being republished as exited.

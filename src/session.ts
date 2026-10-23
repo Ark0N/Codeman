@@ -744,6 +744,11 @@ export class Session extends EventEmitter {
    */
   private _paneExit: PaneExit | null = null;
   /**
+   * The pane's live directory, from the pane-exit watcher's read. Runtime-only:
+   * serialized by toState() but never restored by the constructor.
+   */
+  private _cwd: string | undefined;
+  /**
    * How many starts, attaches or relaunches are running for this session's
    * pane. While one is, a dead-pane reading may describe a pane that is being
    * revived on purpose, so the exited-agent sweep leaves the session alone
@@ -1485,6 +1490,28 @@ export class Session extends EventEmitter {
     if (this._muxSession) this._mux?.clearPaneExit?.(this._muxSession.muxName);
   }
 
+  /** The pane's live working directory, when the pane read has reported one. */
+  get cwd(): string | undefined {
+    return this._cwd;
+  }
+
+  /**
+   * Record the pane's live directory. Returns whether it CHANGED, so the caller
+   * broadcasts only on a real transition.
+   *
+   * Scoped by {@link paneExitApplies}, the same rule as the exit reading: a
+   * remote session's local pane runs the ssh client and a docker case's runs a
+   * `docker exec`, so their pane directory is a host directory the agent was
+   * never in, and a direct-PTY or rediscovered session has no pane Codeman can
+   * vouch for. A relative value is refused rather than stored.
+   */
+  setCwd(next: string | undefined): boolean {
+    const resolved = this.paneExitApplies && next?.startsWith('/') ? next : undefined;
+    if (resolved === this._cwd) return false;
+    this._cwd = resolved;
+    return true;
+  }
+
   /**
    * Record what the mux layer observed of this pane's agent, and say whether
    * that changed the answer. The caller persists and broadcasts on a true.
@@ -2162,6 +2189,7 @@ export class Session extends EventEmitter {
       pid: this.pid,
       status: this._status,
       workingDir: this.workingDir,
+      cwd: this._cwd,
       remote: this._remote,
       docker: this._docker,
       owner: this._owner,

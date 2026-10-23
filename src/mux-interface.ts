@@ -271,7 +271,7 @@ export interface PaneCaptureOptions {
  * - `sessionKilled` (data: { sessionId: string }) - Session terminated
  * - `sessionDied` (data: { sessionId: string }) - Session died unexpectedly
  * - `statsUpdated` (sessions: MuxSessionWithStats[]) - Stats refreshed
- * - `paneExitsUpdated` () - A pane read finished; ask `getPaneExit()` per session
+ * - `paneExitsUpdated` () - A pane read finished; ask `getPaneExit()` (and `getPaneCurrentPath()`) per session
  */
 export interface TerminalMultiplexer extends EventEmitter {
   /** Which backend this instance uses */
@@ -395,6 +395,16 @@ export interface TerminalMultiplexer extends EventEmitter {
    * need their own probe. See {@link PaneExit}.
    */
   getPaneExit?(muxName: string): PaneExit | undefined;
+
+  /**
+   * The directory the session's pane was in at the last pane read
+   * (`#{pane_current_path}`), or `undefined` when unknown. Read from the same
+   * batched watcher as {@link getPaneExit}, so it costs no tmux call. A relative
+   * path printed in the terminal resolves against it; it is never a
+   * confinement root. A multiplexer without it leaves relative paths resolving
+   * against `workingDir`.
+   */
+  getPaneCurrentPath?(muxName: string): string | undefined;
 
   /**
    * How many authoritative pane reads have agreed on the exit `getPaneExit()`
