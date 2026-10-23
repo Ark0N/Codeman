@@ -739,7 +739,7 @@ describe('reads only on request (wiring guard)', () => {
     const start = server.indexOf('new EditHistorySync({');
     const lookup = server.slice(start, server.indexOf('readSources:', start));
     expect(lookup).toMatch(
-      /remoteLocateClaudeTranscript\(\s*session\.remote,\s*remoteTranscriptIds\(session, storedTranscriptId\)/
+      /session\.remote\s*\?\s*remoteLocateClaudeTranscript\(\s*session\.remote,\s*remoteTranscriptIds\(session, storedTranscriptId\)/
     );
     expect(lookup).toMatch(/resolveClaudeTranscript\(\s*this\.transcriptWatchers\.get\(session\.id\)\?\.getPath\(\)/);
   });

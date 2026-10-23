@@ -108,13 +108,18 @@ describe('the transcript lookup on a real shell', () => {
   it('takes the most recently written transcript of all ids, not the first id that has one', () => {
     // conv-1 lies in old/ (1000 s) and new/ (2000 s); solo is older than both, then newest.
     const solo = join(projects(), 'old', 'solo.jsonl');
-    utimesSync(solo, 1_500, 1_500);
-    expect(locate(['conv-1', 'solo'])).toBe(join(projects(), 'new', 'conv-1.jsonl'));
-    expect(locate(['solo', 'conv-1'])).toBe(join(projects(), 'new', 'conv-1.jsonl'));
-    expect(locate(['missing', 'solo'])).toBe(solo);
-    // A respawn resumed the launch conversation after a /clear: the one written last wins.
-    utimesSync(solo, 3_000, 3_000);
-    expect(locate(['conv-1', 'solo'])).toBe(solo);
+    try {
+      utimesSync(solo, 1_500, 1_500);
+      expect(locate(['conv-1', 'solo'])).toBe(join(projects(), 'new', 'conv-1.jsonl'));
+      expect(locate(['solo', 'conv-1'])).toBe(join(projects(), 'new', 'conv-1.jsonl'));
+      expect(locate(['missing', 'solo'])).toBe(solo);
+      // A respawn resumed the launch conversation after a /clear: the one written last wins.
+      utimesSync(solo, 3_000, 3_000);
+      expect(locate(['conv-1', 'solo'])).toBe(solo);
+    } finally {
+      // Older than conv-1, so the live tests below cannot pass by mtime alone.
+      utimesSync(solo, 1_500, 1_500);
+    }
   });
 
   it('exits 3 when no id has a transcript, and drops ids that are not plain tokens', () => {
@@ -166,7 +171,9 @@ describe('the transcript lookup on a real shell', () => {
     const locateIn = (p: typeof pane | undefined) => locate(['conv-1'], p, { PATH: `${bin}:${process.env.PATH}` });
     const session = (body: string) => writeFileSync(join(home, '.claude', 'sessions', '300.json'), body);
 
-    it('finds the live conversation of a grandchild claude before the stored ids', () => {
+    it('finds the live conversation of a grandchild claude before the stored ids, even an older one', () => {
+      // solo (1500 s) is older than conv-1 (2000 s): a /resume into an older conversation
+      // that has not written yet still wins.
       session('{"pid":300,"sessionId":"solo","cwd":"/w","kind":"interactive"}');
       expect(locateIn(pane)).toBe(join(projects(), 'old', 'solo.jsonl'));
     });

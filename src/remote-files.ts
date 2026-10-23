@@ -542,6 +542,8 @@ export function buildRemoteClaudeTranscriptLocateCommand(ids: readonly string[],
     'best=',
     ...claudeConfigDirLines(),
     // newest <id>: `best` becomes that id's transcript if it is newer than the current best.
+    // BusyBox's (and bash 3.2's) `-nt` compares whole seconds: a tie keeps the earlier id, the
+    // stored conversation, until the next write; only without a live id.
     'newest() {',
     '  for f in "$cfg"/projects/*/"$1".jsonl; do',
     '    [ -f "$f" ] || continue',
