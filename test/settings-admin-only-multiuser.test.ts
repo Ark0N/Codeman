@@ -57,8 +57,12 @@ async function send(method: string, path: string, headers: Record<string, string
 async function settleSettings(predicate: (s: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> {
   let last: Record<string, unknown> = {};
   for (let i = 0; i < 40; i++) {
-    last = JSON.parse(await readSettingsBytes());
-    if (predicate(last)) return last;
+    try {
+      last = JSON.parse(await readSettingsBytes());
+      if (predicate(last)) return last;
+    } catch {
+      // the write is not atomic: a read that lands between its truncate and its data is empty, so poll again
+    }
     await new Promise((r) => setTimeout(r, 25));
   }
   return last;
