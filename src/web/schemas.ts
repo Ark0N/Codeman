@@ -1619,9 +1619,6 @@ export const SettingsUpdateSchema = z
     // UI visibility
     showFontControls: z.boolean().optional(),
     showSystemStats: z.boolean().optional(),
-    /** Opt-in host readings after CPU and MEM in the header (default off): GPU load/memory/clock (showGpuStats) and the CPU clock (showCpuMhz). */
-    showGpuStats: z.boolean().optional(),
-    showCpuMhz: z.boolean().optional(),
     /**
      * How the header draws its WS / CPU / MEM / plan-usage cluster. Display key
      * (per-device), desktop only (the cluster is hidden below 768px).

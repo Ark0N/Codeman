@@ -2402,8 +2402,6 @@ class CodemanApp {
     if (data.parentSessionId) this.markConnectionLineEntering?.('lineage:' + data.id);
     this.renderSessionTabs();
     this.updateCost();
-    // Start stats polling when first session appears
-    if (this.sessions.size === 1) this.startSystemStatsPolling();
     if (this._urlSessionId === data.id) this._selectUrlSession();
   }
 

@@ -3239,6 +3239,9 @@ Object.assign(CodemanApp.prototype, {
       showCronButton: _crb,
       // Per-device bottom-bar indicator, absent from SettingsUpdateSchema (.strict()): it must not reach the PUT.
       showGitStatus: _sgs,
+      // Opt-in header readings (GPU Stats, CPU MHz): per-device and absent from the .strict() schema.
+      showGpuStats: _sgp,
+      showCpuMhz: _scm,
       gitStatusTree: _gst,
       gitStatusMaxRepos: _gsm,
       gitStatusTimeoutSeconds: _gst2,

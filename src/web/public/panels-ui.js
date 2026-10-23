@@ -6757,8 +6757,6 @@ Object.assign(CodemanApp.prototype, {
     this._setStatRing('statCpuRing', stats.cpu);
     this._setStatRing('statMemRing', stats.memory?.percent);
 
-    this._updateHostSensors(stats);
-
     if (memEl && memBar) {
       const memGB = (stats.memory.usedMB / 1024).toFixed(1);
       memEl.textContent = `${memGB}G`;
@@ -6774,6 +6772,9 @@ Object.assign(CodemanApp.prototype, {
         memBar.classList.add('medium');
       }
     }
+
+    // After the MEM block, so nothing in the optional readings can stop MEM updating.
+    this._updateHostSensors(stats);
   },
 
   /**
@@ -6810,16 +6811,19 @@ Object.assign(CodemanApp.prototype, {
         fill('statVram', 'statVramRing', 'statVramBar', gpu.memPercent, used);
         if (ring) ring.style.display = '';
       } else {
-        this.$('statVram').textContent = used;
+        const vram = this.$('statVram');
+        if (vram) vram.textContent = used;
         if (ring) ring.style.display = 'none';
       }
     }
     // The GPU clock is a third GPU Stats item (the host may not report one: Windows has none for Intel).
     show('statGpuMhzItem', Boolean(gpu && gpu.mhz !== undefined));
-    if (gpu && gpu.mhz !== undefined) this.$('statGpuMhz').textContent = `${gpu.mhz} MHz`;
+    const gpuMhzEl = gpu && gpu.mhz !== undefined ? this.$('statGpuMhz') : null;
+    if (gpuMhzEl) gpuMhzEl.textContent = `${gpu.mhz} MHz`;
     const cpuMhz = settings.showCpuMhz === true && stats.cpuMhz !== undefined ? stats.cpuMhz : undefined;
     show('statCpuMhzItem', cpuMhz !== undefined);
-    if (cpuMhz !== undefined) this.$('statCpuMhz').textContent = `${cpuMhz} MHz`;
+    const cpuMhzEl = cpuMhz !== undefined ? this.$('statCpuMhz') : null;
+    if (cpuMhzEl) cpuMhzEl.textContent = `${cpuMhz} MHz`;
   },
 
   /**

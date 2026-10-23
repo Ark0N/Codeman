@@ -180,23 +180,22 @@ const readNumber = async (path: string) => {
 };
 
 /** Linux running under WSL: Windows programs can be started, and the GPU belongs to Windows. */
+let wsl: boolean | undefined;
 function inWsl(): boolean {
-  return (
+  wsl ??=
     process.platform === 'linux' &&
     (Boolean(process.env.WSL_INTEROP) ||
       existsSync('/proc/sys/fs/binfmt_misc/WSLInterop') ||
-      existsSync('/proc/sys/fs/binfmt_misc/WSLInterop-late'))
-  );
+      existsSync('/proc/sys/fs/binfmt_misc/WSLInterop-late'));
+  return wsl;
 }
-
-const typeperfPath = () => (existsSync(TYPEPERF) ? TYPEPERF : 'typeperf.exe');
 
 let windowsRamMB: Promise<number | undefined> | undefined;
 
 /** Windows' installed RAM, asked once (PowerShell takes about a second) and remembered when it answers. */
 function readWindowsRamMB(): Promise<number | undefined> {
   windowsRamMB ??= run(
-    existsSync(POWERSHELL) ? POWERSHELL : 'powershell.exe',
+    POWERSHELL,
     ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory'],
     8000
   ).then((out) => {
@@ -240,14 +239,12 @@ export function createCounterStream(options: CounterStreamOptions) {
   let startedAt = 0;
   let lastRead = 0;
   let blockedUntil = 0;
-  let header: string | undefined;
   let latest: { at: number; value: WindowsCounters } | undefined;
   let waiting: Array<() => void> = [];
 
   const stop = () => {
     const old = child;
     child = undefined;
-    header = undefined;
     if (old) {
       try {
         old.kill();
@@ -264,6 +261,9 @@ export function createCounterStream(options: CounterStreamOptions) {
     if (nextKey !== key) latest = undefined;
     key = nextKey;
     startedAt = now();
+    // The header row and the partial line belong to this process alone: a late row from a replaced sampler
+    // must never become the next one's header.
+    let header: string | undefined;
     let buffer = '';
     let sampled = false;
     let started: SamplerChild;
@@ -275,6 +275,7 @@ export function createCounterStream(options: CounterStreamOptions) {
     }
     child = started;
     started.stdout?.on('data', (chunk: Buffer | string) => {
+      if (child !== started) return;
       buffer += chunk.toString();
       let at: number;
       while ((at = buffer.indexOf('\n')) >= 0) {
@@ -332,24 +333,47 @@ export function createCounterStream(options: CounterStreamOptions) {
   };
 }
 
-const windowsCounters = createCounterStream({
-  start: (counters) =>
-    spawn(typeperfPath(), ['-si', '2', ...counters], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }),
-});
-setInterval(() => windowsCounters.sweep(), 10000).unref();
+const GPU_COUNTERS = [
+  '\\GPU Engine(*)\\Utilization Percentage',
+  '\\GPU Adapter Memory(*)\\Shared Usage',
+  '\\GPU Adapter Memory(*)\\Dedicated Usage',
+];
+const CPU_COUNTERS = ['\\Processor Information(_Total)\\Processor Frequency'];
 
-async function readWindowsCounters(request: SensorRequest): Promise<WindowsCounters> {
-  const counters: string[] = [];
-  if (request.gpu) {
-    counters.push(
-      '\\GPU Engine(*)\\Utilization Percentage',
-      '\\GPU Adapter Memory(*)\\Shared Usage',
-      '\\GPU Adapter Memory(*)\\Dedicated Usage'
-    );
-  }
-  if (request.cpuMhz) counters.push('\\Processor Information(_Total)\\Processor Frequency');
-  if (!counters.length) return {};
-  return (await windowsCounters.read(counters)) ?? {};
+/**
+ * The counters one sampler reads. They do not depend on which reading a browser asked for (those are per
+ * device, so two browsers can differ): the CPU clock is always sampled, and the GPU counters are added, once
+ * and for good, on a machine with no native GPU reader. A request then only picks its fields from the sample.
+ */
+export function windowsCounterList(needGpu: boolean): string[] {
+  return needGpu ? [...GPU_COUNTERS, ...CPU_COUNTERS] : [...CPU_COUNTERS];
+}
+
+export function createWindowsSource(stream: Pick<ReturnType<typeof createCounterStream>, 'read' | 'stop'>) {
+  let needGpu = false;
+  return {
+    /** A GPU reading is wanted and no native reader answered: sample the GPU counters too. */
+    needGpuCounters() {
+      needGpu = true;
+    },
+    read: () => stream.read(windowsCounterList(needGpu)),
+    stop: () => stream.stop(),
+  };
+}
+
+const windowsCounters = createCounterStream({
+  // Spawn the Windows program directly: if it is missing, the error lands in the stream's back-off.
+  start: (counters) =>
+    spawn(TYPEPERF, ['-si', '2', ...counters], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }),
+});
+const windowsSource = createWindowsSource(windowsCounters);
+let sweepTimer: ReturnType<typeof setInterval> | undefined;
+
+/** Stop the background sampler and its idle sweep (the server calls this on shutdown). */
+export function stopHostSensors(): void {
+  if (sweepTimer) clearInterval(sweepTimer);
+  sweepTimer = undefined;
+  windowsSource.stop();
 }
 
 async function readAmdGpu(): Promise<GpuReading | undefined> {
@@ -374,14 +398,18 @@ async function readAmdGpu(): Promise<GpuReading | undefined> {
   return undefined;
 }
 
-/** NVIDIA, then AMD; the Windows counters (WSL only) are the slower last resort and only for load and memory. */
-async function readGpu(windows: WindowsCounters | undefined): Promise<GpuReading | undefined> {
+/** NVIDIA, then AMD: the readers that need nothing from Windows. */
+async function readNativeGpu(): Promise<GpuReading | undefined> {
   const out = await run('nvidia-smi', [
     '--query-gpu=utilization.gpu,memory.used,memory.total,clocks.gr',
     '--format=csv,noheader,nounits',
   ]);
-  const native = (out && parseNvidiaSmi(out)) || (await readAmdGpu());
-  if (native || !windows?.gpu) return native;
+  return (out && parseNvidiaSmi(out)) || readAmdGpu();
+}
+
+/** A GPU reading from the Windows counters (WSL only): load and memory in use, but no clock. */
+async function gpuFromWindows(windows: WindowsCounters | undefined): Promise<GpuReading | undefined> {
+  if (!windows?.gpu) return undefined;
   const { percent, memUsedMB, dedicated } = windows.gpu;
   const reading: GpuReading = { percent, memUsedMB };
   // An integrated GPU draws its memory from system RAM, and Windows lets it use up to half of it.
@@ -404,29 +432,35 @@ async function readCpuMhz(windows: WindowsCounters | undefined): Promise<number 
   return info ? parseCpuInfoMhz(info) : undefined;
 }
 
-let cache: { at: number; key: string; value: HostSensors } | undefined;
-let inFlight: { key: string; promise: Promise<HostSensors> } | undefined;
+const cache = new Map<string, { at: number; value: HostSensors }>();
+const inFlight = new Map<string, Promise<HostSensors>>();
 
 /** Read only what was asked for. Missing sensors are simply absent from the result. */
 export async function readHostSensors(request: SensorRequest): Promise<HostSensors> {
   const key = `${request.gpu ? 'g' : ''}${request.cpuMhz ? 'c' : ''}`;
   if (!key) return {};
-  if (cache && cache.key === key && Date.now() - cache.at < CACHE_MS) return cache.value;
-  if (inFlight?.key === key) return inFlight.promise;
+  sweepTimer ??= setInterval(() => windowsCounters.sweep(), 10000).unref();
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
+  const running = inFlight.get(key);
+  if (running) return running;
   const promise = (async () => {
-    const windows = inWsl() ? await readWindowsCounters(request) : undefined;
+    // Native GPU readers first: a machine with a working nvidia-smi never starts the GPU counters.
+    const nativeGpu = request.gpu ? await readNativeGpu() : undefined;
+    const wsl = inWsl();
+    const windowsGpu = wsl && request.gpu && !nativeGpu;
+    if (windowsGpu) windowsSource.needGpuCounters();
+    const windows = wsl && (request.cpuMhz || windowsGpu) ? await windowsSource.read() : undefined;
     const [gpu, cpuMhz] = await Promise.all([
-      request.gpu ? readGpu(windows) : undefined,
-      request.cpuMhz ? readCpuMhz(windows) : undefined,
+      request.gpu ? (nativeGpu ?? gpuFromWindows(windows)) : undefined,
+      request.cpuMhz ? readCpuMhz(wsl ? (windows ?? {}) : undefined) : undefined,
     ]);
     const value: HostSensors = {};
     if (gpu) value.gpu = gpu;
     if (cpuMhz) value.cpuMhz = cpuMhz;
-    cache = { at: Date.now(), key, value };
+    cache.set(key, { at: Date.now(), value });
     return value;
-  })().finally(() => {
-    inFlight = undefined;
-  });
-  inFlight = { key, promise };
+  })().finally(() => inFlight.delete(key));
+  inFlight.set(key, promise);
   return promise;
 }

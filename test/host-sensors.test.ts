@@ -7,6 +7,8 @@ import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import {
   createCounterStream,
+  createWindowsSource,
+  windowsCounterList,
   meanKhzAsMhz,
   parseCpuInfoMhz,
   parseDpmClock,
@@ -172,5 +174,92 @@ describe('createCounterStream', () => {
   it('answers nothing, within the wait, when no sample ever arrives', async () => {
     const { stream } = fake();
     expect(await stream.read(counters)).toBeUndefined();
+  });
+});
+
+describe('the Windows sampler shared by every browser', () => {
+  const HEADER = '"(PDH-CSV 4.0)","\\\\H\\Processor Information(_Total)\\Processor Frequency"\r\n';
+
+  function rig() {
+    const children: Array<{ stdout: PassThrough; killed: boolean; counters: string[] }> = [];
+    const stream = createCounterStream({
+      start: (counters) => {
+        const stdout = new PassThrough();
+        const child = { stdout, killed: false, counters };
+        children.push(child);
+        return {
+          stdout,
+          kill: () => {
+            child.killed = true;
+            return true;
+          },
+          once: () => undefined,
+        } as never;
+      },
+      firstSampleMs: 20,
+    });
+    return { children, source: createWindowsSource(stream) };
+  }
+
+  it('samples the same counters whatever a browser asked for, so two browsers share one process', async () => {
+    const { children, source } = rig();
+    // browser A (GPU Stats) and browser B (GPU Stats and CPU MHz) read the same sampler in turn
+    for (let i = 0; i < 8; i++) {
+      const read = source.read();
+      if (i === 0) children[0].stdout.write(HEADER + '"t","1700"\r\n');
+      await read;
+    }
+    expect(children).toHaveLength(1);
+    expect(children[0].killed).toBe(false);
+  });
+
+  it('adds the GPU counters once, for good, on a machine with no native GPU reader', async () => {
+    const { children, source } = rig();
+    void source.read();
+    expect(children[0].counters).toEqual(windowsCounterList(false));
+    expect(children[0].counters.some((c) => c.includes('GPU Engine'))).toBe(false);
+    source.needGpuCounters();
+    void source.read();
+    expect(children).toHaveLength(2);
+    expect(children[0].killed).toBe(true);
+    expect(children[1].counters).toEqual(windowsCounterList(true));
+    source.needGpuCounters();
+    void source.read();
+    void source.read();
+    expect(children).toHaveLength(2);
+  });
+});
+
+describe('a late row from a replaced sampler', () => {
+  it("is ignored, so it can never become the new sampler's header", async () => {
+    const children: PassThrough[] = [];
+    let clock = 1000;
+    const stream = createCounterStream({
+      start: () => {
+        const stdout = new PassThrough();
+        children.push(stdout);
+        return { stdout, kill: () => true, once: () => undefined } as never;
+      },
+      now: () => clock,
+      firstSampleMs: 20,
+      recycleMs: 30000,
+    });
+    const counters = ['\\Processor Information(_Total)\\Processor Frequency'];
+    const header = '"(PDH-CSV 4.0)","\\\\H\\Processor Information(_Total)\\Processor Frequency"\r\n';
+    const first = stream.read(counters);
+    children[0].write(header + '"t","1700"\r\n');
+    await first;
+    clock += 31000;
+    const second = stream.read(counters); // replaces the sampler
+    expect(children).toHaveLength(2);
+    // the killed process still had a data row in its pipe: it arrives after the replacement began
+    children[0].write('"t","999"\r\n');
+    await new Promise((r) => setImmediate(r));
+    // the stale row is not a sample: with nothing from the new process yet there is still nothing to hand out
+    expect(await stream.read(counters)).toBeUndefined();
+    children[1].write(header + '"t","1800"\r\n');
+    await second;
+    await new Promise((r) => setImmediate(r));
+    expect(await stream.read(counters)).toEqual({ cpuMhz: 1800 });
   });
 });

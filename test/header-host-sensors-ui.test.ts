@@ -131,7 +131,7 @@ describe('header host sensors', () => {
     expect(appJs).not.toMatch(/\} else \{\s*this\.stopSystemStatsPolling\(\);/);
   });
 
-  it('is opt-in in the settings page: unchecked chips, off in every default, accepted by the schema', () => {
+  it('is opt-in in the settings page: unchecked chips, off in every default, stripped from the settings PUT', () => {
     const html = read('index.html');
     for (const id of ['appSettingsShowGpuStats', 'appSettingsShowCpuMhz']) {
       expect(html).toMatch(new RegExp(`<input type="checkbox" id="${id}">`));
@@ -139,6 +139,9 @@ describe('header host sensors', () => {
     const settingsUi = read('settings-ui.js');
     expect(settingsUi).toContain('showGpuStats ?? defaults.showGpuStats ?? false');
     expect(settingsUi).toContain('showCpuMhz ?? defaults.showCpuMhz ?? false');
-    expect(readFileSync(join(process.cwd(), 'src/web/schemas.ts'), 'utf-8')).toMatch(/showCpuMhz: z\.boolean\(\)/);
+    // per-device, so stripped from the PUT body like the other header toggles (the schema is .strict())
+    expect(settingsUi).toContain('showGpuStats: _sgp,');
+    expect(settingsUi).toContain('showCpuMhz: _scm,');
+    expect(readFileSync(join(process.cwd(), 'src/web/schemas.ts'), 'utf-8')).not.toContain('showCpuMhz');
   });
 });
