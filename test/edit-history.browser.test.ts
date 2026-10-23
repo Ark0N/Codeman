@@ -323,8 +323,12 @@ describe('Edit history panel in a real browser', () => {
     );
     await page.waitForTimeout(800);
     expect(syncReads(sessionA)).toBe(before + 1);
-    // The end of a turn re-reads too (a parallel tool call reports one tool end only).
-    (server as any).broadcast('transcript:complete', { sessionId: sessionA, timestamp: Date.now() });
+    // The end of a turn re-reads too (a parallel tool call reports one tool end only, a background
+    // subagent writes later): `session:idle`, since claude's transcript has no `result` line.
+    (server as any).broadcast('session:idle', { id: 'someone-else' });
+    await page.waitForTimeout(1200);
+    expect(syncReads(sessionA)).toBe(before + 1);
+    (server as any).broadcast('session:idle', { id: sessionA });
     await page.waitForTimeout(1200);
     expect(syncReads(sessionA)).toBe(before + 2);
   });
@@ -334,7 +338,7 @@ describe('Edit history panel in a real browser', () => {
     await page.waitForSelector('#editHistoryPanel:not(.visible)', { state: 'attached' });
     const before = syncReads(sessionA);
     toolEnd(sessionA, 'Edit');
-    (server as any).broadcast('transcript:complete', { sessionId: sessionA, timestamp: Date.now() });
+    (server as any).broadcast('session:idle', { id: sessionA });
     await page.waitForTimeout(1200);
     expect(syncReads(sessionA)).toBe(before);
     expect(await page.$('#editHistoryUnread')).toBeNull(); // no unread badge: closed means idle

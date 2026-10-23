@@ -8,8 +8,8 @@
  * server's reading, which never runs in the background: it reads
  * `GET /api/sessions/:id/edits?sync=1` when it opens and when the active session changes, and,
  * only while it is open, re-reads (debounced) on the active session's `transcript:tool_end` for a
- * tool that can change files and on `transcript:complete` (the existing transcript watcher's
- * events). No poll, and nothing at all while the panel is closed.
+ * tool that can change files (the existing transcript watcher's event) and on its `session:idle`
+ * (the end of a turn). No poll, and nothing at all while the panel is closed.
  *
  * - A code entry opens its diff inline (`GET /api/sessions/:id/edits/:entryId`), drawn with the Git
  *   panel's diff classes (`git-diff`, `git-diff-line--hunk|add|del`).
@@ -182,9 +182,10 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * SSE `transcript:tool_end` ({ sessionId, toolName }) and `transcript:complete` ({ sessionId }):
-   * while the panel is open on that session, re-read after a tool that can change files, and at
-   * the end of a turn (a parallel tool call reports only one tool end). Closed: nothing.
+   * SSE `transcript:tool_end` ({ sessionId, toolName }), and the end of a turn through
+   * `onEditHistorySessionIdle`: while the panel is open on that session, re-read after a tool that
+   * can change files, and when the turn ends (a parallel tool call reports only one tool end; a
+   * background subagent writes after the tool end that started it). Closed: nothing.
    */
   _onEditHistoryTranscriptEvent(data) {
     if (!data || data.sessionId !== this.activeSessionId || !this._isEditHistoryPanelOpen()) return;
@@ -195,6 +196,15 @@ Object.assign(CodemanApp.prototype, {
       this._editHistoryDebounce = null;
       if (this._isEditHistoryPanelOpen()) this.refreshEditHistory();
     }, EDIT_HISTORY_SSE_DEBOUNCE_MS);
+  },
+
+  /**
+   * Called by _onSessionIdle() (`session:idle`, { id }): the end of a turn. Claude's interactive
+   * transcript has no `result` line, so the transcript watcher's `transcript:complete` never fires
+   * for these sessions.
+   */
+  onEditHistorySessionIdle(sessionId) {
+    this._onEditHistoryTranscriptEvent({ sessionId });
   },
 
   /** Called by selectSession(): the open panel follows the active session. */

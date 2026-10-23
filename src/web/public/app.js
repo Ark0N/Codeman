@@ -287,8 +287,8 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.ATTACHMENT_DETECTED, '_onAttachmentDetected'],
 
   // Edit history (edit-history-ui.js): an open panel follows its session's tool ends
+  // (and its turn ends, from _onSessionIdle: one handler per event in this map)
   [SSE_EVENTS.TRANSCRIPT_TOOL_END, '_onEditHistoryTranscriptEvent'],
-  [SSE_EVENTS.TRANSCRIPT_COMPLETE, '_onEditHistoryTranscriptEvent'],
 
   // Tunnel
   [SSE_EVENTS.TUNNEL_STARTED, '_onTunnelStarted'],
@@ -3518,6 +3518,8 @@ class CodemanApp {
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) this._updateLocalEchoState();
     }
+    // An open Edit history panel re-reads at the end of its session's turn (edit-history-ui.js).
+    this.onEditHistorySessionIdle?.(data.id);
     // Start stuck detection timer (only if no respawn running). Not at the end of Codeman's
     // own keep-alive turn (`keepAlive`): the session has been waiting since the last real
     // turn, whose timer is still running or has already fired.
