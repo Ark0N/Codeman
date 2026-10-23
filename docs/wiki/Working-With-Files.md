@@ -275,6 +275,9 @@ Click it for a draggable window listing the active session's edits, newest first
   to open it in the preview.
 - **Load older** reads further back in the conversation, in the main agent's transcript and the
   subagents' alike (up to three transcripts per click; with more, they take turns).
+- After `/clear` or a resume, the edits of the earlier conversation stay listed, and the window
+  first catches up on the ones it had not read yet. **Load older** then goes back within the new
+  conversation.
 
 It works for local Claude sessions only. Remote (SSH), Docker and other CLIs' sessions say so instead.
 

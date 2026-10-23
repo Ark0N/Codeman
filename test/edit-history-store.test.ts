@@ -16,6 +16,8 @@ import {
   MAX_FILE_BYTES,
   MAX_STORE_BYTES,
   parseAgentMeta,
+  READ_BUDGET_BYTES,
+  TMP_TAG,
 } from '../src/edit-history-store.js';
 import { MAX_HUNK_BYTES } from '../src/edit-history-parse.js';
 
@@ -77,12 +79,24 @@ function bashResult(id: string, sec: number): string {
 
 const jsonl = (lines: string[]) => Buffer.from(lines.map((l) => l + '\n').join(''));
 
-/** Read like the sync will: ask the store for a range, slice it out of `file`, apply. */
-function syncForward(store: EditHistoryStore, file: Buffer, budget?: number, source = MAIN_SOURCE, tid = 'conv-1') {
-  const range = store.nextRange(source, file.length, tid, budget);
-  if (!range) return null;
-  const chunk = file.subarray(range.offset, range.offset + range.len);
-  return store.apply({ transcriptId: tid, source, startOffset: range.offset, chunk, size: file.length });
+/**
+ * Read like the reader (edit-history-local-source.ts): on from the cursor of the current
+ * conversation (clamped to the size), else the file's last `budget` bytes; then apply.
+ * Null when nothing is new.
+ */
+function syncForward(
+  store: EditHistoryStore,
+  file: Buffer,
+  budget = READ_BUDGET_BYTES,
+  source = MAIN_SOURCE,
+  tid = 'conv-1'
+) {
+  const cursor = tid === store.getTranscriptId() ? store.getCursor(source) : undefined;
+  const offset = cursor ? Math.min(cursor.offset, file.length) : Math.max(0, file.length - budget);
+  const len = Math.min(budget, file.length - offset);
+  if (cursor && offset === cursor.offset && len === 0) return null;
+  const chunk = file.subarray(offset, offset + len);
+  return store.apply({ transcriptId: tid, source, startOffset: offset, chunk, size: file.length });
 }
 
 function syncOlder(store: EditHistoryStore, file: Buffer, budget?: number, source = MAIN_SOURCE, tid = 'conv-1') {
@@ -192,10 +206,13 @@ describe('EditHistoryStore: forward reads', () => {
     expect(store.get('e2')?.path).toBe(path);
   });
 
-  it('restarts a file that shrank (replaced) from its end', () => {
+  it('restarts a file that shrank (replaced) from its end, with the next read', () => {
     const store = new EditHistoryStore('s1', { dir });
     syncForward(store, jsonl([editLine('e1', 1), editLine('e2', 2)]));
     const replaced = jsonl([editLine('n1', 3)]);
+    // The reader clamps the cursor to the size: an empty chunk at the end, and the cursor goes.
+    expect(syncForward(store, replaced)?.added).toBe(0);
+    expect(store.getCursor(MAIN_SOURCE)).toBeUndefined();
     expect(syncForward(store, replaced)?.added).toBe(1);
     expect(store.getCursor(MAIN_SOURCE)?.offset).toBe(replaced.length);
   });
@@ -214,7 +231,6 @@ describe('EditHistoryStore: conversations and sources', () => {
     const store = new EditHistoryStore('s1', { dir });
     syncForward(store, jsonl([editLine('e1', 1)]));
     const second = jsonl([editLine('f1', 5)]);
-    expect(store.nextRange(MAIN_SOURCE, second.length, 'conv-2')).toEqual({ offset: 0, len: second.length });
     syncForward(store, second, undefined, MAIN_SOURCE, 'conv-2');
     expect(store.getTranscriptId()).toBe('conv-2');
     expect(ids(store)).toEqual(['f1', 'e1']);
@@ -590,14 +606,50 @@ describe('EditHistoryStore: persistence', () => {
       'live.json',
       'gone.json',
       `gone.json.${process.pid + 1}.tmp`,
+      // An earlier run that had this process's pid (a container's pid 1): stale as well.
       `live.json.${process.pid}.tmp`,
+      `live.json.${process.pid}-0a1b2c3d.tmp`,
+      `live.json.${TMP_TAG}.tmp`,
       'notes.txt',
     ]) {
       writeFileSync(join(dir, name), '{}');
     }
     expect(await EditHistoryStore.sweep((id) => id === 'live', { dir })).toBe(1);
-    expect(readdirSync(dir).sort()).toEqual([`live.json.${process.pid}.tmp`, 'live.json', 'notes.txt'].sort());
+    expect(readdirSync(dir).sort()).toEqual([`live.json.${TMP_TAG}.tmp`, 'live.json', 'notes.txt'].sort());
     expect(await EditHistoryStore.sweep(() => false, { dir: join(dir, 'missing') })).toBe(0);
+  });
+
+  it('takes only a plain transcript id from the file (the sync builds a path from it)', async () => {
+    const cursors = { main: { offset: 10, floor: 0 } };
+    for (const transcriptId of ['../../etc/passwd', 'a/b', '', 7]) {
+      writeFileSync(join(dir, 's1.json'), JSON.stringify({ version: 1, transcriptId, cursors, entries: [] }));
+      const store = await EditHistoryStore.load('s1', { dir });
+      expect(store.getTranscriptId()).toBeNull();
+      expect(store.knownSources()).toEqual([]); // offsets into no known conversation
+    }
+    writeFileSync(join(dir, 's1.json'), JSON.stringify({ version: 1, transcriptId: 'conv-1.a_b', cursors }));
+    const store = await EditHistoryStore.load('s1', { dir });
+    expect(store.getTranscriptId()).toBe('conv-1.a_b');
+    expect(store.knownSources()).toEqual(['main']);
+  });
+
+  it('settle() writes pending changes and nothing for a store without any', async () => {
+    const store = new EditHistoryStore('s1', { dir, debounceMs: 60_000 });
+    syncForward(store, jsonl([editLine('e1', 1)]));
+    await store.settle();
+    expect((await EditHistoryStore.load('s1', { dir })).get('e1')).toBeDefined();
+    const loaded = await EditHistoryStore.load('s1', { dir });
+    rmSync(join(dir, 's1.json'));
+    await loaded.settle();
+    await new EditHistoryStore('empty', { dir }).settle();
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('delete() removes a stored history without parsing it', async () => {
+    writeFileSync(join(dir, 's1.json'), 'not json');
+    await EditHistoryStore.delete('s1', { dir });
+    await EditHistoryStore.delete('missing', { dir });
+    expect(readdirSync(dir)).toEqual([]);
   });
 
   it('ignores a file of an unknown version', async () => {

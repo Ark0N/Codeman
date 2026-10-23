@@ -34,6 +34,8 @@ export const MAX_PENDING_BASH = 200;
  * this bounds it; an image path past this point of a command is still found in the output.
  */
 export const MAX_PENDING_COMMAND_CHARS = 8192;
+/** Longest id, cwd or agent id of an unanswered Bash call; a call with a longer one is not kept. */
+export const MAX_PENDING_FIELD_CHARS = 4096;
 
 export type EditKind = 'code' | 'image';
 /** `edit` = a result with a path and a patch from a tool other than Edit/Write. */
@@ -291,6 +293,7 @@ export function parseClaudeEditLines(text: string, pending: readonly PendingBash
         if (typeof block.id !== 'string' || !isRecord(block.input)) continue;
         const command = block.input.command;
         if (typeof command !== 'string') continue;
+        if ([block.id, cwd, agentId ?? ''].some((f) => f.length > MAX_PENDING_FIELD_CHARS)) continue;
         const entry: PendingBash = { id: block.id, ts, command: command.slice(0, MAX_PENDING_COMMAND_CHARS), cwd };
         if (agentId) entry.agentId = agentId;
         open.delete(block.id);

@@ -3,7 +3,7 @@
  * "reads only on request" wiring. Reader and probe are fakes; the store is real (temp dir).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EditHistoryStore } from '../src/edit-history-store.js';
@@ -16,6 +16,7 @@ import type {
 import {
   confirmImages,
   EditHistorySync,
+  MAX_LOADED_STORES,
   MAX_OLDER_SOURCES,
   NO_TRANSCRIPT,
   REMOVED,
@@ -126,6 +127,8 @@ function setup(over: Partial<EditHistorySyncDeps> = {}) {
   const host = new FakeHost();
   const probes = new Map<string, PathProbe>();
   const lookups: string[] = [];
+  /** Session ids in the order their stores were loaded. */
+  const loads: string[] = [];
   const deps: EditHistorySyncDeps = {
     transcriptPath: async (session) => {
       lookups.push(session.id);
@@ -134,16 +137,18 @@ function setup(over: Partial<EditHistorySyncDeps> = {}) {
     readSources: (path, req, budget, opts) => host.read(path, req, budget, opts),
     probe: async (paths) => paths.map((p) => probes.get(p) ?? null),
     loadStore: (id) => EditHistoryStore.load(id, { dir, debounceMs: 0 }),
+    deleteStore: (id) => EditHistoryStore.delete(id, { dir }),
     sweepStores: async () => 0,
     ...over,
   };
   const load = deps.loadStore;
   deps.loadStore = async (id) => {
+    loads.push(id);
     const store = await load(id);
     opened.push(store);
     return store;
   };
-  return { host, probes, lookups, deps, sync: new EditHistorySync(deps) };
+  return { host, probes, lookups, loads, deps, sync: new EditHistorySync(deps) };
 }
 
 const local: EditHistorySession = { id: 's1', mode: 'claude', remote: undefined, claudeSessionId: 'conv1' };
@@ -317,28 +322,107 @@ describe('EditHistorySync', () => {
     expect(() => readFileSync(join(dir, 's1.json'))).toThrow();
   });
 
-  it('a deleted session stays deleted: neither a run in flight nor a later request writes it again', async () => {
+  it('neither a run in flight nor a request during the removal writes the deleted history again', async () => {
     const { host, sync } = setup();
     host.append('main', editLine('t1', T0, '/w/a.ts'));
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const reading = new Promise<void>((r) => (entered = r));
     const orig = host.read;
     host.read = async (...a) => {
+      entered();
       await gate;
       return orig(...a);
     };
     const runs = [sync.sync(local), sync.sync(local)]; // one running, one queued
+    await reading;
     const removing = sync.remove('s1');
+    // The removal waits for the read under way; a request meanwhile reads nothing.
+    expect(await sync.sync(local)).toEqual({ state: 'unavailable', reason: REMOVED });
     release();
     await Promise.all([...runs, removing]);
     await new Promise((r) => setTimeout(r, 20)); // past the store's debounce
     expect(readdirSync(dir)).toEqual([]);
-    const reads = host.calls.length;
-    expect(await sync.sync(local)).toEqual({ state: 'unavailable', reason: REMOVED });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(host.calls).toHaveLength(reads);
+    expect(host.calls).toHaveLength(1); // the read under way; the queued run never read
+  });
+
+  it('the same conversation under an unnormalized path reads on from its cursors, nothing else', async () => {
+    const path = '/p/./conv1.jsonl';
+    const { host, sync } = setup({ transcriptPath: async () => path });
+    host.append('main', editLine('t1', T0, '/w/a.ts'));
+    await sync.sync(local);
+    host.append('main', editLine('t2', T0 + 1, '/w/a.ts'));
+    await sync.sync(local);
+    expect(host.paths).toEqual([path, path]);
+    expect(host.calls[1]).toEqual([
+      { relPath: 'main', offset: host.files.get('main')!.length - editLine('t2', T0 + 1, '/w/a.ts').length },
+    ]);
+  });
+
+  it('a session that comes back with the same id (reboot restore) reads its history afresh', async () => {
+    const { host, sync } = setup();
+    host.append('main', editLine('t1', T0, '/w/a.ts'));
+    await sync.sync(local);
+    // Boot: the unpinned record is pruned as stale; then "restore" brings the session back.
+    await sync.remove('s1');
+    expect(await sync.sync(local)).toEqual({ state: 'ok' });
+    expect((await sync.getStore('s1')).list().map((e) => e.id)).toEqual(['t1']);
+  });
+
+  it('remove deletes a history it has not loaded without loading it', async () => {
+    const { sync, loads } = setup();
+    const other = new EditHistoryStore('s1', { dir });
+    other.addImageEntries([{ toolUseId: 'b1', path: '/w/a.png', ts: T0 }]);
+    await other.flush();
+    await sync.remove('s1');
+    expect(loads).toEqual([]);
+    expect(existsSync(join(dir, 's1.json'))).toBe(false);
+  });
+
+  it(`keeps at most ${MAX_LOADED_STORES} stores loaded: a dropped one is written and loads again whole`, async () => {
+    const { host, sync, loads } = setup({ loadStore: (id) => EditHistoryStore.load(id, { dir, debounceMs: 60_000 }) });
+    host.append('main', editLine('t1', T0, '/w/a.ts'));
+    const ids = Array.from({ length: MAX_LOADED_STORES + 2 }, (_, i) => `s${i}`);
+    for (const id of ids) await sync.sync({ ...local, id });
+    expect(loads).toEqual(ids);
+    // The two least recently used went: written (no debounced save ran), not kept in memory.
+    await sync.flushAll();
+    expect(existsSync(join(dir, 's0.json'))).toBe(true);
+    expect((await sync.getStore('s0')).list().map((e) => e.id)).toEqual(['t1']);
+    expect(loads.slice(ids.length)).toEqual(['s0']);
+    // The most recently used ones stay loaded.
+    await sync.getStore(ids[ids.length - 1]);
+    expect(loads.slice(ids.length)).toEqual(['s0']);
+  });
+
+  it('a dropped store that never changed writes nothing (no file for a session without edits)', async () => {
+    const { sync } = setup(); // no transcript: nothing to read
+    for (let i = 0; i <= MAX_LOADED_STORES; i++) await sync.sync({ ...local, id: `s${i}` });
+    await sync.flushAll();
     expect(readdirSync(dir)).toEqual([]);
-    expect((await sync.getStore('s1')).list()).toEqual([]);
+  });
+
+  it('a store whose run is in flight is not dropped, and loads once', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { host, sync, loads } = setup();
+    host.append('main', editLine('t1', T0, '/w/a.ts'));
+    const orig = host.read;
+    let first = true;
+    host.read = async (...a) => {
+      if (first) {
+        first = false;
+        await gate;
+      }
+      return orig(...a);
+    };
+    const slow = sync.sync(local);
+    for (let i = 1; i <= MAX_LOADED_STORES + 1; i++) await sync.sync({ ...local, id: `s1-${i}` });
+    release();
+    expect(await slow).toEqual({ state: 'ok' });
+    expect((await sync.getStore('s1')).list().map((e) => e.id)).toEqual(['t1']);
+    expect(loads.filter((id) => id === 's1')).toEqual(['s1']);
   });
 
   it('concurrent first callers share one store', async () => {
@@ -563,9 +647,16 @@ describe('reads only on request (wiring guard)', () => {
   });
 
   it('no other module holds the reader, and the edit history modules run no timer or watcher', () => {
-    for (const file of ['src/web/session-listener-wiring.ts', 'src/web/routes/hook-event-routes.ts']) {
-      expect(read(file)).not.toMatch(/editHistory/i);
-    }
+    const root = join(__dirname, '..');
+    const holders = readdirSync(join(root, 'src'), { recursive: true, encoding: 'utf-8' })
+      .filter((f) => /\.(ts|js)$/.test(f))
+      .map((f) => join('src', f).split('\\').join('/'))
+      .filter((f) => /EditHistorySync|editHistorySync/.test(read(f)));
+    expect(holders.sort()).toEqual([
+      'src/web/edit-history-sync.ts',
+      'src/web/routes/edit-history-routes.ts',
+      'src/web/server.ts',
+    ]);
     for (const file of [
       'src/web/edit-history-sync.ts',
       'src/edit-history-store.ts',

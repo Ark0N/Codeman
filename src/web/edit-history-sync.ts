@@ -13,9 +13,18 @@
  * for a line longer than the budget) but read in the next pass; up to
  * {@link MAX_FORWARD_PASSES} passes per sync, the rest with the next one.
  *
- * GONE. `remove()` (the session's record is deleted) marks the session gone before it deletes
- * the file: a run in flight stops after its current read, its store no longer writes, and a
- * later request reads nothing (`unavailable`, reason `removed`) instead of loading a new store.
+ * NEW CONVERSATION. When the transcript path names another conversation (`/clear`, resume),
+ * the previous transcript (same directory) is first read to its end, so edits it got after
+ * the last read are not lost with its cursors; then the new one is read from its end.
+ * "Load older" reaches back within the current conversation only.
+ *
+ * MEMORY. At most {@link MAX_LOADED_STORES} stores stay loaded; past that the least recently
+ * used one without a run is written (if it changed) and dropped, and loaded again on demand.
+ *
+ * GONE. `remove()` (the session's record is deleted) marks the session gone, deletes the file
+ * and then drops the session's slot: a run in flight stops after its current read and its
+ * store no longer writes; a request during the removal reads nothing (`unavailable`, reason
+ * `removed`). A session that comes back with the same id (reboot restore) starts afresh.
  * `sweep()` deletes, at startup, the stored history of sessions that no longer exist. A
  * subagent transcript that vanished loses its cursor (`dropSource`), not its entries.
  *
@@ -33,6 +42,7 @@
  * @module web/edit-history-sync
  */
 
+import { basename, dirname, join } from 'node:path';
 import type { SessionRemote } from '../types/session.js';
 import type { EditSourceReadOptions, EditSourceRequest, EditSources, PathProbe } from '../edit-history-local-source.js';
 import type { ImageCandidate } from '../edit-history-parse.js';
@@ -45,6 +55,8 @@ export const IMAGE_MTIME_SLACK_MS = 2000;
 export const MAX_FORWARD_PASSES = 3;
 /** Sources read back per "Load older" click, a full budget each. */
 export const MAX_OLDER_SOURCES = 3;
+/** Stores kept in memory; the least recently used one past this is dropped. */
+export const MAX_LOADED_STORES = 3;
 /** `reason` when the session has no transcript yet (no prompt yet, or not found). */
 export const NO_TRANSCRIPT = 'no-transcript';
 /** `reason` once the session's history was deleted. */
@@ -79,6 +91,8 @@ export interface EditHistorySyncDeps {
   ): Promise<EditSources | null>;
   probe(paths: readonly string[]): Promise<Array<PathProbe | null>>;
   loadStore(sessionId: string): Promise<EditHistoryStore>;
+  /** Delete a session's stored history without loading it. */
+  deleteStore(sessionId: string): Promise<void>;
   /** Delete the stored history of every session `keep` rejects; returns how many. */
   sweepStores(keep: (sessionId: string) => boolean): Promise<number>;
   budget?: number;
@@ -151,7 +165,10 @@ interface SessionSlot {
 }
 
 export class EditHistorySync {
+  /** By session, least recently used first. */
   private readonly slots = new Map<string, SessionSlot>();
+  /** Writes of dropped stores; loading that session again waits for its write. */
+  private readonly unloading = new Map<string, Promise<void>>();
   private readonly budget: number;
 
   constructor(private readonly deps: EditHistorySyncDeps) {
@@ -160,15 +177,7 @@ export class EditHistorySync {
 
   /** The session's store, loaded from disk on first use (one load for concurrent callers). */
   getStore(sessionId: string): Promise<EditHistoryStore> {
-    const slot = this.slot(sessionId);
-    if (!slot.store) {
-      const loading = this.deps.loadStore(sessionId);
-      slot.store = loading;
-      loading.catch(() => {
-        if (slot.store === loading) slot.store = undefined;
-      });
-    }
-    return slot.store;
+    return this.storeOf(sessionId, this.slot(sessionId));
   }
 
   getStatus(sessionId: string): EditHistoryStatus {
@@ -182,10 +191,10 @@ export class EditHistorySync {
   async sync(session: EditHistorySession, opts: SyncOptions = {}): Promise<EditHistoryStatus> {
     const why = unsupportedReason(session);
     const slot = this.slot(session.id);
-    if (slot.gone) return this.getStatus(session.id);
+    if (slot.gone) return { ...slot.status };
     if (why) {
       slot.status = { state: 'unsupported', reason: why };
-      return this.getStatus(session.id);
+      return { ...slot.status };
     }
     const want: SyncWant = { forward: !opts.older, older: !!opts.older };
     if (slot.running) {
@@ -196,33 +205,48 @@ export class EditHistorySync {
       await slot.running;
       // The queued run starts when the current one ends; wait for it too.
       if (slot.running) await slot.running;
-      return this.getStatus(session.id);
+      return { ...slot.status };
     }
     slot.running = this.runLoop(session, slot, want);
     try {
       await slot.running;
     } finally {
       slot.running = undefined;
+      this.unloadIdle(slot);
     }
-    return this.getStatus(session.id);
+    return { ...slot.status };
   }
 
   /** Write every loaded store's pending changes (server shutdown). */
   async flushAll(): Promise<void> {
-    await Promise.all([...this.slots.values()].map(async (slot) => (await slot.store)?.flush()));
+    await Promise.all([
+      ...[...this.slots.values()].map(async (slot) => (await slot.store?.catch(() => undefined))?.settle()),
+      ...this.unloading.values(),
+    ]);
   }
 
   /**
-   * Delete a session's stored history (its record is gone). The session stays marked, so a
-   * run in flight or a late request cannot load and write a new store for it.
+   * Delete a session's stored history (its record is gone). While it runs the session is
+   * marked, so a run in flight or a request meanwhile cannot load and write a new store for
+   * it; then its slot goes, and a session that comes back with this id starts afresh.
    */
   async remove(sessionId: string): Promise<void> {
     const slot = this.slot(sessionId);
     slot.gone = true;
     slot.again = undefined;
     slot.status = { state: 'unavailable', reason: REMOVED };
-    const store = await this.getStore(sessionId);
-    await store.remove();
+    try {
+      const store = await slot.store?.catch(() => undefined);
+      if (store) {
+        await store.remove();
+      } else {
+        await this.unloading.get(sessionId);
+        await this.deps.deleteStore(sessionId);
+      }
+      await slot.running;
+    } finally {
+      if (this.slots.get(sessionId) === slot) this.slots.delete(sessionId);
+    }
   }
 
   /**
@@ -233,13 +257,51 @@ export class EditHistorySync {
     return this.deps.sweepStores((id) => this.slots.has(id) || exists(id));
   }
 
+  /** The session's slot, now the most recently used. */
   private slot(sessionId: string): SessionSlot {
-    let slot = this.slots.get(sessionId);
-    if (!slot) {
-      slot = { status: { state: 'ok' } };
-      this.slots.set(sessionId, slot);
-    }
+    const slot = this.slots.get(sessionId) ?? { status: { state: 'ok' } };
+    this.slots.delete(sessionId);
+    this.slots.set(sessionId, slot);
     return slot;
+  }
+
+  private storeOf(sessionId: string, slot: SessionSlot): Promise<EditHistoryStore> {
+    if (!slot.store) {
+      const loading = (async () => {
+        await this.unloading.get(sessionId);
+        return this.deps.loadStore(sessionId);
+      })();
+      slot.store = loading;
+      loading.catch(() => {
+        if (slot.store === loading) slot.store = undefined;
+      });
+      this.unloadIdle(slot);
+    }
+    return slot.store;
+  }
+
+  /**
+   * Past {@link MAX_LOADED_STORES}, drop the least recently used stores no run uses: each is
+   * written if it changed, and a later request loads it again (after that write).
+   */
+  private unloadIdle(keep?: SessionSlot): void {
+    let loaded = 0;
+    for (const slot of this.slots.values()) if (slot.store) loaded++;
+    for (const [sessionId, slot] of this.slots) {
+      if (loaded <= MAX_LOADED_STORES) break;
+      if (!slot.store || slot.running || slot.gone || slot === keep) continue;
+      this.slots.delete(sessionId);
+      loaded--;
+      const writing: Promise<void> = slot.store
+        .then((store) => store.settle())
+        .catch((err) => {
+          console.warn(`[EditHistory] Saving the history of ${sessionId} failed:`, err);
+        })
+        .finally(() => {
+          if (this.unloading.get(sessionId) === writing) this.unloading.delete(sessionId);
+        });
+      this.unloading.set(sessionId, writing);
+    }
   }
 
   private async runLoop(session: EditHistorySession, slot: SessionSlot, want: SyncWant): Promise<void> {
@@ -253,9 +315,10 @@ export class EditHistorySync {
   }
 
   private async runOnce(session: EditHistorySession, slot: SessionSlot, older: boolean): Promise<void> {
-    const store = await this.getStore(session.id);
     let status: EditHistoryStatus;
     try {
+      // This slot's store: a run still in flight after `remove()` cannot reach a later one.
+      const store = await this.storeOf(session.id, slot);
       const path = slot.gone ? null : await this.deps.transcriptPath(session);
       let found: boolean;
       if (!path) {
@@ -289,11 +352,31 @@ export class EditHistorySync {
   /**
    * One forward read of all sources. `more` = some file has unread bytes after it, or was cut
    * short by the shared budget and left for the next pass. A transcript other than the stored
-   * one (`/clear`, resume) is read like a first read.
+   * one (`/clear`, resume) is read like a first read, once the stored one is read to its end.
    */
   private async readForward(path: string, store: EditHistoryStore): Promise<{ found: boolean; more: boolean }> {
+    const own = this.storedTranscript(path, store);
+    if (own !== path && store.knownSources().length > 0) {
+      const previous = await this.readFrom(own, store, this.forwardRequests(store));
+      if (previous.more) return { found: true, more: true };
+    }
+    return this.readFrom(path, store, own === path ? this.forwardRequests(store) : []);
+  }
+
+  /**
+   * The path of the conversation the store holds cursors for: `path` itself, or the previous
+   * conversation's transcript next to it (`/clear` and resume keep the project directory).
+   */
+  private storedTranscript(path: string, store: EditHistoryStore): string {
     const known = store.getTranscriptId();
-    const requests = known !== null && path.endsWith(`/${known}.jsonl`) ? this.forwardRequests(store) : [];
+    return known === null || basename(path) === `${known}.jsonl` ? path : join(dirname(path), `${known}.jsonl`);
+  }
+
+  private async readFrom(
+    path: string,
+    store: EditHistoryStore,
+    requests: EditSourceRequest[]
+  ): Promise<{ found: boolean; more: boolean }> {
     const res = await this.deps.readSources(path, requests, this.budget);
     if (!res) return { found: false, more: false };
     this.dropMissing(store, requests, res);
@@ -326,6 +409,8 @@ export class EditHistorySync {
 
   private async readOlder(path: string, store: EditHistoryStore, slot: SessionSlot): Promise<boolean> {
     if (!store.backfillTruncated) return true;
+    // Older lines belong to the stored conversation, even before a forward read moved on.
+    path = this.storedTranscript(path, store);
     const sources = store.sourcesWithOlder().sort();
     if (sources.length === 0) return true;
     // Take turns: start after the last source the previous click read.

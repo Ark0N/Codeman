@@ -6,11 +6,11 @@
  * (`subagents/agent-<id>.jsonl`). Each has a cursor:
  *   - `offset` — the next byte to read forward; always a line boundary.
  *   - `floor`  — the lowest byte already parsed; > 0 while older lines are unread
- *                ("ältere laden" reads `[floor − budget, floor)`).
- * The store decides WHICH byte range to read (`nextRange`/`olderRange`); the caller reads
- * it — locally or over ssh — and hands the bytes to `apply`. Cuts happen only at `\n`,
- * which never occurs inside a UTF-8 sequence, so multibyte characters split by a chunk
- * boundary are never decoded half.
+ *                ("ältere laden" reads `[floor − budget, floor)`, see `olderRange`).
+ * The reader (`edit-history-local-source.ts`) reads forward from each `offset` of the
+ * current conversation, a file without one from `budget` bytes before its end, and hands the
+ * bytes to `apply`. Cuts happen only at `\n`, which never occurs inside a UTF-8 sequence, so
+ * multibyte characters split by a chunk boundary are never decoded half.
  *
  * A first read of a file starts `budget` bytes before its end (transcripts reach 100 MB+),
  * drops the cut first line and leaves `floor` there. A line longer than the budget is
@@ -23,8 +23,8 @@
  * A new conversation (`/clear`, resume) arrives as a new `transcriptId`: cursors and
  * pending Bash calls start over, entries stay. Entries are capped at {@link MAX_ENTRIES}
  * and {@link MAX_STORE_BYTES} of diff text; the oldest by time are dropped. Besides them
- * the file holds the cursors, at most {@link MAX_PENDING_BASH} unanswered Bash calls and at
- * most {@link MAX_AGENTS} subagent labels.
+ * the file holds one cursor per transcript file of the current conversation, at most
+ * {@link MAX_PENDING_BASH} unanswered Bash calls and at most {@link MAX_AGENTS} subagent labels.
  *
  * ⚠️ The file holds secrets: a diff carries whatever the agent wrote, keys and `.env`
  * contents included. So, like `intents.json`, it is written 0600 via tmp+rename, bounded,
@@ -40,6 +40,7 @@
  * @module edit-history-store
  */
 
+import { randomBytes } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dataPath } from './config/instance.js';
@@ -48,6 +49,7 @@ import {
   MAX_HUNK_BYTES,
   MAX_PENDING_BASH,
   MAX_PENDING_COMMAND_CHARS,
+  MAX_PENDING_FIELD_CHARS,
   parseClaudeEditLines,
   type EditRecord,
   type EditTool,
@@ -72,12 +74,17 @@ export const READ_BUDGET_BYTES = 8 * 1024 * 1024;
  * above stays far below it; JSON escaping at most doubles ordinary text.
  */
 export const MAX_FILE_BYTES = 32 * 1024 * 1024;
-/** Longest id, cwd or agent id of a loaded pending Bash call; a longer one is no real one. */
-const MAX_LOADED_FIELD_CHARS = 4096;
 export const MAIN_SOURCE = 'main';
 const SAVE_DEBOUNCE_MS = 1000;
 const FILE_VERSION = 1;
 const NL = 0x0a;
+/** A transcript id as the reader takes it (`<id>.jsonl`): no path separators. */
+const TRANSCRIPT_ID = /^[A-Za-z0-9._-]+$/;
+/**
+ * Names this process's tmp files (`<id>.json.<tag>.tmp`); any other tmp file is left over from
+ * an earlier run (`sweep`), even one whose pid this process has again (a container's pid 1).
+ */
+export const TMP_TAG = `${process.pid}-${randomBytes(4).toString('hex')}`;
 
 /** `bash`: an image a Bash call wrote; `sent`: an image claude delivered to the user. */
 export type EditHistoryTool = EditTool | 'bash' | 'sent';
@@ -198,7 +205,7 @@ function cursorFrom(raw: unknown): SourceCursor | null {
   return cursor;
 }
 
-const loadedField = (v: unknown): v is string => typeof v === 'string' && v.length <= MAX_LOADED_FIELD_CHARS;
+const loadedField = (v: unknown): v is string => typeof v === 'string' && v.length <= MAX_PENDING_FIELD_CHARS;
 
 function pendingBashFrom(raw: unknown): PendingBash | null {
   if (!isObj(raw)) return null;
@@ -279,8 +286,12 @@ export class EditHistoryStore {
     if (!isObj(data)) return store;
     if (data.version !== FILE_VERSION) return store;
     const f = data as unknown as StoreFile;
-    store.transcriptId = typeof f.transcriptId === 'string' ? f.transcriptId : null;
-    for (const [k, raw] of Object.entries(isObj(f.cursors) ? f.cursors : {})) {
+    // The sync builds the previous transcript's path from it (`/clear`), so only a plain id counts.
+    store.transcriptId =
+      typeof f.transcriptId === 'string' && TRANSCRIPT_ID.test(f.transcriptId) ? f.transcriptId : null;
+    // Cursors are offsets into that conversation's files; without it they mean nothing.
+    const cursors = store.transcriptId !== null && isObj(f.cursors) ? f.cursors : {};
+    for (const [k, raw] of Object.entries(cursors)) {
       const cursor = cursorFrom(raw);
       if (cursor) store.cursors.set(k, cursor);
     }
@@ -319,15 +330,20 @@ export class EditHistoryStore {
     }
     let removed = 0;
     for (const name of names) {
-      const tmp = /^(.+)\.json\.(\d+)\.tmp$/.exec(name);
+      const tmp = /\.json\.[\w-]+\.tmp$/.test(name);
       const stale = tmp
-        ? Number(tmp[2]) !== process.pid
+        ? !name.endsWith(`.json.${TMP_TAG}.tmp`)
         : name.endsWith('.json') && !keep(name.slice(0, -'.json'.length));
       if (!stale) continue;
       await unlink(join(dir, name)).catch(() => undefined);
       if (!tmp) removed++;
     }
     return removed;
+  }
+
+  /** Delete the stored history of `sessionId` without loading it. */
+  static async delete(sessionId: string, opts: Pick<EditHistoryStoreOptions, 'dir'> = {}): Promise<void> {
+    await new EditHistoryStore(sessionId, opts).remove();
   }
 
   getTranscriptId(): string | null {
@@ -375,21 +391,6 @@ export class EditHistoryStore {
     this.scheduleSave();
   }
 
-  /**
-   * The next forward range to read from `source`, or null when nothing is new.
-   * A conversation other than the stored one starts from scratch (see `apply`).
-   */
-  nextRange(source: string, size: number, transcriptId: string, budget = READ_BUDGET_BYTES): ByteRange | null {
-    const cursor = transcriptId === this.transcriptId ? this.cursors.get(source) : undefined;
-    if (cursor && size >= cursor.offset) {
-      if (size === cursor.offset) return null;
-      return { offset: cursor.offset, len: Math.min(budget, size - cursor.offset) };
-    }
-    // Unknown file, new conversation, or a file that shrank (replaced): read its end.
-    const offset = Math.max(0, size - budget);
-    return size > offset ? { offset, len: size - offset } : null;
-  }
-
   /** The next older range of `source` ("ältere laden"), or null when it is read to its start. */
   olderRange(source: string, budget = READ_BUDGET_BYTES): ByteRange | null {
     const cursor = this.cursors.get(source);
@@ -418,8 +419,10 @@ export class EditHistoryStore {
   }
 
   /**
-   * Apply a forward chunk read at `nextRange`: a full budget unless it reaches the file's end.
-   * Returns new entries and Bash image candidates.
+   * Apply a forward chunk: read from the source's cursor, or, without one, its last `budget`
+   * bytes; a full budget unless it reaches the file's end. A file that shrank below its cursor
+   * (replaced) loses the cursor and is read from its end next time. Returns new entries and
+   * Bash image candidates.
    */
   apply(input: ApplyInput): ApplyResult {
     if (this.removed) return { added: 0, candidates: [] };
@@ -546,6 +549,15 @@ export class EditHistoryStore {
     return added;
   }
 
+  /**
+   * Write pending changes, if any, and wait for a write under way (the store is dropped from
+   * memory and loaded again later). Unlike `flush()`, a store without changes writes nothing.
+   */
+  async settle(): Promise<void> {
+    if (this.saveTimer) return this.flush();
+    await this.writing;
+  }
+
   /** Write now (cancels a pending debounced write). Writes run one after another. */
   async flush(): Promise<void> {
     if (this.saveTimer) {
@@ -593,7 +605,7 @@ export class EditHistoryStore {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     // `mode` applies only to a file being created: the fresh tmp file is 0600, and the rename
     // makes it the store, so an existing store never keeps wider bits.
-    const tmp = `${this.file}.${process.pid}.tmp`;
+    const tmp = `${this.file}.${TMP_TAG}.tmp`;
     await writeFile(tmp, JSON.stringify(data), { mode: 0o600 });
     if (this.removed) {
       await unlink(tmp).catch(() => undefined);

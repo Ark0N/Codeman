@@ -68,6 +68,7 @@ async function setup(
       opened.push(store);
       return store;
     },
+    deleteStore: (id) => EditHistoryStore.delete(id, { dir }),
     sweepStores: async () => 0,
     ...deps,
   });
@@ -112,6 +113,18 @@ describe('GET /api/sessions/:id/edits', () => {
       }),
     ]);
     expect(data.entries[0]).not.toHaveProperty('hunks');
+  });
+
+  it('starts the sync before it loads the store (a deletion right after the session check stops the sync)', async () => {
+    const { app, sync } = await setup();
+    const calls: string[] = [];
+    const syncFn = sync.sync.bind(sync);
+    const getStore = sync.getStore.bind(sync);
+    vi.spyOn(sync, 'sync').mockImplementation((...a) => (calls.push('sync'), syncFn(...a)));
+    vi.spyOn(sync, 'getStore').mockImplementation((...a) => (calls.push('getStore'), getStore(...a)));
+    await app.inject({ method: 'GET', url: `${URL}?sync=1` });
+    await app.inject({ method: 'POST', url: `${URL}/older` });
+    expect(calls).toEqual(['sync', 'getStore', 'sync', 'getStore']);
   });
 
   it('without sync=1 answers from the store and does not read', async () => {

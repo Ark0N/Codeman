@@ -348,6 +348,7 @@ export class WebServer extends EventEmitter {
     readSources: readClaudeEditSources,
     probe: probeLocalPaths,
     loadStore: (sessionId) => EditHistoryStore.load(sessionId),
+    deleteStore: (sessionId) => EditHistoryStore.delete(sessionId),
     sweepStores: (keep) => EditHistoryStore.sweep(keep),
   });
   private respawnControllers: Map<string, RespawnController> = new Map();

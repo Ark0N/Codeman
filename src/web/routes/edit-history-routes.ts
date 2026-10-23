@@ -23,6 +23,7 @@ import {
   unsupportedReason,
   type EditHistorySession,
   type EditHistoryState,
+  type EditHistoryStatus,
   type EditHistorySync,
 } from '../edit-history-sync.js';
 
@@ -104,10 +105,14 @@ export function registerEditHistoryRoutes(app: FastifyInstance, ctx: SessionPort
     const { sync: doSync } = req.query as { sync?: string };
     const { session, view } = sessionOf(id, req);
     const why = unsupportedReason(view);
-    const store = await sync.getStore(session.id);
-    if (why) return { success: true, data: listOf(store, session.workingDir, { state: 'unsupported', reason: why }) };
-    const status = doSync === '1' ? await sync.sync(view) : sync.getStatus(session.id);
-    return { success: true, data: listOf(store, session.workingDir, status) };
+    // The sync starts in the same tick as the session check: a deletion right after it marks
+    // the running sync gone (EditHistorySync.remove), so nothing writes a deleted session.
+    const status: EditHistoryStatus = why
+      ? { state: 'unsupported', reason: why }
+      : doSync === '1'
+        ? await sync.sync(view)
+        : sync.getStatus(session.id);
+    return { success: true, data: listOf(await sync.getStore(session.id), session.workingDir, status) };
   });
 
   app.post('/api/sessions/:id/edits/older', async (req): Promise<ApiResponse<EditHistoryList>> => {
