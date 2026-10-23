@@ -306,20 +306,26 @@ Click it for a draggable window listing the active session's edits, newest first
   first catches up on the ones it had not read yet. **Load older** then goes back within the new
   conversation.
 
-It works for local Claude sessions only. Remote (SSH), Docker and other CLIs' sessions say so instead.
+It works for Claude sessions, local and remote (SSH). Docker and other CLIs' sessions say so instead.
+A remote session's images show no thumbnail (each would be one more SSH read); click one to
+preview it. A remote host that is asleep is never woken for the history: the window shows the
+stored edits with the SSH error on top.
 
 How it reads:
 
 - **Only while you look.** The history is read from the session's Claude transcript when you open
   the window, and again after each tool call that can change files and at the end of each turn,
-  while it stays open on that session. A closed window reads nothing, and Codeman does no work in
-  the background for sessions nobody looks at.
+  while it stays open on that session (a remote session at the end of each turn only: its host
+  sends no tool events). A closed window reads nothing, and Codeman does no work in the
+  background for sessions nobody looks at.
 - **The transcript is found through the session's hooks.** Each prompt tells Codeman where the
   session's transcript is. Right after a server restart, before the next prompt, Codeman looks in
   the session's `CLAUDE_CONFIG_DIR` if you set one for it in Codeman, else in the default config
   directory. A `CLAUDE_CONFIG_DIR` set outside Codeman (in a shell profile or a wrapper script)
   is only known after the next prompt; until then the window says "No transcript found for this
-  session yet".
+  session yet". A remote session's transcript is looked up on its host over SSH: the
+  conversation its Claude writes now, else the session's own, under the remote user's
+  `~/.claude` (a `CLAUDE_CONFIG_DIR` on the remote host is not followed).
 - **The history is stored, and it holds secrets.** Every diff an agent wrote is copied to
   `~/.codeman/edit-history/<session-id>.json`, including API keys or `.env` contents it edited. The file is
   readable by your user only, capped at 500 edits and 4 MiB of diff text per session (the oldest

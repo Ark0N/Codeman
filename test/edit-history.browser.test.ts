@@ -379,6 +379,30 @@ describe('Edit history panel in a real browser', () => {
     state.set(sessionA, s);
   });
 
+  it('a remote session lists its images without a thumbnail (no ssh read per row); a click still previews', async () => {
+    const thumbs = () => page.locator('#editHistoryBody img.edit-history-thumb').count();
+    expect(await thumbs()).toBe(1);
+    await page.evaluate((sid) => {
+      const w = window as any;
+      w.app.sessions.get(sid).remote = { hostId: 'h', label: 'h', host: '192.0.2.1', username: 'j', remotePath: '/' };
+      w.__previewed = [];
+      w.__openFilePreview = w.app.openFilePreview;
+      w.app.openFilePreview = (p: string, s: string) => w.__previewed.push([p, s]);
+    }, sessionA);
+    await reload();
+    await page.locator('#editHistoryBody .edit-history-entry', { hasText: 'shot.png' }).waitFor();
+    expect(await thumbs()).toBe(0);
+    await page.locator('#editHistoryBody .edit-history-entry', { hasText: 'shot.png' }).click();
+    expect(await page.evaluate(() => (window as any).__previewed)).toEqual([[join(root, 'shot.png'), sessionA]]);
+    await page.evaluate((sid) => {
+      const w = window as any;
+      delete w.app.sessions.get(sid).remote;
+      w.app.openFilePreview = w.__openFilePreview;
+    }, sessionA);
+    await reload();
+    await page.locator('#editHistoryBody img.edit-history-thumb').waitFor();
+  });
+
   it('a long path outside the workspace keeps its file name readable, the folder is cut at the start', async () => {
     const s = state.get(sessionA)!;
     const long =
@@ -452,7 +476,9 @@ describe('Edit history panel in a real browser', () => {
   it('follows the active session, and says when a session is not a Claude session', async () => {
     await select(sessionB);
     await page.waitForFunction(() =>
-      /only available for local Claude sessions/.test(document.getElementById('editHistoryBody')!.textContent ?? '')
+      /only available for Claude sessions outside Docker/.test(
+        document.getElementById('editHistoryBody')!.textContent ?? ''
+      )
     );
     expect(calls).toContain(`GET /api/sessions/${sessionB}/edits?sync=1`);
     expect(await rows().count()).toBe(0);

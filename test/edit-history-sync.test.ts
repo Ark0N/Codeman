@@ -129,13 +129,21 @@ function setup(over: Partial<EditHistorySyncDeps> = {}) {
   const lookups: string[] = [];
   /** Session ids in the order their stores were loaded. */
   const loads: string[] = [];
+  /** The session each read (and, as `probe:<id>`, each probe) was made for. */
+  const readers: string[] = [];
   const deps: EditHistorySyncDeps = {
     transcriptPath: async (session) => {
       lookups.push(session.id);
       return host.path;
     },
-    readSources: (path, req, budget, opts) => host.read(path, req, budget, opts),
-    probe: async (paths) => paths.map((p) => probes.get(p) ?? null),
+    readSources: (session, path, req, budget, opts) => {
+      readers.push(session.id);
+      return host.read(path, req, budget, opts);
+    },
+    probe: async (session, paths) => {
+      readers.push(`probe:${session.id}`);
+      return paths.map((p) => probes.get(p) ?? null);
+    },
     loadStore: (id) => EditHistoryStore.load(id, { dir, debounceMs: 0 }),
     deleteStore: (id) => EditHistoryStore.delete(id, { dir }),
     sweepStores: async () => 0,
@@ -148,7 +156,7 @@ function setup(over: Partial<EditHistorySyncDeps> = {}) {
     opened.push(store);
     return store;
   };
-  return { host, probes, lookups, loads, deps, sync: new EditHistorySync(deps) };
+  return { host, probes, lookups, loads, readers, deps, sync: new EditHistorySync(deps) };
 }
 
 const local: EditHistorySession = { id: 's1', mode: 'claude', remote: undefined, claudeSessionId: 'conv1' };
@@ -160,9 +168,10 @@ const remote: EditHistorySession = {
 };
 
 describe('unsupportedReason', () => {
-  it('accepts a local claude session, rejects remote, docker and non-claude CLIs', () => {
+  it('accepts a local or remote claude session, rejects docker and non-claude CLIs', () => {
     expect(unsupportedReason(local)).toBeUndefined();
-    expect(unsupportedReason(remote)).toBe('remote');
+    expect(unsupportedReason(remote)).toBeUndefined();
+    expect(unsupportedReason({ ...remote, docker: { image: 'x' } })).toBe('docker');
     expect(unsupportedReason({ ...local, docker: { image: 'x' } })).toBe('docker');
     expect(unsupportedReason({ ...local, mode: 'shell' })).toBe('mode');
   });
@@ -285,14 +294,42 @@ describe('EditHistorySync', () => {
     expect((await sync.getStore('s1')).list()).toHaveLength(1);
   });
 
-  it('marks remote, docker and non-claude sessions unsupported without looking for a transcript', async () => {
+  it('marks docker and non-claude sessions unsupported without looking for a transcript', async () => {
     const { host, lookups, sync } = setup();
     host.append('main', editLine('t1', T0, '/w/a.ts'));
     expect(await sync.sync({ ...local, mode: 'shell' })).toEqual({ state: 'unsupported', reason: 'mode' });
-    expect(await sync.sync(remote)).toEqual({ state: 'unsupported', reason: 'remote' });
     expect(await sync.sync({ ...local, docker: {} })).toEqual({ state: 'unsupported', reason: 'docker' });
     expect(lookups).toEqual([]);
     expect(host.calls).toEqual([]);
+  });
+
+  it('reads a remote session through the same deps, each call with that session (ssh is the server’s part)', async () => {
+    const { host, lookups, readers, probes, sync } = setup();
+    host.append('main', editLine('t1', T0, '/w/a.ts') + bashPair('b1', T0 + 1000, T0 + 3000, 'render out.png'));
+    probes.set('/w/out.png', { realPath: '/w/out.png', kind: 'file', size: 9, mtimeMs: T0 + 2000 });
+    expect(await sync.sync(remote)).toEqual({ state: 'ok' });
+    expect(lookups).toEqual(['s2']);
+    expect(readers).toEqual(['s2', 'probe:s2']);
+    expect((await sync.getStore('s2')).list().map((e) => e.path)).toEqual(['/w/out.png', '/w/a.ts']);
+  });
+
+  it('an unreachable remote host is unavailable with the stored entries kept, and the next sync reads on', async () => {
+    const { host, sync, deps } = setup();
+    host.append('main', editLine('t1', T0, '/w/a.ts'));
+    await sync.sync(remote);
+    const transcriptPath = deps.transcriptPath;
+    deps.transcriptPath = async () => {
+      throw new Error('remote host huff unreachable: ssh: connect to host huff port 22: Connection timed out');
+    };
+    host.append('main', editLine('t2', T0 + 1000, '/w/b.ts'));
+    expect(await sync.sync(remote)).toEqual({
+      state: 'unavailable',
+      reason: 'remote host huff unreachable: ssh: connect to host huff port 22: Connection timed out',
+    });
+    expect((await sync.getStore('s2')).list()).toHaveLength(1);
+    deps.transcriptPath = transcriptPath;
+    expect(await sync.sync(remote)).toEqual({ state: 'ok' });
+    expect((await sync.getStore('s2')).list()).toHaveLength(2);
   });
 
   it('runs one sync per session at a time and folds occasions into one more run', async () => {

@@ -9,12 +9,14 @@
  * `GET /api/sessions/:id/edits?sync=1` when it opens and when the active session changes, and,
  * only while it is open, re-reads (debounced) on the active session's `transcript:tool_end` for a
  * tool that can change files (the existing transcript watcher's event) and on its `session:idle`
- * (the end of a turn). No poll, and nothing at all while the panel is closed.
+ * (the end of a turn). No poll, and nothing at all while the panel is closed. A remote session has
+ * no transcript watcher (no hooks reach back from its host), so it follows turn ends only.
  *
  * - A code entry opens its diff inline (`GET /api/sessions/:id/edits/:entryId`), drawn with the Git
  *   panel's diff classes (`git-diff`, `git-diff-line--hunk|add|del`).
  * - An image entry opens the shared file preview (panels-ui.js `openFilePreview`), as does a click
- *   on any path; inside the workspace it also shows a thumbnail. Both go through the existing file
+ *   on any path; inside a local session's workspace it also shows a thumbnail (a remote one would
+ *   stream every listed image over ssh). Both go through the existing file
  *   routes only: the thumbnail is the confined `file-raw`, and the preview of a file outside the
  *   workspace registers it on click with `notify: false` (`_registerExternalPreview`, which
  *   enforces the attachment guard and its extension allowlist). A path from the transcript is
@@ -318,10 +320,12 @@ Object.assign(CodemanApp.prototype, {
    * (`POST …/attachments`, `notify: false`), and minting one per rendered row would push the
    * session's real attachments out of its capped registry. Clicking it opens the file preview,
    * which registers it like any other external file. SVGs get none either (`file-raw` serves
-   * them as a download).
+   * them as a download), nor does a remote session's image: its `file-raw` streams over ssh, and
+   * a list of generated images would open one ssh read per row; a click still previews it.
    */
   _editHistoryThumbSrc(path, sid) {
-    if (!path || /\.svg$/i.test(path) || this._isExternalPreviewPath?.(path, sid) !== false) return null;
+    if (!path || /\.svg$/i.test(path) || this.sessions?.get?.(sid)?.remote) return null;
+    if (this._isExternalPreviewPath?.(path, sid) !== false) return null;
     return this._editHistoryUrl(`/api/sessions/${encodeURIComponent(sid)}/file-raw?path=${encodeURIComponent(path)}`);
   },
 
@@ -353,7 +357,9 @@ Object.assign(CodemanApp.prototype, {
     }
     const data = h.data;
     if (data.state === 'unsupported') {
-      body.append(el('div', 'edit-history-empty', t('Edit history is only available for local Claude sessions.')));
+      body.append(
+        el('div', 'edit-history-empty', t('Edit history is only available for Claude sessions outside Docker.'))
+      );
       return;
     }
     if (data.state === 'unavailable') {

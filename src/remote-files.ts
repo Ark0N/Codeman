@@ -32,6 +32,7 @@ import { PassThrough, type Readable } from 'node:stream';
 import type { SessionRemote } from './types/session.js';
 import { buildSshConnectionArgs, remoteSshTarget, shellescape } from './remote-hosts.js';
 import { runWithRemoteSshLimit } from './remote-ssh-limiter.js';
+import type { EditSourceReadOptions, EditSourceRequest, EditSources } from './edit-history-local-source.js';
 
 const execAsync = promisify(exec);
 
@@ -411,6 +412,367 @@ export async function remoteReadFile(remote: SessionRemote, remotePath: string, 
   } catch (err) {
     throw new RemoteFileAccessError(`failed to read remote file: ${describeExecError(err)}`);
   }
+}
+
+/** Conversation ids are uuids; anything else never reaches the remote shell. */
+const CLAUDE_TRANSCRIPT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+/** Exit status the edit-history scripts use for "no such transcript on that host". */
+const TRANSCRIPT_NOT_FOUND_EXIT = 3;
+
+/** Transcript files an edit-source request may name; nothing else reaches the shell. */
+const EDIT_SOURCE_REL_PATH_PATTERN = /^(main|subagents\/agent-[A-Za-z0-9_-]+\.jsonl)$/;
+
+/** The meta record's relPath; group 1 is the agentId. */
+const EDIT_SOURCE_META_REL_PATH_PATTERN = /^subagents\/agent-([A-Za-z0-9_-]+)\.meta\.json$/;
+
+/** Cap on one subagent `.meta.json` record (outside the transcript budget), as in the local reader. */
+const EDIT_SOURCE_META_MAX_BYTES = 8192;
+
+/** Cap on all meta records of one read; a meta past it is sent with a later read. */
+const EDIT_SOURCE_META_BUDGET_BYTES = 4 * 1024 * 1024;
+
+/** Room for the record headers (one per transcript file) on top of budget and metas. */
+const EDIT_SOURCE_HEADER_SLACK_BYTES = 1024 * 1024;
+
+const TMUX_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+/** Where a remote session's agent runs: the remote tmux socket and session (`remoteTmuxLocation`). */
+export interface RemoteClaudePane {
+  socket: string;
+  sessionName: string;
+}
+
+function isByteCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** De-duplicated ids that match {@link CLAUDE_TRANSCRIPT_ID_PATTERN}, in order. */
+function safeClaudeTranscriptIds(ids: readonly string[]): string[] {
+  return [...new Set(ids)].filter((id) => CLAUDE_TRANSCRIPT_ID_PATTERN.test(id));
+}
+
+/** A main transcript path the read script takes: absolute, `<id>.jsonl`, no NUL or newline. */
+export function isRemoteClaudeTranscriptPath(path: string): boolean {
+  if (!path.startsWith('/') || !path.endsWith('.jsonl') || /[\0\n]/.test(path)) return false;
+  return CLAUDE_TRANSCRIPT_ID_PATTERN.test(path.slice(path.lastIndexOf('/') + 1, -'.jsonl'.length));
+}
+
+/**
+ * Shell lines that set `live` to the conversation the claude in `pane` is writing NOW,
+ * or leave it empty. Codeman launches a remote claude with `--session-id <id>`, but a
+ * `/clear` (or a resume picked inside claude) starts a new conversation, and with no
+ * hooks from a remote host Codeman never hears of it. claude itself keeps
+ * `~/.claude/sessions/<pid>.json` with the current `sessionId`, so: the pane's pid, its
+ * children and grandchildren (a wrapper shell may sit in between), the first of those
+ * with such a file. Only `[A-Za-z0-9._-]` survives the `sed`, the id pattern, so `$live`
+ * is safe unquoted. `ps -A -o pid= -o ppid=` is POSIX (no GNU `--ppid`).
+ */
+function liveClaudeIdLines(pane: RemoteClaudePane | undefined): string[] {
+  if (!pane || !TMUX_NAME_PATTERN.test(pane.socket) || !TMUX_NAME_PATTERN.test(pane.sessionName)) return [];
+  return [
+    'live=',
+    `pp=$(tmux -L ${shellescape(pane.socket)} list-panes -t ${shellescape(`=${pane.sessionName}`)} -F '#{pane_pid}' 2>/dev/null | head -n 1)`,
+    "case $pp in ''|*[!0-9]*) pp= ;; esac",
+    'if [ -n "$pp" ]; then',
+    '  tree=$(ps -A -o pid= -o ppid= 2>/dev/null)',
+    '  kids=$(printf \'%s\\n\' "$tree" | awk -v p="$pp" \'$2 == p { print $1 }\')',
+    '  grand=$(for k in $kids; do printf \'%s\\n\' "$tree" | awk -v p="$k" \'$2 == p { print $1 }\'; done)',
+    '  for c in $pp $kids $grand; do',
+    '    f="$HOME/.claude/sessions/$c.json"',
+    '    [ -f "$f" ] || continue',
+    '    live=$(sed -n \'s/.*"sessionId":"\\([A-Za-z0-9._-]*\\)".*/\\1/p\' "$f" | head -n 1)',
+    '    [ -n "$live" ] && break',
+    '  done',
+    'fi',
+  ];
+}
+
+/**
+ * Script that finds a remote claude session's main transcript and prints `\0<path>\0`;
+ * exit {@link TRANSCRIPT_NOT_FOUND_EXIT} when there is none. First the conversation the
+ * claude in `pane` writes now ({@link liveClaudeIdLines}), then each of `ids`; per id the
+ * newest `$HOME/.claude/projects/*\/<id>.jsonl`. `$HOME` is expanded by the REMOTE shell:
+ * the transcript lives in the remote user's home, which the server cannot know.
+ *
+ * ⚠️ Runs under an explicit `sh` with `LC_ALL=C`: sshd runs a command in the remote user's
+ * LOGIN shell, and on a zsh host `ls` can be an alias and an unmatched glob aborts the whole
+ * script ("no matches found"). So: no `ls` at all, the newest file wins via `-nt`, and an
+ * `[ -f ]` guard on every glob. `C` makes bracket ranges and glob order plain bytes.
+ */
+export function buildRemoteClaudeTranscriptLocateCommand(ids: readonly string[], pane?: RemoteClaudePane): string {
+  const safeIds = safeClaudeTranscriptIds(ids);
+  if (safeIds.length === 0) return `exit ${TRANSCRIPT_NOT_FOUND_EXIT}`;
+  const liveLines = liveClaudeIdLines(pane);
+  const script = [
+    'LC_ALL=C',
+    'export LC_ALL',
+    'best=',
+    ...liveLines,
+    `for id in ${liveLines.length ? '$live ' : ''}${safeIds.map((id) => shellescape(id)).join(' ')}; do`,
+    '  for f in "$HOME"/.claude/projects/*/"$id".jsonl; do',
+    '    [ -f "$f" ] || continue',
+    '    if [ -z "$best" ] || [ "$f" -nt "$best" ]; then best=$f; fi',
+    '  done',
+    '  [ -n "$best" ] && break',
+    'done',
+    `[ -n "$best" ] || exit ${TRANSCRIPT_NOT_FOUND_EXIT}`,
+    'printf \'\\0%s\\0\' "$best"',
+  ].join('\n');
+  return `sh -c ${shellescape(script)}`;
+}
+
+/** The path from {@link buildRemoteClaudeTranscriptLocateCommand} output; null when there is none. */
+export function parseRemoteClaudeTranscriptLocate(stdout: Buffer): string | null {
+  const start = stdout.indexOf(0);
+  const end = start === -1 ? -1 : stdout.indexOf(0, start + 1);
+  if (end === -1) return null;
+  const path = stdout.toString('utf8', start + 1, end);
+  return isRemoteClaudeTranscriptPath(path) ? path : null;
+}
+
+/**
+ * Find a remote claude session's main transcript in ONE ssh round trip (see
+ * {@link buildRemoteClaudeTranscriptLocateCommand}). `null` when it has none; an unreachable
+ * host, an ssh failure or broken output is a `RemoteFileAccessError`. Never wakes a host: a
+ * sleeping one is a connect timeout, like every other read in this module.
+ */
+export async function remoteLocateClaudeTranscript(
+  remote: SessionRemote,
+  ids: readonly string[],
+  pane?: RemoteClaudePane
+): Promise<string | null> {
+  assertNotUnderTest();
+  const command = buildRemoteFileCommand(remote, buildRemoteClaudeTranscriptLocateCommand(ids, pane));
+  let stdout: Buffer;
+  try {
+    const result = await runWithRemoteSshLimit(() =>
+      execAsync(command, { timeout: REMOTE_READ_TIMEOUT_MS, maxBuffer: READ_BUFFER_SLACK_BYTES, encoding: 'buffer' })
+    );
+    stdout = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout);
+  } catch (err) {
+    if ((err as { code?: unknown }).code === TRANSCRIPT_NOT_FOUND_EXIT) return null;
+    throw new RemoteFileAccessError(
+      `remote host ${remote.label || remote.host} unreachable: ${describeExecError(err)}`
+    );
+  }
+  const path = parseRemoteClaudeTranscriptLocate(stdout);
+  if (!path) throw new RemoteFileAccessError('unexpected output from the remote transcript lookup');
+  return path;
+}
+
+/**
+ * Script that reads a remote claude session's main transcript at `mainPath` and its subagent
+ * transcripts (`<mainPath without .jsonl>/subagents/agent-<id>.jsonl`) in ONE ssh round trip,
+ * with exactly the local reader's rules (`readClaudeEditSources`):
+ *
+ * - a request without `len` reads from `offset` (clamped to the size);
+ * - a request with `len` is a block that ends at `offset + len`: short of budget, its end;
+ * - a file without a request (one the caller has not seen) reads its last bytes, and a new
+ *   subagent's `.meta.json` (≤ {@link EDIT_SOURCE_META_MAX_BYTES}, outside the budget) comes
+ *   along as its own record; with `onlyRequested` such files are left out.
+ *
+ * `budgetBytes` is shared by all transcript files, main first, then the subagents in byte
+ * order. A file that gets none of it still produces a zero-length record, because the caller
+ * needs its size. Exit {@link TRANSCRIPT_NOT_FOUND_EXIT} when `mainPath` is not a file.
+ *
+ * Output: `\0<transcriptId>\0`, then per record `<relPath>\0<size>\0<start>\0<len>\0`
+ * followed by exactly `<len>` raw bytes. Should a file shrink between `wc -c` and the read,
+ * the slice is NUL-padded to `<len>` so the framing never shifts.
+ *
+ * Inputs never reach the script unchecked: the path via {@link isRemoteClaudeTranscriptPath}
+ * (and shellescaped), relPaths via {@link EDIT_SOURCE_REL_PATH_PATTERN}, offsets and lengths as
+ * plain digits; anything invalid is dropped. A subagent file whose name the pattern would
+ * reject is skipped on the remote side too. Same `sh` + `LC_ALL=C` rules as the lookup.
+ */
+export function buildRemoteClaudeEditSourcesCommand(
+  mainPath: string,
+  requests: readonly EditSourceRequest[],
+  budgetBytes: number,
+  opts: EditSourceReadOptions = {}
+): string {
+  if (!isRemoteClaudeTranscriptPath(mainPath)) return `exit ${TRANSCRIPT_NOT_FOUND_EXIT}`;
+  const transcriptId = mainPath.slice(mainPath.lastIndexOf('/') + 1, -'.jsonl'.length);
+
+  const byRelPath = new Map<string, { offset: number; len: number | null }>();
+  for (const request of requests) {
+    if (!request || typeof request.relPath !== 'string') continue;
+    if (!EDIT_SOURCE_REL_PATH_PATTERN.test(request.relPath)) continue;
+    if (!isByteCount(request.offset)) continue;
+    if (request.len !== undefined && !isByteCount(request.len)) continue;
+    if (byRelPath.has(request.relPath)) continue;
+    byRelPath.set(request.relPath, { offset: request.offset, len: request.len ?? null });
+  }
+  const budget = Number.isFinite(budgetBytes) ? Math.max(0, Math.floor(budgetBytes)) : 0;
+  const requestArgs = (request: { offset: number; len: number | null }): string =>
+    `r ${request.offset} ${request.len === null ? "''" : String(request.len)}`;
+
+  const main = byRelPath.get('main');
+  const mainLine = main
+    ? `emit main "$best" ${requestArgs(main)}`
+    : opts.onlyRequested
+      ? ''
+      : 'emit main "$best" t 0 \'\'';
+  const subagentCases = [...byRelPath.entries()]
+    .filter(([relPath]) => relPath !== 'main')
+    .map(([relPath, request]) => {
+      const name = relPath.slice('subagents/'.length);
+      return `    ${shellescape(name)}) emit "subagents/$b" "$f" ${requestArgs(request)} ;;`;
+    });
+  const newSubagent = opts.onlyRequested
+    ? ['    *) ;;']
+    : [
+        '    *) emit "subagents/$b" "$f" t 0 \'\'',
+        '      m=${f%.jsonl}.meta.json',
+        '      if [ -f "$m" ]; then',
+        '        fsize "$m"',
+        `        mn=$s; [ "$mn" -le ${EDIT_SOURCE_META_MAX_BYTES} ] || mn=${EDIT_SOURCE_META_MAX_BYTES}`,
+        '        if [ "$mn" -le "$mbudget" ]; then',
+        '          mbudget=$((mbudget - mn))',
+        '          printf \'%s\\0%s\\0%s\\0%s\\0\' "subagents/${b%.jsonl}.meta.json" "$s" 0 "$mn"',
+        '          [ "$mn" -eq 0 ] || bytes "$m" 0 "$mn"',
+        '        fi',
+        '      fi ;;',
+      ];
+
+  const script = [
+    'LC_ALL=C',
+    'export LC_ALL',
+    `best=${shellescape(mainPath)}`,
+    `[ -f "$best" ] || exit ${TRANSCRIPT_NOT_FOUND_EXIT}`,
+    `printf '\\0%s\\0' ${shellescape(transcriptId)}`,
+    `budget=${budget}`,
+    `mbudget=${EDIT_SOURCE_META_BUDGET_BYTES}`,
+    // Size via `wc -c <` (POSIX; BSD pads it with spaces, hence the tr).
+    'fsize() {',
+    '  s=$(wc -c < "$1" 2>/dev/null | tr -d \' \\t\\n\')',
+    "  case $s in ''|*[!0-9]*) s=0 ;; esac",
+    '}',
+    // Exactly $3 bytes of $1 from offset $2, NUL-padded if the file shrank meanwhile.
+    'bytes() {',
+    '  { tail -c +$(($2 + 1)) "$1" 2>/dev/null | head -c "$3"; head -c "$3" /dev/zero; } | head -c "$3"',
+    '}',
+    // emit <relPath> <file> <r|t> <offset> <len|''>: r = a request, t = the tail of a new file.
+    'emit() {',
+    '  fsize "$2"',
+    '  if [ "$3" = r ] && [ -n "$5" ]; then',
+    '    bs=$4; [ "$bs" -le "$s" ] || bs=$s',
+    '    be=$(($4 + $5)); [ "$be" -le "$s" ] || be=$s',
+    '    n=$((be - bs)); [ "$n" -le "$budget" ] || n=$budget',
+    '    start=$((be - n))',
+    '  elif [ "$3" = r ]; then',
+    '    start=$4; [ "$start" -le "$s" ] || start=$s',
+    '    n=$((s - start)); [ "$n" -le "$budget" ] || n=$budget',
+    '  else',
+    '    n=$s; [ "$n" -le "$budget" ] || n=$budget',
+    '    start=$((s - n))',
+    '  fi',
+    '  budget=$((budget - n))',
+    '  printf \'%s\\0%s\\0%s\\0%s\\0\' "$1" "$s" "$start" "$n"',
+    '  [ "$n" -eq 0 ] || bytes "$2" "$start" "$n"',
+    '}',
+    mainLine,
+    'for f in "${best%.jsonl}"/subagents/agent-*.jsonl; do',
+    '  [ -f "$f" ] || continue',
+    '  b=${f##*/}',
+    '  case $b in agent-.jsonl|agent-*[!A-Za-z0-9_-]*.jsonl) continue ;; esac',
+    '  case $b in',
+    ...subagentCases,
+    ...newSubagent,
+    '  esac',
+    'done',
+  ].join('\n');
+  return `sh -c ${shellescape(script)}`;
+}
+
+/**
+ * Parse {@link buildRemoteClaudeEditSourcesCommand} output, byte-exact on the Buffer (a chunk
+ * may end mid UTF-8 sequence, so nothing here measures decoded strings). Everything before
+ * the first NUL is rc-file chatter. `null` = protocol broken: a missing or malformed header
+ * field, an unknown relPath, a slice outside the file or a body shorter than its length.
+ */
+export function parseRemoteClaudeEditSources(stdout: Buffer): EditSources | null {
+  let pos = stdout.indexOf(0);
+  if (pos === -1) return null;
+  pos += 1;
+
+  const readField = (): string | null => {
+    const end = stdout.indexOf(0, pos);
+    if (end === -1) return null;
+    const field = stdout.toString('utf8', pos, end);
+    pos = end + 1;
+    return field;
+  };
+  const readNumber = (): number | null => {
+    const field = readField();
+    if (field === null || !/^\d+$/.test(field)) return null;
+    const value = Number(field);
+    return Number.isSafeInteger(value) ? value : null;
+  };
+
+  const transcriptId = readField();
+  if (!transcriptId || !CLAUDE_TRANSCRIPT_ID_PATTERN.test(transcriptId)) return null;
+
+  const files: EditSources['files'] = [];
+  const metas: Record<string, string> = {};
+  while (pos < stdout.length) {
+    const relPath = readField();
+    const size = readNumber();
+    const startOffset = readNumber();
+    const len = readNumber();
+    if (relPath === null || size === null || startOffset === null || len === null) return null;
+    if (startOffset + len > size || pos + len > stdout.length) return null;
+    const chunk = stdout.subarray(pos, pos + len);
+    pos += len;
+
+    const meta = EDIT_SOURCE_META_REL_PATH_PATTERN.exec(relPath);
+    if (meta) {
+      metas[meta[1]] = chunk.toString('utf8');
+    } else if (EDIT_SOURCE_REL_PATH_PATTERN.test(relPath)) {
+      files.push({ relPath, size, startOffset, chunk });
+    } else {
+      return null;
+    }
+  }
+  return { transcriptId, files, metas };
+}
+
+/**
+ * Read a remote claude session's transcripts (see {@link buildRemoteClaudeEditSourcesCommand}),
+ * the remote twin of `readClaudeEditSources`. `null` when `mainPath` does not exist; an
+ * unreachable host, an ssh failure or broken output is a `RemoteFileAccessError`. Never wakes.
+ */
+export async function remoteReadClaudeEditSources(
+  remote: SessionRemote,
+  mainPath: string,
+  requests: readonly EditSourceRequest[],
+  budgetBytes: number,
+  opts: EditSourceReadOptions = {}
+): Promise<EditSources | null> {
+  assertNotUnderTest();
+  const budget = Number.isFinite(budgetBytes) ? Math.max(0, Math.floor(budgetBytes)) : 0;
+  const command = buildRemoteFileCommand(remote, buildRemoteClaudeEditSourcesCommand(mainPath, requests, budget, opts));
+  let stdout: Buffer;
+  try {
+    const result = await runWithRemoteSshLimit(() =>
+      execAsync(command, {
+        timeout: REMOTE_READ_TIMEOUT_MS,
+        maxBuffer: budget + EDIT_SOURCE_META_BUDGET_BYTES + EDIT_SOURCE_HEADER_SLACK_BYTES,
+        encoding: 'buffer',
+      })
+    );
+    stdout = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout);
+  } catch (err) {
+    if ((err as { code?: unknown }).code === TRANSCRIPT_NOT_FOUND_EXIT) return null;
+    throw new RemoteFileAccessError(
+      `remote host ${remote.label || remote.host} unreachable: ${describeExecError(err)}`
+    );
+  }
+  const parsed = parseRemoteClaudeEditSources(stdout);
+  if (!parsed || !mainPath.endsWith(`/${parsed.transcriptId}.jsonl`)) {
+    throw new RemoteFileAccessError('unexpected output from the remote edit-history read');
+  }
+  return parsed;
 }
 
 /**

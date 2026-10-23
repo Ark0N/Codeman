@@ -565,7 +565,8 @@
     'Open a session to see its edits.': '打开一个会话以查看其编辑。',
     'Reading the edit history…': '正在读取编辑历史…',
     'Could not read the edit history.': '无法读取编辑历史。',
-    'Edit history is only available for local Claude sessions.': '编辑历史仅适用于本地 Claude 会话。',
+    'Edit history is only available for Claude sessions outside Docker.':
+      '编辑历史仅适用于 Docker 之外的 Claude 会话。',
     'Showing saved entries only: {reason}': '仅显示已保存的条目：{reason}',
     'No transcript found for this session yet. It is picked up with the next prompt; until then a CLAUDE_CONFIG_DIR set outside Codeman cannot be found.':
       '尚未找到此会话的记录。它会在下一次提示时被识别；在此之前，在 Codeman 之外设置的 CLAUDE_CONFIG_DIR 无法被找到。',
