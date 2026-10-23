@@ -1272,7 +1272,7 @@ export function registerAgentCommands(program: Command): Command {
 
   agent
     .command('inspect <id>')
-    .description('Bounded transcript evidence or a labeled pane snapshot; opaque incremental cursors')
+    .description('Experimental: bounded transcript evidence or a labeled pane snapshot; opaque incremental cursors')
     .option('--max-bytes <n>', 'UTF8 evidence budget (1–65536)', '8192')
     .option('--since <cursor>', 'Resume a cursor from the same owner, pane and transcript')
     .option('--json', 'Machine-readable output')
@@ -1288,7 +1288,9 @@ export function registerAgentCommands(program: Command): Command {
 
   agent
     .command('stage <id>')
-    .description('Type a printable single-line UTF8 file without Enter; requires a verifiable local Codex composer')
+    .description(
+      'Experimental: type a printable single-line UTF8 file without Enter; requires a verifiable local Codex composer'
+    )
     .requiredOption('--message-file <path>', 'Regular UTF8 file, at most 8192 bytes, no trailing newline')
     .option('--json', 'Machine-readable output')
     .action((id: string, options: { messageFile: string; json?: boolean }) =>
@@ -1297,7 +1299,7 @@ export function registerAgentCommands(program: Command): Command {
 
   agent
     .command('submit <id>')
-    .description('Send Enter once only when the staged composer, pane and hash still match')
+    .description('Experimental: send Enter once only when the staged composer, pane and hash still match')
     .requiredOption('--stage-id <receipt>', 'One-shot stage receipt')
     .requiredOption('--confirm-sha <hash>', 'Exact SHA-256 returned by stage')
     .option('--json', 'Machine-readable output')

@@ -1,4 +1,11 @@
-# Bounded inspection and guarded submission
+# Experimental bounded inspection and guarded submission
+
+**Experimental:** `codeman agent inspect`, `stage` and `submit`, and their
+`/api/v1/sessions/:id/inspect|stage|submit` routes (including `/api` aliases),
+are excluded from the stable CLI/HTTP contract. Their commands, flags, paths,
+payloads and behavior may change or be removed in a minor or patch release.
+Pin a compatible Codeman version when automating them. Authentication and
+session ownership checks still apply.
 
 Use these commands inside a Codeman session. They use its authenticated HTTP API.
 They supplement `send`, `wait` and `read` over the same HTTP transport; no direct

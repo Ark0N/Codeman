@@ -814,7 +814,10 @@ Rules that matter:
 - **Lifetime.** An inbox goes with its session on delete. A server restart empties all
   inboxes unless the user turned on *Keep agent inbox across restarts* in Settings.
 
-## Bounded inspection and guarded submission
+## Experimental bounded inspection and guarded submission
+
+These three commands and their HTTP routes may change or be removed in minor or
+patch releases; they are excluded from the stable CLI/HTTP contract.
 
 Use `codeman agent inspect` for bounded evidence and incremental local Codex cursors.
 Use `codeman agent stage --message-file` followed by one hash-confirmed
