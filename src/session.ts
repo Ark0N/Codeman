@@ -129,6 +129,9 @@ import { DEFAULT_TMUX_HISTORY_LIMIT } from './config/terminal-history.js';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 import { getCli } from './config/cli-registry/registry.js';
 import { SubmitVerifier } from './session-submit-verifier.js';
+import { promptSha256, readGuardedCodexSnapshotDetails, type GuardedInputSnapshot } from './agent-staging.js';
+import { isKeyboardTerminalInput } from './terminal-input-classifier.js';
+import { stripAnsi } from './utils/regex-patterns.js';
 import { KEEP_WARM_NUDGE } from './prompt-cache-keepwarm.js';
 import { compileVersionRegex } from './config/cli-registry/patterns.js';
 import { resolveSessionCliVersion } from './utils/cli-resolver.js';
@@ -1298,6 +1301,7 @@ export class Session extends EventEmitter {
 
   /** Set the owning username (used by recovery to restore ownership). */
   set owner(username: string | undefined) {
+    if (this._owner !== username) this._guardedPaneRevision++;
     this._owner = username;
   }
 
@@ -1402,11 +1406,13 @@ export class Session extends EventEmitter {
    * tmux session whose record is about to be deleted (Ark0N/Codeman#446).
    */
   markClosing(closing: boolean): void {
+    if (this._closing !== closing) this._guardedPaneRevision++;
     this._closing = closing;
   }
 
   /** Run one pane start, attach or relaunch with {@link paneLifecycleInFlight} raised. */
   private async _withPaneLifecycle<T>(op: () => Promise<T>): Promise<T> {
+    this._guardedPaneRevision++;
     this._paneLifecycleOps++;
     try {
       return await op();
@@ -1433,6 +1439,7 @@ export class Session extends EventEmitter {
    * Ark0N/Codeman#446 review; both now persist on their success path.
    */
   private clearPaneExitForNewPane(): void {
+    this._guardedPaneRevision++;
     this.setPaneExit(undefined);
     if (this._muxSession) this._mux?.clearPaneExit?.(this._muxSession.muxName);
   }
@@ -4196,6 +4203,11 @@ export class Session extends EventEmitter {
     prompt: string,
     options?: { model?: string; onProgress?: (info: { tokens?: number; status?: string }) => void }
   ): Promise<{ result: string; cost: number }> {
+    if (this._guardedSubmitInFlight) {
+      this._guardedInputRevision++;
+      throw new Error('Guarded submission in progress');
+    }
+    this._guardedPaneRevision++;
     return new Promise((resolve, reject) => {
       if (this.ptyProcess) {
         reject(new Error('Session already has a running process'));
@@ -4705,6 +4717,116 @@ export class Session extends EventEmitter {
 
   // Note: checkAutoCompact/checkAutoClear moved to SessionAutoOps (this._autoOps)
 
+  private readonly _inspectionInstance = uuidv4();
+  private _guardedPaneRevision = 0;
+  private _guardedGeometryRevision = 0;
+  private _guardedInputRevision = 0;
+  private _guardedPendingWrites = 0;
+  private _guardedSubmitInFlight = false;
+  /** Ephemeral identity, never persisted or based on a potentially reused pid alone. */
+  get inspectionGeneration(): string {
+    return `${this._inspectionInstance}:${this._guardedPaneRevision}:${this.owner ?? ''}`;
+  }
+  /** Staging additionally binds geometry; transcript cursors survive a terminal resize. */
+  get guardedInputGeneration(): string {
+    return `${this.inspectionGeneration}:${this._guardedGeometryRevision}`;
+  }
+  get guardedInputPendingWrites(): number {
+    return this._guardedPendingWrites;
+  }
+  /** Expose only the path selection needed for attributed Codex evidence, never credentials. */
+  getCodexHomeOverride(): string | undefined {
+    return this._envOverrides?.CODEX_HOME || undefined;
+  }
+  private _observeGuardedKeyboardInput(data: string): void {
+    if (data && isKeyboardTerminalInput(data)) this._guardedInputRevision++;
+  }
+  guardedInputSnapshot(): GuardedInputSnapshot | null {
+    return this._readGuardedInputSnapshot(false);
+  }
+  private _readGuardedInputSnapshot(allowLease: boolean): GuardedInputSnapshot | null {
+    if (
+      this._isStopped ||
+      this._closing ||
+      this.paneLifecycleInFlight ||
+      this._guardedPendingWrites ||
+      (!allowLease && this._guardedSubmitInFlight) ||
+      this.remote ||
+      this.docker ||
+      this.paneExit ||
+      getCli(this.mode)?.capabilities.transcript !== 'codex-rollout' ||
+      !this._muxSession
+    )
+      return null;
+    const capture: import('./mux-interface.js').PaneCaptureOptions = {};
+    const screen = this._mux?.capturePaneBuffer?.(this._muxSession.muxName, undefined, capture);
+    if (!screen) return null;
+    // tmux's replay has CUP addresses rather than line breaks. Read the SAME
+    // fresh frame for dialog/work chrome and exact composer/caret proof.
+    // eslint-disable-next-line no-control-regex
+    const plain = stripAnsi(screen.replace(/\x1b\[\d+;\d+H/g, '\n'));
+    const working = this._workingLinePattern();
+    working.lastIndex = 0;
+    if (this._paneShowsBlocked(plain) || working.test(plain) || this._paneAwaitsWorkers(plain)) return null;
+    const composer = readGuardedCodexSnapshotDetails(screen);
+    return composer === null
+      ? null
+      : {
+          generation: this.guardedInputGeneration,
+          revision: this._guardedInputRevision,
+          composerSha: promptSha256(composer.composer),
+          availableColumns: Number.isFinite(capture.capturedGeometry?.cols)
+            ? capture.capturedGeometry!.cols - composer.prefixWidth
+            : 0,
+        };
+  }
+  /** Stage through ordinary delivery, after cancelling any older Enter retry timer. */
+  async stageGuardedInput(message: string): Promise<boolean> {
+    if (/[\r\n]/.test(message)) return false;
+    if (this._guardedPendingWrites || this._guardedSubmitInFlight) {
+      this._guardedInputRevision++;
+      return false;
+    }
+    this._submitVerifier?.cancel();
+    return this.writeViaMux(message, { fromUser: true });
+  }
+  /** One conditional Enter. An ambiguous acknowledgement is never replayed. */
+  async submitGuardedInput(expected: GuardedInputSnapshot): Promise<boolean> {
+    const matches = (current: GuardedInputSnapshot | null): boolean =>
+      !!current &&
+      current.generation === expected.generation &&
+      current.revision === expected.revision &&
+      current.composerSha === expected.composerSha &&
+      current.availableColumns === expected.availableColumns;
+    if (!matches(this.guardedInputSnapshot()) || !this._mux || !this._muxSession) return false;
+    this._guardedSubmitInFlight = true;
+    let dispatched = false;
+    try {
+      const sent = await this._mux.sendInput(this.id, '\r', {
+        beforeDispatch: () => {
+          if (!matches(this._readGuardedInputSnapshot(true))) return false;
+          this._guardedInputRevision++;
+          dispatched = true;
+          return true;
+        },
+      });
+      if (sent && dispatched) this._emitSubmittedPrompt(this._trackSubmit('\r', { fromUser: true }));
+      return sent && dispatched;
+    } finally {
+      this._guardedSubmitInFlight = false;
+    }
+  }
+  /** Lease/pending boundary for named keys whose bytes bypass the ordinary write methods. */
+  async performAuxiliaryInput(operation: () => Promise<void>): Promise<void> {
+    this._guardedInputRevision++;
+    if (this._guardedSubmitInFlight) throw new Error('Guarded submission in progress');
+    this._guardedPendingWrites++;
+    try {
+      await operation();
+    } finally {
+      this._guardedPendingWrites--;
+    }
+  }
   /**
    * Sends input directly to the PTY process.
    *
@@ -4724,6 +4846,8 @@ export class Session extends EventEmitter {
    * input could disappear while the caller believed it had been delivered.
    */
   write(data: string, options: SessionWriteOptions = {}): boolean {
+    this._observeGuardedKeyboardInput(data);
+    if (this._guardedSubmitInFlight) return false;
     const submittedPrompt = this._trackSubmit(data, options);
     if (!this.ptyProcess) return false;
     this.ptyProcess.write(data);
@@ -4772,6 +4896,7 @@ export class Session extends EventEmitter {
    * separator. Reports submissions like a write would (a line feed never is one).
    */
   trackUserInput(data: string): void {
+    this._observeGuardedKeyboardInput(data);
     if (!this._acceptsPrompts) return;
     this._emitSubmittedPrompt(this._submittedPromptTracker.feed(data));
   }
@@ -4793,6 +4918,7 @@ export class Session extends EventEmitter {
    * their prompt must count as real and alert normally.
    */
   markPromptSubmitted(prompt?: string): void {
+    this._guardedInputRevision++;
     if (prompt !== undefined && prompt.trim() !== KEEP_WARM_NUDGE) this._keepAliveTurnUntil = 0;
     this._stampSubmit();
   }
@@ -4888,22 +5014,29 @@ export class Session extends EventEmitter {
    * ```
    */
   async writeViaMux(data: string, options: SessionWriteOptions = {}): Promise<boolean> {
-    const submittedPrompt = this._trackSubmit(data, options);
-    if (this._mux && this._muxSession) {
-      const sent = await this._mux.sendInput(this.id, data);
-      if (sent) {
-        this._emitSubmittedPrompt(submittedPrompt);
-        this._verifySubmitted(data);
+    this._observeGuardedKeyboardInput(data);
+    if (this._guardedSubmitInFlight) return false;
+    this._guardedPendingWrites++;
+    try {
+      const submittedPrompt = this._trackSubmit(data, options);
+      if (this._mux && this._muxSession) {
+        const sent = await this._mux.sendInput(this.id, data);
+        if (sent) {
+          this._emitSubmittedPrompt(submittedPrompt);
+          this._verifySubmitted(data);
+        }
+        return sent;
       }
-      return sent;
+      // Fallback to PTY write
+      if (this.ptyProcess) {
+        this.ptyProcess.write(data);
+        this._emitSubmittedPrompt(submittedPrompt);
+        return true;
+      }
+      return false;
+    } finally {
+      this._guardedPendingWrites--;
     }
-    // Fallback to PTY write
-    if (this.ptyProcess) {
-      this.ptyProcess.write(data);
-      this._emitSubmittedPrompt(submittedPrompt);
-      return true;
-    }
-    return false;
   }
 
   /**
@@ -4931,7 +5064,10 @@ export class Session extends EventEmitter {
         this._isStopped || !this._mux || !this._muxSession
           ? null
           : this._mux.capturePaneText?.(this._muxSession.muxName),
-      sendEnter: () => this._mux?.sendInput(this.id, '\r'),
+      sendEnter: () => {
+        if (this._guardedSubmitInFlight) this._submitVerifier?.cancel();
+        return this.writeViaMux('\r');
+      },
       // ⚠ NO fallback glyph here, unlike the screen-reading probe elsewhere in this file.
       // Only claude, codex, pi, opencode, omp, gemini and antigravity declare a promptGlyph; the other modes would fall back
       // to claude's `❯`, which is ALSO starship's default shell prompt (and pure's, and
@@ -4960,6 +5096,7 @@ export class Session extends EventEmitter {
    * `resize()` skipped a real resize that happened to match them.
    */
   private _notePtySpawnGeometry(cols: number, rows: number): void {
+    this._guardedPaneRevision++;
     this._ptyCols = cols;
     this._ptyRows = rows;
   }
@@ -5082,6 +5219,7 @@ export class Session extends EventEmitter {
     }
     const dimsChanged = cols !== this._ptyCols || rows !== this._ptyRows;
     if (this.ptyProcess && (dimsChanged || options.force)) {
+      this._guardedGeometryRevision++;
       this._ptyCols = cols;
       this._ptyRows = rows;
       if (!IS_TEST_MODE && this._mux && this._muxSession) {
@@ -5098,6 +5236,10 @@ export class Session extends EventEmitter {
 
   // Legacy method for sending input - wraps runPrompt
   async sendInput(input: string): Promise<void> {
+    if (this._guardedSubmitInFlight) {
+      this._guardedInputRevision++;
+      throw new Error('Guarded submission in progress');
+    }
     this._status = 'busy';
     this._markActivity(true);
     this.runPrompt(input).catch((err) => {

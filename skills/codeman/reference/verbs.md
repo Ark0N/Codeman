@@ -550,8 +550,10 @@ this (`src/web/routes/approval-routes.ts:43`). ESC is then claude's own interrup
 that half is the CLI's behavior, not something this API guarantees.
 
 - **This is not the composer-clearing tool.** Esc (and Ctrl+U) do **not** clear a
-  typed-but-unsubmitted prompt, verified live. The only recovery there is to submit it
-  with `{"input":"\r"}` and let the worker read the junk line.
+  typed-but-unsubmitted Claude prompt, verified live. Do not submit an unverified
+  draft merely to clear it. For a refused guarded local Codex submit, use the
+  verified-unsent recovery in [inspection and staging](inspection-and-staging.md#recover-after-a-refused-submit);
+  when the composer is unclear, ask the user to clear it in the terminal.
 - The interrupted turn already burned its tokens. Interrupting early saves the rest.
 - `POST /api/sessions/:id/send-key` is a different endpoint and cannot do this: its
   allowlist is S-Enter / C-Enter only.
@@ -764,3 +766,15 @@ Confirm cleanup with `GET /api/v1/sessions`, never with `/api/v1/sessions/unifie
 (that one folds in transcript history from the whole machine and will keep showing
 your worker forever).
 
+
+## Experimental bounded inspection and guarded submission
+
+These three commands and their HTTP routes may change or be removed in minor or
+patch releases; they are excluded from the stable CLI/HTTP contract.
+
+Use `codeman agent inspect` for bounded evidence and incremental local Codex cursors.
+Use `codeman agent stage --message-file` followed by one hash-confirmed
+`codeman agent submit --stage-id --confirm-sha` when the exact local Codex
+composer and caret can be verified. Other targets provide labeled snapshots or
+refuse guarded input. See [inspection and staging](inspection-and-staging.md)
+for budgets, receipt expiry, conflict handling and supported composers.

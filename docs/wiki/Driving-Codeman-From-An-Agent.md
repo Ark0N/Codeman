@@ -44,6 +44,9 @@ SID=$(codeman agent spawn scratch-1 --mode claude)        # quick-start + wait f
 codeman agent send "$SID" 'review src/, then say DONE' --until stop,exit --timeout 300000
 codeman agent read "$SID"                                 # last answer (as the server reads it for that mode)
 codeman agent read "$SID" --tail 3000                     # terminal tail, ANSI stripped (every mode)
+codeman agent inspect "$SID" --max-bytes 8192 --json     # recent evidence + opaque cursor (pane snapshots are labeled)
+codeman agent stage "$SID" --message-file /tmp/prompt.txt --json  # no Enter; known local Codex composer only
+codeman agent submit "$SID" --stage-id "$STAGE_ID" --confirm-sha "$SHA256" --json  # one conditional Enter
 codeman agent send "$SID" 'run the tests, then print WORKDONE followed by _4711'   # hook-less modes: the marker in halves …
 codeman agent wait "$SID" --match WORKDONE_4711           # … and the wait on the joined form
 codeman agent interrupt "$SID"                            # a bare ESC, conversation intact
@@ -253,3 +256,5 @@ failing the spawn, because a cosmetic field must never break a worker.
 - [Hooks And Integrations](Hooks-And-Integrations) - events flowing the other way.
 - [Watching Agents Work](Watching-Agents-Work) - seeing the fan-out in the UI.
 - [`skills/codeman/SKILL.md`](https://github.com/Ark0N/Codeman/blob/master/skills/codeman/SKILL.md) - the skill itself.
+
+Bounded inspection and guarded stage/submit details: [API reference](../api-reference.md#bounded-agent-inspection-and-guarded-input). Stage accepts one printable UTF8 line without trailing whitespace; receipts expire after two minutes. Submit refuses changed/unprovable composers and never automatically replays Enter. `send --no-enter` alone has no receipt.

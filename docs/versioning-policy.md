@@ -62,6 +62,20 @@ These may change in a **MINOR** (or even PATCH) release without a MAJOR bump:
    anything labeled experimental in the UI or docs. These may change or be
    removed at any time.
 
+### Experimental agent coordination
+
+`codeman agent inspect`, `codeman agent stage` and `codeman agent submit` are
+experimental. The matching `GET /api/v1/sessions/:id/inspect`,
+`POST /api/v1/sessions/:id/stage` and `POST /api/v1/sessions/:id/submit` routes,
+including their unversioned `/api` aliases, share this designation. This is an
+explicit exception to both the CLI and HTTP stability promises above: these
+commands, flags, endpoint paths, payloads and behavior may change or be removed
+in a MINOR or PATCH release without a stable-surface deprecation period. Pin a
+compatible Codeman version when automating them. Existing authentication,
+ownership and shared response-envelope rules still apply. Other agent commands
+and API routes retain their existing stability guarantees. Promotion to stable
+requires an explicit documented decision.
+
 ## Deprecation policy
 
 When we need to change a covered surface:
