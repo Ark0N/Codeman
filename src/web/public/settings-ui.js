@@ -597,6 +597,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsGitStatusTree').checked = settings.gitStatusTree ?? defaults.gitStatusTree ?? true;
     document.getElementById('appSettingsGitStatusMaxRepos').value = settings.gitStatusMaxRepos ?? defaults.gitStatusMaxRepos ?? 12;
     document.getElementById('appSettingsGitStatusTimeout').value = settings.gitStatusTimeoutSeconds ?? defaults.gitStatusTimeoutSeconds ?? 30;
+    document.getElementById('appSettingsShowEditHistory').checked = settings.showEditHistory ?? defaults.showEditHistory ?? false;
     // Gesture control lives in the Input section (alongside Local Echo / CJK Input)
     // but is only available when the instance runs with CODEMAN_GESTURE=1 (server sets
     // window.__codemanGestureAvailable). Hide just this item otherwise so the toggle
@@ -2940,6 +2941,7 @@ Object.assign(CodemanApp.prototype, {
       // Clamped here and again on the server; an empty or odd value falls back to the default.
       gitStatusMaxRepos: Math.min(50, Math.max(1, parseInt(document.getElementById('appSettingsGitStatusMaxRepos').value, 10) || 12)),
       gitStatusTimeoutSeconds: Math.min(120, Math.max(5, parseInt(document.getElementById('appSettingsGitStatusTimeout').value, 10) || 30)),
+      showEditHistory: document.getElementById('appSettingsShowEditHistory').checked,
       gestureControlEnabled: document.getElementById('appSettingsGestureControl').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
@@ -3237,6 +3239,8 @@ Object.assign(CodemanApp.prototype, {
       gitStatusTree: _gst,
       gitStatusMaxRepos: _gsm,
       gitStatusTimeoutSeconds: _gst2,
+      // Per-device header button (edit-history-ui.js), likewise absent from the .strict() schema.
+      showEditHistory: _seh,
       showTabDetachButton: _tdb,
       // Detach Tiles: what a tile drag does is a property of this device's
       // windows, and the key is absent from the .strict() SettingsUpdateSchema.
@@ -4526,6 +4530,8 @@ Object.assign(CodemanApp.prototype, {
     // Bottom-bar Git indicator (git-status-ui.js): opt-in, per-device. Starts or stops its poll to
     // match the setting, so a live toggle needs no reload.
     this.applyGitStatusVisibility?.();
+    // Header Edit history button (edit-history-ui.js): opt-in, per-device, marker-class hidden.
+    this.applyEditHistoryVisibility?.();
 
     // Notification bell is retired (notifications live in Settings → Notifications
     // + the drawer); keep it hidden regardless of the notification-enabled state.
@@ -4889,7 +4895,7 @@ Object.assign(CodemanApp.prototype, {
       'language',
       'terminalWheelLocalScrollback',
       'autoCopySelection', 'copyStripMargin',
-      'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree', 'gitStatusMaxRepos', 'gitStatusTimeoutSeconds',
+      'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree', 'gitStatusMaxRepos', 'gitStatusTimeoutSeconds', 'showEditHistory',
       'showTabDetachButton',
       'mobileOverviewEnabled',
       'sessionLineageLines',

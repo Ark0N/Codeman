@@ -1,0 +1,704 @@
+/**
+ * Edit history store: byte ranges, cursors, dedupe, cap, persistence.
+ * Transcript bytes are built from JSONL lines shaped like real claude records.
+ */
+import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  EditHistoryStore,
+  entryBytes,
+  MAIN_SOURCE,
+  MAX_AGENT_META_CHARS,
+  MAX_AGENTS,
+  MAX_ENTRIES,
+  MAX_FILE_BYTES,
+  MAX_STORE_BYTES,
+  parseAgentMeta,
+  READ_BUDGET_BYTES,
+  TMP_TAG,
+} from '../src/edit-history-store.js';
+import { MAX_HUNK_BYTES } from '../src/edit-history-parse.js';
+
+let dir: string;
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'edit-history-store-'));
+});
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
+
+const T0 = Date.parse('2026-10-15T19:00:00.000Z');
+const iso = (s: number) => new Date(T0 + s * 1000).toISOString();
+
+function editLine(id: string, sec: number, path = `/work/${id}.ts`, extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    type: 'user',
+    timestamp: iso(sec),
+    cwd: '/work',
+    message: { role: 'user', content: [{ tool_use_id: id, type: 'tool_result', content: 'ok' }] },
+    toolUseResult: {
+      filePath: path,
+      oldString: 'a',
+      newString: 'b',
+      originalFile: 'a',
+      structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-a', '+b'] }],
+      userModified: false,
+      replaceAll: false,
+    },
+    ...extra,
+  });
+}
+
+/** An Edit whose diff carries `size` bytes of added text. */
+function bigEditLine(id: string, sec: number, size: number): string {
+  const line = JSON.parse(editLine(id, sec));
+  line.toolUseResult.structuredPatch[0].lines = ['-a', '+' + 'x'.repeat(size)];
+  return JSON.stringify(line);
+}
+
+function bashUse(id: string, sec: number, command: string): string {
+  return JSON.stringify({
+    type: 'assistant',
+    timestamp: iso(sec),
+    cwd: '/work',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] },
+  });
+}
+
+function bashResult(id: string, sec: number): string {
+  return JSON.stringify({
+    type: 'user',
+    timestamp: iso(sec),
+    cwd: '/work',
+    message: { role: 'user', content: [{ tool_use_id: id, type: 'tool_result', content: '' }] },
+    toolUseResult: { stdout: '', stderr: '', interrupted: false, isImage: false },
+  });
+}
+
+const jsonl = (lines: string[]) => Buffer.from(lines.map((l) => l + '\n').join(''));
+
+/**
+ * Read like the reader (edit-history-local-source.ts): on from the cursor of the current
+ * conversation (clamped to the size), else the file's last `budget` bytes; then apply.
+ * Null when nothing is new.
+ */
+function syncForward(
+  store: EditHistoryStore,
+  file: Buffer,
+  budget = READ_BUDGET_BYTES,
+  source = MAIN_SOURCE,
+  tid = 'conv-1'
+) {
+  const cursor = tid === store.getTranscriptId() ? store.getCursor(source) : undefined;
+  const offset = cursor ? Math.min(cursor.offset, file.length) : Math.max(0, file.length - budget);
+  const len = Math.min(budget, file.length - offset);
+  if (cursor && offset === cursor.offset && len === 0) return null;
+  const chunk = file.subarray(offset, offset + len);
+  return store.apply({ transcriptId: tid, source, startOffset: offset, chunk, size: file.length });
+}
+
+function syncOlder(store: EditHistoryStore, file: Buffer, budget?: number, source = MAIN_SOURCE, tid = 'conv-1') {
+  const range = store.olderRange(source, budget);
+  if (!range) return null;
+  const chunk = file.subarray(range.offset, range.offset + range.len);
+  return store.applyOlder({ transcriptId: tid, source, startOffset: range.offset, chunk, size: file.length });
+}
+
+const ids = (store: EditHistoryStore) => store.list().map((e) => e.id);
+
+describe('EditHistoryStore: forward reads', () => {
+  it('reads a small file whole, then only what was appended', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    let file = jsonl([editLine('e1', 1), editLine('e2', 2)]);
+    expect(syncForward(store, file)?.added).toBe(2);
+    expect(store.getCursor(MAIN_SOURCE)).toEqual({ offset: file.length, floor: 0 });
+    expect(syncForward(store, file)).toBeNull();
+    file = Buffer.concat([file, jsonl([editLine('e3', 3)])]);
+    expect(syncForward(store, file)?.added).toBe(1);
+    expect(ids(store)).toEqual(['e3', 'e2', 'e1']);
+    expect(store.backfillTruncated).toBe(false);
+  });
+
+  it('leaves a partial last line (still being written) for the next read', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const full = jsonl([editLine('e1', 1), editLine('e2', 2)]);
+    const firstLineEnd = full.indexOf(0x0a) + 1;
+    const partial = full.subarray(0, firstLineEnd + 30);
+    expect(syncForward(store, partial)?.added).toBe(1);
+    expect(store.getCursor(MAIN_SOURCE)?.offset).toBe(firstLineEnd);
+    expect(syncForward(store, full)?.added).toBe(1);
+    expect(ids(store)).toEqual(['e2', 'e1']);
+  });
+
+  it('deduplicates by tool_use_id', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const file = jsonl([editLine('e1', 1), editLine('e1', 1)]);
+    expect(syncForward(store, file)?.added).toBe(1);
+    expect(store.list()).toHaveLength(1);
+  });
+
+  it('starts a large file near its end, drops the cut line and keeps the floor there', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const lines = Array.from({ length: 20 }, (_, i) => editLine(`e${i}`, i));
+    const file = jsonl(lines);
+    const budget = Math.floor(file.length / 3);
+    syncForward(store, file, budget);
+    const cursor = store.getCursor(MAIN_SOURCE)!;
+    expect(cursor.offset).toBe(file.length);
+    expect(cursor.floor).toBeGreaterThan(file.length - budget);
+    expect(file[cursor.floor - 1]).toBe(0x0a);
+    expect(store.backfillTruncated).toBe(true);
+    expect(ids(store)[0]).toBe('e19');
+    expect(ids(store)).not.toContain('e0');
+  });
+
+  it('reads a backlog in budget-sized forward steps without losing a line', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const first = jsonl([editLine('e0', 0)]);
+    syncForward(store, first);
+    const more = Array.from({ length: 30 }, (_, i) => editLine(`e${i + 1}`, i + 1));
+    const file = Buffer.concat([first, jsonl(more)]);
+    const budget = 700;
+    for (let i = 0; i < 100 && syncForward(store, file, budget); i++);
+    expect(store.list()).toHaveLength(31);
+    expect(store.getCursor(MAIN_SOURCE)?.offset).toBe(file.length);
+  });
+
+  it('skips a line longer than the budget instead of re-reading it forever', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const huge = editLine('big', 1, '/work/big.ts', { pad: 'x'.repeat(5000) });
+    const first = jsonl([editLine('e0', 0)]);
+    syncForward(store, first);
+    const file = Buffer.concat([first, jsonl([huge, editLine('e2', 2)])]);
+    for (let i = 0; i < 50 && syncForward(store, file, 1000); i++);
+    expect(ids(store)).toEqual(['e2', 'e0']);
+    expect(store.getCursor(MAIN_SOURCE)?.offset).toBe(file.length);
+  });
+
+  it('reads the line after a skipped one whole, wherever it falls against the chunk grid', async () => {
+    const budget = 1000;
+    const first = jsonl([editLine('e0', 0)]);
+    const lost: number[] = [];
+    for (let pad = 0; pad < budget; pad++) {
+      const store = new EditHistoryStore('s1', { dir, debounceMs: 60_000 });
+      syncForward(store, first);
+      const huge = JSON.stringify({ type: 'user', message: { content: 'h'.repeat(2400 + pad) } });
+      const next = editLine('next', 2, '/work/next.ts', { pad: 'p'.repeat(300) }); // < budget
+      const file = Buffer.concat([first, jsonl([huge, next, editLine('e3', 3)])]);
+      for (let i = 0; i < 50 && syncForward(store, file, budget); i++);
+      if (!store.get('next') || !store.get('e3')) lost.push(pad);
+      await store.remove();
+    }
+    expect(lost).toEqual([]);
+  });
+
+  it('keeps a multibyte character split by the chunk boundary intact', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const path = '/work/Größe – Ümlaut 😀.ts';
+    const file = jsonl([editLine('e1', 1), editLine('e2', 2, path)]);
+    const emoji = file.indexOf(Buffer.from('😀'));
+    // Cut inside the 4-byte emoji, then continue.
+    const cut = file.subarray(0, emoji + 2);
+    syncForward(store, cut);
+    syncForward(store, file);
+    expect(store.get('e2')?.path).toBe(path);
+  });
+
+  it('restarts a file that shrank (replaced) from its end, with the next read', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    syncForward(store, jsonl([editLine('e1', 1), editLine('e2', 2)]));
+    const replaced = jsonl([editLine('n1', 3)]);
+    // The reader clamps the cursor to the size: an empty chunk at the end, and the cursor goes.
+    expect(syncForward(store, replaced)?.added).toBe(0);
+    expect(store.getCursor(MAIN_SOURCE)).toBeUndefined();
+    expect(syncForward(store, replaced)?.added).toBe(1);
+    expect(store.getCursor(MAIN_SOURCE)?.offset).toBe(replaced.length);
+  });
+
+  it('ignores a chunk that does not start at the cursor', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const file = jsonl([editLine('e1', 1), editLine('e2', 2)]);
+    syncForward(store, file);
+    const res = store.apply({ transcriptId: 'conv-1', source: MAIN_SOURCE, startOffset: 3, chunk: file, size: 999 });
+    expect(res.added).toBe(0);
+  });
+});
+
+describe('EditHistoryStore: conversations and sources', () => {
+  it('starts new cursors for a new transcriptId and keeps the old entries', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    syncForward(store, jsonl([editLine('e1', 1)]));
+    const second = jsonl([editLine('f1', 5)]);
+    syncForward(store, second, undefined, MAIN_SOURCE, 'conv-2');
+    expect(store.getTranscriptId()).toBe('conv-2');
+    expect(ids(store)).toEqual(['f1', 'e1']);
+  });
+
+  it('keeps one cursor per source and the subagent id on its entries', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const main = jsonl([editLine('m1', 1)]);
+    const sub = jsonl([editLine('s1', 2, '/work/s.ts', { isSidechain: true, agentId: 'a1' })]);
+    const subSource = 'subagents/agent-a1.jsonl';
+    syncForward(store, main);
+    syncForward(store, sub, undefined, subSource);
+    expect(store.getCursor(MAIN_SOURCE)?.offset).toBe(main.length);
+    expect(store.getCursor(subSource)?.offset).toBe(sub.length);
+    expect(store.get('s1')?.agentId).toBe('a1');
+  });
+
+  it('records agent meta from meta.json text', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    store.setAgentMeta(
+      'a1',
+      JSON.stringify({
+        agentType: 'coding',
+        description: 'Impl: fix',
+        worktreePath: '/w/.claude/worktrees/agent-a1',
+        worktreeBranch: 'worktree-agent-a1',
+        toolUseId: 'toolu_x',
+      })
+    );
+    store.setAgentMeta('a2', 'not json');
+    expect(store.getAgents()).toEqual({
+      a1: {
+        description: 'Impl: fix',
+        agentType: 'coding',
+        worktreePath: '/w/.claude/worktrees/agent-a1',
+        worktreeBranch: 'worktree-agent-a1',
+      },
+    });
+    expect(store.hasAgentMeta('a2')).toBe(false);
+    expect(parseAgentMeta('{"description":"d"}')).toEqual({ description: 'd', agentType: '' });
+  });
+});
+
+describe('EditHistoryStore: older blocks', () => {
+  it('loads older lines block by block down to the start, without duplicates at the seam', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const file = jsonl(Array.from({ length: 30 }, (_, i) => editLine(`e${i}`, i)));
+    const budget = Math.floor(file.length / 4);
+    syncForward(store, file, budget);
+    const before = store.list().length;
+    expect(before).toBeLessThan(30);
+    let rounds = 0;
+    while (syncOlder(store, file, budget) && rounds < 20) rounds++;
+    expect(rounds).toBeGreaterThan(1);
+    expect(store.list()).toHaveLength(30);
+    expect(store.getCursor(MAIN_SOURCE)?.floor).toBe(0);
+    expect(store.backfillTruncated).toBe(false);
+    expect(store.olderRange(MAIN_SOURCE, budget)).toBeNull();
+  });
+
+  it('skips a line longer than the budget going back and reaches the lines before it', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const huge = JSON.stringify({ type: 'user', message: { content: 'x'.repeat(6000) } });
+    const older = Array.from({ length: 10 }, (_, i) => editLine(`old${i}`, i));
+    const newer = Array.from({ length: 5 }, (_, i) => editLine(`new${i}`, 100 + i));
+    const file = jsonl([...older, huge, ...newer]);
+    const budget = 4000;
+    syncForward(store, file, budget);
+    expect(ids(store).sort()).toEqual(newer.map((_, i) => `new${i}`).sort());
+    let rounds = 0;
+    while (syncOlder(store, file, budget) && rounds < 30) rounds++;
+    expect(store.list()).toHaveLength(15);
+    expect(store.getCursor(MAIN_SOURCE)).toMatchObject({ floor: 0 });
+    expect(store.getCursor(MAIN_SOURCE)?.floorMidLine).toBeUndefined();
+    expect(store.backfillTruncated).toBe(false);
+  });
+
+  it('going back, reads the line before a skipped one whole, wherever it falls against the block grid', async () => {
+    const budget = 1000;
+    const huge = JSON.stringify({ type: 'user', message: { content: 'h'.repeat(2500) } });
+    const lost: number[] = [];
+    for (let pad = 0; pad < budget; pad++) {
+      const store = new EditHistoryStore('s1', { dir, debounceMs: 60_000 });
+      const lines = [editLine('p0', 0), editLine('p1', 1), editLine('before', 2), huge];
+      for (let i = 0; i < 6; i++)
+        lines.push(editLine(`t${i}`, 10 + i, `/work/t${i}.ts`, i === 0 ? { pad: 'p'.repeat(pad) } : {}));
+      const file = jsonl(lines);
+      syncForward(store, file, budget);
+      for (let i = 0; i < 50 && syncOlder(store, file, budget); i++);
+      if (!store.get('before') || !store.get('p0')) lost.push(pad);
+      await store.remove();
+    }
+    expect(lost).toEqual([]);
+  });
+
+  it('a source whose file is gone (dropSource) offers no older lines and keeps its entries', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const sub = 'subagents/agent-a1.jsonl';
+    const file = jsonl(Array.from({ length: 10 }, (_, i) => editLine(`s${i}`, i, `/work/s${i}.ts`, { agentId: 'a1' })));
+    syncForward(store, file, 400, sub);
+    expect(store.sourcesWithOlder()).toEqual([sub]);
+    const kept = ids(store);
+    store.dropSource(sub);
+    expect(store.getCursor(sub)).toBeUndefined();
+    expect(store.backfillTruncated).toBe(false);
+    expect(ids(store)).toEqual(kept);
+  });
+
+  it('refuses an older chunk that does not end at the floor', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const file = jsonl(Array.from({ length: 10 }, (_, i) => editLine(`e${i}`, i)));
+    syncForward(store, file, 300);
+    const res = store.applyOlder({
+      transcriptId: 'conv-1',
+      source: MAIN_SOURCE,
+      startOffset: 0,
+      chunk: file.subarray(0, 10),
+      size: file.length,
+    });
+    expect(res.added).toBe(0);
+  });
+});
+
+describe('EditHistoryStore: Bash images', () => {
+  it('pairs a Bash call and its result across a chunk boundary', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const part1 = jsonl([bashUse('b1', 1, 'python render.py -o out/frame.png')]);
+    const file = Buffer.concat([part1, jsonl([bashResult('b1', 4)])]);
+    expect(syncForward(store, part1)?.candidates).toEqual([]);
+    const res = syncForward(store, file)!;
+    expect(res.candidates).toEqual([
+      { toolUseId: 'b1', start: T0 + 1000, end: T0 + 4000, paths: ['/work/out/frame.png'] },
+    ]);
+  });
+
+  it('adds confirmed images as entries without a diff, once', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const img = { toolUseId: 'b1', path: '/work/out/frame.png', ts: T0 + 4000, agentId: 'a1' };
+    expect(store.addImageEntries([img, img])).toBe(1);
+    expect(store.addImageEntries([img])).toBe(0);
+    expect(store.list()[0]).toEqual({
+      id: 'b1:/work/out/frame.png',
+      ts: T0 + 4000,
+      path: '/work/out/frame.png',
+      kind: 'image',
+      tool: 'bash',
+      created: false,
+      added: 0,
+      removed: 0,
+      hunks: [],
+      truncated: false,
+      agentId: 'a1',
+    });
+  });
+});
+
+describe('EditHistoryStore: cap', () => {
+  it(`keeps the newest ${MAX_ENTRIES} entries`, () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const file = jsonl(Array.from({ length: MAX_ENTRIES + 20 }, (_, i) => editLine(`e${i}`, i)));
+    const res = syncForward(store, file, file.length);
+    expect(res?.added).toBe(MAX_ENTRIES);
+    expect(store.list()).toHaveLength(MAX_ENTRIES);
+    expect(store.get('e19')).toBeUndefined();
+    expect(store.get('e20')).toBeDefined();
+    // Older than everything kept: counts as nothing added.
+    expect(store.addImageEntries([{ toolUseId: 'old', path: '/a.png', ts: T0 - 1000 }])).toBe(0);
+  });
+
+  it('offers no older block once the cap is full (it would be dropped on read)', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const lines = Array.from({ length: MAX_ENTRIES + 20 }, (_, i) => editLine(`e${i}`, i));
+    const file = jsonl(lines);
+    const tail = jsonl(lines.slice(-MAX_ENTRIES)).length;
+    syncForward(store, file, tail + 10);
+    expect(store.list()).toHaveLength(MAX_ENTRIES);
+    expect(store.getCursor(MAIN_SOURCE)!.floor).toBeGreaterThan(0);
+    expect(store.backfillTruncated).toBe(false);
+  });
+
+  it(`keeps at most ${MAX_STORE_BYTES} bytes of diff text, dropping the oldest`, () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const n = 300;
+    const file = jsonl(Array.from({ length: n }, (_, i) => bigEditLine(`e${i}`, i, 20_000)));
+    syncForward(store, file, file.length);
+    const kept = store.list();
+    expect(kept.length).toBeLessThan(n);
+    expect(kept.reduce((sum, e) => sum + entryBytes(e), 0)).toBeLessThanOrEqual(MAX_STORE_BYTES);
+    expect(store.get(`e${n - 1}`)).toBeDefined();
+    expect(store.get('e0')).toBeUndefined();
+  });
+
+  it('offers no older block once the byte cap is full', () => {
+    const store = new EditHistoryStore('s1', { dir });
+    const file = jsonl(Array.from({ length: 300 }, (_, i) => bigEditLine(`e${i}`, i, 20_000)));
+    syncForward(store, file, 5_000_000);
+    expect(store.list().length).toBeLessThan(MAX_ENTRIES);
+    expect(store.getCursor(MAIN_SOURCE)!.floor).toBeGreaterThan(0);
+    expect(store.backfillTruncated).toBe(false);
+  });
+
+  it('caps the agent meta strings', () => {
+    const meta = parseAgentMeta(JSON.stringify({ description: 'd'.repeat(5000), agentType: 'coding' }));
+    expect(meta?.description).toHaveLength(MAX_AGENT_META_CHARS);
+    expect(meta?.agentType).toBe('coding');
+  });
+
+  it(`keeps at most ${MAX_AGENTS} subagent labels, dropping the oldest no entry uses`, () => {
+    const store = new EditHistoryStore('s1', { dir });
+    syncForward(store, jsonl([editLine('e1', 1, '/work/a.ts', { agentId: 'a0' })]));
+    for (let i = 0; i <= MAX_AGENTS + 4; i++) store.setAgentMeta(`a${i}`, `{"description":"d${i}"}`);
+    const agents = store.getAgents();
+    expect(Object.keys(agents)).toHaveLength(MAX_AGENTS);
+    expect(agents.a0).toBeDefined(); // used by an entry
+    expect(agents[`a${MAX_AGENTS + 4}`]).toBeDefined(); // the newest
+    expect(agents.a1).toBeUndefined();
+  });
+});
+
+describe('EditHistoryStore: persistence', () => {
+  it('reloads entries, cursors, pending Bash calls and agents from disk', async () => {
+    const store = new EditHistoryStore('s1', { dir, debounceMs: 60_000 });
+    const file = jsonl([editLine('e1', 1), bashUse('b1', 2, 'render > a.png')]);
+    syncForward(store, file);
+    store.setAgentMeta('a1', '{"description":"d","agentType":"coding"}');
+    await store.flush();
+    const loaded = await EditHistoryStore.load('s1', { dir });
+    expect(ids(loaded)).toEqual(['e1']);
+    expect(loaded.getCursor(MAIN_SOURCE)).toEqual(store.getCursor(MAIN_SOURCE));
+    expect(loaded.getTranscriptId()).toBe('conv-1');
+    expect(loaded.getAgents()).toEqual({ a1: { description: 'd', agentType: 'coding' } });
+    const done = Buffer.concat([file, jsonl([bashResult('b1', 3)])]);
+    expect(syncForward(loaded, done)?.candidates[0]?.paths).toEqual(['/work/a.png']);
+  });
+
+  it('writes the file 0600 in a 0700 directory, also over a wider existing file', async () => {
+    const sub = join(dir, 'edit-history');
+    const store = new EditHistoryStore('s1', { dir: sub, debounceMs: 60_000 });
+    syncForward(store, jsonl([editLine('e1', 1)]));
+    await store.flush();
+    expect(statSync(sub).mode & 0o777).toBe(0o700);
+    expect(statSync(join(sub, 's1.json')).mode & 0o777).toBe(0o600);
+    writeFileSync(join(sub, 's1.json'), '{}', { mode: 0o644 });
+    await store.flush();
+    expect(statSync(join(sub, 's1.json')).mode & 0o777).toBe(0o600);
+  });
+
+  it('applies the caps and drops malformed entries when loading', async () => {
+    const store = new EditHistoryStore('s1', { dir, debounceMs: 60_000 });
+    syncForward(store, jsonl(Array.from({ length: MAX_ENTRIES }, (_, i) => editLine(`e${i}`, i))));
+    await store.flush();
+    const data = JSON.parse(readFileSync(join(dir, 's1.json'), 'utf-8'));
+    const extra = JSON.parse(editLine('late', MAX_ENTRIES + 1));
+    data.entries.push(
+      { ...store.get('e0')!, id: 'newest', ts: T0 + 10_000_000 },
+      { id: 'broken', path: 7, hunks: [] },
+      { id: 'nohunks', path: '/a.ts' },
+      extra
+    );
+    writeFileSync(join(dir, 's1.json'), JSON.stringify(data));
+    const loaded = await EditHistoryStore.load('s1', { dir });
+    expect(loaded.list()).toHaveLength(MAX_ENTRIES);
+    expect(loaded.get('newest')).toBeDefined();
+    expect(loaded.get('e0')).toBeUndefined();
+    expect(loaded.get('broken')).toBeUndefined();
+    expect(loaded.get('nohunks')).toBeUndefined();
+  });
+
+  it('drops broken cursors, pending Bash calls and agent labels when loading (a damaged file)', async () => {
+    writeFileSync(
+      join(dir, 's1.json'),
+      JSON.stringify({
+        version: 1,
+        sessionId: 's1',
+        transcriptId: 'conv-1',
+        cursors: {
+          main: { offset: 1.5, floor: 0 },
+          'subagents/agent-x.jsonl': { offset: -5, floor: 0 },
+          'subagents/agent-y.jsonl': { offset: 10, floor: 20 },
+          'subagents/agent-z.jsonl': { offset: 10, floor: 5, floorMidLine: true },
+        },
+        pendingBash: [null, 7, { id: 'b1', ts: 1, command: 'render > a.png', cwd: '/work' }],
+        agents: { x: null, y: 'text', z: { description: 'd', agentType: 'coding' } },
+        entries: [{ id: 'e1', ts: 1, path: '/a.ts', hunks: [null] }],
+      })
+    );
+    const loaded = await EditHistoryStore.load('s1', { dir });
+    expect(loaded.knownSources()).toEqual(['subagents/agent-z.jsonl']);
+    expect(loaded.getCursor('subagents/agent-z.jsonl')).toEqual({ offset: 10, floor: 5, floorMidLine: true });
+    expect(loaded.getAgents()).toEqual({ z: { description: 'd', agentType: 'coding' } });
+    expect(loaded.list()).toEqual([]);
+    // The surviving pending call still pairs with its result, and nothing throws.
+    expect(syncForward(loaded, jsonl([bashResult('b1', 3)]))?.candidates[0]?.paths).toEqual(['/work/a.png']);
+  });
+
+  it('rebuilds loaded entries under the same bounds: known fields only, string diff lines, the per-edit cap', async () => {
+    const good = {
+      ts: 1,
+      path: '/a.ts',
+      kind: 'code',
+      tool: 'Edit',
+      created: false,
+      added: 1,
+      removed: 0,
+      truncated: false,
+    };
+    writeFileSync(
+      join(dir, 's1.json'),
+      JSON.stringify({
+        version: 1,
+        sessionId: 's1',
+        transcriptId: 'conv-1',
+        cursors: {},
+        pendingBash: [
+          { id: 'b1', ts: 1, command: 'ls', cwd: '/work' },
+          { id: 'b2', ts: 1, command: 'ls', cwd: '/' + 'c'.repeat(5000) },
+          { id: 'p'.repeat(5000), ts: 1, command: 'ls', cwd: '/work' },
+        ],
+        agents: { ['a'.repeat(MAX_AGENT_META_CHARS + 1)]: { description: 'd', agentType: 't' } },
+        entries: [
+          { ...good, id: 'extra', hunks: [], blob: 'x'.repeat(1000) },
+          { ...good, id: 'objlines', hunks: [{ oldStart: 1, lines: [{ k: 'y' }, '+kept'] }] },
+          { ...good, id: 'bighunk', hunks: [{ lines: ['+' + 'q'.repeat(MAX_HUNK_BYTES)] }] },
+          { ...good, id: 'badtool', tool: 'Rm', hunks: [] },
+        ],
+      })
+    );
+    const loaded = await EditHistoryStore.load('s1', { dir, debounceMs: 60_000 });
+    expect(
+      loaded
+        .list()
+        .map((e) => e.id)
+        .sort()
+    ).toEqual(['bighunk', 'extra', 'objlines']);
+    expect(loaded.get('extra')).not.toHaveProperty('blob');
+    expect(loaded.get('objlines')!.hunks[0].lines).toEqual(['+kept']);
+    expect(loaded.get('bighunk')).toMatchObject({ truncated: true, hunks: [{ lines: [] }] });
+    expect(loaded.getAgents()).toEqual({});
+    await loaded.flush();
+    expect(
+      JSON.parse(readFileSync(join(dir, 's1.json'), 'utf-8')).pendingBash.map((p: { id: string }) => p.id)
+    ).toEqual(['b1']);
+  });
+
+  it("counts an entry's id against the byte cap", () => {
+    const e = {
+      id: 'i'.repeat(1000),
+      ts: 1,
+      path: '/a.ts',
+      kind: 'code',
+      tool: 'Edit',
+      created: false,
+      added: 0,
+      removed: 0,
+      hunks: [],
+      truncated: false,
+    } as const;
+    expect(entryBytes(e) - entryBytes({ ...e, id: 'i' })).toBe(999);
+  });
+
+  it(`does not parse a store file larger than ${MAX_FILE_BYTES} bytes`, async () => {
+    const store = new EditHistoryStore('s1', { dir, debounceMs: 60_000 });
+    syncForward(store, jsonl([editLine('e1', 1)]));
+    await store.flush();
+    const text = readFileSync(join(dir, 's1.json'), 'utf-8');
+    expect((await EditHistoryStore.load('s1', { dir })).get('e1')).toBeDefined();
+    writeFileSync(join(dir, 's1.json'), text + ' '.repeat(MAX_FILE_BYTES)); // still valid JSON
+    expect((await EditHistoryStore.load('s1', { dir })).list()).toEqual([]);
+  });
+
+  it('sweep() deletes the histories of sessions that are gone and stale tmp files, nothing else', async () => {
+    for (const name of [
+      'live.json',
+      'gone.json',
+      `gone.json.${process.pid + 1}.tmp`,
+      // An earlier run that had this process's pid (a container's pid 1): stale as well.
+      `live.json.${process.pid}.tmp`,
+      `live.json.${process.pid}-0a1b2c3d.tmp`,
+      `live.json.${TMP_TAG}.tmp`,
+      'notes.txt',
+    ]) {
+      writeFileSync(join(dir, name), '{}');
+    }
+    expect(await EditHistoryStore.sweep((id) => id === 'live', { dir })).toBe(1);
+    expect(readdirSync(dir).sort()).toEqual([`live.json.${TMP_TAG}.tmp`, 'live.json', 'notes.txt'].sort());
+    expect(await EditHistoryStore.sweep(() => false, { dir: join(dir, 'missing') })).toBe(0);
+  });
+
+  it('takes only a plain transcript id from the file (the sync builds a path from it)', async () => {
+    const cursors = { main: { offset: 10, floor: 0 } };
+    for (const transcriptId of ['../../etc/passwd', 'a/b', '', 7]) {
+      writeFileSync(join(dir, 's1.json'), JSON.stringify({ version: 1, transcriptId, cursors, entries: [] }));
+      const store = await EditHistoryStore.load('s1', { dir });
+      expect(store.getTranscriptId()).toBeNull();
+      expect(store.knownSources()).toEqual([]); // offsets into no known conversation
+    }
+    writeFileSync(join(dir, 's1.json'), JSON.stringify({ version: 1, transcriptId: 'conv-1.a_b', cursors }));
+    const store = await EditHistoryStore.load('s1', { dir });
+    expect(store.getTranscriptId()).toBe('conv-1.a_b');
+    expect(store.knownSources()).toEqual(['main']);
+  });
+
+  it('settle() writes pending changes and nothing for a store without any', async () => {
+    const store = new EditHistoryStore('s1', { dir, debounceMs: 60_000 });
+    syncForward(store, jsonl([editLine('e1', 1)]));
+    await store.settle();
+    expect((await EditHistoryStore.load('s1', { dir })).get('e1')).toBeDefined();
+    const loaded = await EditHistoryStore.load('s1', { dir });
+    rmSync(join(dir, 's1.json'));
+    await loaded.settle();
+    await new EditHistoryStore('empty', { dir }).settle();
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('delete() removes a stored history without parsing it', async () => {
+    writeFileSync(join(dir, 's1.json'), 'not json');
+    await EditHistoryStore.delete('s1', { dir });
+    await EditHistoryStore.delete('missing', { dir });
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('ignores a file of an unknown version', async () => {
+    writeFileSync(join(dir, 'v9.json'), JSON.stringify({ version: 9, entries: [{ id: 'x' }] }));
+    expect((await EditHistoryStore.load('v9', { dir })).list()).toEqual([]);
+  });
+
+  it('writes debounced', async () => {
+    const store = new EditHistoryStore('s1', { dir, debounceMs: 20 });
+    syncForward(store, jsonl([editLine('e1', 1)]));
+    const path = join(dir, 's1.json');
+    expect(existsSync(path)).toBe(false);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(JSON.parse(readFileSync(path, 'utf-8')).entries).toHaveLength(1);
+  });
+
+  it('starts empty from a missing or corrupt file', async () => {
+    expect((await EditHistoryStore.load('none', { dir })).list()).toEqual([]);
+    const store = new EditHistoryStore('bad', { dir });
+    await store.flush();
+    writeFileSync(join(dir, 'bad.json'), '{broken');
+    expect((await EditHistoryStore.load('bad', { dir })).list()).toEqual([]);
+  });
+
+  it('remove() deletes the file and stops later writes', async () => {
+    const store = new EditHistoryStore('s1', { dir, debounceMs: 10 });
+    syncForward(store, jsonl([editLine('e1', 1)]));
+    await store.flush();
+    await store.remove();
+    expect(existsSync(join(dir, 's1.json'))).toBe(false);
+    syncForward(store, jsonl([editLine('e1', 1), editLine('e2', 2)]));
+    await new Promise((r) => setTimeout(r, 40));
+    await store.flush();
+    expect(existsSync(join(dir, 's1.json'))).toBe(false);
+    expect(store.list()).toEqual([]); // the content is forgotten too
+  });
+
+  it('remove() during a write leaves nothing behind (the write cannot rename over the deleted file)', async () => {
+    const store = new EditHistoryStore('s1', { dir, debounceMs: 60_000 });
+    syncForward(store, jsonl([editLine('e1', 1)]));
+    const writing = store.flush();
+    // Let the write get past its first check, so remove() meets it under way.
+    await new Promise((r) => setImmediate(r));
+    await Promise.all([writing, store.remove()]);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('defaults to the data directory', () => {
+    const store = new EditHistoryStore('s1');
+    expect((store as unknown as { file: string }).file).toMatch(/edit-history[\\/]s1\.json$/);
+  });
+});

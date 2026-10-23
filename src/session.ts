@@ -2610,7 +2610,7 @@ export class Session extends EventEmitter {
     if (entry?.launch.chain !== 'fallback') return options;
 
     const resumeIdPattern = entry.launch.params?.resumeId;
-    const configDir = this._claudeConfigDir();
+    const configDir = this.claudeConfigDir();
     const chainTail = this._claudeSessionChain[this._claudeSessionChain.length - 1];
     const candidates = [chainTail, options.resumeSessionId, this.id].filter((v): v is string => !!v);
     for (const candidate of candidates) {
@@ -2632,8 +2632,11 @@ export class Session extends EventEmitter {
     return options;
   }
 
-  /** The session's Claude config dir when it has been relocated (#255), else undefined. */
-  private _claudeConfigDir(): string | undefined {
+  /**
+   * The session's Claude config dir when it has been relocated (#255), else undefined.
+   * Public for the edit history reader, which looks for the transcript there.
+   */
+  claudeConfigDir(): string | undefined {
     // Trimmed like `claudeProjectsDir()` trims the process-wide override: the
     // envOverrides schema validates keys only, and a whitespace-only value would
     // otherwise resolve to a relative path and read "no transcript" for everything.

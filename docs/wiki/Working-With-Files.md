@@ -253,6 +253,60 @@ that repository's own configuration on the host). The
 data comes from `GET /api/sessions/:id/git-status` and `GET /api/sessions/:id/git-diff`
 (see the [API reference](https://github.com/Ark0N/Codeman/blob/master/docs/api-reference.md)).
 
+## Edit history
+
+The Git panel shows what is different now. The edit history shows what the agent did, one edit
+at a time, including edits that were later undone or committed. Turn on **App Settings → Header &
+Panels → Header → Edit history** (per device, off by default) and a clock button appears in the
+header next to Attachments. It is not shown on phones.
+
+Click it for a draggable window listing the active session's edits, newest first:
+
+- One row per Edit or Write, with `new` for a file the agent created, `edit` otherwise,
+  and the lines added and removed. **Click a row** to see that edit's diff inline, coloured like the
+  Git panel; a diff over 64 KB is cut short. **Click the path** to open the file in the preview.
+- Edits made by subagents carry a chip with the subagent's task; hover it for the agent type and
+  its worktree branch. **Main agent only** hides them. **Group by file** puts the edits under
+  their file, with the totals on the file's row.
+- Images an agent produced with a shell command (a render, a plot, a screenshot) appear as rows with
+  a thumbnail: a `.png`, `.jpg`, `.gif`, `.webp`, `.avif` or `.svg` path named in the command or
+  its output counts when the file's modification time falls within that command's run. Images the
+  agent sent you count as well. Images outside the workspace and SVGs show no thumbnail. Click one
+  to open it in the preview.
+- **Load older** reads further back in the conversation, in the main agent's transcript and the
+  subagents' alike (up to three transcripts per click; with more, they take turns).
+- After `/clear` or a resume, the edits of the earlier conversation stay listed, and the window
+  first catches up on the ones it had not read yet. **Load older** then goes back within the new
+  conversation.
+
+It works for local Claude sessions only. Remote (SSH), Docker and other CLIs' sessions say so instead.
+
+How it reads:
+
+- **Only while you look.** The history is read from the session's Claude transcript when you open
+  the window, and again after each tool call that can change files and at the end of each turn,
+  while it stays open on that session. A closed window reads nothing, and Codeman does no work in
+  the background for sessions nobody looks at.
+- **The transcript is found through the session's hooks.** Each prompt tells Codeman where the
+  session's transcript is. Right after a server restart, before the next prompt, Codeman looks in
+  the session's `CLAUDE_CONFIG_DIR` if you set one for it in Codeman, else in the default config
+  directory. A `CLAUDE_CONFIG_DIR` set outside Codeman (in a shell profile or a wrapper script)
+  is only known after the next prompt; until then the window says "No transcript found for this
+  session yet".
+- **The history is stored, and it holds secrets.** Every diff an agent wrote is copied to
+  `~/.codeman/edit-history/<session-id>.json`, including API keys or `.env` contents it edited. The file is
+  readable by your user only, capped at 500 edits and 4 MiB of diff text per session (the oldest
+  are dropped), never part of search, blocked from every file route, and deleted when you delete
+  the session (a file left behind, by a crash for instance, goes at the next start). A pinned session you kill keeps its record and its history until you unpin and
+  delete it.
+- **Images go through the existing file routes.** A thumbnail inside the workspace uses the File
+  Viewer's route. An image outside it opens like any clicked path outside the workspace (no
+  notification, same file-type allowlist and sensitive-file blocklist). No new route serves a file.
+
+The data comes from `GET /api/sessions/:id/edits`, `GET /api/sessions/:id/edits/:entryId` and
+`POST /api/sessions/:id/edits/older` (see the
+[API reference](https://github.com/Ark0N/Codeman/blob/master/docs/api-reference.md)).
+
 ## Gotchas
 
 - **The viewer follows the active session's workspace.** Switching tabs changes what you are

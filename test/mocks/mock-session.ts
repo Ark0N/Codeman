@@ -81,6 +81,13 @@ export class MockSession extends EventEmitter {
   claudeSessionIdIsFirstHand: boolean = false;
   /** Mirrors Session.claudeSessionChain — oldest first, current last. */
   claudeSessionChain: string[] = [];
+  /** The per-session CLAUDE_CONFIG_DIR override that Session.claudeConfigDir() reads. */
+  claudeConfigDirOverride: string | undefined = undefined;
+
+  /** Mirrors Session.claudeConfigDir — the override, trimmed; undefined when unset. */
+  claudeConfigDir(): string | undefined {
+    return this.claudeConfigDirOverride?.trim() || undefined;
+  }
 
   /** Mirrors Session.adoptClaudeSessionId, including the first-hand chain rule. */
   adoptClaudeSessionId(newId: string, options: { firstHand?: boolean } = {}): void {
