@@ -94,7 +94,8 @@ ssh -o BatchMode=yes -t <connection-args> user@host \
   'tmux -L codeman-remote new-session -A -s codeman-ssh-<id8> -c <remotePath> "cd <remotePath> && exec <cli>" \; \
      set -t codeman-ssh-<id8> status off \; set -t codeman-ssh-<id8> mouse off \; \
      set -t codeman-ssh-<id8> prefix C-q \; set -s escape-time 0 \; \
-     set -t codeman-ssh-<id8> window-size latest'
+     set -t codeman-ssh-<id8> window-size latest \; \
+     unbind-key -a -T prefix \; bind-key -T prefix C-q send-prefix'
 ```
 
 Key points:
@@ -108,7 +109,11 @@ Key points:
 - **`-L codeman-remote`** = a DEDICATED socket for sessions launched by remote
   Codemans, NOT the canonical `-L codeman` socket the remote host's own Codeman
   uses. Options are set per-session (`set -t`), never `-g`, so a shared remote
-  tmux server's other sessions are untouched (#145 hardening). Note the
+  tmux server's other sessions are untouched (#145 hardening). The prefix
+  *table* is server-global, so the create chain reduces it to `C-q send-prefix`
+  (`unbind-key -a -T prefix` then `bind-key`). Otherwise Ctrl+Q then `)` moves
+  the inner client onto a sibling session. A non-owned attach does not do this:
+  it joins the remote Codeman's own socket. Note the
   asymmetry: **discovery/attach (COD-105) target the canonical `-L codeman`
   socket** — they join sessions the remote's own Codeman manages, while owned
   durable launches live on `-L codeman-remote`.

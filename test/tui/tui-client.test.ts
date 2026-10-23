@@ -25,6 +25,11 @@ import {
   parseSessionOptions,
   parseDetachKey,
   parsePrefixBinding,
+  isTuiSwitchBinding,
+  tuiSwitchBindingTty,
+  tuiSwitchAttachHook,
+  tuiSwitchGuard,
+  isTuiClientTty,
   ATTACH_BANNER_MARKER,
   parseTmuxSessionList,
   parseWindowSizing,
@@ -619,28 +624,70 @@ describe('attach window sizing', () => {
 });
 
 describe('TuiClient.bindSwitchKey', () => {
-  it('escapes the command separator, or tmux runs the second command instead of binding it', () => {
+  it('guards switch-client to one client tty, and keeps both commands inside the if-shell string', () => {
     // ⚠️ A bare `;` argument is a command separator to tmux's OWN parser: it
-    // ends the bind-key and executes what follows immediately. That bound only
-    // `switch-client` and ran `window-size latest` against every session at
-    // attach time, which is why sessions were left on `latest` after a detach —
-    // the sizing snapshot was taken from already-corrupted state. Verified
-    // against real tmux both ways before this test was written.
+    // ends the bind-key and executes what follows immediately. The two commands
+    // therefore live in the single if-shell argument, where `;` separates them
+    // when the key fires rather than when the key is bound. An unscoped
+    // `switch-client` is refused: key tables are server-wide, and that binding
+    // would move a browser tab on Esc then a digit.
     const calls: string[][] = [];
     const exec: TuiExecFile = async (_file, args) => {
       calls.push([...args]);
       return { stdout: '', stderr: '' };
     };
     const client = new TuiClient({ baseUrl, socket: 'codeman-beta', exec });
-    return client.bindSwitchKey('M-2', 'codeman-aaaa1111').then(() => {
+    return client.bindSwitchKey('M-2', 'codeman-aaaa1111', '/dev/pts/4').then(async () => {
       const bind = calls.find((args) => args.includes('bind-key'));
       expect(bind).toBeDefined();
-      expect(bind).toContain('\\;');
       expect(bind).not.toContain(';');
-      // Both commands have to be in the ONE binding.
-      expect(bind?.join(' ')).toContain('switch-client -t codeman-aaaa1111');
-      expect(bind?.join(' ')).toContain('window-size latest');
+      expect(bind).not.toContain('\\;');
+      const command = bind?.at(-1) ?? '';
+      expect(command).toContain(
+        'switch-client -t codeman-aaaa1111 ; set-window-option -t codeman-aaaa1111 window-size latest'
+      );
+      expect(bind).toContain('if-shell');
+      expect(bind).toContain('-F');
+      expect(bind?.join(' ')).toContain('#{client_tty},/dev/pts/4');
+      expect(bind?.join(' ')).toContain('#{@codeman-tui-pid}');
+      expect(await client.bindSwitchKey('M-2', 'codeman-aaaa1111', '/tmp/not-a-tty')).toBe(false);
+      expect(await client.bindSwitchKey('M-2', 'other-session', '/dev/pts/4')).toBe(false);
     });
+  });
+});
+
+describe('TUI switch-key guard', () => {
+  const guarded =
+    'if-shell -F "#{&&:#{==:#{client_tty},/dev/pts/4},#{==:#{client_pid},#{@codeman-tui-pid}}}" "switch-client -t codeman-aaaa1111 ; set-window-option -t codeman-aaaa1111 window-size latest"';
+
+  it('recognises our binding and the legacy unscoped one, and leaves a user binding alone', () => {
+    expect(isTuiSwitchBinding(guarded)).toBe(true);
+    expect(tuiSwitchBindingTty(guarded)).toBe('/dev/pts/4');
+    expect(
+      isTuiSwitchBinding(
+        'switch-client -t codeman-aaaa1111 \\; set-window-option -t codeman-aaaa1111 window-size latest'
+      )
+    ).toBe(true);
+    expect(isTuiSwitchBinding('switch-client -t codeman-aaaa1111')).toBe(true);
+    expect(tuiSwitchBindingTty('switch-client -t codeman-aaaa1111')).toBeNull();
+    expect(isTuiSwitchBinding('switch-client -n')).toBe(false);
+    expect(isTuiSwitchBinding('switch-client -t my-session')).toBe(false);
+    expect(isTuiSwitchBinding('display-message mine')).toBe(false);
+  });
+
+  it('refuses a tty that is not safe to interpolate, and defers client_pid in the hook', () => {
+    expect(isTuiClientTty('/dev/pts/4')).toBe(true);
+    expect(isTuiClientTty('/dev/ttys003')).toBe(true);
+    expect(isTuiClientTty('/tmp/pty')).toBe(false);
+    expect(isTuiClientTty('/dev/pts/4; rm')).toBe(false);
+    expect(tuiSwitchGuard('/dev/pts/4')).toContain('#{client_tty},/dev/pts/4');
+    expect(tuiSwitchGuard('/dev/pts/4')).toContain('#{@codeman-tui-pid}');
+    // A bare #{client_pid} is expanded when the hook is stored, with no client
+    // attached, and the pid is then empty forever. The backslash defers it.
+    const hook = tuiSwitchAttachHook('/dev/pts/4');
+    expect(hook).toContain('/dev/pts/4');
+    expect(hook).toContain('\\#{client_pid}');
+    expect(hook).toContain('set-hook -gu client-attached[90]');
   });
 });
 

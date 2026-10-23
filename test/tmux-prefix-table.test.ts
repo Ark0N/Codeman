@@ -15,7 +15,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import * as pty from 'node-pty';
-import { prefixTableNeedsReset, restrictTmuxPrefixTable } from '../src/tmux-prefix-table.js';
+import {
+  nestedPrefixTableResetCommands,
+  prefixTableNeedsReset,
+  restrictTmuxPrefixTable,
+} from '../src/tmux-prefix-table.js';
 
 /** A trimmed copy of tmux 3.4's stock prefix table, as `list-keys -T prefix` prints it. */
 const STOCK = [
@@ -276,5 +280,86 @@ describe.skipIf(!hasTmux)('restrictTmuxPrefixTable against a real tmux (private 
     } finally {
       run(`${tmux} set-option -g prefix C-b`);
     }
+  });
+});
+
+describe.skipIf(!hasTmux)('nested Docker/remote tmux prefix table (private socket)', () => {
+  // What buildRemoteLaunchCommand / buildDockerLaunchCommand create: prefix C-q
+  // on a dedicated server, then the two commands nestedPrefixTableResetCommands
+  // emits. The inner client is the docker-exec / ssh process; Ctrl+Q is its prefix.
+  const socket = `codeman-nested-prefix-${process.pid}`;
+  const tmux = `tmux -L ${socket} -f /dev/null`;
+  const run = (cmd: string): string => execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  let client: pty.IPty | null = null;
+
+  const clientSession = () => run(`${tmux} list-clients -F '#{client_session}'`).trim();
+
+  async function waitFor(check: () => boolean, ms = 3000): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (check()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return check();
+  }
+
+  beforeAll(async () => {
+    // `stty -ixon` in the pane so a delivered C-q is visible to cat -v as ^Q
+    // instead of being eaten as XON. The attach client below is what must also
+    // deliver C-q; node-pty opens the pty raw, which clears IXON on that side.
+    run(`${tmux} new-session -d -s alpha -x 80 -y 24 'stty -ixon; cat -v'`);
+    run(`${tmux} new-session -d -s beta -x 80 -y 24 'stty -ixon; cat -v'`);
+    run(`${tmux} set-option -t alpha prefix C-q`);
+    run(`${tmux} set-option -t beta prefix C-q`);
+    const env = { ...process.env } as Record<string, string>;
+    delete env.TMUX;
+    client = pty.spawn('tmux', ['-L', socket, '-f', '/dev/null', 'attach-session', '-t', 'alpha'], {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      env,
+    });
+    expect(await waitFor(() => clientSession() === 'alpha')).toBe(true);
+  });
+
+  afterAll(() => {
+    client?.kill();
+    let socketPath = '';
+    try {
+      socketPath = run(`${tmux} display-message -p '#{socket_path}'`).trim();
+      run(`${tmux} kill-server`);
+    } catch {
+      /* already gone */
+    }
+    if (socketPath.endsWith(`/${socket}`)) rmSync(socketPath, { force: true });
+  });
+
+  it('with the stock table, Ctrl+Q ) moves the inner client onto the other session', async () => {
+    client!.write('\x11)');
+    expect(await waitFor(() => clientSession() === 'beta')).toBe(true);
+    const name = run(`${tmux} list-clients -F '#{client_name}'`).trim();
+    run(`${tmux} switch-client -c ${name} -t alpha`);
+    expect(await waitFor(() => clientSession() === 'alpha')).toBe(true);
+  });
+
+  it('after the nested reset, Ctrl+Q ), s and w leave the client, and Ctrl+Q Ctrl+Q reaches the pane', async () => {
+    for (const command of nestedPrefixTableResetCommands()) run(`${tmux} ${command}`);
+
+    const prefix = run(`${tmux} list-keys -T prefix`)
+      .split('\n')
+      .filter((line) => line.trim());
+    expect(prefix).toEqual([expect.stringMatching(/-T prefix C-q\s+send-prefix$/)]);
+
+    client!.write('\x11)');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    client!.write('\x11s');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    client!.write('\x11w');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(clientSession()).toBe('alpha');
+    expect(run(`${tmux} display-message -p -t alpha '#{pane_in_mode}'`).trim()).toBe('0');
+
+    client!.write('\x11\x11');
+    expect(await waitFor(() => run(`${tmux} capture-pane -p -t alpha`).includes('^Q'))).toBe(true);
   });
 });
