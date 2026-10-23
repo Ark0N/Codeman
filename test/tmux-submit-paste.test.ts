@@ -315,3 +315,13 @@ describe('sendInput line breaks', () => {
     expect(typed.ran[0]).toMatch(/ send-keys -t "codeman-abc12345" -l -- 'just type'$/);
   });
 });
+
+it('terminates literal operands in both sendInputToPane branches', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const src = await readFile(new URL('../src/tmux-manager.ts', import.meta.url), 'utf8');
+  const start = src.indexOf('  sendInputToPane(');
+  const body = src.slice(start, src.indexOf('\n  }\n', start));
+  const literal = body.match(/send-keys[^`\n]*-l[^`\n]*/g) ?? [];
+  expect(literal).toHaveLength(2);
+  for (const command of literal) expect(command).toContain(' -l -- ');
+});

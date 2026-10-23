@@ -1242,3 +1242,30 @@ Its CLI knowledge is a GENERATED block (`npm run generate:cli-catalog`, markers 
 ⚠️ It must stay **bash 3.2** clean — macOS ships it and the documented install is `curl | bash` under `set -euo pipefail`, so `declare -A`, `mapfile`, namerefs, `${x,,}` and here-strings are all fatal there; CI runs `bash -n` plus a real `bash:3.2` container, since expanding an EMPTY array under `set -u` is a runtime abort `bash -n` cannot see.
 
 ⚠️ It executes ONLY commands from the embedded block (`CLI_INSTALL_CMD_TRUSTED`) — there is no network fetch of the catalogue at install time to worry about at all.
+
+## Agent inspection and guarded submission
+
+`agent-session-routes.ts` is registered by `WebServer` with the other route
+modules. Ownership is checked before transcript/pane/receipt lookup. Inspection
+uses strict native metadata attribution, bounded traversal, separate prefix and
+candidate-metadata budgets, bounded path probes before canonical reads, and
+complete UTF8 JSONL records. A full page advances its cursor without claiming a
+blocked record. Opaque cursors bind caller/session/lifecycle/file identity; pane
+geometry is excluded so changing devices does not invalidate transcript paging.
+
+Staging requires a fresh, known local Codex composer/caret capture. The footer
+uses the shared `CODEX_REASONING_EFFORTS` vocabulary. Before any write, available
+columns are calculated from actual captured geometry and the rendered prefix,
+including indentation; reaching the last column or wrapping is refused. Stage
+cancels older verifier retries and sends no Enter. Receipts contain hashes and
+bounded ephemeral identities only, expire, and are consumed before awaited
+submission, including failures.
+
+Submission additionally binds input and geometry revisions and rechecks the
+exact composer/caret at the conditional Enter boundary. The route must retain
+the Session snapshot's staging generation rather than replacing it with the
+inspection generation. Managed input and auxiliary named keys participate in the
+same pending/lease boundary. Complete focus/mouse reports and empty writes are
+not edits. Never retry ambiguous Enter delivery or clear an unverified composer.
+The ordinary SubmitVerifier uses the shared write boundary, so each re-press
+updates `lastSubmitAt` just like any other Enter.

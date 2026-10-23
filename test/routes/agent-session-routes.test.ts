@@ -1,6 +1,6 @@
 /** @fileoverview Agent inspection and guarded input HTTP contracts (no live ports). */
 import { afterEach, describe, expect, it } from 'vitest';
-import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
+import { registerAgentSessionRoutes } from '../../src/web/routes/agent-session-routes.js';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 
 let harness: RouteTestHarness;
@@ -9,7 +9,7 @@ afterEach(async () => {
 });
 describe('agent session routes', () => {
   it('returns an explicitly bounded pane snapshot when no attributed transcript exists', async () => {
-    harness = await createRouteTestHarness(registerSessionRoutes);
+    harness = await createRouteTestHarness(registerAgentSessionRoutes);
     const session = [...harness.ctx.sessions.values()][0];
     const result = await harness.app.inject({ url: `/api/sessions/${session.id}/inspect?maxBytes=20` });
     expect(result.statusCode).toBe(200);
@@ -19,7 +19,7 @@ describe('agent session routes', () => {
     expect(Buffer.byteLength(body.data.evidence)).toBeLessThanOrEqual(20);
   });
   it('refuses guarded staging for an uncharacterized composer', async () => {
-    harness = await createRouteTestHarness(registerSessionRoutes);
+    harness = await createRouteTestHarness(registerAgentSessionRoutes);
     const session = [...harness.ctx.sessions.values()][0];
     const result = await harness.app.inject({
       method: 'POST',
@@ -33,7 +33,9 @@ describe('agent session routes', () => {
 it('checks ownership before inspection, stage and submit', async () => {
   process.env.CODEMAN_MULTIUSER = '1';
   try {
-    harness = await createRouteTestHarness(registerSessionRoutes, { authUser: { username: 'alice', role: 'user' } });
+    harness = await createRouteTestHarness(registerAgentSessionRoutes, {
+      authUser: { username: 'alice', role: 'user' },
+    });
     const session = [...harness.ctx.sessions.values()][0];
     session.owner = 'bob';
     for (const request of [
@@ -52,7 +54,7 @@ it('checks ownership before inspection, stage and submit', async () => {
   }
 });
 it('validates output budgets and refuses to resume a pane fallback', async () => {
-  harness = await createRouteTestHarness(registerSessionRoutes);
+  harness = await createRouteTestHarness(registerAgentSessionRoutes);
   const session = [...harness.ctx.sessions.values()][0];
   session.terminalBuffer = '😀é'.repeat(20);
   for (const value of ['0', '-1', '65537', '1.5', 'NaN'])
@@ -74,7 +76,7 @@ it('validates output budgets and refuses to resume a pane fallback', async () =>
 it('uses real session writes to stage without Enter and refuses intervening API input', async () => {
   const { Session } = await import('../../src/session.js');
   const { formatPaneSnapshot } = await import('../../src/tmux-manager.js');
-  harness = await createRouteTestHarness(registerSessionRoutes);
+  harness = await createRouteTestHarness(registerAgentSessionRoutes);
   let composer = '';
   const writes: string[] = [];
   const session = new Session({
@@ -83,13 +85,19 @@ it('uses real session writes to stage without Enter and refuses intervening API 
     mode: 'codex',
     mux: {
       isAvailable: () => true,
-      capturePaneBuffer: () =>
-        formatPaneSnapshot([`› ${composer}`, '  GPT-6-Luna default · ~/case'], {
+      capturePaneBuffer: (
+        _name: string,
+        _pane?: string,
+        opts?: { capturedGeometry?: { cols: number; rows: number } }
+      ) => {
+        if (opts) opts.capturedGeometry = { cols: 100, rows: 20 };
+        return formatPaneSnapshot([`› ${composer}`, '  GPT-6-Luna default · ~/case'], {
           cols: 100,
           rows: 20,
           cursorX: 2 + composer.length,
           cursorY: 0,
-        }),
+        });
+      },
       sendInput: async (_id: string, text: string, options?: { beforeDispatch?: () => boolean }) => {
         if (options?.beforeDispatch && !options.beforeDispatch()) return false;
         writes.push(text);
@@ -157,7 +165,9 @@ it('reads only a strictly attributed Codex rollout and binds HTTP cursors to its
   const row =
     JSON.stringify({ type: 'session_meta', payload: { id, cwd: root, originator: `codeman_${session.id}` } }) + '\n';
   await writeFile(join(home, 'sessions', `rollout-${id}.jsonl`), row + '{"text":"hello"}\n');
-  harness = await createRouteTestHarness(registerSessionRoutes, { authUser: { username: 'alice', role: 'admin' } });
+  harness = await createRouteTestHarness(registerAgentSessionRoutes, {
+    authUser: { username: 'alice', role: 'admin' },
+  });
   (harness.ctx.sessions as unknown as Map<string, Session>).set(session.id, session);
   try {
     const first = await harness.app.inject({
@@ -172,6 +182,13 @@ it('reads only a strictly attributed Codex rollout and binds HTTP cursors to its
     expect(data.cursor).not.toContain(home);
     const next = await harness.app.inject({ url: `/api/sessions/${session.id}/inspect?since=${data.cursor}` });
     expect(next.json().data.evidence).toBe('');
+    const access = session as unknown as { ptyProcess: { resize(cols: number, rows: number): void } | null };
+    access.ptyProcess = { resize: () => {} };
+    session.resize(80, 24);
+    access.ptyProcess = null;
+    expect(
+      (await harness.app.inject({ url: `/api/sessions/${session.id}/inspect?since=${data.cursor}` })).statusCode
+    ).toBe(200);
     session.owner = 'changed-owner';
     expect(
       (await harness.app.inject({ url: `/api/sessions/${session.id}/inspect?since=${data.cursor}` })).statusCode
@@ -202,7 +219,7 @@ it('refuses a stale launch-resume cursor once a new managed rollout conflicts wi
   const row = (id: string, originator: string) =>
     JSON.stringify({ type: 'session_meta', payload: { id, cwd: root, originator } }) + '\n';
   await writeFile(join(home, 'sessions', `rollout-${old}.jsonl`), row(old, 'original-launch'));
-  harness = await createRouteTestHarness(registerSessionRoutes);
+  harness = await createRouteTestHarness(registerAgentSessionRoutes);
   (harness.ctx.sessions as unknown as Map<string, Session>).set(session.id, session);
   try {
     const initial = (await harness.app.inject({ url: `/api/sessions/${session.id}/inspect` })).json().data;

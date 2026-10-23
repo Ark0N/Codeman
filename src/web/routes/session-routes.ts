@@ -4,7 +4,6 @@
  * auto-clear, auto-compact, image watcher, flicker filter, and logout.
  */
 
-import { registerAgentSessionRoutes } from './agent-session-routes.js';
 import { FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { join, dirname, extname, basename, resolve as resolvePath } from 'node:path';
@@ -1113,8 +1112,6 @@ export function registerSessionRoutes(
   // ═══════════════════════════════════════════════════════════════
 
   // ========== Logout ==========
-
-  registerAgentSessionRoutes(app, ctx);
 
   app.post('/api/logout', async (req, reply) => {
     // Invalidate server-side session token (not just the browser cookie)

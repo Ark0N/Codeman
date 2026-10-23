@@ -6,12 +6,18 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { stripAnsi } from './utils/regex-patterns.js';
 import { visibleWidth } from './tui/tui-ansi.js';
+import { CODEX_REASONING_EFFORTS } from './types/session.js';
+const FOOTER_LINE = new RegExp(
+  String.raw`^\s+(?:\d+% context left|\? for shortcuts|← for agents|\S+ (?:${[...CODEX_REASONING_EFFORTS, 'default'].join('|')}) · )`
+);
 export const STAGE_MAX_BYTES = 8192;
 export const promptSha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
 export interface GuardedInputSnapshot {
   generation: string;
   revision: number;
   composerSha: string;
+  /** Actual captured pane width minus the rendered composer prefix (including indentation). */
+  availableColumns: number;
 }
 export interface GuardedInputTarget {
   id: string;
@@ -40,17 +46,7 @@ export function readGuardedCodexComposer(screen: string): string | null {
   const last = rows.at(-1);
   if (!last) return null;
   const below = lines.slice(last.index + 1).filter((line) => line.trim());
-  if (
-    below.length === 0 ||
-    below.length > 3 ||
-    below.some(
-      (line) =>
-        !/^\s+(?:\d+% context left|\? for shortcuts|← for agents|\S+ (?:default|low|medium|high|xhigh|max) · )/.test(
-          line
-        )
-    )
-  )
-    return null;
+  if (below.length === 0 || below.length > 3 || below.some((line) => !FOOTER_LINE.test(line))) return null;
   // Preserve exact printable content; only SGR-dim placeholder/suggestion text is excluded.
   const raw = screen.split('\n')[last.index];
   let dim = false;
@@ -74,6 +70,10 @@ export function readGuardedCodexComposer(screen: string): string | null {
 
 /** Require the capture's caret at the exact end of the unwrapped composer. */
 export function readGuardedCodexSnapshot(snapshot: string): string | null {
+  return readGuardedCodexSnapshotDetails(snapshot)?.composer ?? null;
+}
+/** Exact input-row prefix width, shared by proof and preflight wrapping checks. */
+export function readGuardedCodexSnapshotDetails(snapshot: string): { composer: string; prefixWidth: number } | null {
   // formatPaneSnapshot emits one absolute row address per line, then the caret.
   // Plain captures lack caret evidence and cannot prove invisible trailing edits.
   // eslint-disable-next-line no-control-regex
@@ -98,7 +98,7 @@ export function readGuardedCodexSnapshot(snapshot: string): string | null {
   const prefix = stripAnsi(rows[composerRow]).match(/^(\s*›[ \u00a0])/);
   if (!prefix || Number(caret[1]) !== composerRow + 1 || Number(caret[2]) !== visibleWidth(prefix[1] + composer) + 1)
     return null;
-  return composer;
+  return { composer, prefixWidth: visibleWidth(prefix[1]) };
 }
 
 export class GuardedStageStore {
@@ -129,6 +129,8 @@ export class GuardedStageStore {
       const before = target.snapshot();
       if (!before || before.composerSha !== promptSha256(''))
         throw new GuardedInputConflict('An empty, verifiable composer is required');
+      if (!Number.isFinite(before.availableColumns) || visibleWidth(message) >= before.availableColumns)
+        throw new GuardedInputConflict('Message would reach the pane edge or wrap; shorten it or widen the pane');
       for (const [id, receipt] of this.receipts)
         if (receipt.expiresAt <= this.now() || receipt.sessionId === target.id) this.receipts.delete(id);
       // Refuse capacity before typing. Do not evict a caller's still-live receipt.
@@ -139,7 +141,12 @@ export class GuardedStageStore {
       if (!(await target.write(message)))
         throw new GuardedInputConflict('Staging delivery failed; inspect the pane before trying again');
       const after = target.snapshot();
-      if (!after || after.generation !== before.generation || after.revision !== before.revision + 1)
+      if (
+        !after ||
+        after.generation !== before.generation ||
+        after.revision !== before.revision + 1 ||
+        after.availableColumns !== before.availableColumns
+      )
         throw new GuardedInputConflict('Input or pane changed while staging; no receipt was issued');
       const stageId = randomUUID();
       const expiresAt = this.now() + this.ttlMs;
@@ -166,6 +173,7 @@ export class GuardedStageStore {
         !current ||
         current.generation !== receipt.generation ||
         current.revision !== receipt.revision ||
+        current.availableColumns !== receipt.availableColumns ||
         current.composerSha !== receipt.sha256
       )
         throw new GuardedInputConflict('Staged composer, input, or pane identity changed; nothing submitted');

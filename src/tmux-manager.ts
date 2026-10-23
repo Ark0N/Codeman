@@ -4170,7 +4170,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       if (textPart && hasCarriageReturn) {
         execSync(
-          `${tmux} send-keys -t ${shellescape(target)} -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+          `${tmux} send-keys -t ${shellescape(target)} -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
           {
             encoding: 'utf-8',
             timeout: EXEC_TIMEOUT_MS,
@@ -4182,7 +4182,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         });
       } else if (textPart) {
         execSync(
-          `${tmux} send-keys -t ${shellescape(target)} -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+          `${tmux} send-keys -t ${shellescape(target)} -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
           {
             encoding: 'utf-8',
             timeout: EXEC_TIMEOUT_MS,

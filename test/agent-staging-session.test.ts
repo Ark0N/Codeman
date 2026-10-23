@@ -7,13 +7,19 @@ it('fences writes and reused-pid pane lifecycles without persisting prompt conte
   let screen = '› \n  GPT-6-Luna default · ~/case\n';
   const mux = {
     isAvailable: () => true,
-    capturePaneBuffer: () =>
-      formatPaneSnapshot(screen.trimEnd().split('\n'), {
+    capturePaneBuffer: (
+      _name: string,
+      _pane?: string,
+      opts?: { capturedGeometry?: { cols: number; rows: number } }
+    ) => {
+      if (opts) opts.capturedGeometry = { cols: 100, rows: 20 };
+      return formatPaneSnapshot(screen.trimEnd().split('\n'), {
         cols: 100,
         rows: 20,
         cursorX: screen.startsWith('› hello') ? 7 : 2,
         cursorY: 0,
-      }),
+      });
+    },
     sendInput: async () => true,
   };
   const session = new Session({
@@ -49,8 +55,19 @@ it('checks conditional Enter at the dispatch boundary and rejects concurrent bro
   const writes: string[] = [];
   const mux = {
     isAvailable: () => true,
-    capturePaneBuffer: () =>
-      formatPaneSnapshot(['› hello', '  GPT-6-Luna default · ~/case'], { cols: 100, rows: 20, cursorX: 7, cursorY: 0 }),
+    capturePaneBuffer: (
+      _name: string,
+      _pane?: string,
+      opts?: { capturedGeometry?: { cols: number; rows: number } }
+    ) => {
+      if (opts) opts.capturedGeometry = { cols: 100, rows: 20 };
+      return formatPaneSnapshot(['› hello', '  GPT-6-Luna default · ~/case'], {
+        cols: 100,
+        rows: 20,
+        cursorX: 7,
+        cursorY: 0,
+      });
+    },
     sendInput: async (_id: string, text: string, options?: { beforeDispatch?: () => boolean }) => {
       await new Promise<void>((resolve) => {
         dispatch = resolve;
@@ -104,13 +121,19 @@ it('cancels an older automatic submit verifier before staging an identical promp
   const writes: string[] = [];
   const mux = {
     isAvailable: () => true,
-    capturePaneBuffer: () =>
-      formatPaneSnapshot([`› ${composer}`, '  GPT-6-Luna default · ~/case'], {
+    capturePaneBuffer: (
+      _name: string,
+      _pane?: string,
+      opts?: { capturedGeometry?: { cols: number; rows: number } }
+    ) => {
+      if (opts) opts.capturedGeometry = { cols: 100, rows: 20 };
+      return formatPaneSnapshot([`› ${composer}`, '  GPT-6-Luna default · ~/case'], {
         cols: 100,
         rows: 20,
         cursorX: 2 + composer.length,
         cursorY: 0,
-      }),
+      });
+    },
     capturePaneText: () => `› ${composer}\n  GPT-6-Luna default · ~/case`,
     sendInput: async (_id: string, text: string) => {
       writes.push(text);
@@ -141,8 +164,19 @@ it('routes automatic verifier Enter through the shared guarded input boundary', 
   const writes: string[] = [];
   const mux = {
     isAvailable: () => true,
-    capturePaneBuffer: () =>
-      formatPaneSnapshot(['› hello', '  GPT-6-Luna default · ~/case'], { cols: 100, rows: 20, cursorX: 7, cursorY: 0 }),
+    capturePaneBuffer: (
+      _name: string,
+      _pane?: string,
+      opts?: { capturedGeometry?: { cols: number; rows: number } }
+    ) => {
+      if (opts) opts.capturedGeometry = { cols: 100, rows: 20 };
+      return formatPaneSnapshot(['› hello', '  GPT-6-Luna default · ~/case'], {
+        cols: 100,
+        rows: 20,
+        cursorX: 7,
+        cursorY: 0,
+      });
+    },
     capturePaneText: () => '› hello\n  GPT-6-Luna default · ~/case',
     sendInput: async (_id: string, text: string, options?: { beforeDispatch?: () => boolean }) => {
       if (options?.beforeDispatch) {
@@ -180,8 +214,19 @@ it('refuses legacy one-shot prompt entrypoints during a guarded submission befor
   const writes: string[] = [];
   const mux = {
     isAvailable: () => true,
-    capturePaneBuffer: () =>
-      formatPaneSnapshot(['› hello', '  GPT-6-Luna default · ~/case'], { cols: 100, rows: 20, cursorX: 7, cursorY: 0 }),
+    capturePaneBuffer: (
+      _name: string,
+      _pane?: string,
+      opts?: { capturedGeometry?: { cols: number; rows: number } }
+    ) => {
+      if (opts) opts.capturedGeometry = { cols: 100, rows: 20 };
+      return formatPaneSnapshot(['› hello', '  GPT-6-Luna default · ~/case'], {
+        cols: 100,
+        rows: 20,
+        cursorX: 7,
+        cursorY: 0,
+      });
+    },
     sendInput: async (_id: string, text: string, options?: { beforeDispatch?: () => boolean }) => {
       await new Promise<void>((resolve) => {
         release = resolve;
@@ -259,7 +304,14 @@ it('uses fresh normalized pane rows for working/dialog denial before exact compo
     mode: 'codex',
     mux: {
       isAvailable: () => true,
-      capturePaneBuffer: capture,
+      capturePaneBuffer: (
+        _name: string,
+        _pane?: string,
+        opts?: { capturedGeometry?: { cols: number; rows: number } }
+      ) => {
+        if (opts) opts.capturedGeometry = { cols: 100, rows: 20 };
+        return capture();
+      },
       capturePaneText: () => {
         throw Error('must use same frame');
       },
@@ -287,13 +339,19 @@ it('keeps raw user input synchronous and preserves receipts for focus/mouse/noop
     mode: 'codex',
     mux: {
       isAvailable: () => true,
-      capturePaneBuffer: () =>
-        formatPaneSnapshot(['› hello', '  GPT-6-Luna default · ~/case'], {
+      capturePaneBuffer: (
+        _name: string,
+        _pane?: string,
+        opts?: { capturedGeometry?: { cols: number; rows: number } }
+      ) => {
+        if (opts) opts.capturedGeometry = { cols: 100, rows: 20 };
+        return formatPaneSnapshot(['› hello', '  GPT-6-Luna default · ~/case'], {
           cols: 100,
           rows: 20,
           cursorX: 7,
           cursorY: 0,
-        }),
+        });
+      },
     },
     muxSession: { muxName: 'codeman-12345678', sessionId: 'test', createdAt: 1, pid: 1 },
   } as unknown as ConstructorParameters<typeof Session>[0]);
@@ -319,11 +377,90 @@ it('keeps raw user input synchronous and preserves receipts for focus/mouse/noop
     session.owner = 'other';
     session.owner = undefined;
     expect(session.inspectionGeneration).not.toBe(generation);
-    const priorResize = session.inspectionGeneration;
+    const priorResize = session.guardedInputGeneration;
     session.resize(80, 24);
-    expect(session.inspectionGeneration).not.toBe(priorResize);
+    expect(session.guardedInputGeneration).not.toBe(priorResize);
   } finally {
     access.ptyProcess = null;
     await session.stop(false);
+  }
+});
+
+it('refuses a message that would wrap using the actual captured indent and width before any write', async () => {
+  const writes: string[] = [];
+  const session = new Session({
+    workingDir: '/tmp',
+    mode: 'codex',
+    mux: {
+      isAvailable: () => true,
+      capturePaneBuffer: (
+        _name: string,
+        _pane: string,
+        opts: { capturedGeometry?: { cols: number; rows: number } }
+      ) => {
+        if (opts) opts.capturedGeometry = { cols: 30, rows: 20 };
+        return formatPaneSnapshot(['    › ', '  GPT-6 default · ~/case'], {
+          cols: 30,
+          rows: 20,
+          cursorX: 6,
+          cursorY: 0,
+        });
+      },
+      sendInput: async (_id: string, text: string) => {
+        writes.push(text);
+        return true;
+      },
+    },
+    muxSession: { muxName: 'codeman-12345678', sessionId: 'test', createdAt: 1, pid: 1 },
+  } as unknown as ConstructorParameters<typeof Session>[0]);
+  const { GuardedStageStore } = await import('../src/agent-staging.js');
+  try {
+    const store = new GuardedStageStore();
+    const target = {
+      id: session.id,
+      snapshot: () => session.guardedInputSnapshot(),
+      write: (text: string) => session.stageGuardedInput(text),
+      submit: (snap: Parameters<Session['submitGuardedInput']>[0]) => session.submitGuardedInput(snap),
+    };
+    await expect(store.stage(target, 'alice', 'x'.repeat(24))).rejects.toThrow();
+    expect(writes).toEqual([]);
+  } finally {
+    await session.stop(false);
+  }
+});
+
+it('keeps inspection generations stable across resize but invalidates a staged snapshot', async () => {
+  const session = new Session({ workingDir: '/tmp', mode: 'codex' });
+  const access = session as unknown as { ptyProcess: { resize(cols: number, rows: number): void } | null };
+  access.ptyProcess = { resize: () => {} };
+  try {
+    const inspection = session.inspectionGeneration;
+    const staging = session.guardedInputGeneration;
+    session.resize(80, 24);
+    expect(session.inspectionGeneration).toBe(inspection);
+    expect(session.guardedInputGeneration).not.toBe(staging);
+  } finally {
+    access.ptyProcess = null;
+    await session.stop(false);
+  }
+});
+
+it('records a verifier re-press as the latest submit time', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(10000);
+  const session = new Session({
+    workingDir: '/tmp',
+    mode: 'codex',
+    mux: { isAvailable: () => true, capturePaneText: () => '› hello\n', sendInput: async () => true },
+    muxSession: { muxName: 'codeman-12345678', sessionId: 'test', createdAt: 1, pid: 1 },
+  } as unknown as ConstructorParameters<typeof Session>[0]);
+  try {
+    await session.writeViaMux('hello\r');
+    const initial = session.lastSubmitAt;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(session.lastSubmitAt).toBe(initial + 2000);
+  } finally {
+    await session.stop(false);
+    vi.useRealTimers();
   }
 });
