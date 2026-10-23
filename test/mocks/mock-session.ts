@@ -107,6 +107,10 @@ export class MockSession extends EventEmitter {
   /** Mirrors Session.trackUserInput (the send-key route feeds it around the write path). */
   trackUserInput(_data: string): void {}
 
+  async performAuxiliaryInput(operation: () => Promise<void>): Promise<void> {
+    await operation();
+  }
+
   private _muxName: string | null = null;
 
   constructor(id: string = 'mock-session-id') {

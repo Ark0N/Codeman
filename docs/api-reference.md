@@ -589,9 +589,75 @@ request returns. The capture runs synchronous tmux calls on the server; the
 | `lines=<n>` | With `full=1` only: read at most `<n>` lines of tmux history above the visible frame. An integer of at least 1, clamped to the configured history limit; absent or malformed, the whole limit (100,000 lines by default), as before. When a bound below the configured limit left older lines in tmux (its `history_size` is deeper), `truncated` is true with `truncationReason: 'tail'`; a byte cap still reports `'capped'`. Without it a full capture reads all of that history before `tail` cuts it, so a client that keeps a fixed number of lines (the tile grid sends its xterm's scrollback plus its rows) should send it. |
 | `alt=recording` | With `full=1` only: if the pane is in the alternate screen (a nested tmux, where tmux keeps no history, or any full-screen app such as vim or less while it is open), answer with the visible frame over the byte recording instead (`source: 'mux-visible'`, `tail` applied as without `full=1`). Shells' automatic loads send it. |
 
+## Bounded agent inspection and guarded input
+
+These authenticated routes use the standard envelope and session ownership checks.
+`/api/v1` aliases `/api`; an inaccessible session returns `404 NOT_FOUND` before
+any transcript, pane or receipt lookup.
+
+| Endpoint | Parameters/body | Result |
+| --- | --- | --- |
+| `GET /api/v1/sessions/:id/inspect` | `maxBytes=8192` (integer 1–65536), optional opaque `since` UUID | `source`, `identity`, observed `activity`, bounded UTF8 `evidence`, `truncated`, `incremental`, `cursor`, `maxBytes`; native results also include `omittedBeforeBytes`, `scannedBytes`, optional `blockedReason` |
+| `POST /api/v1/sessions/:id/stage` | `{ "message": "printable single line" }` | `{ stageId, sha256, expiresAt, sessionId, submitted:false }`; types without Enter |
+| `POST /api/v1/sessions/:id/submit` | `{ "stageId": "UUID", "confirmSha": "64 lowercase hex characters" }` | `{ stageId, sessionId, submitted:true }`; sends one conditional Enter |
+
+Inspection initially supports native local Codex JSONL with strict conversation
+attribution, using the session's effective `CODEX_HOME`, explicit resume identity
+or unique managed originator. It never selects an arbitrary newest cwd match.
+The initial read selects recent complete records; `omittedBeforeBytes` explicitly
+labels its tail omission. Cursor reads consume only complete appended records,
+keeping UTF8/JSONL boundaries. Evidence bytes exclude response metadata and JSON
+escaping. Record scans cap at 256 KiB plus bounded identity anchors; attribution
+separately caps at 8192 directory entries, eight directory levels and 1 MiB of
+metadata reads. Oversized/unfinished records report `blockedReason`; incremental
+reads do not silently skip them. Other modes, remote/container sessions, and
+unprovable native attribution return `source:"pane-snapshot"`, `incremental:false`,
+`cursor:null`; these snapshots can repeat evidence.
+
+Attribution identifies a file, not an authoritative current-thread signal. A
+configured launch resume and a new owned rollout conflict and force fallback.
+An in-CLI `/resume` of an existing foreign-originator thread may leave no new
+owned rollout; launch metadata cannot detect that switch. Check the returned
+conversation identity and do not use these observations as proof of the active
+thread, task completion or authorization.
+
+Opaque server-side cursors bind caller, session, pane generation, conversation,
+opened-file identity, byte offset and bounded content anchors. At most 1024 live
+cursors are retained for 15 minutes; restart, eviction or expiry requires a fresh
+tail baseline. Replacement, truncation, detected rewrites, reassociation, foreign
+cursors or loss of the attributed source return `409 CONFLICT`. No transcript
+filesystem path is returned as cursor/identity metadata; evidence retains the
+owner's native record content, which can itself contain paths.
+
+Guarded input initially requires a local characterized Codex composer, one
+unwrapped visible line, a recognized footer and a cursor at its exact end.
+Unknown/working/modal/shell/remote/container composers fail closed. Stage accepts
+at most 8192 UTF8 bytes, no C0/C1/DEL controls, multiline text, or trailing
+whitespace (the existing mux transport trims it). Its two-minute receipt stores
+only hashes/ephemeral identities in a bounded in-memory store (1024 live receipts),
+never persisted prompt content. A receipt acknowledges typing; a delayed screen
+paint can still make submit refuse until exact verification becomes possible.
+
+Direct auxiliary key operations participate in the same pending-write and input
+lease checks. Complete allowlisted focus/mouse reports and empty writes preserve
+input revision; mixed or unknown sequences remain keyboard-bearing. Exact
+composer/caret checks also reject a mouse-moved caret.
+
+Submit consumes an owned receipt before awaited delivery, verifies the caller,
+confirmation hash, expiry, lifecycle/input revisions and exact composer/caret,
+then uses a session-level conditional Enter dispatch with a temporary input lease.
+Competing Codeman writes cannot enter during that dispatch. Managed restarts and
+intervening browser/API/auxiliary input invalidate receipts independently of pid
+reuse or restored visible text. Direct tmux edits remain outside Codeman's
+serialization. Failed, ambiguous, expired, changed or repeated submits return
+`409 CONFLICT`; every owned attempt consumes the receipt. Neither submit nor its
+error recovery automatically replays Enter. Success acknowledges delivery of one
+Enter, not native acceptance or task completion. Invalid schema input returns
+`400 INVALID_INPUT`.
+
 ## The `codeman agent` CLI (client over these endpoints)
 
-`codeman agent ls|spawn|send|wait|read|interrupt|rm|post|inbox|ack` (`src/cli-agent.ts`) is the command-line client for the endpoints above, for agents the skill does not reach (a pi or shell session, a machine without `jq`). It adds no route: `spawn` is `POST /api/v1/quick-start` (+ `wait-output` on the mode's `capabilities.composerReadyMark` from the CLI registry, where it declares one), `send` is `POST …/input` with `clientId`+`seq` (and `wait`/`waitTimeout` for `--wait` / `--until <signals>`; `delivered:false` without `duplicate` and `wait.ended` both exit 3 — the CLI never reports a dead worker as done), `wait` is `GET …/wait` (`--until`) or `GET …/wait-output` (`--match`, `from=buffer` by default), `read` is `GET …/last-response` or `GET …/terminal?tail=`, `interrupt` is `POST …/input` with a bare `\u001b`, `rm` is `DELETE …/sessions/:id`, and the inbox verbs map one to one onto the [agent inbox](#agent-inbox) routes (`post` → `POST …/inbox`, `inbox [id] [--wait]` → `GET …/inbox[?wait=]`, own inbox by default, `ack <ids…>` → `POST …/inbox/ack`); `ls` adds an `INBOX` column from `GET /api/v1/agent-inbox/summary` and drops it when that route does not answer. A fire-and-forget `send` to a sleeping wake-on-LAN host reads the route's `buffered` (own line, exit 0) and `dropped` (exit 1: the chunk is gone). An id may be the 8-character form `ls` prints, resolved through `GET /api/v1/sessions`; anything shorter refuses before any request, the same floor as `PARENT_SESSION_ID_MIN_PREFIX`. Every call carries `X-Codeman-Parent-Session`; only `spawn`'s quick-start carries `X-Codeman-Agent-Origin: codeman-agent-cli` (the agent-scratch label must never reach a request that cannot create the case directory). Basic auth comes from `CODEMAN_PASSWORD` or the data dir's `.env`. Server-side error codes are shown verbatim (`INVALID_INPUT: until=stop …` on a hook-less mode is not hidden); exit codes are `0` ok, `1` error, `2` timeout, `3` the session exited, `4` refused by a client-side guard (for `inbox --wait`, `3` only when `GET /api/v1/sessions` no longer lists the session; a wait the server ended otherwise, on a restart or a detach, is `2`). `post` takes text that starts with `-` as it is (a markdown file often does); text that is exactly an option (`--json`, `-h`) goes after `--`. See the README section "`codeman agent`" for the guards and `test/cli-agent.test.ts` for the pinned behaviour.
+`codeman agent ls|spawn|send|wait|read|inspect|stage|submit|interrupt|rm|post|inbox|ack` (`src/cli-agent.ts`) is the command-line client for the endpoints above, for agents the skill does not reach (a pi or shell session, a machine without `jq`). It uses the guarded endpoints above for `inspect`/`stage`/`submit`; `spawn` is `POST /api/v1/quick-start` (+ `wait-output` on the mode's `capabilities.composerReadyMark` from the CLI registry, where it declares one), `send` is `POST …/input` with `clientId`+`seq` (and `wait`/`waitTimeout` for `--wait` / `--until <signals>`; `delivered:false` without `duplicate` and `wait.ended` both exit 3 — the CLI never reports a dead worker as done), `wait` is `GET …/wait` (`--until`) or `GET …/wait-output` (`--match`, `from=buffer` by default), `read` is `GET …/last-response` or `GET …/terminal?tail=`, `interrupt` is `POST …/input` with a bare `\u001b`, `rm` is `DELETE …/sessions/:id`, and the inbox verbs map one to one onto the [agent inbox](#agent-inbox) routes (`post` → `POST …/inbox`, `inbox [id] [--wait]` → `GET …/inbox[?wait=]`, own inbox by default, `ack <ids…>` → `POST …/inbox/ack`); `ls` adds an `INBOX` column from `GET /api/v1/agent-inbox/summary` and drops it when that route does not answer. A fire-and-forget `send` to a sleeping wake-on-LAN host reads the route's `buffered` (own line, exit 0) and `dropped` (exit 1: the chunk is gone). An id may be the 8-character form `ls` prints, resolved through `GET /api/v1/sessions`; anything shorter refuses before any request, the same floor as `PARENT_SESSION_ID_MIN_PREFIX`. Every call carries `X-Codeman-Parent-Session`; only `spawn`'s quick-start carries `X-Codeman-Agent-Origin: codeman-agent-cli` (the agent-scratch label must never reach a request that cannot create the case directory). Basic auth comes from `CODEMAN_PASSWORD` or the data dir's `.env`. Server-side error codes are shown verbatim (`INVALID_INPUT: until=stop …` on a hook-less mode is not hidden); exit codes are `0` ok, `1` error, `2` timeout, `3` the session exited, `4` refused by a client-side guard (for `inbox --wait`, `3` only when `GET /api/v1/sessions` no longer lists the session; a wait the server ended otherwise, on a restart or a detach, is `2`). `post` takes text that starts with `-` as it is (a markdown file often does); text that is exactly an option (`--json`, `-h`) goes after `--`. See the README section "`codeman agent`" for the guards and `test/cli-agent.test.ts` for the pinned behaviour.
 
 `codeman mcp` (`src/mcp-server.ts`) is a Model Context Protocol server on stdio over the same endpoints, for MCP clients: `list_sessions` (`GET /api/v1/sessions`), `start_session` (`POST /api/v1/quick-start` with `X-Codeman-Agent-Origin: codeman-mcp`, then `wait-output` on the mode's ready mark), `send_prompt` (`POST …/input` with `wait`/`waitTimeout`), `wait_for_session` (`GET …/wait` or `…/wait-output`), `read_output` (`GET …/last-response` or `…/terminal?tail=`), `interrupt_session` and `delete_session`. It adds no route. The URL comes from `CODEMAN_API_URL` or `--url`, never a guess; prompting, interrupting and deleting are limited to sessions the process started (or the calling session's own children) unless it runs with `--allow-any-session`. See the README section "MCP server" and `test/mcp-server.test.ts`.
 

@@ -316,7 +316,8 @@ export interface TerminalMultiplexer extends EventEmitter {
   /**
    * Send input to a session via tmux send-keys.
    */
-  sendInput(sessionId: string, input: string): Promise<boolean>;
+  /** Internal conditional Enter guard, checked synchronously before transport dispatch. */
+  sendInput(sessionId: string, input: string, options?: { beforeDispatch?: () => boolean }): Promise<boolean>;
 
   // ========== Metadata ==========
 

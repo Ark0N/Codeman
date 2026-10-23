@@ -811,3 +811,12 @@ Rules that matter:
   not parked, `send` it one line ("read your inbox: `codeman agent inbox`").
 - **Lifetime.** An inbox goes with its session on delete. A server restart empties all
   inboxes unless the user turned on *Keep agent inbox across restarts* in Settings.
+
+## Bounded inspection and guarded submission
+
+Use `codeman agent inspect` for bounded evidence and incremental local Codex cursors.
+Use `codeman agent stage --message-file` followed by one hash-confirmed
+`codeman agent submit --stage-id --confirm-sha` when the exact local Codex
+composer and caret can be verified. Other targets provide labeled snapshots or
+refuse guarded input. See [inspection and staging](inspection-and-staging.md)
+for budgets, receipt expiry, conflict handling and supported composers.

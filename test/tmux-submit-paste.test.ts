@@ -229,6 +229,21 @@ describe('sendInput line breaks', () => {
     return argvOf(setBufferCmd.replace(/^.*? set-buffer /, `${FAKE_TMUX} set-buffer `)).at(-1) as string;
   }
 
+  it('checks a conditional Enter before the actual inputRunner command', async () => {
+    const manager = managerWithSession();
+    try {
+      expect(await manager.sendInput('s1', '\r', { beforeDispatch: () => false })).toBe(false);
+      expect(manager.ran).toEqual([]);
+      expect(await manager.sendInput('s1', '\r', { beforeDispatch: () => true })).toBe(true);
+      expect(manager.ran).toEqual([expect.stringMatching(/ Enter$/)]);
+      manager.ran = [];
+      expect(await manager.sendInput('s1', 'draft\r', { beforeDispatch: () => true })).toBe(false);
+      expect(manager.ran).toEqual([]);
+    } finally {
+      manager.destroy();
+    }
+  });
+
   it('submits a multi-line prompt as one paste with its line breaks, then Enter', async () => {
     const manager = managerWithSession();
     expect(await manager.sendInput('s1', 'line one\nline two\n\nparagraph three\r')).toBe(true);

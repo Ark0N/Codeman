@@ -3983,7 +3983,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * - `Enter` key is sent as a SEPARATE tmux invocation after a small delay
    * - Ink (Claude CLI) needs text and Enter split to avoid treating Enter as a newline
    */
-  async sendInput(sessionId: string, input: string): Promise<boolean> {
+  async sendInput(sessionId: string, input: string, options?: { beforeDispatch?: () => boolean }): Promise<boolean> {
+    if (options?.beforeDispatch && input !== '\r') return false;
     const session = this.sessions.get(sessionId);
     if (!session) {
       console.error(
@@ -3996,7 +3997,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // inputRunner() so a test subclass can record what WOULD reach tmux.
     const run = this.inputRunner();
     if (!run) {
-      return true;
+      return options?.beforeDispatch?.() ?? true;
     }
 
     console.log(
@@ -4050,7 +4051,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
           `${this.tmux()} send-keys -t "${session.muxName}" -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`
         );
       } else if (hasCarriageReturn) {
-        // Enter only
+        // Enter only: no await between the guard and dispatch.
+        if (options?.beforeDispatch && !options.beforeDispatch()) return false;
         await run(`${this.tmux()} send-keys -t "${session.muxName}" Enter`);
       }
 
