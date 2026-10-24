@@ -194,7 +194,7 @@ describe('SSE connect timeout', () => {
     expect(app.reconnectAttempts).toBe(1);
   });
 
-  it('going offline cancels the pending timer (the online event reconnects)', () => {
+  it('connectSSE() while offline cancels the pending timer (the online event reconnects)', () => {
     const app = makeApp();
     app.connectSSE();
     navigatorStub.onLine = false;
