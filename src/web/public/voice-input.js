@@ -14,7 +14,7 @@
  *   auto-detects MIME type (opus/webm/mp4), and supports custom key terms for dev vocabulary.
  *
  * - VoiceInput — High-level voice input controller. Toggle mode: tap mic to start, tap
- *   again to stop. Auto-stops after 3s silence. Shows floating preview overlay with recording
+ *   again to stop. Auto-stops after configurable silence. Shows floating preview overlay with recording
  *   indicator, level meter (AnalyserNode), and elapsed timer. Two insert modes: "direct"
  *   (inject into local echo overlay or PTY) and "compose" (editable textarea overlay).
  *   Includes a temporary green Send button that replaces the settings gear icon after voice input.
@@ -216,9 +216,12 @@ const DeepgramProvider = {
 
   _resetSilenceTimeout() {
     clearTimeout(this._silenceTimeout);
+    this._silenceTimeout = null;
+    const delay = VoiceInput.getSilenceTimeoutMs(3000);
+    if (delay === 0) return;
     this._silenceTimeout = setTimeout(() => {
       this.stop();
-    }, 3000);
+    }, delay);
   },
 
   stop() {
@@ -455,7 +458,10 @@ const ClaudeVoiceProvider = {
 
   _resetSilenceTimeout() {
     clearTimeout(this._silenceTimeout);
-    this._silenceTimeout = setTimeout(() => this.stop(), this.SILENCE_MS);
+    this._silenceTimeout = null;
+    const delay = VoiceInput.getSilenceTimeoutMs(this.SILENCE_MS);
+    if (delay === 0) return;
+    this._silenceTimeout = setTimeout(() => this.stop(), delay);
   },
 
   /**
@@ -545,6 +551,7 @@ const VoiceInput = {
   _lastTranscript: '',
   _stabilityTimer: null,
   _accumulatedFinal: '',
+  _pendingInterim: '',
   _activeProvider: null, // 'deepgram' | 'webspeech' | null
   _recordingStartedAt: 0, // timestamp when recording started
   _retryCount: 0, // auto-retry counter for premature Web Speech API ends
@@ -597,6 +604,12 @@ const VoiceInput = {
     } catch (_e) {
       return {};
     }
+  },
+
+  /** Seconds in settings; zero means stop only when the user asks. */
+  getSilenceTimeoutMs(fallback) {
+    const seconds = this._getDeepgramConfig().silenceTimeout;
+    return [0, 3, 6, 15, 30].includes(seconds) ? seconds * 1000 : fallback;
   },
 
   _saveDeepgramConfig(config) {
@@ -706,6 +719,7 @@ const VoiceInput = {
     this.isRecording = true;
     this._activeProvider = 'claude';
     this._accumulatedFinal = '';
+    this._pendingInterim = '';
     this._lastTranscript = '';
     this._hasReceivedResult = false;
     this._recordingStartedAt = Date.now();
@@ -728,22 +742,19 @@ const VoiceInput = {
         // Each frame is the WHOLE running transcript, so replace rather than append.
         this._accumulatedFinal = text;
         if (isFinal) {
-          this._hidePreview();
-          this._insertText(text);
-          this.stop();
+          this.stop(true);
         } else {
           this._showPreview(text, 'claude');
         }
       },
       onError: (msg) => {
         const wasRecording = this.isRecording;
-        this.stop();
+        this.stop(true);
         if (wasRecording) app.showToast(msg, 'error');
       },
       onEnd: () => {
         if (this.isRecording) {
-          if (this._accumulatedFinal) this._insertText(this._accumulatedFinal);
-          this.stop();
+          this.stop(true);
         }
       }
     });
@@ -756,6 +767,7 @@ const VoiceInput = {
     this.isRecording = true;
     this._activeProvider = 'deepgram';
     this._accumulatedFinal = '';
+    this._pendingInterim = '';
     this._lastTranscript = '';
     this._hasReceivedResult = false;
     this._recordingStartedAt = Date.now();
@@ -777,12 +789,12 @@ const VoiceInput = {
         if (!this.isRecording) return;
         this._hasReceivedResult = true;
         if (isFinal) {
-          this._accumulatedFinal += text;
-          this._hidePreview();
-          this._insertText(this._accumulatedFinal);
-          this.stop();
+          this._accumulatedFinal += (this._accumulatedFinal ? ' ' : '') + text;
+          this._pendingInterim = '';
+          this._showPreview(this._accumulatedFinal, 'deepgram');
         } else {
-          const display = this._accumulatedFinal + text;
+          this._pendingInterim = (this._accumulatedFinal ? ' ' : '') + text;
+          const display = this._accumulatedFinal + this._pendingInterim;
           this._showPreview(display, 'deepgram');
         }
       },
@@ -793,9 +805,6 @@ const VoiceInput = {
       },
       onEnd: () => {
         if (this.isRecording) {
-          if (this._accumulatedFinal) {
-            this._insertText(this._accumulatedFinal);
-          }
           this.stop();
         }
       }
@@ -819,6 +828,7 @@ const VoiceInput = {
     this.isRecording = true;
     this._activeProvider = 'webspeech';
     this._accumulatedFinal = '';
+    this._pendingInterim = '';
     this._lastTranscript = '';
     this._hasReceivedResult = false;
     this._recordingStartedAt = Date.now();
@@ -849,9 +859,19 @@ const VoiceInput = {
     if (navigator.vibrate) navigator.vibrate(50);
   },
 
-  stop() {
+  stop(claudeFinished = false) {
     if (!this.isRecording) return;
+    // Claude delivers its final transcript after finalize. Keep accepting it
+    // until that frame (or onEnd) completes this recording.
+    if (this._activeProvider === 'claude' && !claudeFinished && ClaudeVoiceProvider._ws?.readyState === WebSocket.OPEN) {
+      ClaudeVoiceProvider.stop();
+      return;
+    }
     this.isRecording = false;
+    const text = this._accumulatedFinal + this._pendingInterim;
+    this._accumulatedFinal = '';
+    this._pendingInterim = '';
+    if (text) this._insertText(text);
     clearTimeout(this.silenceTimeout);
     clearTimeout(this._stabilityTimer);
     this.silenceTimeout = null;
@@ -901,11 +921,14 @@ const VoiceInput = {
     }
 
     if (finalText) {
+      clearTimeout(this._stabilityTimer);
+      this._stabilityTimer = null;
       this._accumulatedFinal += finalText;
-      this._hidePreview();
-      this._insertText(this._accumulatedFinal);
-      this.stop();
-    } else if (interim) {
+      this._pendingInterim = interim;
+      this._showPreview(this._accumulatedFinal + interim);
+    }
+    if (interim) {
+      this._pendingInterim = interim;
       const display = this._accumulatedFinal + interim;
       this._showPreview(display);
       // iOS Safari workaround: isFinal is always false.
@@ -917,6 +940,9 @@ const VoiceInput = {
   _onWebSpeechError(event) {
     // During auto-retry, 'aborted' and 'no-speech' errors are expected — ignore them
     if (this._retryCount > 0 && (event.error === 'aborted' || event.error === 'no-speech')) return;
+
+    // Browser silence events must not override an extended/manual deadline.
+    if (event.error === 'no-speech' && this.getSilenceTimeoutMs(3000) !== 3000) return;
 
     const wasRecording = this.isRecording;
     this.stop();
@@ -953,16 +979,30 @@ const VoiceInput = {
         this.recognition.start();
       } catch (_e) {
         // If restart fails, fall through to stop
-        if (this._accumulatedFinal) this._insertText(this._accumulatedFinal);
         this.stop();
       }
       return;
     }
 
-    // Genuine end — finalize any accumulated text
-    if (this._accumulatedFinal) {
-      this._insertText(this._accumulatedFinal);
+    // Some browsers end recognition independently of our silence timer. For an
+    // extended/manual session, restart without resetting the original deadline.
+    const delay = this.getSilenceTimeoutMs(3000);
+    if (delay === 0 || delay > 3000) {
+      try {
+        // Each recognition run starts a fresh result list. Retain Safari's
+        // interim-only phrase before the next run can replace it.
+        if (this._pendingInterim) {
+          this._accumulatedFinal += this._pendingInterim + ' ';
+          this._pendingInterim = '';
+        }
+        this.recognition.start();
+        return;
+      } catch (_e) {
+        // A failed restart ends recording normally.
+      }
     }
+
+    // Genuine end — finalize any accumulated text
     this.stop();
   },
 
@@ -1138,26 +1178,25 @@ const VoiceInput = {
 
   _resetSilenceTimeout() {
     clearTimeout(this.silenceTimeout);
+    this.silenceTimeout = null;
+    const delay = this.getSilenceTimeoutMs(3000);
+    if (delay === 0) return;
     this.silenceTimeout = setTimeout(() => {
       if (this.isRecording) {
-        // Finalize any accumulated text before stopping
-        if (this._accumulatedFinal) {
-          this._insertText(this._accumulatedFinal);
-        }
         this.stop();
       }
-    }, 3000);
+    }, delay);
   },
 
   _iosStabilityCheck(transcript) {
+    // The Safari shortcut must not override the chosen thinking pause.
+    if (this.getSilenceTimeoutMs(3000) !== 3000) return;
     if (transcript !== this._lastTranscript) {
       this._lastTranscript = transcript;
       clearTimeout(this._stabilityTimer);
       this._stabilityTimer = setTimeout(() => {
         if (this.isRecording) {
-          const finalText = this._accumulatedFinal + transcript;
-          this._hidePreview();
-          this._insertText(finalText);
+          this._pendingInterim = transcript;
           this.stop();
         }
       }, 750);
@@ -1340,6 +1379,7 @@ const VoiceInput = {
     this.silenceTimeout = null;
     this._stabilityTimer = null;
     this._accumulatedFinal = '';
+    this._pendingInterim = '';
     this._lastTranscript = '';
     this._retryCount = 0;
     this._hasReceivedResult = false;

@@ -3182,6 +3182,20 @@
                       <option value="compose">Compose dialog</option>
                     </select>
                   </div>
+                  <div class="set-row has-field" data-search="voice silence pause timeout manual stop recording">
+                    <div class="set-row-text">
+                      <label class="set-row-label" for="voiceSilenceTimeout">Stop after silence</label>
+                      <span class="set-row-desc">Allow time to think between phrases. Manual keeps listening until you tap the mic again.</span>
+                    </div>
+                    <select id="voiceSilenceTimeout" class="set-select">
+                      <option value="default">Provider default</option>
+                      <option value="3">3 seconds</option>
+                      <option value="6">6 seconds</option>
+                      <option value="15">15 seconds</option>
+                      <option value="30">30 seconds</option>
+                      <option value="0">Manual</option>
+                    </select>
+                  </div>
                   <div class="set-row has-field" data-search="voice language">
                     <div class="set-row-text">
                       <span class="set-row-label">Language</span>

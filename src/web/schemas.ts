@@ -1721,6 +1721,8 @@ export const SettingsUpdateSchema = z
         language: z.string().max(20).optional(),
         keyterms: z.string().max(500).optional(),
         insertMode: z.string().max(20).optional(),
+        /** Silence timeout in seconds; 0 disables automatic stopping. Omitted keeps provider defaults. */
+        silenceTimeout: z.union([z.literal(0), z.literal(3), z.literal(6), z.literal(15), z.literal(30)]).optional(),
       })
       .optional(),
     // Run mode preference (cross-device sync)
