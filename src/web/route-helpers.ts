@@ -324,11 +324,33 @@ function sessionNotFoundError(sessionId: string): Error & { statusCode: number; 
  * Look up a session by ID or throw a structured error.
  * Replaces the pattern: `const session = sessions.get(id); if (!session) return createErrorResponse(...)`.
  *
- * When `req` is passed in multi-user mode, a session the caller does not own is
- * reported as NOT_FOUND (never 403), so existence of other users' sessions is not
- * leaked. Single-user / admin callers are unaffected.
+ * In multi-user mode a session the caller does not own is reported as NOT_FOUND
+ * (never 403), so existence of other users' sessions is not leaked. Single-user /
+ * admin callers are unaffected (`canAccessOwned` short-circuits when multi-user is off).
+ *
+ * `req` is REQUIRED. When it was optional, forgetting it compiled cleanly and
+ * silently performed an UNSCOPED lookup. A caller with no request in flight must
+ * say so at the call site via {@link findSessionUnscopedOrFail}.
  */
-export function findSessionOrFail(ctx: SessionPort, sessionId: string, req?: FastifyRequest): Session {
+export function findSessionOrFail(ctx: SessionPort, sessionId: string, req: FastifyRequest): Session {
+  return lookupSessionOrFail(ctx, sessionId, req);
+}
+
+/**
+ * Look up a session WITHOUT ownership scoping. Deliberately verbose and greppable:
+ * every call is a decision to skip the multi-user ownership check and should carry
+ * a comment saying why (e.g. a startup path with no request in flight). Inside a
+ * request handler use `findSessionOrFail(ctx, id, req)` instead.
+ *
+ * It has no production callers today: every lookup in `src/` is request-scoped. It
+ * exists so the next genuinely request-less caller has somewhere to go other than
+ * making `req` optional again.
+ */
+export function findSessionUnscopedOrFail(ctx: SessionPort, sessionId: string): Session {
+  return lookupSessionOrFail(ctx, sessionId, undefined);
+}
+
+function lookupSessionOrFail(ctx: SessionPort, sessionId: string, req: FastifyRequest | undefined): Session {
   const session = ctx.sessions.get(sessionId);
   if (!session) throw sessionNotFoundError(sessionId);
   if (req && !canAccessOwned(getAuthUser(req), session.owner)) throw sessionNotFoundError(sessionId);
@@ -343,15 +365,18 @@ export function findSessionOrFail(ctx: SessionPort, sessionId: string, req?: Fas
  * return, so this returns the persisted record instead. Same ownership
  * enforcement, same 404-not-403 leak protection — this is that function's
  * missing other half, not a separate check reimplemented inline.
+ *
+ * `req` is REQUIRED for the same reason as on `findSessionOrFail`: an optional
+ * one would let a caller that forgot it retire another user's row in multi-user mode.
  */
 export function findPersistedSessionOrFail(
   store: { getSession(id: string): SessionState | null },
   sessionId: string,
-  req?: FastifyRequest
+  req: FastifyRequest
 ): SessionState {
   const persisted = store.getSession(sessionId);
   if (!persisted) throw sessionNotFoundError(sessionId);
-  if (req && !canAccessOwned(getAuthUser(req), persisted.owner)) throw sessionNotFoundError(sessionId);
+  if (!canAccessOwned(getAuthUser(req), persisted.owner)) throw sessionNotFoundError(sessionId);
   return persisted;
 }
 

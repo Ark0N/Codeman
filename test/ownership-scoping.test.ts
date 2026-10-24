@@ -10,10 +10,16 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import ts from 'typescript';
 import { WebServer } from '../src/web/server.js';
 import { TmuxManager } from '../src/tmux-manager.js';
 import { createUser, invalidateUsersCache } from '../src/user-store.js';
-import { canAccessOwned, findSessionOrFail, sessionCapacityState } from '../src/web/route-helpers.js';
+import {
+  canAccessOwned,
+  findSessionOrFail,
+  findSessionUnscopedOrFail,
+  sessionCapacityState,
+} from '../src/web/route-helpers.js';
 
 vi.spyOn(TmuxManager, 'isTmuxAvailable').mockReturnValue(true);
 
@@ -152,6 +158,30 @@ describe('session-scoping helpers (multi-user)', () => {
     expect(() => findSessionOrFail(ctxWith(map), 's1', reqAs('bob', 'user'))).toThrow();
     expect(findSessionOrFail(ctxWith(map), 's1', reqAs('alice', 'user'))).toBeDefined();
     expect(findSessionOrFail(ctxWith(map), 's1', reqAs('root', 'admin'))).toBeDefined();
+  });
+
+  it('findSessionUnscopedOrFail is the explicit unscoped lookup: returns a foreign session, 404s an unknown id', () => {
+    const map = new Map<string, unknown>([['s1', fakeSession('alice')]]);
+    expect(findSessionUnscopedOrFail(ctxWith(map), 's1')).toBeDefined();
+    expect(() => findSessionUnscopedOrFail(ctxWith(map), 'missing')).toThrow();
+  });
+
+  it('findSessionOrFail and findPersistedSessionOrFail declare req as REQUIRED, so an unscoped call must use the explicit helper', async () => {
+    // tsc does not typecheck test/, so pin the signatures from the source AST: an
+    // optional `req` would make forgetting it compile into an UNSCOPED lookup.
+    const file = path.join(import.meta.dirname, '../src/web/route-helpers.ts');
+    const src = ts.createSourceFile(file, await fs.readFile(file, 'utf8'), ts.ScriptTarget.Latest, true);
+    for (const name of ['findSessionOrFail', 'findPersistedSessionOrFail']) {
+      const decl = src.statements.find(
+        (s): s is ts.FunctionDeclaration => ts.isFunctionDeclaration(s) && s.name?.text === name
+      );
+      const req = decl?.parameters.find((p) => p.name.getText(src) === 'req');
+      expect(req, name).toBeDefined();
+      expect(req?.questionToken, name).toBeUndefined();
+      expect(req?.initializer, name).toBeUndefined();
+      // Exactly `FastifyRequest`: a later `FastifyRequest | undefined` would be optional in all but syntax.
+      expect(req?.type?.getText(src), name).toBe('FastifyRequest');
+    }
   });
 
   it('per-user session cap counts only the owner sessions', () => {
