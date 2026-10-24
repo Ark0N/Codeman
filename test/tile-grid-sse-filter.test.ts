@@ -80,7 +80,11 @@ describe('the SSE filter while tiles own the terminal', () => {
     const app = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
     const start = app.indexOf('const _sseParams = new URLSearchParams(');
     expect(start).toBeGreaterThan(-1);
-    const block = app.slice(start, app.indexOf('this.eventSource = new EventSource(', start));
+    // Both ends must be found: a missing end marker makes slice() take the
+    // rest of app.js, and the checks below would then pass on any text.
+    const end = app.indexOf('const eventSource = new EventSource(', start);
+    expect(end).toBeGreaterThan(start);
+    const block = app.slice(start, end);
     expect(block).toContain('this._sseFilterSessionId(this.activeSessionId)');
     expect(block).not.toMatch(/set\('sessions', this\.activeSessionId\)/);
   });

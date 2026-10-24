@@ -997,6 +997,12 @@ class CodemanApp {
     this._sseLastMessageAt = 0;
     this._sseStaleTimeoutMs = window.CodemanSseStale?.TIMEOUT_MS ?? 45000;
     this._sseStaleWatchdog = null;
+    // Connect timeout: the watchdog only judges a 'connected' stream, and an
+    // attempt whose request hangs never opens AND never errors. Each attempt
+    // is bounded by this timer (armed in connectSSE, cleared on open, on
+    // failure and at the top of every connectSSE so timers never stack).
+    this._sseConnectTimeout = null;
+    this._sseConnectTimeoutMs = window.CodemanSseStale?.CONNECT_TIMEOUT_MS ?? 15000;
 
     // Connection-loss UI (banner + full-screen overlay). The decision itself is
     // pure and lives in constants.js (computeConnectionLossUi); these are just
@@ -2066,6 +2072,10 @@ class CodemanApp {
   }
 
   connectSSE() {
+    // First, before the offline early return: any path into connectSSE
+    // supersedes the previous attempt, and its deadline must go with it.
+    this._clearTimer('_sseConnectTimeout');
+
     // Check if browser is offline
     if (!navigator.onLine) {
       this.setConnectionStatus('offline');
@@ -2109,7 +2119,21 @@ class CodemanApp {
     const _sseParams = new URLSearchParams({ clientId: this._clientId });
     const _sseFilterId = this._sseFilterSessionId(this.activeSessionId);
     if (_sseFilterId) _sseParams.set('sessions', _sseFilterId);
-    this.eventSource = new EventSource(CodemanBase.url(`/api/events?${_sseParams.toString()}`));
+    const eventSource = new EventSource(CodemanBase.url(`/api/events?${_sseParams.toString()}`));
+    this.eventSource = eventSource;
+
+    // Bound the attempt. A request that never gets response headers leaves
+    // the EventSource in CONNECTING with no `open` and no `error`, so without
+    // this the page waits forever. readyState OPEN covers the narrow race
+    // where the connection opened but its `open` callback has not run yet.
+    const connectTimeout = setTimeout(() => {
+      if (this._sseConnectTimeout !== connectTimeout) return;
+      this._sseConnectTimeout = null;
+      if (this.eventSource !== eventSource || eventSource.readyState === EventSource.OPEN) return;
+      console.warn(`[SSE] connection did not open within ${this._sseConnectTimeoutMs}ms, retrying`);
+      this._handleSseConnectionFailure(eventSource);
+    }, this._sseConnectTimeoutMs);
+    this._sseConnectTimeout = connectTimeout;
 
     // Store all event listeners for cleanup on reconnect.
     //
@@ -2138,6 +2162,7 @@ class CodemanApp {
     };
 
     this.eventSource.onopen = () => {
+      this._clearTimer('_sseConnectTimeout');
       this.reconnectAttempts = 0;
       // Start the liveness clock here, not at the first frame: the watchdog
       // only ever fires while the status is 'connected', and this is the
@@ -2145,31 +2170,7 @@ class CodemanApp {
       this._sseLastMessageAt = Date.now();
       this.setConnectionStatus('connected');
     };
-    this.eventSource.onerror = () => {
-      this.reconnectAttempts++;
-      if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-        this.setConnectionStatus('disconnected');
-      } else {
-        this.setConnectionStatus('reconnecting');
-      }
-      // Close the failed connection before scheduling reconnect
-      if (this.eventSource) {
-        this.eventSource.close();
-        this.eventSource = null;
-      }
-      // Clear any existing reconnect timeout before setting new one (prevents orphaned timeouts)
-      this._clearTimer('sseReconnectTimeout');
-      // Exponential backoff: 200ms, 500ms, 1s, 2s, 4s, ... up to 30s
-      // Fast first retry (200ms) for server-restart case (COM deploy),
-      // then ramp up for real network issues.
-      const delay = this.reconnectAttempts <= 1 ? 200
-        : Math.min(500 * Math.pow(2, this.reconnectAttempts - 2), 30000);
-      // Feeds the "Retrying in Ns" countdown. With a 30s cap on the backoff, a
-      // silent wait that long is indistinguishable from a hung app.
-      this._nextSseRetryAt = Date.now() + delay;
-      this._updateConnectionLossUi();
-      this.sseReconnectTimeout = setTimeout(() => this.connectSSE(), delay);
-    };
+    this.eventSource.onerror = () => this._handleSseConnectionFailure(eventSource);
 
     // Create stable handler wrappers once (reused across reconnects so
     // removeEventListener always matches the original reference)
@@ -2330,6 +2331,38 @@ class CodemanApp {
     // ourselves. 5s granularity against a 45s threshold: cheap, and it keeps
     // the worst-case detection lag well under a heartbeat interval.
     this._sseStaleWatchdog = setInterval(() => this._checkSseStale(), 5000);
+  }
+
+  /**
+   * Close a failed SSE attempt (onerror, or the connect timeout) and schedule
+   * the normal exponential-backoff retry.
+   */
+  _handleSseConnectionFailure(eventSource) {
+    // A late error or timeout from an EventSource that has since been
+    // replaced must not close or reschedule the connection that replaced it.
+    if (this.eventSource !== eventSource) return;
+    this._clearTimer('_sseConnectTimeout');
+    this.reconnectAttempts++;
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      this.setConnectionStatus('disconnected');
+    } else {
+      this.setConnectionStatus('reconnecting');
+    }
+    // Close the failed connection before scheduling reconnect
+    this.eventSource = null;
+    eventSource.close();
+    // Clear any existing reconnect timeout before setting new one (prevents orphaned timeouts)
+    this._clearTimer('sseReconnectTimeout');
+    // Exponential backoff: 200ms, 500ms, 1s, 2s, 4s, ... up to 30s
+    // Fast first retry (200ms) for server-restart case (COM deploy),
+    // then ramp up for real network issues.
+    const delay = this.reconnectAttempts <= 1 ? 200
+      : Math.min(500 * Math.pow(2, this.reconnectAttempts - 2), 30000);
+    // Feeds the "Retrying in Ns" countdown. With a 30s cap on the backoff, a
+    // silent wait that long is indistinguishable from a hung app.
+    this._nextSseRetryAt = Date.now() + delay;
+    this._updateConnectionLossUi();
+    this.sseReconnectTimeout = setTimeout(() => this.connectSSE(), delay);
   }
 
   /**
