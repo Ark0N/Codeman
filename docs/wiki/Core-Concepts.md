@@ -14,22 +14,50 @@ Codeman-side configuration:
 - Which CLI the Run button should default to.
 - Per-case toggles (Agent Teams, 1M Opus context).
 - A **Default session group** (Case settings…): new sessions of the case land in that tab group of the
-  vertical rail unless you start them from a group's own *New session* or they follow the session that
-  spawned them. *Ungrouped* turns it off. It follows you across devices, never moves existing tabs, and a
+  vertical rail unless you start them from a group's own _New session_ or they follow the session that
+  spawned them. _Ungrouped_ turns it off. It follows you across devices, never moves existing tabs, and a
   deleted group simply falls back to Ungrouped.
 - Where it runs, if it is not the local filesystem: see [Location overlays](#location-overlays).
 
 Three ways to get one, all under **New or link a case…** at the bottom of the case picker
 (the case dropdown in the bottom toolbar; on a phone, the case sheet's **Create New Case**):
 
-| How               | Result                                                                                                 |
-| ----------------- | ------------------------------------------------------------------------------------------------------ |
+| How               | Result                                                                                                                                                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Create New**    | A fresh `~/codeman-cases/<name>` with a scaffolded `CLAUDE.md`, or with **Create in a custom folder**, a new folder inside a parent you choose, scaffolded the same way and registered in place like a linked case. |
-| **Clone Repo**    | A repo cloned into `~/codeman-cases/<name>` and registered as a case. Private repos need this machine's own git credentials (see below). |
-| **Link Existing** | An existing folder anywhere on disk, registered in place. Nothing is copied or moved.                    |
+| **Clone Repo**    | A repo cloned into `~/codeman-cases/<name>` and registered as a case. Private repos need this machine's own git credentials (see below).                                                                            |
+| **Link Existing** | An existing folder anywhere on disk, registered in place. Nothing is copied or moved.                                                                                                                               |
 
 Linked cases keep living where they are. Deleting a case in Codeman removes the
 registration, and for a linked case that is all it removes.
+
+**Renaming a case.** In the case manager (Settings, or the case picker's manage view) the pencil
+button renames a case and its folder. A case under `~/codeman-cases` _is_ its folder name, so it
+always moves. A linked case renames its name in the list only, unless you tick **Also rename the
+folder on disk** in the rename dialog: then its real folder is renamed too, next to where it is.
+Remote and Docker cases cannot be renamed. Renaming does the following for you:
+
+- **Sessions are never moved from under you.** If live sessions have the folder open, the rename is
+  refused and lists them; you can then choose to stop them. That closes them the way closing their tabs
+  does (nothing is restarted, and the last one to close removes the files attached to prompts in the
+  case's `.codeman-uploads`). While a rename runs, Codeman holds the folder so no session can start
+  inside it half-moved.
+- **A folder another program holds open is reported, not forced.** On Windows, SMB shares and some FUSE
+  mounts a directory with an open handle cannot be renamed; Codeman retries briefly, then says the folder
+  is in use and to close whatever has it (a terminal, an editor, a file browser, a sync client).
+- **Claude Code's history follows.** It keys conversations by the folder's path, so the rename moves
+  `<claude config>/projects/<old path>` to the new path and `--resume` still finds them. When the new
+  path already has history (a case deleted earlier under that name leaves its history behind), the
+  conversations are merged into it without overwriting anything. Other CLIs'
+  history, Docker mounts and `git worktree` links that point at the old path are not updated. The
+  Resume list uses the renamed folder too, and the case's default session group follows the new name.
+- **Not migrated.** Scheduled (cron) jobs keep the old `workingDir` and fail at their next run until you
+  edit them; Claude history of sessions started in a subfolder (including `.claude/worktrees/<name>`)
+  stays under the old path. Claude Code's own per-project settings in `~/.claude.json` (local-scope MCP
+  servers, allowed tools, the folder's trust) are keyed by the old path too, so the renamed case starts
+  without them: Codeman does not write another CLI's configuration here. In multi-user mode only an
+  admin's rename updates the shared case order and last used case.
+- **The case order, the last used case and this browser's per-case options follow the new name.**
 
 **Clone Repo never asks for credentials.** It uses whatever the server's own git already has:
 an ssh key, or a credential helper such as `gh auth setup-git`. The Docker image can include
@@ -75,10 +103,10 @@ Claude-only where it appears, and [Agent CLIs](Agent-CLIs) lists them in one pla
 
 Where a case runs is **separate from** which CLI it runs. There are three locations:
 
-| Location       | What happens                                                                                                 |
-| -------------- | ------------------------------------------------------------------------------------------------------------ |
-| **Local**      | The default. tmux and the CLI run on the Codeman host.                                                        |
-| **Docker**     | One long-lived container per case; sessions `docker exec` into it. See [Docker Cases](Docker-Cases).           |
+| Location       | What happens                                                                                                                     |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Local**      | The default. tmux and the CLI run on the Codeman host.                                                                           |
+| **Docker**     | One long-lived container per case; sessions `docker exec` into it. See [Docker Cases](Docker-Cases).                             |
 | **Remote SSH** | A durable tmux server on the remote host, fronted by a local pane running `ssh`. See [Remote SSH Sessions](Remote-SSH-Sessions). |
 
 This matters because it is a common source of confusion: Docker is **not** an eleventh run
@@ -113,14 +141,14 @@ sessions never appear in a bare `tmux ls`.
 
 ## What persists
 
-| Survives                                     | Does not survive                                    |
-| -------------------------------------------- | --------------------------------------------------- |
-| Closing the browser                          | `tmux -L codeman kill-server`                        |
-| Losing the network                            | A machine reboot (tmux dies with it)                 |
-| Restarting the Codeman server                 | Killing the session from the UI                      |
-| `codeman web --stop`                          |                                                      |
-| A dropped SSH link, for remote cases          |                                                      |
-| A container restart, for docker cases         |                                                      |
+| Survives                              | Does not survive                     |
+| ------------------------------------- | ------------------------------------ |
+| Closing the browser                   | `tmux -L codeman kill-server`        |
+| Losing the network                    | A machine reboot (tmux dies with it) |
+| Restarting the Codeman server         | Killing the session from the UI      |
+| `codeman web --stop`                  |                                      |
+| A dropped SSH link, for remote cases  |                                      |
+| A container restart, for docker cases |                                      |
 
 Conversation history is a separate question: Claude transcripts live in `~/.claude/`, so a
 conversation can be resumed even after the tmux session is gone. That is what the welcome
@@ -130,18 +158,18 @@ screen's **Resume Conversation** list offers.
 
 Everything Codeman knows lives under `~/.codeman/`:
 
-| File                                     | Holds                                                                |
-| ---------------------------------------- | -------------------------------------------------------------------- |
-| `state.json`                             | Sessions, settings, respawn config, orchestrator state, cron jobs.    |
-| `settings.json`                          | User preferences that sync across your devices.                       |
-| `mux-sessions.json`                      | tmux recovery data.                                                   |
-| `session-lifecycle.jsonl`                | Append-only audit log of session starts, exits, and kills.            |
-| `linked-cases.json`                      | Registered cases.                                                     |
-| `remote-hosts.json`, `docker-hosts.json` | Location overlay configuration.                                       |
-| `webviews.json`                          | Saved dashboard URLs.                                                 |
-| `users.json`                             | Multi-user accounts, mode 0600.                                       |
-| `push-*.json`                            | Web push keys and subscriptions.                                      |
-| `certs/`                                 | Self-signed TLS for `--https`.                                        |
+| File                                     | Holds                                                                                         |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `state.json`                             | Sessions, settings, respawn config, orchestrator state, cron jobs.                            |
+| `settings.json`                          | User preferences that sync across your devices.                                               |
+| `mux-sessions.json`                      | tmux recovery data.                                                                           |
+| `session-lifecycle.jsonl`                | Append-only audit log of session starts, exits, and kills.                                    |
+| `linked-cases.json`                      | Registered cases.                                                                             |
+| `remote-hosts.json`, `docker-hosts.json` | Location overlay configuration.                                                               |
+| `webviews.json`                          | Saved dashboard URLs.                                                                         |
+| `users.json`                             | Multi-user accounts, mode 0600.                                                               |
+| `push-*.json`                            | Web push keys and subscriptions.                                                              |
+| `certs/`                                 | Self-signed TLS for `--https`.                                                                |
 | `backups/config/`                        | Timestamped copies of the files above that you customized ([Config Backups](Config-Backups)). |
 
 None of it needs root, none of it leaves the machine, and deleting `~/.codeman/` resets
@@ -184,17 +212,17 @@ See [Hooks And Integrations](Hooks-And-Integrations).
 
 ## Vocabulary
 
-| Term            | Means                                                                        |
-| --------------- | ---------------------------------------------------------------------------- |
-| **Case**        | Named working directory.                                                      |
-| **Session**     | One CLI in one tmux session.                                                  |
-| **Run mode**    | Which CLI: claude, opencode, codex, gemini, antigravity, pi, grok, deepseek, omp, copilot, shell. |
-| **Respawn**     | Restarting the CLI on idle to keep an unattended run going.                   |
-| **Ralph loop**  | An autonomous single-session task loop.                                       |
-| **Orchestrator**| A phased plan driven across multiple agents.                                  |
-| **Subagent**    | An agent the CLI spawned itself, shown live in its own window.                |
-| **Web tab**     | A saved dashboard URL rendered as a tab. Not a session.                       |
-| **Instance**    | One Codeman server with its own data directory and tmux socket.               |
+| Term             | Means                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------- |
+| **Case**         | Named working directory.                                                                          |
+| **Session**      | One CLI in one tmux session.                                                                      |
+| **Run mode**     | Which CLI: claude, opencode, codex, gemini, antigravity, pi, grok, deepseek, omp, copilot, shell. |
+| **Respawn**      | Restarting the CLI on idle to keep an unattended run going.                                       |
+| **Ralph loop**   | An autonomous single-session task loop.                                                           |
+| **Orchestrator** | A phased plan driven across multiple agents.                                                      |
+| **Subagent**     | An agent the CLI spawned itself, shown live in its own window.                                    |
+| **Web tab**      | A saved dashboard URL rendered as a tab. Not a session.                                           |
+| **Instance**     | One Codeman server with its own data directory and tmux socket.                                   |
 
 ## Read next
 

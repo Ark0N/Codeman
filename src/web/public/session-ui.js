@@ -4975,6 +4975,12 @@ Object.assign(CodemanApp.prototype, {
                     title="${reorderTitle || 'Move up'}" ${isFirst ? 'disabled' : ''}>&#x25B2;</button>
             <button class="case-manage-btn" onclick="app.moveCaseDown(${escapeHtml(JSON.stringify(c.name))})"
                     title="${reorderTitle || 'Move down'}" ${isLast ? 'disabled' : ''}>&#x25BC;</button>
+            ${
+              c.location === 'docker' || c.location === 'remote'
+                ? ''
+                : `<button class="case-manage-btn" onclick="app.renameCase(${escapeHtml(JSON.stringify(c.name))})"
+                    title="Rename case (and its folder)">&#x270E;</button>`
+            }
             <button class="case-manage-btn case-manage-btn-delete" onclick="app.deleteCase(${escapeHtml(JSON.stringify(c.name))})"
                     title="Delete case">&#x2715;</button>
           </div>
@@ -5005,6 +5011,113 @@ Object.assign(CodemanApp.prototype, {
     this.cases = reordered;
     this.renderCaseManageList();
     await this.saveCaseOrder(reordered.map(c => c.name));
+  },
+
+  /**
+   * Rename a case and its folder (POST /api/cases/:name/rename), in the app's own dialog.
+   *
+   * A linked case shows a checkbox for renaming the real folder too (unticked = the name only). When live
+   * sessions have the folder open the server refuses and lists them; the dialog then lists them and its button
+   * becomes "Stop sessions and rename", so they are only stopped after a second, explicit press. Errors from
+   * the server (a taken name, a folder another program has open) stay inside the dialog so the name can be fixed.
+   */
+  renameCase(name) {
+    const info = (this.cases || []).find((c) => c.name === name);
+    this._renameCaseState = { name, linked: Boolean(info?.linked), stop: false, busy: false };
+    const input = document.getElementById('renameCaseInput');
+    const label = document.getElementById('renameCaseLabel');
+    if (label) label.textContent = `New name for "${name}"`;
+    if (input) input.value = name;
+    const row = document.getElementById('renameCaseFolderRow');
+    row?.classList.toggle('hidden', !info?.linked);
+    const box = document.getElementById('renameCaseFolder');
+    if (box) box.checked = false;
+    const hint = document.getElementById('renameCaseFolderHint');
+    if (hint) hint.textContent = info?.linked ? `${info.path}  (unticked: only the name in this list changes)` : '';
+    document.getElementById('renameCaseNote')?.classList.toggle('hidden', Boolean(info?.linked));
+    this._renameCaseNotice('');
+    const submit = document.getElementById('renameCaseSubmit');
+    if (submit) submit.textContent = 'Rename';
+    document.getElementById('renameCaseModal')?.classList.add('active');
+    input?.focus?.();
+    input?.select?.();
+  },
+
+  closeRenameCase() {
+    document.getElementById('renameCaseModal')?.classList.remove('active');
+    this._renameCaseState = null;
+  },
+
+  /** Show (or clear, with '') a message inside the rename dialog. */
+  _renameCaseNotice(message) {
+    const el = document.getElementById('renameCaseError');
+    if (!el) return;
+    el.textContent = message;
+    el.classList.toggle('hidden', !message);
+  },
+
+  async submitRenameCase() {
+    const state = this._renameCaseState;
+    if (!state || state.busy) return;
+    const name = state.name;
+    const newName = (document.getElementById('renameCaseInput')?.value || '').trim();
+    if (!newName || newName === name) {
+      this._renameCaseNotice('Enter a different name.');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(newName)) {
+      this._renameCaseNotice('Use only letters, numbers, hyphens and underscores.');
+      return;
+    }
+    const body = { newName };
+    if (state.linked) body.renameFolder = Boolean(document.getElementById('renameCaseFolder')?.checked);
+    if (state.stop) body.stopSessions = true;
+    state.busy = true;
+    const submit = document.getElementById('renameCaseSubmit');
+    if (submit) submit.disabled = true;
+    try {
+      const res = await fetch(`/api/cases/${encodeURIComponent(name)}/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({ success: false, error: 'Unexpected response' }));
+      if (data.requiresStop) {
+        const list = (data.sessions || []).map((s) => `${s.name}`).join(', ');
+        state.stop = true;
+        this._renameCaseNotice(`These sessions have the folder open: ${list}. They will be closed (their tabs go away and nothing is restarted) before the folder is renamed.`);
+        if (submit) submit.textContent = 'Stop sessions and rename';
+        return;
+      }
+      if (!data.success) {
+        // A rename that failed after closing sessions says so: their tabs are gone either way.
+        const closed = Number(data.stoppedSessions) || 0;
+        const message = data.error || 'Failed to rename the case.';
+        this._renameCaseNotice(
+          closed > 0 ? `${message} (${closed} session${closed === 1 ? ' was' : 's were'} already closed.)` : message
+        );
+        return;
+      }
+      this.closeRenameCase();
+      this.showToast(`Case renamed to "${newName}"`, 'success');
+      // The per-case run options are stored under the case name in this browser.
+      try {
+        const stored = localStorage.getItem('caseSettings_' + name);
+        if (stored !== null) {
+          localStorage.setItem('caseSettings_' + newName, stored);
+          localStorage.removeItem('caseSettings_' + name);
+        }
+      } catch { /* storage blocked: the options fall back to their defaults */ }
+      const select = document.getElementById('quickStartCase');
+      const current = select?.value;
+      await this.loadQuickStartCases(current === name ? newName : current);
+      this.renderCaseManageList();
+    } catch (err) {
+      this._renameCaseNotice('Failed to rename the case: ' + err.message);
+    } finally {
+      state.busy = false;
+      if (submit) submit.disabled = false;
+    }
   },
 
   async deleteCase(name) {

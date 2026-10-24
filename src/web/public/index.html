@@ -3818,6 +3818,35 @@
       </div>
     </div>
 
+    <!-- Rename a case (and its folder): opened by the Manage tab's pencil button, see renameCase() in session-ui.js.
+         Placed after the case modal so it stacks above it. -->
+    <div class="modal" id="renameCaseModal">
+      <div class="modal-backdrop" onclick="app.closeRenameCase()"></div>
+      <div class="modal-content modal-sm">
+        <div class="modal-header">
+          <h3>Rename case</h3>
+          <button class="modal-close" onclick="app.closeRenameCase()" aria-label="Cancel">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-row">
+            <label for="renameCaseInput" id="renameCaseLabel">New name</label>
+            <input type="text" id="renameCaseInput" class="set-input" maxlength="100" autocomplete="off" spellcheck="false"
+                   placeholder="letters, numbers, - and _" onkeydown="if (event.key === 'Enter') app.submitRenameCase()">
+          </div>
+          <div class="form-row hidden" id="renameCaseFolderRow">
+            <label class="checkbox-row"><input type="checkbox" id="renameCaseFolder"> Also rename the folder on disk</label>
+            <span class="form-hint" id="renameCaseFolderHint" data-i18n-skip></span>
+          </div>
+          <p class="form-hint" id="renameCaseNote">A case under the cases folder is renamed together with its folder.</p>
+          <p class="form-hint hidden" id="renameCaseError" role="alert" style="color: var(--danger, #e5534b);"></p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-toolbar" onclick="app.closeRenameCase()">Cancel</button>
+          <button class="btn-toolbar btn-primary" id="renameCaseSubmit" onclick="app.submitRenameCase()">Rename</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Mobile Case Picker (Bottom Sheet) -->
     <div class="modal mobile-case-picker" id="mobileCasePickerModal">
       <div class="modal-backdrop" onclick="app.closeMobileCasePicker()"></div>

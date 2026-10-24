@@ -10,7 +10,7 @@ import { FastifyInstance } from 'fastify';
 import { existsSync, lstatSync, mkdirSync, writeFileSync, readdirSync, readFileSync, createReadStream } from 'node:fs';
 import { exec } from 'node:child_process';
 import fs from 'node:fs/promises';
-import { join, resolve, basename } from 'node:path';
+import { join, resolve, basename, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import type {
@@ -30,6 +30,7 @@ import {
   LinkCaseSchema,
   CaseOrderSchema,
   CaseDefaultGroupSchema,
+  RenameCaseSchema,
   RemoteCaseLinkSchema,
   RemoteHostSchema,
   DockerCaseLinkSchema,
@@ -52,6 +53,14 @@ import {
 import type { GitRemoteProbe, GitUrlParse } from '../../git-clone.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { prepareNewCasePath } from '../case-path.js';
+import {
+  CaseRenameError,
+  moveCaseFolder,
+  moveClaudeHistory,
+  renameInOrder,
+  siblingPath,
+  withCaseLock,
+} from '../../case-rename.js';
 import { boundedPathExists, describeUnknownPath, probePath, probePathKind } from '../../utils/index.js';
 import { readAgentCaseMarker, type AgentCaseMarker } from '../../agent-case-marker.js';
 import { settingsWriteBlocker, writeHooksConfig } from '../../hooks-config.js';
@@ -1744,6 +1753,199 @@ export function registerCaseRoutes(
         return reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'That tab group does not exist'));
       }
       throw err;
+    }
+  });
+
+  // ========== Rename Case ==========
+
+  /**
+   * Rename a case: its name and, with it, its folder.
+   *
+   * - A case under the cases directory IS its folder name, so it always moves.
+   * - A linked case has an alias that is only a key in linked-cases.json; the real folder moves too only
+   *   with `renameFolder: true` (it can be shared with other tools).
+   * - Remote and Docker cases are not renamable here: their folder lives on another host or in a container
+   *   whose name derives from the case name.
+   *
+   * ⚠️ Moving a folder that sessions have open is the dangerous part (see src/case-rename.ts): live
+   * sessions in it are listed and refused (409 `requiresStop`) unless `stopSessions` is set, in which
+   * case they are ended first. The folder is held by an in-process lock for the whole operation, so a
+   * session cannot start in it half-moved.
+   */
+  app.post('/api/cases/:name/rename', async (req, reply) => {
+    const { name } = req.params as { name: string };
+    const user = getAuthUser(req);
+    const body = parseBody(RenameCaseSchema, req.body);
+    const newName = body.newName;
+    const fail = (status: number, code: ApiErrorCode, message: string, extra: Record<string, unknown> = {}) => {
+      reply.code(status);
+      return { ...createErrorResponse(code, message), ...extra };
+    };
+    if (!SAFE_CASE_NAME.test(name) || !validatePathWithinBase(name, resolveCasesDir(user))) {
+      return fail(400, ApiErrorCode.INVALID_INPUT, 'Invalid case name');
+    }
+    if (newName === name) return fail(400, ApiErrorCode.INVALID_INPUT, 'The new name is the same as the old one');
+
+    // Remote and Docker cases first, so a same-named local case cannot be confused for them.
+    const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
+    const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
+    if (
+      remoteCases.some((c) => c.name === name && canAccessOwned(user, c.owner)) ||
+      dockerCases.some((c) => c.name === name && canAccessOwned(user, c.owner))
+    ) {
+      return fail(400, ApiErrorCode.INVALID_INPUT, 'Remote and Docker cases cannot be renamed here');
+    }
+
+    const casesBase = resolveCasesDir(user);
+    const linkedCases = await readLinkedCases();
+    const isLinked = Boolean(linkedCases[name]) && (!isMultiUserMode() || isAdmin(req));
+    const oldPath = isLinked ? linkedCases[name] : join(casesBase, name);
+
+    // The new name must be free in every namespace the list merges.
+    const localTaken = existsSync(join(casesBase, newName));
+    const taken =
+      localTaken ||
+      Boolean(linkedCases[newName]) ||
+      remoteCases.some((c) => c.name === newName) ||
+      dockerCases.some((c) => c.name === newName);
+    if (taken) return fail(409, ApiErrorCode.ALREADY_EXISTS, `A case named "${newName}" already exists`);
+
+    const state = await probePath(oldPath);
+    if (state === 'absent') return fail(404, ApiErrorCode.NOT_FOUND, `Case "${name}" not found`);
+    // An alias-only rename never touches the folder, so an unreachable one does not block it.
+    if (state === 'unknown' && (!isLinked || body.renameFolder === true)) {
+      return fail(503, ApiErrorCode.OPERATION_FAILED, describeUnknownPath('Case folder', oldPath, { pastCap: true }));
+    }
+
+    const moveFolder = !isLinked || body.renameFolder === true;
+    const newPath = isLinked ? (moveFolder ? siblingPath(oldPath, newName) : oldPath) : join(casesBase, newName);
+    if (moveFolder && newPath !== oldPath) {
+      // probePath follows symlinks, so a dangling one reads as absent; moveCaseFolder would still refuse it
+      // (it checks with lstat), but only after the sessions below were stopped. The probe answered for this
+      // very path, so the lstat after it is not a first touch of an unreachable mount.
+      const target = await probePath(newPath, { pastCap: true });
+      const danglingLink =
+        target === 'absent' &&
+        (await fs.lstat(newPath).then(
+          () => true,
+          () => false
+        ));
+      if (target !== 'absent' || danglingLink) {
+        return fail(409, ApiErrorCode.ALREADY_EXISTS, `A folder named ${newPath} already exists`);
+      }
+    }
+
+    // Sessions with the folder open. Only a move disturbs them; an alias-only rename leaves them running.
+    // Remote sessions carry the remote path as their workingDir, so they are not this folder's.
+    const heldRoot = resolve(oldPath);
+    const open = moveFolder
+      ? Array.from(ctx.sessions.values()).filter((s) => {
+          if (s.remote) return false;
+          const dir = resolve(s.workingDir);
+          return dir === heldRoot || dir.startsWith(heldRoot + sep);
+        })
+      : [];
+    if (open.some((s) => !canAccessOwned(user, s.owner))) {
+      return fail(403, ApiErrorCode.FORBIDDEN, "Another user's session has this case open");
+    }
+    if (open.length > 0 && !body.stopSessions) {
+      return fail(
+        409,
+        ApiErrorCode.CONFLICT,
+        `${open.length} live session${open.length === 1 ? ' has' : 's have'} this folder open. Stop them to rename it.`,
+        { requiresStop: true, sessions: open.map((s) => ({ id: s.id, name: s.name })) }
+      );
+    }
+
+    // Sessions really ended so far: an error after `stopSessions` still says how many are gone.
+    let stopped = 0;
+    try {
+      await withCaseLock(oldPath, newPath, async () => {
+        for (const s of open) {
+          await ctx.cleanupSession(s.id, true, 'case_rename');
+          stopped++;
+        }
+        if (moveFolder) await moveCaseFolder(oldPath, newPath);
+        const originalLinks = isLinked ? await readLinkedCases() : undefined;
+        // The settings.json content before this rename wrote it, set only once a write is attempted (an
+        // absent file reads as {}, which must not be written back as a file that never existed).
+        let originalSettings: Record<string, unknown> | undefined;
+        try {
+          // settings.json is server-wide and caseOrder/lastUsedCase name the admin's cases, so only the
+          // admin's rename touches it (a non-admin's own rename must not rewrite someone else's list).
+          // Written before linked-cases.json so a failure here leaves the registry untouched.
+          if (isAdmin(req)) {
+            const existing = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {});
+            const order = renameInOrder(existing.caseOrder, name, newName);
+            const last = existing.lastUsedCase === name ? newName : undefined;
+            if (order || last) {
+              originalSettings = existing;
+              await fs.writeFile(
+                SETTINGS_PATH,
+                JSON.stringify(
+                  { ...existing, ...(order ? { caseOrder: order } : {}), ...(last ? { lastUsedCase: last } : {}) },
+                  null,
+                  2
+                )
+              );
+            }
+          }
+          if (originalLinks) {
+            const links = { ...originalLinks };
+            delete links[name];
+            links[newName] = newPath;
+            try {
+              await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(links, null, 2));
+            } catch (err) {
+              await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(originalLinks, null, 2)).catch(() => {});
+              throw err;
+            }
+          }
+        } catch (err) {
+          // The folder moved but the registries did not follow: put settings.json and the folder back
+          // rather than leave a case whose name and folder disagree.
+          if (originalSettings) {
+            await fs.writeFile(SETTINGS_PATH, JSON.stringify(originalSettings, null, 2)).catch(() => {});
+          }
+          if (moveFolder) {
+            const movedBack = await fs.rename(newPath, oldPath).then(
+              () => true,
+              () => false
+            );
+            if (!movedBack) {
+              throw new Error(`${getErrorMessage(err)}. The folder could not be moved back and is now at ${newPath}.`);
+            }
+          }
+          throw err;
+        }
+        if (moveFolder) await moveClaudeHistory(oldPath, newPath);
+        // The owner's default session group is keyed by case name: carry it over, best effort.
+        const layoutOwner = ownerLayoutKey(ownerFor(req));
+        try {
+          const { groupId } = await ctx.tabLayouts.caseDefaultGroup(layoutOwner, name);
+          if (groupId) await ctx.tabLayouts.setCaseDefaultGroup(layoutOwner, newName, groupId);
+        } catch {
+          /* the group is a convenience; the rename already happened */
+        }
+        await ctx.tabLayouts.forgetCaseDefaultGroup(layoutOwner, name).catch(() => undefined);
+      });
+      ctx.broadcast(SseEvent.CaseRenamed, { oldName: name, newName, oldPath, newPath, folderMoved: moveFolder });
+      return {
+        success: true,
+        data: { oldName: name, newName, oldPath, newPath, folderMoved: moveFolder, stoppedSessions: open.length },
+      };
+    } catch (err) {
+      if (err instanceof CaseRenameError) {
+        const status = err.code === 'BUSY' ? 409 : err.code === 'EXISTS' ? 409 : err.code === 'LOCKED' ? 423 : 400;
+        const code =
+          err.code === 'EXISTS'
+            ? ApiErrorCode.ALREADY_EXISTS
+            : err.code === 'BUSY'
+              ? ApiErrorCode.CONFLICT
+              : ApiErrorCode.OPERATION_FAILED;
+        return fail(status, code, err.message, { renameCode: err.code, stoppedSessions: stopped });
+      }
+      return fail(500, ApiErrorCode.OPERATION_FAILED, getErrorMessage(err), { stoppedSessions: stopped });
     }
   });
 

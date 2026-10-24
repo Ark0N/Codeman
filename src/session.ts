@@ -151,6 +151,7 @@ import {
 } from './session-attachment-history.js';
 import type { SessionAttachmentHistoryItem, DisplayModel } from './types/session.js';
 import { resolveConfigModel } from './model-config-resolvers.js';
+import { isCasePathLocked } from './case-rename.js';
 import { legacyConfigForMode } from './session-cli-registry-bridge.js';
 import {
   launchModelFor,
@@ -948,6 +949,11 @@ export class Session extends EventEmitter {
     }
   ) {
     super();
+    // A case folder being renamed (src/case-rename.ts) must not gain a session mid-move: its pane would
+    // start in a directory that is about to have a different path.
+    if (config.workingDir && isCasePathLocked(config.workingDir)) {
+      throw new Error(`The case folder ${config.workingDir} is being renamed. Try again in a moment.`);
+    }
     this.setMaxListeners(25);
 
     // Default error handler prevents unhandled 'error' events from crashing the process.

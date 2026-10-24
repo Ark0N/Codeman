@@ -1992,6 +1992,21 @@ export const LinkCaseSchema = z.object({
   path: safePathSchema,
 });
 
+/** POST /api/cases/:name/rename */
+export const RenameCaseSchema = z
+  .object({
+    newName: z
+      .string()
+      .min(1)
+      .max(100)
+      .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.'),
+    /** Linked cases only: also rename the real folder on disk (a case under the cases directory always moves). */
+    renameFolder: z.boolean().optional(),
+    /** Stop the live sessions that have the folder open, instead of refusing with the list of them. */
+    stopSessions: z.boolean().optional(),
+  })
+  .strict();
+
 /** PUT /api/cases/order */
 export const CaseOrderSchema = z.object({
   order: z.array(z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format')),

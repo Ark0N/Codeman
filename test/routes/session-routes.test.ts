@@ -2613,6 +2613,26 @@ describe('session-routes', () => {
       expect(row.workingDir).not.toBe(home);
     });
 
+    it("resumes a renamed case's conversation in the new folder, not the stale cwd in the transcript", async () => {
+      const home = process.env.HOME as string;
+      const realDir = join(home, 'renamed-case');
+      await mkdir(realDir, { recursive: true });
+
+      const projectKey = realDir.replace(/[^a-zA-Z0-9]/g, '-');
+      const projDir = join(home, '.claude', 'projects', projectKey);
+      await mkdir(projDir, { recursive: true });
+
+      const sessionId = '33333333-3333-3333-3333-333333333333';
+      const line =
+        JSON.stringify({ type: 'user', cwd: join(home, 'old-case-name'), message: { role: 'user', content: 'hi' } }) +
+        '\n';
+      await writeFile(join(projDir, `${sessionId}.jsonl`), line + '#'.repeat(4200 - line.length));
+
+      const res = await harness.app.inject({ method: 'GET', url: `/api/history/sessions?projectKey=${projectKey}` });
+      const row = JSON.parse(res.body).data.sessions.find((s: { sessionId: string }) => s.sessionId === sessionId);
+      expect(row.workingDir).toBe(realDir);
+    });
+
     it('prefers the dotdir over a same-named non-dot sibling, and never emits a "//" path', async () => {
       // A doubled dash also lets the decoder read the empty split segment as a
       // directory NAME. `isDir(current + '/' + '')` stats `current + '/'`, which

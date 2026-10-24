@@ -1924,6 +1924,7 @@ const SSE_EVENTS = {
   CASE_CREATED: 'case:created',
   CASE_LINKED: 'case:linked',
   CASE_DELETED: 'case:deleted',
+  CASE_RENAMED: 'case:renamed',
   CASE_ORDER_CHANGED: 'case:order-changed',
   DOCKER_EXPORT_COMPLETE: 'docker:exportComplete',
   DOCKER_EXPORT_FAILED: 'docker:exportFailed',
