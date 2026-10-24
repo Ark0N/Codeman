@@ -479,9 +479,11 @@ export interface PasteTextCommands {
 
 /**
  * Escape a final `;` for tmux. tmux splits commands on an argument that ENDS in
- * `;` (`set-buffer -- 'a;'` stores `a`, `send-keys -l 'a;'` types `a`, a lone `;`
+ * `;` (`set-buffer -- 'a;'` stores `a`, `send-keys -l -- 'a;'` types `a`, a lone `;`
  * is no argument at all); a final `\;` is its escape for a literal `;`. A `;`
- * anywhere else in the argument is literal already. Exported for unit testing.
+ * anywhere else in the argument is literal already. Every `send-keys -l` passes
+ * `--` before the text, like `set-buffer`, or tmux parses a text that starts with
+ * `-` as its own options. Exported for unit testing.
  */
 export function escapeTmuxTrailingSemicolon(text: string): string {
   return text.endsWith(';') ? `${text.slice(0, -1)}\\;` : text;

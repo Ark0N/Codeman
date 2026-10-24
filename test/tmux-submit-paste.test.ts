@@ -181,7 +181,7 @@ describe('sendInput wiring', () => {
 
   it('escapes a trailing ";" on every send-keys -l in sendInput and sendInputToPane', async () => {
     const src = await source();
-    const typed = src.match(/send-keys[^`\n]*-l -- \$\{[^`\n]*\}/g) ?? [];
+    const typed = src.match(/send-keys[^`\n]*-l (?:-- )?\$\{[^`\n]*\}/g) ?? [];
     const inSend = [await sendInputBody(), src.slice(src.indexOf('sendInputToPane(muxName'))]
       .map((b) => b.slice(0, b.indexOf('\n  }\n')))
       .join('\n');
@@ -279,7 +279,7 @@ describe('sendInput line breaks', () => {
     // Without an Enter, what is left is one line, so it is typed like any other.
     const typed = managerWithSession();
     await typed.sendInput('s1', '\n\njust type');
-    expect(typed.ran).toEqual([expect.stringMatching(/ send-keys -t "codeman-abc12345" -l 'just type'$/)]);
+    expect(typed.ran).toEqual([expect.stringMatching(/ send-keys -t "codeman-abc12345" -l -- 'just type'$/)]);
   });
 
   it('leaves single-line input as it was: pasted with Enter, typed without', async () => {
@@ -291,6 +291,6 @@ describe('sendInput line breaks', () => {
     const typed = managerWithSession();
     await typed.sendInput('s1', 'just type');
     expect(typed.ran).toHaveLength(1);
-    expect(typed.ran[0]).toMatch(/ send-keys -t "codeman-abc12345" -l 'just type'$/);
+    expect(typed.ran[0]).toMatch(/ send-keys -t "codeman-abc12345" -l -- 'just type'$/);
   });
 });
