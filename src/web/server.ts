@@ -457,6 +457,7 @@ export class WebServer extends EventEmitter {
   private qrAuthFailures: StaleExpirationMap<string, number> | null = null;
   private hookSecretFailures: StaleExpirationMap<string, number> | null = null;
   private userFailures: StaleExpirationMap<string, number> | null = null;
+  private userIpFailures: StaleExpirationMap<string, number> | null = null;
   private pushStore: PushSubscriptionStore = new PushSubscriptionStore();
   /** ntfy / Slack / Discord / generic webhook for the push events; config in webhook.json (0600). */
   private webhookNotifier = new WebhookNotifier(() => readWebhookConfig(getDataDir()), webviewFetch);
@@ -959,6 +960,7 @@ export class WebServer extends EventEmitter {
       this.qrAuthFailures = authState.qrAuthFailures;
       this.hookSecretFailures = authState.hookSecretFailures;
       this.userFailures = authState.userFailures;
+      this.userIpFailures = authState.userIpFailures;
     }
 
     // WebSocket support (terminal I/O — low-latency bidirectional channel)
@@ -4323,6 +4325,10 @@ export class WebServer extends EventEmitter {
     if (this.userFailures) {
       this.userFailures.dispose();
       this.userFailures = null;
+    }
+    if (this.userIpFailures) {
+      this.userIpFailures.dispose();
+      this.userIpFailures = null;
     }
     this.activePlanOrchestrators.clear();
     this.cleaningUp.clear();

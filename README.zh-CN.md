@@ -581,7 +581,7 @@ loginctl enable-linger $USER
 1. 首次请求 → 浏览器弹出 Basic Auth 提示（用户名：`admin` 或 `CODEMAN_USERNAME`）
 2. 成功后 → 服务端签发 `codeman_session` cookie（24 小时 TTL，活动时自动延长）
 3. 后续请求通过 cookie 静默认证
-4. 同一 IP 失败 10 次 → 429 速率限制（15 分钟衰减）
+4. 同一 IP 失败 10 次 → 429 速率限制（15 分钟衰减）。多用户模式下每个 IP 的上限为 50 次，且同一 IP 对每个账户最多 10 次失败；超过任一上限后，来自该 IP 的正确密码也须等待衰减，但该账户仍可从其他 IP 登录
 
 通过隧道暴露前**务必设置 `CODEMAN_PASSWORD`** —— 否则任何拿到 URL 的人都能完全访问你的会话。
 
@@ -671,7 +671,7 @@ Codeman 默认用 `--dangerously-skip-permissions` 启动会话，因此 Web UI 
 
 - **默认仅环回** —— 服务器程序本身绑定 `127.0.0.1`，仅可从本机访问，因此「无密码」默认配置开箱即安全（引导式安装器会询问网络访问方式，并替你配置绑定和密码）。在未设置 `CODEMAN_PASSWORD` 的情况下绑定非环回主机会*启动但打印一条醒目警告*，并给出三个具体修复方案（设置密码、环回 + 一个带认证的隧道，或用 `--allow-unauthenticated-network` 显式确认）
 - **可选认证，真实会话** —— 通过 `CODEMAN_USERNAME`（默认 `admin`）/ `CODEMAN_PASSWORD` 的 HTTP Basic 认证。成功后签发一个不透明的 256 位 `codeman_session` cookie（`randomBytes(32)`）—— 服务端校验，而非客户端签名，因此无法离线伪造（24h TTL、自动延长、设备上下文审计日志）
-- **按 IP 速率限制** —— 失败 10 次 → `429` 并带 `Retry-After`（15 分钟衰减）。即便攻击者在同一 IP 上猛攻，有效 cookie 或正确密码也能*立即*恢复 —— 这很重要，因为所有隧道流量共享同一个环回 IP。二维码认证有自己独立的限制器
+- **按 IP 速率限制** —— 失败 10 次 → `429` 并带 `Retry-After`（15 分钟衰减）。即便攻击者在同一 IP 上猛攻，有效 cookie 或正确密码也能*立即*恢复 —— 这很重要，因为所有隧道流量共享同一个环回 IP。多用户模式下每个 IP 改为 50 次，同一 IP 对每个账户另有 10 次失败上限；两者都在校验密码之前检查，超过任一上限后，来自该 IP 的正确密码也须等待衰减，但该账户仍可从其他 IP 登录。二维码认证有自己独立的限制器
 - **可配置的权限模式**：`--dangerously-skip-permissions` 只是默认值。**App Settings → Agents & CLIs → Claude → Startup Mode** 可以把新会话切换为 Anthropic 的分类器护栏 `auto` 模式（低打扰，需要 Claude Code 2.1.207+）、`normal` 提示模式，或一份显式的允许工具列表。多用户模式下，未获授权的用户会被强制为 `auto`，shell 会话与跳过权限需要按用户显式授权
 
 ### 始终开启的浏览器加固（v0.9.5）

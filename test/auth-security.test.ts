@@ -15,6 +15,7 @@ import { WebServer } from '../src/web/server.js';
 import { TmuxManager } from '../src/tmux-manager.js';
 import { SettingsUpdateSchema } from '../src/web/schemas.js';
 import { getHookSecret, HOOK_SECRET_HEADER } from '../src/config/hook-secret.js';
+import { AUTH_FAILURE_MAX } from '../src/config/auth-config.js';
 
 const TEST_USER = 'admin';
 const TEST_PASS = 'test-password-12345';
@@ -46,7 +47,7 @@ async function getSessionCookie(baseUrl: string): Promise<string> {
 }
 
 async function exhaustAuthFailures(baseUrl: string, prefix: string): Promise<void> {
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < AUTH_FAILURE_MAX; i++) {
     const res = await fetch(`${baseUrl}/api/status`, {
       headers: { Authorization: basicAuthHeader(TEST_USER, `${prefix}-${i}`) },
     });

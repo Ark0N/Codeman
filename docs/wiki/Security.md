@@ -53,7 +53,7 @@ When authentication is enabled:
 | ------------------- | ------------------------------------------------------------------------------------------------ |
 | **HTTP Basic**      | `CODEMAN_USERNAME` (default `admin`) and `CODEMAN_PASSWORD`.                                      |
 | **Session cookie**  | A 256-bit opaque token validated server side, so it cannot be forged offline. 24 hours, extended on activity, with a device-context audit trail. |
-| **Rate limiting**   | Ten failed attempts per IP produce a `429` with a 15 minute decay. A correct password or valid cookie recovers immediately even under attack, which matters because all tunnel traffic shares one loopback address. |
+| **Rate limiting**   | Ten failed attempts per IP produce a `429` with a 15 minute decay. A correct password or valid cookie recovers immediately even under attack, which matters because all tunnel traffic shares one loopback address. In multi-user mode the per-IP cap is 50, and each account allows ten failed guesses from any one IP. Both are checked before the password, so past either a correct password from that IP also waits for the decay (the account still logs in from another IP, and a valid cookie keeps working). From the tenth failed guess on, an account's wrong guesses get a `429` from every IP, which never refuses a correct password. |
 | **QR auth**         | Single-use 60-second tokens with their own separate rate limiter, so a mistyped password cannot lock out QR login. |
 | **Hook endpoints**  | The hook and telemetry endpoints skip Basic auth because they are called from localhost by the CLI, but when auth is on, that bypass additionally requires a per-instance hook secret. |
 

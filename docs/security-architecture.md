@@ -149,7 +149,7 @@ by presence in a server‑side map, so they cannot be forged offline.
 
 ### Rate limiting / lockout recovery
 
-Failed auth is tracked **per IP**: 10 failures → `429`, with a 15‑minute decay.
+Failed logins are tracked **per IP**: 10 failures (`AUTH_FAILURE_MAX`) → `429`, with a 15‑minute decay. Multi-user mode replaces that with three buckets, all with the same decay: a wider per-IP **pre-gate** of 50 failures (`AUTH_IP_FAILURE_MAX`), checked before the scrypt verify, which bounds scrypt cost from one source and tolerates many users behind one egress IP; a **per-(username, IP)** gate of 10 failures (`AUTH_FAILURE_MAX`), also checked before the verify, which is what caps verified guesses against one account from one source; and a **per-username** bucket, checked after the verify, that answers `429` to failed guesses from the 10th on, from any IP (the count is incremented before the check). The last two exist in multi-user mode only. So the wider per-IP cap does not widen guessing against any one account from one IP, and other IPs cannot lock an account out.
 The QR path has its own separate limiter.
 
 The lockout check sits **after** the cookie/credential checks (step 4, not first).
@@ -158,6 +158,22 @@ immediately** even while an attacker is hammering the same IP — important beca
 all traffic through a tunnel shares one source IP (loopback). Wrong credentials
 are still counted and still hit the `429` at the threshold, so brute‑force
 protection is unchanged.
+The two multi-user pre-verify gates are the exception: once the per-IP pre-gate
+or an account's (username, IP) gate trips, even a correct password from that IP
+gets `429` until the decay (for the pair gate, only for that account; the same
+account from another IP still logs in), which is why the per-IP cap is the
+widest. The per-username bucket stays after the verify on purpose: checked
+first, a username-wide lockout let throwaway IPs keep a known account (admin
+included) locked out even with the right password.
+Both pre-verify gates count a request the moment it passes them, before its
+verify starts, so a burst of concurrent attempts cannot all slip through on one
+stale count; a correct password then clears its slot with the rest, and a
+failure is not counted a second time. A verify still in flight therefore holds a
+slot, even one carrying the right password, but identical credentials from the
+same IP that arrive during it share that verify, its slot and its outcome, and
+skip both gates: they add no guess and no scrypt work. So a browser replaying its
+cached login on many parallel requests after a restart (cookie sessions live in
+memory) is not refused by the slots its own password filled.
 
 ---
 
