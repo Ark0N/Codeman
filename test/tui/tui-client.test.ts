@@ -642,23 +642,30 @@ describe('TuiClient.bindSwitchKey', () => {
       expect(bind).toBeDefined();
       expect(bind).not.toContain(';');
       expect(bind).not.toContain('\\;');
-      const command = bind?.at(-1) ?? '';
+      const command = bind?.at(-2) ?? '';
       expect(command).toContain(
         'switch-client -t codeman-aaaa1111 ; set-window-option -t codeman-aaaa1111 window-size latest'
       );
+      // The else branch: a client that fails the guard (a browser tab's Esc
+      // then a digit) gets the key in its own pane instead of losing it.
+      expect(bind?.at(-1)).toBe('send-keys M-2');
       expect(bind).toContain('if-shell');
       expect(bind).toContain('-F');
       expect(bind?.join(' ')).toContain('#{client_tty},/dev/pts/4');
       expect(bind?.join(' ')).toContain('#{@codeman-tui-pid}');
       expect(await client.bindSwitchKey('M-2', 'codeman-aaaa1111', '/tmp/not-a-tty')).toBe(false);
       expect(await client.bindSwitchKey('M-2', 'other-session', '/dev/pts/4')).toBe(false);
+      // The key is interpolated into the else command, so only M-1..M-9 bind.
+      expect(await client.bindSwitchKey('M-2 ; kill-server', 'codeman-aaaa1111', '/dev/pts/4')).toBe(false);
+      expect(await client.bindSwitchKey('M-0', 'codeman-aaaa1111', '/dev/pts/4')).toBe(false);
+      expect(calls.filter((args) => args.includes('bind-key'))).toHaveLength(1);
     });
   });
 });
 
 describe('TUI switch-key guard', () => {
   const guarded =
-    'if-shell -F "#{&&:#{==:#{client_tty},/dev/pts/4},#{==:#{client_pid},#{@codeman-tui-pid}}}" "switch-client -t codeman-aaaa1111 ; set-window-option -t codeman-aaaa1111 window-size latest"';
+    'if-shell -F "#{&&:#{==:#{client_tty},/dev/pts/4},#{==:#{client_pid},#{@codeman-tui-pid}}}" "switch-client -t codeman-aaaa1111 ; set-window-option -t codeman-aaaa1111 window-size latest" "send-keys M-2"';
 
   it('recognises our binding and the legacy unscoped one, and leaves a user binding alone', () => {
     expect(isTuiSwitchBinding(guarded)).toBe(true);

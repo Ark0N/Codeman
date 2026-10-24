@@ -459,6 +459,9 @@ export const TUI_SWITCH_CLIENT_PID = '@codeman-tui-pid';
  */
 export const TUI_SWITCH_ATTACH_HOOK = 'client-attached[90]';
 
+/** The keys `bindSwitchKey` binds. The key is interpolated into the binding's `send-keys` else command. */
+const TUI_SWITCH_KEY = /^M-[1-9]$/;
+
 /** Linux `/dev/pts/N` and macOS `/dev/ttysNNN`. Anything else is not a client tty we will interpolate into a format. */
 const TUI_CLIENT_TTY = /^\/dev\/(?:pts\/[0-9]+|ttys[0-9]+)$/;
 
@@ -1049,6 +1052,14 @@ export class TuiClient {
    * the same `M-<digit>` inside `escape-time`, does not match. An unsafe tty
    * refuses the bind rather than falling back to an unscoped `switch-client`.
    *
+   * A client that fails the guard gets the key back: the if-shell else
+   * argument is `send-keys <key>`, which writes it into that client's own pane
+   * exactly as an unbound key would arrive. Without it the root binding ate
+   * the key, so a browser tab's vim `<Esc>2j` lost its Esc and its digit for
+   * the whole attach, and for good after a TUI killed before `restore()`. The
+   * key is interpolated into that command string, so only `M-1`..`M-9` are
+   * accepted.
+   *
    * The two commands live in the if-shell argument, where `;` is a separator
    * inside that string. A bare `;` as its own argv element would end the
    * `bind-key` and run `window-size latest` immediately, which is the bug the
@@ -1058,7 +1069,7 @@ export class TuiClient {
    * that session follows this terminal.
    */
   async bindSwitchKey(key: string, target: string, clientTty: string): Promise<boolean> {
-    if (!MUX_NAME_PATTERN.test(target) || !isTuiClientTty(clientTty)) return false;
+    if (!TUI_SWITCH_KEY.test(key) || !MUX_NAME_PATTERN.test(target) || !isTuiClientTty(clientTty)) return false;
     try {
       await this.exec('tmux', [
         '-L',
@@ -1071,6 +1082,7 @@ export class TuiClient {
         '-F',
         tuiSwitchGuard(clientTty),
         `switch-client -t ${target} ; set-window-option -t ${target} window-size latest`,
+        `send-keys ${key}`,
       ]);
       return true;
     } catch {
@@ -1081,7 +1093,8 @@ export class TuiClient {
   /**
    * Record this TUI's client pid when it attaches, then drop the hook so a
    * later client on a reused pty does not take the binding over. Best effort:
-   * a failure means Alt+1..9 do nothing, which is the closed direction.
+   * a failure means Alt+1..9 never switch (they reach the pane as Esc then
+   * the digit), which is the closed direction.
    */
   async armTuiSwitchGuard(clientTty: string): Promise<boolean> {
     if (!isTuiClientTty(clientTty)) return false;

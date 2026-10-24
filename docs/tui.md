@@ -195,7 +195,8 @@ That is the **session strip**: the other sessions stay visible from inside a pan
 numbered exactly as the dashboard numbers them, with the one you are in inverted.
 `Alt+1`..`Alt+9` switch between them without going back to the dashboard first. Those keys
 run `switch-client` only for this terminal's tmux client, so a browser tab on the
-same socket cannot use them to jump sessions, Esc followed by a digit included. With
+same socket cannot use them to jump sessions, Esc followed by a digit included (that
+tab's pane still receives the Esc and the digit). With
 more sessions than fit, the strip shows a window around the current one and marks
 each cut end with `…`; the way-out hint is measured first and always keeps its space.
 

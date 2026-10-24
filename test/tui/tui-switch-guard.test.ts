@@ -142,8 +142,15 @@ describe.skipIf(!hasTmux)('TUI M-1..M-9 switch only the attaching client', () =>
     if (socketPath.endsWith(`/${socket}`)) rmSync(socketPath, { force: true });
   });
 
+  /** How many Esc-then-2 presses alpha's pane has echoed (the tty's ECHOCTL shows ESC as `^[`). */
+  function escTwosInAlpha(): number {
+    return run(['capture-pane', '-p', '-t', alpha]).split('^[2').length - 1;
+  }
+
   it('switches the armed client only, including after that client has died', async () => {
-    run(['new-session', '-d', '-s', alpha, '-x', '80', '-y', '24', 'sleep 300']);
+    // alpha echoes what reaches its pane, so a key another client presses can
+    // be seen arriving there instead of being eaten by the root binding.
+    run(['new-session', '-d', '-s', alpha, '-x', '80', '-y', '24', 'stty -ixon; cat -v']);
     run(['new-session', '-d', '-s', beta, '-x', '80', '-y', '24', 'sleep 300']);
 
     helper = spawn('python3', ['-c', PTY_HELPER, socket, alpha], { stdio: ['pipe', 'pipe', 'inherit'] });
@@ -207,8 +214,10 @@ describe.skipIf(!hasTmux)('TUI M-1..M-9 switch only the attaching client', () =>
     expect(otherTty).toMatch(CLIENT_TTY);
     expect(otherTty).not.toBe(tty);
 
+    expect(escTwosInAlpha()).toBe(0);
     other.write('\x1b2');
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    // Not moved, and not swallowed: the else branch hands the key to its pane.
+    expect(await waitFor(() => escTwosInAlpha() === 1)).toBe(true);
     expect(sessions().get(otherTty)?.session).toBe(alpha);
     expect(sessions().get(tty)?.session).toBe(beta);
 
@@ -220,7 +229,7 @@ describe.skipIf(!hasTmux)('TUI M-1..M-9 switch only the attaching client', () =>
     expect(run(['show-options', '-gv', '@codeman-tui-pid']).trim()).toBe(pid);
 
     other.write('\x1b2');
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(await waitFor(() => escTwosInAlpha() === 2)).toBe(true);
     expect(sessions().get(otherTty)?.session).toBe(alpha);
 
     // restore() drops the key because it still names this tty, and the dead pid.
