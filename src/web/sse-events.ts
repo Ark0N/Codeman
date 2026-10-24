@@ -32,7 +32,7 @@
  * - **Custom Model Endpoint Profiles** (1): swapped-out (a session's model got evicted by another session on the same llama-swap endpoint)
  * - **Orchestrator** (12): stateChanged, planProgress, planReady, phase*, verification, task*, completed, error
  * - **Clipboard** (1): write
- * - **Cases** (4): created, linked, deleted, order-changed
+ * - **Cases** (5): created, linked, deleted, renamed, order-changed
  * - **Docker cases** (8): exportComplete/Failed, importComplete, imageBuild*, containerRecreated
  * - **Multi-user** (3): admin:usersChanged, auth:passwordChangeRequired, session:orderChanged
  * - **Web tabs** (2): webview:changed, tab:layoutChanged

@@ -33,9 +33,9 @@ registration, and for a linked case that is all it removes.
 
 **Renaming a case.** In the case manager (Settings, or the case picker's manage view) the pencil
 button renames a case and its folder. A case under `~/codeman-cases` _is_ its folder name, so it
-always moves. A linked case renames its name in the list only; Codeman then asks whether to rename
-the real folder as well, next to where it is (Cancel leaves the folder alone). Remote and Docker
-cases cannot be renamed. Renaming does the following for you:
+always moves. A linked case renames its name in the list only, unless you tick **Also rename the
+folder on disk** in the rename dialog: then its real folder is renamed too, next to where it is.
+Remote and Docker cases cannot be renamed. Renaming does the following for you:
 
 - **Sessions are never moved from under you.** If live sessions have the folder open, the rename is
   refused and lists them; you can then choose to stop them (nothing is restarted). While a rename runs,
@@ -49,8 +49,10 @@ cases cannot be renamed. Renaming does the following for you:
   Resume list uses the renamed folder too, and the case's default session group follows the new name.
 - **Not migrated.** Scheduled (cron) jobs keep the old `workingDir` and fail at their next run until you
   edit them; Claude history of sessions started in a subfolder (including `.claude/worktrees/<name>`)
-  stays under the old path. In multi-user mode only an admin's rename updates the shared case order and
-  last used case.
+  stays under the old path. Claude Code's own per-project settings in `~/.claude.json` (local-scope MCP
+  servers, allowed tools, the folder's trust) are keyed by the old path too, so the renamed case starts
+  without them: Codeman does not write another CLI's configuration here. In multi-user mode only an
+  admin's rename updates the shared case order and last used case.
 - **The case order, the last used case and this browser's per-case options follow the new name.**
 
 **Clone Repo never asks for credentials.** It uses whatever the server's own git already has:

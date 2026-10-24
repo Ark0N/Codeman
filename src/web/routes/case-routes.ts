@@ -1845,11 +1845,19 @@ export function registerCaseRoutes(
       );
     }
 
+    // Sessions really ended so far: an error after `stopSessions` still says how many are gone.
+    let stopped = 0;
     try {
       await withCaseLock(oldPath, newPath, async () => {
-        for (const s of open) await ctx.cleanupSession(s.id, true, 'case_rename');
+        for (const s of open) {
+          await ctx.cleanupSession(s.id, true, 'case_rename');
+          stopped++;
+        }
         if (moveFolder) await moveCaseFolder(oldPath, newPath);
         const originalLinks = isLinked ? await readLinkedCases() : undefined;
+        // The settings.json content before this rename wrote it, set only once a write is attempted (an
+        // absent file reads as {}, which must not be written back as a file that never existed).
+        let originalSettings: Record<string, unknown> | undefined;
         try {
           // settings.json is server-wide and caseOrder/lastUsedCase name the admin's cases, so only the
           // admin's rename touches it (a non-admin's own rename must not rewrite someone else's list).
@@ -1859,6 +1867,7 @@ export function registerCaseRoutes(
             const order = renameInOrder(existing.caseOrder, name, newName);
             const last = existing.lastUsedCase === name ? newName : undefined;
             if (order || last) {
+              originalSettings = existing;
               await fs.writeFile(
                 SETTINGS_PATH,
                 JSON.stringify(
@@ -1881,9 +1890,20 @@ export function registerCaseRoutes(
             }
           }
         } catch (err) {
-          // The folder moved but the registries did not follow: put it back rather than leave a case
-          // whose name and folder disagree.
-          if (moveFolder) await fs.rename(newPath, oldPath).catch(() => {});
+          // The folder moved but the registries did not follow: put settings.json and the folder back
+          // rather than leave a case whose name and folder disagree.
+          if (originalSettings) {
+            await fs.writeFile(SETTINGS_PATH, JSON.stringify(originalSettings, null, 2)).catch(() => {});
+          }
+          if (moveFolder) {
+            const movedBack = await fs.rename(newPath, oldPath).then(
+              () => true,
+              () => false
+            );
+            if (!movedBack) {
+              throw new Error(`${getErrorMessage(err)}. The folder could not be moved back and is now at ${newPath}.`);
+            }
+          }
           throw err;
         }
         if (moveFolder) await moveClaudeHistory(oldPath, newPath);
@@ -1911,9 +1931,9 @@ export function registerCaseRoutes(
             : err.code === 'BUSY'
               ? ApiErrorCode.CONFLICT
               : ApiErrorCode.OPERATION_FAILED;
-        return fail(status, code, err.message, { renameCode: err.code });
+        return fail(status, code, err.message, { renameCode: err.code, stoppedSessions: stopped });
       }
-      return fail(500, ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      return fail(500, ApiErrorCode.OPERATION_FAILED, getErrorMessage(err), { stoppedSessions: stopped });
     }
   });
 

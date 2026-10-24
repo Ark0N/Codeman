@@ -6,6 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
@@ -182,11 +183,12 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     expect(linked()).toEqual({ renamed: join(work, 'renamed') });
   });
 
-  it('puts the folder back when the registry cannot be written', async () => {
+  it('puts the folder and settings.json back when the registry cannot be written', async () => {
     const { app } = await createRouteTestHarness(registerCaseRoutes);
     const real = join(work, 'my-project');
     mkdirSync(real);
     writeFileSync(LINKED(), JSON.stringify({ proj: real }));
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj' }));
     // the registry reads fine but cannot be written: the rename must undo the folder move
     chmodSync(LINKED(), 0o444);
     const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
@@ -194,6 +196,44 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     expect(existsSync(real)).toBe(true);
     expect(linked()).toEqual({ proj: real });
     expect(existsSync(join(work, 'renamed'))).toBe(false);
+    // settings.json is written first, so it must be put back too
+    expect(settings()).toEqual({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj' });
+  });
+
+  it('says where the folder is when it cannot be moved back', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    const real = join(work, 'my-project');
+    mkdirSync(real);
+    writeFileSync(LINKED(), JSON.stringify({ proj: real }));
+    chmodSync(LINKED(), 0o444);
+    const moved = join(work, 'renamed');
+    const realRename = fs.rename;
+    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (from === moved) throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+      return realRename(from, to);
+    });
+    try {
+      const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toContain(`is now at ${moved}`);
+      expect(existsSync(moved)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reports the sessions it stopped when the rename fails after stopping them', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerCaseRoutes);
+    const real = join(work, 'my-project');
+    mkdirSync(real);
+    writeFileSync(LINKED(), JSON.stringify({ proj: real }));
+    chmodSync(LINKED(), 0o444);
+    (ctx.sessions as Map<string, unknown>).set('s1', { id: 's1', name: 'w1', workingDir: real });
+    const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true, stopSessions: true });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().stoppedSessions).toBe(1);
+    expect(ctx.cleanupSession).toHaveBeenCalledWith('s1', true, 'case_rename');
+    expect(existsSync(real)).toBe(true);
   });
 
   it('puts the folder and the registry back when settings.json cannot be written', async () => {
