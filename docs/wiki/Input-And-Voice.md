@@ -78,6 +78,14 @@ sequences, so word jumps and history keys keep working.
 | **Deepgram**       | A Deepgram API key.                            | Nova-3, with automatic silence detection.                     |
 | **Web Speech**     | Nothing.                                       | Browser-provided, quality varies.                             |
 
+### Thinking pauses
+
+In **App Settings → Voice → Stop after silence**, choose 3, 6, 15 or 30 seconds,
+or **Manual** to keep listening until you tap the mic again (`Ctrl+Shift+V`).
+**Provider default** preserves the existing timeout: 6 seconds for Claude and
+3 seconds for Deepgram or Web Speech. The timeout counts from the latest transcript
+update. Connection failures or microphone errors can still end a recording.
+
 ### Dictating through your Claude login
 
 Off by default; enable it in **App Settings → Voice**.
