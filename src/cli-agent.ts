@@ -3,7 +3,8 @@
  * inside a Codeman session, in every CLI mode.
  *
  * A thin HTTP client over endpoints that already exist (`quick-start`, `input`,
- * `wait`, `wait-output`, `last-response`, `terminal`, `DELETE sessions/:id`). It
+ * `wait`, `wait-output`, `last-response`, `terminal`, `DELETE sessions/:id`, and the
+ * agent inbox: `inbox`, `inbox/ack`, `agent-inbox/summary`). It
  * invents no route and no transport: everything goes through `CODEMAN_API_URL`, so
  * auth, ownership and the per-session waiter cap apply unchanged. The behaviour is
  * the packaged agent skill's (`skills/codeman`), ported from shell prose into code
@@ -188,6 +189,22 @@ export function defaultClientId(selfId: string, suffix = ''): string {
 export function stripAnsi(text: string): string {
   // eslint-disable-next-line no-control-regex
   return stripAnsiSequences(text).replace(/\x1b[()][AB0]/g, '');
+}
+
+/**
+ * Inbox message text for a terminal. Another session wrote it, so an escape sequence
+ * in it would otherwise reach the reader's terminal (retitle it, or move the cursor
+ * over the `from` line above it). ANSI sequences go as in `read --tail`, and every
+ * control character left (C0 other than newline and tab, DEL, C1) is shown as `\xHH`,
+ * so a bare `\r` or backspace cannot overwrite the header either. A CRLF line end
+ * stays a line end. `--json` prints the text as stored.
+ */
+export function terminalSafeText(text: string): string {
+  return (
+    stripAnsi(text.replace(/\r\n/g, '\n'))
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`)
+  );
 }
 
 /** Parse a positive-integer option (`--timeout` ms, `--tail` bytes); the server rejects anything else. */
@@ -416,15 +433,55 @@ export async function resolveSessionId(
   return { error: `"${id}" is ambiguous: ${matches.map((s) => s.id.slice(0, 13)).join(', ')}`, code: EXIT.error };
 }
 
-/** `agent ls` — every session the caller can see, self marked. */
+/** One session's row in `GET /api/agent-inbox/summary`. */
+export interface InboxSummaryRow {
+  pending: number;
+  unseen: number;
+  oldestUnseenAt: number | null;
+  parked: boolean;
+}
+
+/**
+ * The inbox summary, or undefined when it cannot be had (a server without the route,
+ * a transient error). `ls` must still list sessions then, so this never fails the verb.
+ */
+async function fetchInboxSummary(deps: AgentDeps): Promise<Record<string, InboxSummaryRow> | undefined> {
+  try {
+    const res = await deps.request(deps.ctx, { method: 'GET', path: '/api/v1/agent-inbox/summary' });
+    if (!res.json?.success) return undefined;
+    return (res.json.data as { sessions?: Record<string, InboxSummaryRow> } | undefined)?.sessions ?? {};
+  } catch {
+    return undefined;
+  }
+}
+
+/** The INBOX cell of `ls`: `3 (1 new)`, `parked`, both, or empty. */
+export function inboxCell(row: InboxSummaryRow | undefined): string {
+  if (!row) return '';
+  const parts: string[] = [];
+  if (row.pending > 0) parts.push(row.unseen > 0 ? `${row.pending} (${row.unseen} new)` : String(row.pending));
+  if (row.parked) parts.push('parked');
+  return parts.join(', ');
+}
+
+/** `agent ls` — every session the caller can see, self marked, with its inbox counts. */
 export async function agentLs(deps: AgentDeps): Promise<number> {
-  const res = await deps.request(deps.ctx, { method: 'GET', path: '/api/v1/sessions' });
+  const [res, inbox] = await Promise.all([
+    deps.request(deps.ctx, { method: 'GET', path: '/api/v1/sessions' }),
+    fetchInboxSummary(deps),
+  ]);
   if (!res.json?.success) return fail(deps, describeFailure(res));
   const sessions = (res.json.data as SessionRow[] | undefined) ?? [];
   if (deps.json) {
     emitJson(
       deps,
-      sessions.map((s) => ({ ...s, self: isSelfSession(deps.ctx.selfId, s.id) }))
+      sessions.map((s) => ({
+        ...s,
+        self: isSelfSession(deps.ctx.selfId, s.id),
+        // null = empty inbox and not parked. The key is absent when the server did
+        // not answer the summary, so "no data" never reads as "no mail".
+        ...(inbox ? { inbox: inbox[s.id] ?? null } : {}),
+      }))
     );
     return EXIT.ok;
   }
@@ -432,17 +489,22 @@ export async function agentLs(deps: AgentDeps): Promise<number> {
     deps.io.out(palette.muted('(no sessions)'));
     return EXIT.ok;
   }
-  const rows = sessions.map((s) => [
-    isSelfSession(deps.ctx.selfId, s.id) ? '*' : ' ',
-    s.id.slice(0, 8),
-    s.mode ?? '?',
-    s.status ?? '?',
-    s.name || s.workingDir || '',
-  ]);
-  deps.io.out(table([[' ', 'ID', 'MODE', 'STATUS', 'NAME'], ...rows], { gap: 2 }));
+  const rows = sessions.map((s) => {
+    const row = [isSelfSession(deps.ctx.selfId, s.id) ? '*' : ' ', s.id.slice(0, 8), s.mode ?? '?', s.status ?? '?'];
+    if (inbox) row.push(inboxCell(inbox[s.id]));
+    row.push(s.name || s.workingDir || '');
+    return row;
+  });
+  const header = inbox ? [' ', 'ID', 'MODE', 'STATUS', 'INBOX', 'NAME'] : [' ', 'ID', 'MODE', 'STATUS', 'NAME'];
+  deps.io.out(table([header, ...rows], { gap: 2 }));
   deps.io.out(
     palette.muted(`* = this session (${deps.ctx.selfId.slice(0, 8)}). status is a UI hint, never a sync signal.`)
   );
+  if (inbox) {
+    deps.io.out(
+      palette.muted('INBOX: pending (unseen), parked = the session is waiting on `agent inbox --wait` right now.')
+    );
+  }
   return EXIT.ok;
 }
 
@@ -791,6 +853,158 @@ export async function agentRm(deps: AgentDeps, options: { id: string }): Promise
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Agent inbox
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A message as `GET …/inbox` hands it out. */
+export interface InboxMessageRow {
+  id: string;
+  from: string | null;
+  text: string;
+  createdAt: number;
+  seen: boolean;
+}
+
+/**
+ * The message `post` was given, which must be ONE argument, as with `send`: several
+ * would be an unquoted `$(cat notes.md)` split by the shell, and joining the pieces
+ * with spaces loses its newlines. Unlike `send`, newlines inside the one argument are
+ * fine: the inbox stores text as data and never types it.
+ */
+export function postTextFromArgs(words: readonly string[]): { text: string } | { error: string } {
+  if (words.length === 1) return { text: words[0] };
+  return { error: `refusing: the message must be ONE argument, got ${words.length} — quote it` };
+}
+
+/** `agent post` — store a message in another session's inbox. Never types into its pane. */
+export async function agentPost(deps: AgentDeps, options: { id: string; text: string }): Promise<number> {
+  if (options.text.length === 0) return fail(deps, 'refusing: empty message', EXIT.refused);
+  const target = await resolveSessionId(deps, options.id);
+  if ('error' in target) return fail(deps, target.error, target.code);
+  const res = await deps.request(deps.ctx, {
+    method: 'POST',
+    path: `/api/v1/sessions/${encodeURIComponent(target.id)}/inbox`,
+    body: { text: options.text },
+  });
+  // 409 = the receiver's inbox is full; nothing was stored. Passed through as an error.
+  if (!res.json?.success) return fail(deps, describeFailure(res));
+  const data = res.json.data as { message?: InboxMessageRow; pending?: number; unseen?: number } | undefined;
+  if (deps.json) emitJson(deps, data ?? {});
+  else
+    deps.io.out(
+      palette.ok(
+        `${GLYPH.ok} posted to ${target.id.slice(0, 8)} (${data?.pending ?? '?'} pending, ${data?.unseen ?? '?'} unseen)`
+      )
+    );
+  return EXIT.ok;
+}
+
+export interface InboxReadOptions {
+  /** Another session's inbox (a peek); omitted = this session's own. */
+  id?: string;
+  /** Long-poll budget in ms; the read parks while nothing is unseen. */
+  waitMs?: number;
+}
+
+/** True only when the session list was read and does not contain `id`. */
+async function sessionIsGone(deps: AgentDeps, id: string): Promise<boolean> {
+  try {
+    const res = await deps.request(deps.ctx, { method: 'GET', path: '/api/v1/sessions' });
+    if (!res.json?.success) return false;
+    return !((res.json.data as SessionRow[] | undefined) ?? []).some((s) => s.id === id);
+  } catch {
+    return false;
+  }
+}
+
+/** Relative age for humans: `12s`, `4m`, `3h`. */
+function age(createdAt: number, now: number): string {
+  const s = Math.max(0, Math.round((now - createdAt) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  return `${Math.round(s / 3600)}h`;
+}
+
+/**
+ * `agent inbox` — read this session's inbox (or peek at another's). Removes nothing:
+ * a message stays until `agent ack <id>`. Only reading your OWN inbox marks messages
+ * seen. Exit 0 with mail, 2 when a `--wait` ran out with nothing unseen or the server
+ * cut it short (restart, detach), 3 when the session is gone from the list.
+ */
+export async function agentInboxRead(deps: AgentDeps, options: InboxReadOptions): Promise<number> {
+  const target = await resolveSessionId(deps, options.id ?? deps.ctx.selfId);
+  if ('error' in target) return fail(deps, target.error, target.code);
+  const res = await deps.request(deps.ctx, {
+    method: 'GET',
+    path: `/api/v1/sessions/${encodeURIComponent(target.id)}/inbox`,
+    query: { wait: options.waitMs },
+    timeoutMs: options.waitMs !== undefined ? options.waitMs + 10_000 : undefined,
+  });
+  if (!res.json?.success) return fail(deps, describeFailure(res));
+  const data = res.json.data as
+    | {
+        receiver?: boolean;
+        messages?: InboxMessageRow[];
+        pending?: number;
+        unseen?: number;
+        wait?: { timedOut?: boolean; ended?: boolean };
+      }
+    | undefined;
+  const messages = data?.messages ?? [];
+  // `ended` is also what a server restart or a detach answers. Exit 3 tells a receiver
+  // loop to stop, so it needs the session list to confirm the session is gone; while
+  // it is still listed (or the list cannot be had, as during a restart) the wait was
+  // only cut short, which is exit 2: loop again.
+  const gone = data?.wait?.ended ? await sessionIsGone(deps, target.id) : false;
+  const code = gone ? EXIT.dead : data?.wait?.timedOut || data?.wait?.ended ? EXIT.timeout : EXIT.ok;
+  if (deps.json) {
+    emitJson(deps, data ?? {});
+    return code;
+  }
+  const now = (deps.now ?? Date.now)();
+  for (const m of messages) {
+    const sender = m.from ? m.from.slice(0, 8) : 'user';
+    const tag = m.seen ? palette.muted('seen') : palette.emph('new');
+    deps.io.out(palette.muted(`── ${m.id} from ${sender}, ${age(m.createdAt, now)} ago, `) + tag);
+    deps.io.out(terminalSafeText(m.text));
+  }
+  if (gone) {
+    deps.io.err(palette.err(`${GLYPH.fail} the session went away during the wait`));
+  } else if (data?.wait?.ended) {
+    deps.io.err(palette.muted('(the server ended the wait early, e.g. a restart; exit 2, wait again)'));
+  } else if (messages.length === 0) {
+    deps.io.err(palette.muted(data?.wait?.timedOut ? '(no mail; wait timed out, exit 2)' : '(no mail)'));
+  } else if (data?.receiver) {
+    deps.io.err(
+      palette.muted(
+        `${messages.length} pending. Nothing is removed by reading: when done, \`codeman agent ack <id>…\` (full ids above).`
+      )
+    );
+  } else {
+    deps.io.err(palette.muted(`${messages.length} pending (peek: nothing was marked seen).`));
+  }
+  return code;
+}
+
+/** `agent ack` — remove messages from THIS session's inbox by id. Idempotent. */
+export async function agentAck(deps: AgentDeps, options: { ids: string[] }): Promise<number> {
+  const ids = options.ids.map((id) => id.trim()).filter(Boolean);
+  if (ids.length === 0) return fail(deps, 'refusing: no message ids', EXIT.refused);
+  const self = await resolveSessionId(deps, deps.ctx.selfId);
+  if ('error' in self) return fail(deps, self.error, self.code);
+  const res = await deps.request(deps.ctx, {
+    method: 'POST',
+    path: `/api/v1/sessions/${encodeURIComponent(self.id)}/inbox/ack`,
+    body: { ids },
+  });
+  if (!res.json?.success) return fail(deps, describeFailure(res));
+  const data = res.json.data as { removed?: number; pending?: number } | undefined;
+  if (deps.json) emitJson(deps, data ?? {});
+  else deps.io.out(palette.ok(`${GLYPH.ok} acked ${data?.removed ?? 0} (${data?.pending ?? '?'} still pending)`));
+  return EXIT.ok;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Commander wiring
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -833,7 +1047,9 @@ async function run(json: boolean, verb: (deps: AgentDeps) => Promise<number>): P
 export function registerAgentCommands(program: Command): Command {
   const agent = program
     .command('agent')
-    .description('Talk to other sessions from inside one (any CLI mode): list, spawn, send, wait, read, interrupt, rm');
+    .description(
+      'Talk to other sessions from inside one (any CLI mode): list, spawn, send, wait, read, interrupt, rm, and the inbox: post, inbox, ack'
+    );
 
   agent
     .command('ls')
@@ -975,6 +1191,49 @@ export function registerAgentCommands(program: Command): Command {
     .option('--json', 'Machine-readable output')
     .action((id: string, options: { json?: boolean }) =>
       run(Boolean(options.json), (deps) => agentInterrupt(deps, { id }))
+    );
+
+  agent
+    .command('post <id> <text...>')
+    .description(
+      "Leave a message in another session's inbox (ONE quoted argument; multi-line is fine). Nothing is typed into its pane: it reads with `agent inbox`"
+    )
+    .option('--json', 'Machine-readable output')
+    // A message is often a file (`"$(cat task.md)"`) and markdown starts with `- ` or
+    // `---` often enough; without this commander takes it for an unknown option.
+    // `--json` and `-h` are still options: text that is exactly one goes after `--`.
+    .allowUnknownOption()
+    .action((id: string, words: string[], options: { json?: boolean }) =>
+      run(Boolean(options.json), (deps) => {
+        const message = postTextFromArgs(words);
+        if ('error' in message) return Promise.resolve(fail(deps, message.error, EXIT.refused));
+        return agentPost(deps, { id, text: message.text });
+      })
+    );
+
+  agent
+    .command('inbox [id]')
+    .description(
+      "Read this session's inbox (or peek at another's with [id]). Reading removes nothing; `agent ack` does. --wait blocks while nothing is new: exit 2 on timeout"
+    )
+    .option('-w, --wait', 'Block until a new (unseen) message arrives')
+    .option('-t, --timeout <ms>', 'Wait budget in ms (with --wait)', String(DEFAULT_WAIT_MS))
+    .option('--json', 'Machine-readable output')
+    .action((id: string | undefined, options: { wait?: boolean; timeout?: string; json?: boolean }) =>
+      run(Boolean(options.json), (deps) =>
+        agentInboxRead(deps, {
+          id,
+          waitMs: options.wait ? parsePositiveInt(options.timeout, DEFAULT_WAIT_MS) : undefined,
+        })
+      )
+    );
+
+  agent
+    .command('ack <ids...>')
+    .description("Remove messages from this session's inbox by id, once handled (unknown ids are not an error)")
+    .option('--json', 'Machine-readable output')
+    .action((ids: string[], options: { json?: boolean }) =>
+      run(Boolean(options.json), (deps) => agentAck(deps, { ids }))
     );
 
   agent

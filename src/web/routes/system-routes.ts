@@ -65,6 +65,8 @@ import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import { QR_AUTH_FAILURE_MAX } from '../../config/tunnel-config.js';
 import { AUTH_SESSION_TTL_MS } from '../../config/auth-config.js';
 import { resolveTerminalHistoryConfig } from '../../config/terminal-history.js';
+import { agentInboxPersistence } from '../agent-inbox-persistence.js';
+import { agentInbox } from '../agent-inbox.js';
 
 /**
  * Defaults for `POST /api/deepseek/install-profile`.
@@ -802,6 +804,13 @@ export function registerSystemRoutes(
     const lifecycleLog = getLifecycleLog();
     for (const s of result.cleaned) {
       lifecycleLog.log({ event: 'stale_cleaned', sessionId: s.id, name: s.name });
+      // A detached session kept its agent inbox. Its record going is the delete only
+      // when no tmux session stands behind it: a detached pane the multiplexer still
+      // lists is re-adopted under the same id at the next boot (restoreMuxSessions,
+      // with or without a state.json record), and its mail must come back with it.
+      // Keeping a pane that died while detached errs toward the 12 h TTL and the boot
+      // prune, the same trade the boot keep set makes.
+      if (!ctx.mux.getSession(s.id)) agentInbox.drop(s.id);
     }
     return { cleanedSessions: result.count };
   });
@@ -1136,6 +1145,10 @@ export function registerSystemRoutes(
         workflowRunWatcher,
         'Workflow run watcher'
       );
+
+      // Agent inbox snapshot (default OFF). From `merged` like the toggles above: a
+      // partial PUT that omits the key must not switch it off and delete the file.
+      agentInboxPersistence.setEnabled(merged.agentInboxPersistEnabled === true);
 
       // Handle image watcher toggle dynamically
       toggleService((merged.imageWatcherEnabled as boolean) ?? false, imageWatcher, 'Image watcher', () => {

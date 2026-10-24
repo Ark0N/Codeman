@@ -764,3 +764,50 @@ Confirm cleanup with `GET /api/v1/sessions`, never with `/api/v1/sessions/unifie
 (that one folds in transcript history from the whole machine and will keep showing
 your worker forever).
 
+### 5.15 Agent inbox
+
+Every session has an inbox. A message posted there is stored, not typed: the receiver's
+pane is untouched, no turn starts, and the text may span several lines. The receiver
+reads when it is ready. Use it for results a worker hands back, for a follow-up task a
+busy worker should pick up after its current one, and for anything longer than one
+composer line. Use `send` when you want a turn to start now.
+
+```bash
+codeman agent post "$WORKER" "$(cat task.md)"   # ONE quoted argument; prints pending/unseen
+codeman agent inbox --wait --timeout 300000     # your own inbox; blocks while nothing is new
+codeman agent ack <id> [<id>…]                  # remove what you handled, by the full id inbox printed
+codeman agent inbox "$WORKER"                   # peek at someone else's: marks nothing
+codeman agent ls                                # INBOX column: pending (new), parked
+```
+
+The same over HTTP: `POST /api/v1/sessions/:id/inbox {"text":…}`, `GET
+/api/v1/sessions/:id/inbox?wait=<ms>`, `POST /api/v1/sessions/:id/inbox/ack {"ids":[…]}`,
+`GET /api/v1/agent-inbox/summary`. The preamble's `CURL` already sends
+`X-Codeman-Parent-Session`, which is how the server knows who you are.
+
+Rules that matter:
+
+- **Reading removes nothing.** Every read returns every pending message until you ack
+  it, so a crash between reading and doing loses nothing. Ack once the work is done,
+  not when you have read it: a sender looking at `ls` sees unacked mail as not done.
+- **Only the receiver's own read counts.** Your read of your own inbox marks messages
+  seen (`seen: true` on the next read); reading another session's inbox is a peek and
+  changes nothing for it. Only the receiver can ack (403 otherwise).
+- **`--wait` waits for something new.** It returns at once when there is unseen mail
+  and otherwise blocks until a post arrives; seen but unacked messages come back with it
+  and do not end the wait. Timeout is exit 2, and so is a wait the server cut short
+  (a restart): loop again. Exit 3 means the session list no longer has the session.
+  `--wait` on someone else's inbox returns at once while they have unseen mail (only
+  their read clears it); check `ls` instead.
+- **The sender is resolved, not claimed.** `from` is the session the header resolves to,
+  or `null` (the user). In single-user mode that is a hint, since every local process
+  holds the same credentials. In multi-user mode it is checked against the owner;
+  an admin can still act as any session of the receiver's owner.
+- **Full means refused.** 200 messages or 512 KiB per inbox, 16 KiB per message. A full
+  inbox answers 409 and stores nothing; the oldest is never dropped. Messages expire 12
+  hours after they were posted.
+- **Nobody is woken.** An idle receiver does not look at its inbox by itself, and the
+  server never types into its pane. When `ls` shows a worker idle with unread mail and
+  not parked, `send` it one line ("read your inbox: `codeman agent inbox`").
+- **Lifetime.** An inbox goes with its session on delete. A server restart empties all
+  inboxes unless the user turned on *Keep agent inbox across restarts* in Settings.
