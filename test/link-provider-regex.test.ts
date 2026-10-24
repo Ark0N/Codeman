@@ -17,6 +17,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import vm from 'node:vm';
 
 const publicFile = (name: string) => readFileSync(join(__dirname, '..', 'src', 'web', 'public', name), 'utf-8');
 
@@ -99,8 +100,9 @@ describe('terminal link-provider regexes (shipped source)', () => {
     // Excluding `&` truncated every real query string: a WordPress edit link
     // resolved to `?post=1479` and opened the wrong page, and Claude Code's OAuth
     // login URL (many `&` params) was not clickable at all.
-    const url = shippedPattern('urlPattern');
-    const strip = (u: string) => u.replace(/[.,;:!?)&]+$/, '');
+    const context = vm.createContext({ console, window: undefined });
+    vm.runInContext(`${CONSTANTS_SOURCE}\nglobalThis.findUrls = findTerminalUrls;`, context);
+    const findUrls = context.findUrls as (text: string) => Array<{ url: string }>;
     const cases: Array<[string, string]> = [
       [
         'updated in place: https://bio-hacking.blog/wp-admin/post.php?post=1479&action=edit',
@@ -115,10 +117,7 @@ describe('terminal link-provider regexes (shipped source)', () => {
       ['trailing https://x.com/a?b=1& next', 'https://x.com/a?b=1'],
     ];
     for (const [line, want] of cases) {
-      url.lastIndex = 0;
-      const m = url.exec(line);
-      expect(m, line).not.toBeNull();
-      expect(strip(m![0]), line).toBe(want);
+      expect(findUrls(line).map((match) => match.url), line).toEqual([want]);
     }
   });
 

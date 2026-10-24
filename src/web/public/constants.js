@@ -2184,9 +2184,9 @@ function findFilePathLinks(text) {
   // `?img=b.png` belong to the URL link, not to a second, overlapping file link.
   // (`file:///home/x.png` is not one of them: its path is the file.)
   const urls = [];
-  const urlPattern = /\bhttps?:\/\/\S+/gi;
+  const webUrlPattern = /\bhttps?:\/\/\S+/gi;
   let match;
-  while ((match = urlPattern.exec(value)) !== null) urls.push({ index: match.index, path: match[0] });
+  while ((match = webUrlPattern.exec(value)) !== null) urls.push({ index: match.index, path: match[0] });
   const inUrl = (index, length) => urls.some((u) => index < u.index + u.path.length && u.index < index + length);
 
   const absolute = absoluteFilePathPattern();
@@ -2345,7 +2345,12 @@ function terminalLogicalLine(buffer, row, cols, maxRows) {
     if (r <= 0) return false;
     if (lineAt(r)?.isWrapped) return true;
     const prev = lineAt(r - 1);
-    return !!prev && (prev.translateToString(true) || '').length >= width;
+    const prevText = prev?.translateToString(true) || '';
+    // A full-width table divider is a row boundary, not a hard-wrapped line.
+    // Treating it as a continuation glues the divider onto the row below and
+    // hides that row's wrapped URL from the link provider.
+    if (/^[\s─━═╌╍┄┅┈┉-]+$/u.test(prevText)) return false;
+    return prevText.length >= width;
   };
 
   let startRow = row;
@@ -2517,6 +2522,305 @@ function terminalPathLine(buffer, row, cols, maxRows) {
     return -1;
   };
   return { startRow: parts[0].startRow, endRow: parts[parts.length - 1].endRow, text, offsetToCell, cellToOffset };
+}
+
+/**
+ * Web URLs in terminal text, with the trimming the link provider applies.
+ *
+ * A single `&` is part of the URL (query separator); `&&` is the shell operator
+ * and ends it. `)` is kept INSIDE a URL when it closes a `(` that is also inside
+ * it (`…/Team-Space(QA)Archive/…` used to link only as far as `(QA`), and an
+ * unmatched `)` ends the URL, which keeps the closing paren of `(https://…)` and
+ * `[text](https://…)` out of the link. Trailing sentence punctuation is trimmed.
+ *
+ * @param {string} text
+ * @returns {Array<{url: string, startIndex: number, endIndex: number, rawEnd: number}>}
+ *          `endIndex` is exclusive; `rawEnd` is where the match ran to before the
+ *          paren/punctuation trim (the wrap-continuation test needs it).
+ */
+function findTerminalUrls(text) {
+  // Named `urlPattern` on purpose: test/link-provider-regex.test.ts extracts it
+  // by name to prove it stays linear-time on hostile lines.
+  const urlPattern = /https?:\/\/(?:[^\s"'<>|;&\]\x00-\x1f]|&(?!&))+/g;
+  const urls = [];
+  let match;
+  while ((match = urlPattern.exec(String(text || ''))) !== null) {
+    const raw = match[0];
+    let end = raw.length;
+    let depth = 0;
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i] === '(') depth++;
+      else if (raw[i] === ')') {
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+        depth--;
+      }
+    }
+    const url = raw.slice(0, end).replace(/[.,;:!?&]+$/, '');
+    if (!/:\/\/[^/]/.test(url)) continue;
+    urls.push({ url, startIndex: match.index, endIndex: match.index + url.length, rawEnd: match.index + raw.length });
+  }
+  return urls;
+}
+
+/**
+ * The row span a URL covers when the CLI wrapped it with its OWN newlines at a
+ * point short of the terminal width.
+ *
+ * {@link terminalLogicalLine} joins soft wraps and full-width hard wraps. A CLI
+ * that word-wraps inside a table cell or a paragraph (codex's markdown tables,
+ * for one) breaks a long URL at `/`, `?`, `-` … well before the right edge and
+ * indents the rest to the cell's column, so neither rule fires and each row
+ * linked a fragment. A row continues the URL above it only when ALL hold:
+ *   - the URL fragment ends on a character a wrapper breaks after
+ *     (`/ ? & = - _ % # + ~`); a following table column may be excluded;
+ *   - the next row is indented no further right than the column the URL
+ *     started in (a table cell or list item continuation, not unrelated text);
+ *   - that row's first token looks like URL material (contains one of
+ *     `% & = / ? . - _`), is not a bare number/version or list marker,
+ *     and is not itself a new `scheme://`; without `% & = / ?`, the token
+ *     must finish its cell (row end or a gap of at least two spaces).
+ * The last rule is what stops prose such as "…/files/" + "then run it" from
+ * being glued into one link.
+ *
+ * Bounded by `maxRows`, like the logical line. Pure: reads rows only.
+ *
+ * @param {{getLine: (row: number) => any, length: number}} buffer
+ * @param {number} row 0-based absolute row being examined.
+ * @param {number} cols Terminal width.
+ * @param {number} [maxRows]
+ * @returns {{startRow: number, endRow: number, firstRowUrlEnd?: number} | null}
+ *          `firstRowUrlEnd` is where the URL's cell ends on the first row when
+ *          other table columns follow it; null means the row is not part of a
+ *          URL continued this way.
+ */
+function terminalUrlContinuationExtent(buffer, row, cols, maxRows) {
+  const bound = Math.max(1, maxRows || 12);
+  const here = terminalLogicalLine(buffer, row, cols, bound);
+  if (!here) return null;
+
+  const chainFrom = (start) => {
+    const first = terminalLogicalLine(buffer, start, cols, bound);
+    if (!first || first.startRow !== start) return null;
+    let text = first.text.replace(/\s+$/, '');
+    let endRow = first.endRow;
+    let urlStartCol = -1;
+    let firstRowUrlEnd = null;
+    let extended = false;
+    while (endRow - start + 1 < bound) {
+      const urls = findTerminalUrls(text);
+      const last = urls[urls.length - 1];
+      const trailingColumns =
+        endRow === first.endRow && last && last.rawEnd < text.length && /^ {2,}\S/.test(text.slice(last.rawEnd));
+      const urlText = trailingColumns ? text.slice(0, last.rawEnd) : text;
+      if (!last || last.rawEnd !== urlText.length || !/[/?&=\-_%#+~]$/.test(urlText)) break;
+      if (urlStartCol < 0) urlStartCol = first.offsetToCell(last.startIndex).col;
+      const next = buffer.getLine(endRow + 1);
+      if (!next || next.isWrapped) break;
+      const nextText = next.translateToString(true) || '';
+      const indent = nextText.length - nextText.replace(/^\s+/, '').length;
+      const token = nextText.slice(indent).split(/\s/, 1)[0];
+      if (!token || indent > urlStartCol || /^(?:\d+[.)]|[-*•])(?:\s|$)/.test(nextText.slice(indent))) break;
+      // When other table columns follow the URL, the next row must align with
+      // the start of its cell. A new numbered row must not become URL text.
+      if (
+        trailingColumns &&
+        (!indent ||
+          first.text[indent - 1] !== ' ' ||
+          first.text[indent] === ' ' ||
+          / {2,}/.test(first.text.slice(indent, last.startIndex)))
+      )
+        break;
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token) || !/^[A-Za-z0-9%_~]/.test(token)) break;
+      if (!/[%&=/?.\-_]/.test(token) || /^v?\d+(?:\.\d+)*(?:[-+][\w.-]+)?[.,;:!?)]?$/i.test(token)) break;
+      // Hyphens, underscores and dots also occur in prose. Without stronger
+      // URL punctuation, the token must finish its cell, not introduce a sentence.
+      const rest = nextText.slice(indent + token.length);
+      if (!/[%&=/?]/.test(token) && rest.trim() !== '' && !/^ {2,}/.test(rest)) break;
+      const nextLogical = terminalLogicalLine(buffer, endRow + 1, cols, bound);
+      if (!nextLogical) break;
+      if (trailingColumns) firstRowUrlEnd = last.rawEnd;
+      text = urlText + nextLogical.text.slice(indent).replace(/\s+$/, '');
+      endRow = nextLogical.endRow;
+      extended = true;
+    }
+    return { startRow: start, endRow, extended, firstRowUrlEnd };
+  };
+
+  // Walk up through earlier logical lines: the nearest one whose URL chain
+  // reaches this row owns it.
+  let start = here.startRow;
+  while (start >= 0 && here.startRow - start < bound) {
+    const chain = chainFrom(start);
+    if (chain && chain.extended && chain.endRow >= here.startRow) {
+      return {
+        startRow: chain.startRow,
+        endRow: chain.endRow,
+        ...(chain.firstRowUrlEnd === null ? {} : { firstRowUrlEnd: chain.firstRowUrlEnd }),
+      };
+    }
+    if (start === 0) break;
+    const above = terminalLogicalLine(buffer, start - 1, cols, bound);
+    if (!above) break;
+    start = above.startRow;
+  }
+  return null;
+}
+
+/**
+ * The text the link provider scans for `row`: {@link terminalPathLine}, widened
+ * to the rows of a URL the CLI wrapped short of the edge
+ * ({@link terminalUrlContinuationExtent}). Same shape as terminalPathLine.
+ *
+ * Over a widened span every row is read trimmed (except one a soft wrap
+ * continues from, which fills the width), a HARD continuation's indent is
+ * dropped (the cell mapping keeps the cells), and the first row stops at the
+ * URL's cell when other table columns follow it, so those columns never sit
+ * between the URL's pieces.
+ *
+ * @returns Same shape as {@link terminalPathLine}; null when the row does not exist.
+ */
+function terminalLinkLine(buffer, row, cols, maxRows) {
+  const base = terminalPathLine(buffer, row, cols, maxRows);
+  if (!base) return null;
+  const extent = terminalUrlContinuationExtent(buffer, row, cols, maxRows);
+  if (!extent || (extent.startRow >= base.startRow && extent.endRow <= base.endRow)) return base;
+  const startRow = Math.min(extent.startRow, base.startRow);
+  const endRow = Math.max(extent.endRow, base.endRow);
+  const segments = [];
+  let text = '';
+  for (let r = startRow; r <= endRow; r++) {
+    const line = buffer.getLine(r);
+    if (!line) break;
+    const next = r < endRow ? buffer.getLine(r + 1) : null;
+    let rowText = line.translateToString(!(next && next.isWrapped)) || '';
+    if (r === extent.startRow && extent.firstRowUrlEnd != null) rowText = rowText.slice(0, extent.firstRowUrlEnd);
+    let colStart = 0;
+    if (r > startRow && !line.isWrapped) {
+      colStart = rowText.length - rowText.replace(/^\s+/, '').length;
+      rowText = rowText.slice(colStart);
+    }
+    segments.push({ row: r, textStart: text.length, colStart });
+    text += rowText;
+  }
+  const offsetToCell = (offset) => {
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const seg = segments[i];
+      if (offset >= seg.textStart || i === 0) return { row: seg.row, col: seg.colStart + (offset - seg.textStart) };
+    }
+    return { row: startRow, col: offset };
+  };
+  const cellToOffset = (targetRow, targetCol) => {
+    const seg = segments.find((s) => s.row === targetRow);
+    return seg ? seg.textStart + Math.max(0, targetCol - seg.colStart) : -1;
+  };
+  return { startRow, endRow: segments[segments.length - 1].row, text, offsetToCell, cellToOffset };
+}
+
+/**
+ * Absolute file paths the CLI word-wrapped INSIDE a table cell (codex markdown
+ * tables), returned as one link per path with a segment per row.
+ *
+ *    Before screenshot (/tmp/x/docs/review/          After screenshot (/tmp/x/review/BLDMESH-
+ *    BLDMESH-243/before-overview.png)                243/after-overview.png)
+ *
+ * Neither fragment matches FILE_PATH_LINK_PATTERN alone (the first has no
+ * extension, the second no absolute root), and a linear stitch of the rows
+ * cannot serve a two-column table: each column's continuation sits in the same
+ * next row. So each fragment is followed DOWN ITS OWN CELL: the cell's left
+ * edge is where its text starts after the previous ≥2-space column gap, and the
+ * continuation is the token starting at exactly that column on the next row.
+ * A fragment qualifies only when it is the last thing in its cell on that row
+ * (row end or a ≥2-space gap follows). Every continuation must pass
+ * pathContinuation and its cell must be no wider than the preceding cell's
+ * text, so independent listing rows and longer prose never displace links.
+ *
+ * Pure: reads rows only. Cells are taken one per string character (xterm rows
+ * with wide glyphs would shift columns; such rows simply fail the alignment).
+ *
+ * @param {{getLine: (row: number) => any, length: number}} buffer
+ * @param {number} row 0-based absolute row being examined.
+ * @param {number} [maxRows] Bound on rows one path may span.
+ * @returns {Array<{path: string, segments: Array<{row: number, startCol: number, endCol: number}>}>}
+ *          Paths with a segment on `row`; `endCol` is exclusive, columns 0-based.
+ */
+function terminalCellWrappedPaths(buffer, row, maxRows) {
+  const bound = Math.max(2, maxRows || 4);
+  const rootPattern = new RegExp(`\\/(?:${FILE_LINK_ROOT_GROUP})\\/`, 'g');
+  // Box-drawing verticals are cell borders (Claude Code draws tables with them).
+  const isPathChar = (ch) => !!ch && !/[\s"'<>|;&\x00-\x1f│┃║]/.test(ch);
+  const rowText = (r) => {
+    const line = buffer.getLine(r);
+    return line ? (line.translateToString(true) || '').replace(/\s+$/, '') : null;
+  };
+  // A fragment is the last text in its cell on this row when the row ends, a
+  // column gap (≥2 spaces) follows it, or a cell border does.
+  const endsCell = (text, end) => end >= text.length || /^(?: {2,}| *[│┃║|])/.test(text.slice(end));
+
+  const fromStart = (startRow) => {
+    const found = [];
+    const text = rowText(startRow);
+    if (!text) return found;
+    rootPattern.lastIndex = 0;
+    let m;
+    while ((m = rootPattern.exec(text)) !== null) {
+      const start = m.index;
+      if (start > 0 && !/[\s(\[{"'`<]/.test(text[start - 1])) continue;
+      let end = start;
+      while (end < text.length && isPathChar(text[end])) end++;
+      rootPattern.lastIndex = Math.max(end, start + 1);
+      if (!endsCell(text, end)) continue;
+      // Already a complete path on its own row: the ordinary detector owns it.
+      const alone = absoluteFilePathPattern().exec(text.slice(start, end));
+      if (alone && alone.index === 0 && alone[0].length === end - start) continue;
+      // The cell's left edge: just past the nearest ≥2-space gap or cell border
+      // (and the padding after it) before the path.
+      const before = text.slice(0, start);
+      let cellCol = before.length - before.replace(/^\s+/, '').length;
+      const edge = /(?: {2,}|[│┃║|] *)(?=\S)/g;
+      let e;
+      const upToPath = text.slice(0, start + 1);
+      while ((e = edge.exec(upToPath)) !== null) cellCol = e.index + e[0].length;
+
+      let joined = text.slice(start, end);
+      let previousCellLength = end - cellCol;
+      const segments = [{ row: startRow, startCol: start, endCol: end }];
+      for (let r = startRow + 1; r < startRow + bound; r++) {
+        const line = buffer.getLine(r);
+        if (!line || line.isWrapped) break;
+        const next = rowText(r);
+        if (!next || !isPathChar(next[cellCol]) || (cellCol > 0 && next[cellCol - 1] !== ' ')) break;
+        let tokenEnd = cellCol;
+        while (tokenEnd < next.length && isPathChar(next[tokenEnd])) tokenEnd++;
+        const token = next.slice(cellCol, tokenEnd);
+        // Include prose after the token in this cell, but not another column.
+        const cellText = next.slice(cellCol).split(/ {2,}|[│┃║|]/, 1)[0].trimEnd();
+        if (cellText.length > previousCellLength || !pathContinuation(joined, token)) break;
+        const candidate = joined + token;
+        const match = absoluteFilePathPattern().exec(candidate);
+        if (match && match.index === 0 && match[0].length > joined.length) {
+          segments.push({ row: r, startCol: cellCol, endCol: cellCol + match[0].length - joined.length });
+          found.push({ path: match[0], segments });
+          break;
+        }
+        if (!endsCell(next, tokenEnd)) break;
+        joined = candidate;
+        previousCellLength = cellText.length;
+        segments.push({ row: r, startCol: cellCol, endCol: tokenEnd });
+      }
+    }
+    return found;
+  };
+
+  const results = [];
+  for (let s = row; s >= 0 && row - s < bound; s--) {
+    for (const hit of fromStart(s)) {
+      if (hit.segments.some((seg) => seg.row === row)) results.push(hit);
+    }
+  }
+  return results;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -3440,7 +3744,14 @@ if (typeof window !== 'undefined') {
     rendersAsPage,
     HTML_PAGE_EXTENSIONS,
   };
-  window.CodemanTerminalLines = { terminalLogicalLine, terminalPathLine };
+  window.CodemanTerminalLines = {
+    terminalLogicalLine,
+    terminalPathLine,
+    terminalLinkLine,
+    terminalUrlContinuationExtent,
+    findTerminalUrls,
+    terminalCellWrappedPaths,
+  };
   window.CodemanUrlSession = { sessionIdFromFragment };
   window.CodemanSplitPane = {
     clampDividerPercent,
