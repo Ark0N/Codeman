@@ -2234,17 +2234,24 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  *   - /mnt/c/My Docs/report.docx            after a list marker (`-`, `*`, `•`, `1.`, `2)`)
  *   Saved to: 03 Attachments/Build SIPOC Design/plan.pptx      after a short label (one to four words + `:`)
  *
- * An absolute path may stand alone or follow a marker. Relative and `~/`
- * paths require an explicit path label (SPACED_FILE_PATH_LABEL_PATTERN), with
- * an optional marker before it: generic labels and bullets also introduce prose. One trailing
- * sentence mark is left out. The candidate must read as ONE path: it ends on a
- * known extension, and no earlier word ends on one or `/`; later words cannot
- * start a new `/`, `~/`, `./` or `../` path. No earlier word ends
- * in `:` or is an arrow, so two paths on a line are never merged.
+ * An absolute path may stand alone or follow a marker. Any label, before an
+ * absolute, relative or `~/` path, must be an explicit path label
+ * (SPACED_FILE_PATH_LABEL_PATTERN), with an optional marker before it: generic
+ * labels (`Error:`, `Note:`) and bare bullets also introduce prose, so a relative
+ * path needs a path label to be taken spaced. One trailing sentence mark is left
+ * out, and a leading `./` is not a segment. The candidate must read as ONE path:
+ * it ends on a known extension, a rooted one has a directory before its first
+ * space, no earlier word ends on an extension or `/`, and none holds a `:` and a
+ * digit (`a.ts:42`, a line suffix ends the path). Later words cannot start a new
+ * `/`, `~/`, `./` or `../` path, no earlier word ends in `:` or is an arrow, and
+ * a run of spaces (a column gap) is refused, so two paths on a line are never
+ * merged.
  *
  * A candidate that is one path but not a linkable one (an unknown root such as
- * `/etc`, a `.`/`..`/empty segment) comes back with `link: false`: its span links
- * nothing, rather than the fragment after its last space.
+ * `/etc`, a `.`/`..`/empty segment) comes back with `link: false` when its last
+ * word still holds a `/`: its span links nothing, rather than the fragment after
+ * its last space. Otherwise (`/usr/bin/env node build.js`) the line is left to
+ * the ordinary detectors.
  *
  * Linear: one bounded prefix match, then string scans.
  *
@@ -2257,18 +2264,29 @@ function spacedFilePathOnLine(line) {
   const index = prefix[0].length;
   const path = text.slice(index).trimEnd().replace(/[.,;:!?]$/, '');
   if (!path.includes(' ') || !path.includes('/') || path.length > 1000) return null;
-  if (!path.startsWith('/') && !SPACED_FILE_PATH_LABEL_PATTERN.test(prefix[2] || '')) return null;
+  // After a label, only a path label introduces a path; with no label, only an
+  // absolute path may stand alone. `Error: /a/b contains c.md` is prose.
+  if (prefix[2] ? !SPACED_FILE_PATH_LABEL_PATTERN.test(prefix[2]) : !path.startsWith('/')) return null;
   if (!PATH_TOKEN_ENDS_WITH_EXTENSION.test(path)) return null;
-  if (/[\t"'`<>|;&\x00-\x1f\\]/.test(path) || path.includes('://')) return null;
+  // A run of spaces is a column gap (`git status`, `ls -l`), not a name.
+  if (/[\t"'`<>|;&\x00-\x1f\\]/.test(path) || path.includes('://') || path.includes('  ')) return null;
   const words = path.split(' ');
+  // A rooted candidate must have a directory before its first space: `/usr/bin/env node a.js`
+  // or `/review the changes in src/a.ts` is a command, not a spaced path.
+  if (path.startsWith('/') && !/^\/[^/]+\//.test(words[0])) return null;
   for (const word of words.slice(0, -1)) {
     if (word.endsWith('/') || word.endsWith(':') || /^(?:—|–|→|=>|->|<-)$/.test(word)) return null;
+    // `a.ts:42` (grep -n, compiler output): the path already ended at the line suffix.
+    if (/:\d/.test(word)) return null;
     if (PATH_TOKEN_ENDS_WITH_EXTENSION.test(word.replace(/[.,;:!?)\]}]+$/, ''))) return null;
   }
   if (words.slice(1).some((word) => /^(?:\/|~\/|\.{1,2}\/)/.test(word))) return null;
   const rooted = SPACED_PATH_ROOT.test(path) || path.startsWith('~/');
-  const segments = path.replace(/^~?\//, '').split('/');
+  const segments = path.replace(/^(?:~?\/|\.\/)/, '').split('/');
   const link = (rooted || !path.startsWith('/')) && segments.every((seg) => seg && seg !== '.' && seg !== '..');
+  // Reserve an unlinkable span only when it still reads as a path to its end;
+  // otherwise leave the line to the ordinary detectors.
+  if (!link && !words[words.length - 1].includes('/')) return null;
   return { path, index, link };
 }
 

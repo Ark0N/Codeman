@@ -3015,18 +3015,23 @@ class CodemanApp {
     // invalidates the traversal.
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const targets = [];
+    // Same promise as the guard above: a stale constants.js without the label
+    // pattern only loses the carried label, it never throws.
+    const labelPattern = typeof SPACED_FILE_PATH_LABEL_PATTERN !== 'undefined' ? SPACED_FILE_PATH_LABEL_PATTERN : null;
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (node.parentElement?.closest('a')) continue;
       // Markdown puts **Saved to:** in a separate <strong> node. Carry only
-      // an explicit leading path label into detection; never arbitrary prose
-      // or a label from another block. The label itself stays untouched.
+      // an explicit path label that starts its line into detection; never
+      // arbitrary prose or a label from another block. Chat renders with
+      // `breaks: true`, so a later line of a paragraph starts after a <br>.
+      // The label itself stays untouched.
       const label = node.previousSibling;
-      const beforeLabel = label?.previousSibling;
+      let beforeLabel = label?.previousSibling;
+      if (beforeLabel?.nodeType === 3 && !beforeLabel.nodeValue.trim()) beforeLabel = beforeLabel.previousSibling;
       const labelText = label?.nodeName === 'STRONG' ? label.textContent : '';
       const leadingLabel =
-        /^(?:P|LI)$/.test(node.parentElement?.tagName || '') &&
-        (!beforeLabel || (beforeLabel.nodeType === 3 && !beforeLabel.nodeValue.trim() && !beforeLabel.previousSibling));
-      const prefix = leadingLabel && SPACED_FILE_PATH_LABEL_PATTERN.test(labelText) ? `${labelText} ` : '';
+        /^(?:P|LI)$/.test(node.parentElement?.tagName || '') && (!beforeLabel || beforeLabel.nodeName === 'BR');
+      const prefix = leadingLabel && labelPattern?.test(labelText) ? `${labelText} ` : '';
       const found = findFilePathLinks(prefix + (node.nodeValue || ''))
         .filter((hit) => hit.index >= prefix.length)
         .map((hit) => ({ ...hit, index: hit.index - prefix.length }));

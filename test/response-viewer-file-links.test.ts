@@ -58,7 +58,9 @@ vm.runInContext(
   readFileSync(resolve(import.meta.dirname, '../src/web/public/vendor/marked.min.js'), 'utf8'),
   markedContext
 );
-const marked = markedContext.marked as { parse(text: string): string };
+const marked = markedContext.marked as { parse(text: string, options?: object): string };
+/** The options `_renderMarkdown` passes, so the tests see chat's real markup (a newline becomes `<br>`). */
+const renderChat = (markdown: string) => marked.parse(markdown, { breaks: true, gfm: true });
 
 const CodemanApp = loadCodemanAppClass();
 const APP_SOURCE = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
@@ -89,8 +91,16 @@ describe('response viewer file-path linkifier', () => {
     ['**Saved to:** /mnt/c/My Docs/a.docx', ['/mnt/c/My Docs/a.docx']],
     ['**Tests:** 45/45 pass in test/foo.test.ts', ['test/foo.test.ts']],
     ['**Error:** I/O failure reading data.json', ['data.json']],
+    [
+      'Done.\n**Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      ['03 Attachments/Build SIPOC Design/Build-SIPOC.pptx'],
+    ],
+    [
+      '**Size:** 2 MB\n**Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      ['03 Attachments/Build SIPOC Design/Build-SIPOC.pptx'],
+    ],
   ])('links rendered Markdown with consumed markers and labels: %s', (markdown, expected) => {
-    const html = marked.parse(markdown);
+    const html = renderChat(markdown);
     const original = document.createElement('div');
     original.innerHTML = html;
     const root = linkify(html);
@@ -103,8 +113,9 @@ describe('response viewer file-path linkifier', () => {
     for (const markdown of [
       'See **Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
       '**Saved to:**\n\n03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      'Done.\nSee **Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
     ]) {
-      expect(paths(linkify(marked.parse(markdown))).map((a) => a.getAttribute('data-path'))).toEqual([
+      expect(paths(linkify(renderChat(markdown))).map((a) => a.getAttribute('data-path'))).toEqual([
         'Design/Build-SIPOC.pptx',
       ]);
     }

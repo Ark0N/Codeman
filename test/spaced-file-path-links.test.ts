@@ -67,12 +67,15 @@ describe('spaced file paths', () => {
     expect(paths(`${label} ${p}`)).toEqual([p]);
   });
 
-  it.each(['- ', '* ', '• ', '1. ', '2) '])('links a spaced path after the list marker %j', (marker) => {
-    const rel = '03 Attachments/Build SIPOC Design/Build-SIPOC.pptx';
-    expect(paths(`${marker}${rel}`)).toEqual(['Design/Build-SIPOC.pptx']);
-    expect(paths(`${marker}Path: ${rel}`)).toEqual([rel]);
-    expect(paths(`  ${marker}${LONG}`)).toEqual([LONG]);
-  });
+  it.each(['- ', '* ', '• ', '1. ', '2) '])(
+    'defers a relative spaced path after a bare list marker %j, links it after a path label',
+    (marker) => {
+      const rel = '03 Attachments/Build SIPOC Design/Build-SIPOC.pptx';
+      expect(paths(`${marker}${rel}`)).toEqual(['Design/Build-SIPOC.pptx']);
+      expect(paths(`${marker}Path: ${rel}`)).toEqual([rel]);
+      expect(paths(`  ${marker}${LONG}`)).toEqual([LONG]);
+    }
+  );
 
   it('works line by line in code-block text, where list markers remain literal', () => {
     const text = `Wrote two files:\n- ${LONG}\n- Path: notes/a b/c.md\n`;
@@ -162,6 +165,64 @@ describe('spaced file paths', () => {
     const t0 = performance.now();
     findFilePathLinks(line);
     expect(performance.now() - t0).toBeLessThan(500);
+  });
+});
+
+/** The links master returned for `line`, in order: `[path, folder?]` pairs, each at its first occurrence. */
+const masterLinks = (line: string, ...links: Array<[string, true?]>) =>
+  links.map(([path, folder]) => ({ path, index: line.indexOf(path), ...(folder ? { folder } : {}) }));
+
+describe('spaced file paths: shapes that keep master links', () => {
+  // grep -n, rg -n and compiler output: a `:` plus a digit inside an earlier
+  // word is a line suffix, so the path already ended there.
+  it.each([
+    ['/home/me/proj/README.md:12:See docs/setup.md', '/home/me/proj/README.md', 'docs/setup.md'],
+    [
+      '     /home/me/proj/CLAUDE.md:42:Deep detail lives in docs/architecture-invariants.md',
+      '/home/me/proj/CLAUDE.md',
+      'docs/architecture-invariants.md',
+    ],
+    ['/home/me/proj/src/a.ts:42:5 - error in b.ts', '/home/me/proj/src/a.ts', 'b.ts'],
+    ['/home/me/proj/src/index.ts:10 updated config.json', '/home/me/proj/src/index.ts', 'config.json'],
+  ])('ends the path at a line suffix: %s', (line, first, second) => {
+    expect(findFilePathLinks(line)).toEqual(masterLinks(line, [first], [second]));
+  });
+
+  // A generic label introduces prose for an absolute path as much as a relative one.
+  it.each([
+    ['Error: /home/me/proj contains a.md', '/home/me/proj', 'a.md'],
+    ['Warning: /home/me/proj is not tracked, see notes.md', '/home/me/proj', 'notes.md'],
+    ['Working directory: /home/me/proj, see README.md', '/home/me/proj', 'README.md'],
+    ['- Note: /tmp/out has the logs in run.log', '/tmp/out', 'run.log'],
+  ])('defers an absolute path after a generic label: %s', (line, folder, file) => {
+    expect(findFilePathLinks(line)).toEqual(masterLinks(line, [folder, true], [file]));
+  });
+
+  it('documented trade-off: an absolute spaced path after a non-path label splits as on master', () => {
+    const line = 'Saved the report to: /mnt/c/My Docs/a.docx';
+    expect(findFilePathLinks(line)).toEqual(masterLinks(line, ['/mnt/c/My', true], ['Docs/a.docx']));
+  });
+
+  it.each([
+    ['/usr/bin/python3 script.py', 'script.py'],
+    ['/usr/bin/env node build.js', 'build.js'],
+    ['/review the changes in src/foo.ts', 'src/foo.ts'],
+  ])('does not reserve a command line that only looks like one path: %s', (line, file) => {
+    expect(findFilePathLinks(line)).toEqual(masterLinks(line, [file]));
+  });
+
+  it('still refuses an unlinkable spaced path that reads as one path to its end', () => {
+    expect(paths('/etc/secret files/passwords.txt')).toEqual([]);
+  });
+
+  it('does not merge a column gap into one path', () => {
+    const line = '/home/me/proj     modified     notes.md';
+    expect(findFilePathLinks(line)).toEqual(masterLinks(line, ['/home/me/proj', true], ['notes.md']));
+  });
+
+  it('reads a leading ./ as the workspace, not a segment', () => {
+    expect(paths('Saved to: ./My Docs/plan.md')).toEqual(['./My Docs/plan.md']);
+    expect(paths('Saved to: ./notes.md')).toEqual(['./notes.md']);
   });
 });
 
