@@ -5,7 +5,16 @@
  * test/setup.ts's temp HOME; every folder is removed through safeRmHomeTree. Port: N/A (app.inject()).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import fs from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -70,6 +79,43 @@ describe('POST /api/cases/:name/rename (a case under the cases directory)', () =
     expect(readFileSync(join(newDir, 'CLAUDE.md'), 'utf8')).toBe('alpha');
     expect(settings()).toMatchObject({ caseOrder: ['keep', 'beta', 'tail'], lastUsedCase: 'beta' });
     expect(existsSync(join(claudeCfg, 'projects', claudeProjectDirName(newDir), 'c.jsonl'))).toBe(true);
+  });
+
+  it('carries Claude history into the project directory a deleted case of the new name left behind', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    const oldDir = localCase('alpha');
+    const newDir = join(CASES_DIR(), 'beta');
+    const oldKey = join(claudeCfg, 'projects', claudeProjectDirName(oldDir));
+    const newKey = join(claudeCfg, 'projects', claudeProjectDirName(newDir));
+    mkdirSync(oldKey, { recursive: true });
+    writeFileSync(join(oldKey, 'conv-alpha.jsonl'), '{}');
+    // case delete never removes Claude Code's history, so an earlier "beta" left its project directory
+    mkdirSync(newKey, { recursive: true });
+    writeFileSync(join(newKey, 'conv-old-beta.jsonl'), '{}');
+
+    const res = await rename(app, 'alpha', { newName: 'beta' });
+    made.push(newDir);
+
+    expect(res.statusCode).toBe(200);
+    expect(existsSync(join(newKey, 'conv-alpha.jsonl'))).toBe(true);
+    expect(existsSync(join(newKey, 'conv-old-beta.jsonl'))).toBe(true);
+    expect(existsSync(oldKey)).toBe(false);
+  });
+
+  it('refuses a dangling symlink at the new folder before it stops any session', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerCaseRoutes);
+    const oldDir = localCase('alpha');
+    const target = join(CASES_DIR(), 'beta');
+    symlinkSync(join(work, 'nowhere'), target);
+    made.push(target);
+    (ctx.sessions as Map<string, unknown>).set('s1', { id: 's1', name: 'w1', workingDir: oldDir });
+
+    const res = await rename(app, 'alpha', { newName: 'beta', stopSessions: true });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().errorCode).toBe('ALREADY_EXISTS');
+    expect(ctx.cleanupSession).not.toHaveBeenCalled();
+    expect(existsSync(oldDir)).toBe(true);
   });
 
   it('refuses a name that is taken (local or linked), the same name, or one that is not allowed', async () => {

@@ -170,6 +170,8 @@ describe('renameCase / submitRenameCase', () => {
 
     await t.app.submitRenameCase();
     expect(t.els.renameCaseError.textContent).toContain('w1-alpha');
+    // "stop" closes them through the server's session cleanup: say that their tabs go away
+    expect(t.els.renameCaseError.textContent).toContain('They will be closed (their tabs go away');
     expect(t.els.renameCaseSubmit.textContent).toBe('Stop sessions and rename');
     expect(t.els.renameCaseModal.classes.has('active')).toBe(true);
     expect(t.calls).toHaveLength(1);
@@ -177,6 +179,20 @@ describe('renameCase / submitRenameCase', () => {
     await t.app.submitRenameCase();
     expect(t.calls.map((c) => c.body)).toEqual([{ newName: 'beta' }, { newName: 'beta', stopSessions: true }]);
     expect(t.els.renameCaseModal.classes.has('active')).toBe(false);
+  });
+
+  it('says how many sessions were already closed when the rename fails after closing them', async () => {
+    const refusal = { success: false, error: 'busy', requiresStop: true, sessions: [{ id: 's', name: 'w1-alpha' }] };
+    const failed = { success: false, error: 'The registry could not be written.', stoppedSessions: 2 };
+    const t = makeApp({ responses: [refusal, failed], cases: [{ name: 'alpha' }] });
+    t.app.renameCase('alpha');
+    t.els.renameCaseInput.value = 'beta';
+    await t.app.submitRenameCase();
+    await t.app.submitRenameCase();
+    expect(t.els.renameCaseError.textContent).toBe(
+      'The registry could not be written. (2 sessions were already closed.)'
+    );
+    expect(t.els.renameCaseModal.classes.has('active')).toBe(true);
   });
 
   it('cancelling the dialog stops nothing and renames nothing', async () => {

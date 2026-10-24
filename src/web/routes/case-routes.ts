@@ -1819,8 +1819,20 @@ export function registerCaseRoutes(
 
     const moveFolder = !isLinked || body.renameFolder === true;
     const newPath = isLinked ? (moveFolder ? siblingPath(oldPath, newName) : oldPath) : join(casesBase, newName);
-    if (moveFolder && newPath !== oldPath && (await probePath(newPath, { pastCap: true })) !== 'absent') {
-      return fail(409, ApiErrorCode.ALREADY_EXISTS, `A folder named ${newPath} already exists`);
+    if (moveFolder && newPath !== oldPath) {
+      // probePath follows symlinks, so a dangling one reads as absent; moveCaseFolder would still refuse it
+      // (it checks with lstat), but only after the sessions below were stopped. The probe answered for this
+      // very path, so the lstat after it is not a first touch of an unreachable mount.
+      const target = await probePath(newPath, { pastCap: true });
+      const danglingLink =
+        target === 'absent' &&
+        (await fs.lstat(newPath).then(
+          () => true,
+          () => false
+        ));
+      if (target !== 'absent' || danglingLink) {
+        return fail(409, ApiErrorCode.ALREADY_EXISTS, `A folder named ${newPath} already exists`);
+      }
     }
 
     // Sessions with the folder open. Only a move disturbs them; an alias-only rename leaves them running.

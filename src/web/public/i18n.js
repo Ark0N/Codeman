@@ -1346,8 +1346,8 @@
       [/^Case renamed to "(.+)"$/, (_m, name) => `案例已重命名为“${name}”`],
       [/^New name for "(.+)"$/, (_m, name) => `“${name}”的新名称`],
       [
-        /^These sessions have the folder open: (.+)\. They will be stopped \(nothing is restarted\) before the folder is renamed\.$/,
-        (_m, list) => `这些会话正在使用该文件夹：${list}。重命名前将停止它们（不会重新启动）。`,
+        /^These sessions have the folder open: (.+)\. They will be closed \(their tabs go away and nothing is restarted\) before the folder is renamed\.$/,
+        (_m, list) => `这些会话正在使用该文件夹：${list}。重命名前将关闭它们（其标签页会消失，不会重新启动）。`,
       ],
       [/^Failed to (.+)$/, (_m, action) => `操作失败：${action}`],
       [/^Will create: (.+)$/, (_m, path) => `将创建：${path}`],

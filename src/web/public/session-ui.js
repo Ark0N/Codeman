@@ -5067,12 +5067,17 @@ Object.assign(CodemanApp.prototype, {
       if (data.requiresStop) {
         const list = (data.sessions || []).map((s) => `${s.name}`).join(', ');
         state.stop = true;
-        this._renameCaseNotice(`These sessions have the folder open: ${list}. They will be stopped (nothing is restarted) before the folder is renamed.`);
+        this._renameCaseNotice(`These sessions have the folder open: ${list}. They will be closed (their tabs go away and nothing is restarted) before the folder is renamed.`);
         if (submit) submit.textContent = 'Stop sessions and rename';
         return;
       }
       if (!data.success) {
-        this._renameCaseNotice(data.error || 'Failed to rename the case.');
+        // A rename that failed after closing sessions says so: their tabs are gone either way.
+        const closed = Number(data.stoppedSessions) || 0;
+        const message = data.error || 'Failed to rename the case.';
+        this._renameCaseNotice(
+          closed > 0 ? `${message} (${closed} session${closed === 1 ? ' was' : 's were'} already closed.)` : message
+        );
         return;
       }
       this.closeRenameCase();

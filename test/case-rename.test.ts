@@ -3,7 +3,7 @@
  * migration. Real filesystem under test/setup.ts's temp HOME. Port: N/A.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -135,7 +135,7 @@ describe('Claude history', () => {
     expect(claudeProjectDirName('/home/devvyn/.dotcase')).toBe('-home-devvyn--dotcase');
   });
 
-  it('moves the old path’s history to the new one, and leaves existing history alone', async () => {
+  it('moves the old path’s history to the new one', async () => {
     const cfg = tmp();
     const projects = join(cfg, 'projects');
     const oldPath = join(tmp(), 'alpha');
@@ -145,11 +145,58 @@ describe('Claude history', () => {
     expect(await moveClaudeHistory(oldPath, newPath, cfg)).toBe(true);
     expect(existsSync(join(projects, claudeProjectDirName(newPath), 'c.jsonl'))).toBe(true);
     expect(existsSync(join(projects, claudeProjectDirName(oldPath)))).toBe(false);
-
-    mkdirSync(join(projects, claudeProjectDirName(oldPath)), { recursive: true });
-    expect(await moveClaudeHistory(oldPath, newPath, cfg)).toBe(false); // the target already has history
-    expect(existsSync(join(projects, claudeProjectDirName(oldPath)))).toBe(true);
     expect(await moveClaudeHistory(join(tmp(), 'none'), newPath, cfg)).toBe(false);
+  });
+
+  it('merges into history already at the new path (a deleted case’s leftovers) without overwriting any of it', async () => {
+    const cfg = tmp();
+    const projects = join(cfg, 'projects');
+    const oldPath = join(tmp(), 'alpha');
+    const newPath = join(tmp(), 'beta');
+    const from = join(projects, claudeProjectDirName(oldPath));
+    const to = join(projects, claudeProjectDirName(newPath));
+    mkdirSync(join(from, 'conv-a', 'subagents'), { recursive: true });
+    writeFileSync(join(from, 'conv-a.jsonl'), 'alpha');
+    writeFileSync(join(from, 'conv-a', 'subagents', 'agent-1.jsonl'), 'alpha agent');
+    mkdirSync(join(from, 'memory'));
+    writeFileSync(join(from, 'memory', 'MEMORY.md'), 'alpha memory');
+    // Claude Code never removes a project directory, so a case deleted earlier under the new name left this.
+    mkdirSync(join(to, 'memory'), { recursive: true });
+    writeFileSync(join(to, 'conv-old.jsonl'), 'old beta');
+    writeFileSync(join(to, 'memory', 'MEMORY.md'), 'old beta memory');
+
+    expect(await moveClaudeHistory(oldPath, newPath, cfg)).toBe(true);
+
+    expect(readFileSync(join(to, 'conv-a.jsonl'), 'utf8')).toBe('alpha');
+    expect(readFileSync(join(to, 'conv-a', 'subagents', 'agent-1.jsonl'), 'utf8')).toBe('alpha agent');
+    expect(readFileSync(join(to, 'conv-old.jsonl'), 'utf8')).toBe('old beta');
+    // an entry both have is never overwritten: it stays where it was
+    expect(readFileSync(join(to, 'memory', 'MEMORY.md'), 'utf8')).toBe('old beta memory');
+    expect(readFileSync(join(from, 'memory', 'MEMORY.md'), 'utf8')).toBe('alpha memory');
+    expect(existsSync(join(from, 'conv-a.jsonl'))).toBe(false);
+  });
+
+  it('removes the old project directory once a merge has emptied it, and never merges into a symlink', async () => {
+    const cfg = tmp();
+    const projects = join(cfg, 'projects');
+    const oldPath = join(tmp(), 'alpha');
+    const newPath = join(tmp(), 'beta');
+    const from = join(projects, claudeProjectDirName(oldPath));
+    const to = join(projects, claudeProjectDirName(newPath));
+    mkdirSync(from, { recursive: true });
+    mkdirSync(to, { recursive: true });
+    writeFileSync(join(from, 'conv-a.jsonl'), 'alpha');
+    expect(await moveClaudeHistory(oldPath, newPath, cfg)).toBe(true);
+    expect(existsSync(from)).toBe(false);
+
+    const elsewhere = tmp();
+    const linkedPath = join(tmp(), 'gamma');
+    mkdirSync(from);
+    writeFileSync(join(from, 'conv-b.jsonl'), 'alpha');
+    symlinkSync(elsewhere, join(projects, claudeProjectDirName(linkedPath)));
+    expect(await moveClaudeHistory(oldPath, linkedPath, cfg)).toBe(false);
+    expect(existsSync(join(from, 'conv-b.jsonl'))).toBe(true);
+    expect(existsSync(join(elsewhere, 'conv-b.jsonl'))).toBe(false);
   });
 });
 

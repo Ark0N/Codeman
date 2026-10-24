@@ -38,13 +38,17 @@ folder on disk** in the rename dialog: then its real folder is renamed too, next
 Remote and Docker cases cannot be renamed. Renaming does the following for you:
 
 - **Sessions are never moved from under you.** If live sessions have the folder open, the rename is
-  refused and lists them; you can then choose to stop them (nothing is restarted). While a rename runs,
-  Codeman holds the folder so no session can start inside it half-moved.
+  refused and lists them; you can then choose to stop them. That closes them the way closing their tabs
+  does (nothing is restarted, and the last one to close removes the files attached to prompts in the
+  case's `.codeman-uploads`). While a rename runs, Codeman holds the folder so no session can start
+  inside it half-moved.
 - **A folder another program holds open is reported, not forced.** On Windows, SMB shares and some FUSE
   mounts a directory with an open handle cannot be renamed; Codeman retries briefly, then says the folder
   is in use and to close whatever has it (a terminal, an editor, a file browser, a sync client).
 - **Claude Code's history follows.** It keys conversations by the folder's path, so the rename moves
-  `<claude config>/projects/<old path>` to the new path and `--resume` still finds them. Other CLIs'
+  `<claude config>/projects/<old path>` to the new path and `--resume` still finds them. When the new
+  path already has history (a case deleted earlier under that name leaves its history behind), the
+  conversations are merged into it without overwriting anything. Other CLIs'
   history, Docker mounts and `git worktree` links that point at the old path are not updated. The
   Resume list uses the renamed folder too, and the case's default session group follows the new name.
 - **Not migrated.** Scheduled (cron) jobs keep the old `workingDir` and fail at their next run until you

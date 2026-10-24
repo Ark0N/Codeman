@@ -131,34 +131,50 @@ export function claudeProjectDirName(path: string): string {
 
 /**
  * Move Claude Code's history for the old folder to the new one, so `--resume` and the past-sessions list
- * still find the conversations. Leaves it alone when the new path already has history (nothing is merged
- * or overwritten) or when there is none. Returns whether anything moved.
+ * still find the conversations. Returns whether anything moved.
+ *
+ * The new path can already have history: Claude Code never removes a project directory, and deleting a
+ * case does not either, so a case deleted earlier under the new name leaves one behind. The old history is
+ * then merged into it entry by entry (conversations are UUID-named, so they do not collide), never
+ * overwriting: an entry both directories have (a `memory/` folder, say) stays at the old path. A merge
+ * only goes between two real directories, never through a symlink.
  */
 export async function moveClaudeHistory(oldPath: string, newPath: string, configDir?: string): Promise<boolean> {
   const projects = claudeProjectsDir(configDir);
   const from = join(projects, claudeProjectDirName(oldPath));
   const to = join(projects, claudeProjectDirName(newPath));
   if (from === to) return false;
-  if (
-    !(await fs.lstat(from).then(
-      () => true,
-      () => false
-    ))
-  )
-    return false;
-  if (
-    await fs.lstat(to).then(
-      () => true,
-      () => false
-    )
-  )
-    return false;
-  try {
-    await fs.rename(from, to);
-    return true;
-  } catch {
-    return false; // history is a convenience; the folder move already succeeded
+  const fromStat = await fs.lstat(from).catch(() => null);
+  if (!fromStat) return false;
+  const toStat = await fs.lstat(to).catch(() => null);
+  if (!toStat) {
+    try {
+      await fs.rename(from, to);
+      return true;
+    } catch {
+      return false; // history is a convenience; the folder move already succeeded
+    }
   }
+  if (!fromStat.isDirectory() || !toStat.isDirectory()) return false;
+  let moved = false;
+  for (const entry of await fs.readdir(from).catch(() => [] as string[])) {
+    const target = join(to, entry);
+    if (
+      await fs.lstat(target).then(
+        () => true,
+        () => false
+      )
+    )
+      continue;
+    try {
+      await fs.rename(join(from, entry), target);
+      moved = true;
+    } catch {
+      /* left at the old path, like an entry both have */
+    }
+  }
+  await fs.rmdir(from).catch(() => {}); // succeeds only once nothing was left behind
+  return moved;
 }
 
 /** Replace `from` by `to` in a list, keeping its position (the case order). */
