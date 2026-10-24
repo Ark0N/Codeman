@@ -2333,6 +2333,9 @@ function terminalLogicalLine(buffer, row, cols, maxRows) {
   const continuesPrevious = (r) => {
     if (r <= 0) return false;
     if (lineAt(r)?.isWrapped) return true;
+    // A divider row never continues the row above, even when that row reaches
+    // the right edge: a URL ending at the edge must not absorb `────` below it.
+    if (/^[\s─━═╌╍┄┅┈┉-]+$/u.test(lineAt(r)?.translateToString(true) || '')) return false;
     const prev = lineAt(r - 1);
     const prevText = prev?.translateToString(true) || '';
     // A full-width table divider is a row boundary, not a hard-wrapped line.
@@ -2565,11 +2568,12 @@ function findTerminalUrls(text) {
  * linked a fragment. A row continues the URL above it only when ALL hold:
  *   - the URL fragment ends on a character a wrapper breaks after
  *     (`/ ? & = - _ % # + ~`); a following table column may be excluded;
- *   - the next row is indented no further right than the column the URL
+ *   - the next row is indented, but no further right than the column the URL
  *     started in (a table cell or list item continuation, not unrelated text);
  *   - that row's first token looks like URL material (contains one of
  *     `% & = / ? . - _`), is not a bare number/version or list marker,
- *     and is not itself a new `scheme://`; without `% & = / ?`, the token
+ *     and is not itself a new `scheme://`, a shell prompt (`user@host:`),
+ *     a home path (`~/`) or an HTTP status line; without `% & = / ?`, the token
  *     must finish its cell (row end or a gap of at least two spaces).
  * The last rule is what stops prose such as "…/files/" + "then run it" from
  * being glued into one link.
@@ -2611,7 +2615,10 @@ function terminalUrlContinuationExtent(buffer, row, cols, maxRows) {
       const nextText = next.translateToString(true) || '';
       const indent = nextText.length - nextText.replace(/^\s+/, '').length;
       const token = nextText.slice(indent).split(/\s/, 1)[0];
-      if (!token || indent > urlStartCol || /^(?:\d+[.)]|[-*•])(?:\s|$)/.test(nextText.slice(indent))) break;
+      // A hard continuation is indented (a table cell, a list item, Claude's
+      // two-space paragraph indent); a column-0 row is a new line of output.
+      if (!token || !indent || indent > urlStartCol || /^(?:\d+[.)]|[-*•])(?:\s|$)/.test(nextText.slice(indent)))
+        break;
       // When other table columns follow the URL, the next row must align with
       // the start of its cell. A new numbered row must not become URL text.
       if (
@@ -2623,6 +2630,9 @@ function terminalUrlContinuationExtent(buffer, row, cols, maxRows) {
       )
         break;
       if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token) || !/^[A-Za-z0-9%_~]/.test(token)) break;
+      // A shell prompt (`user@host:~/dir$`), a home path and an HTTP status line
+      // are never the rest of a URL, however much URL punctuation they carry.
+      if (/^[\w.-]+@[\w.-]+:|^~\/|^HTTP\/\d/i.test(token)) break;
       if (!/[%&=/?.\-_]/.test(token) || /^v?\d+(?:\.\d+)*(?:[-+][\w.-]+)?[.,;:!?)]?$/i.test(token)) break;
       // Hyphens, underscores and dots also occur in prose. Without stronger
       // URL punctuation, the token must finish its cell, not introduce a sentence.

@@ -30,15 +30,20 @@ type Link = {
 function loadPure() {
   const context = vm.createContext({ console, window: undefined });
   vm.runInContext(
-    `${CONSTANTS}\nglobalThis.__urls = findTerminalUrls; globalThis.__extent = terminalUrlContinuationExtent;`,
+    `${CONSTANTS}\nglobalThis.__urls = findTerminalUrls; globalThis.__extent = terminalUrlContinuationExtent; globalThis.__logical = terminalLogicalLine;`,
     context,
     { filename: 'constants.js' }
   );
   const ctx = context as unknown as {
     __urls: (text: string) => UrlRef[];
     __extent: (buffer: unknown, row: number, cols: number, maxRows?: number) => Extent;
+    __logical: (buffer: unknown, row: number, cols: number, maxRows?: number) => Extent;
   };
-  return { findTerminalUrls: ctx.__urls, terminalUrlContinuationExtent: ctx.__extent };
+  return {
+    findTerminalUrls: ctx.__urls,
+    terminalUrlContinuationExtent: ctx.__extent,
+    terminalLogicalLine: ctx.__logical,
+  };
 }
 
 function fakeBuffer(rows: Row[], cols: number) {
@@ -102,6 +107,29 @@ const PROSE_ROWS = [
   ['Callback https://example.com/cb?code=', 'Re-run the login', 'https://example.com/cb?code='],
   ['Branch https://github.com/o/r/tree/feat-', 'x.y happened', 'https://github.com/o/r/tree/feat-'],
 ];
+// Rows that carry URL punctuation but are never the rest of the URL above them:
+// a shell prompt, an HTTP status line, a home path, and column-0 prose. Each
+// third element is the URL, the fourth the path link expected on the second row.
+const NOT_CONTINUATION_ROWS: [string, string, string, string | null][] = [
+  ['https://registry.npmjs.org/', 'arkon@box:~/proj$', 'https://registry.npmjs.org/', '~/proj'],
+  ['https://pypi.org/simple/', 'dev@laptop:/srv/app$', 'https://pypi.org/simple/', '/srv/app'],
+  ['$ curl -sI https://example.com/', 'HTTP/2 200', 'https://example.com/', null],
+  ['$ curl -i http://localhost:3000/api/', 'HTTP/1.1 200 OK', 'http://localhost:3000/api/', null],
+  ['Docs: https://example.com/guide/', '~/notes.md has more', 'https://example.com/guide/', '~/notes.md'],
+  ['fetch https://api.example.com/items/', 'status=200 took=12ms', 'https://api.example.com/items/', null],
+  ['Status page: https://status.example.com/', '24/7 monitoring is on.', 'https://status.example.com/', null],
+  ['Did you mean https://example.com/search?q=', 'really? no.', 'https://example.com/search?q=', null],
+];
+// Known trade-offs: a row end counts as a cell end, so a short indented word
+// with URL punctuation still continues the URL. Pinned so a change is deliberate.
+const TRADE_OFF_ROWS: [string, string, string][] = [
+  ['⏺ Docs live at https://example.com/guide/', '  self-hosted.', 'https://example.com/guide/self-hosted'],
+  [
+    '⏺ The docs are at https://example.com/guide/',
+    '  and/or the API reference covers it.',
+    'https://example.com/guide/and/or',
+  ],
+];
 
 describe('findTerminalUrls (grammar)', () => {
   const { findTerminalUrls } = loadPure();
@@ -144,7 +172,7 @@ describe('findTerminalUrls (grammar)', () => {
 });
 
 describe('terminalUrlContinuationExtent (wrap joining)', () => {
-  const { terminalUrlContinuationExtent } = loadPure();
+  const { terminalUrlContinuationExtent, terminalLogicalLine } = loadPure();
 
   it('spans all three rows of a URL wrapped inside a table cell, from any of them', () => {
     const buffer = fakeBuffer(TABLE, COLS);
@@ -196,10 +224,42 @@ describe('terminalUrlContinuationExtent (wrap joining)', () => {
     for (const row of [0, 1]) expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toBeNull();
   });
 
+  it.each(NOT_CONTINUATION_ROWS)('does not join a prompt, status line, home path or prose after %s', (first, next) => {
+    const buffer = fakeBuffer([{ text: first }, { text: next }], 100);
+    for (const row of [0, 1]) expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toBeNull();
+  });
+
+  // Indented, so only the prompt / home path / status-line rule can refuse them.
+  it.each(['arkon@box:~/proj$', 'dev@laptop:/srv/app$', '~/notes.md', 'HTTP/2 200', 'HTTP/1.1 200 OK'])(
+    'does not join an indented %s either',
+    (next) => {
+      const buffer = fakeBuffer([{ text: 'Docs: https://example.com/guide/' }, { text: '  ' + next }], 100);
+      for (const row of [0, 1]) expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toBeNull();
+    }
+  );
+
+  it.each(TRADE_OFF_ROWS)('still joins the known trade-off after %s', (first, next) => {
+    const buffer = fakeBuffer([{ text: first }, { text: next }], 100);
+    for (const row of [0, 1])
+      expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toMatchObject({ startRow: 0, endRow: 1 });
+  });
+
+  it('does not let a URL at the right edge absorb a full-width divider row below it', () => {
+    const cols = 40;
+    const url = 'https://example.com/' + 'a'.repeat(cols - 'https://example.com/'.length);
+    for (const divider of ['─'.repeat(cols), '-'.repeat(cols)]) {
+      const buffer = fakeBuffer([{ text: url }, { text: divider }, { text: 'next' }], cols);
+      expect(terminalLogicalLine(buffer, 0, cols, 12)).toMatchObject({ startRow: 0, endRow: 0 });
+      expect(terminalLogicalLine(buffer, 1, cols, 12)).toMatchObject({ startRow: 1 });
+    }
+  });
+
+  // Real continuations are indented (codex cells, Claude's two-space paragraph
+  // indent); a column-0 row is refused, so these fixtures are indented.
   it.each(['my-post-title', 'user_id', 'x.html', 'my-post-title   ', 'my-post-title  Other column'])(
     'keeps a weak-punctuation continuation that ends its cell: %s',
     (next) => {
-      const buffer = fakeBuffer([{ text: 'Docs: https://example.com/guide/' }, { text: next }], 100);
+      const buffer = fakeBuffer([{ text: 'Docs: https://example.com/guide/' }, { text: '  ' + next }], 100);
       for (const row of [0, 1])
         expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toMatchObject({ startRow: 0, endRow: 1 });
     }
@@ -208,7 +268,10 @@ describe('terminalUrlContinuationExtent (wrap joining)', () => {
   it.each(['part%20two', 'x=1&y=2', 'path/slug', 'query?x=1'])(
     'keeps stronger URL punctuation followed by prose: %s',
     (token) => {
-      const buffer = fakeBuffer([{ text: 'Docs: https://example.com/guide/' }, { text: token + ' more text' }], 100);
+      const buffer = fakeBuffer(
+        [{ text: 'Docs: https://example.com/guide/' }, { text: '  ' + token + ' more text' }],
+        100
+      );
       expect(terminalUrlContinuationExtent(buffer, 0, 100, 12)).toMatchObject({ startRow: 0, endRow: 1 });
     }
   );
@@ -337,6 +400,39 @@ describe('terminal link provider with wrapped table URLs', () => {
     links[0].activate(null, links[0].text);
     expect(openSpy).toHaveBeenCalledExactlyOnceWith(url, '_blank', 'noopener,noreferrer');
     expect(provide(2).filter((link) => /^https?:/.test(link.text))).toEqual([]);
+  });
+
+  it.each(NOT_CONTINUATION_ROWS)('keeps the URL and the second row separate: %s', (first, next, url, pathOnNext) => {
+    const { provide, openSpy } = harness([{ text: first }, { text: next }], 100);
+    const links = provide(1).filter((link) => /^https?:/.test(link.text));
+    expect(links.map((link) => link.text)).toEqual([url]);
+    links[0].activate(null, links[0].text);
+    expect(openSpy).toHaveBeenCalledExactlyOnceWith(url, '_blank', 'noopener,noreferrer');
+    const second = provide(2);
+    expect(second.filter((link) => /^https?:/.test(link.text))).toEqual([]);
+    if (pathOnNext) expect(second.map((link) => link.text)).toContain(pathOnNext);
+  });
+
+  it.each(TRADE_OFF_ROWS)('pins the known trade-off link after %s', (first, next, joined) => {
+    const { provide } = harness([{ text: first }, { text: next }], 100);
+    for (const line of [1, 2]) {
+      const links = provide(line).filter((link) => /^https?:/.test(link.text));
+      expect(links.map((link) => link.text)).toContain(joined);
+    }
+  });
+
+  it('keeps a full-width divider row out of a URL that reaches the right edge', () => {
+    const cols = 40;
+    const url = 'https://example.com/' + 'a'.repeat(cols - 'https://example.com/'.length);
+    for (const divider of ['─'.repeat(cols), '-'.repeat(cols)]) {
+      const { provide } = harness([{ text: url }, { text: divider }], cols);
+      expect(
+        provide(1)
+          .filter((link) => /^https?:/.test(link.text))
+          .map((link) => link.text)
+      ).toEqual([url]);
+      expect(provide(2).filter((link) => /^https?:/.test(link.text))).toEqual([]);
+    }
   });
 
   it('opens the whole URL from any of its rows', () => {
