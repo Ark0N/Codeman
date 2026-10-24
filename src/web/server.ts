@@ -45,6 +45,7 @@ import { looksLikeHostReboot, newestPersistedActivity, planRebootRestore } from 
 import { rebootRestoreRegistry } from './reboot-restore-registry.js';
 import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
 import { WebhookNotifier, readWebhookConfig } from '../webhook-notify.js';
+import { stopHostSensors } from '../host-sensors.js';
 import type { WebhookUrgency } from '../types/push.js';
 import { webviewFetch } from './webview-egress.js';
 import { readRemoteHosts, rehydrateRemoteHostFields } from '../remote-hosts.js';
@@ -4174,6 +4175,9 @@ export class WebServer extends EventEmitter {
     // port against the next start — the exact EADDRINUSE this feature already
     // got wrong once.
     void stopDeepSeekWeb();
+
+    // The header's GPU / CPU clock sampler is a Windows child process under WSL, and its idle sweep a timer.
+    stopHostSensors();
 
     // Same teardown rule: the per-endpoint llama-swap log tails are otherwise closed
     // only by the periodic idle sweep, whose interval is disposed just below.

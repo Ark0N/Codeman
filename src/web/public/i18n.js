@@ -451,6 +451,8 @@
     'Header Displays': '顶部栏显示',
     'Font Controls': '字体控制',
     'System Stats': '系统状态',
+    'GPU Stats': 'GPU 状态',
+    'CPU MHz': 'CPU 频率',
     'Lifecycle Log': '生命周期日志',
     'Response Viewer': '回复查看器',
     'Attachments Button': '附件按钮',

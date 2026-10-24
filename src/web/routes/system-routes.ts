@@ -13,6 +13,7 @@ import { totalmem, freemem, loadavg, cpus } from 'node:os';
 import { execSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { dataPath } from '../../config/instance.js';
+import { readHostSensors } from '../../host-sensors.js';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } from '../../types.js';
 import { isUnauthenticatedNetworkAcknowledged } from '../network-auth-policy.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
@@ -1007,8 +1008,15 @@ export function registerSystemRoutes(
 
   // ========== System Stats ==========
 
-  app.get('/api/system/stats', async () => {
-    return getSystemStats();
+  // GPU (load, memory, clock) and CPU clock readings are opt-in: the browser adds ?gpu=1 and ?cpumhz=1 only while
+  // the matching header setting is on, so a default install never runs nvidia-smi or reads sysfs.
+  app.get('/api/system/stats', async (req) => {
+    const query = req.query as { gpu?: string; cpumhz?: string };
+    const sensors = await readHostSensors({
+      gpu: query.gpu === '1',
+      cpuMhz: query.cpumhz === '1',
+    });
+    return { ...getSystemStats(), ...sensors };
   });
 
   // ========== Settings ==========

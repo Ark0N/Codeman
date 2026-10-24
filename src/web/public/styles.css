@@ -2356,6 +2356,13 @@ body.solo-mode .header-divider {
   }
 }
 
+/* The opt-in host readings (GPU, VRAM, MHz) start hidden and are shown by panels-ui.js once the host
+   reports them; a plain `display` on .stat-item would override the attribute, and the Tiles style sets its own
+   (a grid) at a higher specificity, so the selector carries the style attribute to outrank it. */
+html[data-header-stats] .header-system-stats .stat-item[hidden] {
+  display: none;
+}
+
 /* Connection Indicator */
 .connection-indicator {
   display: flex;

@@ -12,6 +12,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 import { registerSystemRoutes } from '../../src/web/routes/system-routes.js';
 
+const hostSensors = vi.hoisted(() => ({ readHostSensors: vi.fn(async (_request: unknown) => ({})) }));
+vi.mock('../../src/host-sensors.js', () => hostSensors);
+
 // ── Mocks ──────────────────────────────────────────────────────────
 
 vi.mock('node:fs/promises', () => ({
@@ -325,6 +328,20 @@ describe('system-routes', () => {
       const body = JSON.parse(res.body);
       expect(body).toHaveProperty('cpu');
       expect(body).toHaveProperty('memory');
+    });
+
+    it('adds no GPU or clock readings unless they are asked for', async () => {
+      const body = JSON.parse((await harness.app.inject({ method: 'GET', url: '/api/system/stats' })).body);
+      expect(body).not.toHaveProperty('gpu');
+      expect(body).not.toHaveProperty('cpuMhz');
+    });
+
+    it('passes only the requested readings on to the sensor reader', async () => {
+      hostSensors.readHostSensors.mockClear();
+      hostSensors.readHostSensors.mockResolvedValueOnce({ cpuMhz: 3200 });
+      const res = await harness.app.inject({ method: 'GET', url: '/api/system/stats?cpumhz=1&gpu=0' });
+      expect(hostSensors.readHostSensors).toHaveBeenCalledWith({ gpu: false, cpuMhz: true });
+      expect(JSON.parse(res.body).cpuMhz).toBe(3200);
     });
   });
 
