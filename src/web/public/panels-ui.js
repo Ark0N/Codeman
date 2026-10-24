@@ -424,6 +424,7 @@ Object.assign(CodemanApp.prototype, {
     if (!modal || !search) return;
 
     this.commandPaletteActiveIndex = 0;
+    this._resetCommandPaletteAgent();
     search.value = '';
     modal.classList.add('active');
 
@@ -465,6 +466,11 @@ Object.assign(CodemanApp.prototype, {
     });
 
     search?.addEventListener('keydown', async (e) => {
+      if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && this._commandPaletteArrowCyclesAgent(e)) {
+        e.preventDefault();
+        this._cycleCommandPaletteAgent(e.key === 'ArrowRight' ? 1 : -1);
+        return;
+      }
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         this.moveCommandPaletteSelection(1);
@@ -494,7 +500,22 @@ Object.assign(CodemanApp.prototype, {
       }
     });
 
+    // Clicking an agent arrow must leave focus in the search box, or the
+    // Left/Right/Enter keys stop reaching the palette after the first click.
+    list?.addEventListener?.('mousedown', (e) => {
+      if (e.target?.closest?.('[data-palette-agent-cycle]')) e.preventDefault?.();
+    });
+
     list?.addEventListener?.('click', (e) => {
+      // The agent arrows sit inside the new-session row: they change the agent
+      // and must not also activate (launch) the row they are drawn in.
+      const cycle = e.target?.closest?.('[data-palette-agent-cycle]');
+      if (cycle) {
+        e.preventDefault?.();
+        e.stopPropagation?.();
+        this._cycleCommandPaletteAgent(cycle.dataset.paletteAgentCycle === 'prev' ? -1 : 1);
+        return;
+      }
       const row = e.target?.closest?.('[data-command-index]');
       if (!row) return;
       this.commandPaletteActiveIndex = Number(row.dataset.commandIndex) || 0;
@@ -535,16 +556,108 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _buildCommandPaletteNewSessionItem(query = '') {
-    const mode = this.runMode || this._runMode || 'claude';
+    const caseName = this._commandPaletteCaseName(query);
+    const agent = this._commandPaletteAgent(caseName);
+    const mode = agent?.id || this.runMode || this._runMode || 'claude';
     const labels = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', pi: 'Pi', grok: 'Grok', deepseek: 'DeepSeek', omp: 'OMP', copilot: 'Copilot' };
-    const caseName = this._findCommandPaletteCaseMatch(query) || document.getElementById('quickStartCase')?.value || 'testcase';
     return {
       id: 'new-session',
       type: 'new-session',
       caseName,
+      mode,
       title: 'New session',
-      subtitle: `Run ${labels[mode] || mode} in ${caseName}`,
+      subtitle: `Run ${agent?.label || labels[mode] || mode} in ${caseName}`,
     };
+  },
+
+  /** The case a new session from the palette starts in: the case the query names, else the Run button's case. */
+  _commandPaletteCaseName(query = '') {
+    return this._findCommandPaletteCaseMatch(query) || document.getElementById('quickStartCase')?.value || 'testcase';
+  },
+
+  /** The case of the new-session row on screen (the palette's last render), for the agent switch. */
+  _commandPaletteRowCase() {
+    const row = (this.commandPaletteItems || []).find((item) => item?.type === 'new-session');
+    return row ? row.caseName : this._commandPaletteCaseName(document.getElementById('commandPaletteSearch')?.value || '');
+  },
+
+  /**
+   * The agents the new-session row can start in `caseName`: the server-injected
+   * CLI catalog's enabled entries that the toolbar Run menu offers for that case,
+   * in catalog order. An agent entry goes through the Run menu's own rule,
+   * _runModeAvailableForCase (session-ui.js): the host's CLIs for a local or
+   * remote case, the container's for a Docker case. A non-agent entry (Shell) is
+   * never gated, as in the Run menu. The vm test harness may load this file
+   * without session-ui.js, and then the host's isCliAvailable() decides. The ids
+   * are DATA from the registry, never a list kept here. Empty on a page rendered
+   * without the catalog; that and a single entry both leave the row on the Run
+   * button's mode (see _commandPaletteAgent).
+   */
+  _commandPaletteAgentChoices(caseName = this._commandPaletteRowCase()) {
+    const catalog = typeof window !== 'undefined' && Array.isArray(window.__codemanCliCatalog) ? window.__codemanCliCatalog : [];
+    const offered = (id) =>
+      typeof this._runModeAvailableForCase === 'function'
+        ? this._runModeAvailableForCase(id, caseName)
+        : (this.isCliAvailable?.(id) ?? true);
+    return catalog
+      .filter((cli) => cli && typeof cli.id === 'string' && cli.enabled && (cli.kind !== 'agent' || offered(cli.id)))
+      .map((cli) => ({ id: cli.id, label: (typeof cli.label === 'string' && cli.label.trim()) || cli.id }));
+  },
+
+  /**
+   * The agent the new-session row will start in `caseName`: the one picked with
+   * the switch since the palette opened, else the Run button's mode, else the
+   * first offered. Null when fewer than two are offered: with one entry there is
+   * nothing to pick, so the row keeps the Run button's mode as it did before the
+   * switch existed, and a Run mode the case cannot start fails the way the Run
+   * button would, instead of the palette quietly starting the one entry offered
+   * (often Shell).
+   */
+  _commandPaletteAgent(caseName = this._commandPaletteRowCase()) {
+    const choices = this._commandPaletteAgentChoices(caseName);
+    if (choices.length < 2) return null;
+    const runMode = this.runMode || this._runMode;
+    return (
+      choices.find((c) => c.id === this._commandPaletteAgentId) || choices.find((c) => c.id === runMode) || choices[0]
+    );
+  },
+
+  /**
+   * Each time the palette opens it forgets the last pick, so the row starts on
+   * the Run button's mode (see _commandPaletteAgent). That default is resolved
+   * per render, not here: the query can move the row to another case, which may
+   * offer the Run button's mode when the first case did not.
+   */
+  _resetCommandPaletteAgent() {
+    this._commandPaletteAgentId = null;
+  },
+
+  _cycleCommandPaletteAgent(delta) {
+    const caseName = this._commandPaletteRowCase();
+    const choices = this._commandPaletteAgentChoices(caseName);
+    if (choices.length < 2) return;
+    const at = Math.max(0, choices.findIndex((c) => c.id === this._commandPaletteAgent(caseName)?.id));
+    this._commandPaletteAgentId = choices[(((at + delta) % choices.length) + choices.length) % choices.length].id;
+    this.renderCommandPalette();
+  },
+
+  /**
+   * Left/Right change the agent only while the new-session row is highlighted,
+   * and only when the key would not move the caret anyway (Left at the start of
+   * the query, Right at its end, no selection), so editing a typed case name
+   * keeps working.
+   */
+  _commandPaletteArrowCyclesAgent(e) {
+    const active = (this.commandPaletteItems || [])[this.commandPaletteActiveIndex || 0];
+    if (active?.type !== 'new-session') return false;
+    if (this._commandPaletteAgentChoices(active.caseName).length < 2) return false;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return false;
+    const input = e.target;
+    const value = typeof input?.value === 'string' ? input.value : '';
+    const start = Number.isFinite(input?.selectionStart) ? input.selectionStart : value.length;
+    const end = Number.isFinite(input?.selectionEnd) ? input.selectionEnd : start;
+    if (start !== end) return false;
+    return e.key === 'ArrowRight' ? end >= value.length : start <= 0;
   },
 
   _findCommandPaletteCaseMatch(query = '') {
@@ -600,17 +713,38 @@ Object.assign(CodemanApp.prototype, {
         const active = index === this.commandPaletteActiveIndex ? ' active' : '';
         const icon = item.type === 'new-session' ? '+' : item.type === 'browse-sessions' ? '≡' : '›';
         const browse = item.type === 'browse-sessions' ? ' command-palette-item--browse' : '';
+        const agent = item.type === 'new-session' ? this._renderCommandPaletteAgentPicker(item.mode, item.caseName) : '';
         return `
-          <button class="command-palette-item${active}${browse}" type="button" data-command-index="${index}">
+          <button class="command-palette-item${active}${browse}${agent ? ' command-palette-item--agent' : ''}" type="button" data-command-index="${index}">
             <span class="command-palette-icon" aria-hidden="true">${icon}</span>
             <span class="command-palette-text">
               <span class="command-palette-title">${escapeHtml(item.title)}</span>
               <span class="command-palette-subtitle">${escapeHtml(item.subtitle || '')}</span>
-            </span>
+            </span>${agent}
           </button>
         `;
       })
       .join('');
+  },
+
+  /**
+   * The new-session row's agent switch: arrows either side of the agent's logo
+   * and name. Spans, not buttons: the row itself is a <button>. The switch is
+   * aria-hidden (no nested buttons; the row's subtitle already names the agent),
+   * and its arrows work by click through data-palette-agent-cycle. Nothing is
+   * drawn when there is nothing to choose between.
+   */
+  _renderCommandPaletteAgentPicker(mode, caseName) {
+    const choices = this._commandPaletteAgentChoices(caseName);
+    if (choices.length < 2) return '';
+    const agent = choices.find((c) => c.id === mode) || choices[0];
+    return `
+            <span class="command-palette-agent" aria-hidden="true" title="Agent for the new session (Left/Right to change)">
+              <span class="command-palette-agent-arrow" data-palette-agent-cycle="prev">&lsaquo;</span>
+              <span class="run-mode-dot ${escapeHtml(agent.id)}" aria-hidden="true"></span>
+              <span class="command-palette-agent-label">${escapeHtml(agent.label)}</span>
+              <span class="command-palette-agent-arrow" data-palette-agent-cycle="next">&rsaquo;</span>
+            </span>`;
   },
 
   moveCommandPaletteSelection(delta) {
@@ -655,7 +789,16 @@ Object.assign(CodemanApp.prototype, {
           caseSelect.value = item.caseName;
         }
       }
-      await this.run();
+      // A one-shot launch of the picked agent: the same temporary _runMode swap
+      // the custom-model entries and worktree launches use, so run() keeps its
+      // launch lock and per-mode paths and the Run button's mode is untouched.
+      const previousRunMode = this._runMode;
+      if (item.mode) this._runMode = item.mode;
+      try {
+        await this.run();
+      } finally {
+        this._runMode = previousRunMode;
+      }
     }
   },
 

@@ -8,7 +8,7 @@ Press `Ctrl+?` in the app for the same list in a floating overlay.
 
 | Shortcut                        | Action                                                          |
 | ------------------------------- | --------------------------------------------------------------- |
-| `Ctrl+K` (also `Cmd+K`, `Alt+K`)| Find an open session or start a new one.                         |
+| `Ctrl+K` (also `Cmd+K`, `Alt+K`)| Find an open session or start a new one. On the **New session** row, `Left` / `Right` change the agent it starts. |
 | `Ctrl+Tab`                      | Next session.                                                    |
 | `Alt+[` / `Alt+]`               | Previous / next tab.                                             |
 | `Alt+1` to `Alt+9`              | Switch to tab N. Physical keys, so macOS Option layouts work.    |

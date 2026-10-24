@@ -94,6 +94,8 @@
     'Move to Ungrouped': '移到未分组',
     'Move to new group': '移到新分组',
     'New session': '新建会话',
+    // The Cmd+K palette's new-session agent switch (panels-ui.js, its title tooltip).
+    'Agent for the new session (Left/Right to change)': '新会话使用的智能体（按左/右方向键切换）',
     'A session is already starting.': '已有会话正在启动。',
     'Follow parent again': '重新跟随父会话',
     'Parent closed; placed on its own': '父会话已关闭；单独放置',

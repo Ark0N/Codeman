@@ -8970,6 +8970,37 @@ kbd {
   font-size: 0.72rem;
 }
 
+/* New-session row: the agent it will start, switchable with Left/Right or the arrows */
+.command-palette-item--agent {
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+}
+.command-palette-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.2rem;
+  font-size: 0.78rem;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.command-palette-agent-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--text-muted);
+  border-radius: 4px;
+  font-size: 1rem;
+  line-height: 1;
+}
+.command-palette-agent-arrow:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+}
+
 /* COD-192: "Browse all sessions…" escape hatch — visually secondary */
 .command-palette-item--browse {
   margin-top: 4px;
