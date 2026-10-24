@@ -66,7 +66,8 @@ Project Insights, File Browser, Subagents, Approvals Inbox, Read My Mind, Ultrac
 Ultracode Windows, Cron.
 
 **Host readings** (opt-in, both off by default and per device): **GPU Stats** adds three items after CPU and MEM: GPU load, graphics memory and the GPU clock,
-and **CPU MHz** adds the live CPU clock. An item appears only when the
+and **CPU MHz** adds the live CPU clock. Both sets of items live inside **System Stats**, so they show only
+while that chip is on, and nothing is fetched while it is off. An item appears only when the
 host reports it, so a machine with no readable GPU shows nothing extra. Sources: `nvidia-smi` or the amdgpu
 sysfs files for the GPU; inside WSL, the Windows performance counters through `typeperf.exe`, which cover
 any vendor (an Intel GPU gives load and memory in use, but Windows publishes no clock for it, and its memory

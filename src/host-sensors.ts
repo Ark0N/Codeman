@@ -194,28 +194,29 @@ function inWsl(): boolean {
   return wsl;
 }
 
-let windowsRamMB: Promise<number | undefined> | undefined;
+let windowsRamMB: number | undefined;
+let ramProbe: Promise<void> | undefined;
 let ramRetryAt = 0;
 
 /**
- * Windows' installed RAM, asked once (PowerShell takes about a second) and remembered when it answers. A
- * failure is not retried on every GPU poll (8 s timeout each): it waits READER_BACKOFF_MS first.
+ * Windows' installed RAM in MB once PowerShell has answered, else undefined. The probe (about a second, 8 s
+ * timeout) is started here but never awaited: the stats route answers CPU and MEM only after the sensors, so
+ * the GPU reading carries the memory in use alone until the answer lands, and the total from then on. A
+ * failure is not retried on every GPU poll: it waits READER_BACKOFF_MS first.
  */
-function readWindowsRamMB(): Promise<number | undefined> {
-  if (!windowsRamMB && Date.now() < ramRetryAt) return Promise.resolve(undefined);
-  windowsRamMB ??= run(
+function windowsRamMBIfKnown(): number | undefined {
+  if (windowsRamMB !== undefined || ramProbe || Date.now() < ramRetryAt) return windowsRamMB;
+  ramProbe = run(
     POWERSHELL,
     ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory'],
     8000
   ).then((out) => {
     const bytes = out ? finite(Number(out.trim())) : undefined;
-    if (!bytes || bytes <= 0) {
-      windowsRamMB = undefined;
-      ramRetryAt = Date.now() + READER_BACKOFF_MS;
-    }
-    return bytes && bytes > 0 ? Math.round(bytes / MB) : undefined;
+    if (bytes && bytes > 0) windowsRamMB = Math.round(bytes / MB);
+    else ramRetryAt = Date.now() + READER_BACKOFF_MS;
+    ramProbe = undefined;
   });
-  return windowsRamMB;
+  return undefined;
 }
 
 /** What the sampler needs from a child process; `ChildProcess` fits, and tests pass a fake. */
@@ -423,7 +424,7 @@ async function readAmdGpu(): Promise<GpuReading | undefined> {
   return undefined;
 }
 
-/** NVIDIA, then AMD: the readers that need nothing from Windows. */
+/** nvidia-smi is not run again before this time: it failed or timed out, and waits READER_BACKOFF_MS. */
 let nvidiaSkipUntil = 0;
 
 /** NVIDIA, then AMD. A host without a working nvidia-smi is not asked again on every poll. */
@@ -441,12 +442,13 @@ async function readNativeGpu(): Promise<GpuReading | undefined> {
 }
 
 /** A GPU reading from the Windows counters (WSL only): load and memory in use, but no clock. */
-async function gpuFromWindows(windows: WindowsCounters | undefined): Promise<GpuReading | undefined> {
+function gpuFromWindows(windows: WindowsCounters | undefined): GpuReading | undefined {
   if (!windows?.gpu) return undefined;
   const { percent, memUsedMB, dedicated } = windows.gpu;
   const reading: GpuReading = { percent, memUsedMB };
-  // An integrated GPU draws its memory from system RAM, and Windows lets it use up to half of it.
-  const ram = dedicated ? undefined : await readWindowsRamMB();
+  // An integrated GPU draws its memory from system RAM, and Windows lets it use up to half of it. Until
+  // Windows has said how much RAM it has, the reading is the memory in use alone (the header shows no ring).
+  const ram = dedicated ? undefined : windowsRamMBIfKnown();
   if (ram) {
     reading.memTotalMB = Math.round(ram / 2);
     reading.memPercent = clampPercent((memUsedMB / reading.memTotalMB) * 100);

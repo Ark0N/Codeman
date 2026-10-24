@@ -1,6 +1,9 @@
 /**
- * @fileoverview The pure parsers behind the opt-in header readings (GPU, CPU clock), the route's
- * opt-in query handling, and the header display's defaults. No hardware needed.
+ * @fileoverview The pure parsers behind the opt-in header readings (nvidia-smi, the amdgpu clock table,
+ * cpufreq and /proc/cpuinfo, typeperf), readHostSensors reading nothing unless a reading is asked for, the
+ * typeperf counter stream's life cycle (first sample, recycling, idle stop, back-off after a failed start,
+ * no wait on a cold sampler by default, a late row from a replaced sampler), and the Windows sampler that
+ * every browser shares. No hardware needed.
  */
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
@@ -233,7 +236,7 @@ describe('the Windows sampler shared by every browser', () => {
     expect(children[0].killed).toBe(false);
   });
 
-  it('adds the GPU counters once, for good, on a machine with no native GPU reader', async () => {
+  it('adds the GPU counters with one restart on a machine with no native GPU reader, and keeps them while needed', async () => {
     const { children, source } = rig();
     void source.read();
     expect(children[0].counters).toEqual(windowsCounterList(false));

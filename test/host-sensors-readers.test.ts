@@ -1,8 +1,8 @@
 /**
  * The order and the back-offs of readHostSensors, with `child_process` and the sysfs reads mocked so no
  * hardware is needed: native GPU readers go first (a machine with a working nvidia-smi never starts the
- * Windows GPU counters), a failing reader is left alone for a minute, a cold Windows sampler is not
- * waited for, and the GPU counters leave the sampler again once nothing needs them.
+ * Windows GPU counters), a failing reader is left alone for a minute, neither a cold Windows sampler nor
+ * the PowerShell RAM probe is waited for, and the GPU counters leave the sampler again once nothing needs them.
  */
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
@@ -12,6 +12,9 @@ type ExecCall = { cmd: string; args: string[] };
 const state = vi.hoisted(() => ({
   nvidia: '' as string | Error,
   powershell: '' as string | Error,
+  /** When set, PowerShell does not answer until the test calls the callbacks kept here. */
+  holdPowershell: false,
+  heldPowershell: [] as Array<() => void>,
   execCalls: [] as Array<{ cmd: string; args: string[] }>,
   spawnCalls: [] as Array<{ cmd: string; args: string[]; stdout: unknown }>,
 }));
@@ -19,6 +22,14 @@ const state = vi.hoisted(() => ({
 vi.mock('node:child_process', () => ({
   execFile: (cmd: string, args: string[], _opts: unknown, cb: (err: Error | null, stdout: string) => void) => {
     state.execCalls.push({ cmd, args });
+    if (state.holdPowershell && cmd.endsWith('powershell.exe')) {
+      state.heldPowershell.push(() => {
+        const held = state.powershell;
+        if (held instanceof Error) cb(held, '');
+        else cb(null, held);
+      });
+      return;
+    }
     const answer = cmd === 'nvidia-smi' ? state.nvidia : cmd.endsWith('powershell.exe') ? state.powershell : '';
     if (answer instanceof Error) cb(answer, '');
     else cb(null, answer);
@@ -56,6 +67,8 @@ const tick = () => new Promise((r) => setImmediate(r));
 beforeEach(() => {
   state.nvidia = NVIDIA;
   state.powershell = new Error('powershell failed');
+  state.holdPowershell = false;
+  state.heldPowershell = [];
   state.execCalls = [];
   state.spawnCalls = [];
   process.env.WSL_INTEROP = '1';
@@ -134,6 +147,46 @@ describe('a failing reader is left alone for a minute', () => {
     await tick();
     await readHostSensors({ gpu: true });
     expect(counted('powershell.exe')).toBe(2);
+    stopHostSensors();
+  });
+});
+
+describe('the PowerShell RAM probe', () => {
+  it('is never waited for: the memory in use shows at once, and the total once Windows has answered', async () => {
+    state.nvidia = new Error('no nvidia');
+    state.holdPowershell = true;
+    const { readHostSensors, stopHostSensors } = await load();
+    await readHostSensors({ gpu: true }); // starts the sampler
+    (state.spawnCalls[0].stdout as PassThrough).write(HEADER + ROW);
+    await tick();
+    vi.setSystemTime(Date.now() + 2500);
+    // PowerShell has not answered (and never will unless the test lets it): the read must not wait for it
+    const first = await Promise.race([
+      readHostSensors({ gpu: true }),
+      new Promise<'waited'>((r) => setTimeout(() => r('waited'), 1000)),
+    ]);
+    expect(first).not.toBe('waited');
+    expect((first as { gpu?: object }).gpu).toEqual({ percent: 20, memUsedMB: 1024 });
+    expect(counted('powershell.exe')).toBe(1);
+    // a poll while the probe is still running starts no second PowerShell
+    vi.setSystemTime(Date.now() + 2500);
+    (state.spawnCalls[0].stdout as PassThrough).write(ROW);
+    await tick();
+    expect((await readHostSensors({ gpu: true })).gpu?.memTotalMB).toBeUndefined();
+    expect(counted('powershell.exe')).toBe(1);
+    // Windows answers 16 GiB: an integrated GPU may use half of it
+    state.powershell = '17179869184\r\n';
+    state.heldPowershell.forEach((answer) => answer());
+    await tick();
+    for (let i = 0; i < 2; i++) {
+      vi.setSystemTime(Date.now() + 2500);
+      (state.spawnCalls[0].stdout as PassThrough).write(ROW);
+      await tick();
+      const out = await readHostSensors({ gpu: true });
+      expect(out.gpu).toEqual({ percent: 20, memUsedMB: 1024, memTotalMB: 8192, memPercent: 13 });
+    }
+    // the answer is kept: PowerShell is not asked again
+    expect(counted('powershell.exe')).toBe(1);
     stopHostSensors();
   });
 });
