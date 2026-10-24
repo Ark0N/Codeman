@@ -9439,7 +9439,10 @@ class CodemanApp {
   /**
    * Remember how much scrollback tmux holds for a session's pane, from any
    * terminal response. Called whether or not the response was written, since
-   * it describes the PANE, not the payload. A response without the field (a
+   * it describes the PANE, not the payload. Three responses are skipped, since
+   * none is the newest word on the pane: an error envelope (`success: false`)
+   * on any path, a refresh that lost its owner, and a history pull whose select
+   * generation moved during the fetch. A response without the field (a
    * byte-history fallback, an older server) forgets it, so the next tab switch
    * goes back to the bounded tail: unknown never counts as empty.
    */
@@ -9971,7 +9974,10 @@ class CodemanApp {
       }
       const data = capture.json?.data ?? {};
       const bodyParsedAt = performance.now();
-      this._notePaneHistory?.(sessionId, data);
+      // An error envelope (a JSON 5xx: _fetchTerminalCapture does not check
+      // `res.ok`) is not a capture: recording its empty data would forget the
+      // count the pane last reported, as in the refresh and the history pull.
+      if (capture.json?.success !== false) this._notePaneHistory?.(sessionId, data);
       // How this load must end, decided here because `chunkedTerminalWrite` is
       // what actually ends it for a non-empty buffer. A tmux pane capture is a
       // point-in-time frame, so nothing that reached the browser after the
