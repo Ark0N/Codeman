@@ -695,8 +695,9 @@ describe('pageKeysForGesture, the pure gesture rules both panes share', () => {
   });
 
   it('pages a notch-sized opening event at once, and the notches after it repay it', () => {
-    // Five 4-row notches 400 ms apart: the first pays the page, the next four (16 of the 15 rows
-    // owed on 38 rows) repay it, and none of them pages again.
+    // Five 4-row notches 400 ms apart: the first pays the page, the next four (16 rows of travel
+    // against the 14 owed on 36 rows, half a screen less the opener's 4) repay it, and none of them
+    // pages again.
     const steps = run([
       [-4, 0],
       [-4, 400],

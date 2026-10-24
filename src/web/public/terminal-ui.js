@@ -6076,8 +6076,9 @@ Object.assign(CodemanApp.prototype, {
    * never sent a key at all. That page is pre-paid: the travel it skipped is
    * owed back by the rest of the gesture, so the rate stays one page per
    * `perPage` rows. A new touch contact (`ev.touchId`), a pause outside a contact
-   * (PAGE_KEY_GESTURE_GAP_MS, or PAGE_KEY_DEBT_MS while a same-direction page is
-   * still owed), a reversal after the gap or a tab switch starts a new gesture;
+   * (PAGE_KEY_GESTURE_GAP_MS; while a same-direction page is still owed,
+   * PAGE_KEY_DEBT_MS, or PAGE_KEY_NOTCH_DEBT_MS when a notch-sized opener pre-paid
+   * it), a reversal after the gap or a tab switch starts a new gesture;
    * one contact is never split by time, and a quick reversal never pre-pays. A
    * mouse-wheel notch pages at once too, and its debt (PAGE_KEY_NOTCH_DEBT_MS) is repaid by the
    * notches after it, so a mouse pages once per `perPage` rows of travel with the
