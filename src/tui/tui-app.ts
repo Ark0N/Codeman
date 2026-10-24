@@ -56,6 +56,8 @@ import { composerScroll, composerStep, composerText, createComposer, type TuiCom
 import { formatAwayDigest } from './tui-digest.js';
 import {
   ATTACH_BANNER_MARKER,
+  isTuiClientTty,
+  readControllingTty,
   TuiClient,
   type TuiSessionOptions,
   type TuiWindowSizing,
@@ -550,7 +552,14 @@ export async function beginAttachHandoff(
   label: string,
   tabs: readonly TuiAttachTab[] = [],
   cols?: number,
-  rows?: number
+  rows?: number,
+  /**
+   * Tty the attach client will inherit. Omit to read this process's terminal.
+   * `null` means there is no usable tty: switch keys are not bound (an unscoped
+   * `switch-client` would move every client on the socket, including a browser
+   * tab). Tests pass a tty so they do not depend on stdin.
+   */
+  clientTty?: string | null
 ): Promise<TuiAttachHandoff> {
   const prefix = (await client.readPrefixKey(muxName)) ?? undefined;
   // Read, not assumed: see detachChord() for the `d` vs `D` mix-up this closes.
@@ -584,13 +593,29 @@ export async function beginAttachHandoff(
   // usable rather than decorative. Only the first nine, only sessions that
   // really have a pane, and only keys tmux reports as free — the same rule the
   // way-out key follows, so a binding of the user's own is never shadowed.
+  //
+  // The key table is server-global. The command is guarded to this terminal's
+  // client (see bindSwitchKey): without a tty we bind nothing, and a leaked
+  // unscoped `switch-client` from an older TUI is removed so it cannot keep
+  // moving browser tabs. When we do claim the keys, drop whatever previous
+  // attach left on M-1..M-9 first — including keys this strip will not reuse.
   const switchKeys: string[] = [];
-  for (const tab of tabs.slice(0, 9)) {
-    if (!tab.muxName) continue;
-    const key = `M-${tab.index}`;
-    const bound = await client.readPrefixBinding(key, 'root');
-    if (bound !== null && !bound.startsWith('switch-client')) continue;
-    if (await client.bindSwitchKey(key, tab.muxName)) switchKeys.push(key);
+  const tty = clientTty === undefined ? readControllingTty() : clientTty || null;
+  const switchTabs = tabs.slice(0, 9).filter((tab) => tab.index >= 1 && tab.index <= 9 && tab.muxName);
+  const guarded = Boolean(tty && isTuiClientTty(tty));
+  // The keys are bound here but stay inert until the attach hook records this
+  // client's pid, and that hook is armed at the very end (see below).
+  if (guarded && switchTabs.length > 0) {
+    for (let index = 1; index <= 9; index++) await client.unbindSwitchKey(`M-${index}`);
+    for (const tab of switchTabs) {
+      const key = `M-${tab.index}`;
+      const bound = await client.readPrefixBinding(key, 'root');
+      // Takeover just cleared ours. Anything still here belongs to the user.
+      if (bound !== null) continue;
+      if (await client.bindSwitchKey(key, tab.muxName as string, tty as string)) switchKeys.push(key);
+    }
+  } else {
+    for (let index = 1; index <= 9; index++) await client.unbindSwitchKey(`M-${index}`, '');
   }
   const bannerFor = (activeMux: string, ownLabel: string): Record<string, string> =>
     buildAttachBanner({
@@ -635,10 +660,20 @@ export async function beginAttachHandoff(
     if (cols && rows && rows > 1) await client.presizeWindow(target, cols, rows - 1);
     if (target === muxName) await client.followAttachingClient(target);
   }
+  // ⚠️ Armed LAST, as the final tmux call before the caller's `spawnSync`. The
+  // hook is one-shot for this tty, so a TUI killed between arming and attaching
+  // leaves it armed, and Linux hands the lowest free pty to the next opener: a
+  // browser tab's attach client could land on this tty and have its pid
+  // recorded, which would make these keys move that tab. Arming after the
+  // dressing loop above shrinks that window to the attach's own startup. A
+  // failed arm leaves the keys inert (the closed direction), and `restore()`
+  // still unbinds them.
+  if (switchKeys.length > 0) await client.armTuiSwitchGuard(tty as string);
   return {
     chord: oneKey ? ONE_KEY_DETACH : fallbackDetachChord(prefix, detachKey, claimed && alias ? alias : undefined),
     async restore(): Promise<void> {
-      for (const key of switchKeys) await client.unbindSwitchKey(key);
+      for (const key of switchKeys) await client.unbindSwitchKey(key, tty ?? '');
+      if (tty && isTuiClientTty(tty)) await client.disarmTuiSwitchGuard(tty);
       if (oneKey) await client.unbindDetachKey(ONE_KEY_DETACH, 'root');
       if (claimed && alias) await client.unbindDetachKey(alias);
       // Options first, then the size: dropping the status bar gives its row

@@ -27,11 +27,18 @@
  * per tmux server in practice.
  *
  * That tolerance is server-wide like every key table: while such an alias is
- * bound, a browser tab's client can detach itself with it too. The same goes
- * for the `root` keys an attach claims, including Alt+1..9, which run
- * `switch-client`: a tab that receives Esc then a digit within tmux's
- * `escape-time` is moved onto another session for as long as those bindings
- * exist. Leaving `root` alone keeps the attach working; it does not close that.
+ * bound, a browser tab's client can detach itself with it too. F1 in `root`
+ * is the same kind of way out. Alt+1..9 are not: `codeman tui` binds those
+ * through `if-shell -F` so `switch-client` runs only for the TUI's own client
+ * (see `bindSwitchKey` in src/tui/tui-client.ts). This file still does not
+ * touch `root`.
+ *
+ * Docker cases and owned remote sessions run a second tmux (`-L codeman-docker`,
+ * `-L codeman-remote`) with `prefix C-q`. That server is not this socket, so
+ * the reset above never sees it, and its stock prefix table still switches
+ * the inner client. `nestedPrefixTableResetCommands` is the same reduction,
+ * appended to those create chains. A non-owned remote attach joins another
+ * Codeman's `-L codeman` and must not run it.
  *
  * @module tmux-prefix-table
  */
@@ -42,6 +49,36 @@ import { shellescape } from './remote-hosts.js';
 
 /** tmux's stock prefix, used when `show-options` cannot be read. */
 const DEFAULT_PREFIX = 'C-b';
+
+/**
+ * Prefix on the dedicated tmux inside a Docker case and an owned remote
+ * session. Codeman's own socket keeps the user's prefix; these nested servers
+ * always use C-q so it does not collide with the outer prefix.
+ */
+export const NESTED_TMUX_PREFIX = 'C-q';
+
+/**
+ * Commands that reduce a nested tmux's prefix table to `C-q send-prefix`.
+ *
+ * Joined with `\;` onto the `new-session` that creates the server
+ * (`buildRemoteLaunchCommand`, `buildDockerLaunchCommand`). No `tmux` binary
+ * and no `-g`: the table is server-global, which is what we want on these
+ * dedicated sockets and nowhere else.
+ *
+ * Those servers load the user's tmux config (no `-f /dev/null`). A config that
+ * leaves the prefix table empty makes `unbind-key -a -T prefix` fail with
+ * "table prefix doesn't exist", and tmux then drops every later command in the
+ * `\;` chain, including the bind and `remain-on-exit failed` (#210). The same
+ * empty table is what #669 handled on the local socket. Binding `send-prefix`
+ * first creates the table so the unbind can run; the unbind clears stock
+ * bindings (and that first bind); the second bind puts `send-prefix` back.
+ * Put them BEFORE `remain-on-exit failed` so a remote tmux that rejects
+ * `failed` does not drop the reduction.
+ */
+export function nestedPrefixTableResetCommands(): readonly [string, string, string] {
+  const sendPrefix = `bind-key -T prefix ${NESTED_TMUX_PREFIX} send-prefix`;
+  return [sendPrefix, 'unbind-key -a -T prefix', sendPrefix];
+}
 
 /** One `list-keys -T prefix` line: key and command. */
 const PREFIX_LINE = /^bind-key\s+(?:-\S+\s+)*?-T\s+prefix\s+(\S+)\s+(.+)$/;

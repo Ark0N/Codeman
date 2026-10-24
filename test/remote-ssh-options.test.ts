@@ -166,6 +166,15 @@ describe('COD-107 buildRemoteLaunchCommand — threads connection args', () => {
       'set -s escape-time 0',
       // COD-106 — shared/collaborative sizing, per-session scoped (never -g).
       `set -t ${remoteName} window-size latest`,
+      // #671 — the nested server's prefix table is stock unless this chain
+      // reduces it. Ctrl+Q then ) would switch-client onto a sibling session.
+      // Bind first: a user config that emptied the prefix table makes
+      // `unbind-key -a` fail and tmux drops the rest of the `\;` chain,
+      // including the bind and remain-on-exit. That option stays last because
+      // a remote tmux that rejects `failed` aborts the rest of the chain.
+      'bind-key -T prefix C-q send-prefix',
+      'unbind-key -a -T prefix',
+      'bind-key -T prefix C-q send-prefix',
       // #210 — keep a CRASHED pane for diagnosis. `failed` (not `on`, which would
       // also strand a pane after a clean `exit`), and LAST because tmux aborts the
       // remaining commands of a `\;` chain on error and `failed` needs tmux >= 3.2.

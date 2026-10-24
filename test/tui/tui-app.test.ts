@@ -626,9 +626,101 @@ describe('the way out when F1 is taken, on a socket with no detach key', () => {
       restoreWindowSizing: async () => true,
     } as unknown as TuiClient;
 
-    const handoff = await beginAttachHandoff(client, 'codeman-abc12345', 'w1-case');
+    const handoff = await beginAttachHandoff(client, 'codeman-abc12345', 'w1-case', [], undefined, undefined, null);
 
     expect(handoff.chord).toBe('Ctrl+B then Ctrl+D');
+  });
+});
+
+describe('attach switch keys stay on the TUI client', () => {
+  it('binds M-1 through the guard for the tty it was given, and does not bind without one', async () => {
+    const binds: Array<{ key: string; target: string; tty: string }> = [];
+    const unbinds: Array<{ key: string; owner: string | undefined }> = [];
+    let armed: string | null = null;
+    let disarmed: string | null = null;
+    // tmux calls in order, to pin where the attach hook is armed.
+    const order: string[] = [];
+    const client = {
+      readPrefixKey: async () => 'C-b',
+      readDetachKey: async () => 'd',
+      readPrefixBinding: async () => null,
+      bindDetachKey: async () => true,
+      unbindDetachKey: async () => true,
+      armTuiSwitchGuard: async (tty: string) => {
+        order.push('arm');
+        armed = tty;
+        return true;
+      },
+      disarmTuiSwitchGuard: async (tty: string) => {
+        disarmed = tty;
+      },
+      bindSwitchKey: async (key: string, target: string, tty: string) => {
+        order.push('bind');
+        binds.push({ key, target, tty });
+        return true;
+      },
+      unbindSwitchKey: async (key: string, owner?: string) => {
+        unbinds.push({ key, owner });
+      },
+      readSessionOptions: async () => null,
+      applySessionOptions: async () => {
+        order.push('dress');
+        return true;
+      },
+      restoreSessionOptions: async () => true,
+      readWindowSizing: async () => null,
+      presizeWindow: async () => true,
+      followAttachingClient: async () => {
+        order.push('follow');
+        return true;
+      },
+      restoreWindowSizing: async () => true,
+    } as unknown as TuiClient;
+
+    const tabs = [
+      { index: 1, label: 'w1', active: true, muxName: 'codeman-aaaa1111' },
+      { index: 2, label: 'w2', active: false, muxName: 'codeman-bbbb2222' },
+    ];
+    const handoff = await beginAttachHandoff(
+      client,
+      'codeman-aaaa1111',
+      'w1',
+      tabs,
+      undefined,
+      undefined,
+      '/dev/pts/4'
+    );
+    expect(armed).toBe('/dev/pts/4');
+    // Armed once, as the LAST tmux call of the handoff: a TUI killed while the
+    // bars were being dressed must not leave a one-shot hook for its tty that a
+    // browser tab's attach on a reused pty would fire.
+    expect(order).toEqual(['bind', 'bind', 'dress', 'follow', 'dress', 'arm']);
+    expect(binds).toEqual([
+      { key: 'M-1', target: 'codeman-aaaa1111', tty: '/dev/pts/4' },
+      { key: 'M-2', target: 'codeman-bbbb2222', tty: '/dev/pts/4' },
+    ]);
+    // Takeover clears M-1..M-9 before claiming, so a killed TUI's leftovers go.
+    expect(unbinds.filter((entry) => entry.owner === undefined).map((entry) => entry.key)).toEqual([
+      'M-1',
+      'M-2',
+      'M-3',
+      'M-4',
+      'M-5',
+      'M-6',
+      'M-7',
+      'M-8',
+      'M-9',
+    ]);
+
+    await handoff.restore();
+    expect(disarmed).toBe('/dev/pts/4');
+    expect(unbinds.filter((entry) => entry.owner === '/dev/pts/4').map((entry) => entry.key)).toEqual(['M-1', 'M-2']);
+
+    binds.length = 0;
+    armed = null;
+    await beginAttachHandoff(client, 'codeman-aaaa1111', 'w1', tabs, undefined, undefined, null);
+    expect(armed).toBeNull();
+    expect(binds).toEqual([]);
   });
 });
 

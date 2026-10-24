@@ -41,7 +41,7 @@
  * @module tui/tui-client
  */
 
-import { execFile as execFileCb } from 'node:child_process';
+import { execFile as execFileCb, execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
@@ -443,6 +443,91 @@ export function parsePrefixBinding(stdout: string, key: string, table: TuiKeyTab
     return (match[2] ?? '').trim();
   }
   return null;
+}
+
+/**
+ * User option holding the tmux client pid of the TUI attach that owns M-1..M-9.
+ * Set by `TUI_SWITCH_ATTACH_HOOK` when that client attaches, read by the
+ * `if-shell -F` guard on those keys. A dead pid matches no live client.
+ */
+export const TUI_SWITCH_CLIENT_PID = '@codeman-tui-pid';
+
+/**
+ * Indexed so it does not replace a user's own `client-attached` hook. High
+ * index to stay clear of `[0]`. One-shot: the hook unsets itself after it
+ * records the pid, so a later client that reuses the pty does not re-arm it.
+ */
+export const TUI_SWITCH_ATTACH_HOOK = 'client-attached[90]';
+
+/** The keys `bindSwitchKey` binds. The key is interpolated into the binding's `send-keys` else command. */
+const TUI_SWITCH_KEY = /^M-[1-9]$/;
+
+/** Linux `/dev/pts/N` and macOS `/dev/ttysNNN`. Anything else is not a client tty we will interpolate into a format. */
+const TUI_CLIENT_TTY = /^\/dev\/(?:pts\/[0-9]+|ttys[0-9]+)$/;
+
+export function isTuiClientTty(value: string): boolean {
+  return TUI_CLIENT_TTY.test(value);
+}
+
+/**
+ * The terminal this process is attached to, when it is a safe tmux client tty.
+ * `codeman tui` inherits that tty into `tmux attach-session`, which is how the
+ * guard knows its own client before the client exists. A pipe (tests, no TTY)
+ * is null: callers then must not bind `switch-client` for every client.
+ */
+export function readControllingTty(): string | null {
+  try {
+    const out = execFileSync('tty', { encoding: 'utf8', stdio: ['inherit', 'pipe', 'ignore'] }).trim();
+    return isTuiClientTty(out) ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `if-shell -F` guard for a TUI switch key. True only for the client whose tty
+ * is `tty` AND whose pid is the one the attach hook stored. Evaluated when the
+ * key is pressed, against the client that pressed it.
+ */
+export function tuiSwitchGuard(tty: string): string {
+  return `#{&&:#{==:#{client_tty},${tty}},#{==:#{client_pid},#{${TUI_SWITCH_CLIENT_PID}}}}`;
+}
+
+/**
+ * `set-hook` command for `TUI_SWITCH_ATTACH_HOOK`. `\#{client_pid}` is
+ * defensive. On tmux 3.4 both this form and a bare `#{client_pid}` are stored
+ * verbatim and both record the attaching client's pid. The escape stays so a
+ * tmux that expands formats while the hook is stored (no client exists yet)
+ * cannot save an empty pid.
+ */
+export function tuiSwitchAttachHook(tty: string): string {
+  return (
+    `if-shell -F "#{==:#{client_tty},${tty}}" ` +
+    `"set -Fg ${TUI_SWITCH_CLIENT_PID} \\"\\#{client_pid}\\"; set-hook -gu ${TUI_SWITCH_ATTACH_HOOK}"`
+  );
+}
+
+const LEGACY_TUI_SWITCH = /^switch-client -t (\S+?)(?: \\; set-window-option -t \1 window-size latest)?$/;
+
+/**
+ * A root binding this TUI installed: the guarded `if-shell` form, or the
+ * pre-guard `switch-client -t <mux>` form a killed TUI can leave behind.
+ * A user's own `switch-client -n` or a target that is not a Codeman session
+ * is not ours.
+ */
+export function isTuiSwitchBinding(command: string): boolean {
+  const text = command.trim();
+  if (text.includes(TUI_SWITCH_CLIENT_PID) && text.includes('#{client_tty}') && text.includes('switch-client -t ')) {
+    return true;
+  }
+  const legacy = LEGACY_TUI_SWITCH.exec(text);
+  return legacy !== null && MUX_NAME_PATTERN.test(legacy[1] ?? '');
+}
+
+/** The tty embedded in a guarded switch binding, or null for a legacy one. */
+export function tuiSwitchBindingTty(command: string): string | null {
+  const match = /#\{==:#\{client_tty\},(\/dev\/(?:pts\/[0-9]+|ttys[0-9]+))\}/.exec(command);
+  return match?.[1] ?? null;
 }
 
 /**
@@ -959,21 +1044,33 @@ export class TuiClient {
    * `switch-client` rather than detach-then-attach: it keeps the terminal, so
    * the move is instant and the TUI stays blocked in its `spawnSync` exactly as
    * before, still holding the restore it owes.
+   *
+   * The binding is NOT server-wide in effect. Key tables are, so the key is
+   * bound for every client, but the command is `if-shell -F` and runs only
+   * when the client that pressed it is this TUI (`clientTty` plus the pid the
+   * attach hook stored). A browser tab's Esc-then-digit, which tmux reads as
+   * the same `M-<digit>` inside `escape-time`, does not match. An unsafe tty
+   * refuses the bind rather than falling back to an unscoped `switch-client`.
+   *
+   * A client that fails the guard gets the key back: the if-shell else
+   * argument is `send-keys <key>`, which writes it into that client's own pane
+   * exactly as an unbound key would arrive. Without it the root binding ate
+   * the key, so a browser tab's vim `<Esc>2j` lost its Esc and its digit for
+   * the whole attach, and for good after a TUI killed before `restore()`. The
+   * key is interpolated into that command string, so only `M-1`..`M-9` are
+   * accepted.
+   *
+   * The two commands live in the if-shell argument, where `;` is a separator
+   * inside that string. A bare `;` as its own argv element would end the
+   * `bind-key` and run `window-size latest` immediately, which is the bug the
+   * old `\;` argument existed to avoid. The second command is `window-size
+   * latest`: the window is already the right size on arrival (see
+   * presizeWindow), so it changes nothing then, and a resize while sitting in
+   * that session follows this terminal.
    */
-  async bindSwitchKey(key: string, target: string): Promise<boolean> {
-    if (!MUX_NAME_PATTERN.test(target)) return false;
+  async bindSwitchKey(key: string, target: string, clientTty: string): Promise<boolean> {
+    if (!TUI_SWITCH_KEY.test(key) || !MUX_NAME_PATTERN.test(target) || !isTuiClientTty(clientTty)) return false;
     try {
-      // Two commands: go there, then let that window follow this terminal again.
-      // It is already the right size (see presizeWindow), so `latest` changes
-      // nothing on arrival and costs no repaint — it matters only if the
-      // terminal is resized while sitting in that session.
-      //
-      // ⚠️ The separator MUST be an escaped `\;`. A bare `;` is a command
-      // separator to tmux's own parser, so it ends the `bind-key` and RUNS
-      // what follows immediately: the binding kept only `switch-client`, and
-      // every session got `window-size latest` executed on it at attach time.
-      // That is what left sessions on `latest` after a detach, since the
-      // snapshot was then taken from already-corrupted state.
       await this.exec('tmux', [
         '-L',
         this.socket,
@@ -981,15 +1078,11 @@ export class TuiClient {
         '-T',
         'root',
         key,
-        'switch-client',
-        '-t',
-        target,
-        '\\;',
-        'set-window-option',
-        '-t',
-        target,
-        'window-size',
-        'latest',
+        'if-shell',
+        '-F',
+        tuiSwitchGuard(clientTty),
+        `switch-client -t ${target} ; set-window-option -t ${target} window-size latest`,
+        `send-keys ${key}`,
       ]);
       return true;
     } catch {
@@ -997,10 +1090,92 @@ export class TuiClient {
     }
   }
 
-  /** Give back a switch key, but only while it still points at a session. */
-  async unbindSwitchKey(key: string): Promise<void> {
+  /**
+   * Record this TUI's client pid when it attaches, then drop the hook so a
+   * later client on a reused pty does not take the binding over. Best effort:
+   * a failure means Alt+1..9 never switch (they reach the pane as Esc then
+   * the digit), which is the closed direction.
+   */
+  async armTuiSwitchGuard(clientTty: string): Promise<boolean> {
+    if (!isTuiClientTty(clientTty)) return false;
+    try {
+      await this.exec('tmux', [
+        '-L',
+        this.socket,
+        'set-hook',
+        '-g',
+        TUI_SWITCH_ATTACH_HOOK,
+        tuiSwitchAttachHook(clientTty),
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Undo `armTuiSwitchGuard` for this tty. The hook is removed only while it
+   * still names `clientTty` (a second TUI may have replaced it). The pid option
+   * is removed only when no live client still has it, so a second attach that
+   * already recorded its own pid is left alone.
+   */
+  async disarmTuiSwitchGuard(clientTty: string): Promise<void> {
+    if (!isTuiClientTty(clientTty)) return;
+    try {
+      const { stdout } = await this.exec('tmux', ['-L', this.socket, 'show-hooks', '-g']);
+      const hook = stdout.split('\n').find((line) => line.startsWith(`${TUI_SWITCH_ATTACH_HOOK} `));
+      // The closed form, not the bare tty: `/dev/pts/4` is a substring of a
+      // hook armed for `/dev/pts/41`, and removing that one would leave the
+      // second TUI's Alt keys dead for its whole attach.
+      if (hook?.includes(`#{client_tty},${clientTty}}`)) {
+        await this.exec('tmux', ['-L', this.socket, 'set-hook', '-gu', TUI_SWITCH_ATTACH_HOOK]);
+      }
+    } catch {
+      /* no server, or the hook is already gone */
+    }
+    let pid = '';
+    try {
+      const { stdout } = await this.exec('tmux', ['-L', this.socket, 'show-options', '-gv', TUI_SWITCH_CLIENT_PID]);
+      pid = stdout.trim();
+    } catch {
+      return;
+    }
+    if (!pid) return;
+    let live = '';
+    try {
+      ({ stdout: live } = await this.exec('tmux', ['-L', this.socket, 'list-clients', '-F', '#{client_pid}']));
+    } catch {
+      live = '';
+    }
+    const pids = new Set(
+      live
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+    );
+    if (pids.has(pid)) return;
+    try {
+      await this.exec('tmux', ['-L', this.socket, 'set-option', '-gu', TUI_SWITCH_CLIENT_PID]);
+    } catch {
+      /* already unset */
+    }
+  }
+
+  /**
+   * Give back a switch key, but only while it is still one of ours.
+   *
+   * `ownerTty` set: keep a binding that names a different tty, so this attach's
+   * restore does not take a second TUI's keys. `ownerTty` omitted: any of our
+   * bindings on the key goes (the attaching TUI is taking the table over).
+   * Pass `''` to drop only a legacy unscoped binding.
+   */
+  async unbindSwitchKey(key: string, ownerTty?: string): Promise<void> {
     const bound = await this.readPrefixBinding(key, 'root');
-    if (!bound || !bound.startsWith('switch-client')) return;
+    if (!bound || !isTuiSwitchBinding(bound)) return;
+    if (ownerTty !== undefined) {
+      const boundTty = tuiSwitchBindingTty(bound);
+      if (boundTty !== null && boundTty !== ownerTty) return;
+    }
     try {
       await this.exec('tmux', ['-L', this.socket, 'unbind-key', '-T', 'root', key]);
     } catch {

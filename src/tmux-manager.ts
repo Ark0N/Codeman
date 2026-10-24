@@ -129,7 +129,7 @@ import {
 
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 import { ensureDeepSeekStatusShim } from './deepseek-status-shim.js';
-import { restrictTmuxPrefixTable } from './tmux-prefix-table.js';
+import { NESTED_TMUX_PREFIX, nestedPrefixTableResetCommands, restrictTmuxPrefixTable } from './tmux-prefix-table.js';
 
 /** How long a cached process snapshot stays usable. */
 const PROC_SNAPSHOT_TTL_MS = 2000;
@@ -1232,7 +1232,9 @@ export function remoteTmuxLocation(remote: SessionRemote, sessionId: string): { 
  *   ssh -o BatchMode=yes -t [<COD-107 connection opts>] user@host \
  *     'tmux -L codeman-remote new-session -A -s codeman-ssh-<id> -c <path> "cd <path> && exec <cli>" \
  *        \; set -t codeman-ssh-<id> status off \; set -t codeman-ssh-<id> mouse off \
- *        \; set -t codeman-ssh-<id> prefix C-q \; set -s escape-time 0'
+ *        \; set -t codeman-ssh-<id> prefix C-q \; set -s escape-time 0 \; \
+ *        bind-key -T prefix C-q send-prefix \; unbind-key -a -T prefix \; \
+ *        bind-key -T prefix C-q send-prefix \; set -t codeman-ssh-<id> remain-on-exit failed'
  *
  * COD-107 — the connection options (`-p`, `-i`, `-J`, SOCKS `-o ProxyCommand`,
  * arbitrary `-o`) come from the shared `buildSshConnectionArgs(remote)`, so the
@@ -1346,7 +1348,7 @@ export function buildRemoteLaunchCommand(options: {
     `tmux -L ${REMOTE_TMUX_SOCKET} new-session -A -s ${remoteName} -c ${shellescape(remote.remotePath)} ${shellescape(paneCommand)}`,
     `set -t ${remoteName} status off`,
     `set -t ${remoteName} mouse off`,
-    `set -t ${remoteName} prefix C-q`,
+    `set -t ${remoteName} prefix ${NESTED_TMUX_PREFIX}`,
     'set -s escape-time 0',
     // COD-106 — shared/collaborative sessions: tmux defaults to sizing a window
     // to the SMALLEST attached client, so two Codemans at different viewports
@@ -1355,6 +1357,15 @@ export function buildRemoteLaunchCommand(options: {
     // Per-session scoped (`set -t <name>`, matching #145's hardening) so a shared
     // remote tmux server's other sessions keep their own sizing behavior.
     `set -t ${remoteName} window-size latest`,
+    // The prefix TABLE is server-global (unlike `prefix C-q`, which is per
+    // session). This socket is dedicated to Codeman's owned sessions, so the
+    // same reduction as the local socket applies: Ctrl+Q then )/(/s/w/L must
+    // not switch-client / choose-tree onto a sibling. Bind, then unbind-all,
+    // then bind again: a user config that left the prefix table empty makes
+    // `unbind-key -a -T prefix` fail and abort the rest of this chain.
+    // BEFORE remain-on-exit, which stays last because an old remote tmux
+    // rejects `failed` and aborts the rest of the chain.
+    ...nestedPrefixTableResetCommands(),
     // #210: keep a CRASHED pane so the failure is still on screen. Without this,
     // tmux destroys the pane -> window -> session (and, being the only session,
     // the whole remote server) the instant the pane command exits, which tears the
@@ -1371,7 +1382,8 @@ export function buildRemoteLaunchCommand(options: {
     // LAST in the chain on purpose: tmux aborts the remaining commands of a `\;`
     // sequence once one errors (also verified), and `failed` needs tmux >= 3.2 on
     // the REMOTE host. Trailing, a rejection costs only this option; leading, it
-    // would silently drop status/mouse/prefix/escape-time/window-size with it.
+    // would silently drop status/mouse/prefix/escape-time/window-size and the
+    // prefix-table reduction with it.
     `set -t ${remoteName} remain-on-exit failed`,
   ].join(' \\; ');
 
@@ -1550,8 +1562,12 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
     `new-session -A -s ${dkrName} -c ${workdir} ${shellescape(paneCommand)}`,
     `set -t ${dkrName} status off`,
     `set -t ${dkrName} mouse off`,
-    `set -t ${dkrName} prefix C-q`,
+    `set -t ${dkrName} prefix ${NESTED_TMUX_PREFIX}`,
     'set -s escape-time 0',
+    // Same reduction as the owned-remote chain: the in-container server is
+    // Codeman's (`-L codeman-docker`), and its stock prefix table would move
+    // the inner client to a sibling session on Ctrl+Q then )/(/s/w/L.
+    ...nestedPrefixTableResetCommands(),
   ].join(' \\; ');
 
   const execEnvFlags: string[] = [];

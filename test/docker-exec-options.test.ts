@@ -106,6 +106,16 @@ describe('buildDockerLaunchCommand', () => {
     expect(cmd).toContain('tmux -L codeman-docker setenv -g CODEMAN_SESSION_ID');
     expect(cmd).toContain('new-session -A -s codeman-dkr-1a2b3c4d');
     expect(cmd).toContain("sh -lc '");
+    // The in-container tmux keeps prefix C-q. Without this reduction its stock
+    // prefix table runs switch-client / choose-tree for the inner client.
+    // Bind, unbind-all, bind again: an empty prefix table makes unbind-key -a
+    // fail and abort the rest of the \; chain.
+    const firstBind = cmd.indexOf('bind-key -T prefix C-q send-prefix');
+    const unbind = cmd.indexOf('unbind-key -a -T prefix');
+    const secondBind = cmd.indexOf('bind-key -T prefix C-q send-prefix', unbind);
+    expect(firstBind).toBeGreaterThan(cmd.indexOf('prefix C-q'));
+    expect(unbind).toBeGreaterThan(firstBind);
+    expect(secondBind).toBeGreaterThan(unbind);
   });
 
   it('pins a deterministic conversation id with a reboot-surviving fallback (fresh launch)', () => {
