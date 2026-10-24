@@ -169,7 +169,11 @@ Both pre-verify gates count a request the moment it passes them, before its
 verify starts, so a burst of concurrent attempts cannot all slip through on one
 stale count; a correct password then clears its slot with the rest, and a
 failure is not counted a second time. A verify still in flight therefore holds a
-slot, even one carrying the right password.
+slot, even one carrying the right password, but identical credentials from the
+same IP that arrive during it share that verify, its slot and its outcome, and
+skip both gates: they add no guess and no scrypt work. So a browser replaying its
+cached login on many parallel requests after a restart (cookie sessions live in
+memory) is not refused by the slots its own password filled.
 
 ---
 

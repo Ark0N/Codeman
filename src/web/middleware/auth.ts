@@ -9,7 +9,7 @@
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { StaleExpirationMap } from '../../utils/index.js';
 import type { AuthSessionRecord } from '../ports/auth-port.js';
 import { isAllowedRequestHost, isAllowedRequestOrigin, type HostPolicy } from '../network-auth-policy.js';
@@ -33,7 +33,7 @@ import {
   lostWebviewFramePage,
   LOST_FRAME_PAGE_CSP,
 } from '../webview-proxy.js';
-import { ApiErrorCode, createErrorResponse, type AuthUser } from '../../types.js';
+import { ApiErrorCode, createErrorResponse, type AuthUser, type UserRecord } from '../../types.js';
 
 // Request-scoped identity (multi-user). Single-user leaves it undefined and the
 // ownership helpers default to a synthetic admin (see route-helpers).
@@ -78,6 +78,22 @@ function parseBasicAuth(header?: string): { username: string; password: string }
     return null;
   }
 }
+
+/**
+ * Key of the multi-user in-flight verify map: a SHA-256 digest of (client IP,
+ * normalized username, password), so the plaintext password is never held as a key.
+ * The JSON array keeps the three parts unambiguous for any strings (a NUL-joined
+ * string is not, since a username may carry a NUL). Never logged or persisted, and
+ * gone from the map once its verify settles.
+ */
+function verifyFlightKey(clientIp: string, normUser: string, password: string): string {
+  return createHash('sha256')
+    .update(JSON.stringify([clientIp, normUser, password]))
+    .digest('hex');
+}
+
+/** What one Basic verify decided, shared by the request that ran it and every joiner. */
+type BasicVerifyOutcome = { user: UserRecord } | { user: null; limited: boolean };
 
 /**
  * The `/api/hook-event` + `/api/status-telemetry` localhost bypass, shared by the
@@ -490,8 +506,8 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
  * Multi-user auth hook (async, because password verification runs scrypt). Verifies
  * `username:password` against the user store, mints an identity-carrying cookie,
  * decorates `req.authUser`, enforces the per-IP, per-(username, IP) and per-username
- * rate limits, and the `mustChangePassword` lockbox. The single-user hook above is
- * left untouched.
+ * rate limits, and the `mustChangePassword` lockbox. Identical logins in flight at once
+ * share one verify. The single-user hook above is left untouched.
  */
 function registerMultiUserAuthHook(
   app: FastifyInstance,
@@ -539,6 +555,75 @@ function registerMultiUserAuthHook(
       return true;
     }
     return false;
+  };
+
+  // Basic verifies in flight, by verifyFlightKey(). A request whose identical
+  // credentials from the same IP are already being verified awaits that verify
+  // instead of starting its own. Each entry is removed when its verify settles, so the
+  // map never holds more than the distinct verifies in flight.
+  const verifiesInFlight = new Map<string, Promise<BasicVerifyOutcome>>();
+
+  // The verify plus its once-only side effects, run by the first request for a key.
+  // A success clears the three buckets and records the login; a failure is counted
+  // here once (the per-IP and pair buckets already hold it: the caller reserved them).
+  const verifyOnce = async (
+    username: string,
+    password: string,
+    normUser: string,
+    clientIp: string,
+    pairKey: string
+  ): Promise<BasicVerifyOutcome> => {
+    const result = await verifyPassword(username, password);
+    if (result) {
+      const { user, needsRehash: rehash } = result;
+      if (rehash) void setPassword(user.username, password).catch(() => {});
+      void touchLastLogin(user.username).catch(() => {});
+      authFailures.delete(clientIp);
+      userFailures.delete(normUser);
+      userIpFailures.delete(pairKey);
+      return { user };
+    }
+    // Failed guess: only the per-username bucket counts it here. Once that bucket
+    // reaches the cap, further FAILED attempts get 429 from any IP, but this path is
+    // only reached on a wrong password, so it can never deny a correct one. Its count
+    // is re-read after the await, so concurrent failures against one account each add one.
+    const uFail = (userFailures.get(normUser) ?? 0) + 1;
+    userFailures.set(normUser, uFail);
+    return { user: null, limited: uFail >= AUTH_FAILURE_MAX };
+  };
+
+  // Answer one request from a shared outcome. Every successful request, joiners
+  // included, gets its own cookie session under the usual capacity rules.
+  const sendBasicOutcome = (
+    req: FastifyRequest,
+    reply: FastifyReply,
+    outcome: BasicVerifyOutcome,
+    normUser: string
+  ): void => {
+    if (outcome.user) {
+      const { user } = outcome;
+      const token = randomBytes(32).toString('hex');
+      if (authSessions.size >= MAX_AUTH_SESSIONS) evictForCapacity(user.username);
+      authSessions.set(token, {
+        ip: req.ip,
+        ua: req.headers['user-agent'] ?? '',
+        createdAt: Date.now(),
+        method: 'basic',
+        username: user.username,
+        role: user.role,
+        mustChangePassword: !!user.mustChangePassword,
+      });
+      req.authUser = { username: user.username, role: user.role };
+      setSessionCookie(reply, token);
+      enforcePasswordChange(req, reply, !!user.mustChangePassword);
+      return;
+    }
+    if (outcome.limited) {
+      sendAuthRateLimit(reply, userFailures, normUser);
+      return;
+    }
+    reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
+    reply.code(401).send('Unauthorized');
   };
 
   app.addHook('onRequest', async (req, reply) => {
@@ -611,14 +696,27 @@ function registerMultiUserAuthHook(
     // concurrent burst pass the gates on the same stale read: 29 wrong guesses plus the
     // right password, all in flight at once from one IP, logged in. A success deletes
     // the reservation with the rest of the buckets; a failure is not counted again.
+    // A request whose IDENTICAL credentials from the same IP are already being verified
+    // joins that verify instead: it skips both gates, takes no slot, runs no scrypt and
+    // gets the same outcome, since it adds no guess and no CPU. Reserving for each of
+    // them refused a correct password with the slots that password itself had filled,
+    // which is every reload after a restart: cookie sessions live in memory, so the
+    // browser replays its cached Basic header on many parallel requests at once. A
+    // request with no verify in flight for its credentials is gated as normal.
+    const creds = parseBasicAuth(req.headers.authorization);
+    const normUser = creds ? creds.username.trim().toLowerCase() : '';
+    const flightKey = creds ? verifyFlightKey(clientIp, normUser, creds.password) : '';
+    const shared = creds ? verifiesInFlight.get(flightKey) : undefined;
+    if (shared) {
+      sendBasicOutcome(req, reply, await shared, normUser);
+      return;
+    }
     const ipFail = authFailures.get(clientIp) ?? 0;
     if (ipFail >= AUTH_IP_FAILURE_MAX) {
       sendAuthRateLimit(reply, authFailures, clientIp);
       return;
     }
-    const creds = parseBasicAuth(req.headers.authorization);
     if (creds) {
-      const normUser = creds.username.trim().toLowerCase();
       // IPs never contain a newline, so this key is unambiguous for any username.
       const pairKey = `${clientIp}\n${normUser}`;
       const pairFail = userIpFailures.get(pairKey) ?? 0;
@@ -626,8 +724,9 @@ function registerMultiUserAuthHook(
         sendAuthRateLimit(reply, userIpFailures, pairKey);
         return;
       }
-      // Reserve both slots now, from the values the gates just read. Correct only while
-      // nothing between those reads and these writes awaits: keep it that way.
+      // Reserve both slots and publish this verify for joiners, from the values the
+      // gates just read. Correct only while nothing between those reads and these
+      // writes awaits: keep it that way.
       authFailures.set(clientIp, ipFail + 1);
       userIpFailures.set(pairKey, pairFail + 1);
       // Security: the per-username bucket is consulted only AFTER the verify, and only
@@ -635,44 +734,15 @@ function registerMultiUserAuthHook(
       // throwaway IPs lock out a known account (incl. admin) even with the correct
       // password. A correct password that passes the two gates above always wins and
       // self-heals the per-IP, per-username and this pair's buckets.
-      const result = await verifyPassword(creds.username, creds.password);
-      if (result) {
-        const { user, needsRehash: rehash } = result;
-        if (rehash) void setPassword(user.username, creds.password).catch(() => {});
-        void touchLastLogin(user.username).catch(() => {});
-        authFailures.delete(clientIp);
-        userFailures.delete(normUser);
-        userIpFailures.delete(pairKey);
-
-        const token = randomBytes(32).toString('hex');
-        if (authSessions.size >= MAX_AUTH_SESSIONS) evictForCapacity(user.username);
-        authSessions.set(token, {
-          ip: clientIp,
-          ua: req.headers['user-agent'] ?? '',
-          createdAt: Date.now(),
-          method: 'basic',
-          username: user.username,
-          role: user.role,
-          mustChangePassword: !!user.mustChangePassword,
-        });
-        req.authUser = { username: user.username, role: user.role };
-        setSessionCookie(reply, token);
-        enforcePasswordChange(req, reply, !!user.mustChangePassword);
-        return;
+      const verify = verifyOnce(creds.username, creds.password, normUser, clientIp, pairKey);
+      verifiesInFlight.set(flightKey, verify);
+      let outcome: BasicVerifyOutcome;
+      try {
+        outcome = await verify;
+      } finally {
+        verifiesInFlight.delete(flightKey);
       }
-      // Failed guess: the per-IP and pair buckets already hold it (reserved above), so
-      // only the per-username bucket counts it here. Once that bucket reaches the cap,
-      // further FAILED attempts get 429 from any IP, but this path is only reached on a
-      // wrong password, so it can never deny a correct one. Its count is re-read after
-      // the await, so concurrent failures against one account each add one.
-      const uFail = (userFailures.get(normUser) ?? 0) + 1;
-      userFailures.set(normUser, uFail);
-      if (uFail >= AUTH_FAILURE_MAX) {
-        sendAuthRateLimit(reply, userFailures, normUser);
-        return;
-      }
-      reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
-      reply.code(401).send('Unauthorized');
+      sendBasicOutcome(req, reply, outcome, normUser);
       return;
     }
 

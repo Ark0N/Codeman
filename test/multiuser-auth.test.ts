@@ -16,12 +16,20 @@ import path from 'node:path';
 import { WebServer } from '../src/web/server.js';
 import { TmuxManager } from '../src/tmux-manager.js';
 import { TunnelManager } from '../src/tunnel-manager.js';
-import { createUser, invalidateUsersCache } from '../src/user-store.js';
+import { createUser, invalidateUsersCache, verifyPassword } from '../src/user-store.js';
 import type { FastifyInstance } from 'fastify';
 import { AUTH_FAILURE_MAX, AUTH_IP_FAILURE_MAX } from '../src/config/auth-config.js';
 import type { StaleExpirationMap } from '../src/utils/stale-expiration-map.js';
 
 vi.spyOn(TmuxManager, 'isTmuxAvailable').mockReturnValue(true);
+
+// Count scrypt verifies: the real verifyPassword, wrapped, so the middleware still checks
+// the real store and a test can tell how many requests reached it.
+vi.mock('../src/user-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/user-store.js')>();
+  return { ...actual, verifyPassword: vi.fn(actual.verifyPassword) };
+});
+const verifyCalls = vi.mocked(verifyPassword);
 
 function basic(user: string, pass: string): string {
   return 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
@@ -316,6 +324,87 @@ describe('multi-user auth', () => {
 
     // The lockout is that pair's only: bob still logs in from another IP.
     expect((await login('203.0.113.51', 'bob', 'bobpass123')).statusCode).toBe(200);
+  });
+
+  it('identical in-flight logins share one verify: a burst of correct ones all log in', async () => {
+    const { login, buckets } = await startIpServer();
+    const ip = '203.0.113.60';
+    verifyCalls.mockClear();
+
+    // A browser whose cookie died with a server restart replays its cached Basic header
+    // on many parallel requests. Had each reserved its own slot, every one past
+    // AUTH_FAILURE_MAX would be refused although all carry the right password.
+    const burst = [];
+    for (let i = 0; i < AUTH_FAILURE_MAX + 5; i++) burst.push(login(ip, 'bob', 'bobpass123'));
+    const responses = await Promise.all(burst);
+
+    expect(responses.map((r) => r.statusCode)).toEqual(burst.map(() => 200));
+    expect(verifyCalls).toHaveBeenCalledTimes(1);
+    // Each request still gets a cookie session of its own.
+    const tokens = responses.map((r) => /codeman_session=([^;]+)/.exec(String(r.headers['set-cookie']))?.[1]);
+    expect(new Set(tokens).size).toBe(burst.length);
+    expect(tokens).not.toContain(undefined);
+    // The one success cleared the buckets, the reservation included.
+    expect(buckets.userIpFailures.get(`${ip}\nbob`)).toBeUndefined();
+    expect(buckets.authFailures.get(ip)).toBeUndefined();
+
+    // The entry left the map when its verify settled: the next login verifies afresh.
+    expect((await login(ip, 'bob', 'bobpass123')).statusCode).toBe(200);
+    expect(verifyCalls).toHaveBeenCalledTimes(2);
+  });
+
+  it('identical in-flight logins share one verify: a burst of one wrong password counts once', async () => {
+    const { login, buckets } = await startIpServer();
+    const ip = '203.0.113.70';
+    verifyCalls.mockClear();
+
+    const burst = [];
+    for (let i = 0; i < AUTH_FAILURE_MAX + 5; i++) burst.push(login(ip, 'bob', 'same-wrong'));
+    const codes = (await Promise.all(burst)).map((r) => r.statusCode);
+
+    // One guess, verified once, counted once in each bucket, and the same 401 for all.
+    expect(codes).toEqual(burst.map(() => 401));
+    expect(verifyCalls).toHaveBeenCalledTimes(1);
+    expect(buckets.userFailures.get('bob')).toBe(1);
+    expect(buckets.userIpFailures.get(`${ip}\nbob`)).toBe(1);
+    expect(buckets.authFailures.get(ip)).toBe(1);
+  });
+
+  it('identical in-flight logins skip the gates: the slot their own verify took does not refuse them', async () => {
+    const { login } = await startIpServer();
+    const ip = '203.0.113.80';
+    for (let i = 0; i < AUTH_FAILURE_MAX - 1; i++) {
+      expect((await login(ip, 'bob', `bad-${i}`)).statusCode, `attempt ${i + 1}`).toBe(401);
+    }
+    verifyCalls.mockClear();
+
+    // The first of these takes the pair's last slot; the rest join its verify, so a gate
+    // check of their own would refuse them with a full bucket.
+    const burst = [];
+    for (let i = 0; i < 5; i++) burst.push(login(ip, 'bob', 'bobpass123'));
+    const codes = (await Promise.all(burst)).map((r) => r.statusCode);
+
+    expect(codes).toEqual(burst.map(() => 200));
+    expect(verifyCalls).toHaveBeenCalledTimes(1);
+  });
+
+  it('a verify that throws leaves the in-flight map, and its joiners share the failure', async () => {
+    const { login } = await startIpServer();
+    const ip = '203.0.113.90';
+    verifyCalls.mockClear();
+    verifyCalls.mockRejectedValueOnce(new Error('user store unreadable'));
+
+    const burst = [];
+    for (let i = 0; i < 3; i++) burst.push(login(ip, 'bob', 'bobpass123'));
+    const codes = (await Promise.all(burst)).map((r) => r.statusCode);
+
+    expect(verifyCalls).toHaveBeenCalledTimes(1);
+    expect(new Set(codes).size).toBe(1);
+    expect(codes[0]).toBeGreaterThanOrEqual(500);
+
+    // Removed in a finally, so the next identical login runs a verify of its own.
+    expect((await login(ip, 'bob', 'bobpass123')).statusCode).toBe(200);
+    expect(verifyCalls).toHaveBeenCalledTimes(2);
   });
 
   it('per-(username, IP) gate: a correct password clears the pair bucket', async () => {
