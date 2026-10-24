@@ -12,14 +12,25 @@ It can also include the GitHub CLI (`gh`) and the Azure CLI (`az`) with the `azu
 
 ## Prerequisites
 
-- Docker Engine or Docker Desktop with Docker Compose v2
-- A reachable Docker daemon
+- Docker Engine or Docker Desktop with the Docker Compose v2 plugin, version 2.27.2 or newer
+- A reachable Docker daemon, usable by your account without sudo (on Linux, membership of the `docker` group)
 
 The application container mounts the Docker daemon socket so Codeman can create and manage its isolated Docker cases. Treat anyone who can administer this Compose project as having Docker-host-equivalent access.
 
 ## Start
 
-Copy the environment template, set a strong password, and confirm `CODEMAN_APPDATA_PATH`. The example maps `/mnt/user/appdata/codeman` on the host to `/home/${CODEMAN_RUNTIME_USER}` in the container, preserving Codeman state and CLI credentials outside Docker-managed volumes.
+On Linux, clone the repository and run the start script:
+
+```sh
+git clone https://github.com/Ark0N/Codeman.git && cd Codeman
+bash docker/Start-Codeman.sh
+```
+
+The first run checks Docker, Compose and the daemon, then asks for a data folder (default `~/codeman-docker`), a port (default 3000, or the next free one) and a password (Enter generates one and prints it once). It writes `docker/.env` from `docker/.env.example`, builds the image, starts the container and waits until Codeman answers, then prints the URL and how to sign in. `--yes` takes every default without asking, and `--setup-only` writes `docker/.env` and stops so it can be reviewed first. The full description, including the options, is the Start section of the [Docker deployment guide](../docker/README.md#start).
+
+The data folder is mounted at `/home/${CODEMAN_RUNTIME_USER}` in the container, so Codeman state and CLI credentials stay on the host outside Docker-managed volumes. On every start the script determines `PUID` and `PGID` from the owner of that folder, and `DOCKER_SOCKET_GID` from the configured Docker socket, before invoking Compose. A root-owned data folder is rejected so the runtime account cannot become UID 0.
+
+To write `docker/.env` by hand instead (Unraid and other root-only hosts, or Compose without the script), copy the template, set a strong password, and confirm `CODEMAN_APPDATA_PATH`. The example value `/mnt/user/appdata/codeman` is an Unraid layout.
 
 ```sh
 cp docker/.env.example docker/.env
@@ -31,12 +42,6 @@ On PowerShell, use the following command instead.
 Copy-Item docker/.env.example docker/.env
 ```
 
-On Linux, run the stack with the start script. It determines `PUID` and `PGID` from the owner of `CODEMAN_APPDATA_PATH`, and `DOCKER_SOCKET_GID` from the configured Docker socket, before invoking Compose. A root-owned application-data directory is rejected so the runtime account cannot become UID 0.
-
-```sh
-bash docker/Start-Codeman.sh
-```
-
 On other platforms, run Compose directly. `PUID` and `PGID` default to `1000:1000`; set them in `docker/.env` when the application-data directory has a different owner. Naming the file with `-f` disables Compose's own discovery of `docker/docker-compose.override.yml`, so add a second `-f` for it when you keep one (see `docker/README.md`, Local customisation).
 
 ```sh
@@ -45,7 +50,7 @@ docker compose --env-file docker/.env -f docker/docker-compose.yaml up --build -
 
 The container starts as root, corrects the ownership of a bind source the daemon had to create, and drops to `PUID:PGID` with `setpriv` before Codeman starts; the capabilities that needs are declared in `docker/docker-compose.yaml` and named by the entrypoint when a compose file written elsewhere lacks them.
 
-Open `http://localhost:3000` and sign in with the username and password from `docker/.env`.
+Open the URL the script printed (`http://localhost:3000` by default) and sign in with the username and password from `docker/.env`.
 
 ## Operations
 
