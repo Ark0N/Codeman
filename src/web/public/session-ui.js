@@ -782,38 +782,18 @@ Object.assign(CodemanApp.prototype, {
    * run modes like the rest, and neither `agy` nor `pi` is likely to be installed.
    */
   _refreshRunModeAvailability(menu) {
-    // A DOCKER case runs its agents INSIDE the container, so host CLI
-    // availability answers the wrong question: the host may have no claude at
-    // all while the container ships one, and gating on the host hides a mode
-    // that would have worked. Adoption records what the container really has
-    // (`availableModes`); an owned container runs our base image, which ships
-    // every CLI, so an absent list means "do not gate" rather than "nothing".
     // Same source every run* path reads the selected case from.
     const caseName = document.getElementById('quickStartCase')?.value;
     const activeCase = caseName ? (this.cases || []).find((c) => c.name === caseName) : null;
     const isDocker = activeCase?.location === 'docker';
-    // Prefer a LIVE probe over the value stored at attach time: a container's
-    // CLIs can be installed or removed long after the case was linked, and a
-    // case linked before that field existed has none at all.
-    const containerModes = isDocker
-      ? this._dockerCaseModes?.[caseName] || activeCase.docker?.availableModes || null
-      : null;
     if (isDocker && !this._dockerCaseModes?.[caseName]) void this._probeDockerCaseModes(activeCase, menu);
-    // An unreachable container hides every agent mode and explains why, instead
-    // of silently offering modes that cannot start.
-    //
-    // ⚠️ ADOPTED cases only. For an OWNED case a missing container is the normal
-    // state before the first session — the launch chain creates and starts it — so
-    // reporting it as a fault hid every agent mode on a freshly linked Docker case
-    // behind "start it yourself first", for a container Codeman was about to create.
+    // An unreachable (adopted) container hides every agent mode and explains why,
+    // instead of silently offering modes that cannot start; see _runModeAvailableForCase.
     const probeError = isDocker ? this._dockerCaseProbeError?.[caseName] : null;
     for (const option of menu.querySelectorAll('.run-mode-option[data-mode]')) {
       const mode = option.dataset.mode;
       if (!mode || mode === 'shell') continue;
-      let available;
-      if (isDocker) available = probeError ? false : containerModes ? containerModes.includes(mode) : true;
-      else available = this.isCliAvailable(mode);
-      option.style.display = available ? 'flex' : 'none';
+      option.style.display = this._runModeAvailableForCase(mode, caseName) ? 'flex' : 'none';
     }
     this._renderRunModeNotice(menu, probeError);
     // DeepSeek is the one mode whose availability has two halves: `dsh` can be
@@ -830,6 +810,44 @@ Object.assign(CodemanApp.prototype, {
     // all (and is the honest thing to offer there).
     const dsWeb = menu.querySelector('#runModeDeepSeekWeb');
     if (dsWeb) dsWeb.style.display = avail.deepseekBinary ? 'flex' : 'none';
+  },
+
+  /**
+   * Does the case named `caseName` offer agent run mode `mode`? The ONE rule
+   * behind the Run menu's entries (_refreshRunModeAvailability) and the Cmd+K
+   * new-session row's agents (_commandPaletteAgentChoices, panels-ui.js), so the
+   * two never disagree on what a case can start. Shell needs no CLI and is
+   * never gated; both callers skip it before asking.
+   *
+   * Reads only what is already known and never starts a container probe: the
+   * Run menu starts one (_probeDockerCaseModes), and its answer lands in
+   * _dockerCaseModes, which this reads. Until then (a probe still in flight)
+   * the stored availableModes decide, else nothing is gated.
+   */
+  _runModeAvailableForCase(mode, caseName) {
+    const activeCase = caseName ? (this.cases || []).find((c) => c.name === caseName) : null;
+    if (activeCase?.location === 'docker') {
+      // A DOCKER case runs its agents INSIDE the container, so host CLI
+      // availability answers the wrong question: the host may have no claude at
+      // all while the container ships one, and gating on the host hides a mode
+      // that would have worked. Adoption records what the container really has
+      // (`availableModes`); an owned container runs our base image, which ships
+      // every CLI, so an absent list means "do not gate" rather than "nothing".
+      //
+      // An unreachable container offers no agent mode. ⚠️ Only an ADOPTED case
+      // ever records that error: for an OWNED case a missing container is the
+      // normal state before the first session (the launch chain creates and
+      // starts it), so reporting it as a fault hid every agent mode on a freshly
+      // linked Docker case behind "start it yourself first", for a container
+      // Codeman was about to create.
+      if (this._dockerCaseProbeError?.[caseName]) return false;
+      // Prefer a LIVE probe over the value stored at attach time: a container's
+      // CLIs can be installed or removed long after the case was linked, and a
+      // case linked before that field existed has none at all.
+      const containerModes = this._dockerCaseModes?.[caseName] || activeCase.docker?.availableModes || null;
+      return containerModes ? containerModes.includes(mode) : true;
+    }
+    return this.isCliAvailable(mode);
   },
 
   /** Render every enabled agent entry from the server's registry projection. */

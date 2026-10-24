@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 
-function loadPaletteHarness(overrides: Record<string, any> = {}) {
+function loadPaletteHarness(overrides: Record<string, any> = {}, { sessionUi = false } = {}) {
   const elements: Record<string, any> = {};
   const listeners: Record<string, (event: any) => void> = {};
   const CodemanApp = function CodemanApp(this: any) {};
@@ -70,6 +70,12 @@ function loadPaletteHarness(overrides: Record<string, any> = {}) {
 
   const panelsUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/panels-ui.js'), 'utf8');
   vm.runInContext(panelsUi, context, { filename: 'panels-ui.js' });
+  // session-ui.js loads after panels-ui.js in index.html. Opt-in: it also brings
+  // the real selectQuickStartCase, which the case-pick tests above stub around.
+  if (sessionUi) {
+    const sessionUiSrc = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUiSrc, context, { filename: 'session-ui.js' });
+  }
 
   const app = new (CodemanApp as any)();
   app.sessions = new Map([
@@ -350,9 +356,12 @@ const PALETTE_CATALOG = [
 ];
 
 /** A palette whose agent list comes from the injected CLI catalog, codex not installed. */
-function loadAgentPalette(catalog: any[] = PALETTE_CATALOG) {
+function loadAgentPalette(catalog: any[] = PALETTE_CATALOG, options: { sessionUi?: boolean } = {}) {
   const available: Record<string, boolean> = { claude: true, shell: true, codex: false, opencode: true, gemini: true };
-  const harness = loadPaletteHarness({ window: { __codemanCliCatalog: catalog, __codemanCliAvailable: available } });
+  const harness = loadPaletteHarness(
+    { window: { __codemanCliCatalog: catalog, __codemanCliAvailable: available } },
+    options
+  );
   // Mirrors settings-ui.js isCliAvailable(): unknown reads as available.
   harness.app.isCliAvailable = (id: string) => available[id] !== false;
   harness.app._runMode = 'claude';
@@ -514,9 +523,11 @@ describe('Command-K new-session agent picker', () => {
     expect(elements.commandPaletteList.innerHTML).not.toContain('data-palette-agent-cycle');
   });
 
-  it('keeps the Run button mode when the host offers a single other agent (a Docker case)', async () => {
-    // The host has only Shell, while a Docker case's Run menu put the Run
-    // button on the container's claude: Enter must still start claude.
+  it('keeps the Run button mode when a single other agent is offered', async () => {
+    // Only Shell is offered while the Run button names claude: with nothing to
+    // pick between, the row keeps the Run button's mode, as before the picker
+    // existed, so run() answers a missing claude with its install hint instead
+    // of the palette silently starting Shell.
     const { app, elements } = loadAgentPalette(PALETTE_CATALOG.slice(0, 2));
     app.isCliAvailable = (id: string) => id !== 'claude';
     let modeDuringRun: string | undefined;
@@ -534,6 +545,128 @@ describe('Command-K new-session agent picker', () => {
     await app.activateCommandPaletteItem(index);
     expect(modeDuringRun).toBe('claude');
     expect(app._runMode).toBe('claude');
+  });
+});
+
+/** The toolbar Run menu's entries, as renderRegistryRunOptions() and index.html draw them. */
+function fakeRunMenu(modes: string[]) {
+  const options = modes.map((mode) => ({ dataset: { mode }, style: { display: 'PRISTINE' } }));
+  return {
+    options,
+    querySelectorAll: (selector: string) => (selector === '.run-mode-option[data-mode]' ? options : []),
+    querySelector: () => null,
+    prepend: vi.fn(),
+  };
+}
+const shownByRunMenu = (menu: ReturnType<typeof fakeRunMenu>) =>
+  menu.options.filter((option) => option.style.display === 'flex').map((option) => option.dataset.mode);
+
+/**
+ * A palette with session-ui.js loaded, so the agent list goes through the Run
+ * menu's real availability rule. Host flags as in loadAgentPalette (no codex
+ * here); the active case is a Docker case with the given `docker` record.
+ */
+function loadDockerPalette(docker: Record<string, any>) {
+  const harness = loadAgentPalette(PALETTE_CATALOG, { sessionUi: true });
+  harness.app.cases = [
+    { name: 'plex-previews' },
+    { name: 'far', location: 'remote' },
+    { name: 'dock', location: 'docker', docker },
+  ];
+  harness.elements.quickStartCase.value = 'dock';
+  harness.app.selectQuickStartCase = vi.fn();
+  // The Run menu's live container probe is a docker exec round trip; here it
+  // never lands, which is also what a probe still in flight looks like.
+  harness.app._probeDockerCaseModes = vi.fn();
+  return harness;
+}
+
+const ADOPTED = { owned: false, hostId: 'local', container: 'dev-box', availableModes: ['shell', 'claude', 'codex'] };
+
+describe('Command-K new-session agents follow the Run menu for the row case', () => {
+  it('offers a Docker case its container agents and starts on a container-only Run mode', async () => {
+    // codex is missing on the host but ships in the container, and the Run
+    // button is on it (picked from the Run menu, which gates on the container).
+    const { app, elements } = loadDockerPalette(ADOPTED);
+    app._runMode = 'codex';
+    let modeDuringRun: string | undefined;
+    app.run = vi.fn(async () => {
+      modeDuringRun = app._runMode;
+    });
+
+    app.openCommandPalette();
+    elements.commandPaletteSearch.value = 'nomatch';
+    app.renderCommandPalette();
+    const index = app.commandPaletteItems.findIndex((i: any) => i.type === 'new-session');
+
+    expect(app._commandPaletteAgentChoices('dock').map((c: any) => c.id)).toEqual(['claude', 'shell', 'codex']);
+    expect(app.commandPaletteItems[index]).toMatchObject({
+      caseName: 'dock',
+      mode: 'codex',
+      subtitle: 'Run Codex in dock',
+    });
+    expect(elements.commandPaletteList.innerHTML).toContain('run-mode-dot codex');
+
+    // The same agents the Run menu shows for this case.
+    const menu = fakeRunMenu(['claude', 'codex', 'opencode', 'shell']);
+    app._refreshRunModeAvailability(menu);
+    expect(shownByRunMenu(menu)).toEqual(['claude', 'codex']);
+
+    await app.activateCommandPaletteItem(index);
+    expect(modeDuringRun).toBe('codex');
+    expect(app._runMode).toBe('codex');
+  });
+
+  it('offers every enabled agent for an owned container nothing has probed yet, and then follows the probe', () => {
+    // An owned container runs the base image, which ships every CLI, and before
+    // its first session there is nothing to probe: like the Run menu, an unknown
+    // list does not gate, so a probe still in flight cannot empty the row.
+    const { app } = loadDockerPalette({ owned: true, hostId: 'local', container: 'codeman-dock' });
+    app._runMode = 'codex';
+
+    app.openCommandPalette();
+
+    expect(app._commandPaletteAgentChoices('dock').map((c: any) => c.id)).toEqual([
+      'claude',
+      'shell',
+      'codex',
+      'opencode',
+    ]);
+    expect(app.commandPaletteItems.find((i: any) => i.type === 'new-session').mode).toBe('codex');
+    // The palette reads what the Run menu learned; it never starts a docker exec itself.
+    expect(app._probeDockerCaseModes).not.toHaveBeenCalled();
+    const menu = fakeRunMenu(['claude', 'codex', 'opencode', 'shell']);
+    app._refreshRunModeAvailability(menu);
+    expect(shownByRunMenu(menu)).toEqual(['claude', 'codex', 'opencode']);
+
+    // Once the live probe has landed, both follow it.
+    app._dockerCaseModes = { dock: ['shell', 'opencode'] };
+    expect(app._commandPaletteAgentChoices('dock').map((c: any) => c.id)).toEqual(['shell', 'opencode']);
+    app._refreshRunModeAvailability(menu);
+    expect(shownByRunMenu(menu)).toEqual(['opencode']);
+  });
+
+  it('keeps the host rule for local and remote cases, and follows the case the query names', () => {
+    const { app, elements } = loadDockerPalette(ADOPTED);
+    elements.quickStartCase.value = 'plex-previews';
+    app._runMode = 'codex'; // missing on the host
+    const row = () => app.commandPaletteItems.find((i: any) => i.type === 'new-session');
+
+    app.openCommandPalette();
+
+    expect(app._commandPaletteAgentChoices('plex-previews').map((c: any) => c.id)).toEqual([
+      'claude',
+      'shell',
+      'opencode',
+    ]);
+    expect(app._commandPaletteAgentChoices('far').map((c: any) => c.id)).toEqual(['claude', 'shell', 'opencode']);
+    expect(row()).toMatchObject({ caseName: 'plex-previews', mode: 'claude' });
+
+    // Typing the Docker case's name moves the row there, where the container
+    // has the Run button's codex, so the row starts on it.
+    elements.commandPaletteSearch.value = 'dock';
+    app.renderCommandPalette();
+    expect(row()).toMatchObject({ caseName: 'dock', mode: 'codex' });
   });
 });
 

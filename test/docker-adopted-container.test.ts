@@ -299,8 +299,8 @@ describe('adopted container: run modes come from the CONTAINER, not the host', (
    * exactly what happened twice: a comment added above the assertion pushed the
    * asserted line past the cutoff and CI failed on a test that was still true.
    */
-  const refreshFn = (src) => {
-    const start = src.indexOf('_refreshRunModeAvailability(menu) {');
+  const methodFn = (src, signature) => {
+    const start = src.indexOf(signature);
     expect(start).toBeGreaterThan(-1);
     const open = src.indexOf('{', start);
     let depth = 0;
@@ -308,23 +308,30 @@ describe('adopted container: run modes come from the CONTAINER, not the host', (
       if (src[i] === '{') depth++;
       else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
     }
-    throw new Error('unbalanced braces in _refreshRunModeAvailability');
+    throw new Error(`unbalanced braces in ${signature}`);
   };
+  // The per-mode decision lives in ONE helper, shared by the Run menu and the
+  // Cmd+K new-session row (panels-ui.js), so the two cannot drift apart.
+  const ruleFn = (src) => methodFn(src, '_runModeAvailableForCase(mode, caseName) {');
 
   it('gates a docker case on availableModes instead of host CLI probes', () => {
     // The sandbox host had codex but no claude while the adopted container had
     // claude and no codex; gating on the host hid the only mode that worked.
-    const fn = refreshFn(ui);
+    const fn = ruleFn(ui);
     expect(fn).toContain("location === 'docker'");
     expect(fn).toContain('availableModes');
     // Non-docker cases must keep the original host probe (#201).
     expect(fn).toContain('this.isCliAvailable(mode)');
+    // And the Run menu asks that helper rather than keeping its own copy.
+    expect(methodFn(ui, '_refreshRunModeAvailability(menu) {')).toContain(
+      'this._runModeAvailableForCase(mode, caseName)'
+    );
   });
 
   it('leaves an owned container ungated when nothing was probed', () => {
     // Our base image ships every CLI, so an absent list means "unknown", and
     // treating unknown as "nothing available" would empty the menu.
-    expect(refreshFn(ui)).toMatch(/containerModes \?[^:]*:\s*true/);
+    expect(ruleFn(ui)).toMatch(/containerModes \?[^:]*:\s*true/);
   });
 });
 
