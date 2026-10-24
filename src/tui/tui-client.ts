@@ -1111,7 +1111,10 @@ export class TuiClient {
     try {
       const { stdout } = await this.exec('tmux', ['-L', this.socket, 'show-hooks', '-g']);
       const hook = stdout.split('\n').find((line) => line.startsWith(`${TUI_SWITCH_ATTACH_HOOK} `));
-      if (hook?.includes(clientTty)) {
+      // The closed form, not the bare tty: `/dev/pts/4` is a substring of a
+      // hook armed for `/dev/pts/41`, and removing that one would leave the
+      // second TUI's Alt keys dead for its whole attach.
+      if (hook?.includes(`#{client_tty},${clientTty}}`)) {
         await this.exec('tmux', ['-L', this.socket, 'set-hook', '-gu', TUI_SWITCH_ATTACH_HOOK]);
       }
     } catch {

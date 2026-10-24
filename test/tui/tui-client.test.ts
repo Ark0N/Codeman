@@ -690,6 +690,27 @@ describe('TUI switch-key guard', () => {
     expect(hook).toContain('\\#{client_pid}');
     expect(hook).toContain('set-hook -gu client-attached[90]');
   });
+
+  it('disarms only the hook armed for its own tty, not one for a tty it is a prefix of', async () => {
+    // `/dev/pts/4` is a substring of `/dev/pts/41`: a bare includes() removed a
+    // second TUI's hook and left its Alt keys dead for that attach.
+    const disarm = async (armedFor: string, ownTty: string): Promise<string[][]> => {
+      const calls: string[][] = [];
+      const exec: TuiExecFile = async (_file, args) => {
+        calls.push([...args]);
+        if (args.includes('show-hooks')) {
+          return { stdout: `client-attached[90] ${tuiSwitchAttachHook(armedFor)}\n`, stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      };
+      await new TuiClient({ baseUrl, socket: 'codeman-beta', exec }).disarmTuiSwitchGuard(ownTty);
+      return calls.filter((args) => args.includes('set-hook'));
+    };
+    expect(await disarm('/dev/pts/41', '/dev/pts/4')).toEqual([]);
+    expect(await disarm('/dev/pts/4', '/dev/pts/4')).toEqual([
+      ['-L', 'codeman-beta', 'set-hook', '-gu', 'client-attached[90]'],
+    ]);
+  });
 });
 
 describe('parsePrefixBinding', () => {

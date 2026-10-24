@@ -638,6 +638,8 @@ describe('attach switch keys stay on the TUI client', () => {
     const unbinds: Array<{ key: string; owner: string | undefined }> = [];
     let armed: string | null = null;
     let disarmed: string | null = null;
+    // tmux calls in order, to pin where the attach hook is armed.
+    const order: string[] = [];
     const client = {
       readPrefixKey: async () => 'C-b',
       readDetachKey: async () => 'd',
@@ -645,6 +647,7 @@ describe('attach switch keys stay on the TUI client', () => {
       bindDetachKey: async () => true,
       unbindDetachKey: async () => true,
       armTuiSwitchGuard: async (tty: string) => {
+        order.push('arm');
         armed = tty;
         return true;
       },
@@ -652,6 +655,7 @@ describe('attach switch keys stay on the TUI client', () => {
         disarmed = tty;
       },
       bindSwitchKey: async (key: string, target: string, tty: string) => {
+        order.push('bind');
         binds.push({ key, target, tty });
         return true;
       },
@@ -659,11 +663,17 @@ describe('attach switch keys stay on the TUI client', () => {
         unbinds.push({ key, owner });
       },
       readSessionOptions: async () => null,
-      applySessionOptions: async () => true,
+      applySessionOptions: async () => {
+        order.push('dress');
+        return true;
+      },
       restoreSessionOptions: async () => true,
       readWindowSizing: async () => null,
       presizeWindow: async () => true,
-      followAttachingClient: async () => true,
+      followAttachingClient: async () => {
+        order.push('follow');
+        return true;
+      },
       restoreWindowSizing: async () => true,
     } as unknown as TuiClient;
 
@@ -681,6 +691,10 @@ describe('attach switch keys stay on the TUI client', () => {
       '/dev/pts/4'
     );
     expect(armed).toBe('/dev/pts/4');
+    // Armed once, as the LAST tmux call of the handoff: a TUI killed while the
+    // bars were being dressed must not leave a one-shot hook for its tty that a
+    // browser tab's attach on a reused pty would fire.
+    expect(order).toEqual(['bind', 'bind', 'dress', 'follow', 'dress', 'arm']);
     expect(binds).toEqual([
       { key: 'M-1', target: 'codeman-aaaa1111', tty: '/dev/pts/4' },
       { key: 'M-2', target: 'codeman-bbbb2222', tty: '/dev/pts/4' },

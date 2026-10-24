@@ -1231,7 +1231,7 @@ export function remoteTmuxLocation(remote: SessionRemote, sessionId: string): { 
  *        \; set -t codeman-ssh-<id> status off \; set -t codeman-ssh-<id> mouse off \
  *        \; set -t codeman-ssh-<id> prefix C-q \; set -s escape-time 0 \; \
  *        bind-key -T prefix C-q send-prefix \; unbind-key -a -T prefix \; \
- *        bind-key -T prefix C-q send-prefix'
+ *        bind-key -T prefix C-q send-prefix \; set -t codeman-ssh-<id> remain-on-exit failed'
  *
  * COD-107 — the connection options (`-p`, `-i`, `-J`, SOCKS `-o ProxyCommand`,
  * arbitrary `-o`) come from the shared `buildSshConnectionArgs(remote)`, so the

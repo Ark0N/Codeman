@@ -96,7 +96,8 @@ ssh -o BatchMode=yes -t <connection-args> user@host \
      set -t codeman-ssh-<id8> prefix C-q \; set -s escape-time 0 \; \
      set -t codeman-ssh-<id8> window-size latest \; \
      bind-key -T prefix C-q send-prefix \; unbind-key -a -T prefix \; \
-     bind-key -T prefix C-q send-prefix'
+     bind-key -T prefix C-q send-prefix \; \
+     set -t codeman-ssh-<id8> remain-on-exit failed'
 ```
 
 Key points:

@@ -154,7 +154,9 @@ describe.skipIf(!hasTmux)('TUI M-1..M-9 switch only the attaching client', () =>
     expect(await client.armTuiSwitchGuard(tty)).toBe(true);
     const hooks = run(['show-hooks', '-g']);
     expect(hooks).toContain('client-attached[90]');
-    expect(hooks).toContain(tty);
+    // The closed form, as stored: disarmTuiSwitchGuard matches on it, so a
+    // hook for /dev/pts/41 is not taken for /dev/pts/4's.
+    expect(hooks).toContain(`#{client_tty},${tty}}`);
     // The stored hook still names the format. Expanding it while the hook is
     // stored would save an empty pid (no client yet) and the guard would never match.
     expect(hooks).toContain('#{client_pid}');
@@ -226,5 +228,14 @@ describe.skipIf(!hasTmux)('TUI M-1..M-9 switch only the attaching client', () =>
     await client.disarmTuiSwitchGuard(tty);
     expect(run(['list-keys', '-T', 'root'])).not.toContain(`switch-client -t ${beta}`);
     expect(() => run(['show-options', '-gv', '@codeman-tui-pid'])).toThrow();
+
+    // A hook armed for a tty this one is a prefix of (pts/4 vs pts/41) is
+    // another TUI's, and this tty's disarm must leave it.
+    const longer = `${tty}1`;
+    expect(await client.armTuiSwitchGuard(longer)).toBe(true);
+    await client.disarmTuiSwitchGuard(tty);
+    expect(run(['show-hooks', '-g'])).toContain('client-attached[90]');
+    await client.disarmTuiSwitchGuard(longer);
+    expect(run(['show-hooks', '-g'])).not.toContain('client-attached[90]');
   });
 });

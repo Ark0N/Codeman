@@ -603,9 +603,9 @@ export async function beginAttachHandoff(
   const tty = clientTty === undefined ? readControllingTty() : clientTty || null;
   const switchTabs = tabs.slice(0, 9).filter((tab) => tab.index >= 1 && tab.index <= 9 && tab.muxName);
   const guarded = Boolean(tty && isTuiClientTty(tty));
-  if (!guarded) {
-    for (let index = 1; index <= 9; index++) await client.unbindSwitchKey(`M-${index}`, '');
-  } else if (switchTabs.length > 0 && (await client.armTuiSwitchGuard(tty as string))) {
+  // The keys are bound here but stay inert until the attach hook records this
+  // client's pid, and that hook is armed at the very end (see below).
+  if (guarded && switchTabs.length > 0) {
     for (let index = 1; index <= 9; index++) await client.unbindSwitchKey(`M-${index}`);
     for (const tab of switchTabs) {
       const key = `M-${tab.index}`;
@@ -660,6 +660,15 @@ export async function beginAttachHandoff(
     if (cols && rows && rows > 1) await client.presizeWindow(target, cols, rows - 1);
     if (target === muxName) await client.followAttachingClient(target);
   }
+  // ⚠️ Armed LAST, as the final tmux call before the caller's `spawnSync`. The
+  // hook is one-shot for this tty, so a TUI killed between arming and attaching
+  // leaves it armed, and Linux hands the lowest free pty to the next opener: a
+  // browser tab's attach client could land on this tty and have its pid
+  // recorded, which would make these keys move that tab. Arming after the
+  // dressing loop above shrinks that window to the attach's own startup. A
+  // failed arm leaves the keys inert (the closed direction), and `restore()`
+  // still unbinds them.
+  if (switchKeys.length > 0) await client.armTuiSwitchGuard(tty as string);
   return {
     chord: oneKey ? ONE_KEY_DETACH : fallbackDetachChord(prefix, detachKey, claimed && alias ? alias : undefined),
     async restore(): Promise<void> {
