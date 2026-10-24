@@ -215,9 +215,10 @@
   //    (`ev.touchId`, set by the touch paths per touchstart and carried by that
   //    contact's momentum; a wheel event has none, so wheel and touch never
   //    share a gesture), or, for events outside any contact, after quiet:
-  //    PAGE_KEY_GESTURE_GAP_MS, stretched to PAGE_KEY_DEBT_MS while a pre-paid
-  //    page is still owed in the same direction. One contact is never split by
-  //    time, so a slow drag (one line per 170 ms) is one gesture;
+  //    PAGE_KEY_GESTURE_GAP_MS, stretched to PAGE_KEY_DEBT_MS (PAGE_KEY_NOTCH_DEBT_MS
+  //    when a notch-sized opener pre-paid it) while a pre-paid page is still owed
+  //    in the same direction. One contact is never split by time, so a slow drag
+  //    (one line per 170 ms) is one gesture;
   //  - a new gesture's opening event (at least PAGE_KEY_MIN_START_ROWS and
   //    under one page: a trackpad flick, or a mouse notch) pages AT ONCE,
   //    pre-paid: the half screen it skipped is owed back by the rest of the
@@ -282,8 +283,8 @@
     }
     const step = pageKeysForTravel(pending, lines, rows);
     // A debt carries the sign opposite to its direction; once the travel reaches
-    // or crosses zero it is repaid, and what is left is plain travel (so the
-    // one-second debt lifetime no longer applies).
+    // or crosses zero it is repaid, and what is left is plain travel (so neither
+    // debt lifetime, PAGE_KEY_DEBT_MS or PAGE_KEY_NOTCH_DEBT_MS, applies any more).
     if (prepaid && step.pending * dir >= 0) prepaid = false;
     return {
       state: { pending: step.pending, lastAt: now, dir, prepaid, notch: prepaid && !!prev.notch, touchId },
