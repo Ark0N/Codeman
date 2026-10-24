@@ -194,6 +194,26 @@ describe('SSE connect timeout', () => {
     expect(app.reconnectAttempts).toBe(1);
   });
 
+  it('a late error from a replaced EventSource leaves the connection that replaced it alone', () => {
+    const app = makeApp();
+    app.connectSSE();
+    const first = FakeEventSource.all[0];
+    app.connectSSE(); // e.g. the user pressed Retry
+    const second = FakeEventSource.all[1];
+    // A browser that still fires onerror on the closed first attempt.
+    first.fail();
+    expect(app.eventSource).toBe(second);
+    expect(second.closed).toBe(false);
+    expect(app.reconnectAttempts).toBe(0);
+    // No retry was scheduled, and the second attempt keeps its own deadline.
+    vi.advanceTimersByTime(TIMEOUT - 1);
+    expect(FakeEventSource.all).toHaveLength(2);
+    expect(second.closed).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(second.closed).toBe(true);
+    expect(app.reconnectAttempts).toBe(1);
+  });
+
   it('connectSSE() while offline cancels the pending timer (the online event reconnects)', () => {
     const app = makeApp();
     app.connectSSE();
