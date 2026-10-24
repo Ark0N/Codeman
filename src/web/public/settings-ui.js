@@ -658,6 +658,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowTabDetachButton').checked =
       this.tabDetachButtonEnabled?.(settings, defaults)
       ?? (settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false);
+    // The tab's "+" (applyHeaderVisibilitySettings): per-device, OFF unless switched on.
+    document.getElementById('appSettingsShowTabNewButton').checked = settings.showTabNewButton === true;
     // Detach Tiles (tile-grid.js): per-device, OFF unless switched on. The tile
     // grid is desktop-only, so the row is hidden elsewhere, like the lineage lines.
     document.getElementById('appSettingsTileDetach').checked = settings.tileDetachEnabled === true;
@@ -2978,6 +2980,7 @@ Object.assign(CodemanApp.prototype, {
       tabArrangement: document.getElementById('appSettingsTabArrangement').value,
       tabStateOrder: document.getElementById('appSettingsTabStateOrder').value,
       showTabDetachButton: document.getElementById('appSettingsShowTabDetachButton').checked,
+      showTabNewButton: document.getElementById('appSettingsShowTabNewButton').checked,
       tileDetachEnabled: document.getElementById('appSettingsTileDetach').checked,
       sessionListLayout: document.getElementById('appSettingsSessionListLayout').value,
       sessionSidebarFontSize: this.resolveSessionSidebarFontSize(
@@ -3249,6 +3252,7 @@ Object.assign(CodemanApp.prototype, {
       gitStatusMaxRepos: _gsm,
       gitStatusTimeoutSeconds: _gst2,
       showTabDetachButton: _tdb,
+      showTabNewButton: _tnb,
       // Detach Tiles: what a tile drag does is a property of this device's
       // windows, and the key is absent from the .strict() SettingsUpdateSchema.
       tileDetachEnabled: _tde,
@@ -4387,6 +4391,9 @@ Object.assign(CodemanApp.prototype, {
       this.tabDetachButtonEnabled?.(settings, defaults)
       ?? (settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false);
     document.documentElement.classList.toggle('tabs-show-detach', showTabDetach);
+    // The tab's "+" (new session beside it): per-device and opt-in everywhere,
+    // like the pop-out button. On a phone it also widens the active tab (mobile.css).
+    document.documentElement.classList.toggle('tabs-show-new', settings.showTabNewButton === true);
     const compactHeader = MobileDetection.getDeviceType() !== 'desktop';
     const showFontControls = compactHeader ? false : (settings.showFontControls ?? defaults.showFontControls ?? false);
     const showSystemStats = compactHeader ? false : (settings.showSystemStats ?? defaults.showSystemStats ?? true);
@@ -4904,6 +4911,7 @@ Object.assign(CodemanApp.prototype, {
       'autoCopySelection', 'copyStripMargin',
       'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree', 'gitStatusMaxRepos', 'gitStatusTimeoutSeconds',
       'showTabDetachButton',
+      'showTabNewButton',
       'mobileOverviewEnabled',
       'sessionLineageLines',
       'showSplitButton',

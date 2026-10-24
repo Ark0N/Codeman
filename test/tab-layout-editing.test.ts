@@ -910,6 +910,22 @@ describe('group menu', () => {
       expect(app._tabGroupMenuKeydown).toBeNull();
     });
 
+    it("Safari's item click (a blur with nowhere to go) keeps the menu open, so the item still runs", () => {
+      // Safari never focuses a clicked button: the press blurs the focused item
+      // with relatedTarget null, and closing on that dropped the click.
+      installFetch();
+      const app = makeApp();
+      open(app);
+      app.startTabGroupRename = vi.fn();
+      const buttons = document.querySelectorAll<HTMLElement>('.tab-layout-group-action-menu button');
+      const rename = [...buttons].find((button) => button.textContent === 'Rename group')!;
+      buttons[0].dispatchEvent(new win.FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
+      expect(isOpen()).toBe(true);
+      rename.click();
+      expect(app.startTabGroupRename).toHaveBeenCalledWith('gx');
+      expect(isOpen()).toBe(false);
+    });
+
     it('a pointer outside, Tab, focus leaving, a resize, a second open and a re-render all close it', () => {
       installFetch();
       const app = makeApp();

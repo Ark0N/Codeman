@@ -2992,6 +2992,33 @@ html[data-header-stats] .header-system-stats .stat-item[hidden] {
   transform: rotate(45deg);
 }
 
+/* "+" (new session beside this tab, app.openTabNewSessionMenu): same reveal as the gear. */
+.session-tab .tab-new {
+  opacity: 0;
+  width: 0;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  overflow: hidden;
+  transition: opacity 0.15s, width 0.15s, padding 0.15s;
+}
+.session-tab.active .tab-new {
+  opacity: 1;
+  width: auto;
+  padding: 0 0.3rem;
+}
+.session-tab .tab-new:hover {
+  color: var(--accent-hover);
+}
+
+/* Per-device toggle (App Settings → Tab Bar), mirrored as tabs-show-new on <html>
+   by settings-ui.js. !important so no layout's reveal rule (sidebar, touch) wins. */
+html:not(.tabs-show-new) .session-tab .tab-new {
+  display: none !important;
+}
+
 /* ===== Session detach / undock (beta/session-detach) ===================== */
 
 /* Pop-out (detach) icon on each tab — mirrors .tab-gear reveal-on-hover. */
@@ -3145,7 +3172,7 @@ html[data-tab-orientation='vertical']:not(.tab-rail-compact) .tab-rail
   pointer-events: auto;
 }
 
-html[data-tab-orientation='vertical'].tab-rail-compact .session-tab .tab-actions > :is(.tab-gear, .tab-detach, .tab-close) {
+html[data-tab-orientation='vertical'].tab-rail-compact .session-tab .tab-actions > :is(.tab-gear, .tab-new, .tab-detach, .tab-close) {
   display: none;
 }
 
@@ -19865,6 +19892,7 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-row > .ta
    actions permanently visible on the active session — no layout jitter when
    the pointer crosses the list. */
 html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-gear,
+html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-new,
 html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-detach,
 html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-close {
   opacity: 1;
@@ -20379,6 +20407,7 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .se
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-info,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-number,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-gear,
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-new,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-detach,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-close {
   display: none;
