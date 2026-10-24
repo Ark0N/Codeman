@@ -1,6 +1,6 @@
 /**
- * @fileoverview src/case-rename.ts: the in-process lock, the retried folder move and Claude history
- * migration. Real filesystem under test/setup.ts's temp HOME. Port: N/A.
+ * @fileoverview src/case-rename.ts: the in-process lock, the record of sessions still being created, the
+ * retried folder move and Claude history migration. Real filesystem under test/setup.ts's temp HOME. Port: N/A.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -9,9 +9,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   CaseRenameError,
+  caseSessionSettled,
   claudeProjectDirName,
   isCasePathLocked,
+  isCaseSessionStarting,
   moveCaseFolder,
+  noteCaseSessionStarting,
   moveClaudeHistory,
   renameInOrder,
   siblingPath,
@@ -75,6 +78,32 @@ describe('withCaseLock', () => {
       expect(() => new Session({ workingDir: from })).toThrow(/being renamed/);
       expect(() => new Session({ workingDir: join(from, 'sub') })).toThrow(/being renamed/);
     });
+  });
+});
+
+describe('sessions still being created', () => {
+  it('counts a constructed session as starting in its folder until the server settles it', () => {
+    const root = tmp();
+    const dir = join(root, 'case');
+    const session = new Session({ workingDir: join(dir, 'sub') });
+    expect(isCaseSessionStarting(dir)).toBe(true);
+    expect(isCaseSessionStarting(join(dir, 'sub'))).toBe(true);
+    expect(isCaseSessionStarting(join(dir, 'other'))).toBe(false);
+    expect(isCaseSessionStarting(`${dir}-2`)).toBe(false);
+    caseSessionSettled(session);
+    expect(isCaseSessionStarting(dir)).toBe(false);
+  });
+
+  it('lets go of a session that is stopped, and of one never registered once a while has passed', async () => {
+    const root = tmp();
+    const stopped = new Session({ workingDir: root });
+    await stopped.stop();
+    expect(isCaseSessionStarting(root)).toBe(false);
+    // a create that failed before registering, or a one-shot prompt that never registers
+    const lost = {};
+    noteCaseSessionStarting(lost, root, 1000);
+    expect(isCaseSessionStarting(root, 1000 + 29_999)).toBe(true);
+    expect(isCaseSessionStarting(root, 1000 + 30_000)).toBe(false);
   });
 });
 

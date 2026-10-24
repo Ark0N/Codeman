@@ -10,6 +10,8 @@
  *
  * - the in-process lock (`withCaseLock` / `isCasePathLocked`) that keeps a session from starting in a
  *   folder while it is being moved, and two renames from overlapping;
+ * - the record of sessions constructed but not yet registered (`isCaseSessionStarting`), which a
+ *   rename refuses to move a folder under, since it can neither list nor stop them;
  * - the move itself, retried a few times for a transient lock and turned into a message that says
  *   what to do when it is a real one;
  * - carrying Claude Code's history for the folder over to the new path.
@@ -50,6 +52,43 @@ export function isCasePathLocked(path: string): boolean {
   const target = resolve(path);
   for (const held of locked) {
     if (within(target, held)) return true;
+  }
+  return false;
+}
+
+/**
+ * Sessions constructed but not yet in the server's session map, where the rename route looks for the
+ * sessions it must list or stop. A create awaits a few things between `new Session` and that map (the
+ * owner's layout lock, a settings read), and a rename that ran in that gap neither saw nor stopped the
+ * session, moved the folder, and left it to start in a path that no longer existed.
+ */
+const starting = new Map<object, { path: string; until: number }>();
+/** A session that never reaches the map (a create that failed, a one-shot prompt) stops counting after this. */
+const STARTING_TTL_MS = 30000;
+
+const dropExpiredStarts = (now: number): void => {
+  for (const [session, entry] of starting) {
+    if (entry.until <= now) starting.delete(session);
+  }
+};
+
+/** `session` (any object standing for it) is being created with `workingDir`; `Session`'s constructor calls this. */
+export function noteCaseSessionStarting(session: object, workingDir: string, now = Date.now()): void {
+  dropExpiredStarts(now);
+  starting.set(session, { path: resolve(workingDir), until: now + STARTING_TTL_MS });
+}
+
+/** `session` is in the server's session map (or was stopped): the rename route sees it from here on. */
+export function caseSessionSettled(session: object): void {
+  starting.delete(session);
+}
+
+/** True when a session is being created at or inside `path`, so a rename of it must wait. */
+export function isCaseSessionStarting(path: string, now = Date.now()): boolean {
+  dropExpiredStarts(now);
+  const root = resolve(path);
+  for (const entry of starting.values()) {
+    if (within(entry.path, root)) return true;
   }
   return false;
 }

@@ -55,6 +55,7 @@ import { generateClaudeMd } from '../../templates/claude-md.js';
 import { prepareNewCasePath } from '../case-path.js';
 import {
   CaseRenameError,
+  isCaseSessionStarting,
   moveCaseFolder,
   moveClaudeHistory,
   renameInOrder,
@@ -1847,6 +1848,14 @@ export function registerCaseRoutes(
       : [];
     if (open.some((s) => !canAccessOwned(user, s.owner))) {
       return fail(403, ApiErrorCode.FORBIDDEN, "Another user's session has this case open");
+    }
+    // A session being created in the folder is not in ctx.sessions yet, so it could be neither listed nor
+    // stopped: it would start in the old path after the move. Checked in the same tick that takes the lock
+    // below (nothing is awaited in between), and the Session constructor refuses the folder from then on.
+    if (moveFolder && isCaseSessionStarting(oldPath)) {
+      return fail(409, ApiErrorCode.CONFLICT, 'A session is starting in this case. Try again in a moment.', {
+        renameCode: 'BUSY',
+      });
     }
     if (open.length > 0 && !body.stopSessions) {
       return fail(

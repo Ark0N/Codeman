@@ -22,7 +22,8 @@ import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerCaseRoutes } from '../../src/web/routes/case-routes.js';
 import { dataPath } from '../../src/config/instance.js';
 import { SETTINGS_PATH, resolveCasesDir } from '../../src/web/route-helpers.js';
-import { claudeProjectDirName } from '../../src/case-rename.js';
+import { caseSessionSettled, claudeProjectDirName } from '../../src/case-rename.js';
+import { Session } from '../../src/session.js';
 import { safeRmHomeTree } from '../mocks/index.js';
 
 const LINKED = () => dataPath('linked-cases.json');
@@ -156,6 +157,28 @@ describe('POST /api/cases/:name/rename (a case under the cases directory)', () =
     expect(existsSync(join(CASES_DIR(), 'beta'))).toBe(true);
   });
 
+  it('refuses to move a folder a session is still being created in, since it can neither list nor stop it', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerCaseRoutes);
+    const oldDir = localCase('alpha');
+    // Constructed but not in ctx.sessions yet: the gap a create spends awaiting the layout lock and settings.
+    const session = new Session({ workingDir: join(oldDir, 'sub') });
+    try {
+      const busy = await rename(app, 'alpha', { newName: 'beta', stopSessions: true });
+      expect(busy.statusCode).toBe(409);
+      expect(busy.json()).toMatchObject({ errorCode: 'CONFLICT', renameCode: 'BUSY' });
+      expect(existsSync(oldDir)).toBe(true);
+      expect(ctx.cleanupSession).not.toHaveBeenCalled();
+      // once registered it is an open session like any other: listed, and stopped only on request
+      (ctx.sessions as Map<string, unknown>).set(session.id, session);
+      caseSessionSettled(session);
+      const listed = await rename(app, 'alpha', { newName: 'beta' });
+      expect(listed.statusCode).toBe(409);
+      expect(listed.json()).toMatchObject({ requiresStop: true, sessions: [{ id: session.id }] });
+    } finally {
+      caseSessionSettled(session);
+    }
+  });
+
   it('does not stop a remote session whose remote path equals the local folder', async () => {
     const { app, ctx } = await createRouteTestHarness(registerCaseRoutes);
     const dir = localCase('alpha');
@@ -213,6 +236,23 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     expect(linked()).toEqual({ other: join(work, 'o'), renamed: real });
     expect(existsSync(real)).toBe(true);
     expect(ctx.cleanupSession).not.toHaveBeenCalled();
+  });
+
+  it('renames only the alias while a session is being created in the folder, which an alias rename leaves alone', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    const real = join(work, 'my-project');
+    mkdirSync(real);
+    writeFileSync(LINKED(), JSON.stringify({ proj: real }));
+    const session = new Session({ workingDir: real });
+    try {
+      expect((await rename(app, 'proj', { newName: 'renamed' })).statusCode).toBe(200);
+      expect((await rename(app, 'renamed', { newName: 'moved', renameFolder: true })).json()).toMatchObject({
+        renameCode: 'BUSY',
+      });
+      expect(existsSync(real)).toBe(true);
+    } finally {
+      caseSessionSettled(session);
+    }
   });
 
   it('renames the real folder too, next to the old one, when asked', async () => {

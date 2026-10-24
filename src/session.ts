@@ -151,7 +151,7 @@ import {
 } from './session-attachment-history.js';
 import type { SessionAttachmentHistoryItem, DisplayModel } from './types/session.js';
 import { resolveConfigModel } from './model-config-resolvers.js';
-import { isCasePathLocked } from './case-rename.js';
+import { caseSessionSettled, isCasePathLocked, noteCaseSessionStarting } from './case-rename.js';
 import { legacyConfigForMode } from './session-cli-registry-bridge.js';
 import {
   launchModelFor,
@@ -954,6 +954,10 @@ export class Session extends EventEmitter {
     if (config.workingDir && isCasePathLocked(config.workingDir)) {
       throw new Error(`The case folder ${config.workingDir} is being renamed. Try again in a moment.`);
     }
+    // And a rename must not start until this session is in the server's map, where it can be listed and
+    // stopped: until registerSessionWithLayout() (or stop()) settles it, the rename route refuses the move.
+    // A remote session's workingDir is the remote path, which the route never counts as the folder's.
+    if (config.workingDir && !config.remote) noteCaseSessionStarting(this, config.workingDir);
     this.setMaxListeners(25);
 
     // Default error handler prevents unhandled 'error' events from crashing the process.
@@ -5181,6 +5185,8 @@ export class Session extends EventEmitter {
   async stop(killMux: boolean = true): Promise<void> {
     // Set stopped flag first to prevent new timers from being created
     this._isStopped = true;
+    // A session stopped before it was registered (a create that failed) no longer holds up a case rename.
+    caseSessionSettled(this);
     // A pane that is gone is watching nothing. Nothing probes a stopped session, so
     // without this the last chip it drew would ride along on its row forever.
     this._watching = null;

@@ -41,7 +41,8 @@ Remote and Docker cases cannot be renamed. Renaming does the following for you:
   refused and lists them; you can then choose to stop them. That closes them the way closing their tabs
   does (nothing is restarted, and the last one to close removes the files attached to prompts in the
   case's `.codeman-uploads`). While a rename runs, Codeman holds the folder so no session can start
-  inside it half-moved.
+  inside it half-moved. A session that is just being started there stops the rename, which says so;
+  trying again a moment later lists that session with the others.
 - **A folder another program holds open is reported, not forced.** On Windows, SMB shares and some FUSE
   mounts a directory with an open handle cannot be renamed; Codeman retries briefly, then says the folder
   is in use and to close whatever has it (a terminal, an editor, a file browser, a sync client).

@@ -242,6 +242,7 @@ import {
 } from './routes/index.js';
 import { isLostWebviewFrameNavigation } from './webview-proxy.js';
 import { CronService } from '../cron/cron-service.js';
+import { caseSessionSettled } from '../case-rename.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -806,6 +807,8 @@ export class WebServer extends EventEmitter {
   private async registerSessionWithLayout(session: Session, placement?: SessionPlacementHint): Promise<TabLayout> {
     return this.tabLayouts.sessionCreated(ownerLayoutKey(session.owner), session.id, placement, () => {
       this.sessions.set(session.id, session);
+      // In the map now, so a case rename lists (and on request stops) it instead of refusing the move.
+      caseSessionSettled(session);
       return () => {
         if (this.sessions.get(session.id) === session) this.sessions.delete(session.id);
       };
@@ -3957,6 +3960,7 @@ export class WebServer extends EventEmitter {
             }
 
             this.sessions.set(session.id, session);
+            caseSessionSettled(session);
             await this.setupSessionListeners(session);
 
             // Auto-attach PTY to the surviving tmux session immediately.
