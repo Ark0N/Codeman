@@ -98,10 +98,16 @@
   const PAGE_KEY_GESTURE_GAP_MS = 150;
   // ...but not for sub-row jitter (0.1 row, ~2px)...
   const PAGE_KEY_MIN_START_ROWS = 0.1;
-  // ...and only for a trackpad-sized opening event. A mouse-wheel notch (100px,
-  // 4 rows) accumulates toward half a screen as before; paging at once on it made
-  // slow notches, each its own gesture past the gap, page a full screen apiece.
+  // ...and only for a trackpad-sized opening event. A mouse-wheel notch (100px, 4 rows) also pages at
+  // once now (see PAGE_KEY_NOTCH_DEBT_MS), but is told apart from a trackpad opener by this size.
   const PAGE_KEY_IMMEDIATE_MAX_ROWS = 2;
+  // A mouse-wheel notch used to just accumulate toward half a screen, so a mouse showed nothing for the
+  // first 5 notches (7 on Firefox's 3-line notches) and a gesture of a few notches seemed dead. The first
+  // notch of a gesture now pre-pays its page like a trackpad flick does, and the notches that follow repay
+  // it: the same gesture sends the same pages, the first one sooner. The old objection was slow notches,
+  // each its own gesture past the gap, paging a full screen apiece, so a notch's debt outlives the pauses
+  // between notches for this long (a trackpad's lasts PAGE_KEY_DEBT_MS).
+  const PAGE_KEY_NOTCH_DEBT_MS = 3000;
   // A pre-paid page's debt outlives the gesture gap for this long when the next
   // event goes the SAME way, so slow small wheel ticks (40 px every 250 ms, a
   // Firefox 1-line notch) pay it back instead of each pre-paying a page of its own.
@@ -216,8 +222,10 @@
   //  - a direction change inside a gesture (a reversal within the gap, or
   //    within the same contact) drops a pre-paid debt and accumulates, never
   //    pre-paying, so a +/-3 px trackpad wobble cannot page back and forth;
-  //  - everything else, a wheel notch included, accumulates through
-  //    pageKeysForTravel, carried across notches.
+  //  - a mouse-wheel notch (any opening event under one page, past the trackpad size) pre-pays its page
+  //    the same way, and its debt lasts PAGE_KEY_NOTCH_DEBT_MS, so the notches that follow repay it
+  //    however slowly they come instead of each paging a screen of its own;
+  //  - everything else accumulates through pageKeysForTravel, carried across notches.
   // Returns { state, keys } with keys '' when nothing is due.
   function pageKeysForGesture(state, ev, lines, rows, now) {
     const prev = state || {};
@@ -239,7 +247,8 @@
       gestureStart = false; // the same contact, however long it has been
     } else {
       const quiet = now - prev.lastAt;
-      gestureStart = quiet > (prepaid && !reversed ? PAGE_KEY_DEBT_MS : PAGE_KEY_GESTURE_GAP_MS);
+      const debtMs = prev.notch ? PAGE_KEY_NOTCH_DEBT_MS : PAGE_KEY_DEBT_MS;
+      gestureStart = quiet > (prepaid && !reversed ? debtMs : PAGE_KEY_GESTURE_GAP_MS);
     }
     if (gestureStart || reversed) {
       // A pre-paid debt belongs to its gesture and its direction.
@@ -248,10 +257,17 @@
     }
     if (gestureStart) {
       const size = Math.abs(lines);
-      if (size >= PAGE_KEY_MIN_START_ROWS && size < Math.min(perPage, PAGE_KEY_IMMEDIATE_MAX_ROWS)) {
+      if (size >= PAGE_KEY_MIN_START_ROWS && size < perPage) {
         // Pre-pay one page; the skipped travel is owed back (pending carries the opposite sign).
         return {
-          state: { pending: lines - dir * perPage, lastAt: now, dir, prepaid: true, touchId },
+          state: {
+            pending: lines - dir * perPage,
+            lastAt: now,
+            dir,
+            prepaid: true,
+            notch: size >= PAGE_KEY_IMMEDIATE_MAX_ROWS,
+            touchId,
+          },
           keys: dir < 0 ? KEY_PAGE_UP : KEY_PAGE_DOWN,
         };
       }
@@ -261,7 +277,10 @@
     // or crosses zero it is repaid, and what is left is plain travel (so the
     // one-second debt lifetime no longer applies).
     if (prepaid && step.pending * dir >= 0) prepaid = false;
-    return { state: { pending: step.pending, lastAt: now, dir, prepaid, touchId }, keys: step.keys };
+    return {
+      state: { pending: step.pending, lastAt: now, dir, prepaid, notch: prepaid && !!prev.notch, touchId },
+      keys: step.keys,
+    };
   }
 
   const TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM = 4;
@@ -425,6 +444,7 @@
     PAGE_KEY_MIN_START_ROWS,
     PAGE_KEY_IMMEDIATE_MAX_ROWS,
     PAGE_KEY_DEBT_MS,
+    PAGE_KEY_NOTCH_DEBT_MS,
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
     MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR,
     MOBILE_KEYBOARD_DISMISS_TAP_SLOP,
@@ -6050,8 +6070,9 @@ Object.assign(CodemanApp.prototype, {
    * (PAGE_KEY_GESTURE_GAP_MS, or PAGE_KEY_DEBT_MS while a same-direction page is
    * still owed), a reversal after the gap or a tab switch starts a new gesture;
    * one contact is never split by time, and a quick reversal never pre-pays. A
-   * larger opening event is a wheel notch and accumulates as before, so slow
-   * notches still page once per `perPage` rows.
+   * mouse-wheel notch pages at once too, and its debt (PAGE_KEY_NOTCH_DEBT_MS) is repaid by the
+   * notches after it, so a mouse pages once per `perPage` rows of travel with the
+   * first page on the first notch, not the fifth.
    *
    * Consumed WITHOUT paging: a pinch (`ctrlKey`, how Chrome reports a trackpad
    * pinch), a mostly horizontal swipe (both deltas present, |deltaX| > |deltaY|;

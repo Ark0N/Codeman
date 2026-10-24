@@ -588,11 +588,11 @@ describe('page-key travel, cap and coalescing', () => {
     FakeFit.proposed = { cols: 80, rows: 36 };
   });
 
-  it('accumulates coarse sub-page travel before sending one page', async () => {
+  it('pages a coarse opening event at once, and the next one repays it instead of paging again', async () => {
     const { ws, mount } = await connectTile(makeApp({ 's-tile': { mode: 'opencode' } }));
 
     mount.fire('wheel', wheelLines(-10));
-    expect(flushed(ws)).toEqual([]);
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
     mount.fire('wheel', wheelLines(-10));
 
     expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
@@ -946,14 +946,14 @@ describe('rows the tile pushed above the screen itself are not history', () => {
     }
     expect(flushed(ws)).toEqual([]);
 
-    // Back on the live screen, only travel made there counts: two quarter-screen
-    // wheels are one PageUp, with nothing carried over from the wheels xterm had
-    // (the gate sits before the pending travel is touched).
+    // Back on the live screen, only travel made there counts: the first quarter-screen wheel pages at
+    // once and the second repays it, with nothing carried over from the wheels xterm had (the gate sits
+    // before the pending travel is touched).
     term.buffer.active.viewportY = baseY;
     const first = wheelLines(-6);
     mount.fire('wheel', first);
     expect(first.preventDefault).toHaveBeenCalled();
-    expect(flushed(ws)).toEqual([]);
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
     mount.fire('wheel', wheelLines(-6));
     expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
   });
