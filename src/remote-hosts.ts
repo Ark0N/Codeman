@@ -90,6 +90,19 @@ export function remoteLoginShellCommand(command: string): string {
 }
 
 /**
+ * Remote tmux runs in sshd's non-interactive shell, which may omit Homebrew and
+ * per-user binaries. Keep every remote tmux operation on the same PATH. Quoting
+ * the entire assignment preserves spaces in HOME/inherited PATH under dash too.
+ * CLI commands still use their existing login-shell/configuration handling.
+ */
+export function withRemoteTmuxPath(command: string): string {
+  return (
+    'export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; ' +
+    command
+  );
+}
+
+/**
  * The CLI text a location overlay should launch for `mode`, or null when this build has no
  * entry for it. `overlays.<location>.command` when the entry names one, otherwise the bare
  * binary — which is what every non-claude CLI wants, and why only claude declares a command.
@@ -228,7 +241,11 @@ export function buildRemoteTmuxCheckCommand(
   host: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions
 ): string {
   // ConnectTimeout is now a default of buildSshConnectionArgs (shared with the launch).
-  return [...buildSshConnectionArgs(host), remoteSshTarget(host), "'command -v tmux'"].join(' ');
+  return [
+    ...buildSshConnectionArgs(host),
+    remoteSshTarget(host),
+    shellescape(withRemoteTmuxPath('command -v tmux')),
+  ].join(' ');
 }
 
 export interface RemoteTmuxCheckResult {
@@ -368,7 +385,7 @@ export function buildRemoteSessionAliveCommand(
 ): string {
   const [ssh, ...connectionArgs] = buildSshConnectionArgs(host);
   const remoteCmd = `tmux -L codeman-remote has-session -t ${shellescape(remoteSessionName)} 2>/dev/null`;
-  return [ssh, ...connectionArgs, remoteSshTarget(host), shellescape(remoteCmd)].join(' ');
+  return [ssh, ...connectionArgs, remoteSshTarget(host), shellescape(withRemoteTmuxPath(remoteCmd))].join(' ');
 }
 
 /**
@@ -453,7 +470,7 @@ export function buildRemoteListSessionsCommand(
   // separators (tmux expands them); `2>/dev/null` is inside the quoted command.
   const remoteCmd =
     'tmux -L codeman list-sessions -F "#{session_name}\\t#{session_attached}\\t#{session_created}\\t#{session_windows}" 2>/dev/null';
-  parts.push(remoteSshTarget(host), shellescape(remoteCmd));
+  parts.push(remoteSshTarget(host), shellescape(withRemoteTmuxPath(remoteCmd)));
   return parts.join(' ');
 }
 
