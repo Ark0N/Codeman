@@ -3,7 +3,8 @@
  * submit (`sendInput`) goes in as ONE bracketed paste. Also `submitsAsKeys()`: a
  * single character is typed instead, since a selection dialog ignores a pasted `3`
  * and the Enter then confirms the highlighted option. And
- * `escapeTmuxTrailingSemicolon()`, which every literal text path runs through.
+ * `escapeTmuxTrailingSemicolon()`, which every literal text path runs through,
+ * and the `--` that ends tmux's option parsing before every `send-keys -l` text.
  *
  * Why: `send-keys -l` typed the text as an unmarked burst, and Codex's paste-burst
  * heuristic folded the Enter that followed 50 ms later into the paste as a newline,
@@ -174,19 +175,28 @@ describe('sendInput wiring', () => {
   it('types a single-character submit with send-keys -l, so a dialog answer selects', async () => {
     const body = await sendInputBody();
     const keysBranch = body.slice(body.indexOf('if (submitsAsKeys(textPart))'), body.indexOf('} else {'));
-    expect(keysBranch).toMatch(/send-keys[^`]*-l \$\{shellescape\(escapeTmuxTrailingSemicolon\(textPart\)\)\}/);
+    expect(keysBranch).toMatch(/send-keys[^`]*-l -- \$\{shellescape\(escapeTmuxTrailingSemicolon\(textPart\)\)\}/);
     expect(keysBranch).not.toContain('pasteText(');
   });
 
   it('escapes a trailing ";" on every send-keys -l in sendInput and sendInputToPane', async () => {
     const src = await source();
-    const typed = src.match(/send-keys[^`\n]*-l \$\{[^`\n]*\}/g) ?? [];
+    const typed = src.match(/send-keys[^`\n]*-l (?:-- )?\$\{[^`\n]*\}/g) ?? [];
     const inSend = [await sendInputBody(), src.slice(src.indexOf('sendInputToPane(muxName'))]
       .map((b) => b.slice(0, b.indexOf('\n  }\n')))
       .join('\n');
     const typedHere = typed.filter((cmd) => inSend.includes(cmd));
     expect(typedHere.length).toBe(4);
     for (const cmd of typedHere) expect(cmd).toContain('escapeTmuxTrailingSemicolon(textPart)');
+  });
+  // tmux parses an argument after `-l` that starts with `-` as an option, so a
+  // prompt like `-x hello` or `--help` was refused instead of typed. `--` ends
+  // option parsing; set-buffer already gets one (buildPasteTextCommands).
+  it('ends option parsing with -- before the text on every send-keys -l', async () => {
+    const src = await source();
+    const literal = src.match(/send-keys -t [^`\n]*\s-l\s[^`\n]*/g) ?? [];
+    expect(literal.length).toBe(4);
+    for (const cmd of literal) expect(cmd).toMatch(/\s-l -- \$\{shellescape\(/);
   });
 });
 
@@ -269,7 +279,7 @@ describe('sendInput line breaks', () => {
     // Without an Enter, what is left is one line, so it is typed like any other.
     const typed = managerWithSession();
     await typed.sendInput('s1', '\n\njust type');
-    expect(typed.ran).toEqual([expect.stringMatching(/ send-keys -t "codeman-abc12345" -l 'just type'$/)]);
+    expect(typed.ran).toEqual([expect.stringMatching(/ send-keys -t "codeman-abc12345" -l -- 'just type'$/)]);
   });
 
   it('leaves single-line input as it was: pasted with Enter, typed without', async () => {
@@ -281,6 +291,23 @@ describe('sendInput line breaks', () => {
     const typed = managerWithSession();
     await typed.sendInput('s1', 'just type');
     expect(typed.ran).toHaveLength(1);
-    expect(typed.ran[0]).toMatch(/ send-keys -t "codeman-abc12345" -l 'just type'$/);
+    expect(typed.ran[0]).toMatch(/ send-keys -t "codeman-abc12345" -l -- 'just type'$/);
+  });
+
+  // The argv a shell hands tmux must put `--` right before the text, or tmux reads
+  // a leading `-` as its own option and types nothing.
+  it('types text that starts with a hyphen after --, on both send-keys -l branches', async () => {
+    const keysArgv = (cmd: string) => argvOf(cmd.replace(/^.*? send-keys /, `${FAKE_TMUX} send-keys `));
+
+    const typed = managerWithSession();
+    await typed.sendInput('s1', '-x hello');
+    expect(typed.ran).toHaveLength(1);
+    expect(keysArgv(typed.ran[0]).slice(-3)).toEqual(['-l', '--', '-x hello']);
+
+    const answer = managerWithSession();
+    await answer.sendInput('s1', '-\r');
+    expect(answer.ran).toHaveLength(2);
+    expect(keysArgv(answer.ran[0]).slice(-3)).toEqual(['-l', '--', '-']);
+    expect(answer.ran[1]).toMatch(/ send-keys -t "codeman-abc12345" Enter$/);
   });
 });

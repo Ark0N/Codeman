@@ -479,9 +479,11 @@ export interface PasteTextCommands {
 
 /**
  * Escape a final `;` for tmux. tmux splits commands on an argument that ENDS in
- * `;` (`set-buffer -- 'a;'` stores `a`, `send-keys -l 'a;'` types `a`, a lone `;`
+ * `;` (`set-buffer -- 'a;'` stores `a`, `send-keys -l -- 'a;'` types `a`, a lone `;`
  * is no argument at all); a final `\;` is its escape for a literal `;`. A `;`
- * anywhere else in the argument is literal already. Exported for unit testing.
+ * anywhere else in the argument is literal already. Every `send-keys -l` passes
+ * `--` before the text, like `set-buffer`, or tmux parses a text that starts with
+ * `-` as its own options. Exported for unit testing.
  */
 export function escapeTmuxTrailingSemicolon(text: string): string {
   return text.endsWith(';') ? `${text.slice(0, -1)}\\;` : text;
@@ -3997,7 +3999,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         // highlighted option (see submitsAsKeys).
         if (submitsAsKeys(textPart)) {
           await run(
-            `${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`
+            `${this.tmux()} send-keys -t "${session.muxName}" -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`
           );
         } else {
           await pasteText(run, buildPasteTextCommands(this.tmux(), session.muxName, textPart));
@@ -4014,7 +4016,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       } else if (textPart) {
         // Text only, no Enter
         await run(
-          `${this.tmux()} send-keys -t "${session.muxName}" -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`
+          `${this.tmux()} send-keys -t "${session.muxName}" -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`
         );
       } else if (hasCarriageReturn) {
         // Enter only
@@ -4168,7 +4170,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       if (textPart && hasCarriageReturn) {
         execSync(
-          `${tmux} send-keys -t ${shellescape(target)} -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+          `${tmux} send-keys -t ${shellescape(target)} -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
           {
             encoding: 'utf-8',
             timeout: EXEC_TIMEOUT_MS,
@@ -4180,7 +4182,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         });
       } else if (textPart) {
         execSync(
-          `${tmux} send-keys -t ${shellescape(target)} -l ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
+          `${tmux} send-keys -t ${shellescape(target)} -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`,
           {
             encoding: 'utf-8',
             timeout: EXEC_TIMEOUT_MS,
