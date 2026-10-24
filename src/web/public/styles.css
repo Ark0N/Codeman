@@ -2294,10 +2294,13 @@ html[data-tab-orientation='vertical'].tab-rail-compact
 
   /* The narrower the toolbar, the less each usage reading shows (data-header-density, header-divider.js):
      tight drops the window and CPU/MEM labels, dense shortens the provider names, tiny keeps only the rings.
-     The prefix outweighs the per-style rules further down, so every header-stats style follows it. */
+     The prefix outweighs the per-style rules further down, so every header-stats style follows it.
+     The opt-in host readings (.stat-item--host: GPU, VRAM and the two clocks) keep their labels at every
+     step: their values look like CPU's and MEM's ("40%", "3.2G", "1800 MHz" beside "4200 MHz"), so the
+     label is the only thing that says which reading is which. */
   html[data-header-density]:not([data-tab-orientation='vertical']):not([data-session-list='sidebar'])
     body:not(.solo-mode)
-    :is(.header-system-stats .stat-label, .header-plan-usage .pu-label) {
+    :is(.header-system-stats .stat-item:not(.stat-item--host) .stat-label, .header-plan-usage .pu-label) {
     display: none;
   }
 
@@ -2333,6 +2336,17 @@ html[data-tab-orientation='vertical'].tab-rail-compact
     )
     body:not(.solo-mode)
     :is(.header-system-stats .stat-value, .header-plan-usage .pu-val) {
+    display: none;
+  }
+
+  /* With its value gone, a reading with no ring (the two clocks, and VRAM while its total is unknown:
+     .stat-item--ringless, toggled by panels-ui.js) would be an empty item that still takes a gap. */
+  html[data-header-stats='compact'][data-header-density='tiny']:not([data-tab-orientation='vertical']):not(
+      [data-session-list='sidebar']
+    )
+    body:not(.solo-mode)
+    .header-system-stats
+    .stat-item--ringless {
     display: none;
   }
 }

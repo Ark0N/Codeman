@@ -6961,6 +6961,8 @@ Object.assign(CodemanApp.prototype, {
     if (gpu && gpu.memUsedMB !== undefined) {
       const used = `${(gpu.memUsedMB / 1024).toFixed(1)}G`;
       const ring = this.$('statVramRing');
+      // Ringless, the Compact style's rings-only step hides the whole item (styles.css) instead of an empty one.
+      this.$('statVramItem')?.classList.toggle('stat-item--ringless', gpu.memPercent === undefined);
       if (gpu.memPercent !== undefined) {
         fill('statVram', 'statVramRing', 'statVramBar', gpu.memPercent, used);
         if (ring) ring.style.display = '';

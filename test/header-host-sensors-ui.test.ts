@@ -123,8 +123,11 @@ describe('header host sensors', () => {
     expect(els.get('statVramItem')?.hidden).toBe(false);
     expect(els.get('statVram')?.textContent).toBe('1.5G');
     expect(els.get('statVramRing')?.style.display).toBe('none');
+    // marked ringless, so the Compact style's rings-only step hides the item rather than leave an empty one
+    expect(els.get('statVramItem')?.classList.set.has('stat-item--ringless')).toBe(true);
     app._updateHostSensors({ gpu: { percent: 5, memUsedMB: 1536, memTotalMB: 8192, memPercent: 19 } });
     expect(els.get('statVramRing')?.style.display).toBe('');
+    expect(els.get('statVramItem')?.classList.set.has('stat-item--ringless')).toBe(false);
   });
 
   it('keeps polling the header stats with no session open, so CPU, MEM and the readings are never stuck at --', () => {

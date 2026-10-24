@@ -180,7 +180,9 @@ Hiding System Stats or Plan Usage still hides them in every style.
 
 The line between the session tabs and the toolbar is a handle: drag it right to narrow the toolbar
 (it wraps onto a second line and the usage readings shed their labels, then their provider names,
-then, in the Compact style, their percentages), left to widen it. Arrow keys resize it, and
+then, in the Compact style, their percentages), left to widen it. The GPU, VRAM and clock readings
+keep their labels, since their values look like CPU's and MEM's; at the narrowest Compact step a
+clock, which has no ring, is hidden. Arrow keys resize it, and
 double-click or Home resets it. It stops at the widest reading, the width is kept per device, and it
 is not shown on phones, in the sidebar layout, in the vertical rail or in a solo window.
 
