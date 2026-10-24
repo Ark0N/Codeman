@@ -18,7 +18,7 @@
  *   indicator, level meter (AnalyserNode), and elapsed timer. Two insert modes: "direct"
  *   (inject into local echo overlay or PTY) and "compose" (editable textarea overlay).
  *   Includes a temporary green Send button that replaces the settings gear icon after voice input.
- *   Web Speech API has auto-retry (up to 2x) for premature onend and iOS Safari stability check.
+ *   Web Speech API retries empty runs twice with backoff and preserves late results after Stop.
  *
  * @globals {object} ClaudeVoiceProvider
  * @globals {object} DeepgramProvider
@@ -272,8 +272,8 @@ const DeepgramProvider = {
  * DeepgramProvider's recorder. The AudioContext is constructed at 16000 Hz so the
  * browser does the resampling.
  *
- * ⚠️ Transcript frames carry the WHOLE running transcript, not deltas. Callers
- * must replace, never concatenate.
+ * Transcript frames cover the current utterance. Replace interims and append
+ * each endpoint final once; an endpoint alone does not end the recording.
  */
 const ClaudeVoiceProvider = {
   _ws: null,
@@ -287,6 +287,8 @@ const ClaudeVoiceProvider = {
   _onError: null,
   _onEnd: null,
   _finalized: false,
+  _finalizeTimeout: null,
+  _generation: 0,
 
   /** How long without any transcript before the recording gives up on its own. */
   SILENCE_MS: 6000,
@@ -296,6 +298,8 @@ const ClaudeVoiceProvider = {
    * @param {object} opts - { language, keyterms[], onResult(text, isFinal), onError(msg), onEnd(), onStream(stream) }
    */
   async start(opts) {
+    this._cleanup();
+    const generation = this._generation;
     this._onResult = opts.onResult;
     this._onError = opts.onError;
     this._onEnd = opts.onEnd;
@@ -307,10 +311,17 @@ const ClaudeVoiceProvider = {
       return;
     }
     try {
-      this._stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true }
       });
+      // Permission prompts can resolve after Stop/reconnect or a newer recording.
+      if (generation !== this._generation || this._finalized) {
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
+      this._stream = stream;
     } catch (err) {
+      if (generation !== this._generation || this._finalized) return;
       const msg = err.name === 'NotAllowedError'
         ? 'Microphone access denied. Check browser settings.'
         : 'Microphone error: ' + err.message;
@@ -334,10 +345,12 @@ const ClaudeVoiceProvider = {
     this._ws.binaryType = 'arraybuffer';
 
     this._ws.onopen = () => {
+      if (generation !== this._generation || this._finalized) return;
       // Capture starts only once the socket is up: PCM buffered before that would
       // be the oldest audio, and dropping it keeps the transcript aligned with what
       // the user hears themselves saying.
-      this._startCapture().catch((err) => {
+      this._startCapture(generation).catch((err) => {
+        if (generation !== this._generation || this._finalized) return;
         this._onError?.('Microphone capture failed: ' + err.message);
         this.stop();
       });
@@ -345,6 +358,7 @@ const ClaudeVoiceProvider = {
     };
 
     this._ws.onmessage = (event) => {
+      if (generation !== this._generation) return;
       let msg;
       try {
         msg = JSON.parse(event.data);
@@ -364,6 +378,7 @@ const ClaudeVoiceProvider = {
     };
 
     this._ws.onclose = (event) => {
+      if (generation !== this._generation) return;
       if (event.code === 4004) {
         this._onError?.(this._unavailableMessage(event.reason));
       } else if (event.code === 4008) {
@@ -388,16 +403,19 @@ const ClaudeVoiceProvider = {
   },
 
   /** Wire mic -> 16 kHz PCM16 frames -> WebSocket. */
-  async _startCapture() {
+  async _startCapture(generation = this._generation) {
+    if (generation !== this._generation || this._finalized) return;
     const Ctx = window.AudioContext || window.webkitAudioContext;
     // Ask for 16 kHz directly so the browser resamples; Safari may hand back its
     // own rate, which _pcmFromFloat32 then downsamples to match.
     this._audioContext = new Ctx({ sampleRate: 16000 });
     if (this._audioContext.state === 'suspended') await this._audioContext.resume();
+    if (generation !== this._generation || this._finalized) return;
     this._sourceNode = this._audioContext.createMediaStreamSource(this._stream);
 
     if (this._audioContext.audioWorklet) {
       await this._audioContext.audioWorklet.addModule(this._workletUrl());
+      if (generation !== this._generation || this._finalized) return;
       this._workletNode = new AudioWorkletNode(this._audioContext, 'pcm-frame-processor');
       this._workletNode.port.onmessage = (event) => this._sendAudio(event.data);
       this._sourceNode.connect(this._workletNode);
@@ -475,6 +493,13 @@ const ClaudeVoiceProvider = {
     if (this._finalized) return;
     this._finalized = true;
     this._stopCapture();
+    // Bound both manual and silence-triggered finalization on a dead connection.
+    // Repeated stop requests return above, so they cannot extend this deadline.
+    this._finalizeTimeout = setTimeout(() => {
+      const onEnd = this._onEnd;
+      this._cleanup();
+      onEnd?.();
+    }, 5000);
     if (this._ws?.readyState === WebSocket.OPEN) {
       try {
         this._ws.send(JSON.stringify({ t: 'finalize' }));
@@ -516,15 +541,19 @@ const ClaudeVoiceProvider = {
 
   /** Hard stop: drop the socket without waiting for a final transcript. */
   _cleanup() {
+    this._generation++;
     this._finalized = true;
+    clearTimeout(this._finalizeTimeout);
+    this._finalizeTimeout = null;
     clearTimeout(this._silenceTimeout);
     this._silenceTimeout = null;
     this._stopCapture();
     if (this._ws) {
+      this._ws.onopen = null;
       this._ws.onclose = null;
       this._ws.onmessage = null;
       this._ws.onerror = null;
-      if (this._ws.readyState === WebSocket.OPEN) {
+      if (this._ws.readyState === WebSocket.OPEN || this._ws.readyState === WebSocket.CONNECTING) {
         try { this._ws.close(1000); } catch (_e) { /* ignore */ }
       }
       this._ws = null;
@@ -543,19 +572,25 @@ const ClaudeVoiceProvider = {
  * Inserts final text into the active session (user presses Enter to submit).
  */
 const VoiceInput = {
+  SILENCE_TIMEOUT_SECONDS: Object.freeze([0, 3, 6, 15, 30]),
   recognition: null,
   isRecording: false,
   supported: false,
   silenceTimeout: null,
   previewEl: null,
-  _lastTranscript: '',
-  _stabilityTimer: null,
   _accumulatedFinal: '',
   _pendingInterim: '',
-  _activeProvider: null, // 'deepgram' | 'webspeech' | null
+  _webSpeechCommitted: '', // Text from completed native recognition runs.
+  _webSpeechSingleUtterance: false,
+  _webSpeechSoundActive: false,
+  _webSpeechActivityUntil: 0,
+  _webSpeechStopping: false,
+  _webSpeechStopTimer: null,
+  _webSpeechRestartTimer: null,
+  _activeProvider: null, // 'claude' | 'deepgram' | 'webspeech' | null
   _recordingStartedAt: 0, // timestamp when recording started
-  _retryCount: 0, // auto-retry counter for premature Web Speech API ends
-  _hasReceivedResult: false, // whether any speech result came in this session
+  _retryCount: 0, // consecutive empty Web Speech API runs
+  _hasReceivedResult: false, // whether this native recognition run received speech
   _durationInterval: null, // timer for updating elapsed time display
   _analyser: null, // AudioContext analyser for level meter
   _analyserSource: null, // MediaStreamSource for level meter
@@ -609,7 +644,7 @@ const VoiceInput = {
   /** Seconds in settings; zero means stop only when the user asks. */
   getSilenceTimeoutMs(fallback) {
     const seconds = this._getDeepgramConfig().silenceTimeout;
-    return [0, 3, 6, 15, 30].includes(seconds) ? seconds * 1000 : fallback;
+    return this.SILENCE_TIMEOUT_SECONDS.includes(seconds) ? seconds * 1000 : fallback;
   },
 
   _saveDeepgramConfig(config) {
@@ -661,7 +696,14 @@ const VoiceInput = {
     if (!this.supported) return;
 
     this.recognition = new SR();
-    this.recognition.continuous = true;
+    // Android's continuous bridge promotes growing partials to separate finals.
+    // Single-utterance mode keeps refinements provisional; onend resumes the mic
+    // while our own silence deadline controls the overall dictation session.
+    // Android tablets in desktop-site mode may identify as touch-capable Linux.
+    this._webSpeechSingleUtterance = navigator.userAgentData?.platform === 'Android'
+      || /Android/i.test(navigator.userAgent || '')
+      || (navigator.maxTouchPoints > 0 && /Linux/i.test(navigator.platform || ''));
+    this.recognition.continuous = !this._webSpeechSingleUtterance;
     this.recognition.interimResults = true;
     this.recognition.lang = 'en-US';
     this.recognition.maxAlternatives = 1;
@@ -669,6 +711,8 @@ const VoiceInput = {
     this.recognition.onresult = (e) => this._onWebSpeechResult(e);
     this.recognition.onerror = (e) => this._onWebSpeechError(e);
     this.recognition.onend = () => this._onWebSpeechEnd();
+    this.recognition.onsoundstart = this.recognition.onspeechstart = () => this._onWebSpeechSound(true);
+    this.recognition.onsoundend = this.recognition.onspeechend = this.recognition.onaudioend = () => this._onWebSpeechSound(false);
   },
 
   toggle() {
@@ -720,7 +764,6 @@ const VoiceInput = {
     this._activeProvider = 'claude';
     this._accumulatedFinal = '';
     this._pendingInterim = '';
-    this._lastTranscript = '';
     this._hasReceivedResult = false;
     this._recordingStartedAt = Date.now();
     this._updateButtons('recording');
@@ -739,12 +782,15 @@ const VoiceInput = {
       onResult: (text, isFinal) => {
         if (!this.isRecording) return;
         this._hasReceivedResult = true;
-        // Each frame is the WHOLE running transcript, so replace rather than append.
-        this._accumulatedFinal = text;
+        // Interims replace the current utterance; each endpoint commits it once.
         if (isFinal) {
-          this.stop(true);
+          this._accumulatedFinal = [this._accumulatedFinal, text].filter(Boolean).join(' ');
+          this._pendingInterim = '';
+          if (ClaudeVoiceProvider._finalized) this.stop(true);
+          else this._showPreview(this._accumulatedFinal, 'claude');
         } else {
-          this._showPreview(text, 'claude');
+          this._pendingInterim = (this._accumulatedFinal ? ' ' : '') + text;
+          this._showPreview(this._accumulatedFinal + this._pendingInterim, 'claude');
         }
       },
       onError: (msg) => {
@@ -768,7 +814,6 @@ const VoiceInput = {
     this._activeProvider = 'deepgram';
     this._accumulatedFinal = '';
     this._pendingInterim = '';
-    this._lastTranscript = '';
     this._hasReceivedResult = false;
     this._recordingStartedAt = Date.now();
     this._updateButtons('recording');
@@ -827,9 +872,12 @@ const VoiceInput = {
     }
     this.isRecording = true;
     this._activeProvider = 'webspeech';
+    this._retryCount = 0;
+    this._webSpeechCommitted = '';
+    this._webSpeechSoundActive = false;
+    this._webSpeechActivityUntil = 0;
     this._accumulatedFinal = '';
     this._pendingInterim = '';
-    this._lastTranscript = '';
     this._hasReceivedResult = false;
     this._recordingStartedAt = Date.now();
     this._updateButtons('recording');
@@ -840,42 +888,57 @@ const VoiceInput = {
     } catch (e) {
       // InvalidStateError = already started — ignore. Other errors = genuine failure.
       if (e.name !== 'InvalidStateError') {
-        this.stop();
+        this.stop(true);
         app.showToast('Voice input failed to start: ' + e.message, 'error');
         return;
       }
     }
     this._resetSilenceTimeout();
-    // Get mic stream for level meter (non-blocking — level meter is cosmetic)
-    navigator.mediaDevices?.getUserMedia({ audio: true }).then(stream => {
-      if (this.isRecording && this._activeProvider === 'webspeech') {
-        this._webSpeechStream = stream;
-        this._startLevelMeter(stream);
-      } else {
-        stream.getTracks().forEach(t => t.stop());
-      }
-    }).catch(() => { /* level meter just won't show */ });
+    // SpeechRecognition owns its microphone. A second getUserMedia capture for
+    // a cosmetic meter can take audio away from Android's recognition service.
+    // Streaming providers still meter the same stream they transcribe.
+    this._drawLevelMeter();
     // Haptic feedback on mobile
     if (navigator.vibrate) navigator.vibrate(50);
   },
 
-  stop(claudeFinished = false) {
+  stop(providerFinished = false) {
     if (!this.isRecording) return;
+    if (this._webSpeechRestartTimer !== null) {
+      clearTimeout(this._webSpeechRestartTimer);
+      this._webSpeechRestartTimer = null;
+      // The recognizer already ended; no onend remains to wait for.
+      providerFinished = true;
+    }
     // Claude delivers its final transcript after finalize. Keep accepting it
     // until that frame (or onEnd) completes this recording.
-    if (this._activeProvider === 'claude' && !claudeFinished && ClaudeVoiceProvider._ws?.readyState === WebSocket.OPEN) {
+    if (this._activeProvider === 'claude' && !providerFinished && ClaudeVoiceProvider._ws?.readyState === WebSocket.OPEN) {
       ClaudeVoiceProvider.stop();
       return;
     }
+    if (this._activeProvider === 'webspeech' && !providerFinished) {
+      if (this._webSpeechStopping) return;
+      this._webSpeechStopping = true;
+      clearTimeout(this.silenceTimeout);
+      // stop() requests a result; Android may deliver it only before onend.
+      // Keep accepting results, with a backstop for engines that never end.
+      this._webSpeechStopTimer = setTimeout(() => {
+        try { this.recognition?.abort(); } catch (_e) { /* already ended */ }
+        this.stop(true);
+      }, 3000);
+      try { this.recognition?.stop(); } catch (_e) { this.stop(true); }
+      return;
+    }
+    clearTimeout(this._webSpeechStopTimer);
+    this._webSpeechStopTimer = null;
+    this._webSpeechStopping = false;
     this.isRecording = false;
     const text = this._accumulatedFinal + this._pendingInterim;
     this._accumulatedFinal = '';
     this._pendingInterim = '';
     if (text) this._insertText(text);
     clearTimeout(this.silenceTimeout);
-    clearTimeout(this._stabilityTimer);
     this.silenceTimeout = null;
-    this._stabilityTimer = null;
     this._retryCount = 0;
     this._stopDurationTimer();
     this._stopLevelMeter();
@@ -883,16 +946,11 @@ const VoiceInput = {
     this._hidePreview();
 
     if (this._activeProvider === 'claude') {
-      // Finalize, don't hang up: the last transcript arrives after the audio does.
-      ClaudeVoiceProvider.stop();
+      // Completion received, or forced teardown: callbacks must not outlive it.
+      ClaudeVoiceProvider._cleanup();
     } else if (this._activeProvider === 'deepgram') {
       DeepgramProvider.stop();
     } else if (this._activeProvider === 'webspeech') {
-      try {
-        this.recognition?.stop();
-      } catch (_e) {
-        // Already stopped — ignore
-      }
       // Stop the mic stream we opened for the level meter
       if (this._webSpeechStream) {
         this._webSpeechStream.getTracks().forEach(t => t.stop());
@@ -905,36 +963,33 @@ const VoiceInput = {
     if (navigator.vibrate) navigator.vibrate([30, 50, 30]);
   },
 
+  _onWebSpeechSound(active) {
+    if (!this.isRecording || this._activeProvider !== 'webspeech' || this._webSpeechStopping) return;
+    this._webSpeechSoundActive = active;
+    if (!active) this._webSpeechActivityUntil = 0;
+  },
+
   _onWebSpeechResult(event) {
     if (!this.isRecording) return;
-    this._hasReceivedResult = true;
     this._resetSilenceTimeout();
-    let interim = '';
-    let finalText = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript;
-      if (event.results[i].isFinal) {
-        finalText += transcript;
-      } else {
-        interim += transcript;
-      }
+    // results is the current run's complete snapshot, not a list of new words.
+    // Rebuild by result position so repeats/corrections replace the same text.
+    // Never deduplicate by text: "go go" and repeated phrases can be intentional.
+    const finals = [];
+    const interims = [];
+    for (let i = 0; i < event.results.length; i++) {
+      const result = event.results[i];
+      const text = result[0]?.transcript?.trim();
+      if (text) (result.isFinal ? finals : interims).push(text);
     }
-
-    if (finalText) {
-      clearTimeout(this._stabilityTimer);
-      this._stabilityTimer = null;
-      this._accumulatedFinal += finalText;
-      this._pendingInterim = interim;
-      this._showPreview(this._accumulatedFinal + interim);
-    }
-    if (interim) {
-      this._pendingInterim = interim;
-      const display = this._accumulatedFinal + interim;
-      this._showPreview(display);
-      // iOS Safari workaround: isFinal is always false.
-      // Detect when interim results stop changing for 750ms → treat as final.
-      this._iosStabilityCheck(interim);
-    }
+    this._accumulatedFinal = [this._webSpeechCommitted, ...finals].filter(Boolean).join(' ');
+    const interim = interims.join(' ');
+    this._hasReceivedResult ||= finals.length > 0 || !!interim;
+    this._pendingInterim = interim ? (this._accumulatedFinal ? ' ' : '') + interim : '';
+    this._showPreview(this._accumulatedFinal + this._pendingInterim);
+    // Some engines omit sound events; transcript updates are also real evidence
+    // of speech activity. This is an activity animation, not an amplitude meter.
+    if (finals.length || interim) this._webSpeechActivityUntil = Date.now() + 600;
   },
 
   _onWebSpeechError(event) {
@@ -945,7 +1000,7 @@ const VoiceInput = {
     if (event.error === 'no-speech' && this.getSilenceTimeoutMs(3000) !== 3000) return;
 
     const wasRecording = this.isRecording;
-    this.stop();
+    this.stop(true);
     if (!wasRecording) return;
 
     switch (event.error) {
@@ -969,41 +1024,40 @@ const VoiceInput = {
   _onWebSpeechEnd() {
     // Recognition ended (browser auto-stopped or we called stop())
     if (!this.isRecording) return;
-
-    const elapsed = Date.now() - this._recordingStartedAt;
-    // Web Speech API often fires onend prematurely on the first attempt (< 500ms, no results).
-    // Auto-retry up to 2 times to avoid the "needs two clicks" problem.
-    if (elapsed < 500 && !this._hasReceivedResult && this._retryCount < 2) {
-      this._retryCount++;
-      try {
-        this.recognition.start();
-      } catch (_e) {
-        // If restart fails, fall through to stop
-        this.stop();
-      }
+    this._onWebSpeechSound(false);
+    if (this._webSpeechStopping) {
+      this.stop(true);
       return;
     }
 
-    // Some browsers end recognition independently of our silence timer. For an
-    // extended/manual session, restart without resetting the original deadline.
+    const empty = !this._hasReceivedResult;
+    this._retryCount = empty ? this._retryCount + 1 : 0;
+    if (this._retryCount > 2) {
+      this.stop(true);
+      return;
+    }
+
+    // Native endpoints must not extend the configured silence deadline.
     const delay = this.getSilenceTimeoutMs(3000);
-    if (delay === 0 || delay > 3000) {
-      try {
-        // Each recognition run starts a fresh result list. Retain Safari's
-        // interim-only phrase before the next run can replace it.
-        if (this._pendingInterim) {
-          this._accumulatedFinal += this._pendingInterim + ' ';
-          this._pendingInterim = '';
-        }
-        this.recognition.start();
-        return;
-      } catch (_e) {
-        // A failed restart ends recording normally.
-      }
+    if (empty || this._webSpeechSingleUtterance || delay === 0 || delay > 3000) {
+      // Commit this run once before the next run resets its result indexes.
+      this._webSpeechCommitted = (this._accumulatedFinal + this._pendingInterim).trim();
+      this._accumulatedFinal = this._webSpeechCommitted;
+      this._pendingInterim = '';
+      const restart = () => {
+        this._webSpeechRestartTimer = null;
+        if (!this.isRecording || this._webSpeechStopping) return;
+        this._hasReceivedResult = false;
+        try { this.recognition.start(); } catch (_e) { this.stop(true); }
+      };
+      // A broken or unavailable recognizer must not spin forever in Manual mode.
+      if (empty) this._webSpeechRestartTimer = setTimeout(restart, 250);
+      else restart();
+      return;
     }
 
     // Genuine end — finalize any accumulated text
-    this.stop();
+    this.stop(true);
   },
 
   /** The session this dictation belongs to (see _targetSessionId). */
@@ -1188,21 +1242,6 @@ const VoiceInput = {
     }, delay);
   },
 
-  _iosStabilityCheck(transcript) {
-    // The Safari shortcut must not override the chosen thinking pause.
-    if (this.getSilenceTimeoutMs(3000) !== 3000) return;
-    if (transcript !== this._lastTranscript) {
-      this._lastTranscript = transcript;
-      clearTimeout(this._stabilityTimer);
-      this._stabilityTimer = setTimeout(() => {
-        if (this.isRecording) {
-          this._pendingInterim = transcript;
-          this.stop();
-        }
-      }, 750);
-    }
-  },
-
   _startDurationTimer() {
     this._stopDurationTimer();
     this._durationInterval = setInterval(() => {
@@ -1239,6 +1278,8 @@ const VoiceInput = {
   },
 
   _stopLevelMeter() {
+    this._webSpeechSoundActive = false;
+    this._webSpeechActivityUntil = 0;
     if (this._levelAnimFrame) {
       cancelAnimationFrame(this._levelAnimFrame);
       this._levelAnimFrame = null;
@@ -1255,13 +1296,21 @@ const VoiceInput = {
   },
 
   _drawLevelMeter() {
-    if (!this._analyser || !this.isRecording) return;
-    const dataArray = new Uint8Array(this._analyser.frequencyBinCount);
-    this._analyser.getByteFrequencyData(dataArray);
-    // Compute RMS level 0-1
-    let sum = 0;
-    for (let i = 0; i < dataArray.length; i++) sum += dataArray[i] * dataArray[i];
-    const rms = Math.sqrt(sum / dataArray.length) / 255;
+    if (!this.isRecording) return;
+    let rms = 0;
+    if (this._activeProvider === 'webspeech') {
+      // The speech API exposes activity events, but no microphone sample level.
+      const active = !this._webSpeechStopping
+        && (this._webSpeechSoundActive || Date.now() < this._webSpeechActivityUntil);
+      if (active) rms = 0.25 + 0.55 * (1 + Math.sin(Date.now() / 110)) / 2;
+    } else {
+      if (!this._analyser) return;
+      const dataArray = new Uint8Array(this._analyser.frequencyBinCount);
+      this._analyser.getByteFrequencyData(dataArray);
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) sum += dataArray[i] * dataArray[i];
+      rms = Math.sqrt(sum / dataArray.length) / 255;
+    }
     // Update the level bars in the preview
     const barsEl = this.previewEl?.querySelector('.voice-level-bars');
     if (barsEl) {
@@ -1291,6 +1340,8 @@ const VoiceInput = {
       indicator.innerHTML = '<span class="voice-rec-dot"></span>';
       const barsEl = document.createElement('span');
       barsEl.className = 'voice-level-bars';
+      barsEl.setAttribute('aria-label', this._activeProvider === 'webspeech' ? 'Speech activity' : 'Microphone level');
+      barsEl.title = this._activeProvider === 'webspeech' ? 'Speech activity' : 'Microphone level';
       for (let i = 0; i < 5; i++) {
         const bar = document.createElement('span');
         bar.className = 'voice-level-bar';
@@ -1358,7 +1409,10 @@ const VoiceInput = {
 
   /** Cleanup on SSE reconnect or page unload */
   cleanup() {
-    if (this.isRecording) this.stop();
+    if (this.isRecording) {
+      this.stop(true);
+      try { this.recognition?.abort(); } catch (_e) { /* already ended */ }
+    }
     this._hideVoiceSendBtn();
     DeepgramProvider._cleanup();
     ClaudeVoiceProvider._cleanup();
@@ -1375,12 +1429,9 @@ const VoiceInput = {
       this.previewEl = null;
     }
     clearTimeout(this.silenceTimeout);
-    clearTimeout(this._stabilityTimer);
     this.silenceTimeout = null;
-    this._stabilityTimer = null;
     this._accumulatedFinal = '';
     this._pendingInterim = '';
-    this._lastTranscript = '';
     this._retryCount = 0;
     this._hasReceivedResult = false;
   }

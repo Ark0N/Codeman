@@ -698,7 +698,7 @@ Frontend `readmymind-ui.js`: header 🧠 marker-hidden (`btn-readmymind--hidden`
 
 ⚠️ Capture MUST be linear16/16 kHz/mono, so it uses an **AudioWorklet**, not MediaRecorder (which cannot emit raw PCM); `voice-pcm-worklet.js` is fetched from JS, so it is invisible to `cacheBustAssets` and borrows voice-input.js's `?v=` token — **edit the two together**.
 
-⚠️ Transcript frames carry the WHOLE running transcript, not deltas: the Claude path replaces where the Deepgram path appends. Provider choice is `voiceSettings.provider` (`auto` prefers Claude → Deepgram → Web Speech). → `docs/claude-voice-plan.md`
+⚠️ Claude transcript frames are cumulative within the current utterance: replace interims, then append each endpoint final once. An endpoint does not stop dictation unless finalization was requested. Finalization has a 5-second client backstop; reconnect cleanup salvages accumulated/interim text and releases the microphone immediately. Provider choice is `voiceSettings.provider` (`auto` prefers Claude → Deepgram → Web Speech). → `docs/claude-voice-plan.md`
 
 ### Files panel search
 
