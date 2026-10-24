@@ -803,9 +803,13 @@ export function registerSystemRoutes(
     const lifecycleLog = getLifecycleLog();
     for (const s of result.cleaned) {
       lifecycleLog.log({ event: 'stale_cleaned', sessionId: s.id, name: s.name });
-      // A detached session kept its agent inbox; removing its record is the delete,
-      // so the mail goes with it (as on the persisted-only DELETE /api/sessions/:id).
-      agentInbox.drop(s.id);
+      // A detached session kept its agent inbox. Its record going is the delete only
+      // when no tmux session stands behind it: a detached pane the multiplexer still
+      // lists is re-adopted under the same id at the next boot (restoreMuxSessions,
+      // with or without a state.json record), and its mail must come back with it.
+      // Keeping a pane that died while detached errs toward the 12 h TTL and the boot
+      // prune, the same trade the boot keep set makes.
+      if (!ctx.mux.getSession(s.id)) agentInbox.drop(s.id);
     }
     return { cleanedSessions: result.count };
   });
