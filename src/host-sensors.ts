@@ -166,11 +166,20 @@ export function parseTypeperf(output: string): WindowsCounters {
   return result;
 }
 
+/**
+ * Run a reader, answering undefined on failure or once `timeout` has passed. execFile's own `timeout` only
+ * sends the child a signal, and its callback waits for the child to exit: an nvidia-smi stuck on a hung
+ * driver (uninterruptible sleep) never does, and every stats request would wait on it with CPU and MEM. So
+ * the deadline here answers by itself; the child is left to the signal.
+ */
 const run = (cmd: string, args: string[], timeout = EXEC_TIMEOUT_MS) =>
   new Promise<string | undefined>((resolve) => {
-    execFile(cmd, args, { timeout, windowsHide: true, maxBuffer: 4 * MB }, (err, stdout) =>
-      resolve(err ? undefined : stdout)
-    );
+    const deadline = setTimeout(() => resolve(undefined), timeout);
+    deadline.unref();
+    execFile(cmd, args, { timeout, windowsHide: true, maxBuffer: 4 * MB }, (err, stdout) => {
+      clearTimeout(deadline);
+      resolve(err ? undefined : stdout);
+    });
   });
 
 const readText = (path: string) =>

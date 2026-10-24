@@ -15,6 +15,9 @@ const state = vi.hoisted(() => ({
   /** When set, PowerShell does not answer until the test calls the callbacks kept here. */
   holdPowershell: false,
   heldPowershell: [] as Array<() => void>,
+  /** When set, nvidia-smi never answers (a child stuck on a hung driver) until the test calls these. */
+  holdNvidia: false,
+  heldNvidia: [] as Array<() => void>,
   execCalls: [] as Array<{ cmd: string; args: string[] }>,
   spawnCalls: [] as Array<{ cmd: string; args: string[]; stdout: unknown }>,
 }));
@@ -22,6 +25,10 @@ const state = vi.hoisted(() => ({
 vi.mock('node:child_process', () => ({
   execFile: (cmd: string, args: string[], _opts: unknown, cb: (err: Error | null, stdout: string) => void) => {
     state.execCalls.push({ cmd, args });
+    if (state.holdNvidia && cmd === 'nvidia-smi') {
+      state.heldNvidia.push(() => cb(null, NVIDIA));
+      return;
+    }
     if (state.holdPowershell && cmd.endsWith('powershell.exe')) {
       state.heldPowershell.push(() => {
         const held = state.powershell;
@@ -69,6 +76,8 @@ beforeEach(() => {
   state.powershell = new Error('powershell failed');
   state.holdPowershell = false;
   state.heldPowershell = [];
+  state.holdNvidia = false;
+  state.heldNvidia = [];
   state.execCalls = [];
   state.spawnCalls = [];
   process.env.WSL_INTEROP = '1';
@@ -147,6 +156,32 @@ describe('a failing reader is left alone for a minute', () => {
     await tick();
     await readHostSensors({ gpu: true });
     expect(counted('powershell.exe')).toBe(2);
+    stopHostSensors();
+  });
+});
+
+describe('a hung nvidia-smi', () => {
+  it('answers at its own deadline instead of waiting for a child that never exits, then backs off', async () => {
+    state.holdNvidia = true;
+    const { readHostSensors, stopHostSensors } = await load();
+    const started = performance.now();
+    // execFile's timeout only signals the child; one that never exits never calls back
+    const first = await Promise.race([
+      readHostSensors({ gpu: true }),
+      new Promise<'hung'>((r) => setTimeout(() => r('hung'), 4000)),
+    ]);
+    expect(first).not.toBe('hung');
+    expect(performance.now() - started).toBeLessThan(3500);
+    expect((first as { gpu?: object }).gpu).toBeUndefined();
+    expect(counted('nvidia-smi')).toBe(1);
+    // the reader that timed out is left alone like a failing one: the next poll does not start a second
+    vi.setSystemTime(Date.now() + 2500);
+    await readHostSensors({ gpu: true });
+    expect(counted('nvidia-smi')).toBe(1);
+    // the child finally exiting changes nothing
+    state.heldNvidia.forEach((answer) => answer());
+    await tick();
+    expect(counted('nvidia-smi')).toBe(1);
     stopHostSensors();
   });
 });
