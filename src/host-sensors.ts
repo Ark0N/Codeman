@@ -48,6 +48,10 @@ export interface SensorRequest {
 const CACHE_MS = 2000;
 /** A counter sample older than this (a few sampling intervals) is no longer a live reading. */
 const FRESH_MS = 10000;
+/** After a reader fails, leave it alone this long: nvidia-smi absent or timing out, PowerShell failing. */
+const READER_BACKOFF_MS = 60000;
+/** The GPU counters stay in the sampler this long after the last GPU read that needed them. */
+const GPU_COUNTERS_HOLD_MS = 120000;
 const EXEC_TIMEOUT_MS = 1500;
 const SYS_DRM = '/sys/class/drm';
 const SYS_CPU = '/sys/devices/system/cpu';
@@ -191,16 +195,24 @@ function inWsl(): boolean {
 }
 
 let windowsRamMB: Promise<number | undefined> | undefined;
+let ramRetryAt = 0;
 
-/** Windows' installed RAM, asked once (PowerShell takes about a second) and remembered when it answers. */
+/**
+ * Windows' installed RAM, asked once (PowerShell takes about a second) and remembered when it answers. A
+ * failure is not retried on every GPU poll (8 s timeout each): it waits READER_BACKOFF_MS first.
+ */
 function readWindowsRamMB(): Promise<number | undefined> {
+  if (!windowsRamMB && Date.now() < ramRetryAt) return Promise.resolve(undefined);
   windowsRamMB ??= run(
     POWERSHELL,
     ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory'],
     8000
   ).then((out) => {
     const bytes = out ? finite(Number(out.trim())) : undefined;
-    if (!bytes || bytes <= 0) windowsRamMB = undefined;
+    if (!bytes || bytes <= 0) {
+      windowsRamMB = undefined;
+      ramRetryAt = Date.now() + READER_BACKOFF_MS;
+    }
     return bytes && bytes > 0 ? Math.round(bytes / MB) : undefined;
   });
   return windowsRamMB;
@@ -212,7 +224,11 @@ export type SamplerChild = Pick<ChildProcess, 'stdout' | 'kill' | 'once'>;
 export interface CounterStreamOptions {
   start: (counters: string[]) => SamplerChild;
   now?: () => number;
-  /** How long the first read waits for the first sample. */
+  /**
+   * How long a read waits for a sample when it has none fresh (0, the default, never waits: the read
+   * answers undefined and the next poll shows the reading). The stats route awaits the sensors before it
+   * answers CPU and MEM, so a cold sampler must not hold it up.
+   */
   firstSampleMs?: number;
   /** A sampler older than this is replaced, so counters of processes that started since are picked up. */
   recycleMs?: number;
@@ -230,7 +246,7 @@ export interface CounterStreamOptions {
  */
 export function createCounterStream(options: CounterStreamOptions) {
   const now = options.now ?? Date.now;
-  const firstSampleMs = options.firstSampleMs ?? 8000;
+  const firstSampleMs = options.firstSampleMs ?? 0;
   const recycleMs = options.recycleMs ?? 30000;
   const idleMs = options.idleMs ?? 30000;
   const backoffMs = options.backoffMs ?? 60000;
@@ -307,7 +323,7 @@ export function createCounterStream(options: CounterStreamOptions) {
   };
 
   return {
-    /** The newest sample for these counters; the first read waits briefly for one. */
+    /** The newest fresh sample for these counters, or undefined (a cold sampler is not waited for unless `firstSampleMs` says so). */
     async read(counters: string[]): Promise<WindowsCounters | undefined> {
       lastRead = now();
       if (now() < blockedUntil) return undefined;
@@ -315,10 +331,12 @@ export function createCounterStream(options: CounterStreamOptions) {
       if (!child || key !== wanted || now() - startedAt > recycleMs) begin(counters);
       if (!latest || key !== wanted || now() - latest.at >= FRESH_MS) {
         if (!child) return undefined;
-        await new Promise<void>((resolve) => {
-          waiting.push(resolve);
-          setTimeout(resolve, firstSampleMs).unref();
-        });
+        if (firstSampleMs > 0) {
+          await new Promise<void>((resolve) => {
+            waiting.push(resolve);
+            setTimeout(resolve, firstSampleMs).unref();
+          });
+        }
       }
       return latest && now() - latest.at < FRESH_MS ? latest.value : undefined;
     },
@@ -342,21 +360,28 @@ const CPU_COUNTERS = ['\\Processor Information(_Total)\\Processor Frequency'];
 
 /**
  * The counters one sampler reads. They do not depend on which reading a browser asked for (those are per
- * device, so two browsers can differ): the CPU clock is always sampled, and the GPU counters are added, once
- * and for good, on a machine with no native GPU reader. A request then only picks its fields from the sample.
+ * device, so two browsers can differ): the CPU clock is always sampled, and the GPU counters are added on a
+ * machine with no native GPU reader (and dropped again once nothing has needed them for a while). A request then only picks its fields from the sample.
  */
 export function windowsCounterList(needGpu: boolean): string[] {
   return needGpu ? [...GPU_COUNTERS, ...CPU_COUNTERS] : [...CPU_COUNTERS];
 }
 
-export function createWindowsSource(stream: Pick<ReturnType<typeof createCounterStream>, 'read' | 'stop'>) {
-  let needGpu = false;
+export function createWindowsSource(
+  stream: Pick<ReturnType<typeof createCounterStream>, 'read' | 'stop'>,
+  now: () => number = Date.now
+) {
+  let gpuUntil = 0;
   return {
-    /** A GPU reading is wanted and no native reader answered: sample the GPU counters too. */
+    /**
+     * A GPU reading is wanted and no native reader answered: sample the GPU counters too, for
+     * GPU_COUNTERS_HOLD_MS after the last such read. A single failed nvidia-smi therefore costs a sampler
+     * restart, not a GPU sampler for the life of the server.
+     */
     needGpuCounters() {
-      needGpu = true;
+      gpuUntil = now() + GPU_COUNTERS_HOLD_MS;
     },
-    read: () => stream.read(windowsCounterList(needGpu)),
+    read: () => stream.read(windowsCounterList(now() < gpuUntil)),
     stop: () => stream.stop(),
   };
 }
@@ -399,12 +424,20 @@ async function readAmdGpu(): Promise<GpuReading | undefined> {
 }
 
 /** NVIDIA, then AMD: the readers that need nothing from Windows. */
+let nvidiaSkipUntil = 0;
+
+/** NVIDIA, then AMD. A host without a working nvidia-smi is not asked again on every poll. */
 async function readNativeGpu(): Promise<GpuReading | undefined> {
-  const out = await run('nvidia-smi', [
-    '--query-gpu=utilization.gpu,memory.used,memory.total,clocks.gr',
-    '--format=csv,noheader,nounits',
-  ]);
-  return (out && parseNvidiaSmi(out)) || readAmdGpu();
+  if (Date.now() >= nvidiaSkipUntil) {
+    const out = await run('nvidia-smi', [
+      '--query-gpu=utilization.gpu,memory.used,memory.total,clocks.gr',
+      '--format=csv,noheader,nounits',
+    ]);
+    const reading = out ? parseNvidiaSmi(out) : undefined;
+    if (reading) return reading;
+    nvidiaSkipUntil = Date.now() + READER_BACKOFF_MS;
+  }
+  return readAmdGpu();
 }
 
 /** A GPU reading from the Windows counters (WSL only): load and memory in use, but no clock. */

@@ -171,6 +171,26 @@ describe('createCounterStream', () => {
     expect(children).toHaveLength(2);
   });
 
+  it('does not wait at all by default: a cold sampler answers nothing and the next read has the sample', async () => {
+    const children: PassThrough[] = [];
+    const stream = createCounterStream({
+      start: () => {
+        const stdout = new PassThrough();
+        children.push(stdout);
+        return { stdout, kill: () => true, once: () => undefined } as never;
+      },
+    });
+    const counters = ['\\Processor Information(_Total)\\Processor Frequency'];
+    const header = '"(PDH-CSV 4.0)","\\\\H\\Processor Information(_Total)\\Processor Frequency"\r\n';
+    const started = Date.now();
+    expect(await stream.read(counters)).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(500);
+    children[0].write(header + '"t","1700"\r\n');
+    await new Promise((r) => setImmediate(r));
+    expect(await stream.read(counters)).toEqual({ cpuMhz: 1700 });
+    expect(children).toHaveLength(1);
+  });
+
   it('answers nothing, within the wait, when no sample ever arrives', async () => {
     const { stream } = fake();
     expect(await stream.read(counters)).toBeUndefined();

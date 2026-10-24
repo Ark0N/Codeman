@@ -6716,6 +6716,10 @@ Object.assign(CodemanApp.prototype, {
     // Skip polling when system stats display is hidden
     const statsEl = document.getElementById('headerSystemStats');
     if (!statsEl || statsEl.style.display === 'none') return;
+    // One request at a time: the poll fires every 2 s, and a slow answer (a cold WSL sampler, a hung
+    // server) must not pile up requests behind it.
+    if (this._systemStatsPending) return;
+    this._systemStatsPending = true;
 
     try {
       // Opt-in readings are only requested while their header setting is on (default off).
@@ -6723,11 +6727,18 @@ Object.assign(CodemanApp.prototype, {
       const wanted = ['gpu', settings.showGpuStats, 'cpumhz', settings.showCpuMhz];
       const query = [];
       for (let i = 0; i < wanted.length; i += 2) if (wanted[i + 1] === true) query.push(`${wanted[i]}=1`);
-      const res = await fetch('/api/system/stats' + (query.length ? '?' + query.join('&') : ''));
+      const res = await fetch('/api/system/stats' + (query.length ? '?' + query.join('&') : ''), {
+        signal:
+          typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+            ? AbortSignal.timeout(8000)
+            : undefined,
+      });
       const stats = await res.json();
       this.updateSystemStatsDisplay(stats.data);
     } catch (err) {
       // Silently fail - system stats are not critical
+    } finally {
+      this._systemStatsPending = false;
     }
   },
 

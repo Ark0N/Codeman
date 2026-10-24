@@ -30,9 +30,11 @@ const classList = () => {
   };
 };
 
-function harness(settings: Record<string, unknown>) {
+function harness(settings: Record<string, unknown>, options: { hold?: boolean } = {}) {
   const els = new Map<string, El>();
   const fetched: string[] = [];
+  let release: () => void = () => undefined;
+  const gate = options.hold ? new Promise<void>((resolve) => (release = resolve)) : null;
   class CodemanApp {}
   const context = vm.createContext({
     CodemanApp,
@@ -40,6 +42,7 @@ function harness(settings: Record<string, unknown>) {
     document: { getElementById: () => ({ style: {} }) },
     fetch: async (url: string) => {
       fetched.push(url);
+      if (gate) await gate;
       return { json: async () => ({ data: { cpu: 1, memory: { usedMB: 1, totalMB: 2, percent: 50 } } }) };
     },
     localStorage: { getItem: () => null },
@@ -62,7 +65,7 @@ function harness(settings: Record<string, unknown>) {
       return els.get(id);
     },
   });
-  return { app, els, fetched };
+  return { app, els, fetched, release };
 }
 
 describe('header host sensors', () => {
@@ -131,6 +134,17 @@ describe('header host sensors', () => {
     expect(appJs).not.toMatch(/\} else \{\s*this\.stopSystemStatsPolling\(\);/);
   });
 
+  it('runs one stats request at a time, so a slow answer cannot pile requests up behind it', async () => {
+    const { app, fetched, release } = harness({}, { hold: true });
+    const polls = [app.fetchSystemStats.call(app), app.fetchSystemStats.call(app), app.fetchSystemStats.call(app)];
+    expect(fetched).toHaveLength(1);
+    release();
+    await Promise.all(polls);
+    // answered: the next poll goes out again
+    await app.fetchSystemStats.call(app);
+    expect(fetched).toHaveLength(2);
+  });
+
   it('is opt-in in the settings page: unchecked chips, off in every default, stripped from the settings PUT', () => {
     const html = read('index.html');
     for (const id of ['appSettingsShowGpuStats', 'appSettingsShowCpuMhz']) {
@@ -142,6 +156,8 @@ describe('header host sensors', () => {
     // per-device, so stripped from the PUT body like the other header toggles (the schema is .strict())
     expect(settingsUi).toContain('showGpuStats: _sgp,');
     expect(settingsUi).toContain('showCpuMhz: _scm,');
-    expect(readFileSync(join(process.cwd(), 'src/web/schemas.ts'), 'utf-8')).not.toContain('showCpuMhz');
+    const schemas = readFileSync(join(process.cwd(), 'src/web/schemas.ts'), 'utf-8');
+    expect(schemas).not.toContain('showCpuMhz');
+    expect(schemas).not.toContain('showGpuStats');
   });
 });
