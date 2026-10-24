@@ -1173,7 +1173,7 @@
     // pages the CLI's own transcript with PageUp/PageDown. Every gate is the
     // primary pane's own, asked for THIS pane (its terminal, its session, never
     // the active one), so the CLI rules stay in terminal-ui.js and this file
-    // names no CLI. The gesture rules (first-event page, notch accumulation,
+    // names no CLI. The gesture rules (first-event page, notch debt,
     // pinch and sideways-swipe consume) are the shared pure
     // CodemanTerminalInput.pageKeysForGesture, run on this tile's own state.
     // Returns true when the wheel was consumed here.

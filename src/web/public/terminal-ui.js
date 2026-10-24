@@ -98,15 +98,19 @@
   const PAGE_KEY_GESTURE_GAP_MS = 150;
   // ...but not for sub-row jitter (0.1 row, ~2px)...
   const PAGE_KEY_MIN_START_ROWS = 0.1;
-  // ...and only for a trackpad-sized opening event. A mouse-wheel notch (100px, 4 rows) also pages at
-  // once now (see PAGE_KEY_NOTCH_DEBT_MS), but is told apart from a trackpad opener by this size.
+  // ...for any opening event under one page. A trackpad-sized opener (under this many rows) and a
+  // mouse-wheel notch (100px, 4 rows) both page at once; this size is what tells them apart for the debt
+  // (see PAGE_KEY_NOTCH_DEBT_MS). The signal is the opener's size, not the device: a touch contact whose
+  // first touchmove is this many rows or more is treated as a notch too, and so is a brisk trackpad
+  // flick that opens with a large event. Both are fine, and both get the longer debt.
   const PAGE_KEY_IMMEDIATE_MAX_ROWS = 2;
   // A mouse-wheel notch used to just accumulate toward half a screen, so a mouse showed nothing for the
   // first 5 notches (7 on Firefox's 3-line notches) and a gesture of a few notches seemed dead. The first
   // notch of a gesture now pre-pays its page like a trackpad flick does, and the notches that follow repay
   // it: the same gesture sends the same pages, the first one sooner. The old objection was slow notches,
   // each its own gesture past the gap, paging a full screen apiece, so a notch's debt outlives the pauses
-  // between notches for this long (a trackpad's lasts PAGE_KEY_DEBT_MS).
+  // between notches for this long (a trackpad's lasts PAGE_KEY_DEBT_MS). It applies to any opener of
+  // PAGE_KEY_IMMEDIATE_MAX_ROWS rows or more, whatever device it came from.
   const PAGE_KEY_NOTCH_DEBT_MS = 3000;
   // A pre-paid page's debt outlives the gesture gap for this long when the next
   // event goes the SAME way, so slow small wheel ticks (40 px every 250 ms, a
@@ -214,8 +218,8 @@
   //    PAGE_KEY_GESTURE_GAP_MS, stretched to PAGE_KEY_DEBT_MS while a pre-paid
   //    page is still owed in the same direction. One contact is never split by
   //    time, so a slow drag (one line per 170 ms) is one gesture;
-  //  - a new gesture's trackpad-sized opening event (at least
-  //    PAGE_KEY_MIN_START_ROWS, under PAGE_KEY_IMMEDIATE_MAX_ROWS) pages AT ONCE,
+  //  - a new gesture's opening event (at least PAGE_KEY_MIN_START_ROWS and
+  //    under one page: a trackpad flick, or a mouse notch) pages AT ONCE,
   //    pre-paid: the half screen it skipped is owed back by the rest of the
   //    gesture, so the rate stays one page per half screen. A debt left by a
   //    pre-paid page dies with its gesture;
@@ -257,11 +261,15 @@
     }
     if (gestureStart) {
       const size = Math.abs(lines);
-      if (size >= PAGE_KEY_MIN_START_ROWS && size < perPage) {
+      // Plain travel left over from the gesture before (what was left once its debt was repaid) is
+      // not dropped by the new opener: it counts toward the page, so a gesture made of notches pages
+      // once per `perPage` rows of travel, as it did before the first notch paged at once.
+      const carried = pending * dir > 0 ? pending : 0;
+      if (size >= PAGE_KEY_MIN_START_ROWS && size < perPage && (carried + lines) * dir < perPage) {
         // Pre-pay one page; the skipped travel is owed back (pending carries the opposite sign).
         return {
           state: {
-            pending: lines - dir * perPage,
+            pending: carried + lines - dir * perPage,
             lastAt: now,
             dir,
             prepaid: true,
@@ -6061,8 +6069,8 @@ Object.assign(CodemanApp.prototype, {
    * scrollback is never touched. Shift is excluded on purpose: it is the explicit
    * "give me local scrollback" gesture and must keep that meaning.
    *
-   * The FIRST event of a trackpad-sized gesture (opening under
-   * PAGE_KEY_IMMEDIATE_MAX_ROWS) pages at once. Waiting for half a screen of
+   * The FIRST event of a gesture (any opening event under one page: a trackpad
+   * flick, or a mouse notch) pages at once. Waiting for half a screen of
    * travel (19 rows, ~475px on a 38-row pane) meant an ordinary trackpad flick
    * never sent a key at all. That page is pre-paid: the travel it skipped is
    * owed back by the rest of the gesture, so the rate stays one page per

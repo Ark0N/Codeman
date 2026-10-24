@@ -694,8 +694,9 @@ describe('pageKeysForGesture, the pure gesture rules both panes share', () => {
     expect(steps.map((s) => s.keys)).toEqual([UP, '', '', UP]);
   });
 
-  it('accumulates a notch-sized opening event, and carries plain travel across notches', () => {
-    // Five 4-row notches 400 ms apart: each is a new gesture, none pages alone.
+  it('pages a notch-sized opening event at once, and the notches after it repay it', () => {
+    // Five 4-row notches 400 ms apart: the first pays the page, the next four (16 of the 15 rows
+    // owed on 38 rows) repay it, and none of them pages again.
     const steps = run([
       [-4, 0],
       [-4, 400],
@@ -703,7 +704,7 @@ describe('pageKeysForGesture, the pure gesture rules both panes share', () => {
       [-4, 1200],
       [-4, 1600],
     ]);
-    expect(steps.map((s) => s.keys).join('')).toBe(UP);
+    expect(steps.map((s) => s.keys)).toEqual([UP, '', '', '', '']);
   });
 
   it('pages a mouse notch at once (4 rows Chrome, 3 rows Firefox) and repays it over the notches that follow', () => {
@@ -719,6 +720,37 @@ describe('pageKeysForGesture, the pure gesture rules both panes share', () => {
     expect(notches(-4, 11).map((s) => s.keys)).toEqual([UP, '', '', '', '', UP, '', '', '', '', UP]);
     // Firefox's 3-row notches repay it over notches 2 to 7, so the next page opens at notch 8.
     expect(notches(-3, 8).map((s) => s.keys)).toEqual([UP, '', '', '', '', '', '', UP]);
+  });
+
+  it('keeps the leftover travel when a notch opens the next gesture, so the page rate matches plain travel', () => {
+    // 6 notches of 4 rows on a 10-row tile (5 rows a page): the page pre-paid by notch 1 is repaid
+    // by notch 2, the leftover opens notch 3's page, and so on. Dropping the leftover (the first cut
+    // of this rule) sent 3 pages for the same travel that earlier sent 4.
+    const steps = run(
+      Array.from({ length: 6 }, (_, i) => [-4, i * 400] as [number, number]),
+      10
+    );
+    expect(steps.map((s) => s.keys)).toEqual([UP, '', UP, UP, UP, UP]);
+    // Over a long run the count follows the travel (a page per perPage rows, one ahead).
+    const long = run(
+      Array.from({ length: 200 }, (_, i) => [-4, i * 400] as [number, number]),
+      38
+    );
+    const pages = long.filter((s) => s.keys).length;
+    expect(pages).toBeGreaterThanOrEqual(Math.floor((200 * 4) / 19));
+    expect(pages).toBeLessThanOrEqual(Math.ceil((200 * 4) / 19) + 1);
+  });
+
+  it('treats a touch contact whose first move is 2 rows or more the same way (opener size, not device)', () => {
+    // [lines, ms, extra]: one contact (touchId 1), a 3-row opening touchmove and the next 16 ms later.
+    const steps = run(
+      [
+        [-3, 0, { touchId: 1 }],
+        [-3, 16, { touchId: 1 }],
+      ],
+      38
+    );
+    expect(steps.map((s) => s.keys)).toEqual([UP, '']);
   });
 
   it('keeps a notch debt across slow pauses (up to PAGE_KEY_NOTCH_DEBT_MS), then pages the next notch at once', () => {
