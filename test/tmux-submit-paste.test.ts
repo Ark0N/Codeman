@@ -293,4 +293,21 @@ describe('sendInput line breaks', () => {
     expect(typed.ran).toHaveLength(1);
     expect(typed.ran[0]).toMatch(/ send-keys -t "codeman-abc12345" -l -- 'just type'$/);
   });
+
+  // The argv a shell hands tmux must put `--` right before the text, or tmux reads
+  // a leading `-` as its own option and types nothing.
+  it('types text that starts with a hyphen after --, on both send-keys -l branches', async () => {
+    const keysArgv = (cmd: string) => argvOf(cmd.replace(/^.*? send-keys /, `${FAKE_TMUX} send-keys `));
+
+    const typed = managerWithSession();
+    await typed.sendInput('s1', '-x hello');
+    expect(typed.ran).toHaveLength(1);
+    expect(keysArgv(typed.ran[0]).slice(-3)).toEqual(['-l', '--', '-x hello']);
+
+    const answer = managerWithSession();
+    await answer.sendInput('s1', '-\r');
+    expect(answer.ran).toHaveLength(2);
+    expect(keysArgv(answer.ran[0]).slice(-3)).toEqual(['-l', '--', '-']);
+    expect(answer.ran[1]).toMatch(/ send-keys -t "codeman-abc12345" Enter$/);
+  });
 });
