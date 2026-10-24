@@ -329,7 +329,6 @@
   // Read off the live screen rows (the last `rows` rows of the active buffer), counting non-blank rows from
   // the bottom: the trust prompt is drawn at the TOP of an otherwise blank screen.
   const CODEX_MENU_OPTION_RE = /^ {0,2}› (?:\d+\. |Add notes)/;
-  const CODEX_MENU_SCAN_ROWS = 24;
   // A wrapped key hint continues on rows that start in lower case (`cancel`, `esc to interrupt`) or with a separator.
   const CODEX_MENU_HINT_WRAP_RE = /^ {2}[a-z←|]/;
   const CODEX_MENU_FOOTER_RE = /^ {1,4}(?:Press enter to confirm|enter (?:select|continue)|tab (?:to add|or esc to clear) notes)/;
@@ -340,7 +339,7 @@
       // narrow pane wraps them over more rows that start in lower case: nothing else may sit under them, so
       // an answer that quotes the hints (above the composer, a tip and a status row) is not a menu.
       const rows = [];
-      for (let y = buf.baseY + terminal.rows - 1; y >= buf.baseY && rows.length < CODEX_MENU_SCAN_ROWS; y--) {
+      for (let y = buf.baseY + terminal.rows - 1; y >= buf.baseY; y--) {
         const text = buf.getLine(y)?.translateToString(true) ?? '';
         if (text.trim()) rows.push(text);
       }

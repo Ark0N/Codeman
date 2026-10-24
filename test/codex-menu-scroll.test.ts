@@ -115,6 +115,18 @@ describe('isCodexSelectionMenu on live captures', () => {
     expect(isMenu(name), name).toBe(false);
   });
 
+  it('still reads a narrow question whose option descriptions wrap over many rows', () => {
+    // The selected option sat 16 rows up from the bottom at 36 columns; sentence-length descriptions on
+    // a phone-width pane push it further, and an earlier row cap lost it (the menu was missed and the
+    // wheel moved the selection again).
+    const rows = fixture('question-w36.txt').split('\n');
+    const at = rows.findIndex((row) => /^\s{0,2}› 1\./.test(row));
+    expect(at).toBeGreaterThan(-1);
+    rows.splice(at + 1, 0, ...Array.from({ length: 12 }, (_, i) => `      wrapped description row ${i + 1}`));
+    const terminal = terminalShowing(rows.join('\n'), 60);
+    expect(windowRef.CodemanTerminalInput.isCodexSelectionMenu(terminal)).toBe(true);
+  });
+
   it('is false for a terminal it cannot read', () => {
     expect(windowRef.CodemanTerminalInput.isCodexSelectionMenu(undefined)).toBe(false);
     expect(windowRef.CodemanTerminalInput.isCodexSelectionMenu({ rows: 10, buffer: { active: { baseY: 0 } } })).toBe(
