@@ -3048,7 +3048,19 @@ class CodemanApp {
     const targets = [];
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (node.parentElement?.closest('a')) continue;
-      const found = findFilePathLinks(node.nodeValue || '');
+      // Markdown puts **Saved to:** in a separate <strong> node. Carry only
+      // an explicit leading path label into detection; never arbitrary prose
+      // or a label from another block. The label itself stays untouched.
+      const label = node.previousSibling;
+      const beforeLabel = label?.previousSibling;
+      const labelText = label?.nodeName === 'STRONG' ? label.textContent : '';
+      const leadingLabel =
+        /^(?:P|LI)$/.test(node.parentElement?.tagName || '') &&
+        (!beforeLabel || (beforeLabel.nodeType === 3 && !beforeLabel.nodeValue.trim() && !beforeLabel.previousSibling));
+      const prefix = leadingLabel && SPACED_FILE_PATH_LABEL_PATTERN.test(labelText) ? `${labelText} ` : '';
+      const found = findFilePathLinks(prefix + (node.nodeValue || ''))
+        .filter((hit) => hit.index >= prefix.length)
+        .map((hit) => ({ ...hit, index: hit.index - prefix.length }));
       if (found.length > 0) targets.push([node, found]);
     }
 
