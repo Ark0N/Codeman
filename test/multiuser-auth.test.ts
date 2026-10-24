@@ -186,9 +186,10 @@ describe('multi-user auth', () => {
       const res = await fetch(rurl('/api/status'), { headers: { Authorization: basic('bob', `bad-${i}`) } });
       expect(res.status).toBe(401);
     }
-    // Finding #17: the CORRECT password must ALWAYS win (verified BEFORE the per-username
-    // throttle) — the accumulated failures can never lock the account out — and success
-    // clears the failure buckets. Previously this returned 429 (the DoS being fixed).
+    // Finding #17: the per-username bucket is checked AFTER the verify, so it never denies
+    // a correct password, and success clears the failure buckets. Previously this returned
+    // 429 (the DoS being fixed). Nine failures also stay under the per-(username, IP) gate,
+    // which is checked before the verify; that is why the correct password is 200 here.
     const good = await fetch(rurl('/api/status'), { headers: { Authorization: basic('bob', 'bobpass123') } });
     expect(good.status).toBe(200);
     // Self-heal: a fresh wrong attempt is 401 again (the counter was reset by the success).
@@ -254,6 +255,24 @@ describe('multi-user auth', () => {
     expect((await login(ipA, 'alice', 'alicepass1')).statusCode).toBe(200);
     // Neither success cleared bob's bucket on ipA: that one is per pair.
     expect((await login(ipA, 'bob', 'bobpass123')).statusCode).toBe(429);
+  });
+
+  it('per-IP pre-gate: concurrent failures from one IP are all counted', async () => {
+    const login = await startIpServer();
+    const ip = '203.0.113.40';
+
+    // AUTH_IP_FAILURE_MAX wrong passwords in flight at once, spread so neither the pair
+    // nor the per-username bucket can refuse any of them. The per-IP count is written
+    // after the scrypt await, so each write must re-read it or the burst counts as one.
+    const perUser = AUTH_FAILURE_MAX - 1;
+    const burst = [];
+    for (let i = 0; i < AUTH_IP_FAILURE_MAX; i++) {
+      burst.push(login(ip, `burst${Math.floor(i / perUser)}`, `bad-${i}`));
+    }
+    await Promise.all(burst);
+
+    // The bucket is full, so the next request from that IP is refused before scrypt.
+    expect((await login(ip, 'burst-next', 'bad')).statusCode).toBe(429);
   });
 
   it('per-(username, IP) gate: a correct password clears the pair bucket', async () => {

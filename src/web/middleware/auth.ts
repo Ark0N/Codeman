@@ -364,9 +364,9 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
     // Per-(username, IP) failure bucket: checked BEFORE the verify, so it is what
     // caps verified guesses against one account from one source. Keyed on the pair,
     // so other IPs can't lock the account out and two users behind one shared IP
-    // don't lock each other out. Same decay as the other buckets; a key is only
-    // created by a failed verify that the per-IP pre-gate also counts, so it grows
-    // no faster than userFailures.
+    // don't lock each other out. Same decay as the other buckets: it holds one key
+    // per (IP, username) pair that failed a verify, swept by the same TTL, so like
+    // them it grows only with failed scrypt verifies.
     state.userIpFailures = new StaleExpirationMap<string, number>({
       ttlMs: AUTH_FAILURE_WINDOW_MS,
       refreshOnGet: false,
@@ -654,10 +654,12 @@ function registerMultiUserAuthHook(
       // Failed guess: count it against all three buckets. Once the per-username bucket
       // reaches the cap, further FAILED attempts get 429 from any IP, but this path is
       // only reached on a wrong password, so it can never deny a correct one.
+      // Every count is re-read after the await: `ipFail` was read before it, and
+      // concurrent failures from one IP would otherwise all write the same value.
       const uFail = (userFailures.get(normUser) ?? 0) + 1;
       userFailures.set(normUser, uFail);
       userIpFailures.set(pairKey, (userIpFailures.get(pairKey) ?? 0) + 1);
-      authFailures.set(clientIp, ipFail + 1);
+      authFailures.set(clientIp, (authFailures.get(clientIp) ?? 0) + 1);
       if (uFail >= AUTH_FAILURE_MAX) {
         sendAuthRateLimit(reply, userFailures, normUser);
         return;
