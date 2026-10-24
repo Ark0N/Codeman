@@ -69,6 +69,8 @@ describe('header divider', () => {
     expect(js).toContain('localStorage');
     expect(js).not.toContain('/api/settings');
     expect(js).toMatch(/key === 'Home'/);
+    // Escape belongs to the global close-panels handler (app.js), so the handle must not claim it too.
+    expect(js).not.toMatch(/'Escape'/);
     expect(js).toContain("addEventListener('dblclick'");
   });
 });

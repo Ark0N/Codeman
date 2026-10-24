@@ -126,6 +126,28 @@ describe('header divider (real Chromium)', () => {
     await p.close();
   });
 
+  it('never stores a width below the minimum, and widens on the first ArrowLeft after a held ArrowRight', async () => {
+    await open({ chip: true });
+    const stored = () => p.evaluate(() => Number(localStorage.getItem('codeman-header-right-width')));
+    // a drag into the window's last pixels used to store a negative width, which the next load dropped
+    await dragTo(-6);
+    expect(await stored()).toBeGreaterThanOrEqual(160);
+    await p.locator('.header-divider').dblclick();
+    await p.locator('.header-divider').focus();
+    for (let i = 0; i < 60; i++) await p.keyboard.press('ArrowRight');
+    await settled();
+    expect(await stored()).toBeGreaterThanOrEqual(160);
+    const floor = (await box('#headerRight')).width;
+    // Escape is the global close-panels key, not a reset
+    await p.keyboard.press('Escape');
+    await settled();
+    expect(Math.abs((await box('#headerRight')).width - floor)).toBeLessThan(2);
+    await p.keyboard.press('ArrowLeft');
+    await settled();
+    expect((await box('#headerRight')).width).toBeGreaterThan(floor);
+    await p.close();
+  });
+
   it('stops the divider at the widest reading so nothing pokes out past it', async () => {
     await open({ chip: true });
     await dragTo(20);

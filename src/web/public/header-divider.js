@@ -23,8 +23,8 @@
 
   /**
    * How much of the usage readings to show for a toolbar this wide. The narrower the toolbar, the more of
-   * the labels go: window labels first, then provider names (shortened), then the percentages (the rings
-   * stay, and the chip's tooltip keeps the numbers).
+   * the labels go: window labels first, then provider names (shortened), then, in the Compact style, the
+   * percentages (the rings stay, and the chip's tooltip keeps the numbers).
    */
   function densityFor(width) {
     if (width >= 560) return '';
@@ -134,7 +134,7 @@
     }
 
     function apply(width) {
-      wanted = width === null ? null : Math.round(width);
+      wanted = width === null ? null : Math.max(MIN_WIDTH, Math.round(width));
       writeStored(wanted);
       settle();
       relayout();
@@ -188,10 +188,11 @@
     handle.addEventListener('dblclick', () => apply(null));
 
     handle.addEventListener('keydown', (event) => {
-      if (event.key === 'Home' || event.key === 'Escape') {
+      if (event.key === 'Home') {
         apply(null);
       } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-        apply((wanted ?? current()) + (event.key === 'ArrowLeft' ? KEY_STEP : -KEY_STEP));
+        // Step from the width on screen, not the request, so a key held past the floor never leaves a dead zone.
+        apply(current() + (event.key === 'ArrowLeft' ? KEY_STEP : -KEY_STEP));
       } else {
         return;
       }
