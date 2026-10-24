@@ -1213,6 +1213,9 @@
       // session, which is usually not the active one: a page key would move its
       // selector. Consumed, so xterm does not scroll the rows under it either.
       if (app.tabAlerts?.get(this.sessionId) === 'action') return true;
+      // A Codex selection menu is not an alert, but PageUp/PageDown move its selection (see
+      // CodemanTerminalInput.isCodexSelectionMenu), so it consumes the wheel the same way.
+      if (app._codexMenuOpen?.({ terminal: this.terminal, sessionId: this.sessionId })) return true;
       if (ev.ctrlKey || Math.abs(ev.deltaX || 0) > Math.abs(ev.deltaY || 0)) return true;
       if (this._pageKeyGesture?.dir && this._pageKeyGesture.dir !== Math.sign(lines)) this._scrollBytes = '';
       const step = input.pageKeysForGesture(this._pageKeyGesture, ev, lines, this.terminal.rows, performance.now());

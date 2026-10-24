@@ -319,6 +319,41 @@
     }
   }
 
+  // A Codex selection menu on screen: the "Implement this plan?" prompt, the /model, /permissions and
+  // /review pickers, an approval, a question or the trust prompt. Each draws its options as numbered rows
+  // with the selected one marked `› N. ` (a question indents it two spaces, and its notes field reads
+  // `› Add notes`) and a key-hint footer (`enter select · esc back`, `enter
+  // continue · esc back`, `Press enter to confirm ...`). Codex uses PageUp and PageDown there to move
+  // the SELECTION (measured on 0.164.0: PageDown from option 1 lands on option 3), so a wheel turned
+  // into page keys would walk the cursor through the options, one notch onto "Yes, implement this plan".
+  // Read off the live screen rows (the last `rows` rows of the active buffer), counting non-blank rows from
+  // the bottom: the trust prompt is drawn at the TOP of an otherwise blank screen.
+  const CODEX_MENU_OPTION_RE = /^ {0,2}› (?:\d+\. |Add notes)/;
+  // A wrapped key hint continues on rows that start in lower case (`cancel`, `esc to interrupt`) or with a separator.
+  const CODEX_MENU_HINT_WRAP_RE = /^ {2}[a-z←|]/;
+  const CODEX_MENU_FOOTER_RE = /^ {1,4}(?:Press enter to confirm|enter (?:select|continue)|tab (?:to add|or esc to clear) notes)/;
+  function isCodexSelectionMenu(terminal) {
+    try {
+      const buf = terminal.buffer.active;
+      // The non-blank rows from the bottom of the screen up. A menu's key hints are the last thing drawn, and a
+      // narrow pane wraps them over more rows that start in lower case: nothing else may sit under them, so
+      // an answer that quotes the hints (above the composer, a tip and a status row) is not a menu.
+      const rows = [];
+      for (let y = buf.baseY + terminal.rows - 1; y >= buf.baseY; y--) {
+        const text = buf.getLine(y)?.translateToString(true) ?? '';
+        if (text.trim()) rows.push(text);
+      }
+      let footerAt = 0;
+      while (footerAt < rows.length && !CODEX_MENU_FOOTER_RE.test(rows[footerAt])) {
+        if (!CODEX_MENU_HINT_WRAP_RE.test(rows[footerAt])) return false;
+        footerAt++;
+      }
+      return footerAt < rows.length && rows.slice(footerAt + 1).some((text) => CODEX_MENU_OPTION_RE.test(text));
+    } catch {
+      return false;
+    }
+  }
+
   // Screen row of the cursor, for the local-echo prompt finders: xterm's cursorY is
   // baseY-relative, so a viewport parked above the bottom shifts it. Null when off screen.
   function cursorViewportRow(terminal) {
@@ -404,6 +439,7 @@
     isComposerNavKey,
     classifyPredictInput,
     isCodexComposerRow,
+    isCodexSelectionMenu,
     cursorViewportRow,
     CODEX_COMPOSER_ROW_RE,
     BRACKETED_PASTE_START,
@@ -6061,8 +6097,9 @@ Object.assign(CodemanApp.prototype, {
    * pinch), a mostly horizontal swipe (both deltas present, |deltaX| > |deltaY|;
    * the touch path locks its own axis before it gets here), and any gesture while
    * the session has an open dialog (tab alert 'action', set by a pending
-   * permission_prompt or elicitation_dialog), so a page key never reaches its
-   * selector.
+   * permission_prompt or elicitation_dialog) or while a Codex selection menu is on
+   * screen (the "Implement this plan?" prompt, a /model picker; see
+   * isCodexSelectionMenu), so a page key never reaches its selector.
    *
    * @returns true when the gesture was consumed here (the caller must not also
    *          scroll locally).
@@ -6085,6 +6122,12 @@ Object.assign(CodemanApp.prototype, {
     // move its selector. Consumed, so the buffer does not scroll under it either.
     if (this.tabAlerts?.get(this.activeSessionId) === 'action') {
       this._logScrollRouting('page-keys-dialog-open');
+      return true;
+    }
+    // Codex's own selection menus (the "Implement this plan?" prompt among them) are not alerts, but PageUp
+    // and PageDown move their selection, so the wheel is consumed there too.
+    if (this._codexMenuOpen()) {
+      this._logScrollRouting('page-keys-menu-open');
       return true;
     }
     // A hollow buffer whose PANE still holds tmux scrollback is unloaded, not
@@ -6120,6 +6163,14 @@ Object.assign(CodemanApp.prototype, {
     if (step.keys) this._queueScrollBytes(step.keys);
     this._logScrollRouting('page-keys');
     return true;
+  },
+
+  // Is a Codex selection menu showing in this pane (or the pane `target` names: a tile passes its own
+  // terminal and session)? See isCodexSelectionMenu.
+  _codexMenuOpen(target = {}) {
+    const session = this.sessions?.get(target.sessionId || this.activeSessionId);
+    if (session?.mode !== 'codex') return false;
+    return window.CodemanTerminalInput.isCodexSelectionMenu(target.terminal || this.terminal);
   },
 
   /**
