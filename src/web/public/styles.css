@@ -2249,6 +2249,111 @@ html[data-tab-orientation='vertical'].tab-rail-compact
   margin-left: auto;
   padding-left: 0.75rem;
   border-left: 1px solid var(--glass-border);
+  position: relative;
+}
+
+/* Draggable edge of the toolbar (header-divider.js). Absolute, so it takes no layout room and the
+   existing border-left stays the visible line. */
+.header-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  width: 12px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 2;
+}
+
+.header-divider:hover,
+.header-divider:focus-visible {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  outline: none;
+}
+
+.header-divider:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* Everything below applies only where the tabs share the header with the toolbar, i.e. where the handle is
+   visible to undo it: not in the sidebar layout, the vertical rail or a solo window, and not on a phone. */
+
+/* A width the user chose: the toolbar keeps it and wraps onto a second line when its content is wider. */
+@media (min-width: 769px) {
+  html[data-header-right-width]:not([data-tab-orientation='vertical']):not([data-session-list='sidebar'])
+    body:not(.solo-mode)
+    .header-right {
+    flex: 0 0 var(--header-right-width);
+    width: var(--header-right-width);
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-content: center;
+    row-gap: 0.25rem;
+    min-height: var(--header-height);
+  }
+
+  /* The narrower the toolbar, the less each usage reading shows (data-header-density, header-divider.js):
+     tight drops the window and CPU/MEM labels, dense shortens the provider names, tiny keeps only the rings.
+     The prefix outweighs the per-style rules further down, so every header-stats style follows it. */
+  html[data-header-density]:not([data-tab-orientation='vertical']):not([data-session-list='sidebar'])
+    body:not(.solo-mode)
+    :is(.header-system-stats .stat-label, .header-plan-usage .pu-label) {
+    display: none;
+  }
+
+  html[data-header-density]:not([data-tab-orientation='vertical']):not([data-session-list='sidebar'])
+    body:not(.solo-mode)
+    :is(.header-system-stats, .header-plan-usage) {
+    gap: 8px;
+    padding: 0 8px;
+  }
+
+  html:is([data-header-density='dense'], [data-header-density='tiny']):not([data-tab-orientation='vertical']):not(
+      [data-session-list='sidebar']
+    )
+    body:not(.solo-mode)
+    .header-plan-usage
+    .pu-provider {
+    font-size: 0;
+  }
+
+  html:is([data-header-density='dense'], [data-header-density='tiny']):not([data-tab-orientation='vertical']):not(
+      [data-session-list='sidebar']
+    )
+    body:not(.solo-mode)
+    .header-plan-usage
+    .pu-provider::after {
+    content: attr(data-short);
+    font-size: 0.6rem;
+  }
+
+  /* Rings-only is a Compact-style reading: the other styles have no rings, so they keep their values. */
+  html[data-header-stats='compact'][data-header-density='tiny']:not([data-tab-orientation='vertical']):not(
+      [data-session-list='sidebar']
+    )
+    body:not(.solo-mode)
+    :is(.header-system-stats .stat-value, .header-plan-usage .pu-val) {
+    display: none;
+  }
+}
+
+body.header-divider-dragging,
+body.header-divider-dragging * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* Only where the tabs share the header with the toolbar. */
+html[data-tab-orientation='vertical'] .header-divider,
+html[data-session-list='sidebar'] .header-divider,
+body.solo-mode .header-divider {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .header-divider {
+    display: none;
+  }
 }
 
 /* Connection Indicator */
