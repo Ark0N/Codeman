@@ -730,8 +730,10 @@ describe('pageKeysForGesture, the pure gesture rules both panes share', () => {
     expect(steps.map((s) => s.keys)).toEqual([UP, '', '', UP]);
   });
 
-  it('accumulates a notch-sized opening event, and carries plain travel across notches', () => {
-    // Five 4-row notches 400 ms apart: each is a new gesture, none pages alone.
+  it('pages a notch-sized opening event at once, and the notches after it repay it', () => {
+    // Five 4-row notches 400 ms apart: the first pays the page, the next four (16 rows of travel
+    // against the 14 owed on 36 rows, half a screen less the opener's 4) repay it, and none of them
+    // pages again.
     const steps = run([
       [-4, 0],
       [-4, 400],
@@ -739,7 +741,86 @@ describe('pageKeysForGesture, the pure gesture rules both panes share', () => {
       [-4, 1200],
       [-4, 1600],
     ]);
-    expect(steps.map((s) => s.keys).join('')).toBe(UP);
+    expect(steps.map((s) => s.keys)).toEqual([UP, '', '', '', '']);
+  });
+
+  it('pages a mouse notch at once (4 rows Chrome, 3 rows Firefox) and repays it over the notches that follow', () => {
+    // Before this, the first 5 Chrome notches (7 Firefox) sent nothing at all: a gesture of a few notches
+    // looked dead. Each page now comes with the notch that opens it instead of the one that completes it:
+    // the rate is the same, one page per 19 rows of travel, a page ahead.
+    const notches = (lines: number, count: number) =>
+      run(
+        Array.from({ length: count }, (_, i) => [lines, i * 400] as [number, number]),
+        38
+      );
+    // Chrome: a page at notch 1, repaid by notches 2 to 5, and the next gesture opens at notch 6.
+    expect(notches(-4, 11).map((s) => s.keys)).toEqual([UP, '', '', '', '', UP, '', '', '', '', UP]);
+    // Firefox's 3-row notches repay it over notches 2 to 7, so the next page opens at notch 8.
+    expect(notches(-3, 8).map((s) => s.keys)).toEqual([UP, '', '', '', '', '', '', UP]);
+  });
+
+  it('keeps the leftover travel when a notch opens the next gesture, so the page rate matches plain travel', () => {
+    // 6 notches of 4 rows on a 10-row tile (5 rows a page): the page pre-paid by notch 1 is repaid
+    // by notch 2, the leftover opens notch 3's page, and so on. Dropping the leftover (the first cut
+    // of this rule) sent 3 pages for the same travel that earlier sent 4.
+    const steps = run(
+      Array.from({ length: 6 }, (_, i) => [-4, i * 400] as [number, number]),
+      10
+    );
+    expect(steps.map((s) => s.keys)).toEqual([UP, '', UP, UP, UP, UP]);
+    // Over a long run the count follows the travel (a page per perPage rows, one ahead).
+    const long = run(
+      Array.from({ length: 200 }, (_, i) => [-4, i * 400] as [number, number]),
+      38
+    );
+    const pages = long.filter((s) => s.keys).length;
+    expect(pages).toBeGreaterThanOrEqual(Math.floor((200 * 4) / 19));
+    expect(pages).toBeLessThanOrEqual(Math.ceil((200 * 4) / 19) + 1);
+  });
+
+  it('treats a touch contact whose first move is 2 rows or more the same way (opener size, not device)', () => {
+    // [lines, ms, extra]: one contact (touchId 1), a 3-row opening touchmove and the next 16 ms later.
+    const steps = run(
+      [
+        [-3, 0, { touchId: 1 }],
+        [-3, 16, { touchId: 1 }],
+      ],
+      38
+    );
+    expect(steps.map((s) => s.keys)).toEqual([UP, '']);
+  });
+
+  it('keeps a notch debt across slow pauses (up to PAGE_KEY_NOTCH_DEBT_MS), then pages the next notch at once', () => {
+    const { PAGE_KEY_NOTCH_DEBT_MS } = loadTerminalUiHarness().windowRef.CodemanTerminalInput;
+    expect(PAGE_KEY_NOTCH_DEBT_MS).toBe(3000);
+    // Notches 1.2 s apart (past the old second of debt) still add up to one page, not one each.
+    const slow = run(
+      Array.from({ length: 5 }, (_, i) => [-4, i * 1200] as [number, number]),
+      38
+    );
+    expect(slow.map((s) => s.keys)).toEqual([UP, '', '', '', '']);
+    // After more than that of quiet it is a new gesture: its first notch pages at once.
+    const resumed = run(
+      [
+        [-4, 0],
+        [-4, 400],
+        [-4, 4_000],
+      ],
+      38
+    );
+    expect(resumed.map((s) => s.keys)).toEqual([UP, '', UP]);
+  });
+
+  it('drops a notch debt when the direction reverses, so a notch back pages too', () => {
+    const steps = run(
+      [
+        [-4, 0],
+        [-4, 400],
+        [4, 800],
+      ],
+      38
+    );
+    expect(steps.map((s) => s.keys)).toEqual([UP, '', DOWN]);
   });
 
   it('keeps a same-direction pre-paid debt for PAGE_KEY_DEBT_MS, then drops it with its gesture', () => {
@@ -1092,11 +1173,12 @@ describe('consistent scroll gesture adapters', () => {
     expect(app._wheelTickGesture.pending).toBeCloseTo(-0.8);
   });
 
-  it('preserves accumulated coarse Codex wheel fallback travel', () => {
+  it('pages a coarse Codex wheel notch at once and keeps the travel after it as repayment', () => {
     const { app, sent } = hollowApp({ mode: 'codex', rows: 43 });
     app._maybePageCliTranscript({ deltaY: -100 }, -4);
     app._flushWheelSgrQueue();
-    expect(sent).toEqual([]);
+    expect(sent).toHaveLength(1);
+    // Five more notches (20 rows, a page is 22) repay the page the first one took: no second page.
     for (let i = 0; i < 5; i++) app._maybePageCliTranscript({ deltaY: -100 }, -4);
     app._flushWheelSgrQueue();
     expect(sent).toHaveLength(1);
