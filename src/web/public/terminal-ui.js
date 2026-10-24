@@ -5883,7 +5883,8 @@ Object.assign(CodemanApp.prototype, {
     // a fix. Scoping the setting away from those modes would be the other
     // option, but it would override an explicit user choice; instead the caller
     // falls through to _maybePageCliTranscript, so the gesture still pages the
-    // CLI's transcript and the setting keeps meaning exactly what it says.
+    // CLI's transcript (or loads unloaded tmux scrollback, see there) and the
+    // setting keeps meaning exactly what it says.
     if (this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback) return false;
     const mode = (target.terminal || this.terminal)?.modes?.mouseTrackingMode;
     if (mode && mode !== 'none') return false;
@@ -6038,8 +6039,11 @@ Object.assign(CodemanApp.prototype, {
    *
    * Guarded by `_localScrollbackIsHollow()` (the `transcriptPageKeys` capability +
    * `baseY === 0`) plus a false forwarding gate, so a session with real local
-   * scrollback is never touched. Shift is excluded on purpose: it is the explicit
-   * "give me local scrollback" gesture and must keep that meaning.
+   * scrollback is never touched, and neither is one whose scrollback tmux still
+   * holds but the last replay did not carry (`paneHistoryLines` > 0): that one
+   * falls through to the local path, whose scroll-to-top pull loads it. Shift is
+   * excluded on purpose: it is the explicit "give me local scrollback" gesture
+   * and must keep that meaning.
    *
    * The FIRST event of a trackpad-sized gesture (opening under
    * PAGE_KEY_IMMEDIATE_MAX_ROWS) pages at once. Waiting for half a screen of
@@ -6083,6 +6087,22 @@ Object.assign(CodemanApp.prototype, {
       this._logScrollRouting('page-keys-dialog-open');
       return true;
     }
+    // A hollow buffer whose PANE still holds tmux scrollback is unloaded, not
+    // hollow: after a server restart a tab switch replays a byte tail that is
+    // only the attach repaint (baseY 0), and paging from there moved an inline
+    // Claude's composer cursor instead of its transcript. The remembered
+    // `paneHistoryLines` (tmux `#{history_size}`) says a `full=1` pull can add
+    // it, so fall through to local scrolling, whose top-of-buffer pull fetches
+    // it (_maybeLoadMoreHistoryOnScroll -> _maybeRefetchFullHistory). 0 and
+    // unknown keep paging. Page keys already queued belong to the abandoned
+    // route and go with the gesture debt. Not logged as a decision of its own
+    // (it would alternate with the caller's line every frame until the pull
+    // lands): the caller's `local-scrollback` line carries `paneHistoryLines`.
+    if ((this._paneHistoryLines?.get(this.activeSessionId) ?? 0) > 0) {
+      this._pageKeyGesture = null;
+      this._wheelSgrQueue = '';
+      return false;
+    }
     // Leftover travel and the gesture in progress belong to the tab they were made on.
     if (this._pageKeySession !== this.activeSessionId) {
       this._pageKeySession = this.activeSessionId;
@@ -6124,16 +6144,20 @@ Object.assign(CodemanApp.prototype, {
     // the DECSETs), so the CLI's real tracking state is reported separately.
     const cliTracking = session?.cliMouseTracking === true;
     const baseY = this.terminal?.buffer?.active?.baseY ?? -1;
+    // What tmux still holds for this pane (the last capture's `paneHistoryLines`):
+    // `localScrollbackRows=0` beside a positive count is an UNLOADED buffer,
+    // which _maybePageCliTranscript hands to the local path instead of paging.
+    const paneHistory = this._paneHistoryLines?.get(sessionId);
     const signature =
       `${decision}|${session?.mode}|${session?.cliVersion}|${optOut}|` +
-      `${tracking}|${encoding}|${cliTracking}|${baseY > 0}`;
+      `${tracking}|${encoding}|${cliTracking}|${baseY > 0}|${(paneHistory ?? 0) > 0}`;
     if (!this._scrollRoutingLogged) this._scrollRoutingLogged = new Map();
     if (this._scrollRoutingLogged.get(sessionId) === signature) return;
     this._scrollRoutingLogged.set(sessionId, signature);
     console.log(
       `[scroll] ${sessionId} → ${decision} (mode=${session?.mode || '?'}, cliVersion=${session?.cliVersion || 'unknown'}, ` +
         `localScrollbackOptOut=${optOut}, mouseTracking=${tracking}, mouseEncoding=${encoding}, ` +
-        `cliMouseTracking=${cliTracking}, localScrollbackRows=${baseY})`
+        `cliMouseTracking=${cliTracking}, localScrollbackRows=${baseY}, paneHistoryLines=${paneHistory ?? 'unknown'})`
     );
   },
 
