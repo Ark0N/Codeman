@@ -365,15 +365,18 @@ function lookupSessionOrFail(ctx: SessionPort, sessionId: string, req: FastifyRe
  * return, so this returns the persisted record instead. Same ownership
  * enforcement, same 404-not-403 leak protection — this is that function's
  * missing other half, not a separate check reimplemented inline.
+ *
+ * `req` is REQUIRED for the same reason as on `findSessionOrFail`: an optional
+ * one would let a caller that forgot it retire another user's row in multi-user mode.
  */
 export function findPersistedSessionOrFail(
   store: { getSession(id: string): SessionState | null },
   sessionId: string,
-  req?: FastifyRequest
+  req: FastifyRequest
 ): SessionState {
   const persisted = store.getSession(sessionId);
   if (!persisted) throw sessionNotFoundError(sessionId);
-  if (req && !canAccessOwned(getAuthUser(req), persisted.owner)) throw sessionNotFoundError(sessionId);
+  if (!canAccessOwned(getAuthUser(req), persisted.owner)) throw sessionNotFoundError(sessionId);
   return persisted;
 }
 
