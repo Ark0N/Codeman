@@ -51,7 +51,15 @@ import { SseEvent } from '../sse-events.js';
 import { getInstallInfo, checkForUpdate, startUpdate, getUpdateStatusForApi } from '../self-update.js';
 
 import { getRepositoryStatus } from '../repo-status.js';
-import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort, TabLayoutPort } from '../ports/index.js';
+import type {
+  SessionPort,
+  EventPort,
+  ConfigPort,
+  InfraPort,
+  AuthPort,
+  TabLayoutPort,
+  KeepWarmPort,
+} from '../ports/index.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import { QR_AUTH_FAILURE_MAX } from '../../config/tunnel-config.js';
 import { AUTH_SESSION_TTL_MS } from '../../config/auth-config.js';
@@ -168,7 +176,7 @@ export function settingsForNonAdmin(settings: unknown): unknown {
 
 export function registerSystemRoutes(
   app: FastifyInstance,
-  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort
+  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort & KeepWarmPort
 ): void {
   const windowStatesPath = dataPath('subagent-window-states.json');
   const parentMapPath = dataPath('subagent-parents.json');
@@ -1103,6 +1111,15 @@ export function registerSystemRoutes(
       // drift. Same convention as the tmuxHistoryLimit block above.
       // Handle subagent tracking toggle dynamically
       toggleService((merged.subagentTrackingEnabled as boolean) ?? true, subagentWatcher, 'Subagent watcher');
+      // The prompt-cache keep-warm keeps its default and cap in memory; a changed default or cap
+      // makes it re-read them and re-evaluate every session now rather than at its next cache report.
+      // Compared on `merged`, not tested for in the body: the browser sends both keys on every save.
+      if (
+        merged.promptCacheKeepWarm !== existing.promptCacheKeepWarm ||
+        merged.promptCacheKeepWarmMaxHours !== existing.promptCacheKeepWarmMaxHours
+      ) {
+        ctx.keepWarm.rescheduleAll();
+      }
 
       // Handle ultracode/workflow run watcher toggle dynamically (default OFF).
       // Either the docked panel OR the floating windows keep the watcher running.

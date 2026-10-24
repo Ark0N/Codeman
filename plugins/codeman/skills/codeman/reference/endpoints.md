@@ -113,7 +113,7 @@ Every JSON response: `{"success":true,"data":…}` or
 | `UNAUTHORIZED` | 401 | auth required or failed (send `-u user:password`). ⚠️ The 401 body is plain text, NOT this envelope, see [Auth and credentials](#auth-and-credentials) |
 | `FORBIDDEN` | 403 | authenticated but not permitted: an admin-only route in multi-user mode, a `workingDir`/case path outside your own workspace, or a shell session without the can-bypass-permissions grant. ⚠️ **Not** what an ownership miss on a session returns: a session you do not own answers 404 `NOT_FOUND`, identically to one that does not exist (deliberate, it leaks no existence) |
 | `NOT_FOUND` | 404 | no such session, or one this caller does not own. Also quick-start's answer for an unknown remote or docker host |
-| `SESSION_BUSY` | 409 | on a **wait**: this session's waiter cap (16, combined signal+output) is full. On **quick-start**: a session cap is full, so clean up before starting more. Two different caps can raise it: the global 50 (`MAX_CONCURRENT_SESSIONS`), and in multi-user mode the per-user cap, which defaults to half of that, **25** (`maxSessionsPerUser()`, `config/multiuser.ts:59-63`). The message tells you which |
+| `SESSION_BUSY` | 409 | on a **wait**: this session's waiter cap (16, combined signal+output) is full. On **quick-start**: a session cap is full, so clean up before starting more. Two different caps can raise it: the global cap, 50 by default (`MAX_CONCURRENT_SESSIONS`, env `CODEMAN_MAX_SESSIONS`, 1 to 462), and in multi-user mode the per-user cap, which defaults to half the global cap, **25** by default (`maxSessionsPerUser()`, `config/multiuser.ts:59-63`). The message tells you which |
 | `CONFLICT` / `ALREADY_EXISTS` | 409 | conflicts with current state |
 | `OPERATION_FAILED` | 422 | well-formed but could not be completed |
 | `RATE_LIMITED` | 429 | per-owner or process-wide waiter pool is full; back off, switching sessions will not help |
@@ -367,7 +367,7 @@ name is in front" rather than "nothing is installed". `shell` has no CLI to prob
 is absent, `jq -r` prints the literal string `null`, and every later call then targets
 `/api/v1/sessions/null`, burning the full readiness budget and reporting jq noise
 instead of the real cause. The failure codes here are `SESSION_BUSY` (a **session** cap:
-the global 50, or the per-user 25 in multi-user mode, never the waiter cap),
+the global cap (50 by default), or the per-user cap (25 by default) in multi-user mode, never the waiter cap),
 `NOT_FOUND` (an unknown remote host or docker host named by the case), `FORBIDDEN`,
 `CONFLICT`, `OPERATION_FAILED` and `INVALID_INPUT`. None of them are retryable in a
 loop.
@@ -401,7 +401,7 @@ differences that break copied code:
   `POST /api/v1/sessions/:id/interactive` (claude and the other agent CLIs) or
   `POST /api/v1/sessions/:id/shell` (shell mode) to actually start the worker.
 - Its capacity failure is **`OPERATION_FAILED` (422)**, not quick-start's
-  `SESSION_BUSY` (409), from the same global-50 / per-user-25 caps
+  `SESSION_BUSY` (409), from the same global / per-user caps (50 / 25 by default)
   (`sessionCapacityMessage()` in `route-helpers.ts`).
 
 ⚠️ `POST .../interactive` accepts `{"clearBreaker":true}`, which resets the **PTY-exit
@@ -420,8 +420,9 @@ callers send no body at all.
   **or Enter is never sent**: the text is typed onto the worker's prompt and sits
   there unsubmitted. This is [symptom 1](#1-deliveredtrue-then-every-wait-times-out),
   the number-one silent failure.
-- `input` must be single-line (newlines are stripped). To send a bare Enter (confirm
-  a dialog), send `{"input":"\r"}`.
+- With `useMux`, newlines in `input` are kept: the text goes in as one bracketed paste
+  and the `\r` submits all lines (without `useMux`, multi-line input is written straight
+  into the pane). To send a bare Enter (confirm a dialog), send `{"input":"\r"}`.
 - `input` is capped at **65536** characters. ⚠️ **Two caps disagree and the smaller one
   is the real one**: the Zod schema allows 100000 (`schemas.ts:1035`), so a 65537-to-100000
   character body passes validation and *then* 400s at the route against
@@ -796,8 +797,8 @@ response echoes.
 | `match` string | 1–200 characters, literal only | 400; `regex=` is rejected outright |
 | `from=buffer` scan window | 256 KB tail of the terminal buffer | a marker older than that tail is invisible even with `from=buffer` |
 | wait-output snippet context | 80 characters either side | `wait.snippet` is bounded, not the whole line |
-| sessions, process-wide | 50 (`MAX_CONCURRENT_SESSIONS`) | 409 `SESSION_BUSY` on quick-start |
-| sessions, per user | 25 in multi-user mode (half the global cap) | the same 409, with a different message |
+| sessions, process-wide | 50 by default (`MAX_CONCURRENT_SESSIONS`, env `CODEMAN_MAX_SESSIONS`, 1 to 462) | 409 `SESSION_BUSY` on quick-start |
+| sessions, per user | half the global cap (25 by default) in multi-user mode | the same 409, with a different message |
 | SSE clients, process-wide | 100 (`MAX_SSE_CLIENTS`) | plain-text `503 Too many SSE connections`; shared with every browser tab |
 | active bash tools tracked | 20 per session | oldest entries drop off `active-tools` |
 | auth failures per IP | 10, decaying over 15 min | plain-text 429 with `Retry-After`; locks out the login path, so never loop a bad credential |

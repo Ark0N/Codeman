@@ -16,3 +16,16 @@ it('preserves the Codex row when a later Claude status-line sample arrives', () 
     codex: { sevenDay: { usedPercentage: 40, resetAt: 3000 } },
   });
 });
+
+it('preserves the Copilot row when a later Claude status-line sample arrives', () => {
+  const module = latestModule as Record<string, unknown>;
+  const setCopilot = module.setLatestCopilotPlanUsage as (value: unknown) => unknown;
+  const setClaude = module.setLatestPlanUsage as (value: Record<string, unknown>) => unknown;
+
+  setCopilot({ monthly: { usedPercentage: 12, resetAt: 5000, used: 36, limit: 300 } });
+  expect(setClaude({ sessionId: 's2', fiveHour: { usedPercentage: 50, resetAt: 2000 } })).toMatchObject({
+    sessionId: 's2',
+    fiveHour: { usedPercentage: 50, resetAt: 2000 },
+    copilot: { monthly: { usedPercentage: 12, resetAt: 5000, used: 36, limit: 300 } },
+  });
+});

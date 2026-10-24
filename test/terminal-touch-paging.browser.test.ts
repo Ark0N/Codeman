@@ -11,6 +11,10 @@
  * the contact's id (one per touchstart, carried by its momentum frames), and a
  * contact is one gesture.
  *
+ * Its own describe covers the other touch route in the same listeners (#663):
+ * an app that turned on xterm's own SGR mouse tracking gets a drag and its
+ * fling momentum as SGR wheel reports, not a local scroll.
+ *
  * What runs for real: the shipped app (page served by a WebServer on port 0),
  * its xterm, the touch listeners, the momentum loop on requestAnimationFrame,
  * the gates in terminal-ui.js and the 40 ms key coalescer. What is stubbed:
@@ -144,4 +148,65 @@ describe('touch paging of a hollow Codex pane in a real browser', () => {
     expect(second.keys).toBe(UP + UP);
     await touch('touchend', x, y0 + Math.ceil(cell));
   }, 60000);
+
+  // Not the page-key fallback: a shell app (htop, vim) that turned on xterm's
+  // own SGR mouse tracking gets touch drags and fling momentum as SGR wheel
+  // reports (_shouldForwardTouchToApp), at phone and tablet widths. Shares this
+  // file's page and touch dispatcher.
+  describe('touch forwarding when xterm owns native SGR mouse tracking', () => {
+    it.each([390, 820])('forwards drag and momentum with native mouse tracking at %ipx', async (width) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(async (id) => {
+        const app = (window as any).app;
+        app.sessions.set(id, { id, name: id, mode: 'shell', status: 'idle' });
+        app.activeSessionId = id;
+        app.loadAppSettingsFromStorage = () => ({ terminalWheelLocalScrollback: false });
+        app._wheelSgrQueue = '';
+        const sent: string[] = [];
+        app._sendInputEphemeral = (_id: string, data: string) => sent.push(data);
+        (window as any).__mouseTouchProbe = { sent };
+        await new Promise<void>((resolve) => app.terminal.write('\x1b[?1049h\x1b[?1003h\x1b[?1006h', resolve));
+      }, PROBE_ID);
+      const point = await page.evaluate(() => {
+        const app = (window as any).app;
+        const r = document.getElementById('terminalContainer')!.getBoundingClientRect();
+        return {
+          x: r.left + 30,
+          y: r.top + 200,
+          mode: app.terminal.modes.mouseTrackingMode,
+          buffer: app.terminal.buffer.active.type,
+        };
+      });
+      expect(point.mode).toBe('any');
+      expect(point.buffer).toBe('alternate');
+      await touch('touchstart', point.x, point.y);
+      await touch('touchmove', point.x, point.y - 60);
+      const drag = await page.evaluate(() => {
+        (window as any).app._flushWheelSgrQueue();
+        return (window as any).__mouseTouchProbe.sent.join('');
+      });
+      expect(drag).toMatch(/\x1b\[<65;\d+;\d+M/);
+      await touch('touchend', point.x, point.y - 60);
+      await page.waitForTimeout(150);
+      const momentum = await page.evaluate(() => {
+        (window as any).app._flushWheelSgrQueue();
+        return (window as any).__mouseTouchProbe.sent.join('');
+      });
+      expect(momentum.length).toBeGreaterThan(drag.length);
+      // Stop momentum before changing the requested mouse encoding.
+      await touch('touchstart', point.x, point.y);
+      await touch('touchcancel', point.x, point.y);
+      await page.evaluate(async () => {
+        const app = (window as any).app;
+        app._wheelSgrQueue = '';
+        (window as any).__mouseTouchProbe.sent.length = 0;
+        await new Promise<void>((resolve) => app.terminal.write('\x1b[?1006l', resolve));
+      });
+      await touch('touchstart', point.x, point.y);
+      await touch('touchmove', point.x, point.y - 60);
+      await page.waitForTimeout(60);
+      expect(await page.evaluate(() => (window as any).__mouseTouchProbe.sent.join(''))).toBe('');
+      await touch('touchcancel', point.x, point.y);
+    });
+  });
 });

@@ -17,6 +17,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
+import { approvalInbox } from '../../src/web/approval-inbox.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
 import { registerHookEventRoutes } from '../../src/web/routes/hook-event-routes.js';
@@ -98,6 +99,103 @@ describe('hook-event-routes', () => {
       );
     });
 
+    /**
+     * The prompt-cache keep-warm's own turn (prompt-cache-keepwarm.ts) ends with the same stop
+     * hook and idle prompt as a real one. While the session marks the turn as its keep-alive,
+     * both open pre-acknowledged: the broadcast says why, and nothing is pushed.
+     */
+    it('opens the stop and idle prompt of a keep-alive turn pre-acknowledged and pushes nothing', async () => {
+      harness.ctx._session.keepAliveTurnActive = true;
+      for (const event of ['stop', 'idle_prompt']) {
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: '/api/hook-event',
+          payload: { event, sessionId: harness.ctx._sessionId, data: null },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(harness.ctx.broadcast).toHaveBeenCalledWith(
+          `hook:${event}`,
+          expect.objectContaining({ sessionId: harness.ctx._sessionId, acknowledgedReason: 'cache keep-alive' })
+        );
+      }
+      expect(harness.ctx.sendPushNotifications).not.toHaveBeenCalled();
+      // The inbox item is what a reload seeds tab alerts from, so it must open acknowledged too.
+      const item = approvalInbox.getForSession(harness.ctx._sessionId);
+      approvalInbox.resolveForSession(harness.ctx._sessionId, 'dismissed');
+      expect(item?.acknowledgedReason).toBe('cache keep-alive');
+      // acknowledgedAt is what approvals-ui.js reads to skip the alert on a reload.
+      expect(item?.acknowledgedAt).toBe(item?.createdAt);
+    });
+
+    /**
+     * Only a human spends an idle alert (CLAUDE.md, Approvals Inbox). A keep-alive turn that
+     * starts while an idle item is pending must leave that item exactly as it found it: its stop
+     * does not resolve it, and its idle prompt does not replace it, so an unseen alert stays
+     * unseen (and pushes nothing a second time) and one a person looked at keeps saying so.
+     */
+    it.each([
+      { seen: false, label: 'an unseen' },
+      { seen: true, label: 'a seen' },
+    ])('leaves $label idle item pending through a keep-alive turn', async ({ seen }) => {
+      const sessionId = harness.ctx._sessionId;
+      const hook = (event: string) =>
+        harness.app.inject({ method: 'POST', url: '/api/hook-event', payload: { event, sessionId, data: null } });
+      await hook('idle_prompt');
+      const before = approvalInbox.getForSession(sessionId);
+      expect(before?.acknowledgedAt).toBeUndefined();
+      if (seen) approvalInbox.acknowledge(sessionId);
+      const acknowledgedAt = before?.acknowledgedAt;
+      harness.ctx.sendPushNotifications.mockClear();
+      harness.ctx.broadcast.mockClear();
+
+      harness.ctx._session.keepAliveTurnActive = true;
+      await hook('stop');
+      await hook('idle_prompt');
+
+      const after = approvalInbox.getForSession(sessionId);
+      approvalInbox.resolveForSession(sessionId, 'dismissed');
+      expect(after?.id).toBe(before?.id);
+      expect(after?.acknowledgedAt).toBe(acknowledgedAt);
+      expect(after?.acknowledgedReason).toBeUndefined();
+      expect(harness.ctx.sendPushNotifications).not.toHaveBeenCalled();
+      // The page's _onHookStop and _onHookIdlePrompt return on the reason, leaving the tab alert.
+      for (const event of ['stop', 'idle_prompt']) {
+        expect(harness.ctx.broadcast).toHaveBeenCalledWith(
+          `hook:${event}`,
+          expect.objectContaining({ acknowledgedReason: 'cache keep-alive' })
+        );
+      }
+    });
+
+    it("a keep-alive turn's idle prompt ends the keep-alive window, its stop does not", async () => {
+      const sessionId = harness.ctx._sessionId;
+      const hook = (event: string) =>
+        harness.app.inject({ method: 'POST', url: '/api/hook-event', payload: { event, sessionId, data: null } });
+      harness.ctx._session.keepAliveTurnActive = true;
+      await hook('stop');
+      expect(harness.ctx._session.keepAliveTurnActive).toBe(true);
+      await hook('idle_prompt');
+      approvalInbox.resolveForSession(sessionId, 'dismissed');
+      expect(harness.ctx._session.keepAliveTurnActive).toBe(false);
+    });
+
+    it("a keep-alive turn's stop still resolves a pending permission dialog", async () => {
+      const sessionId = harness.ctx._sessionId;
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/hook-event',
+        payload: { event: 'permission_prompt', sessionId, data: null },
+      });
+      expect(approvalInbox.getForSession(sessionId)?.kind).toBe('permission');
+      harness.ctx._session.keepAliveTurnActive = true;
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/hook-event',
+        payload: { event: 'stop', sessionId, data: null },
+      });
+      expect(approvalInbox.getForSession(sessionId)).toBeUndefined();
+    });
+
     it('sends push notifications for hook events', async () => {
       const res = await harness.app.inject({
         method: 'POST',
@@ -142,6 +240,27 @@ describe('hook-event-routes', () => {
       expect(session.claudeSessionChain).toEqual(['conv-1']);
       expect(session.lastSubmitAt).toBeGreaterThan(before);
       expect(harness.ctx.persistSessionState).toHaveBeenCalledWith(session);
+    });
+
+    /**
+     * The hook's prompt text is what tells a person typing in an attached tmux client apart
+     * from the prompt-cache keep-alive (Session.markPromptSubmitted ends the keep-alive window
+     * for anything but the nudge), so the route must hand it over, and nothing else.
+     */
+    it("hands the prompt_submitted hook's prompt text to the session", async () => {
+      const session = harness.ctx._session;
+      for (const data of [
+        { session_id: 'conv-1', prompt: 'fix the login bug' },
+        { session_id: 'conv-1', prompt: 42 },
+        { session_id: 'conv-1' },
+      ]) {
+        await harness.app.inject({
+          method: 'POST',
+          url: '/api/hook-event',
+          payload: { event: 'prompt_submitted', sessionId: harness.ctx._sessionId, data },
+        });
+      }
+      expect(session.submittedPrompts).toEqual(['fix the login bug', undefined, undefined]);
     });
 
     it('records a /clear successor in the chain and persists it, without duplicating a repeat', async () => {
@@ -305,6 +424,36 @@ describe('hook-event-routes', () => {
         },
       });
       expect(res.statusCode).toBe(200);
+      expect(mockTracker.recordHookEvent).toHaveBeenCalledWith('stop', expect.any(Object));
+    });
+
+    /**
+     * The run summary files every `stop` as a warning, and the Away digest lists warnings under
+     * Needs Attention, so a keep-alive turn's hooks would add a row there (and to the session's
+     * Summary timeline) for every nudge. They are Codeman's own turn, not the agent's.
+     */
+    it("keeps a keep-alive turn's stop and idle prompt out of the run summary", async () => {
+      const sessionId = harness.ctx._sessionId;
+      const mockTracker = { recordHookEvent: vi.fn() };
+      harness.ctx.runSummaryTrackers.set(sessionId, mockTracker as never);
+      harness.ctx._session.keepAliveTurnActive = true;
+      for (const event of ['stop', 'idle_prompt']) {
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: '/api/hook-event',
+          payload: { event, sessionId, data: null },
+        });
+        expect(res.statusCode).toBe(200);
+      }
+      approvalInbox.resolveForSession(sessionId, 'dismissed');
+      expect(mockTracker.recordHookEvent).not.toHaveBeenCalled();
+
+      // The next real turn is recorded as before.
+      await harness.app.inject({
+        method: 'POST',
+        url: '/api/hook-event',
+        payload: { event: 'stop', sessionId, data: null },
+      });
       expect(mockTracker.recordHookEvent).toHaveBeenCalledWith('stop', expect.any(Object));
     });
 

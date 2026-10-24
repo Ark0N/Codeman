@@ -27,6 +27,13 @@ SESSIONS_FILE="${HOME}/.codeman/mux-sessions.json"
 CODEMAN_TMUX_SOCKET="${CODEMAN_TMUX_SOCKET:-codeman}"
 TMUX_CMD=(tmux -L "$CODEMAN_TMUX_SOCKET")
 
+# Codeman keeps the prefix table on its socket down to send-prefix (browser tabs
+# are attach clients on the same server, src/tmux-prefix-table.ts), so Ctrl+B d
+# does not detach here. An attach claims F1 in the root table instead, like
+# `codeman tui` does, and only when nothing else holds it.
+DETACH_KEY="F1"
+CLAIMED_DETACH_KEY=0
+
 
 # Cached data
 CACHED_JSON=""
@@ -36,11 +43,45 @@ REFRESH_INTERVAL=5  # Refresh data every 5 seconds
 
 # Cleanup on exit
 cleanup() {
+    release_detach_key
     tput cnorm 2>/dev/null
     stty echo 2>/dev/null
     echo ""
 }
 trap cleanup EXIT
+
+# Command bound to $DETACH_KEY in the root table; empty when the key is free
+detach_key_binding() {
+    "${TMUX_CMD[@]}" list-keys -T root 2>/dev/null \
+        | sed -nE "s/^bind-key +(-[^T ][^ ]* +)*-T root ${DETACH_KEY} +//p" | sed -E 's/ +$//'
+}
+
+release_detach_key() {
+    if [[ $CLAIMED_DETACH_KEY -eq 1 ]]; then
+        [[ "$(detach_key_binding)" == "detach-client" ]] && "${TMUX_CMD[@]}" unbind-key -T root "$DETACH_KEY" 2>/dev/null
+        CLAIMED_DETACH_KEY=0
+    fi
+}
+
+# Attach to a session with a key that gets you back out
+attach_session() {
+    local mux_name=$1 bound status
+    bound=$(detach_key_binding)
+    if [[ -z "$bound" ]] && "${TMUX_CMD[@]}" bind-key -T root "$DETACH_KEY" detach-client 2>/dev/null; then
+        CLAIMED_DETACH_KEY=1
+        bound="detach-client"
+    fi
+    if [[ "$bound" == "detach-client" ]]; then
+        echo -e "${CYAN}Attaching... (${DETACH_KEY} to detach)${NC}"
+    else
+        echo -e "${CYAN}Attaching... (${DETACH_KEY} is taken; detach from another shell: tmux -L $CODEMAN_TMUX_SOCKET detach-client -s $mux_name)${NC}"
+    fi
+    sleep 0.3
+    "${TMUX_CMD[@]}" attach-session -t "$mux_name"
+    status=$?
+    release_detach_key
+    return $status
+}
 
 # Check dependencies
 check_dependencies() {
@@ -352,9 +393,7 @@ interactive_menu() {
                     if check_alive "$mux_name"; then
                         tput cnorm
                         clear
-                        echo -e "${CYAN}Attaching... (Ctrl+B D to detach)${NC}"
-                        sleep 0.3
-                        "${TMUX_CMD[@]}" attach-session -t "$mux_name"
+                        attach_session "$mux_name"
                         tput civis
                         need_full_redraw=1
                         force_refresh
@@ -483,7 +522,11 @@ main() {
             [[ -z "${2:-}" ]] && { echo "Usage: $0 attach <N>"; exit 1; }
             force_refresh
             local mux_name=$(get_session_field $(($2-1)) "muxName")
-            check_alive "$mux_name" && "${TMUX_CMD[@]}" attach-session -t "$mux_name" || echo "Session dead or not found"
+            if check_alive "$mux_name"; then
+                attach_session "$mux_name"
+            else
+                echo "Session dead or not found"
+            fi
             ;;
         kill)
             [[ -z "${2:-}" ]] && { echo "Usage: $0 kill <N|N,M|N-M>"; exit 1; }

@@ -1483,6 +1483,10 @@ export const SettingsUpdateSchema = z
      * broadcast and /api/search, which is the user's choice to make.
      */
     autoNameSessions: z.boolean().optional(),
+    /** Prompt-cache keep-warm default for sessions that have not chosen (Session Options overrides it). */
+    promptCacheKeepWarm: z.boolean().optional(),
+    /** Hours after the last real prompt during which keep-alives are sent (default 2, DEFAULT_KEEP_WARM_MAX_HOURS). */
+    promptCacheKeepWarmMaxHours: z.number().min(0.5).max(24).optional(),
     /**
      * Spawned tabs follow their parent: a session created by another one keeps
      * following its parent's tab (into its group, moving with it) until moved by
@@ -1521,6 +1525,18 @@ export const SettingsUpdateSchema = z
      * opt-in. While OFF, GET/POST /api/mcp-sync answer 403 and the Settings controls are hidden.
      */
     mcpSyncEnabled: z.boolean().optional(),
+    /**
+     * Config backups (src/config-backup.ts): timestamped snapshots of the customized config files,
+     * taken at startup and whenever their content changes. SYNCED. Absent means ON (the feature
+     * protects against an event nobody schedules); the folder defaults to `<data dir>/backups/config`.
+     */
+    configBackupEnabled: z.boolean().optional(),
+    /** Absolute folder (a leading `~` is expanded); empty or absent = the default folder. */
+    configBackupDir: z.string().max(1024).optional(),
+    /** Keep at most this many snapshots. */
+    configBackupKeepCount: z.number().int().min(2).max(500).optional(),
+    /** Also drop snapshots older than this many days; 0 = no age limit. */
+    configBackupKeepDays: z.number().int().min(0).max(3650).optional(),
     /**
      * Read My Mind predictor model override. Empty/absent = the AI-checker
      * default (opus: prediction quality is the product and it runs only on an
@@ -1871,6 +1887,9 @@ export const AutoResumeSchema = z.object({
   enabled: z.boolean(),
 });
 
+/** `POST /api/sessions/:id/keep-warm`: `null` clears the session's choice so the app-wide default applies. */
+export const KeepWarmSchema = z.object({ enabled: z.boolean().nullable() });
+
 /** POST /api/sessions/:id/pin (COD-139) — explicit pin state for idempotency. */
 export const PinSessionSchema = z.object({
   pinned: z.boolean(),
@@ -1905,7 +1924,7 @@ export const ScheduledRunSchema = z.object({
 /** 'HH:MM' 24-hour time. */
 const hhmmSchema = z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/, 'Time must be HH:MM (24-hour)');
 
-/** Prompt delivery is single-line only (writeViaMux/Ink constraint) — reject newlines outright. */
+/** Prompt delivery is single-line only (the submit check cannot reliably recognise a multi-line paste) — reject newlines outright. */
 const noNewlines = (v: string) => !/[\r\n]/.test(v);
 
 /** Shared field shape for creating/updating a scheduled job. */
@@ -1978,10 +1997,20 @@ export const CaseOrderSchema = z.object({
   order: z.array(z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format')),
 });
 
+/**
+ * PUT /api/cases/:name/default-group — the tab group new sessions of this case
+ * land in: one of the caller's own group ids, or null for Ungrouped. Same bounds
+ * as tabGroupIdSchema; the route checks the id against the caller's layout.
+ */
+export const CaseDefaultGroupSchema = z.object({
+  groupId: z.string().min(1).max(100).nullable(),
+});
+
 /** PUT /api/session-order — global tab order (ordered sessionIds), COD-131 */
 export const SessionOrderUpdateSchema = z.object({
   // Bounded defensively: ids are uuid-ish (<=100 chars) and the client pushes only
-  // its open-tab order (max sessions is 50) — 500 leaves ample headroom while
+  // its open-tab order (max sessions is 50 by default, at most 462 via CODEMAN_MAX_SESSIONS,
+  // see MAX_CONCURRENT_SESSIONS_CEILING) — 500 leaves enough room while
   // keeping a hostile/buggy client from persisting megabytes into state.json.
   order: z.array(z.string().max(100)).max(500),
 });
@@ -2265,6 +2294,8 @@ export const CustomModelHostSchema = z.object({
   // Server-populated by discovery (custom-model-routes.ts); accepted here only so a client
   // round-tripping the GET response back through PUT (edit-save) doesn't drop it.
   modelContextLengths: z.record(z.string().max(200), z.number().int().positive().max(100_000_000)).optional(),
+  // Same reasoning as modelContextLengths above.
+  modelSlotCounts: z.record(z.string().max(200), z.number().int().positive().max(4096)).optional(),
   // Same reasoning as modelContextLengths above.
   modelSizesGB: z.record(z.string().max(200), z.number().positive().max(100_000)).optional(),
 });

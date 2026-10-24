@@ -29,8 +29,12 @@ are Claude-only; [Agent CLIs](Agent-CLIs) has the table.
 
 ### Does Codeman send my code or prompts anywhere?
 
-No. There is no telemetry, no analytics, and no phone-home. The only network traffic
-Codeman itself makes is between your browser and your server.
+No. There is no telemetry, no analytics, and no phone-home. Beyond the traffic between
+your browser and your server, the server makes a few requests of its own for features you use
+(the Codex usage poll, web push, webhooks). One is on by default: while GitHub Copilot CLI is
+installed and signed in, every 10 minutes the server asks `api.github.com` for your own
+premium-request quota with Copilot's own token. Turn off Plan Usage Limits in App Settings to
+stop it (see [Agent CLIs](Agent-CLIs)).
 
 Your agent CLI is a separate matter: Claude Code talks to Anthropic, Codex talks to OpenAI,
 and so on. That traffic is the CLI's, on your own account, exactly as it would be in a

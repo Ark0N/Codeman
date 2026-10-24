@@ -123,6 +123,12 @@ interface NotePromptArgs {
    * `ApprovalItem.answerInTerminal`.
    */
   answerInTerminal?: boolean;
+  /**
+   * An idle prompt that should open ALREADY acknowledged for a reason other than
+   * `watching`, e.g. `cache keep-alive` when the turn that just ended was Codeman's own
+   * prompt-cache nudge. Same consequence as `watching`: the item exists, only its alert is spent.
+   */
+  preAcknowledged?: string;
   /** Returns the raw (ANSI-bearing) pane frame, or null when unavailable. */
   capture?: () => string | null;
   /**
@@ -285,9 +291,9 @@ export class ApprovalInbox {
       cwd: args.cwd,
       ...(args.answerInTerminal ? { answerInTerminal: true } : {}),
     };
-    if (args.kind === 'idle' && args.watching) {
+    if (args.kind === 'idle' && (args.preAcknowledged || args.watching)) {
       item.acknowledgedAt = item.createdAt;
-      item.acknowledgedReason = `watching ${args.watching}`;
+      item.acknowledgedReason = args.preAcknowledged ?? `watching ${args.watching}`;
     }
     if (!args.capture && args.context) item.context = normalizeCapturedFrame(args.context);
     this.applyCapture(item, args.capture);

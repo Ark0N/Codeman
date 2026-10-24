@@ -201,6 +201,8 @@ export function registerRebootRestoreRoutes(app: FastifyInstance, ctx: RebootRes
               (saved as { __attachmentHistory?: SessionAttachmentHistoryItem[] }).__attachmentHistory ??
               saved.attachmentHistory,
             lastSubmitAt: saved.lastSubmitAt,
+            lastRealPromptAt: saved.lastRealPromptAt,
+            keepWarmEnabled: saved.keepWarmEnabled,
             claudeSessionChain: saved.claudeSessionChain,
             lastActivityAt: saved.lastActivityAt,
             owner: saved.owner,

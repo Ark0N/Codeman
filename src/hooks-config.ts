@@ -41,6 +41,7 @@ import { HOOK_TIMEOUT_SECONDS } from './config/auth-config.js';
 import { dataPath } from './config/instance.js';
 import { readJsonConfig, SETTINGS_PATH } from './web/route-helpers.js';
 import { isNearStalledPath, probePath } from './utils/index.js';
+import { DEFAULT_KEEP_WARM_MAX_HOURS, type KeepWarmSettings } from './prompt-cache-keepwarm.js';
 
 /**
  * Existence check for a WRITER. Unlike the bounded read-side probe (`probePath`),
@@ -1142,6 +1143,41 @@ export async function readPlanUsageTelemetryEnabled(): Promise<boolean> {
 export async function readPinCliSessionNameEnabled(): Promise<boolean> {
   const settings = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {});
   return settings.pinCliSessionName === true;
+}
+
+/**
+ * The prompt-cache keep-warm's app-wide default (`promptCacheKeepWarm`, absent = OFF) and its
+ * cap (`promptCacheKeepWarmMaxHours`, hours after the last real prompt). Read FRESH like
+ * {@link readPinCliSessionNameEnabled} at every claude create and respawn, which decides the
+ * launch's `idleCompaction` opt-out.
+ */
+export async function readKeepWarmSettings(): Promise<KeepWarmSettings> {
+  return keepWarmSettingsFrom(await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {}));
+}
+
+/**
+ * The same two keys for the keep-warm service, which keeps what it reads until the next
+ * settings change. A missing file is the defaults, but any other read or parse failure rejects
+ * rather than falling back: settings.json is rewritten in place, so a read can land mid-write,
+ * and a fallback kept from it would hold keep-warm off until the next keep-warm settings change.
+ */
+export async function readKeepWarmSettingsOrThrow(): Promise<KeepWarmSettings> {
+  let text: string;
+  try {
+    text = await readFile(SETTINGS_PATH, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return keepWarmSettingsFrom({});
+    throw err;
+  }
+  return keepWarmSettingsFrom(JSON.parse(text) as Record<string, unknown>);
+}
+
+function keepWarmSettingsFrom(settings: Record<string, unknown>): KeepWarmSettings {
+  const hours = settings?.promptCacheKeepWarmMaxHours;
+  return {
+    keepWarmDefault: settings?.promptCacheKeepWarm === true,
+    maxHours: typeof hours === 'number' && Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_KEEP_WARM_MAX_HOURS,
+  };
 }
 
 /**

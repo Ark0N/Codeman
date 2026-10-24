@@ -21,9 +21,13 @@
  *
  * - `x-frame-options` / CSP `frame-ancestors`: dropped, else the browser refuses
  *   to render the frame. This is the whole point of the proxy.
- * - `content-encoding` / `content-length`: dropped, because undici's `fetch`
- *   already decoded the body. Forwarding them makes the browser try to gunzip
- *   plaintext.
+ * - `content-encoding` / `content-length`: dropped from responses, because
+ *   undici's `fetch` already decoded the body. Forwarding them makes the browser
+ *   try to gunzip plaintext.
+ * - Request `content-length`: RELAYED with a body. The body reaches undici as a
+ *   stream, which it sends chunked unless told the length, and a server that
+ *   reads only Content-Length (Python's `http.server`, many small Go/C ones)
+ *   then sees an EMPTY body: every POST to such a dashboard arrived blank.
  * - `authorization` + the `codeman_session` cookie: stripped on the way OUT. In
  *   trusted mode the iframe is same-origin, so the browser attaches Codeman's own
  *   Basic-auth header and session cookie to every proxied request. Forwarding
@@ -57,8 +61,10 @@ const HOP_BY_HOP = new Set([
 
 /**
  * Request headers dropped on the way to the upstream. `authorization` and `cookie`
- * carry Codeman's own credentials on a same-origin (trusted) frame; `host`,
- * `content-length` and `accept-encoding` are recomputed by undici.
+ * carry Codeman's own credentials on a same-origin (trusted) frame; `host` and
+ * `accept-encoding` are recomputed by undici. `content-length` is NOT recomputed
+ * for a streamed body; it is listed here only so the copy loop never relays it
+ * blindly, and `buildUpstreamRequestHeaders` puts it back when a body goes with it.
  */
 const DROP_REQUEST_HEADERS = new Set([
   ...HOP_BY_HOP,
@@ -305,7 +311,7 @@ export function filterCookieHeader(cookie: string | undefined, drop: string[]): 
 export function buildUpstreamRequestHeaders(
   incoming: Record<string, string | string[] | undefined>,
   upstream: URL,
-  opts: { forwardCookies: boolean; sessionCookieName: string; refererPath?: string }
+  opts: { forwardCookies: boolean; sessionCookieName: string; refererPath?: string; relayBodyLength?: boolean }
 ): Record<string, string> {
   const headers: Record<string, string> = {};
 
@@ -314,6 +320,21 @@ export function buildUpstreamRequestHeaders(
     if (DROP_REQUEST_HEADERS.has(lower)) continue;
     if (value === undefined) continue;
     headers[lower] = Array.isArray(value) ? value.join(', ') : value;
+  }
+
+  // The body is relayed as a stream, and undici frames a stream it has no length
+  // for as `Transfer-Encoding: chunked`. Hand it the browser's own length so the
+  // upstream sees the framing the browser sent. Only alongside a body (a length
+  // with none would leave the upstream waiting for bytes that never come), and
+  // never against a transfer-encoding, which would make the length a lie.
+  const length = incoming['content-length'];
+  if (
+    opts.relayBodyLength &&
+    typeof length === 'string' &&
+    /^\d+$/.test(length) &&
+    incoming['transfer-encoding'] === undefined
+  ) {
+    headers['content-length'] = length;
   }
 
   if (opts.forwardCookies) {

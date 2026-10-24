@@ -1114,11 +1114,33 @@ Object.assign(CodemanApp.prototype, {
    * history yet for compaction to trim. Same promise-based pattern as
    * `_confirmModelSwap`; `_resolveContextWarningConfirm` settles it.
    */
-  _confirmContextWarning(modelId, contextLength, minSafeContextTokens) {
+  _confirmContextWarning(modelId, contextLength, minSafeContextTokens, slotCount) {
     const modal = document.getElementById('customModelContextWarningModal');
     const messageEl = document.getElementById('customModelContextWarningMessage');
     if (messageEl) {
       const known = typeof contextLength === 'number';
+      const slots = Number.isFinite(slotCount) && slotCount > 1 ? Math.floor(slotCount) : 1;
+      // Enough total context, but split across parallel server slots: llama-server shares its
+      // context between --parallel slots, and this CLI sends concurrent requests (the main
+      // session plus each parallel subagent), so several 40k-token requests spend the shared
+      // pool and the server answers HTTP 500 "Context size has been exceeded".
+      if (known && slots > 1 && contextLength >= minSafeContextTokens) {
+        messageEl.textContent =
+          `${modelId}'s ${contextLength.toLocaleString()} tokens of context are split across ${slots} parallel ` +
+          `server slots, about ${Math.floor(contextLength / slots).toLocaleString()} each. This CLI ` +
+          `needs roughly ${minSafeContextTokens.toLocaleString()}+ tokens just for its own system prompt and tools on ` +
+          `every request, and it sends several requests at once (the main session plus each parallel subagent). ` +
+          `Concurrent requests can use up the shared context, and the server then fails them with ` +
+          `"Context size has been exceeded".\n\n` +
+          `To fix this, start the model with a single slot: add "--parallel 1" to its llama-swap cmd. The active ` +
+          `conversation then gets the whole context, other requests queue instead of failing, and the CLI's ` +
+          `repeated prompt prefix stays cached. Alternatively give the model a larger context (raise --fit-ctx or ` +
+          `--ctx-size) so every slot has at least ${minSafeContextTokens.toLocaleString()} tokens.`;
+        modal?.classList.add('active');
+        return new Promise((resolve) => {
+          this._resolveContextWarningConfirmPromise = resolve;
+        });
+      }
       messageEl.textContent =
         `${modelId} is configured with ` +
         (known ? `only ${contextLength.toLocaleString()} tokens of` : 'an unknown (too small)') +
@@ -1129,7 +1151,11 @@ Object.assign(CodemanApp.prototype, {
         `instead of relying on auto-fit (--fit-ctx), which optimizes for the biggest MODEL that fits, not the ` +
         `biggest CONTEXT — e.g. add "-c 65536" (or as large a --ctx-size as your hardware holds) to its llama-swap ` +
         `config entry. A smaller model at a much larger explicit context often fits in the same VRAM a bigger ` +
-        `model's auto-fit context gets shrunk to make room for.`;
+        `model's auto-fit context gets shrunk to make room for.` +
+        (slots > 1
+          ? `\n\nThis server also runs ${slots} parallel slots that share that context; add "--parallel 1" to ` +
+            `the same cmd so a single conversation gets all of it.`
+          : '');
     }
     modal?.classList.add('active');
     return new Promise((resolve) => {
@@ -1254,8 +1280,13 @@ Object.assign(CodemanApp.prototype, {
     let answered = {};
     let data = await post(bodyObj);
     if (data?.data?.requiresContextWarning) {
-      const { modelId, contextLength, minSafeContextTokens } = data.data;
-      const proceed = await this._confirmContextWarning(modelId, contextLength, minSafeContextTokens);
+      const { modelId, contextLength, minSafeContextTokens, slotCount } = data.data;
+      const proceed = await this._confirmContextWarning(
+        modelId,
+        contextLength,
+        minSafeContextTokens,
+        slotCount
+      );
       if (!proceed) {
         this._lastCustomModelLaunchResult = undefined;
         return { success: false, error: 'Launch cancelled — context window too small' };
@@ -1371,7 +1402,8 @@ Object.assign(CodemanApp.prototype, {
       const proceed = await this._confirmContextWarning(
         payload.modelId,
         payload.contextLength,
-        payload.minSafeContextTokens
+        payload.minSafeContextTokens,
+        payload.slotCount
       );
       if (!proceed) {
         switchingToast?.dismiss();
@@ -2631,6 +2663,10 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('modalAutoResumeEnabled').checked = session.autoResumeEnabled ?? false;
     this.updateAutoResumeStatus(sessionId);
     this.updatePromptCacheStatus(sessionId);
+    // Effective opt-in: the server publishes it in the status (session flag, else the app default).
+    document.getElementById('modalKeepWarmEnabled').checked =
+      session.keepWarm?.enabled ?? session.keepWarmEnabled ?? false;
+    this.updateKeepWarmStatus(sessionId);
     document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
     document.getElementById('modalFlickerFilterEnabled').checked = session.flickerFilterEnabled ?? false;
 
@@ -2913,6 +2949,59 @@ Object.assign(CodemanApp.prototype, {
     if (!session) return;
     session.promptCache = promptCache;
     this.updatePromptCacheStatus(sessionId);
+  },
+
+  /**
+   * Session Options → Respawn → Prompt cache: the keep-warm line on the Status row (what the
+   * keep-warm service is doing, `session.keepWarm`, worded by `CodemanPromptCache.formatKeepWarm`,
+   * hidden when it has nothing to say) and the state of the "Keep the cache warm while idle" switch.
+   */
+  updateKeepWarmStatus(sessionId) {
+    const el = document.getElementById('keepWarmStatus');
+    if (!el || this.editingSessionId !== sessionId) return;
+    const session = this.sessions.get(sessionId);
+    const status = session?.keepWarm;
+    const text = window.CodemanPromptCache.formatKeepWarm(status, Date.now(), session?.statusLineExporter);
+    el.textContent = text;
+    el.hidden = !text;
+    // A launch without cache reports can never keep warm: grey the row and refuse to switch it on,
+    // but a switch that is already on stays reachable so it can be turned off. Same inert-switch
+    // pattern as the context switch in settings-ui.js _applyModelSelection().
+    const box = document.getElementById('modalKeepWarmEnabled');
+    if (!box) return;
+    const inert = window.CodemanPromptCache.keepWarmUnavailable(session?.statusLineExporter);
+    box.closest('.set-row')?.classList.toggle('set-row-disabled', inert);
+    box.disabled = inert && !box.checked;
+  },
+
+  _onSessionKeepWarm(data) {
+    const { sessionId, ...status } = data;
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.keepWarm = status;
+    if (this.editingSessionId === sessionId) {
+      const box = document.getElementById('modalKeepWarmEnabled');
+      if (box) box.checked = status.enabled;
+    }
+    this.updateKeepWarmStatus(sessionId);
+  },
+
+  async autoSaveKeepWarm() {
+    if (!this.editingSessionId) return;
+    const enabled = document.getElementById('modalKeepWarmEnabled').checked;
+    try {
+      // _apiPost unwraps the envelope; the route answers with the status for the NEW choice.
+      const data = await this._apiPost(`/api/sessions/${this.editingSessionId}/keep-warm`, { enabled });
+      const session = this.sessions.get(this.editingSessionId);
+      if (session) {
+        session.keepWarmEnabled = enabled;
+        if (data?.keepWarm?.status) session.keepWarm = data.keepWarm.status;
+      }
+      this.updateKeepWarmStatus(this.editingSessionId);
+      this.showToast(`Prompt-cache keep-warm ${enabled ? 'enabled' : 'disabled'}`, 'success');
+    } catch (err) {
+      this.showToast('Failed to toggle keep-warm: ' + err.message, 'error');
+    }
   },
 
   async toggleSessionImageWatcher() {
@@ -3272,6 +3361,7 @@ Object.assign(CodemanApp.prototype, {
       document.getElementById('caseAgentTeams').checked = settings.agentTeams;
       document.getElementById('caseOpusContext1m').checked = settings.opusContext1m;
       popover.classList.remove('hidden');
+      this._loadCaseDefaultGroup();
 
       // Close on outside click (one-shot listener)
       const closeHandler = (e) => {
@@ -3320,6 +3410,7 @@ Object.assign(CodemanApp.prototype, {
       document.getElementById('caseAgentTeamsMobile').checked = settings.agentTeams;
       document.getElementById('caseOpusContext1mMobile').checked = settings.opusContext1m;
       popover.classList.remove('hidden');
+      this._loadCaseDefaultGroup();
 
       const closeHandler = (e) => {
         if (!popover.contains(e.target) && !e.target.classList.contains('btn-case-settings-mobile')) {
@@ -3344,6 +3435,103 @@ Object.assign(CodemanApp.prototype, {
     if (desktopCheckbox) desktopCheckbox.checked = settings.agentTeams;
     const desktopOpusCheckbox = document.getElementById('caseOpusContext1m');
     if (desktopOpusCheckbox) desktopOpusCheckbox.checked = settings.opusContext1m;
+  },
+
+  // ── Default session group (server-side, per owner + case) ──
+  //
+  // Unlike the two checkboxes above (this browser's localStorage), the default
+  // group lives on the server, because the server places a new session in it in
+  // the same layout write that registers it. The value is a group ID; '' in the
+  // <select> is Ungrouped (null on the wire). Desktop and phone popovers mirror.
+
+  _caseDefaultGroupSelects() {
+    return ['caseDefaultGroup', 'caseDefaultGroupMobile']
+      .map((id) => document.getElementById(id))
+      .filter(Boolean);
+  },
+
+  /** Rebuild both selectors from `groups`, keeping `groupId` if it still exists. */
+  _renderCaseDefaultGroupSelects(groups, groupId) {
+    const known = groups.some((group) => group.id === groupId);
+    const value = known ? groupId : '';
+    for (const select of this._caseDefaultGroupSelects()) {
+      const ungrouped = document.createElement('option');
+      ungrouped.value = '';
+      ungrouped.textContent = 'Ungrouped';
+      const options = groups.map((group) => {
+        const option = document.createElement('option');
+        option.value = group.id;
+        option.textContent = group.name;
+        option.setAttribute('data-i18n-skip', '');
+        return option;
+      });
+      select.replaceChildren(ungrouped, ...options);
+      select.value = value;
+    }
+    return value;
+  },
+
+  /** Read the selected case's default group from the server (popover open). */
+  async _loadCaseDefaultGroup() {
+    const caseName = document.getElementById('quickStartCase')?.value;
+    const selects = this._caseDefaultGroupSelects();
+    if (!caseName || selects.length === 0) return;
+    for (const select of selects) select.disabled = true;
+    const data = await this._apiJson(`/api/cases/${encodeURIComponent(caseName)}/default-group`);
+    if (document.getElementById('quickStartCase')?.value !== caseName) return; // case switched meanwhile
+    const groups = Array.isArray(data?.groups) ? data.groups : [];
+    const groupId = typeof data?.groupId === 'string' ? data.groupId : null;
+    this._caseDefaultGroupState = { caseName, groupId, groups };
+    this._renderCaseDefaultGroupSelects(groups, groupId);
+    for (const select of selects) select.disabled = !data;
+  },
+
+  /** Save a selector change; on refusal restore the last confirmed value. */
+  async onCaseDefaultGroupChanged(select) {
+    const state = this._caseDefaultGroupState;
+    if (!state) return;
+    const groupId = select.value || null;
+    const selects = this._caseDefaultGroupSelects();
+    for (const other of selects) {
+      other.value = select.value;
+      other.disabled = true;
+    }
+    const res = await this._apiPut(`/api/cases/${encodeURIComponent(state.caseName)}/default-group`, { groupId });
+    let saved = null;
+    if (res?.ok) {
+      try {
+        saved = (await res.json())?.data ?? null;
+      } catch {
+        saved = null;
+      }
+    }
+    if (saved) {
+      state.groupId = typeof saved.groupId === 'string' ? saved.groupId : null;
+      if (Array.isArray(saved.groups)) state.groups = saved.groups;
+    } else {
+      this.showToast?.('Could not save the default session group.', 'error');
+    }
+    this._renderCaseDefaultGroupSelects(state.groups, state.groupId);
+    for (const other of selects) other.disabled = false;
+  },
+
+  /**
+   * The tab layout changed (a group was created, renamed or deleted): redraw the
+   * options from it. A deleted selection shows as Ungrouped, which is where the
+   * server now places new sessions (it forgets the stale ID at the next creation).
+   * Every create, delete and reorder broadcasts a layout, so an unchanged group
+   * list is left alone: rebuilding it would reset a dropdown the user has open.
+   */
+  _refreshCaseDefaultGroupOptions(layout) {
+    const state = this._caseDefaultGroupState;
+    if (!state || !layout || !Array.isArray(layout.groups)) return;
+    const groups = layout.groups.map((group) => ({ id: group.id, name: group.name }));
+    const unchanged = groups.length === state.groups.length
+      && groups.every((group, i) => group.id === state.groups[i].id && group.name === state.groups[i].name);
+    if (unchanged) return;
+    state.groups = groups;
+    const value = this._renderCaseDefaultGroupSelects(state.groups, state.groupId);
+    if (!value) state.groupId = null;
   },
 
   // ═══════════════════════════════════════════════════════════════

@@ -48,7 +48,13 @@ const { EXISTING_SETTINGS, subagentWatcher, imageWatcher, workflowRunWatcher } =
   };
   return {
     // Persisted settings.json for these tests: two watchers ON, subagent tracking OFF.
-    EXISTING_SETTINGS: { subagentTrackingEnabled: false, imageWatcherEnabled: true, showUltracodeAgents: true },
+    EXISTING_SETTINGS: {
+      subagentTrackingEnabled: false,
+      imageWatcherEnabled: true,
+      showUltracodeAgents: true,
+      promptCacheKeepWarm: false,
+      promptCacheKeepWarmMaxHours: 2,
+    },
     subagentWatcher: makeWatcher(false),
     imageWatcher: makeWatcher(true),
     workflowRunWatcher: makeWatcher(true),
@@ -142,5 +148,23 @@ describe('PUT /api/settings — partial body must not reset service toggles', ()
     expect(res.statusCode).toBe(200);
     // showUltracodeAgents is still true in settings.json, so it stays up.
     expect(workflowRunWatcher.stop).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The browser sends both keep-warm keys on every App Settings save, so testing for the keys in
+   * the body re-read the settings and re-evaluated every session on each save of anything.
+   */
+  it('re-evaluates the prompt-cache keep-warm only when its default or cap changes', async () => {
+    const put = (payload: Record<string, unknown>) =>
+      harness.app.inject({ method: 'PUT', url: '/api/settings', payload });
+
+    expect((await put({ promptCacheKeepWarm: false, promptCacheKeepWarmMaxHours: 2 })).statusCode).toBe(200);
+    expect(harness.ctx.keepWarm.rescheduleAll).not.toHaveBeenCalled();
+
+    expect((await put({ promptCacheKeepWarm: false, promptCacheKeepWarmMaxHours: 3 })).statusCode).toBe(200);
+    expect(harness.ctx.keepWarm.rescheduleAll).toHaveBeenCalledTimes(1);
+
+    expect((await put({ promptCacheKeepWarm: true })).statusCode).toBe(200);
+    expect(harness.ctx.keepWarm.rescheduleAll).toHaveBeenCalledTimes(2);
   });
 });

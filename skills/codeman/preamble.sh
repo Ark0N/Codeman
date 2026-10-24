@@ -1,4 +1,4 @@
-# ---- Codeman agent preamble 1.42.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+# ---- Codeman agent preamble 1.44.0 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
 # Positional parameters are always written with braces, ${1} and never a bare dollar-digit: Claude Code
 # replaces a bare one in a skill body with the matching word of the skill's arguments, and §0 is pasted
 # from that body (test/agent-skill.test.ts pins it).
@@ -238,6 +238,16 @@ spawn_workers() {
 # pane clearly finished means that profile, so switch that worker to markers.
 sendwait() {
   local sid="${1:?}" p="${2:?}" seq="${3:-$(date +%s)}" body r c head n=0 tmp bg i
+  # One line, like every other waiting sender (`toSingleLine`, `codeman agent send`,
+  # the TUI): the server pastes a multi-line prompt as one block, and the loop below,
+  # like the server's own submit check, cannot recognise a pasted block that is still
+  # on the composer, so a prompt like `Review this:\n- item 1` would sit unsent for
+  # the whole re-wait. Each line is trimmed, blank lines are dropped, the rest are
+  # joined with a space. For a long multi-line task, write a file and send its path.
+  case "$p" in *$'\n'*|*$'\r'*)
+    p=$(printf '%s\n' "$p" | tr '\r' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' | paste -sd ' ' -) ;;
+  esac
+  [ -n "$p" ] || { echo "sendwait: empty prompt" >&2; return 1; }
   # `wait:"stop,exit"`, never the `wait:true` default set: that set also carries
   # `idle`, which is INFERRED from output stabilization and flaps mid-turn. On a
   # dsh worker whose TUI repaints rarely the session reads `idle` while the model
@@ -309,4 +319,4 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.42.0
+CODEMAN_PREAMBLE=1.44.0
