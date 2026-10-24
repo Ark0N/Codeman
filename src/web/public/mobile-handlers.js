@@ -862,7 +862,9 @@ const SwipeHandler = {
     if (Math.abs(deltaX) < this.minSwipeDistance) return; // Too short
 
     // Valid swipe detected. Swipe right -> previous session, left -> next.
-    if (deltaX > 0) app.prevSession();
-    else app.nextSession();
+    // In the order the strip draws, which a grouped layout ('case', 'state', a
+    // sorted rail) makes differ from the canonical session order.
+    if (deltaX > 0) app.prevSession({ visual: true });
+    else app.nextSession({ visual: true });
   },
 };

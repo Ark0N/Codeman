@@ -7278,24 +7278,7 @@ class CodemanApp {
       // the axis a user reaches for there.
       if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'Enter', ' '].includes(e.key)) return;
 
-      // Rows hidden by the sidebar filter must not be steppable.
-      const tabs = [...container.querySelectorAll('.session-tab:not(.tab-filtered-out)')];
-      // ⚠️ A sorted rail paints its rows with the flex `order` property while the
-      // DOM stays in `sessionOrder` (that is what keeps the Alt+N badge and the
-      // drag model honest), so a DOM-order walk steps around the screen instead of
-      // down it: ArrowDown from the top card lands wherever that session happens to
-      // sit in the tab order. Walk what the eye sees. Read the COMPUTED order, not
-      // the inline one, or web tabs (pinned past the cards by a CSS `order: 9999`
-      // rather than an inline style) read as 0 and the walk starts on them. Array
-      // sort is stable, so equal orders keep DOM order, which is the unsorted case.
-      if (this.isTabRailSorted() || container.classList.contains('tabs-triage')) {
-        const orderOf = (el) => Number(getComputedStyle(el).order) || 0;
-        // Case clusters are boxes in DOM order and a sorted rail orders rows
-        // INSIDE each one, so the box goes first in the key.
-        const boxes = [...container.querySelectorAll(':scope > .tab-cluster')];
-        const boxOf = (el) => boxes.indexOf(el.closest('.tab-cluster'));
-        tabs.sort((a, b) => boxOf(a) - boxOf(b) || orderOf(a) - orderOf(b));
-      }
+      const tabs = this._visibleTabRows(container);
       const currentIndex = tabs.indexOf(document.activeElement);
 
       // Enter or Space activates the tab
@@ -7343,6 +7326,52 @@ class CodemanApp {
       };
       container.addEventListener('focusin', this._tabTreeFocusinHandler);
     }
+  }
+
+  /**
+   * The strip's rows (session and web tabs) in the order the eye reads them,
+   * for any layout except the grouped tree (see _tabTreeItems).
+   */
+  _visibleTabRows(container) {
+    // Rows hidden by the sidebar filter must not be steppable.
+    const tabs = [...container.querySelectorAll('.session-tab:not(.tab-filtered-out)')];
+    // ⚠️ A sorted rail paints its rows with the flex `order` property while the
+    // DOM stays in `sessionOrder` (that is what keeps the Alt+N badge and the
+    // drag model honest), so a DOM-order walk steps around the screen instead of
+    // down it: ArrowDown from the top card lands wherever that session happens to
+    // sit in the tab order. Walk what the eye sees. Read the COMPUTED order, not
+    // the inline one, or web tabs (pinned past the cards by a CSS `order: 9999`
+    // rather than an inline style) read as 0 and the walk starts on them. Array
+    // sort is stable, so equal orders keep DOM order, which is the unsorted case.
+    if (this.isTabRailSorted() || container.classList.contains('tabs-triage')) {
+      const orderOf = (el) => Number(getComputedStyle(el).order) || 0;
+      // Case clusters are boxes in DOM order and a sorted rail orders rows
+      // INSIDE each one, so the box goes first in the key.
+      const boxes = [...container.querySelectorAll(':scope > .tab-cluster')];
+      const boxOf = (el) => boxes.indexOf(el.closest('.tab-cluster'));
+      tabs.sort((a, b) => boxOf(a) - boxOf(b) || orderOf(a) - orderOf(b));
+    }
+    return tabs;
+  }
+
+  /**
+   * Session ids in the order the session list DRAWS them: case boxes, state
+   * groups, a sorted rail and named groups all reorder the screen while
+   * `sessionOrder` stays canonical. Only the phone swipe walks this order
+   * (`nextSession({ visual: true })`); Alt+[ / Alt+], Ctrl+Tab and Alt+1..9 keep
+   * the canonical one, since grouping is a render layer. Web tabs are skipped.
+   */
+  _stripSessionOrder() {
+    const container = document.getElementById('sessionTabs');
+    if (!container) return this.sessionOrder;
+    const rows =
+      container.getAttribute('role') === 'tree'
+        ? this._tabTreeItems(container).filter((el) => el.classList.contains('session-tab'))
+        : this._visibleTabRows(container);
+    // An empty list is a real answer (every row filtered out, a tree collapsed
+    // to nothing): the swipe then goes nowhere, like the strip. Only a missing
+    // strip falls back to the canonical order.
+    return rows.map((row) => row.dataset.id).filter((id) => id && this.sessions.has(id));
   }
 
   /** Select a session row or open a web-tab row (Enter/Space, either layout). */
@@ -10645,23 +10674,29 @@ class CodemanApp {
     }
   }
 
-  nextSession() {
+  /** `{ visual: true }` walks the order the strip draws (the phone swipe), see _stripSessionOrder. */
+  nextSession(options = {}) {
     // With the tile grid open, Ctrl+Tab and Alt+[ / Alt+] cycle through the tiles.
     if (this._cycleTileFocus?.(1)) return;
-    if (this.sessionOrder.length <= 1) return;
-
-    const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
-    const nextIndex = (currentIndex + 1) % this.sessionOrder.length;
-    this.selectSession(this.sessionOrder[nextIndex]);
+    const order = options.visual ? this._stripSessionOrder() : this.sessionOrder;
+    // An active session the list does not show (filtered out, or none active on
+    // the home screen) steps in at the first row; a lone row that is not the
+    // active one is still a destination.
+    const currentIndex = order.indexOf(this.activeSessionId);
+    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % order.length;
+    if (!order[nextIndex] || order[nextIndex] === this.activeSessionId) return;
+    this.selectSession(order[nextIndex]);
   }
 
-  prevSession() {
+  prevSession(options = {}) {
     if (this._cycleTileFocus?.(-1)) return;
-    if (this.sessionOrder.length <= 1) return;
-
-    const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
-    const prevIndex = (currentIndex - 1 + this.sessionOrder.length) % this.sessionOrder.length;
-    this.selectSession(this.sessionOrder[prevIndex]);
+    const order = options.visual ? this._stripSessionOrder() : this.sessionOrder;
+    // As above, from the other end: a hidden or absent active session steps in
+    // at the last row (the old arithmetic landed on the second to last).
+    const currentIndex = order.indexOf(this.activeSessionId);
+    const prevIndex = currentIndex < 0 ? order.length - 1 : (currentIndex - 1 + order.length) % order.length;
+    if (!order[prevIndex] || order[prevIndex] === this.activeSessionId) return;
+    this.selectSession(order[prevIndex]);
   }
 
   // ═══════════════════════════════════════════════════════════════

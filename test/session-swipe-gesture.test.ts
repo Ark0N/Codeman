@@ -165,3 +165,148 @@ describe('terminal touch handler hands sideways drags to the swipe', () => {
     expect(load().swipe.maxVerticalDrift).toBe(50);
   });
 });
+
+describe('the swipe walks the order the strip draws', () => {
+  type Proto = Record<string, (this: Record<string, unknown>, ...args: unknown[]) => unknown>;
+  function loadAppProto() {
+    const document = {
+      addEventListener: vi.fn(),
+      documentElement: { dataset: {} },
+      getElementById: (_id: string): unknown => null,
+    };
+    const context = vm.createContext({
+      console,
+      setInterval: vi.fn(),
+      clearInterval: vi.fn(),
+      setTimeout,
+      clearTimeout,
+      requestAnimationFrame: vi.fn(),
+      // A row stub's `cssOrder` stands in for the flex `order` a sorted rail paints.
+      getComputedStyle: (el: { cssOrder?: number }) => ({ order: String(el.cssOrder ?? 0) }),
+      HTMLCanvasElement: class HTMLCanvasElement {},
+      WebSocket: { OPEN: 1 },
+      fetch: vi.fn(),
+      URLSearchParams,
+      document,
+      localStorage: { length: 0, key: vi.fn(), getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
+      window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+      MobileDetection: { isTouchDevice: () => true, isHandheldDevice: () => true, getDeviceType: () => 'mobile' },
+    });
+    const read = (f: string) => readFileSync(resolve(import.meta.dirname, '../src/web/public', f), 'utf8');
+    vm.runInContext(`${read('constants.js')}\n${read('app.js')}\nglobalThis.__App = CodemanApp;`, context);
+    return { proto: (context as unknown as { __App: { prototype: Proto } }).__App.prototype, document };
+  }
+
+  /** The real next/prev over a strip drawn as `rows` (ids; 'web' is a web tab) with `active` selected. */
+  function walk(rows: string[], active: string | null) {
+    const row = (id: string) =>
+      id === 'web' ? { dataset: { webviewId: 'web' } } : { dataset: { id }, classList: { contains: () => false } };
+    return drive(
+      {
+        getAttribute: () => 'tablist',
+        classList: { contains: () => false },
+        querySelectorAll: () => rows.map(row),
+      },
+      active
+    );
+  }
+
+  /** The real next/prev over `strip` (a stub of #sessionTabs) with `active` selected. */
+  function drive(strip: unknown, active: string | null, sorted = false) {
+    const { proto, document } = loadAppProto();
+    const selected: string[] = [];
+    const app: Record<string, unknown> = {
+      sessionOrder: ['w1', 'w2', 'homelab', 'w3'],
+      sessions: new Map(['w1', 'w2', 'homelab', 'w3'].map((id) => [id, {}])),
+      activeSessionId: active,
+      isTabRailSorted: () => sorted,
+      selectSession: (id: string) => selected.push(id),
+    };
+    for (const name of ['_visibleTabRows', '_tabTreeItems', '_stripSessionOrder', 'nextSession', 'prevSession']) {
+      app[name] = proto[name];
+    }
+    document.getElementById = () => strip;
+    const next = (o?: unknown) => (app.nextSession as (o?: unknown) => void).call(app, o);
+    const prev = (o?: unknown) => (app.prevSession as (o?: unknown) => void).call(app, o);
+    return { selected, next, prev };
+  }
+
+  it('follows the case boxes, not the creation order', () => {
+    // Created w1, w2, homelab, w3; the 'case' layout boxes md-viewer's tabs together.
+    const { selected, next, prev } = walk(['w1', 'w2', 'w3', 'web', 'homelab'], 'w3');
+    next({ visual: true });
+    prev({ visual: true });
+    next();
+    // Visual: w3 -> homelab (next), w3 -> w2 (prev). Canonical (no option) keeps sessionOrder: w3 -> w1.
+    expect(selected).toEqual(['homelab', 'w2', 'w1']);
+  });
+
+  it('walks the grouped tree: group by group, sorted inside each, headers and web tabs skipped', () => {
+    // A rail sorted by activity with a named group "ops" (homelab, a web tab, w3) above
+    // Ungrouped (w1, w2); the DOM keeps sessionOrder inside each group. The tree sorts
+    // INSIDE each group, so it draws w3, homelab, web | w1, w2, where one sort over the
+    // whole list (the flat walk) would interleave the groups as w3, w1, homelab, w2.
+    const tab = (id: string, cssOrder: number) => ({
+      dataset: id === 'web' ? { webviewId: 'web' } : { id },
+      cssOrder,
+      classList: { contains: (c: string) => c === 'session-tab' },
+      closest: () => null,
+    });
+    const header = { dataset: { tabGroupHeader: 'ops' }, classList: { contains: () => false } };
+    const section = (head: unknown, rows: unknown[]) => ({
+      classList: { contains: () => false },
+      querySelector: () => head,
+      querySelectorAll: () => rows,
+    });
+    const ops = [tab('homelab', 2), tab('web', 9999), tab('w3', 0)];
+    // The Ungrouped heading is aria-hidden, not a treeitem, so the section has none.
+    const ungrouped = [tab('w1', 1), tab('w2', 3)];
+    const sections = [section(header, ops), section(null, ungrouped)];
+    const strip = {
+      getAttribute: (name: string) => (name === 'role' ? 'tree' : null),
+      classList: { contains: () => false },
+      querySelectorAll: (sel: string) =>
+        sel === '.tab-layout-group' ? sections : sel.includes('.tab-cluster') ? [] : [...ops, ...ungrouped],
+    };
+    const { selected, next, prev } = drive(strip, 'homelab', true);
+    next({ visual: true });
+    prev({ visual: true });
+    // Tree: homelab -> w1 (past the web tab, into the next group), homelab -> w3.
+    // The flat walk would give w2 / w1, the canonical order w3 / w2.
+    expect(selected).toEqual(['w1', 'w3']);
+  });
+
+  it('steps in at the first or last drawn row when the active session is not drawn', () => {
+    // A filter hid the active tab (or nothing is active on the home screen). The drawn
+    // order differs from sessionOrder's ends (w1 ... w3), so the canonical walk from w3
+    // (w1 / homelab) cannot pass for this, and nor can the old arithmetic on the drawn
+    // order, which put previous on the second to last row (w1).
+    const { selected, next, prev } = walk(['homelab', 'w1', 'w2'], 'w3');
+    next({ visual: true });
+    prev({ visual: true });
+    expect(selected).toEqual(['homelab', 'w2']);
+  });
+
+  it('reaches a lone drawn row that is not the active one, and goes nowhere from a lone active one', () => {
+    const lone = walk(['w2'], 'w3');
+    lone.next({ visual: true });
+    expect(lone.selected).toEqual(['w2']);
+    const self = walk(['w3'], 'w3');
+    self.next({ visual: true });
+    self.prev({ visual: true });
+    expect(self.selected).toEqual([]);
+  });
+
+  it('goes nowhere when every row is filtered out, instead of falling back to a hidden session', () => {
+    const { selected, next, prev } = walk([], 'w3');
+    next({ visual: true });
+    prev({ visual: true });
+    expect(selected).toEqual([]);
+  });
+
+  it('the swipe asks for the visual order', () => {
+    const { app, gesture } = load();
+    gesture({ clientX: 300, clientY: 400 }, { clientX: 150, clientY: 400 });
+    expect(app.nextSession).toHaveBeenCalledWith({ visual: true });
+  });
+});
