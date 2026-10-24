@@ -19,6 +19,7 @@ import { TunnelManager } from '../src/tunnel-manager.js';
 import { createUser, invalidateUsersCache } from '../src/user-store.js';
 import type { FastifyInstance } from 'fastify';
 import { AUTH_FAILURE_MAX, AUTH_IP_FAILURE_MAX } from '../src/config/auth-config.js';
+import type { StaleExpirationMap } from '../src/utils/stale-expiration-map.js';
 
 vi.spyOn(TmuxManager, 'isTmuxAvailable').mockReturnValue(true);
 
@@ -88,6 +89,9 @@ afterAll(async () => {
 
 const url = (p: string) => `http://localhost:${server.boundPort}${p}`;
 
+/** The server's private failure buckets, read to count how many guesses reached the verify. */
+type FailureBuckets = Record<'authFailures' | 'userFailures' | 'userIpFailures', StaleExpirationMap<string, number>>;
+
 /**
  * A fresh multi-user server (empty failure buckets) and a login helper that sets the
  * client IP through inject's `remoteAddress`: a real fetch always arrives from
@@ -98,8 +102,9 @@ async function startIpServer() {
   await s.start();
   ipServers.push(s);
   const app = (s as unknown as { app: FastifyInstance }).app;
-  return (ip: string, user: string, pass: string) =>
+  const login = (ip: string, user: string, pass: string) =>
     app.inject({ method: 'GET', url: '/api/status', headers: { authorization: basic(user, pass) }, remoteAddress: ip });
+  return { login, buckets: s as unknown as FailureBuckets };
 }
 
 describe('multi-user auth', () => {
@@ -231,7 +236,7 @@ describe('multi-user auth', () => {
   });
 
   it('per-(username, IP) gate: failures lock that account on that IP only, before scrypt', async () => {
-    const login = await startIpServer();
+    const { login } = await startIpServer();
     const ipA = '203.0.113.10';
     const ipB = '203.0.113.20';
 
@@ -257,26 +262,64 @@ describe('multi-user auth', () => {
     expect((await login(ipA, 'bob', 'bobpass123')).statusCode).toBe(429);
   });
 
-  it('per-IP pre-gate: concurrent failures from one IP are all counted', async () => {
-    const login = await startIpServer();
+  it('per-IP pre-gate: a concurrent burst from one IP reaches the verify at most AUTH_IP_FAILURE_MAX times', async () => {
+    const { login, buckets } = await startIpServer();
     const ip = '203.0.113.40';
 
-    // AUTH_IP_FAILURE_MAX wrong passwords in flight at once, spread so neither the pair
-    // nor the per-username bucket can refuse any of them. The per-IP count is written
-    // after the scrypt await, so each write must re-read it or the burst counts as one.
+    // More than AUTH_IP_FAILURE_MAX wrong passwords in flight at once, spread so neither
+    // the pair nor the per-username bucket can refuse any of them. All the gate reads
+    // happen before the first verify ends, so only a slot reserved before the scrypt
+    // await stops the burst passing the pre-gate on one stale count.
+    const extra = 10;
     const perUser = AUTH_FAILURE_MAX - 1;
     const burst = [];
-    for (let i = 0; i < AUTH_IP_FAILURE_MAX; i++) {
+    for (let i = 0; i < AUTH_IP_FAILURE_MAX + extra; i++) {
       burst.push(login(ip, `burst${Math.floor(i / perUser)}`, `bad-${i}`));
     }
-    await Promise.all(burst);
+    const codes = (await Promise.all(burst)).map((r) => r.statusCode);
 
-    // The bucket is full, so the next request from that IP is refused before scrypt.
+    // No account fills a bucket of its own here, so every verified guess is a 401 and
+    // every 429 is the pre-gate.
+    expect(codes.filter((c) => c === 401).length).toBe(AUTH_IP_FAILURE_MAX);
+    expect(codes.filter((c) => c === 429).length).toBe(extra);
+    // Each admitted guess counted once: reserved before the verify, not again after it.
+    expect(buckets.authFailures.get(ip)).toBe(AUTH_IP_FAILURE_MAX);
+
+    // The bucket is full, so the next request from that IP is refused before scrypt,
+    // a correct password included.
     expect((await login(ip, 'burst-next', 'bad')).statusCode).toBe(429);
+    expect((await login(ip, 'alice', 'alicepass1')).statusCode).toBe(429);
+  });
+
+  it('per-(username, IP) gate: a concurrent burst cannot carry the right password past the cap', async () => {
+    const { login, buckets } = await startIpServer();
+    const ip = '203.0.113.50';
+
+    // AUTH_FAILURE_MAX + 5 logins for bob from one IP, all in flight at once, the LAST
+    // carrying the correct password. Counting only after the verify let every one of
+    // them past the gate on the same stale read, and the correct one logged in.
+    const burst = [];
+    for (let i = 0; i < AUTH_FAILURE_MAX + 4; i++) burst.push(login(ip, 'bob', `bad-${i}`));
+    burst.push(login(ip, 'bob', 'bobpass123'));
+    const codes = (await Promise.all(burst)).map((r) => r.statusCode);
+
+    expect(codes.at(-1)).toBe(429);
+    expect(codes.filter((c) => c !== 401 && c !== 429)).toEqual([]);
+    // Every failed verify adds one to bob's per-username bucket, so it counts the guesses
+    // that reached scrypt: exactly the AUTH_FAILURE_MAX the pair gate admits. (The last
+    // of those is a 429 from that bucket, which is why the 401s are fewer.)
+    expect(buckets.userFailures.get('bob')).toBe(AUTH_FAILURE_MAX);
+    expect(codes.filter((c) => c === 401).length).toBeLessThanOrEqual(AUTH_FAILURE_MAX);
+    // Reserved once each, not counted again on failure.
+    expect(buckets.userIpFailures.get(`${ip}\nbob`)).toBe(AUTH_FAILURE_MAX);
+    expect(buckets.authFailures.get(ip)).toBe(AUTH_FAILURE_MAX);
+
+    // The lockout is that pair's only: bob still logs in from another IP.
+    expect((await login('203.0.113.51', 'bob', 'bobpass123')).statusCode).toBe(200);
   });
 
   it('per-(username, IP) gate: a correct password clears the pair bucket', async () => {
-    const login = await startIpServer();
+    const { login } = await startIpServer();
     const ip = '203.0.113.30';
 
     for (let i = 0; i < AUTH_FAILURE_MAX - 1; i++) {

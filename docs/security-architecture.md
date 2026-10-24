@@ -165,6 +165,11 @@ account from another IP still logs in), which is why the per-IP cap is the
 widest. The per-username bucket stays after the verify on purpose: checked
 first, a username-wide lockout let throwaway IPs keep a known account (admin
 included) locked out even with the right password.
+Both pre-verify gates count a request the moment it passes them, before its
+verify starts, so a burst of concurrent attempts cannot all slip through on one
+stale count; a correct password then clears its slot with the rest, and a
+failure is not counted a second time. A verify still in flight therefore holds a
+slot, even one carrying the right password.
 
 ---
 
