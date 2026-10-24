@@ -575,7 +575,8 @@ Object.assign(CodemanApp.prototype, {
    * enabled entries that are installed here, in catalog order, the same list the
    * welcome screen's Run buttons offer (renderWelcomeCliActions). The ids are
    * DATA from the registry, never a list kept here. Empty on a page rendered
-   * without the catalog, which leaves the row on the Run button's mode.
+   * without the catalog; that and a single entry both leave the row on the Run
+   * button's mode (see _commandPaletteAgent).
    */
   _commandPaletteAgentChoices() {
     const catalog = typeof window !== 'undefined' && Array.isArray(window.__codemanCliCatalog) ? window.__codemanCliCatalog : [];
@@ -584,14 +585,23 @@ Object.assign(CodemanApp.prototype, {
       .map((cli) => ({ id: cli.id, label: (typeof cli.label === 'string' && cli.label.trim()) || cli.id }));
   },
 
-  /** The agent the new-session row will start, or null when the catalog offers none. */
+  /**
+   * The agent the new-session row will start, or null when fewer than two are
+   * offered. With one entry there is no picker to change it, so the row keeps
+   * the Run button's mode: for a Docker case the Run menu offers the
+   * container's CLIs while this list follows the host's, and the only host
+   * entry (often Shell) must not replace the agent the Run button shows.
+   */
   _commandPaletteAgent() {
     const choices = this._commandPaletteAgentChoices();
-    if (!choices.length) return null;
+    if (choices.length < 2) return null;
     return choices.find((c) => c.id === this._commandPaletteAgentId) || choices[0];
   },
 
-  /** Each time the palette opens, the row starts on the Run button's mode (or the first offered agent). */
+  /**
+   * Each time the palette opens, the row starts on the Run button's mode (or,
+   * with two or more offered and that mode not among them, the first offered agent).
+   */
   _resetCommandPaletteAgent() {
     const choices = this._commandPaletteAgentChoices();
     const current = this.runMode || this._runMode;

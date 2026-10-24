@@ -513,6 +513,28 @@ describe('Command-K new-session agent picker', () => {
 
     expect(elements.commandPaletteList.innerHTML).not.toContain('data-palette-agent-cycle');
   });
+
+  it('keeps the Run button mode when the host offers a single other agent (a Docker case)', async () => {
+    // The host has only Shell, while a Docker case's Run menu put the Run
+    // button on the container's claude: Enter must still start claude.
+    const { app, elements } = loadAgentPalette(PALETTE_CATALOG.slice(0, 2));
+    app.isCliAvailable = (id: string) => id !== 'claude';
+    let modeDuringRun: string | undefined;
+    app.run = vi.fn(async () => {
+      modeDuringRun = app._runMode;
+    });
+
+    app.openCommandPalette();
+    elements.commandPaletteSearch.value = 'nomatch';
+    app.renderCommandPalette();
+    const index = app.commandPaletteItems.findIndex((i: any) => i.type === 'new-session');
+
+    expect(app.commandPaletteItems[index]).toMatchObject({ mode: 'claude', subtitle: 'Run Claude in plex-previews' });
+    expect(elements.commandPaletteList.innerHTML).not.toContain('data-palette-agent-cycle');
+    await app.activateCommandPaletteItem(index);
+    expect(modeDuringRun).toBe('claude');
+    expect(app._runMode).toBe('claude');
+  });
 });
 
 describe('Session Manager unified list', () => {
