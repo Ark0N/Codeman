@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 import { registerSystemRoutes } from '../../src/web/routes/system-routes.js';
+import { agentInbox } from '../../src/web/agent-inbox.js';
 
 // ── Mocks ──────────────────────────────────────────────────────────
 
@@ -342,6 +343,29 @@ describe('system-routes', () => {
       expect(body.cleanedSessions).toBe(0);
       expect(harness.ctx.store.cleanupSessionsByIds).toHaveBeenCalledWith(new Set());
       expect(runStaleSessionCleanup).toHaveBeenCalledOnce();
+    });
+
+    it('drops the agent inbox of every record it removes, and only those', async () => {
+      agentInbox.resetForTests();
+      agentInbox.post('stale-detached', null, 'mail for a detached session');
+      agentInbox.post('still-kept', null, 'mail for a session that stays');
+      harness.ctx.tabLayouts.runStaleSessionCleanup = vi.fn(
+        async (_activeIds: Set<string>, action: (ids: ReadonlySet<string>) => unknown) =>
+          action(new Set(['stale-detached']))
+      );
+      vi.mocked(harness.ctx.store.cleanupSessionsByIds).mockReturnValueOnce({
+        count: 1,
+        cleaned: [{ id: 'stale-detached', name: 'w9-gone' }],
+      });
+      try {
+        const res = await harness.app.inject({ method: 'POST', url: '/api/cleanup-state' });
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.body).cleanedSessions).toBe(1);
+        expect(agentInbox.pendingCount('stale-detached')).toBe(0);
+        expect(agentInbox.pendingCount('still-kept')).toBe(1);
+      } finally {
+        agentInbox.resetForTests();
+      }
     });
   });
 

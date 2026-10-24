@@ -668,7 +668,8 @@ detached. By default inboxes live in memory and a server restart empties them.
 The synced setting `agentInboxPersistEnabled` (default off; Settings → Cross-session features)
 writes them to `agent-inbox.json` in the data dir (mode `0600`, tmp file +
 rename) and restores them at boot. Inboxes of sessions that did not come back
-are pruned only after the session restore succeeded. Switching the setting off
+are pruned only after the session restore succeeded; a session on the
+reboot-restore offer keeps its inbox, so a rebuild finds its mail. Switching the setting off
 deletes the file and keeps what is in memory. The file is never read by
 `/api/search`, and the file viewer refuses it.
 

@@ -65,6 +65,7 @@ import { QR_AUTH_FAILURE_MAX } from '../../config/tunnel-config.js';
 import { AUTH_SESSION_TTL_MS } from '../../config/auth-config.js';
 import { resolveTerminalHistoryConfig } from '../../config/terminal-history.js';
 import { agentInboxPersistence } from '../agent-inbox-persistence.js';
+import { agentInbox } from '../agent-inbox.js';
 
 /**
  * Defaults for `POST /api/deepseek/install-profile`.
@@ -802,6 +803,9 @@ export function registerSystemRoutes(
     const lifecycleLog = getLifecycleLog();
     for (const s of result.cleaned) {
       lifecycleLog.log({ event: 'stale_cleaned', sessionId: s.id, name: s.name });
+      // A detached session kept its agent inbox; removing its record is the delete,
+      // so the mail goes with it (as on the persisted-only DELETE /api/sessions/:id).
+      agentInbox.drop(s.id);
     }
     return { cleanedSessions: result.count };
   });

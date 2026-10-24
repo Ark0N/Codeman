@@ -89,6 +89,13 @@ way; it also enables the `Ctrl+Shift+G` grid toggle on this device. See
 This section also holds background-agent tracking, including whether to track agents for
 every session or only the active tab.
 
+**Keep agent inbox across restarts** (under **Cross-session features**, synced, off by
+default) saves the pending `codeman agent post` messages to `agent-inbox.json` in the data
+dir, readable by you only, so they survive a server restart. Off, the agent inbox lives in
+memory and a restart empties it; switching it off deletes the file and keeps what is in
+memory. Messages expire 12 hours after they were posted either way. See
+[Driving Codeman From An Agent](Driving-Codeman-From-An-Agent#the-codeman-agent-commands).
+
 ### Appearance
 
 | Setting                | Notes                                                                                     |

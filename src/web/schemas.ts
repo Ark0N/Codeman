@@ -23,6 +23,7 @@ import { WEBHOOK_KINDS, WEBHOOK_SCOPES } from '../types/push.js';
 import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
 import { MAX_WAKE_MACS } from '../config/remote-wake-limits.js';
 import { MAX_INPUT_LENGTH } from '../config/terminal-limits.js';
+import { MAX_MESSAGE_BYTES } from './agent-inbox.js';
 import { enabledCliIds, enabledClis } from '../config/cli-registry/registry.js';
 import type { SessionMode } from '../types.js';
 import { isAdvisorModel } from '../types/session.js';
@@ -1857,7 +1858,7 @@ export const InboxPostSchema = z
     text: z
       .string()
       .min(1, 'text must not be empty')
-      .max(4 * 16_384),
+      .max(4 * MAX_MESSAGE_BYTES),
   })
   .strict();
 

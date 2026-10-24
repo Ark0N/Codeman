@@ -191,6 +191,22 @@ export function stripAnsi(text: string): string {
   return stripAnsiSequences(text).replace(/\x1b[()][AB0]/g, '');
 }
 
+/**
+ * Inbox message text for a terminal. Another session wrote it, so an escape sequence
+ * in it would otherwise reach the reader's terminal (retitle it, or move the cursor
+ * over the `from` line above it). ANSI sequences go as in `read --tail`, and every
+ * control character left (C0 other than newline and tab, DEL, C1) is shown as `\xHH`,
+ * so a bare `\r` or backspace cannot overwrite the header either. A CRLF line end
+ * stays a line end. `--json` prints the text as stored.
+ */
+export function terminalSafeText(text: string): string {
+  return (
+    stripAnsi(text.replace(/\r\n/g, '\n'))
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`)
+  );
+}
+
 /** Parse a positive-integer option (`--timeout` ms, `--tail` bytes); the server rejects anything else. */
 export function parsePositiveInt(raw: string | undefined, fallback: number, flag = '--timeout'): number {
   if (raw === undefined) return fallback;
@@ -950,7 +966,7 @@ export async function agentInboxRead(deps: AgentDeps, options: InboxReadOptions)
     const sender = m.from ? m.from.slice(0, 8) : 'user';
     const tag = m.seen ? palette.muted('seen') : palette.emph('new');
     deps.io.out(palette.muted(`── ${m.id} from ${sender}, ${age(m.createdAt, now)} ago, `) + tag);
-    deps.io.out(m.text);
+    deps.io.out(terminalSafeText(m.text));
   }
   if (gone) {
     deps.io.err(palette.err(`${GLYPH.fail} the session went away during the wait`));

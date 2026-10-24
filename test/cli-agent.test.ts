@@ -40,6 +40,7 @@ import {
   registerAgentCommands,
   resolveAgentContext,
   stripAnsi,
+  terminalSafeText,
   waitExitCode,
   type AgentContext,
   type AgentDeps,
@@ -705,6 +706,35 @@ describe('agent inbox verbs', () => {
     expect(text).toMatch(/── m-1 from 94990c6d, 2m ago, new/);
     expect(text).toContain('line one\nline two');
     expect(deps.err.join('')).toMatch(/codeman agent ack <id>/);
+  });
+
+  it('inbox prints message text with escape sequences and control characters neutralized', async () => {
+    const hostile = {
+      ...MSG,
+      text: 'title \x1b]0;pwned\x07ok\r\nred \x1b[31mtext\x1b[0m\rover\bwrite\ttab\x9b2J\nend',
+    };
+    const deps = fakeDeps([ok({ receiver: true, messages: [hostile], pending: 1, unseen: 0 })]);
+    expect(await agentInboxRead(deps, {})).toBe(EXIT.ok);
+    // out[0] is the `── <id> from …` header (styled by the palette), out[1] the text.
+    expect(deps.out).toHaveLength(2);
+    expect(deps.out[1]).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+    expect(deps.out[1]).toBe('title ok\nred text\\x0dover\\x08write\ttab\\x9b2J\nend');
+  });
+
+  it('terminalSafeText keeps newline and tab and escapes every other control', () => {
+    expect(terminalSafeText('a\nb\tc')).toBe('a\nb\tc');
+    expect(terminalSafeText('a\r\nb')).toBe('a\nb');
+    expect(terminalSafeText('\x1b[2J\x1bc\x00\x7f')).toBe('\\x1bc\\x00\\x7f');
+    expect(terminalSafeText('ünïcödé ✓')).toBe('ünïcödé ✓');
+  });
+
+  it('inbox --json hands the text out as stored', async () => {
+    const raw = { ...MSG, text: 'red \x1b[31mtext' };
+    const deps = fakeDeps([ok({ receiver: true, messages: [raw], pending: 1, unseen: 0 })], true);
+    await agentInboxRead(deps, {});
+    expect((JSON.parse(deps.out.join('')) as { messages: Array<{ text: string }> }).messages[0].text).toBe(
+      'red \x1b[31mtext'
+    );
   });
 
   it('inbox <id> is a peek and says so', async () => {

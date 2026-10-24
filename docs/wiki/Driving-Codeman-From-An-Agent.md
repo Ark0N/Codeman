@@ -47,6 +47,9 @@ codeman agent read "$SID" --tail 3000                     # terminal tail, ANSI 
 codeman agent send "$SID" 'run the tests, then print WORKDONE followed by _4711'   # hook-less modes: the marker in halves …
 codeman agent wait "$SID" --match WORKDONE_4711           # … and the wait on the joined form
 codeman agent interrupt "$SID"                            # a bare ESC, conversation intact
+codeman agent post "$SID" 'context for later, not a prompt'   # stored in its inbox, not typed into the pane
+codeman agent inbox --wait --timeout 300000               # your own inbox: blocks while nothing is new
+codeman agent ack <msg-id>                                # remove what you handled (read never removes)
 codeman agent rm "$SID"                                   # any session except this one
 ```
 
@@ -56,6 +59,14 @@ codeman agent rm "$SID"                                   # any session except t
   starts with `-` goes after `--`: `codeman agent send "$SID" -- "- fix the bug"`.
 - **Markers** follow [the split-marker trick](#the-split-marker-trick): the echo of your own
   prompt is output too, so ask for the marker in halves and wait on the joined form.
+- **`post`, `inbox`, `ack`** are the agent inbox: a message for another session that starts
+  no turn. `post` stores ONE quoted argument (multi-line is fine, so `"$(cat task.md)"` works)
+  and types nothing into the pane. `inbox` reads this session's mail, or peeks at another's
+  with an id, and removes nothing; `ack <id>…` removes what you handled. `inbox --wait`
+  blocks while nothing is new, so mail you read but did not ack does not wake it again.
+  `ls` shows each session's mail in an INBOX column. Mail lives in memory unless
+  **Keep agent inbox across restarts** is on (see [Settings Reference](Settings-Reference)),
+  and goes when its session is deleted.
 - **Exit codes** are the same for every verb: `0` done, `1` error, `2` timeout, `3` the
   worker exited, `4` refused. `--json` prints the response's `data`.
 

@@ -4036,8 +4036,15 @@ export class WebServer extends EventEmitter {
     // Same gate as the tab layouts: only a restore that succeeded may decide which
     // inboxes are orphans. A failed one returns above and leaves every message alone.
     // Kept: live sessions plus every record state.json still holds (a session that
-    // was not re-adopted this boot but is kept for recovery keeps its mail).
-    const keep = new Set([...this.sessions.keys(), ...Object.keys(this.store.getSessions())]);
+    // was not re-adopted this boot but is kept for recovery keeps its mail), plus the
+    // sessions on the reboot-restore offer. `cleanupStaleSessions()` above has already
+    // pruned their records, and a rebuild reuses the old id, so without them a restored
+    // session would come back to an empty inbox. The 12 h TTL bounds what is never rebuilt.
+    const keep = new Set([
+      ...this.sessions.keys(),
+      ...Object.keys(this.store.getSessions()),
+      ...rebootRestoreRegistry.list(() => true).map((entry) => entry.sessionId),
+    ]);
     const pruned = agentInbox.pruneExcept(keep);
     if (pruned > 0) console.log(`[AgentInbox] dropped ${pruned} inbox(es) of sessions that did not come back`);
   }
@@ -4217,9 +4224,10 @@ export class WebServer extends EventEmitter {
     approvalInbox.stop();
     this.keepWarmService.stop();
     // A post within the debounce window before shutdown would otherwise not reach disk.
+    // Flushed again after `app.close()` below, for a post that lands in between.
     agentInboxPersistence.flush();
     // Same reason as `cancelEverything` above: an in-flight wake is awaited by a request,
-    // and `app.close()` (the last line of this method) does not abort in-flight requests —
+    // and `app.close()` (at the end of this method) does not abort in-flight requests,
     // so without this a restart during a wake waits out the readiness poll.
     this.remoteWake?.stop();
 
@@ -4360,7 +4368,13 @@ export class WebServer extends EventEmitter {
     // Dispose push store (flush pending saves)
     this.pushStore.dispose();
 
-    await this.app.close();
+    try {
+      await this.app.close();
+    } finally {
+      // The routes answer until `app.close()` returns, so a post after the flush above
+      // would otherwise sit in an unref'd debounce timer and never reach disk.
+      agentInboxPersistence.flush();
+    }
   }
 }
 
