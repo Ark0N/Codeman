@@ -387,6 +387,20 @@ describe('Command-K new-session agent picker', () => {
     expect(elements.commandPaletteList.innerHTML).toContain('run-mode-dot opencode');
   });
 
+  it('keeps the switch out of the row button accessible name and gives its tooltip a zh-CN entry', () => {
+    const { app, elements } = loadAgentPalette();
+    app.openCommandPalette();
+    const html = elements.commandPaletteList.innerHTML;
+    const title = 'Agent for the new session (Left/Right to change)';
+
+    // No nested buttons inside the row's <button>: the subtitle names the agent.
+    expect(html).toContain(`class="command-palette-agent" aria-hidden="true" title="${title}"`);
+    expect(html).not.toContain('role="button"');
+    expect(html).not.toContain('aria-label=');
+    const i18n = readFileSync(resolve(import.meta.dirname, '../src/web/public/i18n.js'), 'utf8');
+    expect(i18n.split(`'${title}':`).length - 1).toBe(1);
+  });
+
   it('falls back to the first offered agent when the Run button mode is not offered', () => {
     const { app } = loadAgentPalette();
     app._runMode = 'codex'; // not installed

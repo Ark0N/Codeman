@@ -694,19 +694,21 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * The new-session row's agent switch: arrows either side of the agent's logo
-   * and name. Spans, not buttons: the row itself is a <button>. Nothing is drawn
-   * when there is nothing to choose between.
+   * and name. Spans, not buttons: the row itself is a <button>. The switch is
+   * aria-hidden (no nested buttons; the row's subtitle already names the agent),
+   * and its arrows work by click through data-palette-agent-cycle. Nothing is
+   * drawn when there is nothing to choose between.
    */
   _renderCommandPaletteAgentPicker(mode) {
     const choices = this._commandPaletteAgentChoices();
     if (choices.length < 2) return '';
     const agent = choices.find((c) => c.id === mode) || choices[0];
     return `
-            <span class="command-palette-agent" title="Agent for the new session (Left/Right to change)">
-              <span class="command-palette-agent-arrow" role="button" data-palette-agent-cycle="prev" aria-label="Previous agent">&lsaquo;</span>
+            <span class="command-palette-agent" aria-hidden="true" title="Agent for the new session (Left/Right to change)">
+              <span class="command-palette-agent-arrow" data-palette-agent-cycle="prev">&lsaquo;</span>
               <span class="run-mode-dot ${escapeHtml(agent.id)}" aria-hidden="true"></span>
               <span class="command-palette-agent-label">${escapeHtml(agent.label)}</span>
-              <span class="command-palette-agent-arrow" role="button" data-palette-agent-cycle="next" aria-label="Next agent">&rsaquo;</span>
+              <span class="command-palette-agent-arrow" data-palette-agent-cycle="next">&rsaquo;</span>
             </span>`;
   },
 
