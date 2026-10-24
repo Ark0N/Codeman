@@ -102,6 +102,30 @@ describe('claude', () => {
       'claude --dangerously-skip-permissions --session-id "0f9c2b14-1111-2222-3333-444455556666"'
     );
   });
+
+  it('folds the keep-warm idleCompaction opt-out LAST into the one --settings JSON, and only when asked', () => {
+    const launch = {
+      claudeCliVersion: '2.1.300',
+      statusLineCommand: '/x/exporter.sh',
+      advisorModel: 'opus',
+      sessionName: 'w1 alpha',
+    };
+    // Keep-warm off: byte-identical to the launch from before keep-warm existed.
+    expect(claude(launch)).toBe(
+      'claude --dangerously-skip-permissions --session-id "0f9c2b14-1111-2222-3333-444455556666" ' +
+        '--settings \'{"advisorModel":"opus","statusLine":{"type":"command","command":"/x/exporter.sh"}}\' --name "w1 alpha"'
+    );
+    expect(claude({ ...launch, effort: 'ultracode', idleCompactionOff: true })).toBe(
+      'claude --dangerously-skip-permissions --session-id "0f9c2b14-1111-2222-3333-444455556666" ' +
+        '--settings \'{"ultracode":true,"advisorModel":"opus","statusLine":{"type":"command","command":"/x/exporter.sh"},"idleCompaction":false}\' --name "w1 alpha"'
+    );
+    // The builder folds the key whenever asked, even with nothing else in the JSON (the
+    // launch only asks alongside the exporter, but the builder does not rely on that).
+    expect(claude({ idleCompactionOff: true })).toBe(
+      'claude --dangerously-skip-permissions --session-id "0f9c2b14-1111-2222-3333-444455556666" ' +
+        '--settings \'{"idleCompaction":false}\''
+    );
+  });
 });
 
 describe('opencode', () => {

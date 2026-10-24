@@ -68,11 +68,11 @@ export const KEYBOARD = {
   CONFIRM_TIMEOUT: 2000,
 } as const;
 
-// Swipe constants (match app.js SwipeHandler)
+// Swipe constants (match SwipeHandler in mobile-handlers.js)
 export const SWIPE = {
   MIN_DISTANCE: 80,
-  MAX_TIME: 300,
-  MAX_VERTICAL_DRIFT: 100,
+  MAX_TIME: 500,
+  MAX_VERTICAL_DRIFT: 50,
 } as const;
 
 // Subagent window constants

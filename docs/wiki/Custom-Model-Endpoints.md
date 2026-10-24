@@ -150,6 +150,34 @@ relying on auto-fit (`--fit-ctx`), which sizes the context around fitting the bi
 rather than the biggest context — for example adding `-c 65536` to that model's llama-swap
 entry. "Launch anyway" is still there if you want to try regardless.
 
+**A context that is big enough overall can still be too small once it is split across
+slots.** `llama-server` runs several parallel slots by default (four on the build this was measured on) and,
+unless you say otherwise, they all share one pool of context. Claude Code sends more than one
+request at a time: the main session plus every subagent it runs in parallel, and each of those
+requests carries the roughly 40K tokens of system prompt and tools on its own. Four requests
+of 40K tokens do not fit in a shared 131K pool, so the server refuses them with HTTP 500
+`Context size has been exceeded`, even though any single request would have been fine.
+Discovery therefore also records how many slots each loaded model has. It reads an explicit
+`--parallel` or `-np` from the launch command, and otherwise asks the server for
+`total_slots`, because a server started without the flag chooses the number itself. When the
+context divided by the slot count drops below what Claude Code needs, picking that model shows
+the same in-app dialog, this time explaining the shared slots. The division uses the context
+Codeman read from the launch command (`--fit-ctx` or `-c`), never a larger figure from the
+server's `/props`, which has been measured reporting far more than the server really runs
+with. So a default llama-swap model with auto slots shows the dialog, which names the fix and
+lets you launch anyway. The fix is a single slot:
+
+```yaml
+cmd: >-
+  llama-server -m /models/your-model.gguf --parallel 1 ...
+```
+
+With one slot the active conversation gets the whole context, requests from parallel
+subagents queue behind it instead of failing, and Claude Code's repeated prompt prefix stays
+in the cache instead of being processed again in a different slot each time. The alternative
+is a context large enough that every slot can hold 40K tokens. A slot count Codeman could not
+read is treated as one slot, never guessed.
+
 ## Which harnesses actually work
 
 | Harness                                  | Status                                                                                                                                                                                                               |

@@ -101,11 +101,23 @@ Stated plainly, because a security page that only lists strengths is not useful:
 
 ## Privacy
 
-No telemetry, no analytics, no phone-home. Codeman's only network traffic is between your
-browser and your server. Your agent CLI's traffic is its own, on your account.
+No telemetry, no analytics, no phone-home. Your agent CLI's traffic is its own, on your
+account. Beyond the traffic between your browser and your server, the server itself makes a few
+requests for features you use: the Codex usage poll, web push, and webhooks if you set one up.
+
+The GitHub Copilot quota read behind the plan usage chip's **Copilot** row is **on by default
+while Copilot CLI is installed and signed in** (an absent plan-usage setting reads as on, even
+for a phone-only user whose chip is hidden). Every 10 minutes the server asks `api.github.com`,
+and nothing else, for your premium-request quota, with Copilot's own sign-in token. The token is
+never logged and redirects are refused. Turn off **Plan Usage Limits** in App Settings to stop it.
 
 Two features send data outward, both off by default and both stated where they appear: voice
 dictation through your Claude login, and the Read My Mind prediction call.
+
+[Config Backups](Config-Backups) copies some credential-bearing files (`.env`, `users.json`,
+`custom-model-hosts.json`, `push-keys.json`, `webhook.json`) into a backup folder. The default folder is inside
+the data directory, and every backup is mode `0700`/`0600`, so nothing new is exposed. Only a
+folder you choose yourself can move them somewhere less private; admin only in multi-user mode.
 
 ## Reporting a vulnerability
 

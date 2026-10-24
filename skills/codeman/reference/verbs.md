@@ -101,8 +101,9 @@ Differences from `quick-start` worth knowing before you debug one:
 - hitting the session cap here is `OPERATION_FAILED`, where `quick-start` returns
   `SESSION_BUSY` for the identical condition.
 
-`quick-start` failure codes are `SESSION_BUSY` (the global 50-session cap, or the
-per-user cap of 25 in multi-user mode), `FORBIDDEN`, `CONFLICT`, `NOT_FOUND` (a
+`quick-start` failure codes are `SESSION_BUSY` (the global session cap, 50 by default via
+`CODEMAN_MAX_SESSIONS`, or the per-user cap in multi-user mode, half the global cap,
+25 by default), `FORBIDDEN`, `CONFLICT`, `NOT_FOUND` (a
 remote or docker host named by the case no longer exists), `OPERATION_FAILED` and
 `INVALID_INPUT`. **None of them are retryable in a loop.** Always branch on
 `.success` before reading `.data.sessionId`: on failure the field is absent, `jq -r`
@@ -303,10 +304,16 @@ duplicate resend costs nothing.
 Codeman types the text and sends Enter **only when the input contains a carriage
 return**; without it your command sits unsubmitted on the worker's prompt and
 everything downstream times out. No response field catches this: `delivered:true`
-means "written to the pane", **not** "submitted". Newlines are stripped, so input is
-single-line by construction. Build the body with `jq -n` for any prompt you did not
-author as a literal, because the inline `-d '{"input":"'"$P"'\r"}'` pattern breaks on
-the first double quote, backslash or `$` in a real prompt:
+means "written to the pane", **not** "submitted". With `useMux`, newlines are kept: the
+text goes in as one paste, and the `\r` submits all of it. **`sendwait` sends one line,
+though:** its Enter loop and the server's submit check cannot reliably recognise a
+multi-line paste, so a multi-line prompt to a freshly spawned worker could sit unsent in
+Claude Code's Enter-ignore window. `sendwait` therefore joins the lines with a space,
+which loses their layout; put long multi-line content in a file
+([§5.9](#59-big-input-via-the-workspace)). Build the body with `jq -n`
+for any prompt you did not author as a literal, because the inline
+`-d '{"input":"'"$P"'\r"}'` pattern breaks on the first double quote, backslash or `$`
+in a real prompt:
 
 ```bash
 BODY=$(jq -n --arg p "$PROMPT" '{input:($p+"\r"),useMux:true,clientId:"agent-1",seq:1,wait:true,waitTimeout:60000}')
@@ -587,9 +594,10 @@ allowlist in §4.
 
 ### 5.9 Big input via the workspace
 
-The composer is a single line capped at 65536 characters with newlines stripped, which
-makes it a bad channel for a spec, a diff or a file list. The workspace is the good
-one, and for a local or docker case you are on the same filesystem as the worker.
+The composer is capped at 65536 characters, and a multi-line paste cannot be confirmed
+as submitted, which makes it a bad channel for a spec, a diff or a file list. The
+workspace is the good one, and for a local or docker case you are on the same
+filesystem as the worker.
 
 1. Write `TASK.md` into the worker's workspace with your own file tools. The path is
    `.data.casePath` from `quick-start`, or the `workingDir` you passed to
@@ -599,10 +607,10 @@ one, and for a local or docker case you are on the same filesystem as the worker
 3. Wait on `DONE_<token>` with `wait-output` ([§5.5](#55-markers-for-hook-less-workers)),
    then read `RESULT.json` back with your own tools.
 
-This sidesteps the byte cap, the newline stripping and the quoting hazards in one
-move, and it makes the marker **split by construction**: the token lives in the file,
-never in the line you type, so the echo of your own keystrokes cannot match it. The
-worker also gets to re-read the task instead of holding it in one echoed line.
+This sidesteps the byte cap, the unconfirmed multi-line paste and the quoting hazards
+in one move, and it makes the marker **split by construction**: the token lives in the
+file, never in the line you type, so the echo of your own keystrokes cannot match it.
+The worker also gets to re-read the task instead of holding it in one echoed line.
 
 ⚠️ Two places it does not work: a **remote-SSH case** runs on another host whose
 filesystem you cannot see, and any worker **currently editing** the directory you are

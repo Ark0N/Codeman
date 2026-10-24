@@ -37,7 +37,8 @@ a bottom sheet rather than a dropdown. On a folding phone (iPhone Duo) dialogs s
 the hinge, and opening or closing the device is treated as the device changing shape, never
 as the keyboard appearing.
 
-**Swipe left and right** on the terminal to switch sessions.
+**Swipe left and right** on the terminal to switch sessions. A visible text selection pauses
+the swipe, and a terminal wider than the screen pans sideways instead.
 
 ## The home screen
 
@@ -131,11 +132,12 @@ already writing in the editor.
 
 ## Tapping, links and copying
 
-- **Tap a link** in terminal output and it opens in a new tab. Same for a link in an agent's
+- **Tap a link** in terminal output and it opens in a new tab. Same for a web link in an agent's
   answer in the response viewer — it opens a tab rather than navigating the dashboard away,
   which on a phone would unload the whole session view.
-- **Tap a file path** an agent printed and the file-preview overlay opens (Markdown rendered,
-  HTML as a page); a log or other plain-text path opens the log viewer. Works in scrolled-up
+- **Tap a file path** an agent printed, or a link to one in its answer (Codex writes
+  `[report](/tmp/report.json)`), and the file-preview overlay opens (Markdown rendered, HTML
+  as a page); a log or other plain-text path opens the log viewer. Works in scrolled-up
   transcript too.
 - A tap on the prose *beside* a link still places the cursor as usual, and a tap on a dialog's
   numbered choice still answers the dialog even when the row contains a path — the dialog wins,

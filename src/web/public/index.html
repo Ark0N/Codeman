@@ -197,7 +197,7 @@
         <button class="btn-icon-header btn-split btn-split--hidden" onclick="app.openSplitPicker(event)" title="Split: open a second session beside this one" aria-label="Split: open a second session beside this one" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg></button>
         <button class="btn-icon-header btn-tile-grid btn-tile-grid--hidden" onclick="app.toggleTileGrid()" oncontextmenu="app.openTileCountMenu(event)" aria-describedby="tileGridHint" aria-label="Tiles: show several sessions side by side (right-click for how many)" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg></button>
         <button class="btn-icon-header btn-ultracode-agents btn-ultracode-agents--hidden" onclick="app.toggleUltracodeAgentsPanel()" title="Ultracode / Workflow agents" aria-label="Open ultracode workflow agents"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.2 7.2 15.6 11M8.2 16.8 15.6 13"/></svg></button>
-        <div class="header-plan-usage header-plan-usage--hidden" id="planUsageChip" title="Claude and Codex plan usage limits">—</div>
+        <div class="header-plan-usage header-plan-usage--hidden" id="planUsageChip" title="Claude, Codex and Copilot plan usage limits">—</div>
         <button class="btn-icon-header btn-notifications" onclick="app.toggleNotifications()" title="Notifications" aria-label="Toggle notifications" style="display:none;">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
           <span class="notification-badge" id="notifBadge" style="display:none;">0</span>
@@ -614,6 +614,8 @@
         <div class="file-preview-header">
           <span class="file-preview-title" id="filePreviewTitle">file.ts</span>
           <div class="file-preview-actions">
+            <button class="btn-icon-sm" id="filePreviewBackBtn" onclick="app.stepFilePreviewHistory(-1)" title="Back (Alt+←)" aria-label="Back to the previous file" hidden disabled>&larr;</button>
+            <button class="btn-icon-sm" id="filePreviewForwardBtn" onclick="app.stepFilePreviewHistory(1)" title="Forward (Alt+→)" aria-label="Forward to the next file" hidden disabled>&rarr;</button>
             <button class="btn-icon-sm" id="filePreviewPrevBtn" onclick="app.stepFolderPreview(-1)" title="Previous file in folder (←)" aria-label="Previous file in folder" hidden>&lsaquo;</button>
             <button class="btn-icon-sm" id="filePreviewNextBtn" onclick="app.stepFolderPreview(1)" title="Next file in folder (→)" aria-label="Next file in folder" hidden>&rsaquo;</button>
             <button class="btn-icon-sm" id="filePreviewFolderBtn" onclick="app.openFolderOfPreview()" title="Show folder" aria-label="Show folder" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
@@ -624,6 +626,7 @@
             <button class="btn-icon-sm file-preview-edit-btn" id="filePreviewEditBtn" onclick="app.enterFilePreviewEdit()" title="Edit file" aria-label="Edit file" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg></button>
             <button class="btn-icon-sm" onclick="app.copyFilePreviewContent()" title="Copy content">&#x2398;</button>
             <button class="btn-icon-sm" id="filePreviewDetachBtn" onclick="app.detachFilePreview()" title="Open in new tab" aria-label="Open in new tab" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></button>
+            <button class="btn-icon-sm" id="filePreviewExpandBtn" onclick="app.toggleFilePreviewExpanded()" title="Expand" aria-label="Expand" aria-pressed="false"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
             <button class="btn-icon-sm" onclick="app.closeFilePreview()" title="Close">&times;</button>
           </div>
         </div>
@@ -635,6 +638,7 @@
           <button class="file-preview-editbar-btn file-preview-editbar-btn--save" id="filePreviewSaveBtn" onclick="app.saveFilePreviewEdit()" disabled>Save</button>
         </div>
         <div class="file-preview-footer" id="filePreviewFooter"></div>
+        <div class="file-preview-resize" id="filePreviewResize" title="Drag to resize" aria-hidden="true"></div>
       </div>
     </div>
 
@@ -774,6 +778,11 @@
                 <span>1M Opus Context</span>
               </label>
               <span class="form-hint">Use 1M token context window for new sessions</span>
+              <label class="case-default-group-label" for="caseDefaultGroup">Default session group</label>
+              <select id="caseDefaultGroup" class="case-default-group-select" onchange="app.onCaseDefaultGroupChanged(this)">
+                <option value="">Ungrouped</option>
+              </select>
+              <span class="form-hint">New sessions for this case land in this group</span>
             </div>
           </div>
           <!-- Mobile-only case button + gear -->
@@ -818,6 +827,11 @@
               <span>1M Opus Context</span>
             </label>
             <span class="form-hint">Use 1M token context window</span>
+            <label class="case-default-group-label" for="caseDefaultGroupMobile">Default session group</label>
+            <select id="caseDefaultGroupMobile" class="case-default-group-select" onchange="app.onCaseDefaultGroupChanged(this)">
+              <option value="">Ungrouped</option>
+            </select>
+            <span class="form-hint">New sessions for this case land in this group</span>
           </div>
         </div>
 
@@ -922,6 +936,7 @@
               <div><kbd>Ctrl</kbd>+<kbd>?</kbd></div><div>Show Shortcuts</div>
               <div><kbd>Alt/Option</kbd>+<kbd>?</kbd></div><div>Show Shortcuts</div>
               <div><kbd>Escape</kbd></div><div>Close Panels</div>
+              <div><kbd>Alt/Option</kbd>+<kbd>ArrowLeft</kbd> / <kbd>Alt/Option</kbd>+<kbd>ArrowRight</kbd></div><div>File Viewer Back / Forward</div>
             </div>
           </section>
         </div>
@@ -1334,7 +1349,18 @@
                       <div class="set-row-text">
                         <span class="set-row-label">Status</span>
                         <span class="set-row-desc" id="promptCacheStatus" data-i18n-skip>Not reported yet.</span>
+                        <span class="set-row-desc" id="keepWarmStatus" data-i18n-skip hidden></span>
                       </div>
+                    </div>
+                    <!-- Per-session opt-in for the keep-alive nudge (prompt-cache-keepwarm.ts);
+                         the default for sessions that have not chosen lives in App Settings →
+                         Automation. Its status shares the Status row above: session-ui.js updateKeepWarmStatus. -->
+                    <div class="set-row">
+                      <div class="set-row-text">
+                        <span class="set-row-label">Keep the cache warm while idle</span>
+                        <span class="set-row-desc">Sends a one-line keep-alive just before the cache expires, so your next prompt still reads from cache. Runs only while idle, up to the limit in App Settings &rarr; System &rarr; Automation; switch on before launch to also stop Claude Code's own idle compaction.</span>
+                      </div>
+                      <label class="switch switch-sm"><input type="checkbox" id="modalKeepWarmEnabled" onchange="app.autoSaveKeepWarm()"><span class="slider"></span></label>
                     </div>
                   </div>
                 </div>
@@ -3242,6 +3268,48 @@
                 </div>
               </div>
 
+              <div class="set-group" id="configBackupGroup">
+                <div class="set-group-head"><h4>Config backups</h4><span class="set-scope">server</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="config backup snapshot settings clis restore retention keep">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Back up my configuration</span>
+                      <span class="set-row-desc">Keeps timestamped copies of your settings, CLI overrides, custom endpoints, webhook, linked cases and (in multi-user mode) accounts. A copy is made at startup and whenever one of them changes. Some of these files hold credentials, so each copy is private to this user (mode 0700/0600).</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsConfigBackup"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row has-field" data-search="config backup folder location path directory">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Backup folder</span>
+                      <span class="set-row-desc">An absolute path (a leading <code>~</code> is expanded). Leave empty for the default shown. Only folders Codeman created there are ever pruned.</span>
+                    </div>
+                    <input type="text" id="appSettingsConfigBackupDir" class="set-input" placeholder="default: ~/.codeman/backups/config" data-i18n-skip>
+                  </div>
+                  <div class="set-row has-field" data-search="config backup retention keep count snapshots">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Keep this many backups</span>
+                      <span class="set-row-desc">2 to 500 (with 1, every change would delete the state before it). The newest backup is always kept.</span>
+                    </div>
+                    <input type="number" id="appSettingsConfigBackupKeepCount" oninput="this.dataset.touched=1" class="set-input" min="2" max="500" step="1" placeholder="20">
+                  </div>
+                  <div class="set-row has-field" data-search="config backup retention keep days age">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Delete backups older than (days)</span>
+                      <span class="set-row-desc">A backup is removed once a newer one has existed this many days. 0 keeps backups until the count above pushes them out.</span>
+                    </div>
+                    <input type="number" id="appSettingsConfigBackupKeepDays" oninput="this.dataset.touched=1" class="set-input" min="0" max="3650" step="1" placeholder="30">
+                  </div>
+                  <div class="set-row" data-search="config backup now restore list">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Backups</span>
+                      <span class="set-row-desc">Folder and retention changes apply after you save. Restoring puts a backup's files back and makes a copy of the current ones first. Compare shows what changed between two backups, or between a backup and the running config; credential values are never shown.</span>
+                    </div>
+                    <button class="btn-toolbar btn-sm btn-primary" id="configBackupNowBtn" onclick="app.backupConfigNow()">Back up now</button>
+                  </div>
+                  <div id="configBackupList" class="set-note" data-i18n-skip>Loading…</div>
+                </div>
+              </div>
+
               <div class="set-group">
                 <div class="set-group-head"><h4>Automation</h4><span class="set-scope">synced</span></div>
                 <div class="set-group-body">
@@ -3251,6 +3319,23 @@
                       <span class="set-row-desc">Detect and pop up new images found in session directories.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsImageWatcherEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="prompt cache keep warm keep-alive nudge idle expire">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Keep prompt caches warm</span>
+                      <span class="set-row-desc">Default for Claude sessions that have not chosen on their Respawn tab (a session an agent started needs its own switch): shortly before an idle session's prompt cache would expire, send a one-line keep-alive turn so the next prompt still reads the conversation from cache instead of re-processing it.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsPromptCacheKeepWarm"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="prompt cache keep warm hours limit cap window">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Keep warm for at most</span>
+                      <span class="set-row-desc">Hours after your last prompt in a session during which keep-alives are sent; past that the cache is left to expire. A keep-alive costs a small fraction of the re-write it prevents, so a few hours of them pay off, an overnight gap does not.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <input type="number" id="appSettingsPromptCacheKeepWarmMaxHours" class="set-num" min="0.5" max="24" step="0.5" value="2">
+                      <span class="set-unit">hours</span>
+                    </div>
                   </div>
                 </div>
               </div>

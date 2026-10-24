@@ -143,7 +143,8 @@ export function registerHookEventRoutes(
         // bumped only by input that flowed through Codeman's own write path, so
         // it read 0 forever for those panes and every consumer of "when did this
         // pane last submit" silently degraded.
-        session?.markPromptSubmitted();
+        // The prompt text tells a person's prompt from the keep-alive's (prompt-cache-keepwarm.ts).
+        session?.markPromptSubmitted(typeof data.prompt === 'string' ? data.prompt : undefined);
       }
       // Persist when the conversation actually moved: `/clear` emits no
       // completion event, so without this the successor id is lost on restart
@@ -183,9 +184,21 @@ export function registerHookEventRoutes(
     // seeds from /api/approvals), and it suppresses the push: an alert nobody can answer
     // is worth even less on a phone than in a tab.
     let acknowledgedReason: string | undefined;
+    // A turn Codeman started itself (the prompt-cache keep-alive, prompt-cache-keepwarm.ts)
+    // ends with the same stop hook and idle prompt as a real one. Both open pre-acknowledged,
+    // so no tab, toast or push asks a person to look at a session that wants nothing from them.
+    const keepAliveReason =
+      session?.keepAliveTurnActive && (event === 'stop' || event === 'idle_prompt') ? 'cache keep-alive' : undefined;
     const approvalKind = APPROVAL_KIND_BY_EVENT[event];
+    // Only a human spends an idle alert, so a keep-alive turn leaves a pending idle item exactly
+    // as it found it: its stop does not resolve it, and its idle prompt does not replace it (a
+    // replacement would forget the item was unseen, or that a person had seen it). With no idle
+    // item pending, the keep-alive's idle prompt opens a pre-acknowledged one.
+    const keepsPendingIdle = keepAliveReason !== undefined && approvalInbox.getForSession(sessionId)?.kind === 'idle';
     if (session && hooksAvailableForMode(session.mode, sessionHookOptions(session))) {
-      if (approvalKind) {
+      if (approvalKind === 'idle' && keepsPendingIdle) {
+        // Left in place: no new item, and the broadcast below carries the keep-alive reason.
+      } else if (approvalKind) {
         const toolInput =
           safeData.tool_input && typeof safeData.tool_input === 'object'
             ? (safeData.tool_input as Record<string, unknown>)
@@ -209,6 +222,7 @@ export function registerHookEventRoutes(
           // session that is watching its own work opens acknowledged, so it never arms an
           // alert nobody can answer; notePrompt() carries the whole reasoning.
           watching: session.watching,
+          preAcknowledged: keepAliveReason,
           // Visible tmux frame first (it IS the dialog); raw byte-buffer tail as
           // the fallback for direct-PTY sessions and the no-op test mux.
           capture: () => {
@@ -219,10 +233,15 @@ export function registerHookEventRoutes(
         });
         approvalId = item.id;
         acknowledgedReason = item.acknowledgedReason;
-      } else if (APPROVAL_RESOLVING_EVENTS.has(event)) {
+      } else if (APPROVAL_RESOLVING_EVENTS.has(event) && !keepsPendingIdle) {
         approvalInbox.resolveForSession(sessionId, 'resolved_in_terminal');
       }
     }
+
+    acknowledgedReason ??= keepAliveReason;
+    // The keep-alive turn's own idle prompt is the last thing it sends, so the window ends here
+    // rather than on a fixed clock that a slow turn could outlast.
+    if (keepAliveReason && event === 'idle_prompt') session?.endKeepAliveTurn();
 
     ctx.broadcast(`hook:${event}`, {
       sessionId,
@@ -259,9 +278,11 @@ export function registerHookEventRoutes(
     // Claude pane; only the ones where the conversation actually moved (a /clear
     // successor) carry information, and recording the rest would push a row into
     // the Summary timeline and /api/search per turn and evict useful rows from
-    // the 1000-event FIFO (#367 merge-time fix).
+    // the 1000-event FIFO (#367 merge-time fix). A keep-alive turn's stop and idle prompt are
+    // left out too: the summary files a `stop` as a warning, which the Away digest lists under
+    // Needs Attention, and that turn is Codeman's own, not the agent's.
     const summaryTracker = ctx.runSummaryTrackers.get(sessionId);
-    if (summaryTracker && (event !== 'prompt_submitted' || conversationChanged)) {
+    if (summaryTracker && !keepAliveReason && (event !== 'prompt_submitted' || conversationChanged)) {
       summaryTracker.recordHookEvent(event, safeData);
     }
 

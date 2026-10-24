@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import {
   applyLiveMetrics,
   applyMuxNames,
+  beginAttachHandoff,
   buildAttachBanner,
   buildListLines,
   confirmKillStep,
@@ -38,6 +39,7 @@ import {
   tmuxSocketFromEnv,
 } from '../../src/tui/tui-app.js';
 import { createTuiModel, stateSince } from '../../src/tui/tui-model.js';
+import type { TuiClient } from '../../src/tui/tui-client.js';
 import { glyphsFor } from '../../src/tui/tui-render.js';
 import type { TuiLiveSessionMetrics, TuiTmuxSession } from '../../src/tui/tui-client.js';
 import type { TuiConfirmState, TuiRow, TuiSessionRow } from '../../src/tui/tui-types.js';
@@ -596,6 +598,40 @@ describe('the held-Ctrl detach alias', () => {
   });
 });
 
+describe('the way out when F1 is taken, on a socket with no detach key', () => {
+  // Codeman keeps only `<prefix> send-prefix` in its socket's prefix table
+  // (src/tmux-prefix-table.ts), so tmux's stock `Ctrl+B then d` does nothing there.
+  it('names the held-Ctrl chord on the bar instead of the stock d', () => {
+    const bar = buildAttachBanner({ prefix: 'C-b', heldAlias: 'C-d' })['status-format[0]'];
+    expect(bar).toContain('#[bold]Ctrl+B then Ctrl+D#[nobold]');
+    expect(bar).not.toContain('then d');
+  });
+
+  it('hands the same chord back from the attach handoff, for the help overlay and the hint line', async () => {
+    const free = new Set(['C-d', 'M-1']);
+    const client = {
+      readPrefixKey: async () => 'C-b',
+      readDetachKey: async () => null,
+      readPrefixBinding: async (key: string) => (free.has(key) ? null : 'display-message mine'),
+      bindDetachKey: async () => true,
+      unbindDetachKey: async () => true,
+      bindSwitchKey: async () => true,
+      unbindSwitchKey: async () => true,
+      readSessionOptions: async () => null,
+      applySessionOptions: async () => true,
+      restoreSessionOptions: async () => true,
+      readWindowSizing: async () => null,
+      presizeWindow: async () => true,
+      followAttachingClient: async () => true,
+      restoreWindowSizing: async () => true,
+    } as unknown as TuiClient;
+
+    const handoff = await beginAttachHandoff(client, 'codeman-abc12345', 'w1-case');
+
+    expect(handoff.chord).toBe('Ctrl+B then Ctrl+D');
+  });
+});
+
 describe('naming a session the TUI starts', () => {
   it("follows the web UI's w<n>-<case> convention", () => {
     expect(nextSessionName('mirofish', [])).toBe('w1-mirofish');
@@ -737,8 +773,11 @@ describe('the way out of an attach', () => {
     const keys = helpKeysFor(GLYPHS, { server: true, detach: 'Ctrl+A then d' });
     const detach = keys.find(([key]) => key === 'Ctrl+A then d');
     expect(detach?.[1]).toContain('detach');
-    // Degraded mode still attaches, so it still needs the way out.
-    expect(helpKeysFor(GLYPHS, { server: false }).map(([key]) => key)).toContain('Ctrl+B then d');
+    // Degraded mode still attaches, so it still needs the way out. Before the first
+    // attach that is F1: Codeman's socket has no `d` in its prefix table to name.
+    const before = helpKeysFor(GLYPHS, { server: false }).map(([key]) => key);
+    expect(before).toContain(ONE_KEY_DETACH);
+    expect(before).not.toContain('Ctrl+B then d');
   });
 });
 

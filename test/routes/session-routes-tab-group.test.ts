@@ -104,7 +104,9 @@ describe('create routes: tabGroupId', () => {
     });
     expect(res.statusCode).toBe(200);
     const data = body(res.body);
-    expect(ctx.addSession.mock.calls[0][1]).toEqual({ tabGroupId: 'g1' });
+    // quick-start always names its case too, for the case's default group (the
+    // explicit group still wins inside TabLayoutService).
+    expect(ctx.addSession.mock.calls[0][1]).toEqual({ caseName: 'tabgroupcase', tabGroupId: 'g1' });
     expect(data.tabLayout.groups[0].refs).toEqual([{ kind: 'session', id: data.sessionId }]);
 
     const plain = await app.inject({

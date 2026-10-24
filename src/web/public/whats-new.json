@@ -1,13 +1,13 @@
 {
-  "version": "1.43.0",
+  "version": "1.44.0",
   "highlights": [
-    "Security notices for the CLIs you run",
-    "GitHub Copilot CLI is a run mode (#592)",
-    "Pin tab names on the CLI (#646, optional)",
-    "Antigravity tabs show when they are working (#648)",
-    "Custom-folder cases below the cases folder (#567)",
-    "A steady WS pill (#647)",
-    "Clickable diff and patch files (#644)",
-    "Mixed uploads say what they skipped (#651)"
+    "Config backups (#661)",
+    "Keep an idle Claude session's prompt cache warm (#666, opt-in)",
+    "A default tab group per case (#676)",
+    "A File Viewer you can resize, with Back and Forward (#659)",
+    "Copilot's premium-request quota in the plan-usage chip (#662)",
+    "More (or fewer) sessions with `CODEMAN_MAX_SESSIONS` (#668)",
+    "Multi-line prompts keep their line breaks (#670)",
+    "A warning for llama.cpp slots that split the context too thin (#658)"
   ]
 }

@@ -647,6 +647,9 @@ const COMPOSER_INPUT_FRAME_LIMIT = 64 * 1024;
 const COMPOSER_PASTE_START = '\x1b[200~';
 const COMPOSER_PASTE_END = '\x1b[201~';
 
+// Accessory keys that act on the terminal and leave the keyboard up.
+const ACCESSORY_REFOCUS_ACTIONS = new Set(['scroll-up', 'scroll-down', 'arrow-left', 'arrow-right', 'tab', 'shift-tab', 'shift-left', 'shift-right', 'ctrl', 'ctrl-o', 'opt-enter', 'esc', 'effort-max', 'clear-input']);
+
 /**
  * KeyboardAccessoryBar - Quick action buttons shown above keyboard when typing.
  */
@@ -802,6 +805,21 @@ const KeyboardAccessoryBar = {
     this.syncCodexKeys();
     this._syncComposerDraftIndicator();
 
+    // A key that keeps the keyboard up must not take focus on press at all.
+    // Letting the tap blur the terminal and refocusing it in the click handler
+    // (kept below as the fallback) made every such key start a keyboard
+    // dismissal: a blur/focus pair per tap. Same pattern as the Attach input
+    // (image-input.js). A first tap on clear/compact only arms the confirm.
+    this.element.addEventListener('mousedown', (e) => {
+      const btn = e.target.closest('.accessory-btn');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      if (ACCESSORY_REFOCUS_ACTIONS.has(action) ||
+          ((action === 'clear' || action === 'compact') && this._confirmAction !== action)) {
+        e.preventDefault();
+      }
+    });
+
     // Add click handlers — preventDefault stops event from reaching terminal
     this.element.addEventListener('click', (e) => {
       const btn = e.target.closest('.accessory-btn');
@@ -813,8 +831,7 @@ const KeyboardAccessoryBar = {
       this.handleAction(action, btn);
 
       // Refocus terminal so keyboard stays open (tap blurs terminal → keyboard dismisses → toolbar shifts)
-      const refocusActions = new Set(['scroll-up', 'scroll-down', 'arrow-left', 'arrow-right', 'tab', 'shift-tab', 'shift-left', 'shift-right', 'ctrl', 'ctrl-o', 'opt-enter', 'esc', 'effort-max', 'clear-input']);
-      if (refocusActions.has(action) ||
+      if (ACCESSORY_REFOCUS_ACTIONS.has(action) ||
           ((action === 'clear' || action === 'compact') && this._confirmAction)) {
         if (typeof app !== 'undefined' && app.terminal) {
           app.terminal.focus();
@@ -1415,9 +1432,10 @@ const KeyboardAccessoryBar = {
     overlay.querySelector('.prompt-composer-terminal').addEventListener('click', () => {
       // Hand the text BACK to the terminal prompt so both surfaces hold the same
       // prompt, the mirror of the adoption composePrompt() does on open. Only a
-      // single-line draft can make the trip: the prompt transport is single-line
-      // and strips embedded newlines, so a multi-line draft would arrive mangled
-      // and instead stays parked as a draft (the dot on the Compose key shows it).
+      // single-line draft can make the trip: the terminal prompt is one line and
+      // its text reaches the PTY as typed input, where an embedded newline is a
+      // key, so a multi-line draft would arrive mangled and instead stays parked
+      // as a draft (the dot on the Compose key shows it).
       const text = textarea.value;
       if (!text || text.includes('\n')) {
         close({ focusTerminal: true });

@@ -329,7 +329,12 @@ const CLAUDE: CliEntry = {
       'CLAUDE_CODE_MAX_CONTEXT_TOKENS',
       'CLAUDE_CONFIG_DIR',
     ],
-    gates: { nameFlag: { minVersion: '2.1.224', failClosed: true } },
+    // idleCompactionSetting: the `idleCompaction` settings key first ships in 2.1.290 (2.1.289
+    // already idle-compacts with no opt-out); see TmuxManager._resolveIdleCompactionOptOut.
+    gates: {
+      nameFlag: { minVersion: '2.1.224', failClosed: true },
+      idleCompactionSetting: { minVersion: '2.1.290', failClosed: true },
+    },
     // claude reads `$CLAUDE_CONFIG_DIR/.claude.json` when that is set (checked in 2.1.289).
     mcpConfig: {
       path: '.claude.json',
@@ -768,8 +773,8 @@ const CODEX: CliEntry = {
     transcript: 'codex-rollout',
     altScreen: 'strip-full',
     echo: { policy: 'predict', anchor: { kind: 'cursor' }, predictProfile: 'codex' },
-    wheelForward: { mode: 'never' }, // #227: codex ignores SGR wheel reports, never forward
-    // ...but it DOES page its transcript on PageUp/PageDown. Measured on 0.157.1 (local,
+    wheelForward: { mode: 'always' }, // 0.163.0 fullscreen: measured SGR scrolling; require observed tracking
+    // Without observed mouse tracking, retain PageUp/PageDown fallback. Measured on 0.157.1 (local,
     // alternate screen inside tmux, so xterm holds no history) and 0.160 (remote): PageUp
     // moved the visible transcript while SGR wheel reports and local scrolling did nothing.
     // This is the page-key fallback for a hollow pane, not wheel forwarding.

@@ -434,6 +434,12 @@ about a hundred characters or more is taken as a paste by Claude Code, its `\r`
 becomes a newline, and the prompt stays unsent (measured on 2.1.283). Any other
 input (escape sequences, a bracketed-paste frame, a line feed, a bare `\r`) keeps
 the raw write, and an explicit `"useMux": false` forces it.
+With `"useMux": true`, a line feed is kept: the text goes in as one bracketed paste
+(`\r\n` read as `\n`, leading and trailing line breaks dropped), then Enter if the
+input carried a `\r`; a pane that has not enabled bracketed paste receives each line
+break as a carriage return and runs the lines as they arrive. The check that
+re-presses a stranded Enter cannot reliably recognise a multi-line paste, so a long
+multi-line prompt to a just-started agent is still safer in a file it is told to read.
 
 ```bash
 curl -s -X POST "$API/api/v1/sessions/$SID/input" \
@@ -778,6 +784,28 @@ deleted group, another user's group) is ignored and the session lands where it
 otherwise would, never a `400`. A malformed value (`null`, an empty string, a
 non-string) is a `400 INVALID_INPUT`. Requests without the field are unchanged.
 
+### A case's default session group
+
+- `GET /api/v1/cases/:name/default-group` → `{ caseName, groupId, groups }`: `groupId` is a
+  group id from the caller's own tab layout or `null` (Ungrouped), `groups` the caller's
+  current named groups (`{ id, name }`, in layout order). A stored id whose group was
+  deleted reads back as `null` (the read changes nothing; the next session created for the
+  case forgets it).
+- `PUT /api/v1/cases/:name/default-group` with `{ "groupId": string | null }` saves it. An
+  id not in the caller's layout is a `400 INVALID_INPUT` that leaves the old value in place.
+
+Both answer `404 NOT_FOUND` for a case the caller cannot see (the same rules as
+`GET /api/v1/cases`). The value is stored per owner and case, so in multi-user mode it is
+never shared and needs no admin role. A new session of the case is placed in that group in
+its creating write when nothing stronger applies; the order is: an explicit `tabGroupId`,
+then the session it was spawned from (`parentSessionId`), then the case default, else
+Ungrouped. `POST /api/v1/quick-start` uses its `caseName` (local, linked, remote and Docker
+cases); `POST /api/v1/sessions` uses the case whose folder `workingDir` is (a direct child of
+the caller's case space, a linked case's exact path, or a Claude worktree of either,
+`<case>/.claude/worktrees/<name>`); without a `workingDir` there is no case. When a case default places the
+session, the create response carries `tabLayout` as it does for `tabGroupId`. Deleting the
+case forgets the value; existing sessions never move.
+
 ## Approvals Inbox
 
 Cross-session queue of prompts waiting on a human (permission dialogs,
@@ -990,7 +1018,10 @@ confirmed? } | { clear: true }` applies (or clears) the session's
     just because a swap is needed at all — only when it would disrupt
     someone else.
   - `{requiresContextWarning: true, modelId, contextLength,
-minSafeContextTokens}` — Claude Code's own fixed per-turn overhead
+minSafeContextTokens, slotCount?}` — `slotCount` is present whenever the model runs more than
+    one parallel llama.cpp slot, and the warning also fires when the context
+    divided across those slots is below the floor even though the whole context
+    is not. Claude Code's own fixed per-turn overhead
     (system prompt + tool schemas) can exceed a small model's entire
     discovered context on its own, before any conversation history exists
     to compact, guaranteeing the very first message fails regardless of
@@ -1151,6 +1182,31 @@ Result (`data`):
   - Only installed CLIs are listed: one that is not installed is left out, as a supported CLI that is not installed reads `absent`.
 
 The result carries server **names** only, never `env` values, `headers` or file content. Each changed file keeps its previous content as `<file>.codeman-bak` (overwritten by each sync); a file that receives servers carrying `env` or `headers` is left mode `0600`.
+
+## Prompt-cache keep-warm
+
+Claude Code reports the main conversation's prompt-cache state on its statusline (v2.1.251+); the exporter keeps it per session as `promptCache` on `GET /api/sessions` (`{ warm, ttl, expiresAt, recacheTokensIfCold, misses, lastMissCauses }`, epoch ms). The keep-warm sends one keep-alive turn shortly before an idle session's cache would expire; `keepWarmEnabled` (absent = the app-wide `promptCacheKeepWarm` setting applies, which a session spawned by another session does not inherit), the live `keepWarm` status and `lastRealPromptAt` (epoch ms of the last submit that was not a keep-alive, the cap's clock) ride the same session state. A keep-alive is a submit, so it moves `lastSubmitAt` like any prompt. A claude launch with keep-warm on also carries `"idleCompaction": false` in its `--settings` JSON (Claude Code 2.1.290 or newer).
+
+| Method | Path                               | Body                                 | Notes |
+| ------ | ---------------------------------- | ------------------------------------ | ----- |
+| `POST` | `/api/v1/sessions/:id/keep-warm`   | `{ "enabled": true \| false \| null }` | Sets the session's choice; `null` clears it so the app-wide default applies. `200` with `{ keepWarm: { enabled, status } }`. `400 INVALID_INPUT` for a CLI that reports no cache telemetry on its statusline (anything but Claude today). |
+
+`status` is `{ enabled, idleCompactionOff, state, nextCheckAt?, reason?, nudges, lastNudgeAt?, budgetEndsAt? }` (`idleCompactionOff`: whether the session's current launch carries that opt-out; `budgetEndsAt` only while `enabled`) with `state` one of `off`, `armed` (waiting for the due time), `waiting` (due, deferred by a guard named in `reason`), `nudged` (sent, waiting for the next cache report) or `stopped` (`reason` says why). Two SSE events carry changes: `session:promptCache` (`{ sessionId, ...promptCache }`) and `session:keepWarm` (`{ sessionId, ...status }`), both change-only. The keep-alive turn's `hook:stop` and `hook:idle_prompt` broadcasts carry `acknowledgedReason: "cache keep-alive"`, no push is sent for them and the run summary does not record them; an idle approval already pending stays as it was (only a person spends its alert). Its `session:working` and `session:idle` broadcasts carry `keepAlive: true`.
+
+## Config backups
+
+Timestamped snapshots of the files that hold what a user has customized (`src/config-backup.ts`). On by default; a snapshot is taken at startup and whenever the tracked files' content changes (checked every 5 minutes), so there is one entry per real change. All four routes are admin only in multi-user mode (`403`), because the files include credentials. Responses carry file names and sizes; only the diff returns values, and never a credential's.
+
+Tracked files (a fixed list, relative to the data dir): `settings.json`, `clis.json`, `custom-model-hosts.json`, `webhook.json`, `intents.json`, `linked-cases.json`, `remote-hosts.json`, `remote-cases.json`, `docker-hosts.json`, `docker-cases.json`, `webviews.json`, `push-keys.json`, `users.json`, `.env`. Session state (`state.json`, which also holds cron jobs and respawn presets), logs, the hook secret and caches are not.
+
+Settings (synced, in `settings.json`): `configBackupEnabled` (absent = on), `configBackupDir` (absolute path, `~` expanded; empty = `<data dir>/backups/config`), `configBackupKeepCount` (2–500, default 20), `configBackupKeepDays` (0–3650, default 30; `0` = no age limit). A key absent from `settings.json` means the retention the newest backup in the folder recorded, and the default only when none did. Retention only ever deletes snapshot folders Codeman made there, and never the newest one. Each snapshot is a `0700` folder named `cfg-YYYYMMDD-HHMMSS` (server local time; `-2`, `-3`… on a same-second collision) holding the tracked files under their own names plus a `manifest.json` (`id`, `createdAt`, `reason` of `startup`/`auto`/`manual`/`pre-restore`, `appVersion`, the change-check `hash`, an `origin` id, the `keepCount` and `keepDays` in force, and a SHA-256 and size per file), all `0600`. A snapshot is never dated earlier than the instance's newest one, so a clock that read ahead once does not make every later pass write a copy. All four routes answer `503 OPERATION_FAILED` when a custom folder does not respond, and diff and restore answer `409` for a symlinked or group/world-accessible backup as well as a checksum mismatch. Only folders with that name and a valid manifest are listed, restored or pruned. Full guide: `docs/wiki/Config-Backups.md`.
+
+| Method | Path                                 | Body | Notes                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------ | ------------------------------------ | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/api/config-backups`                | none | `settings` in effect, `dir`, `defaultDir`, `tracked[]` and `backups[]` (`id`, `createdAt`, `reason`, `appVersion`, `files[]`, `bytes`), newest first.                                                                                                                                                                                                                                                                  |
+| `POST` | `/api/config-backups`                | none | Snapshot now, even if nothing changed (`reason: manual`), then apply retention. `status` is `created` or `empty` (nothing tracked exists yet); `removed[]` lists the ids retention deleted. `503` when a custom folder does not answer.                                                                                                                                                                                                                                                                         |
+| `GET`  | `/api/config-backups/diff?from=&to=` | none | What differs between two states: `from`/`to` are a backup id or `current` (the running config; the default for `to`). `files[]` (`name`, `status` `added`/`removed`/`changed`/`unchanged`, `changes[]` of `path`, `kind`, `before`/`after`, `truncated`, `detail`) and `changed`. Credential values are never returned (`redacted: true`). `400` without `from`; `404` unknown id; `409` if a file fails its checksum. |
+| `POST` | `/api/config-backups/:id/restore`    | none | Put a snapshot's files back, atomically, after a `pre-restore` snapshot of the current ones (none when nothing changed since the newest backup). `404` unknown id; `409 CONFLICT` if a file fails its checksum (nothing changed). Returns `restored[]`, `untouched[]` (tracked files present now that the backup did not hold; left as they are), `safetySnapshot` (the `pre-restore` id, or the newest backup's when nothing had changed since it) and `restartRequired[]` (files the running server only reads at start: `.env`, `push-keys.json`, `settings.json`). A file that cannot be written (a full disk, a directory in its place) does not stop the others: the answer is then `500 OPERATION_FAILED` with the same fields in `data` plus `failed[]` (`name`, `error`); the files listed in `restored[]` are the backup's and are reloaded like a full restore.                                                                                                                                                              |
 
 ## Webhook notifications
 

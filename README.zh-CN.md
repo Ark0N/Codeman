@@ -853,7 +853,7 @@ deleted 9f2d8e5f, aff9c691, be9f1f15    标签消失
 
 ### 行路规则（POST 之前先读）
 
-1. **只发单行输入，而且必须以 `\r` 结尾。** 编程输入按字面文本发送，**只有当输入里含回车符时才会触发 Enter**：`{"input":"run tests\r"}`。少了 `\r`，文本就停在会话的输入框里不被提交（同一次调用里的 `wait` 还会在一个压根没开始的回合上耗满整个超时）。内嵌的换行会被剥掉而不是报错，因此 `"echo A\necho B\r"` 执行的是拼起来的 `echo Aecho B`：一次调用只发一行。
+1. **输入必须以 `\r` 结尾。** 编程输入按字面文本发送，**只有当输入里含回车符时才会触发 Enter**：`{"input":"run tests\r"}`。少了 `\r`，文本就停在会话的输入框里不被提交（同一次调用里的 `wait` 还会在一个压根没开始的回合上耗满整个超时）。使用 `useMux` 时内嵌的换行会保留，各行作为一次粘贴送入，因此 `"echo A\necho B\r"` 在 shell 里会执行两条命令；但重新按下滞留 Enter 的检查无法可靠识别多行粘贴，所以较长的多行内容最好写进文件，让 agent 自己去读。
 2. **让输入幂等。** 在 `POST …/input` 上带上稳定的 `clientId` 和按会话单调递增的 `seq`。服务端会去重，因此连接中断后的重试不会重复投递提示。
 3. **认证。** 若设置了 `CODEMAN_PASSWORD`，发送 HTTP Basic 认证（用户 `admin` 或 `CODEMAN_USERNAME`）或 `codeman_session` cookie。默认的环回安装无密码。缺失的 `Origin` 头被允许，因此普通 `curl` 可用；跨站的浏览器 origin 会被拒绝（CSRF 防护）。⚠️ `401` 回的是裸字符串 `Unauthorized`，**不是** JSON 信封，直接喂给 `jq` 只会抛解析错误而看不到真正的失败原因：先看状态码，再解析。
 4. **响应信封。** 多数端点返回 `{ "success": true, "data": … }`（错误：`{ "success": false, "error", "errorCode" }`）。少数遗留 GET 返回裸响应体 —— **两种都要处理**（`body.data ?? body`）。

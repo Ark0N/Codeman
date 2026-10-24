@@ -113,6 +113,7 @@ codeman web    # then open http://localhost:3000
 | Page                                          | What it answers                                    |
 | --------------------------------------------- | -------------------------------------------------- |
 | [Running As A Service](Running-As-A-Service)  | How do I keep it up across reboots, and update it? |
+| [Config Backups](Config-Backups)              | How do I get my settings back after they were changed or lost? |
 | [Troubleshooting](Troubleshooting)            | Why is it doing that?                              |
 | [FAQ](FAQ)                                    | The questions that keep coming up.                 |
 | [Contributing](Contributing)                  | How do I send a fix?                               |

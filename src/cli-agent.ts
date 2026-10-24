@@ -129,16 +129,18 @@ export function sendPromptFromArgs(words: readonly string[]): { text: string } |
 }
 
 /**
- * Why `send` refuses this text, or `undefined` when it is printable. The composer
- * takes one line; the server strips `\r`/`\n` but everything else below 0x20 (and
- * DEL) reaches the pane as a keypress. None of that is a prompt.
+ * Why `send` refuses this text, or `undefined` when it is printable. A line break is
+ * refused for the reason below; everything else below 0x20 (and DEL) reaches the pane
+ * as a keypress. None of that is a prompt.
  */
 export function inputRefusal(text: string): string | undefined {
   if (text.length === 0) return 'refusing: empty input (use `interrupt` for ESC, `send <id> ""` is never a prompt)';
-  // The composer is one line: the server strips newlines, which silently joins the
-  // lines into one prompt, and a tab reaches the pane as a keypress (claude: mode toggle).
+  // The server pastes a multi-line prompt as one block, but the check that re-presses
+  // a stranded Enter cannot reliably recognise that block in the composer, so a wait
+  // could burn its timeout on a prompt that never went out. A tab reaches the pane as
+  // a keypress (claude: mode toggle).
   if (/[\n\r\t]/.test(text)) {
-    return 'refusing: input must be a single line (the composer strips newlines and would join your lines) — join them yourself, or write a file into the workspace and send its path';
+    return 'refusing: input must be a single line (a multi-line paste cannot be confirmed as submitted) — join them yourself, or write a file into the workspace and send its path';
   }
   // C0, DEL and C1 (U+0080–U+009F: an 8-bit CSI is still a CSI to a terminal).
   // eslint-disable-next-line no-control-regex

@@ -136,9 +136,9 @@ instead of failing silently; `Enter` and `1-9` keep working.
 
 ### `p` sends exactly one line
 
-The composer is a single line by design, ending in a carriage return: that is the
-input contract every Codeman path follows, because multi-line text breaks the
-agent's own composer. Pasted newlines become spaces rather than being rejected, so
+The composer is a single line by design, ending in a carriage return, because the
+server's submit check cannot reliably recognise a multi-line paste: a prompt it cannot
+see on the composer line is not re-submitted when the agent ignored the first Enter. Pasted newlines become spaces rather than being rejected, so
 a paste cannot silently run a different command than the one you read.
 
 ## Answering approvals
@@ -178,8 +178,11 @@ bar first named the wrong letter (tmux binds lowercase `d` to `detach-client` an
 capital `D` to `choose-client`), and once corrected it still failed for anyone who
 kept Ctrl held, because that sends `Ctrl+D`, which tmux leaves unbound. So the TUI
 claims `F1` in tmux's prefix-less key table for the length of the attach and gives
-it back afterwards. The chord still works; it is simply not what you are told to
-press.
+it back afterwards. The held-Ctrl chord (`Ctrl+B Ctrl+D`) works too, as the TUI
+claims it for the attach as well. Plain `Ctrl+B d` does not: on Codeman's socket
+the prefix table holds nothing but `send-prefix`, because the browser's terminals
+are tmux clients on the same server and must not be able to `switch-client` or
+`detach-client` themselves (`src/tmux-prefix-table.ts`).
 
 You do not have to remember any of it. For as long as the attach lasts the pane
 wears a bar across the top:

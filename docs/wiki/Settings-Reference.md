@@ -184,11 +184,19 @@ Rebinding for the shortcut registry. See [Keyboard Shortcuts](Keyboard-Shortcuts
 
 ### System
 
-`CLAUDE.md` template for new cases, default working directory, the image watcher, and
+`CLAUDE.md` template for new cases, default working directory, the image watcher, the prompt-cache keep-warm default (**Keep prompt caches warm**, off) and its cap (**Keep warm for at most**, 2 hours after a session's last prompt; see [Keeping Agents Running](Keeping-Agents-Running)), and
 Cloudflare tunnel controls including the tunnel URL. The **Diagnostics** group runs
 `codeman doctor` on the server and lists the agent CLIs, tmux, Node and the optional office
 tools with their versions and install hints (admin only in multi-user mode). In multi-user
 mode, the **Users** administration entry is injected here.
+
+The **Config backups** group controls timestamped copies of your configuration files: an
+on/off switch (on by default), the backup folder (default `~/.codeman/backups/config`), how
+many backups to keep (2 to 500, default 20) and how many days to keep them (0 to 3650, default
+30; 0 means no age limit). A value that is not saved in `settings.json` (a reset file) is whatever
+the newest backup in that folder recorded, and the default only when none did, plus **Back up now** and a list with **Restore**. These are
+server-side settings, read fresh. Details, naming and restore behaviour are on
+[Config Backups](Config-Backups).
 
 ## Session Options
 
@@ -196,7 +204,7 @@ Per session, from the tab.
 
 | Panel            | Contains                                                                                   |
 | ---------------- | ------------------------------------------------------------------------------------------- |
-| **Respawn**      | Auto-resume on usage limit, the respawn cycle configuration, presets, duration. See [Keeping Agents Running](Keeping-Agents-Running). |
+| **Respawn**      | Auto-resume on usage limit, the prompt cache readout and keep-warm switch, the respawn cycle configuration, presets, duration. See [Keeping Agents Running](Keeping-Agents-Running). |
 | **Session**      | Name, working directory, environment overrides, per-tab pop-out override.                    |
 | **Ralph / Todo** | Loop configuration, iteration and todo caps, circuit breaker reset. See [Autonomous Loops](Autonomous-Loops). |
 | **Summary**      | What this session has done: tokens, activity, run summary.                                   |
@@ -221,6 +229,7 @@ Some things are configured before the server starts, not in the UI:
 | `CODEMAN_FILE_PICKER_ROOTS`         | Extra roots for the path picker.                                        |
 | `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledges exposing the server with no password.                  |
 | `CODEMAN_BASE_URL`                  | Mounts Codeman under a sub-path behind a reverse proxy that forwards the prefix unchanged. See [Remote Access](Remote-Access). |
+| `CODEMAN_MAX_SESSIONS`              | Cap on concurrent sessions. 50 by default, 1 to 462 (a larger value is clamped to 462, anything that is not a positive integer falls back to 50). Read at startup. The 462 assumes the default `CODEMAN_MAX_WEBVIEWS` and no pinned closed sessions, which share the same 512-entry tab layout. In multi-user mode the per-user cap defaults to half of it unless `CODEMAN_MAX_SESSIONS_PER_USER` is set. |
 | `CODEMAN_MAX_DOWNLOAD_BYTES`        | Cap on raw file bodies and downloads. 2 GB by default, `0` for none.    |
 | `CODEMAN_MAX_PASTE_IMAGE_BYTES`     | Cap on one pasted, dropped or attached image or document. 50 MB by default. |
 | `CODEMAN_MAX_PASTE_VIDEO_BYTES`     | Cap on one attached video (phone Attach, drop). 1 GB by default; videos stream to disk, so this bounds disk use, not memory. |
@@ -243,3 +252,4 @@ Some things are configured before the server starts, not in the UI:
 - [The Dashboard](The-Dashboard) - what each control does once visible.
 - [Keeping Agents Running](Keeping-Agents-Running) - the Respawn panel in depth.
 - [Agent CLIs](Agent-CLIs) - model, effort, and permission modes.
+- [Config Backups](Config-Backups) - copies of your settings, and how to restore them.

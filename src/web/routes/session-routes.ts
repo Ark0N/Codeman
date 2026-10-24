@@ -4,9 +4,9 @@
  * auto-clear, auto-compact, image watcher, flicker filter, and logout.
  */
 
-import { FastifyInstance, type FastifyReply } from 'fastify';
+import { FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { join, dirname, extname, basename } from 'node:path';
+import { join, dirname, extname, basename, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
@@ -55,6 +55,7 @@ import {
   AutoClearSchema,
   AutoCompactSchema,
   AutoResumeSchema,
+  KeepWarmSchema,
   PinSessionSchema,
   ImageWatcherSchema,
   FlickerFilterSchema,
@@ -76,7 +77,7 @@ import {
 } from './custom-model-routes.js';
 import { matchesPattern } from '../../config/cli-registry/patterns.js';
 import { ownerLayoutKey } from '../../tab-layout-persistence.js';
-import { TabLayoutValidationError } from '../../tab-layout.js';
+import { TabLayoutValidationError, type TabLayout } from '../../tab-layout.js';
 import {
   sessionWaits,
   resolveWaitSignals,
@@ -107,6 +108,7 @@ import {
   ownerFor,
   parseBody,
   persistAndBroadcastSession,
+  readJsonConfig,
   resolveAgentCaseOrigin,
   resolveCasesDir,
   resolveParentSessionId,
@@ -155,7 +157,15 @@ import {
   setHistoryIndexRefresher,
   setHistorySessionIndex,
 } from '../session-history-index.js';
-import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort, TabLayoutPort } from '../ports/index.js';
+import type {
+  SessionPort,
+  EventPort,
+  ConfigPort,
+  InfraPort,
+  AuthPort,
+  TabLayoutPort,
+  KeepWarmPort,
+} from '../ports/index.js';
 import { RunSummaryTracker } from '../../run-summary.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
@@ -203,6 +213,42 @@ import { UPLOADS_DIR } from '../paste-image-gc.js';
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
 const CODEMAN_CONFIG_DIR = getDataDir();
+
+const SAFE_CASE_NAME = /^[a-zA-Z0-9_-]+$/;
+
+/** `<repo>/.claude/worktrees/<name>`: the layout Claude Code's own worktree feature creates. */
+const CLAUDE_WORKTREE_PATH = /^(.*)\/\.claude\/worktrees\/([^/]+)\/?$/;
+
+/** Did the committed layout put this session in a named group (not Ungrouped)? */
+function landedInGroup(layout: TabLayout | undefined, sessionId: string): boolean {
+  return !!layout?.groups.some((group) => group.refs.some((ref) => ref.kind === 'session' && ref.id === sessionId));
+}
+
+/**
+ * The case a POST /api/sessions `workingDir` belongs to, for its default session
+ * group: a direct child of the caller's case space, or (admin / single-user, as
+ * GET /api/cases lists them) a linked case's exact path, or a Claude worktree
+ * (`<case>/.claude/worktrees/<name>`) of either. Lexical only: the browser sends
+ * the path the case list gave it, and this must never touch a possibly-dead
+ * mount. Anything else is no case, which keeps today's placement.
+ */
+async function inferLocalCaseName(req: FastifyRequest, workingDir: string): Promise<string | undefined> {
+  // The Git worktrees modal launches Claude through this route in the worktree, and every other CLI
+  // through quick-start with the case name: both are sessions of that case.
+  const resolved = resolvePath(workingDir);
+  const target = CLAUDE_WORKTREE_PATH.exec(resolved)?.[1] || resolved;
+  const user = getAuthUser(req);
+  if (dirname(target) === resolvePath(resolveCasesDir(user))) {
+    const name = basename(target);
+    if (SAFE_CASE_NAME.test(name)) return name;
+  }
+  if (isMultiUserMode() && !isAdmin(req)) return undefined;
+  const linked = await readJsonConfig<Record<string, string>>(LINKED_CASES_FILE, 'linked cases', {});
+  for (const [name, path] of Object.entries(linked)) {
+    if (SAFE_CASE_NAME.test(name) && typeof path === 'string' && resolvePath(path) === target) return name;
+  }
+  return undefined;
+}
 
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
 // eslint-disable-next-line no-control-regex
@@ -1024,7 +1070,7 @@ function wakeableHost(host: RemoteHost): WakeableRemote {
 
 export function registerSessionRoutes(
   app: FastifyInstance,
-  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort,
+  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort & KeepWarmPort,
   /** Test seam: inject a registry with fake IO instead of the real TCP/WoL probes. */
   options: { remoteWake?: RemoteWakeRegistry } = {}
 ): RemoteWakeRegistry {
@@ -1412,9 +1458,14 @@ export function registerSessionRoutes(
       parentSessionId: resolveParentSessionId(ctx, req, body.parentSessionId, owner),
     });
 
-    const tabLayout = body.tabGroupId
-      ? await ctx.addSession(session, { tabGroupId: body.tabGroupId })
-      : await ctx.addSession(session);
+    // Only a named workingDir: without one the session starts in the server's own cwd, which is no case.
+    const placementCase = remote || !body.workingDir ? undefined : await inferLocalCaseName(req, workingDir);
+    const placement = {
+      ...(body.tabGroupId ? { tabGroupId: body.tabGroupId } : {}),
+      ...(placementCase ? { caseName: placementCase } : {}),
+    };
+    const tabLayout =
+      Object.keys(placement).length > 0 ? await ctx.addSession(session, placement) : await ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -1432,9 +1483,13 @@ export function registerSessionRoutes(
     // Avoids serializing 2-3MB of terminal+text buffers per session creation.
     const lightState = ctx.getSessionStateWithRespawn(session);
     ctx.broadcast(SseEvent.SessionCreated, lightState);
-    // A grouped creation also returns the layout that placed it, so the browser
-    // draws the tab inside its group at once instead of after a re-read.
-    return { session: lightState, ...(body.tabGroupId ? { tabLayout } : {}) };
+    // A grouped creation (asked for, or its case's default group) also returns the
+    // layout that placed it, so the browser draws the tab inside its group at once
+    // instead of after a re-read.
+    return {
+      session: lightState,
+      ...(body.tabGroupId || landedInGroup(tabLayout, session.id) ? { tabLayout } : {}),
+    };
   });
 
   // ========== Rename Session ==========
@@ -1526,6 +1581,7 @@ export function registerSessionRoutes(
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
     }
     const contextLength = endpoint.modelContextLengths?.[body.modelId];
+    const slotCount = endpoint.modelSlotCounts?.[body.modelId];
 
     // Some CLIs (today: only claude) carry enough of their own fixed system-prompt/tool-
     // schema overhead that a small enough real context guarantees a first-message failure
@@ -1536,12 +1592,13 @@ export function registerSessionRoutes(
     // `confirmed`, which still means both) — NOT by `confirmedSwap`: this warning is
     // about the caller's own session, and the swap warning below is about someone
     // else's, so an answer to one is not consent to the other.
-    if (!(body.confirmed || body.confirmedContext) && exceedsSafeContextFloor(entry, contextLength)) {
+    if (!(body.confirmed || body.confirmedContext) && exceedsSafeContextFloor(entry, contextLength, slotCount)) {
       return {
         requiresContextWarning: true,
         modelId: body.modelId,
         contextLength,
         minSafeContextTokens: CLAUDE_MIN_SAFE_CONTEXT_TOKENS,
+        ...(slotCount && slotCount > 1 ? { slotCount } : {}),
       };
     }
 
@@ -3556,6 +3613,39 @@ export function registerSessionRoutes(
     };
   });
 
+  // ========== Prompt-cache keep-warm ==========
+
+  // Per-session opt-in for the keep-alive nudge (prompt-cache-keepwarm.ts). `enabled: null`
+  // clears the choice so the app-wide default applies again. Refused for a CLI that reports
+  // no cache telemetry on its statusline: without `expires_at` there is nothing to schedule.
+  app.post('/api/sessions/:id/keep-warm', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = parseBody(KeepWarmSchema, req.body, 'Invalid request body');
+    const session = findSessionOrFail(ctx, id, req);
+    if (!getCli(session.mode)?.capabilities.statusLineTelemetry) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Prompt-cache keep-warm needs the cache telemetry this CLI does not report'
+      );
+    }
+
+    session.setKeepWarmEnabled(body.enabled ?? undefined);
+    // Re-evaluate BEFORE the state broadcast and the response: both carry `keepWarm`, and a
+    // page that received the previous status would overwrite the one the toggle just produced.
+    await ctx.keepWarm.schedule(id);
+    persistAndBroadcastSession(ctx, session);
+
+    return {
+      success: true,
+      data: {
+        keepWarm: {
+          enabled: session.keepWarmEnabled ?? null,
+          status: session.keepWarm,
+        },
+      },
+    };
+  });
+
   // ========== Auto-Resume (usage-limit pause) ==========
 
   app.post('/api/sessions/:id/auto-resume', async (req) => {
@@ -4290,6 +4380,7 @@ export function registerSessionRoutes(
       const cmEndpoint = cmHosts.find((h) => h.id === customModel.endpointId);
       if (!cmEndpoint) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
       const cmContextLength = cmEndpoint.modelContextLengths?.[customModel.modelId];
+      const cmSlotCount = cmEndpoint.modelSlotCounts?.[customModel.modelId];
 
       // See the dedicated route's own comment for the full reasoning: some CLIs' own fixed
       // overhead can exceed a small enough real context on the very first message,
@@ -4299,13 +4390,14 @@ export function registerSessionRoutes(
       // `confirmedSwap`.
       if (
         !(customModel.confirmed || customModel.confirmedContext) &&
-        exceedsSafeContextFloor(cmEntry, cmContextLength)
+        exceedsSafeContextFloor(cmEntry, cmContextLength, cmSlotCount)
       ) {
         return {
           requiresContextWarning: true,
           modelId: customModel.modelId,
           contextLength: cmContextLength,
           minSafeContextTokens: CLAUDE_MIN_SAFE_CONTEXT_TOKENS,
+          ...(cmSlotCount && cmSlotCount > 1 ? { slotCount: cmSlotCount } : {}),
         };
       }
 
@@ -4461,7 +4553,7 @@ export function registerSessionRoutes(
       }
     }
 
-    const tabLayout = tabGroupId ? await ctx.addSession(session, { tabGroupId }) : await ctx.addSession(session);
+    const tabLayout = await ctx.addSession(session, { caseName, ...(tabGroupId ? { tabGroupId } : {}) });
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -4553,7 +4645,7 @@ export function registerSessionRoutes(
         caseName,
         ...(worktree ? { worktree, workingDir: workspacePath } : {}),
         ...(customModel ? { modelSwapInProgress: qsCustomModelSwapInProgress } : {}),
-        ...(tabGroupId ? { tabLayout } : {}),
+        ...(tabGroupId || landedInGroup(tabLayout, session.id) ? { tabLayout } : {}),
       };
     } catch (err) {
       // Clean up session on error to prevent orphaned resources
@@ -4683,9 +4775,6 @@ export function registerSessionRoutes(
     /** Main repo root the worktree belongs to. */
     worktreeRepo?: string;
   };
-
-  /** `<repo>/.claude/worktrees/<name>` — the layout Claude Code's own worktree feature creates. */
-  const CLAUDE_WORKTREE_PATH = /^(.*)\/\.claude\/worktrees\/([^/]+)\/?$/;
 
   /**
    * Recover cwd / branch / worktree from a transcript chunk.

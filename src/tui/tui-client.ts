@@ -704,8 +704,9 @@ export class TuiClient {
    *
    * Two hard rules from CLAUDE.md, both enforced here so no caller can get them
    * wrong: the payload must END with `\r` or the server never issues Enter and
-   * the text sits unsubmitted, and embedded newlines are stripped rather than
-   * sent (multi-line input breaks Ink, and the server would join the lines).
+   * the text sits unsubmitted, and embedded newlines become spaces rather than
+   * being sent (the server would paste them as one block, which its submit
+   * check cannot reliably recognise in the composer).
    * The `clientId`/`seq` pair makes delivery exactly-once, so a retry after a
    * dropped connection cannot type the prompt twice.
    */

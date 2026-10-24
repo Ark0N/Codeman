@@ -56,6 +56,12 @@ export function createMockRouteContext(options?: {
       runSessionDeletion: vi.fn(async (_removed, action) => action()),
       runStaleSessionCleanup: vi.fn(async (_activeIds, action) => action(new Set())),
       reconcileAfterRestoration: vi.fn(async () => {}),
+      caseDefaultGroup: vi.fn(async () => ({ groupId: null, groups: [] })),
+      setCaseDefaultGroup: vi.fn(async (_owner: string, _caseName: string, groupId: string | null) => ({
+        groupId,
+        groups: [],
+      })),
+      forgetCaseDefaultGroup: vi.fn(async () => {}),
     },
     cleanupSession: vi.fn(async () => {}),
     setupSessionListeners: vi.fn(async () => {}),
@@ -82,6 +88,9 @@ export function createMockRouteContext(options?: {
     setupTimedRespawn: vi.fn(),
     restoreRespawnController: vi.fn(),
     saveRespawnConfig: vi.fn(),
+
+    // -- KeepWarmPort --
+    keepWarm: { schedule: vi.fn(), rescheduleAll: vi.fn(), remove: vi.fn() },
 
     // -- ConfigPort --
     store: {

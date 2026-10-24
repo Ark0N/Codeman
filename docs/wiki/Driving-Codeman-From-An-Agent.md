@@ -125,11 +125,14 @@ These are set in every managed session. Read them rather than hardcoding anythin
 
 Read these before writing any code. Each one has cost somebody an afternoon.
 
-1. **Input is single line and must end with `\r`.** Enter fires only when the payload
-   contains a carriage return. Without it the text sits unsubmitted on the prompt, the
-   request still succeeds, and a combined wait burns its full timeout on a turn that never
-   started. Embedded newlines are stripped rather than rejected, so `"echo A\necho B\r"` runs
-   the joined `echo Aecho B`. One line per call.
+1. **Input must end with `\r`.** Enter fires only when the payload contains a carriage
+   return. Without it the text sits unsubmitted on the prompt, the request still succeeds,
+   and a combined wait burns its full timeout on a turn that never started. With
+   `useMux`, embedded newlines are kept: the text goes in as one paste and the Enter after
+   it submits all of it, so `"echo A\necho B\r"` runs both commands in a shell. The check
+   that re-presses a stranded Enter cannot reliably recognise a multi-line paste, so a
+   long multi-line prompt to a just-started agent is still safer in a file it is told to
+   read.
 2. **Make input idempotent.** Send a stable `clientId` and a monotonic per-session `seq`. The
    server deduplicates, so a retry after a dropped connection cannot double-deliver.
 3. **Auth.** With `CODEMAN_PASSWORD` set, use HTTP Basic or the session cookie. A missing

@@ -558,6 +558,12 @@ describe('codeman tui (under a pty)', () => {
     term.write('?');
     await waitFor(() => frameLines(output).some((line) => line.includes('Keys')), 'the help overlay');
     expect(frameLines(output).join('\n')).toContain('kill (y to confirm)');
+    // Nothing has been attached yet, so this is the dashboard's starting label:
+    // F1, what an attach claims, not tmux's stock chord, which Codeman's socket
+    // does not bind (src/tmux-prefix-table.ts).
+    const detachLine = frameLines(output).find((line) => line.includes('detach from an attached session'));
+    expect(detachLine).toContain('F1');
+    expect(detachLine).not.toContain('Ctrl+B');
 
     term.write('\u001b');
     await waitFor(() => !frameLines(output).some((line) => line.includes('Keys')), 'escape to close the overlay');

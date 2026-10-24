@@ -13,7 +13,9 @@ export interface SessionPort {
   /**
    * Register a created session with the owner's tab layout. `placement.tabGroupId`
    * puts it at the end of that group in the same layout write (ignored when the
-   * group is not in the owner's layout). Resolves to the committed layout.
+   * group is not in the owner's layout); without one (and without a parent that
+   * places it), `placement.caseName`'s default session group does the same.
+   * Resolves to the committed layout.
    */
   addSession(session: Session, placement?: SessionPlacementHint): Promise<TabLayout>;
   cleanupSession(sessionId: string, killMux?: boolean, reason?: string): Promise<void>;
