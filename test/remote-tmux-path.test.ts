@@ -8,6 +8,7 @@ import {
   buildRemoteTmuxCheckCommand,
   buildRemoteSessionAliveCommand,
   buildRemoteListSessionsCommand,
+  withRemoteTmuxPath,
 } from '../src/remote-hosts.js';
 import {
   buildRemoteLaunchCommand,
@@ -105,6 +106,15 @@ esac
     );
   });
   afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  // Literal pin for the quotes. dash 0.5.11+, bash and busybox do not field-split
+  // `export` arguments, so the real-shell cases below also pass with an unquoted
+  // PATH, and the other builder tests compute their expectation from the wrapper.
+  it('double-quotes the whole exported PATH value', () => {
+    expect(withRemoteTmuxPath('tmux -V')).toBe(
+      'export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"; tmux -V'
+    );
+  });
 
   for (const shell of ['/bin/sh', ...(existsSync('/bin/dash') ? ['/bin/dash'] : [])]) {
     for (const item of cases) {
