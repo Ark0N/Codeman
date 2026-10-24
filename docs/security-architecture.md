@@ -149,7 +149,7 @@ by presence in a server‑side map, so they cannot be forged offline.
 
 ### Rate limiting / lockout recovery
 
-Failed logins are tracked **per IP**: 10 failures (`AUTH_FAILURE_MAX`) → `429`, with a 15‑minute decay. Multi-user mode replaces that with a wider per-IP **pre-gate** of 50 failures (`AUTH_IP_FAILURE_MAX`), checked before the scrypt verify, plus a **per-username** bucket that exists in multi-user mode only and answers `429` from the 10th failed guess (`AUTH_FAILURE_MAX`; the count is incremented before the check), so the wider per-IP cap (for users sharing one egress IP) does not widen guessing against any one account.
+Failed logins are tracked **per IP**: 10 failures (`AUTH_FAILURE_MAX`) → `429`, with a 15‑minute decay. Multi-user mode replaces that with three buckets, all with the same decay: a wider per-IP **pre-gate** of 50 failures (`AUTH_IP_FAILURE_MAX`), checked before the scrypt verify, which bounds scrypt cost from one source and tolerates many users behind one egress IP; a **per-(username, IP)** gate of 10 failures (`AUTH_FAILURE_MAX`), also checked before the verify, which is what caps verified guesses against one account from one source; and a **per-username** bucket, checked after the verify, that answers `429` to failed guesses from the 10th on, from any IP (the count is incremented before the check). The last two exist in multi-user mode only. So the wider per-IP cap does not widen guessing against any one account from one IP, and other IPs cannot lock an account out.
 The QR path has its own separate limiter.
 
 The lockout check sits **after** the cookie/credential checks (step 4, not first).
@@ -158,9 +158,13 @@ immediately** even while an attacker is hammering the same IP — important beca
 all traffic through a tunnel shares one source IP (loopback). Wrong credentials
 are still counted and still hit the `429` at the threshold, so brute‑force
 protection is unchanged.
-The multi-user per-IP pre-gate is the exception: it runs before the password is
-verified, so once it trips even a correct password gets `429` until the decay,
-which is why its cap is wider than the per-username one.
+The two multi-user pre-verify gates are the exception: once the per-IP pre-gate
+or an account's (username, IP) gate trips, even a correct password from that IP
+gets `429` until the decay (for the pair gate, only for that account; the same
+account from another IP still logs in), which is why the per-IP cap is the
+widest. The per-username bucket stays after the verify on purpose: checked
+first, a username-wide lockout let throwaway IPs keep a known account (admin
+included) locked out even with the right password.
 
 ---
 

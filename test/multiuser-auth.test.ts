@@ -17,7 +17,8 @@ import { WebServer } from '../src/web/server.js';
 import { TmuxManager } from '../src/tmux-manager.js';
 import { TunnelManager } from '../src/tunnel-manager.js';
 import { createUser, invalidateUsersCache } from '../src/user-store.js';
-import { AUTH_FAILURE_MAX } from '../src/config/auth-config.js';
+import type { FastifyInstance } from 'fastify';
+import { AUTH_FAILURE_MAX, AUTH_IP_FAILURE_MAX } from '../src/config/auth-config.js';
 
 vi.spyOn(TmuxManager, 'isTmuxAvailable').mockReturnValue(true);
 
@@ -34,6 +35,7 @@ function cookieFrom(res: Response): string | null {
 let server: WebServer;
 let rateServer: WebServer;
 let sprayServer: WebServer;
+const ipServers: WebServer[] = [];
 let dataDir: string;
 let spacesDir: string;
 const saved: Record<string, string | undefined> = {};
@@ -74,6 +76,7 @@ afterAll(async () => {
   await server?.stop();
   await rateServer?.stop().catch(() => {});
   await sprayServer?.stop().catch(() => {});
+  for (const s of ipServers) await s.stop().catch(() => {});
   for (const [k, v] of Object.entries(saved)) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
@@ -84,6 +87,20 @@ afterAll(async () => {
 });
 
 const url = (p: string) => `http://localhost:${server.boundPort}${p}`;
+
+/**
+ * A fresh multi-user server (empty failure buckets) and a login helper that sets the
+ * client IP through inject's `remoteAddress`: a real fetch always arrives from
+ * loopback, so it cannot show two sources.
+ */
+async function startIpServer() {
+  const s = new WebServer(0, false, true);
+  await s.start();
+  ipServers.push(s);
+  const app = (s as unknown as { app: FastifyInstance }).app;
+  return (ip: string, user: string, pass: string) =>
+    app.inject({ method: 'GET', url: '/api/status', headers: { authorization: basic(user, pass) }, remoteAddress: ip });
+}
 
 describe('multi-user auth', () => {
   it('rejects unauthenticated requests', async () => {
@@ -159,7 +176,7 @@ describe('multi-user auth', () => {
     expect(after.status).toBe(200);
   });
 
-  it('verify-first: a correct password is never rate-limited and self-heals failures (#17)', async () => {
+  it('verify-first: the per-username bucket never denies a correct password and self-heals failures (#17)', async () => {
     rateServer = new WebServer(0, false, true);
     await rateServer.start();
     const rurl = (p: string) => `http://localhost:${rateServer.boundPort}${p}`;
@@ -187,7 +204,7 @@ describe('multi-user auth', () => {
     expect(limited).toBe(true);
   });
 
-  it('per-IP pre-gate: wrong passwords spread across accounts are throttled at 50, before scrypt', async () => {
+  it('per-IP pre-gate: wrong passwords spread across accounts are throttled at AUTH_IP_FAILURE_MAX, before scrypt', async () => {
     // Fresh server so no earlier test's failures sit in the per-IP bucket.
     sprayServer = new WebServer(0, false, true);
     await sprayServer.start();
@@ -196,13 +213,13 @@ describe('multi-user auth', () => {
     // Spread the guesses so no single username reaches its own AUTH_FAILURE_MAX bucket:
     // only the per-IP pre-gate can produce a 429 here.
     const perUser = AUTH_FAILURE_MAX - 1;
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < AUTH_IP_FAILURE_MAX; i++) {
       const user = `spray${Math.floor(i / perUser)}`;
       const res = await fetch(surl('/api/status'), { headers: { Authorization: basic(user, `bad-${i}`) } });
       expect(res.status, `attempt ${i + 1}`).toBe(401);
     }
 
-    // The 51st failure from the same IP is refused by the pre-gate.
+    // One more failure from the same IP is refused by the pre-gate.
     const over = await fetch(surl('/api/status'), { headers: { Authorization: basic('spray-extra', 'bad') } });
     expect(over.status).toBe(429);
     expect(over.headers.get('retry-after')).toMatch(/^\d+$/);
@@ -210,6 +227,50 @@ describe('multi-user auth', () => {
     // The pre-gate runs before the password check, so even a correct password is refused.
     const good = await fetch(surl('/api/status'), { headers: { Authorization: basic('alice', 'alicepass1') } });
     expect(good.status).toBe(429);
+  });
+
+  it('per-(username, IP) gate: failures lock that account on that IP only, before scrypt', async () => {
+    const login = await startIpServer();
+    const ipA = '203.0.113.10';
+    const ipB = '203.0.113.20';
+
+    // AUTH_FAILURE_MAX wrong passwords for bob from one IP. The last one is already a
+    // 429 from the per-username bucket, which counts before it checks.
+    for (let i = 0; i < AUTH_FAILURE_MAX; i++) {
+      const res = await login(ipA, 'bob', `bad-${i}`);
+      expect(res.statusCode, `attempt ${i + 1}`).toBe(i < AUTH_FAILURE_MAX - 1 ? 401 : 429);
+    }
+
+    // The (bob, ipA) bucket is checked before the password, so even the correct one is
+    // refused from that IP, far below the per-IP pre-gate.
+    expect(AUTH_FAILURE_MAX).toBeLessThan(AUTH_IP_FAILURE_MAX);
+    const lockedOut = await login(ipA, 'bob', 'bobpass123');
+    expect(lockedOut.statusCode).toBe(429);
+    expect(String(lockedOut.headers['retry-after'])).toMatch(/^\d+$/);
+
+    // Another IP cannot lock the account out: bob logs in from ipB.
+    expect((await login(ipB, 'bob', 'bobpass123')).statusCode).toBe(200);
+    // Another account behind the same IP is not locked out either.
+    expect((await login(ipA, 'alice', 'alicepass1')).statusCode).toBe(200);
+    // Neither success cleared bob's bucket on ipA: that one is per pair.
+    expect((await login(ipA, 'bob', 'bobpass123')).statusCode).toBe(429);
+  });
+
+  it('per-(username, IP) gate: a correct password clears the pair bucket', async () => {
+    const login = await startIpServer();
+    const ip = '203.0.113.30';
+
+    for (let i = 0; i < AUTH_FAILURE_MAX - 1; i++) {
+      expect((await login(ip, 'bob', `bad-${i}`)).statusCode, `attempt ${i + 1}`).toBe(401);
+    }
+    expect((await login(ip, 'bob', 'bobpass123')).statusCode).toBe(200);
+
+    // Had the success left the pair at AUTH_FAILURE_MAX - 1, the second of these would
+    // already be refused before the password check.
+    for (let i = 0; i < AUTH_FAILURE_MAX - 1; i++) {
+      expect((await login(ip, 'bob', `again-${i}`)).statusCode, `retry ${i + 1}`).toBe(401);
+    }
+    expect((await login(ip, 'bob', 'bobpass123')).statusCode).toBe(200);
   });
 });
 

@@ -36,10 +36,12 @@ with a parse error and `.errorCode` is simply absent (see
 [symptom 6](#6-jq-parse-error-instead-of-an-errorcode)). Ten failed attempts from one
 IP then get a plain-text `429 Too Many Requests` with `Retry-After`, decaying over 15
 minutes (`AUTH_FAILURE_MAX` = 10, `AUTH_FAILURE_WINDOW_MS` = 15 min). In multi-user
-mode the per-IP cap is 50 (`AUTH_IP_FAILURE_MAX`) and is checked before the password,
-so past it even a correct password gets the 429; each username is also capped at 10
-failed guesses. **Never retry a
-failing credential in a loop**: you will lock the address out of the login path for
+mode the per-IP cap is 50 (`AUTH_IP_FAILURE_MAX`) and each account allows 10 failed
+guesses per IP; both are checked before the password, so past either even a correct
+password from that address gets the 429 (for the per-account one, only for that
+account). From the 10th failed guess on, an account's wrong guesses also get the 429
+from every address, but a correct password still logs in. **Never retry a failing
+credential in a loop**: you will lock the address out of the login path for
 everything, including the user's browser through a tunnel (tunneled traffic arrives as
 127.0.0.1, so one bucket covers it all).
 
@@ -804,7 +806,7 @@ response echoes.
 | sessions, per user | half the global cap (25 by default) in multi-user mode | the same 409, with a different message |
 | SSE clients, process-wide | 100 (`MAX_SSE_CLIENTS`) | plain-text `503 Too many SSE connections`; shared with every browser tab |
 | active bash tools tracked | 20 per session | oldest entries drop off `active-tools` |
-| auth failures per IP | 10, decaying over 15 min (multi-user: 50 per IP, plus 10 per username) | plain-text 429 with `Retry-After`; locks out the login path, so never loop a bad credential |
+| auth failures per IP | 10, decaying over 15 min (multi-user: 50 per IP, plus 10 per account per IP) | plain-text 429 with `Retry-After`; locks out the login path, so never loop a bad credential |
 
 Case creation is **uncapped**, which is the one place restraint has to come from you:
 every `quick-start` with a new `caseName` creates a real directory on the user's disk.

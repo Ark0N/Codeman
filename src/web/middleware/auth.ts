@@ -54,6 +54,8 @@ interface AuthState {
   hookSecretFailures: StaleExpirationMap<string, number> | null;
   /** Per-username Basic-auth failure bucket (multi-user only). */
   userFailures: StaleExpirationMap<string, number> | null;
+  /** Per-(username, client IP) Basic-auth failure bucket (multi-user only). */
+  userIpFailures: StaleExpirationMap<string, number> | null;
 }
 
 /** Rate-limit response for a client that exceeded the failure cap. */
@@ -304,6 +306,7 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
     qrAuthFailures: null,
     hookSecretFailures: null,
     userFailures: null,
+    userIpFailures: null,
   };
 
   // Always declare req.authUser so downstream reads are safe (single-user leaves it
@@ -351,13 +354,33 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
   const hookSecretFailures = state.hookSecretFailures;
 
   if (multiUser) {
-    // Per-username failure bucket: a botnet can't brute-force one account across
-    // many IPs, and one user behind a NAT can't lock out everyone else.
+    // Per-username failure bucket: failed guesses against one account answer 429
+    // from any IP once it fills, and one user behind a NAT can't lock out everyone
+    // else. Checked after the verify, so it never denies a correct password.
     state.userFailures = new StaleExpirationMap<string, number>({
       ttlMs: AUTH_FAILURE_WINDOW_MS,
       refreshOnGet: false,
     });
-    registerMultiUserAuthHook(app, https, authSessions, authFailures, hookSecretFailures, state.userFailures, basePath);
+    // Per-(username, IP) failure bucket: checked BEFORE the verify, so it is what
+    // caps verified guesses against one account from one source. Keyed on the pair,
+    // so other IPs can't lock the account out and two users behind one shared IP
+    // don't lock each other out. Same decay as the other buckets; a key is only
+    // created by a failed verify that the per-IP pre-gate also counts, so it grows
+    // no faster than userFailures.
+    state.userIpFailures = new StaleExpirationMap<string, number>({
+      ttlMs: AUTH_FAILURE_WINDOW_MS,
+      refreshOnGet: false,
+    });
+    registerMultiUserAuthHook(
+      app,
+      https,
+      authSessions,
+      authFailures,
+      hookSecretFailures,
+      state.userFailures,
+      state.userIpFailures,
+      basePath
+    );
     return state;
   }
 
@@ -466,8 +489,9 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
 /**
  * Multi-user auth hook (async, because password verification runs scrypt). Verifies
  * `username:password` against the user store, mints an identity-carrying cookie,
- * decorates `req.authUser`, enforces the per-IP + per-username rate limits, and the
- * `mustChangePassword` lockbox. The single-user hook above is left untouched.
+ * decorates `req.authUser`, enforces the per-IP, per-(username, IP) and per-username
+ * rate limits, and the `mustChangePassword` lockbox. The single-user hook above is
+ * left untouched.
  */
 function registerMultiUserAuthHook(
   app: FastifyInstance,
@@ -476,6 +500,7 @@ function registerMultiUserAuthHook(
   authFailures: StaleExpirationMap<string, number>,
   hookSecretFailures: StaleExpirationMap<string, number>,
   userFailures: StaleExpirationMap<string, number>,
+  userIpFailures: StaleExpirationMap<string, number>,
   basePath = ''
 ): void {
   const setSessionCookie = (reply: FastifyReply, token: string) =>
@@ -570,11 +595,17 @@ function registerMultiUserAuthHook(
       return;
     }
 
-    // 2. Basic Auth against the user store (scrypt verify).
-    // Per-IP pre-gate bounds scrypt CPU cost from one source (does NOT gate on the
-    // per-username bucket here; see below). Wider than AUTH_FAILURE_MAX: it refuses
-    // even a correct password, so behind a shared egress IP (NAT, a tunnel) a narrow
-    // cap would let a few wrong guesses lock everyone out.
+    // 2. Basic Auth against the user store (scrypt verify). Three failure buckets:
+    //  - per IP (AUTH_IP_FAILURE_MAX), checked first: bounds scrypt CPU cost from one
+    //    source. It refuses even a correct password, so it is wider than
+    //    AUTH_FAILURE_MAX: behind a shared egress IP (NAT, a tunnel) a narrow cap
+    //    would let a few wrong guesses lock everyone out.
+    //  - per (username, IP) (AUTH_FAILURE_MAX), checked BEFORE the verify: caps
+    //    verified guesses against one account from one source. Only that IP is
+    //    refused for that account; the same account from another IP still logs in.
+    //  - per username (AUTH_FAILURE_MAX), checked AFTER the verify; see below.
+    // Neither pre-verify refusal is counted, since nothing was verified (and counting
+    // a locked pair's retries would fill the shared per-IP bucket for everyone).
     const ipFail = authFailures.get(clientIp) ?? 0;
     if (ipFail >= AUTH_IP_FAILURE_MAX) {
       sendAuthRateLimit(reply, authFailures, clientIp);
@@ -583,10 +614,18 @@ function registerMultiUserAuthHook(
     const creds = parseBasicAuth(req.headers.authorization);
     if (creds) {
       const normUser = creds.username.trim().toLowerCase();
-      // Security: VERIFY FIRST, then throttle only FAILED attempts. Consulting the
-      // per-username bucket before verifying let throwaway IPs lock out a known account
-      // (incl. admin) even with the correct password. A correct password must always
-      // win and self-heal both buckets, regardless of the username-failure count.
+      // IPs never contain a newline, so this key is unambiguous for any username.
+      const pairKey = `${clientIp}\n${normUser}`;
+      const pairFail = userIpFailures.get(pairKey) ?? 0;
+      if (pairFail >= AUTH_FAILURE_MAX) {
+        sendAuthRateLimit(reply, userIpFailures, pairKey);
+        return;
+      }
+      // Security: the per-username bucket is consulted only AFTER the verify, and only
+      // FAILED attempts are throttled by it. Consulting it before verifying let
+      // throwaway IPs lock out a known account (incl. admin) even with the correct
+      // password. A correct password that passes the two gates above always wins and
+      // self-heals the per-IP, per-username and this pair's buckets.
       const result = await verifyPassword(creds.username, creds.password);
       if (result) {
         const { user, needsRehash: rehash } = result;
@@ -594,6 +633,7 @@ function registerMultiUserAuthHook(
         void touchLastLogin(user.username).catch(() => {});
         authFailures.delete(clientIp);
         userFailures.delete(normUser);
+        userIpFailures.delete(pairKey);
 
         const token = randomBytes(32).toString('hex');
         if (authSessions.size >= MAX_AUTH_SESSIONS) evictForCapacity(user.username);
@@ -611,12 +651,12 @@ function registerMultiUserAuthHook(
         enforcePasswordChange(req, reply, !!user.mustChangePassword);
         return;
       }
-      // Failed guess: count it against BOTH buckets. Once the per-username bucket
-      // reaches the cap, further FAILED attempts get 429 (throttles distributed
-      // brute-force), but this path is only reached on a wrong password, so it can
-      // never deny a correct one.
+      // Failed guess: count it against all three buckets. Once the per-username bucket
+      // reaches the cap, further FAILED attempts get 429 from any IP, but this path is
+      // only reached on a wrong password, so it can never deny a correct one.
       const uFail = (userFailures.get(normUser) ?? 0) + 1;
       userFailures.set(normUser, uFail);
+      userIpFailures.set(pairKey, (userIpFailures.get(pairKey) ?? 0) + 1);
       authFailures.set(clientIp, ipFail + 1);
       if (uFail >= AUTH_FAILURE_MAX) {
         sendAuthRateLimit(reply, userFailures, normUser);
