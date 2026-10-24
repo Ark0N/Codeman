@@ -244,7 +244,7 @@ export class VoiceStreamRelay {
     switch (msg.type) {
       case 'TranscriptText':
       case 'TranscriptInterim': {
-        // Each frame is the whole running transcript, not a delta.
+        // Each frame is the current utterance so far, not a delta; endpoints commit it.
         if (typeof msg.data === 'string' && msg.data) {
           this.pendingTranscript = msg.data;
           this.opts.onTranscript(msg.data, false);

@@ -82,9 +82,19 @@ sequences, so word jumps and history keys keep working.
 
 In **App Settings → Voice → Stop after silence**, choose 3, 6, 15 or 30 seconds,
 or **Manual** to keep listening until you tap the mic again (`Ctrl+Shift+V`).
-**Provider default** preserves the existing timeout: 6 seconds for Claude and
-3 seconds for Deepgram or Web Speech. The timeout counts from the latest transcript
-update. Connection failures or microphone errors can still end a recording.
+**Provider default** uses 6 seconds for Claude and 3 seconds for Deepgram or Web
+Speech. Final transcript events no longer stop Deepgram or Web Speech immediately:
+they wait for the configured silence deadline. The timeout counts from the latest
+transcript update. A browser can still end its native recognition run; extended
+and Manual dictation restart it while preserving the text and silence deadline.
+Connection failures, microphone errors, or repeated empty recognition runs can
+still end a recording.
+
+On Chrome for Android, live words replace earlier partial results without repeating
+them in the input. The browser microphone bars indicate speech activity; streaming
+providers show audio levels. After Stop, dictation briefly waits for the final
+words before inserting text. Reconnecting preserves the available words and resets
+the mic so another recording can start.
 
 ### Dictating through your Claude login
 
