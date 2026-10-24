@@ -181,6 +181,8 @@ describe('the swipe walks the order the strip draws', () => {
       setTimeout,
       clearTimeout,
       requestAnimationFrame: vi.fn(),
+      // A row stub's `cssOrder` stands in for the flex `order` a sorted rail paints.
+      getComputedStyle: (el: { cssOrder?: number }) => ({ order: String(el.cssOrder ?? 0) }),
       HTMLCanvasElement: class HTMLCanvasElement {},
       WebSocket: { OPEN: 1 },
       fetch: vi.fn(),
@@ -197,23 +199,32 @@ describe('the swipe walks the order the strip draws', () => {
 
   /** The real next/prev over a strip drawn as `rows` (ids; 'web' is a web tab) with `active` selected. */
   function walk(rows: string[], active: string | null) {
-    const { proto, document } = loadAppProto();
     const row = (id: string) =>
       id === 'web' ? { dataset: { webviewId: 'web' } } : { dataset: { id }, classList: { contains: () => false } };
-    const strip = {
-      getAttribute: () => 'tablist',
-      classList: { contains: () => false },
-      querySelectorAll: () => rows.map(row),
-    };
+    return drive(
+      {
+        getAttribute: () => 'tablist',
+        classList: { contains: () => false },
+        querySelectorAll: () => rows.map(row),
+      },
+      active
+    );
+  }
+
+  /** The real next/prev over `strip` (a stub of #sessionTabs) with `active` selected. */
+  function drive(strip: unknown, active: string | null, sorted = false) {
+    const { proto, document } = loadAppProto();
     const selected: string[] = [];
     const app: Record<string, unknown> = {
       sessionOrder: ['w1', 'w2', 'homelab', 'w3'],
       sessions: new Map(['w1', 'w2', 'homelab', 'w3'].map((id) => [id, {}])),
       activeSessionId: active,
-      isTabRailSorted: () => false,
+      isTabRailSorted: () => sorted,
       selectSession: (id: string) => selected.push(id),
     };
-    for (const name of ['_visibleTabRows', '_stripSessionOrder', 'nextSession', 'prevSession']) app[name] = proto[name];
+    for (const name of ['_visibleTabRows', '_tabTreeItems', '_stripSessionOrder', 'nextSession', 'prevSession']) {
+      app[name] = proto[name];
+    }
     document.getElementById = () => strip;
     const next = (o?: unknown) => (app.nextSession as (o?: unknown) => void).call(app, o);
     const prev = (o?: unknown) => (app.prevSession as (o?: unknown) => void).call(app, o);
@@ -230,12 +241,50 @@ describe('the swipe walks the order the strip draws', () => {
     expect(selected).toEqual(['homelab', 'w2', 'w1']);
   });
 
-  it('steps in at the first or last drawn row when the active session is not drawn', () => {
-    // A filter hid the active tab (or nothing is active on the home screen).
-    const { selected, next, prev } = walk(['w1', 'w2', 'homelab'], 'w3');
+  it('walks the grouped tree: group by group, sorted inside each, headers and web tabs skipped', () => {
+    // A rail sorted by activity with a named group "ops" (homelab, a web tab, w3) above
+    // Ungrouped (w1, w2); the DOM keeps sessionOrder inside each group. The tree sorts
+    // INSIDE each group, so it draws w3, homelab, web | w1, w2, where one sort over the
+    // whole list (the flat walk) would interleave the groups as w3, w1, homelab, w2.
+    const tab = (id: string, cssOrder: number) => ({
+      dataset: id === 'web' ? { webviewId: 'web' } : { id },
+      cssOrder,
+      classList: { contains: (c: string) => c === 'session-tab' },
+      closest: () => null,
+    });
+    const header = { dataset: { tabGroupHeader: 'ops' }, classList: { contains: () => false } };
+    const section = (head: unknown, rows: unknown[]) => ({
+      classList: { contains: () => false },
+      querySelector: () => head,
+      querySelectorAll: () => rows,
+    });
+    const ops = [tab('homelab', 2), tab('web', 9999), tab('w3', 0)];
+    // The Ungrouped heading is aria-hidden, not a treeitem, so the section has none.
+    const ungrouped = [tab('w1', 1), tab('w2', 3)];
+    const sections = [section(header, ops), section(null, ungrouped)];
+    const strip = {
+      getAttribute: (name: string) => (name === 'role' ? 'tree' : null),
+      classList: { contains: () => false },
+      querySelectorAll: (sel: string) =>
+        sel === '.tab-layout-group' ? sections : sel.includes('.tab-cluster') ? [] : [...ops, ...ungrouped],
+    };
+    const { selected, next, prev } = drive(strip, 'homelab', true);
     next({ visual: true });
     prev({ visual: true });
-    expect(selected).toEqual(['w1', 'homelab']);
+    // Tree: homelab -> w1 (past the web tab, into the next group), homelab -> w3.
+    // The flat walk would give w2 / w1, the canonical order w3 / w2.
+    expect(selected).toEqual(['w1', 'w3']);
+  });
+
+  it('steps in at the first or last drawn row when the active session is not drawn', () => {
+    // A filter hid the active tab (or nothing is active on the home screen). The drawn
+    // order differs from sessionOrder's ends (w1 ... w3), so the canonical walk from w3
+    // (w1 / homelab) cannot pass for this, and nor can the old arithmetic on the drawn
+    // order, which put previous on the second to last row (w1).
+    const { selected, next, prev } = walk(['homelab', 'w1', 'w2'], 'w3');
+    next({ visual: true });
+    prev({ visual: true });
+    expect(selected).toEqual(['homelab', 'w2']);
   });
 
   it('reaches a lone drawn row that is not the active one, and goes nowhere from a lone active one', () => {
