@@ -3349,7 +3349,9 @@ function clampTerminalDimensions(proposed) {
  * could reach it. Output visible, typing invisible, for as long as the claim
  * stayed hot. Width is the axis the wrap arithmetic depends on; rows only
  * decide how much is on screen at once, and keeping the local row count keeps
- * the composer at the bottom of a viewport that scrolls.
+ * the composer at the bottom of a viewport that scrolls. The one deliberate
+ * screen taller than its box is this device's own rows held under the
+ * on-screen keyboard, which keyboardClipPx keeps the composer in view for.
  *
  * @param {{cols: number, rows: number}|null} local - what xterm currently holds
  * @param {{cols: number, rows: number}|null} pty - what the server just reported
@@ -3359,6 +3361,62 @@ function reconcilePtyGeometry(local, pty) {
   if (!pty || !Number.isFinite(pty.cols)) return { adopt: false, cols: null };
   if (!local || !Number.isFinite(local.cols) || local.cols === pty.cols) return { adopt: false, cols: null };
   return { adopt: true, cols: pty.cols };
+}
+
+/** Rows below the last content within which the cursor still counts (keyboardClipPx). */
+const KEYBOARD_CLIP_CURSOR_REACH = 2;
+
+/**
+ * How far to scroll the terminal SCREEN up while its rows are held under the
+ * on-screen keyboard (setting `keyboardHoldsRows`).
+ *
+ * Every PTY height change makes Claude Code clear the screen and reprint only
+ * the transcript tail that fits, so rows above that tail are lost from tmux and
+ * older ones stay in history as stale copies. The keyboard opening and closing
+ * was such a change each time. Instead the rows stay as they were and
+ * `.xterm-screen` (taller than its box now) is translated up by this many px.
+ *
+ * This is the one deliberate exception to "a screen taller than its container
+ * hides the input line" (see reconcilePtyGeometry): the offset below is what
+ * keeps the live content in view.
+ *
+ * - Following live output: the last row with content sits at the bottom of the
+ *   box. A fresh shell prompting on row 1 shows the top; Claude's footer under
+ *   its composer stays visible. The cursor counts only when it is right below
+ *   that content (a prompt or composer line still empty): a TUI that parks its
+ *   cursor far below what it drew (codex's dialogs, with the cursor on the last
+ *   row of an otherwise blank screen) must not scroll its content out of view.
+ * - Reading history: the offset follows the scroll position, so the top of the
+ *   scrollback is reachable and scrolling stays continuous.
+ *
+ * ponytail: recomputed on every render with no hysteresis; add some if a TUI's
+ * mid-redraw frames ever make the view jitter.
+ *
+ * @param {{rows: number, cellHeight: number, viewHeight: number, cursorRow: number,
+ *   lastContentRow: number, following: boolean, viewportY: number, baseY: number}} input
+ *   lastContentRow: the last non-blank screen row, or -1 when the screen is blank
+ * @returns {number} px, between 0 and the screen's overflow
+ */
+function keyboardClipPx(input) {
+  const { rows, cellHeight, viewHeight, cursorRow, lastContentRow, following, viewportY, baseY } = input;
+  if (!(cellHeight > 0) || !(viewHeight > 0) || !(rows > 0)) return 0;
+  const max = Math.max(0, rows * cellHeight - viewHeight);
+  if (max === 0) return 0;
+  if (!following && baseY > 0) return Math.round(max * Math.min(1, Math.max(0, viewportY / baseY)));
+  const cursorCounts = lastContentRow < 0 || cursorRow <= lastContentRow + KEYBOARD_CLIP_CURSOR_REACH;
+  const contentBottomRow = cursorCounts ? Math.max(cursorRow, lastContentRow) : lastContentRow;
+  const bottom = (Math.min(rows - 1, Math.max(0, contentBottomRow)) + 1) * cellHeight;
+  return Math.round(Math.min(max, Math.max(0, bottom - viewHeight)));
+}
+
+/**
+ * How many screen rows, from the top, are fully visible at a given offset: the
+ * local-echo overlay grows upward from the last of them (`setRowLimit`).
+ * @returns {number}
+ */
+function keyboardVisibleRowLimit(clipPx, viewHeight, cellHeight) {
+  if (!(cellHeight > 0)) return 0;
+  return Math.max(1, Math.floor((clipPx + viewHeight) / cellHeight));
 }
 
 /**
@@ -3491,6 +3549,8 @@ if (typeof window !== 'undefined') {
   window.CodemanTerminalGeometry = {
     clampTerminalDimensions,
     reconcilePtyGeometry,
+    keyboardClipPx,
+    keyboardVisibleRowLimit,
     TERMINAL_MIN_COLS,
     TERMINAL_MIN_ROWS,
   };

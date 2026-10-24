@@ -344,6 +344,13 @@ const KeyboardHandler = {
     // branches are skipped on a shape change, whichever way the height moved.
     if (!shapeChanged && heightDiff > 150 && !this.keyboardVisible) {
       this.keyboardVisible = true;
+      // Hold the PTY's rows for as long as the keyboard covers the terminal
+      // (keyboardHoldsRows, keyboardClipPx in constants.js): every height
+      // change makes Claude Code clear and reprint only the tail that fits.
+      // Captured before anything refits, so these are the keyboard-free rows.
+      if (typeof app !== 'undefined' && app.terminal && app._keyboardHoldEligible?.()) {
+        app._keyboardHeldRows = app.terminal.rows;
+      }
       document.body.classList.add('keyboard-visible');
       // While the keyboard is open, size the app to the visual viewport so
       // xterm's bottom row and cursor sit above the OS keyboard.
@@ -355,6 +362,7 @@ const KeyboardHandler = {
     // iOS 26's persistent 24px discrepancy, and Safari bottom bar changes
     else if (!shapeChanged && heightDiff < 100 && this.keyboardVisible) {
       this.keyboardVisible = false;
+      this._releaseHeldRows();
       document.body.classList.remove('keyboard-visible');
       this.onKeyboardHide();
       // Re-sync --app-height now that keyboard is gone (MobileDetection skipped
@@ -381,6 +389,12 @@ const KeyboardHandler = {
     // drop can re-arm the show branch against a baseline that already sits
     // at the shrunk height.
     if (shapeChanged) {
+      // Held rows belong to the display that is gone: release them and arm the
+      // settle, which refits and tells the PTY. Nothing else would: with the
+      // keyboard up throttledResize stands aside, and a rotation alone arms no
+      // settle, so xterm kept the held rows with no clip and the composer sat
+      // under the keyboard until it closed.
+      if (this._releaseHeldRows()) this._scheduleViewportSettle();
       this.initialViewportHeight = this.keyboardVisible ? window.innerHeight : currentHeight;
     } else if (!this.keyboardVisible) {
       this.initialViewportHeight = currentHeight;
@@ -392,6 +406,11 @@ const KeyboardHandler = {
     this.updateLayoutForKeyboard();
     this._deferViewportSettle();
     this.lastViewportHeight = currentHeight;
+  },
+
+  /** End a keyboard row hold (app._releaseKeyboardHold); true when one was held. */
+  _releaseHeldRows() {
+    return typeof app !== 'undefined' && !!app._releaseKeyboardHold?.();
   },
 
   /** Update layout when keyboard shows/hides */
@@ -606,6 +625,9 @@ const KeyboardHandler = {
         // geometry xterm will actually keep (issue #464).
         app.syncTerminalGeometry?.();
         if (this.keyboardVisible) this._shrinkPaddingToFit();
+        // Rows held: nothing re-renders on its own (the size did not change),
+        // so place the screen for the settled box here.
+        app._applyKeyboardClip?.();
         // Following live output → bottom, as before. Reading history → back to
         // the pre-reflow anchor instead of being yanked down (#259).
         if (shouldRestoreScroll) {

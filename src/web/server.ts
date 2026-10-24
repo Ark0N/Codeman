@@ -1914,6 +1914,16 @@ export class WebServer extends EventEmitter {
       '</head>',
       () => `<script>window.__codemanTranscriptPageKeys=${JSON.stringify(pageKeyClis)};</script>\n</head>`
     );
+    // Which run modes keep their PTY rows under a phone keyboard (inline renderers,
+    // the `keyboardHold` capability; `_keyboardHoldEligible` in terminal-ui.js). Same
+    // shape and reasoning as the page-key list above.
+    const keyboardHoldClis = enabledClis()
+      .filter((entry) => entry.capabilities.keyboardHold === 'inline')
+      .map((entry) => entry.id);
+    html = html.replace(
+      '</head>',
+      () => `<script>window.__codemanKeyboardHoldModes=${JSON.stringify(keyboardHoldClis)};</script>\n</head>`
+    );
     if (!soloSessionId && process.env.CODEMAN_GESTURE === '1') {
       html = html.replace('</head>', () => `<script>window.__codemanGestureAvailable=true;</script>\n</head>`);
       if (settings.gestureControlEnabled === true) {

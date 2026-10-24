@@ -205,6 +205,7 @@ Implements the xterm.js `ITerminalAddon` interface. It deliberately does **not**
 | `removeChar()` | `'pending'` \| `'flushed'` \| `false` | Remove the last character and drop any IME composition. See [backspace handling](#backspace-handling). |
 | `clear()` | `void` | Clear all state, the composition included, and hide the overlay. Call on Enter, Ctrl+C, Escape. |
 | `setComposition(text)` | `void` | Show text an IME is still composing as an underlined tail after the typed text. Pass `''` to remove it. See [IME composition](#ime-composition). |
+| `setRowLimit(limit)` | `void` | Narrow the row bound the overlay keeps itself on screen with (normally `terminal.rows`) to the first `limit` screen rows, so it grows upward from the last of them; `null` restores all rows, and a limit above `terminal.rows` changes nothing. For hosts that keep the terminal taller than the box showing it, e.g. while an on-screen keyboard covers the bottom. |
 
 ### Backspace handling
 

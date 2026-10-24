@@ -23195,3 +23195,12 @@ html[data-header-stats='tiles'] .header-plan-usage:not(:has(.pu-row)) {
   border: 1px solid var(--control-border);
   color: var(--text-muted);
 }
+
+/* Rows held under the on-screen keyboard (keyboardHoldsRows; keyboardClipPx in
+   constants.js): the screen stays taller than its box and is scrolled up by
+   --kb-clip, set on #terminalContainer by _applyKeyboardClip (terminal-ui.js).
+   The helper textarea, IME preview, link layer and both echo overlays live
+   inside .xterm-screen, so they move with it, and every hit test reads rects. */
+body.keyboard-visible .terminal-container .xterm-screen {
+  transform: translateY(calc(-1 * var(--kb-clip, 0px)));
+}

@@ -756,3 +756,78 @@ describe('viewport scrolled away from the bottom', () => {
     expect(overlay.style.display).toBe('none');
   });
 });
+
+describe('setRowLimit', () => {
+  function rowLimitSetup(promptRow = 10) {
+    const lines = Array.from({ length: 24 }, (_, i) => (i === promptRow ? '$ ' : ''));
+    const mock = createMockTerminal({ buffer: { lines }, cols: 20, rows: 24, cellHeight: 17 });
+    const addon = new ZerolagInputAddon({ prompt: { type: 'character', char: '$', offset: 2 } });
+    mock.terminal.loadAddon(addon);
+    cleanups.push(() => {
+      addon.dispose();
+      mock.cleanup();
+    });
+    const overlay = () => mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+    return { addon, overlay };
+  }
+
+  it('grows the composer upward from the last VISIBLE row, not the terminal last row', () => {
+    const { addon, overlay } = rowLimitSetup();
+    addon.appendText('x'.repeat(50)); // 3 lines at 20 cols from the prompt on row 10
+    expect(overlay().style.top).toBe(`${10 * 17}px`);
+    addon.setRowLimit(12);
+    expect(overlay().style.top).toBe(`${9 * 17}px`);
+  });
+
+  it('null restores the full terminal height, and junk reads as null', () => {
+    const { addon, overlay } = rowLimitSetup();
+    addon.appendText('x'.repeat(50));
+    addon.setRowLimit(12);
+    addon.setRowLimit(null);
+    expect(overlay().style.top).toBe(`${10 * 17}px`);
+    addon.setRowLimit(12);
+    addon.setRowLimit(Number.NaN);
+    expect(overlay().style.top).toBe(`${10 * 17}px`);
+  });
+
+  // setRowLimit narrows the SAME bound renderOverlay already keeps the block on
+  // screen with (RenderParams.totalRows, filled from terminal.rows), so there is
+  // one place that decides where the block stops growing downward.
+  it('narrows the terminal-rows bound and never widens it', () => {
+    const { addon, overlay } = rowLimitSetup(22);
+    addon.appendText('x'.repeat(50)); // 3 lines from row 22 of 24: the terminal bound lifts it to row 21
+    expect(overlay().style.top).toBe(`${21 * 17}px`);
+    addon.setRowLimit(24);
+    expect(overlay().style.top).toBe(`${21 * 17}px`);
+    addon.setRowLimit(100);
+    expect(overlay().style.top).toBe(`${21 * 17}px`);
+    addon.setRowLimit(23);
+    expect(overlay().style.top).toBe(`${20 * 17}px`);
+  });
+
+  it('leaves a block that fits above the limit where it is', () => {
+    const { addon, overlay } = rowLimitSetup();
+    addon.appendText('x'.repeat(50));
+    addon.setRowLimit(13); // rows 10..12 are exactly the three lines
+    expect(overlay().style.top).toBe(`${10 * 17}px`);
+  });
+
+  it('keeps the TAIL of a block taller than the limit', () => {
+    const { addon, overlay } = rowLimitSetup();
+    addon.appendText('x'.repeat(50)); // lines of 18, 20 and 12 characters
+    addon.setRowLimit(2);
+    expect(overlay().style.top).toBe('0px');
+    const xs = [...overlay().querySelectorAll(':scope > div')].map(
+      (line) => (line.textContent ?? '').replace(/[^x]/g, '').length
+    );
+    expect(xs).toEqual([20, 12]);
+  });
+
+  it('holds across later keystrokes, not only the re-render it triggers', () => {
+    const { addon, overlay } = rowLimitSetup();
+    addon.appendText('x'.repeat(50));
+    addon.setRowLimit(12);
+    addon.appendText('y');
+    expect(overlay().style.top).toBe(`${9 * 17}px`);
+  });
+});

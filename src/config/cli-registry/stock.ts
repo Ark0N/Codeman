@@ -289,6 +289,10 @@ const CLAUDE: CliEntry = {
     // forwarded (older CLI, inline renderer, the local-scrollback opt-out) a scroll is
     // turned into PageUp/PageDown, which Claude pages its transcript on (#205).
     transcriptPageKeys: true,
+    // Claude's default renderer is inline, and each keyboard-driven PTY height change made
+    // it reprint only the tail that fits, erasing transcript rows from tmux (measured on
+    // 2.1.306: 25 of 100 lines over five keyboard cycles). See CliCapabilities.keyboardHold.
+    keyboardHold: 'inline',
     keyboardAccessory: 'agent',
     privilegedCommandGate: false,
     startMode: 'interactive',

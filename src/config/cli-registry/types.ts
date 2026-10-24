@@ -563,6 +563,30 @@ export interface CliCapabilities {
    * Absent means no paging, so a CLI nobody has measured keeps plain local scrolling.
    */
   transcriptPageKeys?: boolean;
+  /**
+   * `'inline'`: the CLI renders inline (its content stacks at the bottom of the
+   * main screen), so while a phone's on-screen keyboard is up the browser keeps
+   * the PTY's rows and scrolls the view instead of resizing (`keyboardHoldsRows`,
+   * terminal-ui.js `_keyboardHoldEligible`). Read by the frontend through
+   * `window.__codemanKeyboardHoldModes`, which the server builds from this field.
+   *
+   * Why it exists: every PTY height change makes Claude Code's inline renderer
+   * clear the screen and reprint only the tail that fits (#672). Measured on
+   * Claude Code 2.1.306 with tmux 3.2a, a fresh session already at the phone's
+   * size printing 100 numbered lines: five keyboard open/close cycles (PTY
+   * 62x38 to 62x15 and back, one SIGWINCH per transition) left 75 of the 100 in
+   * `tmux capture-pane` history, the other 25 gone for good; with the rows held
+   * the PTY stayed 62x38, no SIGWINCH reached the pane and all 100 remained.
+   *
+   * ⚠ Only for a renderer that is inline. A CLI that lays out the FULL height
+   * (codex: banner at the top, composer pinned to the bottom) cannot fit both
+   * ends above the keyboard and must be resized instead, so it stays absent.
+   * Absent means resize, the safe default for an unmeasured CLI. Even when set,
+   * the hold stands aside while the CLI reports mouse tracking (Claude's
+   * fullscreen mode, which lays out the full height and has not been measured
+   * losing lines, so it resizes as before), and for remote and docker sessions.
+   */
+  keyboardHold?: 'inline';
   keyboardAccessory: 'agent' | 'shell';
   /** Multi-user: this CLI is a raw shell, so its commands need the privileged gate. */
   privilegedCommandGate: boolean;

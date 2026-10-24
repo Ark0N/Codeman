@@ -485,6 +485,30 @@ describe('capability shapes', () => {
     }, 'transcriptPageKeys is a boolean');
   });
 
+  it("takes keyboardHold as an optional 'inline', absent meaning the keyboard resizes", () => {
+    const inline = baseEntry();
+    (inline.capabilities as Record<string, unknown>).keyboardHold = 'inline';
+    expect(CliEntrySchema.safeParse(inline).success).toBe(true);
+    const absent = baseEntry();
+    delete (absent.capabilities as Record<string, unknown>).keyboardHold;
+    expect(CliEntrySchema.safeParse(absent).success).toBe(true);
+    for (const value of [true, 'fullscreen', '']) {
+      expectRejected(
+        (e) => {
+          (e.capabilities as Record<string, unknown>).keyboardHold = value;
+        },
+        `keyboardHold=${JSON.stringify(value)} names no renderer kind`
+      );
+    }
+  });
+
+  it('declares keyboardHold for exactly the inline renderer measured losing lines on a height change', () => {
+    // Claude Code 2.1.306's inline renderer was measured dropping transcript lines from
+    // tmux on keyboard-driven height changes; every other stock entry resizes.
+    const holding = STOCK_CLIS.filter((e) => e.capabilities.keyboardHold === 'inline').map((e) => e.id as string);
+    expect(holding).toEqual(['claude']);
+  });
+
   it('declares which CLIs get the wheel forwarded, and whether a version gates it', () => {
     // Claude forwards from 2.1.187 (fullscreen only); tracked Codex and Copilot
     // forward without a version gate. Unmeasured entries stay 'never'.

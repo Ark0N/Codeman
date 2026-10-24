@@ -2452,6 +2452,8 @@ class CodemanApp {
     if (session.id === this.activeSessionId && session.tokens) {
       this.updateRespawnTokens(session.tokens);
     }
+    // cliMouseTracking (Claude's fullscreen mode) ends a keyboard row hold.
+    if (session.id === this.activeSessionId) this._reconcileKeyboardHold?.();
     // Update parentSessionName for any subagents belonging to this session
     // (fixes stale name display after session rename)
     this.updateSubagentParentNames(session.id);
@@ -5166,6 +5168,8 @@ class CodemanApp {
         // backoff reconnect, but if it is not on this session (dead socket, or
         // a give-up) nothing else would re-establish it from here.
         if (this._wsSessionId !== restoreId) this._connectWs(restoreId);
+        // The fresh session record may no longer qualify for a keyboard row hold.
+        this._reconcileKeyboardHold?.();
         void this._onSessionNeedsRefresh({ id: restoreId });
         // The split pane's second terminal reconnects on its own backoff (up to
         // 10 s between tries); the server is back now, so skip the wait. A no-op
@@ -9703,6 +9707,9 @@ class CodemanApp {
     this._cleanupPreviousSession(sessionId);
     this.activeSessionId = sessionId;
     this._activateFileBrowserSession?.(sessionId);
+    // A keyboard row hold belongs to the session it was taken for: release it here
+    // if this one resizes instead (the geometry work below then fits it).
+    this._reconcileKeyboardHold?.({ resize: false });
     // Repaint the partial-history banner for the tab being switched TO. The
     // replay paths refresh it when their fetch lands; without this the previous
     // session's notice stays on screen until then (#258). The switch lands at

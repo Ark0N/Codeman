@@ -667,6 +667,9 @@
     'Weight for bold terminal text. Only useful with a family carrying something heavier than its bold face.':
       '终端粗体文本的字重。仅当字体提供比其粗体更重的字形时才有意义。',
     'Local Echo': '本地回显',
+    'Keep Size Under Keyboard': '键盘弹出时保持尺寸',
+    "For local Claude sessions, opening the on-screen keyboard keeps the session's size and scrolls the view instead, so Claude does not reprint its screen and lose transcript lines. Full-screen interfaces (Codex, Claude's fullscreen mode) are resized as before.":
+      '对于本地 Claude 会话，打开屏幕键盘时会保持会话尺寸并改为滚动视图，这样 Claude 不会重绘屏幕而丢失对话记录行。全屏界面（Codex、Claude 的全屏模式）仍像以前一样调整尺寸。',
     'CJK Input': '中日韩输入',
     'Extended Keyboard Bar': '扩展键盘栏',
     'Gesture Control (beta)': '手势控制（测试版）',
