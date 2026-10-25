@@ -2232,7 +2232,7 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  *
  *   /mnt/c/My Docs/report.docx              the whole line is the path
  *   - /mnt/c/My Docs/report.docx            after a list marker (`-`, `*`, `•`, `1.`, `2)`)
- *   Saved to: 03 Attachments/Build SIPOC Design/plan.pptx      after a short label (one to four words + `:`)
+ *   Saved to: 03 Attachments/Build SIPOC Design/plan.pptx      after a path label (SPACED_FILE_PATH_LABEL_PATTERN)
  *
  * An absolute path may stand alone or follow a marker. Any label, before an
  * absolute, relative or `~/` path, must be an explicit path label
@@ -2245,7 +2245,10 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  * digit (`a.ts:42`, a line suffix ends the path). Later words cannot start a new
  * `/`, `~/`, `./` or `../` path, no earlier word ends in `:` or is an arrow, and
  * a run of spaces (a column gap) is refused, so two paths on a line are never
- * merged.
+ * merged. A relative candidate whose only `/` word is its last is prose after the
+ * label (`Wrote: 120 lines to src/foo.ts`) and is left alone, which also splits
+ * `Saved to: My Docs/plan.md` as master does. A command line is refused: an
+ * executable under `bin/` or `.bin/` as the first word, or any `-x`/`--x` flag word.
  *
  * A candidate that is one path but not a linkable one (an unknown root such as
  * `/etc`, a `.`/`..`/empty segment) comes back with `link: false` when its last
@@ -2274,6 +2277,9 @@ function spacedFilePathOnLine(line) {
   // A rooted candidate must have a directory before its first space: `/usr/bin/env node a.js`
   // or `/review the changes in src/a.ts` is a command, not a spaced path.
   if (path.startsWith('/') && !/^\/[^/]+\//.test(words[0])) return null;
+  // A command whose executable sits under a known root (`/opt/homebrew/bin/node a.js`,
+  // `…/node_modules/.bin/tsc -p tsconfig.json`) is not a path either.
+  if (/\/\.?bin\/[^/]+$/.test(words[0]) || words.some((word) => /^-{1,2}\w/.test(word))) return null;
   for (const word of words.slice(0, -1)) {
     if (word.endsWith('/') || word.endsWith(':') || /^(?:—|–|→|=>|->|<-)$/.test(word)) return null;
     // `a.ts:42` (grep -n, compiler output): the path already ended at the line suffix.
@@ -2284,6 +2290,11 @@ function spacedFilePathOnLine(line) {
   const rooted = SPACED_PATH_ROOT.test(path) || path.startsWith('~/');
   const segments = path.replace(/^(?:~?\/|\.\/)/, '').split('/');
   const link = (rooted || !path.startsWith('/')) && segments.every((seg) => seg && seg !== '.' && seg !== '..');
+  // A path label vouches that a path follows, not for the words before it: when
+  // only the last word holds a `/` (`Wrote: 120 lines to src/foo.ts`), the spaces
+  // are prose, so a relative candidate is left to the ordinary detectors.
+  const firstSlash = words.findIndex((word) => word.includes('/'));
+  if (link && firstSlash === words.length - 1 && !path.startsWith('/')) return null;
   // Reserve an unlinkable span only when it still reads as a path to its end;
   // otherwise leave the line to the ordinary detectors.
   if (!link && !words[words.length - 1].includes('/')) return null;

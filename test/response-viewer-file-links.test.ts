@@ -109,6 +109,14 @@ describe('response viewer file-path linkifier', () => {
     expect(root.querySelector('strong')?.textContent).toBe(original.querySelector('strong')?.textContent);
   });
 
+  it.each([
+    ['**Wrote:** 120 lines to src/foo.ts', ['src/foo.ts']],
+    ['- **Output:** stored in dist/app.js', ['dist/app.js']],
+    ['**Created:** new file src/components/Button.tsx', ['src/components/Button.tsx']],
+  ])('keeps prose after a bold path label out of the link: %s', (markdown, expected) => {
+    expect(paths(linkify(renderChat(markdown))).map((a) => a.getAttribute('data-path'))).toEqual(expected);
+  });
+
   it('does not inherit a bold label from earlier prose or another block', () => {
     for (const markdown of [
       'See **Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',

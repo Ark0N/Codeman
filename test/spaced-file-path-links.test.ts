@@ -121,7 +121,10 @@ describe('spaced file paths', () => {
 
   it('requires a path label for relative candidates but retains absolute ambiguity', () => {
     expect(paths('- Fixed bug in src/My Docs/a.md')).toEqual(['Docs/a.md']);
-    expect(paths('Saved to: 03 Attachments/plan.pptx')).toEqual(['03 Attachments/plan.pptx']);
+    // Documented trade-off: a labelled relative path whose only space is in its top
+    // directory reads like prose after the label, so it splits as on master.
+    expect(paths('Saved to: 03 Attachments/plan.pptx')).toEqual(['Attachments/plan.pptx']);
+    expect(paths('Saved to: My Docs/plan.md')).toEqual(['Docs/plan.md']);
     expect(paths('/home/me/proj contains a.md')).toEqual(['/home/me/proj contains a.md']);
     expect(paths('Saved to: ~/My Docs/plan.md')).toEqual(['~/My Docs/plan.md']);
   });
@@ -209,6 +212,61 @@ describe('spaced file paths: shapes that keep master links', () => {
     ['/review the changes in src/foo.ts', 'src/foo.ts'],
   ])('does not reserve a command line that only looks like one path: %s', (line, file) => {
     expect(findFilePathLinks(line)).toEqual(masterLinks(line, [file]));
+  });
+
+  // A path label vouches that a path follows, not for the prose before it.
+  it.each([
+    ['Wrote: 120 lines to src/foo.ts', 'src/foo.ts'],
+    ['Created: new file src/components/Button.tsx', 'src/components/Button.tsx'],
+    ['Output: written to logs/run.log', 'logs/run.log'],
+    ['Files: 3 changed in src/foo.ts', 'src/foo.ts'],
+    ['Location: line 42 in src/foo.ts', 'src/foo.ts'],
+    ['Path: see src/foo.ts', 'src/foo.ts'],
+    ['- Output: stored in dist/app.js', 'dist/app.js'],
+    ['1. File: changes in src/a.ts', 'src/a.ts'],
+    ['Created: 2026-10-24 build/x.json', 'build/x.json'],
+  ])('keeps label prose out of the path: %s', (line, file) => {
+    expect(findFilePathLinks(line)).toEqual(masterLinks(line, [file]));
+  });
+
+  it('keeps labelled spaced paths whole when a `/` word comes before the last', () => {
+    for (const p of [
+      '03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      '~/My Docs/plan.md',
+      './My Docs/plan.md',
+      'notes/a b/c.md',
+      '/mnt/c/My Docs/a.docx',
+    ]) {
+      expect(paths(`Saved to: ${p}`)).toEqual([p]);
+    }
+  });
+
+  it('documented trade-off: prose between two `/` words after a path label stays in the link', () => {
+    // The first `/` word is not the last, so the prose guard does not fire; master
+    // linked only `utils/x.ts` here.
+    expect(paths('Files: src/components and utils/x.ts')).toEqual(['src/components and utils/x.ts']);
+  });
+
+  // A command whose executable lives under a known root, or one carrying a flag.
+  it.each([
+    ['/opt/homebrew/bin/node server.js', '/opt/homebrew/bin/node', 'server.js'],
+    ['/home/me/.venv/bin/python run.py', '/home/me/.venv/bin/python', 'run.py'],
+    [
+      '/home/me/proj/node_modules/.bin/vitest run test/foo.test.ts',
+      '/home/me/proj/node_modules/.bin/vitest',
+      'test/foo.test.ts',
+    ],
+    ['/home/me/proj/node_modules/.bin/tsc -p tsconfig.json', '/home/me/proj/node_modules/.bin/tsc', 'tsconfig.json'],
+  ])('does not reserve a command under a known root: %s', (line, exe, file) => {
+    expect(findFilePathLinks(line)).toEqual(masterLinks(line, [exe, true], [file]));
+  });
+
+  it.each([
+    '/Users/me/Desktop/Screenshot 2026-10-24 at 10.15.32 AM.png',
+    '/mnt/c/Users/me/Docs - Copy/a.docx',
+    '- /mnt/c/Users/me/Docs - Copy/a.docx',
+  ])('keeps a spaced path whole when a word only looks like a flag or a version: %s', (line) => {
+    expect(paths(line)).toEqual([line.replace(/^- /, '')]);
   });
 
   it('still refuses an unlinkable spaced path that reads as one path to its end', () => {
