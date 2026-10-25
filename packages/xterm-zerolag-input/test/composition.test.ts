@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createMockTerminal } from './helpers.js';
+import { createMockTerminal, lineSpans } from './helpers.js';
 import { ZerolagInputAddon } from '../src/zerolag-input-addon.js';
 
 // setComposition(): IME text still being composed, drawn as an underlined tail
@@ -68,8 +68,9 @@ describe('setComposition', () => {
       expect(span.style.textDecoration).toBe('underline');
     }
     // Grid positions continue straight on from the pending text.
-    expect(spans[3].style.left).toBe(3 * CELL_W + 'px');
-    expect(spans[4].style.left).toBe(4 * CELL_W + 'px');
+    const cells = lineSpans(line);
+    expect(cells[3].left).toBe(3 * CELL_W);
+    expect(cells[4].left).toBe(4 * CELL_W);
     expect(overlay.style.display).toBe('');
   });
 
@@ -79,9 +80,10 @@ describe('setComposition', () => {
     addon.setComposition('天気');
     const spans = Array.from(lineDivs(overlay)[0].children) as HTMLSpanElement[];
     expect(spans.map((s) => s.textContent).join('')).toBe('今日は天気');
-    expect(spans[3].style.left).toBe(6 * CELL_W + 'px');
-    expect(spans[3].style.width).toBe(2 * CELL_W + 'px');
-    expect(spans[4].style.left).toBe(8 * CELL_W + 'px');
+    const cells = lineSpans(lineDivs(overlay)[0]);
+    expect(cells[3].left).toBe(6 * CELL_W);
+    expect(cells[3].width).toBe(2 * CELL_W);
+    expect(cells[4].left).toBe(8 * CELL_W);
   });
 
   it('does not touch pendingText, hasPending, flushed state or the state snapshot', () => {
@@ -115,7 +117,8 @@ describe('setComposition', () => {
     expect(compositionText(overlay)).toBe('WXYZ');
     const second = Array.from(lines[1].children) as HTMLSpanElement[];
     expect(second.every((s) => s.hasAttribute('data-zerolag-composition'))).toBe(true);
-    expect(second[0].style.left).toBe('0px');
+    expect(lineSpans(lines[1])[0].left).toBe(0);
+    expect(lines[1].style.left).toBe('0px');
   });
 
   it('keeps the composition styling when only the tail of a tall prompt fits', () => {

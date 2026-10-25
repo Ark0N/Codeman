@@ -8,8 +8,8 @@
     <a href="https://www.npmjs.com/package/xterm-zerolag-input"><img src="https://img.shields.io/npm/v/xterm-zerolag-input?style=flat-square&color=22c55e" alt="npm"></a>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-1e3a5f?style=flat-square" alt="MIT"></a>
     <img src="https://img.shields.io/badge/Dependencies-0-22c55e?style=flat-square" alt="Zero dependencies">
-    <img src="https://img.shields.io/badge/Size-6.1%20kB%20gzip-22c55e?style=flat-square" alt="6.1 kB gzipped">
-    <img src="https://img.shields.io/badge/Tests-227-22c55e?style=flat-square" alt="175 tests">
+    <img src="https://img.shields.io/badge/Size-5.7%20kB%20gzip-22c55e?style=flat-square" alt="5.7 kB minified and gzipped">
+    <img src="https://img.shields.io/badge/Tests-276-22c55e?style=flat-square" alt="276 tests">
     <img src="https://img.shields.io/badge/xterm.js-v5%20%7C%20v7+-3b82f6?style=flat-square" alt="xterm.js v5 and v7+">
   </p>
 </p>
@@ -60,12 +60,13 @@ Since 0.2.0 the package ships **two addons for two kinds of TUIs**:
 | | |
 |---|---|
 | **Survives full-screen TUIs** | Ink, blessed, and friends repaint the whole screen constantly. The overlay is a separate DOM layer they cannot reach, so it does not get clobbered. |
-| **Pixel-matched to the canvas** | Each character is its own absolutely-positioned `<span>` at exact cell coordinates, so it does not drift out of the grid like normal DOM text flow. |
+| **Pixel-matched to the canvas** | Each character is its own `<span>`, exactly as wide as its cells and snapped to the grid, so it does not drift out of the grid like normal DOM text flow. |
+| **Cheap per keystroke** | Only the line that changed is rebuilt, and each line is one paint layer, so a keystroke costs the same in a 4,000-character prompt as in a short one. |
 | **Wide characters included** | CJK, fullwidth forms and emoji render double-width and position by visual column, using the terminal's Unicode addon when one is loaded. |
 | **Backspace that actually works** | A three-layer cascade (unsent, in-flight, already on screen) tells you exactly what to forward to the PTY, so editing works through any mix of typed, flushed and tab-completed text. |
 | **You keep control of input** | The addon never hooks `onData` for you. You decide what gets echoed and what gets forwarded, which is what makes char-at-a-time, buffered, and multi-session tab switching all possible. |
-| **Small and self-contained** | 6.1 kB gzipped, zero runtime dependencies, dual CJS/ESM with full type declarations. |
-| **Proven under load** | Extracted from [Codeman](https://getcodeman.com), hardened over thousands of hours of real remote and mobile usage, 175 tests over every state transition. |
+| **Small and self-contained** | 5.7 kB minified and gzipped, zero runtime dependencies, dual CJS/ESM with full type declarations. |
+| **Proven under load** | Extracted from [Codeman](https://getcodeman.com), hardened over thousands of hours of real remote and mobile usage, 276 tests over every state transition. |
 
 Built for anything that puts a terminal behind a network hop: SSH web clients, cloud IDEs, mobile terminals, Kubernetes and container consoles, remote agent dashboards, browser-based dev environments.
 
@@ -128,7 +129,7 @@ This library answers all three:
 
 - a **DOM overlay** on its own z-index layer, which Ink cannot touch
 - **bottom-up buffer scanning** for the prompt instead of trusting the cursor
-- **one absolutely-positioned `<span>` per character** at exact cell-grid coordinates
+- **one `<span>` per character**, sized to its cells and snapped to the cell grid
 
 ---
 
@@ -508,15 +509,23 @@ div.xterm-screen (position: relative)
 
 ### Per-character grid alignment
 
-Each character is an absolutely-positioned `<span>`:
+Each line is an absolutely-positioned `<div>` at its row, and each character is a `<span>` in a flex row inside it, as wide as the cells it covers:
 
 ```
-left  = visualColumn * cellWidth   (CSS pixels)
-top   = lineIndex    * cellHeight  (CSS pixels)
-width = cellWidth * charCellWidth  (1 cell, or 2 for wide characters)
+line top    = lineIndex * cellHeight                     (CSS pixels)
+edge(col)   = round(col * cellWidth * 4) / 4             (snapped to a quarter pixel)
+span width  = edge(col + charCellWidth) - edge(col)      (1 cell, or 2 for wide characters)
 ```
 
-Positioning by visual column instead of letting the browser lay out text is what removes sub-pixel drift.
+A span starts where the widths before it add up to. Normal DOM text drifts because glyph advances that the layout engine cannot store exactly carry their rounding into every later cell. A quarter pixel is stored exactly by Blink and WebKit (1/64 px layout units) and Gecko (1/60 px app units), so the snapped widths always add up to the snapped edge: no drift at any column, and every edge stays within 1/8 px of `col * cellWidth`.
+
+The spans are deliberately not absolutely positioned. A positioned element gets its own paint layer, and with one per character the browser had to re-layerize and repaint thousands of them on every keystroke of a long prompt. The font, colour, line height, centring and ligature settings are set once per line and inherited.
+
+### Rendering cost
+
+Each render compares every line with what the previous render left in the overlay and rebuilds only the lines whose text or position changed. Typing a character changes only the last line, so a keystroke costs one line of DOM work, layout and paint, however long the prompt. A font, colour, cell size or Unicode version change rebuilds everything, and so does anything else emptying the overlay element.
+
+Measured in headless Chromium with a 6x CPU slowdown standing in for a phone, typing into a prompt of about 4,100 characters: 0.4.x took a median 813 ms per frame (513 ms of script, style and layout per keystroke), this version 17 ms (8.6 ms). At about 300 characters, 0.4.x already missed 60 fps (54 ms frames).
 
 ### Font matching
 
@@ -543,7 +552,7 @@ The overlay hides while the cursor row is scrolled out of the viewport and re-re
 
 ## Known limitations
 
-- **Canvas and WebGL font mismatch**: minor sub-pixel differences are still possible. Per-character absolute positioning keeps them small.
+- **Canvas and WebGL font mismatch**: minor sub-pixel differences are still possible. Per-character cells snapped to a quarter pixel keep them under 1/8 px.
 - **Grapheme clusters**: widths are summed per code point, so ZWJ emoji sequences (for example 👨‍👩‍👧) and combining marks can be over-counted. Single-code-point emoji and CJK are correct.
 - **Password prompts**: the overlay will happily show characters the server is not echoing. Call `clear()` when you detect a no-echo prompt.
 - **Prompt characters in output**: if your prompt marker also appears in command output, detection can latch onto the wrong line. Use a regex or a custom finder.

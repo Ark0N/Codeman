@@ -1221,7 +1221,7 @@ npm test                    # 运行测试（与 CI 相同；浏览器/移动端
 
 [![npm](https://img.shields.io/npm/v/xterm-zerolag-input?style=flat-square&color=22c55e)](https://www.npmjs.com/package/xterm-zerolag-input)
 
-为 xterm.js 提供即时按键反馈的叠加层。通过把输入的字符立即渲染为像素级精准的 DOM 叠加层，消除高 RTT 连接下的感知输入延迟。零依赖、gzip 后 6.1 kB、可配置的提示符检测、CJK/emoji 宽字符支持、带 238 个测试的完整状态机。
+为 xterm.js 提供即时按键反馈的叠加层。通过把输入的字符立即渲染为像素级精准的 DOM 叠加层，消除高 RTT 连接下的感知输入延迟。零依赖、压缩并 gzip 后 5.7 kB、可配置的提示符检测、CJK/emoji 宽字符支持、带 276 个测试的完整状态机。输入开销不随提示词长度增长。
 
 ```bash
 npm install xterm-zerolag-input
