@@ -42,7 +42,7 @@ codeman web    # then open http://localhost:3000
 **Driving it from code**
 
 - [The Codeman Skill](Codeman-Skill) - one prompt, a whole crew: an agent starting and supervising worker sessions.
-- [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent) - the `codeman agent` commands, the MCP server, wait primitives.
+- [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent) - the `codeman agent` commands, the MCP server, wait primitives, reading saved Codex conversations offline.
 - [HTTP API](HTTP-API) - the envelope, auth, the endpoint map, SSE events.
 - [Hooks And Integrations](Hooks-And-Integrations) - events flowing back into Codeman.
 

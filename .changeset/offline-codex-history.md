@@ -2,4 +2,4 @@
 'aicodeman': minor
 ---
 
-Add offline `codeman history read` for saved Codex transcripts by file, native session ID, or conversation family, with whole-turn topic/date filters and bounded local reads and output.
+Add offline `codeman history read` for saved Codex transcripts by file, native session ID, or conversation family (spawned sub-agents and forks included), with whole-turn topic and UTC date filters. A forked or spawned thread's copy of its parent's history is dropped, so every record belongs to the thread that wrote it. Store attribution has its own budget (`--metadata-bytes`), separate from the transcript budget (`--scan-bytes`), and every bound is raisable (`--max-entries` too), so id lookups keep working on stores of thousands of rollouts. A store file that cannot be attributed, an unreadable directory, or a rollout a running Codex is still appending to no longer fails the lookup; each is reported through `complete: false`. Assistant records carry Codex's own phase and user records none. The Past Sessions scanner and the offline reader now share one Codex rollout format module, including the injected-context rule.

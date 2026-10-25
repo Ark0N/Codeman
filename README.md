@@ -996,6 +996,18 @@ codeman agent rm "$SID"                                   # any session except t
 
 Rules the commands enforce rather than document: they refuse outside a Codeman session and never guess a URL; `send` transmits printable text plus Enter only (a control byte such as `Ctrl+C` is `app_exit` in opencode — ESC exists solely as `interrupt`, which never appends Enter); `rm` refuses an empty id, an unprovable self id and a prefix match in either direction. Ids may be the 8-character prefixes `ls` prints (resolved through the list; an ambiguous prefix refuses, anything shorter than 8 characters refuses on every verb). A prompt that starts with `-` goes after `--` (`send "$SID" -- "- fix the bug"`). The echo of the prompt you sent is output too: a `--match` marker that appears verbatim in the prompt matches at once, before the worker has done anything, so the prompt asks for it in halves. A remote session whose host is asleep answers a fire-and-forget `send` with `buffered` (Codeman wakes the host and types the prompt once the pane is back) or `dropped` (over the wake buffer's cap, nothing will be typed: exit `1`). Exit codes: `0` delivered/matched/signal, `1` error, `2` timeout, `3` the worker exited or the wait ended without an answer (`delivered:false`, `ended:true`), `4` refused. `spawn` prints the id alone on stdout (prose goes to stderr), so `SID=$(…)` captures exactly the id. `--json` prints the envelope's `data` for every verb. `--until stop` on a mode without hook signals is the server's 400, passed through — the marker path (`--match`) is the answer there, exactly as for the skill.
 
+### `codeman history read`: saved Codex conversations, offline
+
+`codeman history read` reads Codex's own saved rollouts (`$CODEX_HOME/sessions`, else `~/.codex/sessions`) straight from disk: no server, no managed session, nothing written. Unlike `codeman agent` it works anywhere, including on a machine where Codeman is not running.
+
+```bash
+codeman history read --session-id 019fc604                         # one conversation, by native id or 8+ character prefix
+codeman history read --root-session-id <uuid> --topic auth          # a conversation and every sub-agent or fork under it
+codeman history read --file /path/to/rollout.jsonl --format text
+```
+
+Filters keep whole user/assistant turns (`--topic` is a literal, case-insensitive match; `--after`/`--before` are inclusive UTC dates). A forked or spawned thread's copy of its parent's history is dropped, so every record belongs to the thread that wrote it. Output is JSON by default and carries `complete: false` whenever the evidence is partial (a file that could not be attributed, a record a running Codex is still writing, an unknown ancestor). Every bound fails closed and is raisable: `--metadata-bytes` (attributing the store, default 1 GiB), `--max-entries` (default 65536), `--scan-bytes` (the selected transcripts, default 16 MiB) and `--max-bytes` (output, default 8192). The full reference is [`skills/codeman/reference/history.md`](skills/codeman/reference/history.md).
+
 ### MCP server (`codeman mcp`): drive Codeman from any MCP client
 
 `codeman mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server on stdio, so any MCP client (Claude Code, Claude Desktop, Codex, Gemini CLI, Cursor, ...) can start Codeman sessions in any installed agent CLI, prompt them, wait for them, read their answers and clean up, from inside Codeman or from outside it. Like `codeman agent`, it is a client of the HTTP API: no new route, auth and ownership unchanged.
