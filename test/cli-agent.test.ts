@@ -577,6 +577,21 @@ describe('agent spawn', () => {
       { method: 'GET', path: `/api/v1/sessions/${OTHER}/wait-output` },
     ]);
   });
+
+  it.each([
+    { error: new Error(''), kind: 'Error' },
+    { error: '', kind: 'string' },
+  ])('reports a readiness failure when the thrown $kind has no message', async ({ error }) => {
+    const deps = fakeDeps((options) => {
+      if (options.path === '/api/v1/quick-start') return ok({ sessionId: OTHER });
+      throw error;
+    }, true);
+
+    expect(await agentSpawn(deps, { caseName: 'c', mode: 'claude', ready: true, timeoutMs: 1000 })).toBe(EXIT.error);
+    expect(deps.out).toHaveLength(1);
+    expect(JSON.parse(deps.out[0])).toEqual({ sessionId: OTHER, readinessError: 'Readiness request failed' });
+    expect(deps.calls).toHaveLength(2);
+  });
 });
 
 describe('session id prefixes', () => {

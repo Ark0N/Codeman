@@ -573,7 +573,7 @@ export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promis
         ready = !dead && Boolean(result?.matched);
       }
     } catch (error) {
-      readinessError = getErrorMessage(error);
+      readinessError = getErrorMessage(error) || 'Readiness request failed';
     }
   }
 
