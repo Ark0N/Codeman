@@ -171,12 +171,75 @@ const TABLE_LAST_COLUMN_ROWS: [string, string, string, string, string | null][] 
 // Known trade-offs: a row end counts as a cell end, so a short indented word
 // with URL punctuation still continues the URL. Pinned so a change is deliberate.
 const TRADE_OFF_ROWS: [string, string, string][] = [
-  ['⏺ Docs live at https://example.com/guide/', '  self-hosted.', 'https://example.com/guide/self-hosted'],
+  ['⏺ Docs live at https://example.com/guide/', '  self-hosted', 'https://example.com/guide/self-hosted'],
   [
     '⏺ The docs are at https://example.com/guide/',
     '  and/or the API reference covers it.',
     'https://example.com/guide/and/or',
   ],
+];
+
+// Indented rows under a URL ending in `/` that carry URL punctuation but are
+// code, a label, a `name=value` field, a measurement or a clock time, or a word
+// ending a sentence. Each third element is the URL on the first row.
+const FIELD_AND_CODE_ROWS: [string, string, string][] = [
+  ['  └ Listening on http://127.0.0.1:8080/', '    ready.', 'http://127.0.0.1:8080/'],
+  ['⏺ Deployed to https://app.example.com/', '  Done.', 'https://app.example.com/'],
+  ['⏺ Docs live at https://example.com/guide/', '  self-hosted.', 'https://example.com/guide/'],
+  ['  Fetching https://example.com/files/', '  done...', 'https://example.com/files/'],
+  [
+    '  ● fetch › handles https://api.example.com/v1/',
+    '    expect(received).toBe(expected)',
+    'https://api.example.com/v1/',
+  ],
+  ['  See https://example.com/api/', '  client.get()', 'https://example.com/api/'],
+  [
+    '/home/u/.venv/lib/urllib3/__init__.py:35: Warning: see https://github.com/urllib3/urllib3/issues/',
+    '  warnings.warn(',
+    'https://github.com/urllib3/urllib3/issues/',
+  ],
+  [
+    '  1) Client fetches https://api.example.com/v1/',
+    '     Failure/Error: expect(res.code).to eq(200)',
+    'https://api.example.com/v1/',
+  ],
+  [
+    'Annotations:  link.argocd.argoproj.io/external-link: https://grafana.example.com/d/',
+    '              prometheus.io/scrape: true',
+    'https://grafana.example.com/d/',
+  ],
+  ['  BASE_URL=https://api.example.com/', '  API_KEY=your-key-here', 'https://api.example.com/'],
+  ['  AUTH_URL=https://auth.example.com/', '  LOG_LEVEL=debug', 'https://auth.example.com/'],
+  [
+    '     level=info msg="request" url=https://api.example.com/v1/',
+    '     level=info msg="done" status=200',
+    'https://api.example.com/v1/',
+  ],
+  ['     url=https://api.example.com/v1/', '     request_id=abc-123', 'https://api.example.com/v1/'],
+  [
+    '  Callback: https://example.com/oauth/callback/',
+    '  state=abc123 must match',
+    'https://example.com/oauth/callback/',
+  ],
+  [
+    '  Downloading https://huggingface.co/org/model/resolve/main/',
+    '  45%|████▌     | 450M/1.00G [00:10<00:12, 45.0MB/s]',
+    'https://huggingface.co/org/model/resolve/main/',
+  ],
+  ['  Downloading https://example.com/files/', '  12.3MB/45.0MB', 'https://example.com/files/'],
+  ['  GET https://example.com/api/', '  12.3ms', 'https://example.com/api/'],
+  ['  https://example.com/blog/', '  10:00:00.123', 'https://example.com/blog/'],
+];
+// Continuations at the edge of those rules that are still the rest of the URL:
+// a wiki title with parens, a file name before a sentence period, a query
+// parameter after `?`, `&` or `_`, and percent-encoding that starts with digits.
+const STILL_CONTINUES_ROWS: [string, string, string][] = [
+  ['  https://en.wikipedia.org/wiki/', '  Mercury_(planet)', 'https://en.wikipedia.org/wiki/Mercury_(planet)'],
+  ['⏺ The guide is at https://example.com/docs/', '  install.html.', 'https://example.com/docs/install.html'],
+  ['  https://example.com/oauth?client_', '  id=abc&scope=read', 'https://example.com/oauth?client_id=abc&scope=read'],
+  ['  https://example.com/cb?code=abc&', '  state=xyz', 'https://example.com/cb?code=abc&state=xyz'],
+  ['  Docs: https://example.com/guide?', '  x=1&y=2 more text', 'https://example.com/guide?x=1&y=2'],
+  ['  https://example.com/files/', '  2026%20Plan.xlsx', 'https://example.com/files/2026%20Plan.xlsx'],
 ];
 
 describe('findTerminalUrls (grammar)', () => {
@@ -291,6 +354,20 @@ describe('terminalUrlContinuationExtent (wrap joining)', () => {
     for (const row of [0, 1]) expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toBeNull();
   });
 
+  it.each(FIELD_AND_CODE_ROWS)(
+    'does not join code, a field, a measurement or a sentence end after %s',
+    (first, next) => {
+      const buffer = fakeBuffer([{ text: first }, { text: next }], 100);
+      for (const row of [0, 1]) expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toBeNull();
+    }
+  );
+
+  it.each(STILL_CONTINUES_ROWS)('still joins the continuation after %s', (first, next) => {
+    const buffer = fakeBuffer([{ text: first }, { text: next }], 100);
+    for (const row of [0, 1])
+      expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toMatchObject({ startRow: 0, endRow: 1 });
+  });
+
   it('does not join an indented email address', () => {
     const buffer = fakeBuffer([{ text: '  https://example.com/' }, { text: '  user@example.com' }], 100);
     for (const row of [0, 1]) expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toBeNull();
@@ -323,16 +400,13 @@ describe('terminalUrlContinuationExtent (wrap joining)', () => {
     }
   );
 
-  it.each(['part%20two', 'x=1&y=2', 'path/slug', 'query?x=1'])(
-    'keeps stronger URL punctuation followed by prose: %s',
-    (token) => {
-      const buffer = fakeBuffer(
-        [{ text: 'Docs: https://example.com/guide/' }, { text: '  ' + token + ' more text' }],
-        100
-      );
-      expect(terminalUrlContinuationExtent(buffer, 0, 100, 12)).toMatchObject({ startRow: 0, endRow: 1 });
-    }
-  );
+  it.each(['part%20two', 'path/slug', 'query?x=1'])('keeps stronger URL punctuation followed by prose: %s', (token) => {
+    const buffer = fakeBuffer(
+      [{ text: 'Docs: https://example.com/guide/' }, { text: '  ' + token + ' more text' }],
+      100
+    );
+    expect(terminalUrlContinuationExtent(buffer, 0, 100, 12)).toMatchObject({ startRow: 0, endRow: 1 });
+  });
 
   it('does not glue a following prose line onto a URL that ends a line', () => {
     const buffer = fakeBuffer(
@@ -484,6 +558,30 @@ describe('terminal link provider with wrapped table URLs', () => {
       if (pathOnNext) expect(second.map((link) => link.text)).toContain(pathOnNext);
     }
   );
+
+  it.each(FIELD_AND_CODE_ROWS)(
+    'keeps code, a field, a measurement or a sentence end separate: %s',
+    (first, next, url) => {
+      const { provide, openSpy } = harness([{ text: first }, { text: next }], 100);
+      const links = provide(1).filter((link) => /^https?:/.test(link.text));
+      expect(links.map((link) => link.text)).toEqual([url]);
+      links[0].activate(null, links[0].text);
+      expect(openSpy).toHaveBeenCalledExactlyOnceWith(url, '_blank', 'noopener,noreferrer');
+      expect(provide(2).filter((link) => /^https?:/.test(link.text))).toEqual([]);
+    }
+  );
+
+  it.each(STILL_CONTINUES_ROWS)('links the whole URL from both rows after %s', (first, next, joined) => {
+    const { provide, openSpy } = harness([{ text: first }, { text: next }], 100);
+    for (const line of [1, 2]) {
+      // One link per row the URL covers, each opening the whole URL.
+      const links = provide(line).filter((link) => /^https?:/.test(link.text));
+      expect(new Set(links.map((link) => link.text))).toEqual(new Set([joined]));
+    }
+    const [link] = provide(2).filter((l) => /^https?:/.test(l.text));
+    link.activate(null, link.text);
+    expect(openSpy).toHaveBeenCalledExactlyOnceWith(joined, '_blank', 'noopener,noreferrer');
+  });
 
   it('keeps an indented email address out of the URL above it', () => {
     const { provide } = harness([{ text: '  https://example.com/' }, { text: '  user@example.com' }], 100);

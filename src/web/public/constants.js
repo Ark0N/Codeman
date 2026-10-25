@@ -2575,9 +2575,12 @@ function findTerminalUrls(text) {
  *   - that row's first token looks like URL material (contains one of
  *     `% & = / ? . - _`), is not a bare number/version or list marker,
  *     and is not itself a new `scheme://`, a shell prompt (`user@host:`),
- *     a home path (`~/`), an email address or an HTTP status line; without
- *     `% & = / ?`, the token must finish its cell (row end or a gap of at
- *     least two spaces).
+ *     a home path (`~/`), an email address, an HTTP status line, a label
+ *     ending in `:`, a measurement or clock time (`45%`, `12.3ms`,
+ *     `10:00:00`), or a `name=value` field under a URL ending in `/`;
+ *     without `% & = / ?`, the token must finish its cell (row end or a
+ *     gap of at least two spaces) and must not be code with a call paren
+ *     or a word ending a sentence (`Done.`).
  * The last rule is what stops prose such as "…/files/" + "then run it" from
  * being glued into one link.
  *
@@ -2643,10 +2646,27 @@ function terminalUrlContinuationExtent(buffer, row, cols, maxRows) {
       // Nor is a token that is a whole email address.
       if (/^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$/.test(token)) break;
       if (!/[%&=/?.\-_]/.test(token) || /^v?\d+(?:\.\d+)*(?:[-+][\w.-]+)?[.,;:!?)]?$/i.test(token)) break;
+      // A label ends with a colon (`Failure/Error:`, `prometheus.io/scrape:`);
+      // the rest of a URL does not.
+      if (token.endsWith(':')) break;
+      // After a `/`, a `name=value` token is the next assignment or log field
+      // (`API_KEY=...`, `level=info`), not the URL: a query starts with `?`.
+      if (urlText.endsWith('/') && /^[A-Za-z_][\w.-]*=/.test(token)) break;
+      // Nor is a measurement or a clock time: `45%` and `45%|####` progress,
+      // `12.3MB/45.0MB`, `12.3ms`, `10:00:00` (`%7B` stays percent-encoding).
+      if (/^\d+(?:\.\d+)?(?:%(?![0-9A-Fa-f]{2})|(?:ms|s|[kKMGT]i?B)(?![\w-]))|^\d{1,2}:\d{2}/.test(token)) break;
       // Hyphens, underscores and dots also occur in prose. Without stronger
       // URL punctuation, the token must finish its cell, not introduce a sentence.
       const rest = nextText.slice(indent + token.length);
-      if (!/[%&=/?]/.test(token) && rest.trim() !== '' && !/^ {2,}/.test(rest)) break;
+      if (!/[%&=/?]/.test(token)) {
+        // Code (`client.get()`, `expect(x).toBe(y)`) is not a URL piece, and a
+        // word that ends a sentence (`ready.`, `Done.`) is prose. A wiki title
+        // (`Mercury_(planet)`) and a file name before its period
+        // (`install.html.`) still continue the URL.
+        if (/[^_]\(/.test(token)) break;
+        if (/[.,;!]$/.test(token) && !/\.[A-Za-z][A-Za-z0-9]{1,4}[.,;!]+$/.test(token)) break;
+        if (rest.trim() !== '' && !/^ {2,}/.test(rest)) break;
+      }
       const nextLogical = terminalLogicalLine(buffer, endRow + 1, cols, bound);
       if (!nextLogical) break;
       if (trailingColumns) firstRowUrlEnd = last.rawEnd;
