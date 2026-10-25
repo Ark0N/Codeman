@@ -343,6 +343,18 @@ export const httpRequest: ApiRequest = (ctx, options) => {
   });
 };
 
+/**
+ * One line describing a thrown request error. Node 22 rejects a refused connection to a host
+ * that resolves to both ::1 and 127.0.0.1 with an AggregateError whose `message` is empty, so
+ * fall back to its `code` (ECONNREFUSED) before a generic line rather than printing nothing.
+ */
+export function describeRequestError(error: unknown): string {
+  const message = getErrorMessage(error);
+  if (message) return message;
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return code ? String(code) : 'request failed without a message';
+}
+
 /** One line describing a failed response, for humans. Plain-text guards (401/403/429) have no envelope. */
 export function describeFailure(res: ApiResponse): string {
   if (res.json && !res.json.success) {
@@ -573,7 +585,7 @@ export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promis
         ready = !dead && Boolean(result?.matched);
       }
     } catch (error) {
-      readinessError = getErrorMessage(error) || 'Readiness request failed';
+      readinessError = describeRequestError(error);
     }
   }
 
@@ -1042,7 +1054,7 @@ async function run(json: boolean, verb: (deps: AgentDeps) => Promise<number>): P
   try {
     process.exitCode = await verb(deps);
   } catch (err) {
-    console.error(palette.err(`${GLYPH.fail} ${getErrorMessage(err)}`));
+    console.error(palette.err(`${GLYPH.fail} ${describeRequestError(err)}`));
     process.exitCode = EXIT.error;
   }
 }

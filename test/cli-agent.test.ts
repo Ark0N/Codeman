@@ -30,6 +30,7 @@ import {
   buildSendBody,
   deleteRefusal,
   describeFailure,
+  describeRequestError,
   httpRequest,
   inboxCell,
   inputRefusal,
@@ -589,8 +590,33 @@ describe('agent spawn', () => {
 
     expect(await agentSpawn(deps, { caseName: 'c', mode: 'claude', ready: true, timeoutMs: 1000 })).toBe(EXIT.error);
     expect(deps.out).toHaveLength(1);
-    expect(JSON.parse(deps.out[0])).toEqual({ sessionId: OTHER, readinessError: 'Readiness request failed' });
+    expect(JSON.parse(deps.out[0])).toEqual({ sessionId: OTHER, readinessError: 'request failed without a message' });
     expect(deps.calls).toHaveLength(2);
+  });
+
+  it('keeps the error code when a refused connection rejects with an empty AggregateError', async () => {
+    // Node 22 on a host resolving to ::1 and 127.0.0.1: message '', code ECONNREFUSED.
+    const refused = Object.assign(new AggregateError([new Error('connect ECONNREFUSED ::1:3000')], ''), {
+      code: 'ECONNREFUSED',
+    });
+    const deps = fakeDeps((options) => {
+      if (options.path === '/api/v1/quick-start') return ok({ sessionId: OTHER });
+      throw refused;
+    }, true);
+
+    expect(await agentSpawn(deps, { caseName: 'c', mode: 'claude', ready: true, timeoutMs: 1000 })).toBe(EXIT.error);
+    expect(JSON.parse(deps.out[0])).toEqual({ sessionId: OTHER, readinessError: 'ECONNREFUSED' });
+  });
+});
+
+describe('describeRequestError', () => {
+  it('prefers the message, then the code, then a generic line', () => {
+    expect(describeRequestError(new Error('socket hang up'))).toBe('socket hang up');
+    expect(describeRequestError(Object.assign(new AggregateError([], ''), { code: 'ECONNREFUSED' }))).toBe(
+      'ECONNREFUSED'
+    );
+    expect(describeRequestError(new Error(''))).toBe('request failed without a message');
+    expect(describeRequestError('')).toBe('request failed without a message');
   });
 });
 

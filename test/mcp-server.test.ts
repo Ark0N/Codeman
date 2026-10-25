@@ -248,6 +248,17 @@ describe('protocol: both eras', () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('CODEMAN_API_URL');
   });
+
+  it('a refused connection with an empty AggregateError still names the error code', async () => {
+    const refused: ApiRequest = async () => {
+      throw Object.assign(new AggregateError([new Error('connect ECONNREFUSED ::1:9')], ''), { code: 'ECONNREFUSED' });
+    };
+    const { out, send } = server(config(), { request: refused, calls: [] });
+    await send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_sessions', arguments: {} } });
+    const result = (out[0] as { result: { isError: boolean; content: Array<{ text: string }> } }).result;
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Cannot reach Codeman at http://127.0.0.1:9: ECONNREFUSED.');
+  });
 });
 
 describe('tool definitions', () => {
