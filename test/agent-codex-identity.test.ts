@@ -224,6 +224,22 @@ describe('remembered attribution on a large, never-pruned store', () => {
     expect(await findExactCodexConversation(f.options)).toBeUndefined();
   });
 
+  it('answers unattributed, without a full walk, when the remembered file verifies but its incremental scan runs out', async () => {
+    const f = await fixture();
+    const path = await dated(f, '2026/10/24', OWNED);
+    expect(await findExactCodexConversation(f.options)).toEqual({ id: OWNED, path });
+    // 30 rollouts in the remembered day itself: the incremental scan reads them all,
+    // so 20 entries cannot cover it, and a full walk (a superset) could not either.
+    await Promise.all(
+      Array.from({ length: 30 }, (_, n) =>
+        dated(f, '2026/10/24', `20000000-2222-4222-8222-${String(n).padStart(12, '0')}`, { originator: 'codex_cli' })
+      )
+    );
+    expect(await findExactCodexConversation(f.options, small)).toBeUndefined();
+    // The memo was dropped, so a call with room walks the store and attributes again.
+    expect(await findExactCodexConversation(f.options)).toEqual({ id: OWNED, path });
+  });
+
   it('drops the remembered file when it is replaced, and walks again', async () => {
     const f = await fixture();
     const path = await dated(f, '2026/10/24', OWNED);

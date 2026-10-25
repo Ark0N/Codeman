@@ -77,8 +77,10 @@ function strictMetadata(bytes: Buffer): Metadata | undefined {
  * this file's head (same `dev:ino`, same strict metadata) and then scans just the
  * directories not older than its own for a second candidate (codex `/new`, or a new
  * owned rollout beside a configured resume), instead of re-reading the whole store,
- * which codex never prunes. Any failed check drops the entry and falls back to the
- * full walk. Bounded: one entry per live session is the expected size.
+ * which codex never prunes. A head that no longer verifies drops the entry and falls
+ * back to the full walk; a failed incremental scan drops it and answers unattributed,
+ * since the full walk reads a superset of that scan. Bounded: one entry per live
+ * session is the expected size.
  */
 interface AttributionMemo {
   id: string;
@@ -133,8 +135,11 @@ export async function findExactCodexConversation(
       }
     }
     attributionMemo.delete(key);
-    // A second candidate is a conflict a full walk would report too; anything
-    // else (a replaced file, an exhausted budget) gets one full walk now.
+    // A file that no longer verifies (replaced, rewritten, gone) gets one full walk
+    // now. A verified file whose incremental scan failed does not: that scan reads a
+    // subset of what a full walk reads under the same budget, so a second candidate,
+    // an exhausted budget or an unreadable entry it hit is one the full walk would hit
+    // too, and walking the whole never-pruned store could only end the same way.
     if (verified) return undefined;
   }
   const candidates = await scanCandidates(sessions, options, budget);

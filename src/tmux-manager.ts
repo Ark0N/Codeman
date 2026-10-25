@@ -984,6 +984,20 @@ export function formatCursorRestore(geometry: PaneCursorGeometry): string {
   return `${up > 0 ? `\x1b[${up}A` : ''}\r${right > 0 ? `\x1b[${right}C` : ''}`;
 }
 
+/**
+ * Split the output of `capture-pane -p \; display-message -p '<cursor format>'`
+ * into the captured rows and the cursor line, which tmux prints last. Null unless
+ * that last line has the cursor query's shape (four leading integers), so a query
+ * that printed nothing can never have the frame's own last row taken for it.
+ */
+export function splitFrameAndCursor(output: string): { frame: string; cursor: string } | null {
+  const body = output.endsWith('\n') ? output.slice(0, -1) : output;
+  const split = body.lastIndexOf('\n');
+  const cursor = body.slice(split + 1);
+  if (!/^\d+ \d+ \d+ \d+(?: |$)/.test(cursor)) return null;
+  return { frame: body.slice(0, split + 1), cursor };
+}
+
 export function formatPaneSnapshot(
   lines: string[],
   geometry: { cols: number; rows: number; cursorX: number; cursorY: number }
@@ -4319,9 +4333,21 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         execOpts.maxBuffer =
           (opts?.maxCaptureBytes ?? DEFAULT_TERMINAL_BUFFER_MAX_BYTES) + FULL_HISTORY_CAPTURE_SLACK_BYTES;
       }
+      const cursorQuery = `display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size} #{alternate_on}'`;
+      const captureCommand = `${this.tmux()} ${captureFlags} -t ${shellescape(target)}`;
+      // The visible frame and its caret come from ONE tmux invocation
+      // (the capture, `\;`, then the cursor query): tmux runs a command list back to back
+      // in its command queue, with no pane output parsed between the two, so the
+      // caret belongs to the frame. Two separate calls raced the CLI's repaint: a
+      // CLI that redraws its composer a few ms after input arrives (codex) could be
+      // captured before the redraw and its caret queried after it, and guarded
+      // stage then refused a frame the keys had already reached. Any doubt about
+      // the combined output (a failed call, a last line that is not the query's)
+      // falls back to the two separate calls, which is what this always did.
+      const combined = fullHistory ? null : this.captureFrameWithCursor(`${captureCommand} \\; ${cursorQuery}`);
       const rawCapture = joinScrollbackAndFrame(
         scrollbackOverride,
-        execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, execOpts),
+        combined?.frame ?? execSync(captureCommand, execOpts),
         scrollbackOverride !== undefined ? opts?.scrollbackOverrideScreen : undefined
       );
       // Query the cursor BEFORE deciding anything else. On the full-history path
@@ -4329,10 +4355,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // appended, and those two have to agree: trailing blank rows are only safe
       // to keep when a move follows to put the caret back above them.
       const geometry = queryPaneCursor(() =>
-        execSync(
-          `${this.tmux()} display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size} #{alternate_on}'`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-        )
+        combined
+          ? combined.cursor
+          : execSync(`${this.tmux()} ${cursorQuery}`, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS })
       );
       // Report the size the pane was really drawing at. The visible-frame path
       // below addresses every row absolutely, so a consumer whose terminal is
@@ -4394,6 +4419,15 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       } else {
         console.error('[TmuxManager] Failed to capture pane buffer:', err);
       }
+      return null;
+    }
+  }
+
+  /** One combined capture-and-cursor-query call, split; null when it failed or is ambiguous. */
+  private captureFrameWithCursor(command: string): { frame: string; cursor: string } | null {
+    try {
+      return splitFrameAndCursor(execSync(command, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }));
+    } catch {
       return null;
     }
   }

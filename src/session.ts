@@ -4749,6 +4749,14 @@ export class Session extends EventEmitter {
   get guardedInputPendingWrites(): number {
     return this._guardedPendingWrites;
   }
+  /**
+   * True while a guarded submit holds the input lease. Every write path refuses for
+   * that span (a few milliseconds), so a route that can report a refusal checks this
+   * first instead of answering as if the bytes went out.
+   */
+  get guardedSubmitInFlight(): boolean {
+    return this._guardedSubmitInFlight;
+  }
   /** Expose only the path selection needed for attributed Codex evidence, never credentials. */
   getCodexHomeOverride(): string | undefined {
     return this._envOverrides?.CODEX_HOME || undefined;

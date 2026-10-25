@@ -551,8 +551,8 @@ that half is the CLI's behavior, not something this API guarantees.
 
 - **This is not the composer-clearing tool.** Esc (and Ctrl+U) do **not** clear a
   typed-but-unsubmitted Claude prompt, verified live. Do not submit an unverified
-  draft merely to clear it. For a refused guarded local Codex submit, use the
-  verified-unsent recovery in [inspection and staging](inspection-and-staging.md#recover-after-a-refused-submit);
+  draft merely to clear it. For a refused guarded local Codex stage or submit, use the
+  verified-unsent recovery in [inspection and staging](inspection-and-staging.md#recover-a-stranded-draft);
   when the composer is unclear, ask the user to clear it in the terminal.
 - The interrupted turn already burned its tokens. Interrupting early saves the rest.
 - `POST /api/sessions/:id/send-key` is a different endpoint and cannot do this: its

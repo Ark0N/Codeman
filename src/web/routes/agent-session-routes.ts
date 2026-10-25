@@ -14,7 +14,13 @@ import type { SessionPort, InfraPort } from '../ports/index.js';
 import { getCli } from '../../config/cli-registry/registry.js';
 import { findExactCodexConversation, resolveEffectiveCodexHome } from '../../agent-codex-identity.js';
 import { InspectionReader, InspectionConflict, boundedUtf8Tail } from '../../agent-inspection.js';
-import { GuardedStageStore, GuardedInputConflict, type GuardedInputTarget } from '../../agent-staging.js';
+import {
+  GuardedStageStore,
+  GuardedInputConflict,
+  guardedComposerChrome,
+  MAY_BE_TYPED,
+  type GuardedInputTarget,
+} from '../../agent-staging.js';
 import { ApiErrorCode, createErrorResponse, type ApiResponse } from '../../types.js';
 import { findSessionOrFail, getAuthUser, parseBody, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
 import { AgentInspectQuerySchema, AgentStageSchema, AgentSubmitSchema } from '../schemas.js';
@@ -51,6 +57,7 @@ export function registerAgentSessionRoutes(app: FastifyInstance, ctx: SessionPor
   const generation = (session: Session) => session.inspectionGeneration;
   const target = (session: Session): GuardedInputTarget => ({
     id: session.id,
+    chrome: () => guardedComposerChrome(getCli(session.mode)),
     snapshot: () => {
       if (ctx.sessions.get(session.id) !== session) return null;
       const snapshot = session.guardedInputSnapshot?.();
@@ -153,7 +160,7 @@ export function registerAgentSessionRoutes(app: FastifyInstance, ctx: SessionPor
             ApiErrorCode.CONFLICT,
             error instanceof GuardedInputConflict
               ? error.message
-              : 'Stage delivery failed; inspect the pane before retrying'
+              : `Stage delivery failed or ambiguous; ${MAY_BE_TYPED}`
           )
         );
     }

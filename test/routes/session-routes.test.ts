@@ -1197,6 +1197,32 @@ describe('session-routes', () => {
       expect(session.writeBuffer).toEqual(['prompt', '\r']);
     });
 
+    it('refuses with 409 and gives the seq back while a guarded submit holds the input lease', async () => {
+      const url = `/api/sessions/${harness.ctx._sessionId}/input`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = harness.ctx.sessions.get(harness.ctx._sessionId) as any;
+      session.writeBuffer.length = 0;
+      const post = (payload: unknown) => harness.app.inject({ method: 'POST', url, payload });
+      session.guardedSubmitInFlight = true;
+      for (const payload of [
+        { input: 'x' },
+        { input: 'x', useMux: true },
+        { input: 'prompt\r' },
+        { input: 'tagged', seq: 7, clientId: 'cid-guard' },
+      ]) {
+        const refused = await post(payload);
+        expect(refused.statusCode, JSON.stringify(payload)).toBe(409);
+        expect(refused.json()).toMatchObject({ success: false, errorCode: 'CONFLICT' });
+        expect(refused.json().error).toMatch(/guarded submit is in progress.*nothing was written/);
+      }
+      expect(session.writeBuffer).toEqual([]);
+      // Once the lease is released the browser's retry of the same seq is applied, not
+      // rejected as a duplicate.
+      session.guardedSubmitInFlight = false;
+      expect((await post({ input: 'tagged', seq: 7, clientId: 'cid-guard' })).statusCode).toBe(200);
+      expect(session.writeBuffer).toEqual(['tagged']);
+    });
+
     it('always applies untagged input (curl/legacy, no dedup)', async () => {
       const url = `/api/sessions/${harness.ctx._sessionId}/input`;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

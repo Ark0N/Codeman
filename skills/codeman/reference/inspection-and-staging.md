@@ -78,15 +78,32 @@ wrapped, remote/container and shell composers are refused. A customized footer o
 unsupported character-width rendering can also make verification unavailable.
 Self-targets are refused by the CLI.
 
+Stage also refuses, before typing, a message that would change what Enter does:
+one starting with `/` (a Codex slash command; with its command list open, Enter
+would run the highlighted command instead) or `!` (a shell command), and one whose
+**last** word starts with `@` (file/mention search) or `$` (skills). Those popups
+follow the caret, which stage leaves at the end, so `look at @src/app.ts please`
+is fine. Send slash and shell commands with `codeman agent send`, and end a
+message with an ordinary word when it mentions a file. A frame showing a
+suggestion popup above the composer is refused at stage and submit too.
+
 The receipt stores a hash and ephemeral identities, never prompt content. It
-expires after two minutes; capacity is 1024 live receipts. Stage delivery can
-precede the next screen paint: a receipt acknowledges typing, while submit still
-requires the fully painted exact composer. If typing fails or is ambiguous, stage
-issues no receipt; inspect the pane before trying again.
+expires after two minutes; capacity is 1024 live receipts. After typing, stage
+re-reads the pane (every 50 ms, up to one second, since Codex repaints a little
+after the keys) and issues a receipt only for a frame that shows exactly the
+message with the caret after it. Any refusal after the keys went out (typing
+failed or was ambiguous, the pane or input changed, or no frame verified in time)
+says the message may already be in the composer: no receipt was issued. Do not
+stage again on top of it; follow [Recover a stranded draft](#recover-a-stranded-draft) below first.
+
+While a submit's Enter is in flight (milliseconds), `send` and other input to that
+session answer `409 CONFLICT` with nothing written; retry the input.
 
 Submit checks the caller, session, hash, expiry, pane lifecycle, input revision,
 geometry, exact composer and caret, then sends one conditional Enter at the session's input
-boundary. Competing Codeman writes are refused during dispatch. Browser/API/key
+boundary. It first waits until 250 ms have passed since stage typed (Codex turns an
+Enter that follows typed text within 120 ms into a newline), so submitting right
+after stage is fine. Competing Codeman writes are refused during dispatch. Browser/API/key
 input and managed restarts invalidate receipts even when the visible text or pid
 is restored. Direct tmux edits are outside that input serialization; captures
 remain evidence at the time observed, rather than terminal isolation.
@@ -98,10 +115,10 @@ Enter was delivered; use inspection or a suitable wait signal to observe native
 acceptance. A `409` or broken connection means inspect first. Do not automatically
 stage/submit again or send an unguarded Enter to recover.
 
-## Recover after a refused submit
+## Recover a stranded draft
 
-A consumed receipt cannot be reused. First observe whether the prompt was
-accepted: use transcript evidence/wait signals and a fresh terminal capture
+A consumed receipt cannot be reused, and a stage refused after typing issued
+none. First observe whether the prompt is still in the composer or was accepted: use transcript evidence/wait signals and a fresh terminal capture
 (`GET /api/v1/sessions/:id/terminal?tail=8192`). If the target is working, has
 accepted the prompt, shows a dialog, or delivery is ambiguous, keep observing;
 do not clear or resend anything. A transcript prompt row alone is not proof

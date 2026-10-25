@@ -426,6 +426,11 @@ worker's prompt but never submitted, and the wait then runs its full timeout on 
 turn that never started. Verified live; this is the most common silent failure on
 this endpoint.
 
+Any input, waiting or not, answers `409 CONFLICT` with nothing written while an
+experimental guarded submit holds the session's input lease (a few milliseconds;
+see [guarded input](#experimental-bounded-agent-inspection-and-guarded-input)).
+Retry it.
+
 A **plain prompt** (printable text followed by exactly one `\r`, nothing else) is
 delivered through tmux even without `useMux`: the text is typed, Enter is pressed as
 a separate key, and the server re-presses Enter while the prompt is still visibly
@@ -630,8 +635,11 @@ final identity verification). The negative filter reads 1 KiB of each rollout
 first and 4 KiB only when that window holds no complete `originator` field. Once
 a rollout is attributed, later calls re-verify only that file (same file identity,
 same strict metadata) and rescan only the `sessions/YYYY/MM/DD` directories not
-older than its own, for a second candidate such as a codex `/new`; a failed check
-falls back to one full walk. So the caps bound the first call, not every call.
+older than its own, for a second candidate such as a codex `/new`. A file that no
+longer verifies falls back to one full walk; a verified file whose incremental scan
+finds a second candidate or runs out of budget answers unattributed without one,
+since the full walk reads a superset of that scan. So the caps bound the first call,
+not every call.
 An unexpected read error is `422 OPERATION_FAILED` (logged with the session id
 and error code only), not a retryable `409`. Unreachable workspace/home/metadata directories
 are probed with a bounded past-cap probe before canonical reads and remain
@@ -670,8 +678,43 @@ actual captured pane width and rendered composer indentation, refusing any
 message that would reach the right edge or wrap. Every declared Codex effort
 word plus `default` is recognized. Its two-minute receipt stores
 only hashes/ephemeral identities in a bounded in-memory store (1024 live receipts),
-never persisted prompt content. A receipt acknowledges typing; a delayed screen
-paint can still make submit refuse until exact verification becomes possible.
+never persisted prompt content.
+
+Stage refuses, before typing anything, a message that would change what Enter
+does rather than what it sends, from the registry's
+`composerCommandPrefixes` and `composerCompletionSigils`. For codex: a message
+starting with `/` (a slash command; codex runs it, or with its command list open
+runs the highlighted one) or `!` (a shell command), checked after any leading
+whitespace, and a message whose last word starts with `@` (file and mention
+search) or `$` (skills; every `$` word, since whether codex opens that list
+depends on its skill catalog). Those popups follow the caret, which stage leaves
+at the end of the message, so a `@` or `$` word earlier in the message is
+accepted. Send slash and shell commands through `POST .../input`
+(`codeman agent send`). Independently, a frame with a suggestion popup in the
+block directly above the composer (the registry's `composerPopupLine`) is refused
+at stage and submit, since codex draws every popup there and leaves the footer
+below the composer unchanged.
+
+A receipt is issued only for a capture that shows exactly the message with the
+caret after it. Codex repaints its composer 30 to 60 ms after the keys arrive,
+so after typing stage re-reads the pane every 50 ms for up to one second and
+takes the first frame with the same pane generation, the input revision its own
+write moved and a composer whose SHA-256 equals the message's. Each capture
+reads the screen and the caret in one tmux invocation. A frame showing another
+writer's input, a new pane lifecycle or a new geometry ends the wait at once.
+Every refusal after the keys went out (typing failed or was ambiguous, the
+pane changed, or no frame verified in time) is a `409` that says the message
+may already be in the composer: inspect the pane and follow the stranded-draft
+recovery (Ctrl+U) in the skill reference before staging again.
+
+While a guarded submit holds the input lease (the few milliseconds of its
+conditional Enter), every other Codeman write path refuses, and
+`POST /api/v1/sessions/:id/input` answers `409 CONFLICT` ("A guarded submit is in
+progress on this session; nothing was written") instead of a `200` for bytes
+that were never written. A tagged `clientId`/`seq` frame keeps its seq, so the
+browser's durable queue, which keeps a frame on a `409`, delivers it on the next
+retry. WebSocket keystrokes in that window are left unacknowledged and redelivered
+the same way.
 
 Direct auxiliary key operations participate in the same pending-write and input
 lease checks. Complete allowlisted focus/mouse reports and empty writes preserve
@@ -679,7 +722,10 @@ input revision; mixed or unknown sequences remain keyboard-bearing. Exact
 composer/caret checks also reject a mouse-moved caret.
 
 Submit consumes an owned receipt before awaited delivery, verifies the caller,
-confirmation hash, expiry, lifecycle/input/geometry revisions and exact composer/caret,
+confirmation hash and expiry, then waits until at least 250 ms have passed since
+the staged keys went out (codex reads keys typed in one burst as a paste and, for
+120 ms after one, turns Enter into a newline instead of a submit), then verifies
+lifecycle/input/geometry revisions and exact composer/caret,
 then uses a session-level conditional Enter dispatch with a temporary input lease.
 Competing Codeman writes cannot enter during that dispatch. Managed restarts and
 intervening browser/API/auxiliary input invalidate receipts independently of pid

@@ -441,6 +441,30 @@ export interface CliCapabilities {
      * takes guarded input: stage and submit refuse it. Tested one row at a time.
      */
     composerFooterLine?: string;
+    /**
+     * Source of a regex matching a row of a suggestion popup this CLI draws directly
+     * ABOVE its composer (a slash-command list, a file or mention search, its key-hint
+     * row). The footer below such a composer is unchanged, so without this guarded
+     * stage/submit would read the popup frame as an idle composer, and Enter would
+     * accept the highlighted entry instead of sending the draft. Tested one row at a
+     * time against the contiguous block just above the composer row, never further
+     * up the pane: a match there refuses the frame. See `readGuardedComposer()`.
+     */
+    composerPopupLine?: string;
+    /**
+     * Characters that, as the first character of a draft, make Enter run a command
+     * rather than send a prompt (codex: `/` slash commands, `!` shell commands).
+     * Guarded stage refuses such a message before typing; commands go through the
+     * ordinary input route.
+     */
+    composerCommandPrefixes?: string;
+    /**
+     * Characters that, starting the word under the caret, open a completion popup
+     * whose highlighted entry Enter accepts (codex: `@` file and mention search, `$`
+     * skills). Guarded stage refuses a message whose LAST word starts with one,
+     * before typing: the caret ends there, and the popup follows the caret.
+     */
+    composerCompletionSigils?: string;
   };
   /**
    * How many columns this CLI indents its transcript body by, so a copy taken from its

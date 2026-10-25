@@ -75,9 +75,11 @@ codeman agent rm "$SID"                                   # any session except t
   [Settings Reference](Settings-Reference); `agentCoordinationEnabled`, synced, off by
   default), and they may change in any release. `inspect` returns bounded evidence with an
   opaque cursor. `stage` types one printable UTF8 line without trailing whitespace into a
-  local Codex composer, with no Enter, and returns a receipt that expires after two minutes;
-  `submit` sends one Enter only if the composer still shows exactly that text, and never
-  replays it. `send --no-enter` alone has no receipt. Details:
+  local Codex composer, with no Enter, and returns a receipt that expires after two minutes
+  once the pane shows exactly that text; it refuses slash (`/`) and shell (`!`) commands
+  and a message whose last word starts with `@` or `$` (those open a Codex popup that Enter
+  would accept), so send commands with `send`. `submit` sends one Enter only if the
+  composer still shows exactly that text, and never replays it. `send --no-enter` alone has no receipt. Details:
   [API reference](https://github.com/Ark0N/Codeman/blob/master/docs/api-reference.md#experimental-bounded-agent-inspection-and-guarded-input).
 - **Exit codes** are the same for every verb: `0` done, `1` error, `2` timeout, `3` the
   worker exited, `4` refused. `--json` prints the response's `data`.

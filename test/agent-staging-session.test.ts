@@ -413,16 +413,18 @@ it('refuses a message that would wrap using the actual captured indent and width
     },
     muxSession: { muxName: 'codeman-12345678', sessionId: 'test', createdAt: 1, pid: 1 },
   } as unknown as ConstructorParameters<typeof Session>[0]);
-  const { GuardedStageStore } = await import('../src/agent-staging.js');
+  const { GuardedStageStore, guardedComposerChrome } = await import('../src/agent-staging.js');
+  const { getCli } = await import('../src/config/cli-registry/registry.js');
   try {
     const store = new GuardedStageStore();
     const target = {
       id: session.id,
+      chrome: () => guardedComposerChrome(getCli('codex')),
       snapshot: () => session.guardedInputSnapshot(),
       write: (text: string) => session.stageGuardedInput(text),
       submit: (snap: Parameters<Session['submitGuardedInput']>[0]) => session.submitGuardedInput(snap),
     };
-    await expect(store.stage(target, 'alice', 'x'.repeat(24))).rejects.toThrow();
+    await expect(store.stage(target, 'alice', 'x'.repeat(24))).rejects.toThrow(/wrap/);
     expect(writes).toEqual([]);
   } finally {
     await session.stop(false);
@@ -462,5 +464,72 @@ it('records a verifier re-press as the latest submit time', async () => {
   } finally {
     await session.stop(false);
     vi.useRealTimers();
+  }
+});
+
+it('stages through a real session whose first post-write capture is the torn frame codex produces', async () => {
+  // Reproduces the live 0.162.0 race: right after the keys land, the screen still
+  // shows the empty composer while the caret is already past the new text. That
+  // frame proves nothing; the repaint a few ms later does.
+  let composer = '';
+  let torn = 0;
+  const writes: string[] = [];
+  const session = new Session({
+    workingDir: '/tmp',
+    mode: 'codex',
+    mux: {
+      isAvailable: () => true,
+      capturePaneBuffer: (
+        _name: string,
+        _pane?: string,
+        opts?: { capturedGeometry?: { cols: number; rows: number } }
+      ) => {
+        if (opts) opts.capturedGeometry = { cols: 100, rows: 20 };
+        const shown = torn > 0 ? '' : composer;
+        if (torn > 0) torn--;
+        return formatPaneSnapshot([`› ${shown}`, '  GPT-6-Luna default · ~/case'], {
+          cols: 100,
+          rows: 20,
+          cursorX: 2 + composer.length,
+          cursorY: 0,
+        });
+      },
+      sendInput: async (_id: string, text: string, options?: { beforeDispatch?: () => boolean }) => {
+        if (options?.beforeDispatch && !options.beforeDispatch()) return false;
+        writes.push(text);
+        if (text !== '\r') {
+          composer += text;
+          torn = 2;
+        }
+        return true;
+      },
+    },
+    muxSession: { muxName: 'codeman-12345678', sessionId: 'test', createdAt: 1, pid: 1 },
+  } as unknown as ConstructorParameters<typeof Session>[0]);
+  const { GuardedStageStore, guardedComposerChrome } = await import('../src/agent-staging.js');
+  const { getCli } = await import('../src/config/cli-registry/registry.js');
+  const sleeps: number[] = [];
+  const store = new GuardedStageStore(Date.now, 1024, 120000, {
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  const target = {
+    id: session.id,
+    chrome: () => guardedComposerChrome(getCli('codex')),
+    snapshot: () => session.guardedInputSnapshot(),
+    write: (text: string) => session.stageGuardedInput(text),
+    submit: (snap: Parameters<Session['submitGuardedInput']>[0]) => session.submitGuardedInput(snap),
+  };
+  try {
+    const receipt = await store.stage(target, 'alice', 'hello');
+    expect(receipt.sha256).toBe(promptSha256('hello'));
+    expect(sleeps).toHaveLength(2);
+    await expect(store.submit(target, 'alice', receipt.stageId, receipt.sha256)).resolves.toMatchObject({
+      submitted: true,
+    });
+    expect(writes).toEqual(['hello', '\r']);
+  } finally {
+    await session.stop(false);
   }
 });

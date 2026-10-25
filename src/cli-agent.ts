@@ -1293,7 +1293,7 @@ export function registerAgentCommands(program: Command): Command {
   agent
     .command('stage <id>')
     .description(
-      'Experimental, opt-in (agentCoordinationEnabled): type a printable single-line UTF8 file without Enter; requires a verifiable local Codex composer'
+      'Experimental, opt-in (agentCoordinationEnabled): type a printable single-line UTF8 file without Enter; requires a verifiable local Codex composer, and refuses slash or shell commands and a last word starting with @ or $ (use send)'
     )
     .requiredOption('--message-file <path>', 'Regular UTF8 file, at most 8192 bytes, no trailing newline')
     .option('--json', 'Machine-readable output')

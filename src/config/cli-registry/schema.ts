@@ -394,6 +394,25 @@ const capabilitiesSchema = z
             'composerFooterLine must be a regex compileVersionRegex() accepts: at most 200 characters, no nested quantifiers'
           )
           .optional(),
+        // Same guard again: run over the rows just above the composer by the same reads.
+        composerPopupLine: z
+          .string()
+          .min(1)
+          .refine(
+            (src) => compileVersionRegex(src) !== null,
+            'composerPopupLine must be a regex compileVersionRegex() accepts: at most 200 characters, no nested quantifiers'
+          )
+          .optional(),
+        // Single ASCII punctuation characters, never letters, digits or whitespace: each one
+        // refuses every message that starts (or whose last word starts) with it.
+        composerCommandPrefixes: z
+          .string()
+          .regex(/^[!-/:-@[-`{-~]{1,8}$/, 'composerCommandPrefixes must be 1 to 8 ASCII punctuation characters')
+          .optional(),
+        composerCompletionSigils: z
+          .string()
+          .regex(/^[!-/:-@[-`{-~]{1,8}$/, 'composerCompletionSigils must be 1 to 8 ASCII punctuation characters')
+          .optional(),
       })
       .strict()
       // A window with nothing to search is a typo, not a configuration. Refused at LOAD

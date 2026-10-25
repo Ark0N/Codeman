@@ -11,7 +11,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { formatCursorRestore, formatPaneSnapshot, hasVisibleContent, queryPaneCursor } from '../src/tmux-manager.js';
+import {
+  formatCursorRestore,
+  formatPaneSnapshot,
+  hasVisibleContent,
+  queryPaneCursor,
+  splitFrameAndCursor,
+} from '../src/tmux-manager.js';
 
 describe('tmux full-history pane capture (COD-47)', () => {
   const source = readFileSync(resolve(import.meta.dirname, '../src/tmux-manager.ts'), 'utf8');
@@ -263,5 +269,34 @@ describe('queryPaneCursor history depth', () => {
   it('asks tmux for the history depth and alternate screen in the same display-message as the cursor', () => {
     const source = readFileSync(resolve(import.meta.dirname, '../src/tmux-manager.ts'), 'utf8');
     expect(source).toContain("'#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size} #{alternate_on}'");
+  });
+});
+
+describe('the visible frame and its caret come from one tmux invocation', () => {
+  const source = readFileSync(resolve(import.meta.dirname, '../src/tmux-manager.ts'), 'utf8');
+  const methodStart = source.indexOf('capturePaneBuffer(muxName: string');
+  const methodBody = source.slice(methodStart, source.indexOf('captureActivePaneBuffer(muxName: string', methodStart));
+
+  it('chains the capture and the cursor query with `\;` on the visible path only', () => {
+    // Two separate execs raced a CLI repaint (codex redraws its composer 30-60 ms
+    // after input): the frame could predate the caret, and guarded stage refused it.
+    // Two backslashes in the source: one escaped backslash in the shell command, which hands tmux its `;`.
+    const chained = '${captureCommand} ' + '\\'.repeat(2) + '; ${cursorQuery}';
+    expect(methodBody).toContain('fullHistory ? null : this.captureFrameWithCursor(`' + chained + '`)');
+    // Any doubt falls back to the two calls the capture always made.
+    expect(methodBody).toContain('combined?.frame ?? execSync(captureCommand, execOpts)');
+    expect(methodBody).toContain('combined\n          ? combined.cursor');
+  });
+  it('splits the combined output into the rows and the cursor line tmux prints last', () => {
+    expect(splitFrameAndCursor('› hello\n  footer\n\n7 0 100 20 0 0\n')).toEqual({
+      frame: '› hello\n  footer\n\n',
+      cursor: '7 0 100 20 0 0',
+    });
+    expect(splitFrameAndCursor('only\n3 0 80 24\n')).toEqual({ frame: 'only\n', cursor: '3 0 80 24' });
+  });
+  it('refuses output whose last line is not the cursor query, so a frame row is never taken for it', () => {
+    expect(splitFrameAndCursor('› hello\n  footer\n')).toBeNull();
+    expect(splitFrameAndCursor('row\nworld 1 2 3 4\n')).toBeNull();
+    expect(splitFrameAndCursor('')).toBeNull();
   });
 });

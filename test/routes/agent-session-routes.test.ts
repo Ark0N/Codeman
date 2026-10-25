@@ -250,6 +250,17 @@ it('uses real session writes to stage without Enter and refuses intervening API 
     });
     expect(stale.statusCode).toBe(409);
     expect(writes.filter((s) => s === '\r')).toHaveLength(1);
+    // Codex's command popup opens on `/`; Enter would run the highlighted command.
+    composer = '';
+    writes.length = 0;
+    const slash = await harness.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${session.id}/stage`,
+      payload: { message: '/stat' },
+    });
+    expect(slash.statusCode).toBe(409);
+    expect(slash.json().error).toMatch(/starting with "\/".*codeman agent send/);
+    expect(writes).toEqual([]);
   } finally {
     await session.stop(false);
   }

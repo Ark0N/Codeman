@@ -2077,6 +2077,24 @@ export function registerSessionRoutes(
       }
     }
 
+    // A guarded submit (agent-staging.ts) holds the input lease for the few
+    // milliseconds of its conditional Enter, and every write path refuses while it
+    // does. Say so instead of answering 200 for bytes that were never written, and
+    // give the seq back so the browser's durable queue (which keeps a frame on any
+    // 409) delivers it once the lease is released. Nothing from here to the write
+    // below awaits, so the lease cannot be taken in between.
+    if (!duplicate && session.guardedSubmitInFlight === true) {
+      if (tagged) session.forgetInputSeq(clientId as string, seq as number);
+      return reply
+        .code(409)
+        .send(
+          createErrorResponse(
+            ApiErrorCode.CONFLICT,
+            'A guarded submit is in progress on this session; nothing was written. Retry the input.'
+          )
+        );
+    }
+
     // Only a waiting request pays for the tmux probe: the browser's plain input path
     // (thousands of calls per session) must stay exec-free.
     const workerDead = wantsWait && workerIsDead(ctx.mux, session);
