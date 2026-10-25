@@ -437,13 +437,28 @@ describe('Command-K new-session agent picker', () => {
     expect(app.commandPaletteItems[app.commandPaletteActiveIndex]).toMatchObject({ mode: 'opencode' });
   });
 
-  it('leaves Left/Right to the caret when they would move it', async () => {
+  it('cycles both ways at the end of a typed case query without moving its caret', async () => {
+    const { app, listeners, elements } = loadAgentPalette();
+    app.openCommandPalette();
+    elements.commandPaletteSearch.value = 'nomatch';
+    app.renderCommandPalette();
+    const left = arrow('ArrowLeft', 7, 'nomatch');
+    await listeners['search:keydown'](left);
+    expect(left.preventDefault).toHaveBeenCalled();
+    expect(app.commandPaletteItems[app.commandPaletteActiveIndex].mode).toBe('opencode');
+    const right = arrow('ArrowRight', 7, 'nomatch');
+    await listeners['search:keydown'](right);
+    expect(right.preventDefault).toHaveBeenCalled();
+    expect(app.commandPaletteItems[app.commandPaletteActiveIndex].mode).toBe('claude');
+  });
+
+  it('leaves Left/Right to the caret inside the query', async () => {
     const { app, listeners, elements } = loadAgentPalette();
     app.openCommandPalette();
     elements.commandPaletteSearch.value = 'nomatch';
     app.renderCommandPalette();
 
-    const left = arrow('ArrowLeft', 7, 'nomatch');
+    const left = arrow('ArrowLeft', 3, 'nomatch');
     const right = arrow('ArrowRight', 3, 'nomatch');
     await listeners['search:keydown'](left);
     await listeners['search:keydown'](right);
@@ -452,6 +467,20 @@ describe('Command-K new-session agent picker', () => {
     expect(right.preventDefault).not.toHaveBeenCalled();
     expect(app.commandPaletteItems[app.commandPaletteActiveIndex].mode).toBe('claude');
   });
+
+  it.each(['altKey', 'ctrlKey', 'metaKey', 'shiftKey'])(
+    'preserves %s arrow editing at query boundaries',
+    async (modifier) => {
+      const { app, listeners, elements } = loadAgentPalette();
+      app.openCommandPalette();
+      elements.commandPaletteSearch.value = 'nomatch';
+      app.renderCommandPalette();
+      const event = { ...arrow('ArrowLeft', 7, 'nomatch'), [modifier]: true };
+      await listeners['search:keydown'](event);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(app.commandPaletteItems[app.commandPaletteActiveIndex].mode).toBe('claude');
+    }
+  );
 
   it('does not cycle while a session row is highlighted', async () => {
     const { app, listeners } = loadAgentPalette();

@@ -643,9 +643,9 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Left/Right change the agent only while the new-session row is highlighted,
-   * and only when the key would not move the caret anyway (Left at the start of
-   * the query, Right at its end, no selection), so editing a typed case name
-   * keeps working.
+   * and the caret is at either query boundary, with no selection. Both arrows
+   * stay in picker navigation after typing a case name; inside the query they
+   * still edit text, as do modified arrows and selection changes.
    */
   _commandPaletteArrowCyclesAgent(e) {
     const active = (this.commandPaletteItems || [])[this.commandPaletteActiveIndex || 0];
@@ -657,7 +657,7 @@ Object.assign(CodemanApp.prototype, {
     const start = Number.isFinite(input?.selectionStart) ? input.selectionStart : value.length;
     const end = Number.isFinite(input?.selectionEnd) ? input.selectionEnd : start;
     if (start !== end) return false;
-    return e.key === 'ArrowRight' ? end >= value.length : start <= 0;
+    return start <= 0 || end >= value.length;
   },
 
   _findCommandPaletteCaseMatch(query = '') {
