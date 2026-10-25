@@ -353,6 +353,177 @@ describe('GET /api/sessions/:id/git-status limits', () => {
   });
 });
 
+describe('POST /api/sessions/:id/git-fetch', () => {
+  /** Records what each repository was asked to do, and lets real git answer the rest. */
+  function recordingRunner() {
+    const calls: Array<[string, string[]]> = [];
+    const seenTimeouts: Array<number | undefined> = [];
+    const runner: GitRunner = async (cwd, args, opts) => {
+      calls.push([cwd, args]);
+      seenTimeouts.push(opts?.timeoutMs);
+      return execFileSyncGit(cwd, args);
+    };
+    return { calls, seenTimeouts, runner, fetches: () => calls.filter(([, args]) => args[0] === 'fetch') };
+  }
+
+  it('runs one fetch per repository the window would show, in the session working directory', async () => {
+    for (const name of ['api', 'web']) {
+      mkdirSync(join(dir, name));
+      git(join(dir, name), 'init', '-q', '-b', 'main');
+    }
+    const { calls, fetches, runner } = recordingRunner();
+    const { app } = await setup({ git: runner });
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' });
+    expect(res.statusCode).toBe(200);
+    const data = res.json().data;
+    expect(data.state).toBe('ok');
+    expect(data.repos.map((r: { name: string; path: string }) => [r.name, r.path])).toEqual([
+      ['api', 'api'],
+      ['web', 'web'],
+    ]);
+    expect(data.repos.every((r: { ok: boolean }) => r.ok)).toBe(true);
+    // A bounded run does not promise which repository starts first, so compare the set.
+    expect(fetches().sort()).toEqual([
+      [join(dir, 'api'), ['fetch', '--quiet']],
+      [join(dir, 'web'), ['fetch', '--quiet']],
+    ]);
+    // Every repository git was asked to touch sits under the session folder, and under nothing else.
+    for (const [cwd] of calls) expect(cwd.startsWith(dir)).toBe(true);
+  });
+
+  it('keeps a repository it could not fetch, with its reason, and says which ones it fetched', async () => {
+    for (const name of ['ok', 'private']) {
+      mkdirSync(join(dir, name));
+      git(join(dir, name), 'init', '-q', '-b', 'main');
+    }
+    const { fetches, runner } = recordingRunner();
+    const injected: GitRunner = async (cwd, args, opts) => {
+      const recorded = runner(cwd, args, opts); // records the call before deciding what git would have said
+      if (args[0] === 'fetch' && cwd === join(dir, 'private')) {
+        throw Object.assign(new Error('Command failed'), {
+          stderr: "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+        });
+      }
+      return recorded;
+    };
+    const { app } = await setup({ git: injected });
+    const data = (await app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' })).json().data;
+    const priv = data.repos.find((r: { name: string }) => r.name === 'private');
+    expect(priv?.ok).toBe(false);
+    expect(priv?.failure?.code).toBe('AUTH_REQUIRED');
+    expect(data.repos.find((r: { name: string }) => r.name === 'ok')?.ok).toBe(true);
+    // Both repositories are still in the list, so both were attempted: a failure does not cancel the run.
+    expect(fetches()).toHaveLength(2);
+  });
+
+  it('redacts credentials git may have echoed back before the failure reaches the client', async () => {
+    git(dir, 'init', '-q', '-b', 'main');
+    // Only the fetch is faked: the resolver still needs its own `rev-parse` to find the repository at all.
+    const runner: GitRunner = async (cwd, args) => {
+      if (args[0] === 'fetch') {
+        throw Object.assign(new Error('Command failed'), {
+          stderr: "fatal: unable to access 'https://bob:ghp_secret@github.com/x.git/'\u001b[31m",
+        });
+      }
+      return execFileSyncGit(cwd, args);
+    };
+    const { app } = await setup({ git: runner });
+    const data = (await app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' })).json().data;
+    expect(data.state).toBe('ok');
+    expect(data.repos[0].failure.stderr).toBe("fatal: unable to access 'https://***:***@github.com/x.git/'[31m");
+  });
+
+  it.each([
+    ['remote', { host: 'h', user: 'u' }],
+    ['docker', { container: 'c' }],
+  ])('does not run git for a %s session and says it is unsupported', async (kind, value) => {
+    git(dir, 'init', '-q', '-b', 'main');
+    const { calls, fetches, runner } = recordingRunner();
+    const { app } = await setup({ git: runner });
+    session[kind] = value;
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toMatchObject({ state: 'unsupported', reason: kind });
+    expect(fetches()).toEqual([]);
+    expect(calls).toEqual([]); // the resolver never ran either: the refusal comes before any git
+  });
+
+  it('refuses a repository inside a Docker case workspace before any git runs', async () => {
+    git(dir, 'init', '-q', '-b', 'main');
+    const { calls, fetches, runner } = recordingRunner();
+    const { app } = await setup({ git: runner, dockerWorkspaces: [realpathSync(dir)] });
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' });
+    expect(res.json().data).toMatchObject({ state: 'unsupported', reason: 'docker' });
+    expect(fetches()).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it('answers not-a-repo for a folder that is not a repository, running no fetch', async () => {
+    const { fetches, runner } = recordingRunner();
+    const { app } = await setup({ git: runner });
+    const data = (await app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' })).json().data;
+    expect(data.state).toBe('not-a-repo');
+    // The resolver looked once and found nothing, so nothing was fetched — and never guessed a repository.
+    expect(fetches()).toEqual([]);
+  });
+
+  it('404s an unknown session, running no fetch', async () => {
+    const { calls, fetches, runner } = recordingRunner();
+    const { app } = await setup({ git: runner });
+    expect((await app.inject({ method: 'POST', url: '/api/sessions/nope/git-fetch' })).statusCode).toBe(404);
+    expect(fetches()).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it('multi-user: another user’s session is not found, and no fetch runs', async () => {
+    process.env.CODEMAN_MULTIUSER = '1';
+    git(dir, 'init', '-q', '-b', 'main');
+    const { fetches, runner } = recordingRunner();
+    const { app } = await setup({ git: runner, authUser: { username: 'bob', role: 'user' } });
+    session.owner = 'alice';
+    expect((await app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' })).statusCode).toBe(404);
+    expect(fetches()).toEqual([]);
+  });
+
+  it('honours maxRepos and timeout (seconds) for a fetch too, clamped, and reports the limit it used', async () => {
+    for (const n of ['a', 'b', 'c']) {
+      mkdirSync(join(dir, n));
+      git(join(dir, n), 'init', '-q', '-b', 'main');
+    }
+    const { seenTimeouts, fetches, runner } = recordingRunner();
+    const { app } = await setup({ git: runner });
+    const post = async (query: string) => {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/test-session-1/git-fetch${query}` });
+      expect(res.statusCode).toBe(200);
+      return res.json().data as { repoLimit: number; repos: Array<{ name: string }> };
+    };
+    const fetchCount = () => fetches().length;
+    const ran = async (query: string, expected: number) => {
+      const before = fetchCount();
+      const data = await post(query);
+      expect(fetchCount() - before).toBe(expected);
+      return data;
+    };
+
+    const limited = await ran('?maxRepos=2&timeout=7', 2);
+    expect(limited.repos.map((r) => r.name)).toEqual(['a', 'b']);
+    expect(limited).toMatchObject({ reposTruncated: true, repoLimit: 2 }); // the window has to say three were found
+    expect(new Set(seenTimeouts)).toEqual(new Set([7000]));
+
+    const wild = await ran('?maxRepos=9999&timeout=1', 3);
+    expect(wild.repoLimit).toBe(50); // clamped to MAX_REPOS_LIMIT, so one request cannot scan the whole disk
+    expect(seenTimeouts.at(-1)).toBe(5000);
+
+    const junk = await ran('?maxRepos=abc&timeout=xyz', 3);
+    expect(junk.repoLimit).toBe(12);
+    expect(seenTimeouts.at(-1)).toBe(30_000);
+
+    // A repeated key reaches the route as an array: it means "default", never a 500.
+    await ran('?timeout=5&timeout=6', 3);
+    expect(seenTimeouts.at(-1)).toBe(30_000);
+  });
+});
+
 function execFileSyncGit(cwd: string, args: string[]): Promise<string> {
   return Promise.resolve(execFileSync('git', ['--no-optional-locks', ...args], { cwd, env: ENV, encoding: 'utf8' }));
 }

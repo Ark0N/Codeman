@@ -1,18 +1,22 @@
 /**
- * @fileoverview `GET /api/sessions/:id/git-status`: what the session's workspace has not committed or
- * pushed (src/git-workspace-status.ts), for the bottom-bar Git indicator and its panel. The answer is
+ * @fileoverview The Git panel's routes: `GET /api/sessions/:id/git-status` (what the session's workspace
+ * has not committed or pushed, src/git-workspace-status.ts) and `POST /api/sessions/:id/git-fetch` (the
+ * panel's Fetch button, src/git-fetch.ts), for the bottom-bar Git indicator and its window. The answer is
  * an overview: the enclosing repository, or each repository found below a folder that holds several
  * projects (see `getGitWorkspaceOverview` for exactly which).
  *
- * Read-only and offline: it never fetches and never runs a git write command. A remote (SSH) or
- * Docker session is not inspected and answers `state: 'unsupported'`, and neither is any repository at or
- * inside a Docker case workspace (a container can write there, and git here would run on the host). Ownership goes through
+ * Read-only and offline: the status route never fetches and never runs a git write command. Fetching is a
+ * separate, user-triggered path (`POST /api/sessions/:id/git-fetch`, src/git-fetch.ts) that the panel calls
+ * only when the user clicks Fetch. A remote (SSH) or Docker session is not inspected and answers
+ * `state: 'unsupported'` on both routes, and neither is any repository at or inside a Docker case
+ * workspace (a container can write there, and git here would run on the host). Ownership goes through
  * `findSessionOrFail`, like every session-scoped route.
  */
 
 import type { FastifyInstance } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
 import { redactGitCredentials } from '../../git-clone.js';
+import { emptyReport, fetchGitWorkspaceOverview, type GitFetchReport } from '../../git-fetch.js';
 import { readDockerCases } from '../../docker-hosts.js';
 import { getDataDir } from '../../config/instance.js';
 import { findSessionOrFail } from '../route-helpers.js';
@@ -30,8 +34,12 @@ import {
 } from '../../git-workspace-status.js';
 import type { SessionPort } from '../ports/index.js';
 
-/** Host paths of every Docker case workspace: repositories at or inside these are never inspected. */
-const defaultDockerWorkspaces = async (): Promise<string[]> =>
+/**
+ * Host paths of every Docker case workspace: repositories at or inside these are never inspected.
+ * Exported so the interval scheduler (src/git-fetch-scheduler.ts) uses the SAME list — the Docker rule has
+ * to be one rule, checked by every path that could run git.
+ */
+export const defaultDockerWorkspaces = async (): Promise<string[]> =>
   (await readDockerCases(getDataDir()).catch(() => [])).map((c) => c.hostWorkspacePath).filter(Boolean);
 
 /**
@@ -118,5 +126,28 @@ export function registerGitStatusRoutes(
         `git diff failed: ${redactGitCredentials(getErrorMessage(err))}`
       );
     }
+  });
+
+  // Fetch, and only because the user clicked Fetch in the panel (src/git-fetch.ts): one
+  // `git fetch --quiet` per repository the panel would show, through the same resolver so the two cannot
+  // disagree about which repositories belong to the workspace. This is the only git command Codeman runs
+  // that writes, and it writes remote-tracking refs only — nothing commits, checks out or merges, so an
+  // agent working in the same repository is not disturbed. Remote and Docker sessions answer `unsupported`
+  // like the status route, and a repository a container can write to is refused before any git runs.
+  app.post('/api/sessions/:id/git-fetch', async (req): Promise<ApiResponse<GitFetchReport>> => {
+    const { id } = req.params as { id: string };
+    const query = req.query as { maxRepos?: unknown; timeout?: unknown };
+    const limits = limitsFrom(query);
+    const session = findSessionOrFail(ctx, id, req);
+    if (session.remote) return { success: true, data: emptyReport('unsupported', { reason: 'remote' }) };
+    if (session.docker) return { success: true, data: emptyReport('unsupported', { reason: 'docker' }) };
+    return {
+      success: true,
+      data: await fetchGitWorkspaceOverview(session.workingDir, {
+        git,
+        ...limits,
+        dockerWorkspaces: await dockerWorkspaces(),
+      }),
+    };
   });
 }

@@ -602,6 +602,11 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsGitStatusTree').checked = settings.gitStatusTree ?? defaults.gitStatusTree ?? true;
     document.getElementById('appSettingsGitStatusMaxRepos').value = settings.gitStatusMaxRepos ?? defaults.gitStatusMaxRepos ?? 12;
     document.getElementById('appSettingsGitStatusTimeout').value = settings.gitStatusTimeoutSeconds ?? defaults.gitStatusTimeoutSeconds ?? 30;
+    // Git fetch on an interval: synced, default OFF, interval default 300 s (DEFAULT_GIT_FETCH_INTERVAL_SECONDS).
+    // Synced means the SERVER decides whether to fetch, so these keys stay out of the per-device display list
+    // below and are not stripped from a save — a stripped key would never reach the scheduler.
+    document.getElementById('appSettingsGitFetchEnabled').checked = settings.gitFetchEnabled === true;
+    document.getElementById('appSettingsGitFetchIntervalSeconds').value = settings.gitFetchIntervalSeconds ?? 300;
     // Gesture control lives in the Input section (alongside Local Echo / CJK Input)
     // but is only available when the instance runs with CODEMAN_GESTURE=1 (server sets
     // window.__codemanGestureAvailable). Hide just this item otherwise so the toggle
@@ -2948,6 +2953,13 @@ Object.assign(CodemanApp.prototype, {
       // Clamped here and again on the server; an empty or odd value falls back to the default.
       gitStatusMaxRepos: Math.min(50, Math.max(1, parseInt(document.getElementById('appSettingsGitStatusMaxRepos').value, 10) || 12)),
       gitStatusTimeoutSeconds: Math.min(120, Math.max(5, parseInt(document.getElementById('appSettingsGitStatusTimeout').value, 10) || 30)),
+      // Clamped to the schema's bounds here too: a value outside them fails the whole save, and these keys
+      // must survive the strip below because the server's scheduler is what reads them.
+      gitFetchEnabled: document.getElementById('appSettingsGitFetchEnabled').checked,
+      gitFetchIntervalSeconds: Math.min(
+        3600,
+        Math.max(30, parseInt(document.getElementById('appSettingsGitFetchIntervalSeconds').value, 10) || 300)
+      ),
       gestureControlEnabled: document.getElementById('appSettingsGestureControl').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,

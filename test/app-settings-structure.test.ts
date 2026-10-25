@@ -12,6 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { SettingsUpdateSchema } from '../src/web/schemas.js';
 
 const publicDir = resolve(import.meta.dirname, '../src/web/public');
 const html = readFileSync(resolve(publicDir, 'index.html'), 'utf8');
@@ -193,6 +194,47 @@ describe('App Settings modal structure', () => {
       const routing = modal.match(new RegExp(`id="${id}"([\\s\\S]*?)</select>`))?.[1] ?? '';
       expect(routing, `${id} does not offer Opus 5.5`).toContain('value="claude-opus-5-5"');
     }
+  });
+
+  /**
+   * Git fetch on an interval (src/git-fetch-scheduler.ts). Both keys are SYNCED, not display keys, because
+   * the server's scheduler is what acts on them: kept per-device, the scheduler would read nobody's number.
+   * Off by default, and the interval clamped on save to the same bounds the schema accepts.
+   */
+  it('keeps the Git fetch rows synced, off by default, and inside the bounds the scheduler acts on', () => {
+    const modal = settingsModal();
+    const bar = modal.match(/<h4>Bottom bar<\/h4>([\s\S]*?)(?=<div class="set-group-head">)/)?.[1];
+    expect(bar, 'the Git fetch rows are not in the Bottom bar group').toBeTruthy();
+    for (const id of ['appSettingsGitFetchEnabled', 'appSettingsGitFetchIntervalSeconds']) {
+      const at = modal.indexOf(`id="${id}"`);
+      expect(at, `no element ${id}`).toBeGreaterThan(-1);
+      const row = modal.slice(modal.lastIndexOf('<div class="set-row"', at), modal.indexOf('</div>', at));
+      expect(row).toContain('<span class="set-scope">synced</span>');
+    }
+    // The number row's own bounds must agree with the schema's, or the browser sends a value the PUT rejects.
+    expect(modal).toContain('id="appSettingsGitFetchIntervalSeconds" class="set-num" value="300" min="30" max="3600"');
+
+    // Display keys are the half of the per-device split that keeps a value off the server.
+    const displayStart = settingsUi.indexOf('const displayKeys = new Set([');
+    const displayBlock = settingsUi.slice(displayStart, settingsUi.indexOf(']);', displayStart));
+    expect(displayBlock).not.toContain('gitFetchEnabled');
+    expect(displayBlock).not.toContain('gitFetchIntervalSeconds');
+    // The strip destructure is the other half: an aliased key here never reaches the settings PUT.
+    expect(settingsUi).not.toMatch(/gitFetch(?:Enabled|IntervalSeconds):\s*_\w+/);
+
+    // Declared in the .strict() schema — an undeclared key 400s the whole settings PUT.
+    expect(SettingsUpdateSchema.safeParse({ gitFetchEnabled: true, gitFetchIntervalSeconds: 300 }).success).toBe(true);
+
+    // Off by default (only an explicit true loads as on), and an empty box falls back to the default interval.
+    expect(settingsUi).toContain(
+      "document.getElementById('appSettingsGitFetchEnabled').checked = settings.gitFetchEnabled === true;"
+    );
+    expect(settingsUi).toContain(
+      "document.getElementById('appSettingsGitFetchIntervalSeconds').value = settings.gitFetchIntervalSeconds ?? 300;"
+    );
+    expect(settingsUi).toMatch(
+      /gitFetchIntervalSeconds: Math\.min\(\s*3600,\s*Math\.max\(30, parseInt\(document\.getElementById\('appSettingsGitFetchIntervalSeconds'\)\.value, 10\) \|\| 300\)\s*\),/
+    );
   });
 
   it('has retired the modal-tab chrome everywhere, not just here', () => {

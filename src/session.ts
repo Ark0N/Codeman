@@ -68,6 +68,7 @@ import {
   type StatusLineExporter,
   type KeepWarmStatus,
 } from './types.js';
+import type { GitFetchStatus } from './git-fetch.js';
 import { resolveAndClaimOmpSessionId } from './utils/omp-session-resolver.js';
 import { claudeTranscriptExists } from './utils/claude-transcript.js';
 import { matchesPattern } from './config/cli-registry/patterns.js';
@@ -614,6 +615,12 @@ export class Session extends EventEmitter {
   private _keepWarmEnabled: boolean | undefined;
   /** Last status the keep-warm service published for this session; ephemeral. */
   private _keepWarm: KeepWarmStatus | null = null;
+  /** Git fetch on an interval for this case; undefined = follow the app-wide default. Persisted. */
+  private _gitFetchEnabled: boolean | undefined;
+  /** Seconds between this case's fetch runs; undefined = follow the app-wide default. Persisted. */
+  private _gitFetchIntervalSeconds: number | undefined;
+  /** Last status the fetch scheduler published for this session; ephemeral. */
+  private _gitFetch: GitFetchStatus | null = null;
   /** Until when the current turn counts as Codeman's own keep-alive (hooks open pre-acknowledged). */
   private _keepAliveTurnUntil = 0;
   /** Last keystroke a person sent through a `fromUser` write. */
@@ -926,6 +933,10 @@ export class Session extends EventEmitter {
       lastRealPromptAt?: number;
       /** Restored prompt-cache keep-warm choice (see `keepWarmEnabled`). */
       keepWarmEnabled?: boolean;
+      /** Restored Git fetch override for this case (see `gitFetchEnabled`). */
+      gitFetchEnabled?: boolean;
+      /** Restored Git fetch interval for this case (see `gitFetchIntervalSeconds`). */
+      gitFetchIntervalSeconds?: number;
       /** Restored conversation chain, oldest first (see `claudeSessionChain`). */
       claudeSessionChain?: string[];
       /** Restored agent-exit observation for this session's pane (see `paneExit`). */
@@ -1015,6 +1026,10 @@ export class Session extends EventEmitter {
     // from before the field has only `lastSubmitAt`, and every submit then was a real one.
     this._lastRealPromptAt = config.lastRealPromptAt ?? config.lastSubmitAt ?? 0;
     this._keepWarmEnabled = config.keepWarmEnabled;
+    // Restored, like the keep-warm choice: the interval is the user's decision about their repositories
+    // and outlives the run that made it, so a restart keeps it rather than falling back to the app default.
+    this._gitFetchEnabled = config.gitFetchEnabled;
+    this._gitFetchIntervalSeconds = config.gitFetchIntervalSeconds;
     // Restored chain: its tail is the conversation the CLI was actually on when
     // the server stopped, which outranks the launch id seeded just above. The
     // FIRST-HAND flag is deliberately NOT restored — a persisted claim is not a
@@ -1579,6 +1594,37 @@ export class Session extends EventEmitter {
     return changed;
   }
 
+  /** Git fetch override for this case; undefined means the app-wide setting applies. */
+  get gitFetchEnabled(): boolean | undefined {
+    return this._gitFetchEnabled;
+  }
+
+  /** Interval override for this case; undefined means the app-wide setting applies. */
+  get gitFetchIntervalSeconds(): number | undefined {
+    return this._gitFetchIntervalSeconds;
+  }
+
+  /**
+   * Set the case's override. The Session Options rows save on their own, so a caller passes what it has
+   * and leaves the other half as it was; `undefined` on either means the app-wide setting applies again.
+   */
+  setGitFetchSettings(enabled: boolean | undefined, intervalSeconds: number | undefined): void {
+    this._gitFetchEnabled = enabled;
+    this._gitFetchIntervalSeconds = intervalSeconds;
+  }
+
+  /** What the fetch scheduler last reported for this session, or null before its first run. */
+  get gitFetch(): GitFetchStatus | null {
+    return this._gitFetch;
+  }
+
+  /** Replace the fetch status; true when it differs from the previous one. */
+  setGitFetchStatus(status: GitFetchStatus): boolean {
+    const changed = JSON.stringify(status) !== JSON.stringify(this._gitFetch);
+    this._gitFetch = status;
+    return changed;
+  }
+
   /**
    * True while the running turn is Codeman's own keep-alive nudge: its stop hook and idle
    * prompt open pre-acknowledged, and its submit moves `lastSubmitAt` (it IS a submit, and the
@@ -2116,6 +2162,9 @@ export class Session extends EventEmitter {
       statusLineExporter: this.statusLineExporter,
       keepWarmEnabled: this._keepWarmEnabled,
       keepWarm: this._keepWarm ?? undefined,
+      gitFetchEnabled: this._gitFetchEnabled,
+      gitFetchIntervalSeconds: this._gitFetchIntervalSeconds,
+      gitFetch: this._gitFetch ?? undefined,
       imageWatcherEnabled: this._imageWatcherEnabled,
       pinned: this._pinned || undefined,
       pinnedAt: this._pinned ? (this._pinnedAt ?? undefined) : undefined,

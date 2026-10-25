@@ -57,6 +57,7 @@ import {
   AutoCompactSchema,
   AutoResumeSchema,
   KeepWarmSchema,
+  GitFetchSettingsSchema,
   PinSessionSchema,
   ImageWatcherSchema,
   FlickerFilterSchema,
@@ -3603,6 +3604,38 @@ export function registerSessionRoutes(
         keepWarm: {
           enabled: session.keepWarmEnabled ?? null,
           status: session.keepWarm,
+        },
+      },
+    };
+  });
+
+  // ========== Git fetch on an interval ==========
+
+  // Per-case override for the fetch interval (src/git-fetch-scheduler.ts). `null` on either field clears
+  // the case's choice so the app-wide setting applies again, and a field left out of the body leaves the
+  // other half as it was: the Session Options rows save on their own. Refused for a remote or Docker
+  // session, exactly as the Git panel excludes them — a container can write to the repository it mounts,
+  // so git there would run that repository's own configuration on the host.
+  app.post('/api/sessions/:id/git-fetch-settings', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = parseBody(GitFetchSettingsSchema, req.body, 'Invalid request body');
+    const session = findSessionOrFail(ctx, id, req);
+    if (session.remote || session.docker) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Git fetch does not run for remote or Docker sessions');
+    }
+
+    const enabled = 'enabled' in body ? (body.enabled ?? undefined) : session.gitFetchEnabled;
+    const intervalSeconds =
+      'intervalSeconds' in body ? (body.intervalSeconds ?? undefined) : session.gitFetchIntervalSeconds;
+    session.setGitFetchSettings(enabled, intervalSeconds);
+    persistAndBroadcastSession(ctx, session);
+
+    return {
+      success: true,
+      data: {
+        gitFetchSettings: {
+          enabled: session.gitFetchEnabled ?? null,
+          intervalSeconds: session.gitFetchIntervalSeconds ?? null,
         },
       },
     };

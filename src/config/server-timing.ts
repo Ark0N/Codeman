@@ -71,6 +71,17 @@ export const SESSION_LIMIT_WAIT_MS = 5000;
 export const ITERATION_PAUSE_MS = 2000;
 
 // ============================================================================
+// Git Fetch Interval
+// ============================================================================
+
+/**
+ * How often the fetch scheduler (src/git-fetch-scheduler.ts) wakes to check which cases are due (ms). A
+ * run lands within one tick of the interval the user set, because the interval is timed from the start of
+ * a run; a tick is a settings read and a due check, not a spawn, so a quiet install costs nothing.
+ */
+export const GIT_FETCH_TICK_INTERVAL_MS = 15 * 1000;
+
+// ============================================================================
 // Mux Stats
 // ============================================================================
 

@@ -1489,6 +1489,16 @@ export const SettingsUpdateSchema = z
     /** Hours after the last real prompt during which keep-alives are sent (default 2, DEFAULT_KEEP_WARM_MAX_HOURS). */
     promptCacheKeepWarmMaxHours: z.number().min(0.5).max(24).optional(),
     /**
+     * Git fetch on an interval (src/git-fetch-scheduler.ts): `git fetch` for the repositories the Git panel
+     * lists, run on a timer instead of only on the panel's Fetch click. SYNCED, default OFF, because the
+     * server is what runs it: `git fetch` is the only git command Codeman runs that writes, and the only
+     * one that runs a repository's own hooks, so nothing runs on a timer until the user turns this on.
+     * Cap in seconds between runs (30 to 3600, default 300). A case can override both in Session Options
+     * → Git; `null` there clears the override.
+     */
+    gitFetchEnabled: z.boolean().optional(),
+    gitFetchIntervalSeconds: z.number().int().min(30).max(3600).optional(),
+    /**
      * Spawned tabs follow their parent: a session created by another one keeps
      * following its parent's tab (into its group, moving with it) until moved by
      * hand. SYNCED, default OFF, because the server does the placement:
@@ -1927,6 +1937,15 @@ export const AutoResumeSchema = z.object({
 
 /** `POST /api/sessions/:id/keep-warm`: `null` clears the session's choice so the app-wide default applies. */
 export const KeepWarmSchema = z.object({ enabled: z.boolean().nullable() });
+
+/**
+ * `POST /api/sessions/:id/git-fetch-settings`: `null` clears the session's choice so the app-wide default
+ * applies. Both fields are optional, so a row that saves on its own does not clear the other.
+ */
+export const GitFetchSettingsSchema = z.object({
+  enabled: z.boolean().nullable().optional(),
+  intervalSeconds: z.number().int().min(30).max(3600).nullable().optional(),
+});
 
 /** POST /api/sessions/:id/pin (COD-139) — explicit pin state for idempotency. */
 export const PinSessionSchema = z.object({

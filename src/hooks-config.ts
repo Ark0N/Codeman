@@ -42,6 +42,7 @@ import { dataPath } from './config/instance.js';
 import { readJsonConfig, SETTINGS_PATH } from './web/route-helpers.js';
 import { isNearStalledPath, probePath } from './utils/index.js';
 import { DEFAULT_KEEP_WARM_MAX_HOURS, type KeepWarmSettings } from './prompt-cache-keepwarm.js';
+import { gitFetchSettingsFrom, type GitFetchSettings } from './git-fetch.js';
 
 /**
  * Existence check for a WRITER. Unlike the bounded read-side probe (`probePath`),
@@ -1170,6 +1171,25 @@ export async function readKeepWarmSettingsOrThrow(): Promise<KeepWarmSettings> {
     throw err;
   }
   return keepWarmSettingsFrom(JSON.parse(text) as Record<string, unknown>);
+}
+
+/**
+ * The Git fetch interval's app-wide default (`gitFetchEnabled`, absent = OFF) and its cap
+ * (`gitFetchIntervalSeconds`, seconds between runs). Read FRESH on every tick by the scheduler, so a live
+ * toggle takes effect on the next tick and turning it off actually stops the fetching. A missing file is
+ * the defaults — OFF — but any other read or parse failure rejects, for the same reason as
+ * {@link readKeepWarmSettingsOrThrow}: settings.json is rewritten in place, so a read can land mid-write,
+ * and a fallback kept from it would hold the feature off until the next settings change.
+ */
+export async function readGitFetchSettings(): Promise<GitFetchSettings> {
+  let text: string;
+  try {
+    text = await readFile(SETTINGS_PATH, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return gitFetchSettingsFrom({});
+    throw err;
+  }
+  return gitFetchSettingsFrom(JSON.parse(text) as Record<string, unknown>);
 }
 
 function keepWarmSettingsFrom(settings: Record<string, unknown>): KeepWarmSettings {

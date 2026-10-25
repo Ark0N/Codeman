@@ -22,7 +22,8 @@
  *
  * Rules the code keeps and the tests pin:
  *   - READ-ONLY and OFFLINE. It never fetches, pulls, commits or writes. "Behind" therefore reflects
- *     the last fetch (the UI says so); "ahead" and the unpushed list are exact against the
+ *     the last fetch (the UI says so, and the Fetch button is a separate user-triggered path in
+ *     `src/git-fetch.ts`, never a poll); "ahead" and the unpushed list are exact against the
  *     remote-tracking refs already on disk. `--no-optional-locks` keeps `git status` from even
  *     refreshing the index, so polling cannot contend with the agent's own git commands.
  *   - Every call is async (`execFile`), bounded by a timeout, and never interpolates a path into a
@@ -596,8 +597,8 @@ export async function discoverChildRepos(
 
 const discoveryCache = new Map<string, { at: number; value: { dirs: string[]; truncated: boolean } }>();
 
-/** Run `fn` over `items` with at most `limit` in flight, keeping the input order. */
-async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+/** Run `fn` over `items` with at most `limit` in flight, keeping the input order. Shared with the fetch path. */
+export async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
   const worker = async () => {
@@ -634,7 +635,7 @@ export function resolveOverviewLimits(opts: { maxRepos?: unknown; timeoutMs?: un
   };
 }
 
-type WorkspaceRepos =
+export type WorkspaceRepos =
   | { kind: 'docker' }
   | { kind: 'error'; error: string }
   | { kind: 'enclosing'; root: string }
@@ -643,9 +644,10 @@ type WorkspaceRepos =
 /**
  * WHICH repositories belong to the workspace (the module header has the rules), without a full
  * status of any of them: one cached `rev-parse` for the enclosing repository, else the cached scan
- * below the folder. The overview and the diff route both go through here, so they cannot disagree.
+ * below the folder. The overview, the fetch route and the diff route all go through here, so they cannot
+ * disagree about which repositories belong to a workspace.
  */
-async function resolveWorkspaceRepos(cwd: string, opts: GitOverviewOptions): Promise<WorkspaceRepos> {
+export async function resolveWorkspaceRepos(cwd: string, opts: GitOverviewOptions): Promise<WorkspaceRepos> {
   const now = opts.now ?? Date.now;
   const { maxRepos, timeoutMs } = resolveOverviewLimits(opts);
   const dockerRoots = await realAll(opts.dockerWorkspaces ?? []);

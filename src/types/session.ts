@@ -33,6 +33,7 @@
 
 import type { RespawnConfig } from './respawn.js';
 import type { AttachmentDetectedType } from './tools.js';
+import type { GitFetchStatus } from '../git-fetch.js';
 
 /** Status of a Claude session */
 export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error';
@@ -891,6 +892,16 @@ export interface SessionState {
   keepWarmEnabled?: boolean;
   /** What the keep-warm is doing right now; ephemeral, never restored. */
   keepWarm?: KeepWarmStatus;
+  /**
+   * Git fetch on an interval for this case's repositories; absent = follow the app-wide
+   * `gitFetchEnabled` default. Restored on a restart, like `keepWarmEnabled`, because the choice is the
+   * user's and outlives the run.
+   */
+  gitFetchEnabled?: boolean;
+  /** Seconds between this case's runs; absent = follow the app-wide `gitFetchIntervalSeconds` default. */
+  gitFetchIntervalSeconds?: number;
+  /** What this case's last fetch did; ephemeral, never restored. */
+  gitFetch?: GitFetchStatus;
   /** Pinned to the top of the session manager list (COD-139) */
   pinned?: boolean;
   /** When the session was pinned (epoch ms) — orders the pinned group, most-recent-first */

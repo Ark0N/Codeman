@@ -84,8 +84,20 @@ by folder** (per device, on by default) shows changed files under collapsed fold
 window; off lists every file by its full path. **Git status: max repositories** (per device,
 1 to 50, default 12) is how many repositories the window lists when a session's folder holds
 several projects. **Git status: git timeout** (per device, 5 to 120 seconds, default 30) is how
-long one git command may run before that repository is reported as unreadable; raise it for
-repositories on a slow network share.
+long one git command may run before that repository is reported as unreadable, and the same value
+bounds the Git window's Fetch button; raise it for repositories on a slow network share.
+
+**Git fetch on an interval** (synced, off by default) runs `git fetch` on a timer for the repositories the
+Git window lists, so the `behind` number is current without a click, and **Git fetch: how often** (synced,
+30 to 3600 seconds, default 300) is the gap between runs for a case with no choice of its own — timed from
+the start of a run, so a slow repository does not push the next one out. These are the only Git settings
+that are synced rather than per device, because the server's scheduler is what acts on them: kept per
+device, the scheduler would read nobody's number. **Session Options → Git** overrides both the switch and
+the interval for one case, and that override wins even while the app switch is off; a case that follows the
+app shows the app's values and its rows go inert until you turn **Follow the app setting** off. Nothing is
+ever fetched for a Docker or remote (SSH) case, and a repository a container can write to is refused
+before any git runs. Both default to off because `git fetch` is the one git command Codeman runs that
+writes, and the one that runs a repository's own hooks.
 
 Most default to off. The stock desktop header is system stats, File Viewer, Tiles, and the gear.
 **Header Stats Style** picks how the system stats and plan usage are drawn: *Compact*

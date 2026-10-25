@@ -2685,6 +2685,9 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('modalKeepWarmEnabled').checked =
       session.keepWarm?.enabled ?? session.keepWarmEnabled ?? false;
     this.updateKeepWarmStatus(sessionId);
+    // Git: the case's own choice if it has one, otherwise the app setting. updateGitFetchStatus is also
+    // what SSE calls when a scheduled run lands, so the rows stay current while the modal is open.
+    this.updateGitFetchStatus(sessionId);
     document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
     document.getElementById('modalFlickerFilterEnabled').checked = session.flickerFilterEnabled ?? false;
 
@@ -2740,6 +2743,12 @@ Object.assign(CodemanApp.prototype, {
       if (ralphTabBtn) ralphTabBtn.style.display = '';
       if (respawnTabBtn) respawnTabBtn.style.display = '';
     }
+
+    // Git is local git only: a remote (SSH) or Docker case answers 'unsupported' on both git routes and is
+    // never fetched by the interval scheduler, so its Git tab has nothing to say and its rail entry goes
+    // hidden the same way.
+    const gitTabBtn = document.querySelector('#sessionOptionsModal .set-rail-item[data-tab="git"]');
+    if (gitTabBtn) gitTabBtn.style.display = session.remote || session.docker ? 'none' : '';
 
     // Populate Ralph Wiggum form with current session values (skip for external CLI sessions)
     if (!isExternalCli) {
@@ -3022,6 +3031,85 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /**
+   * The Git tab: the case's last scheduled run, and which values its rows show. A case with no choice of its
+   * own follows the app setting, so its switch and interval display the app's numbers and go inert — the same
+   * inert-row pattern as updateKeepWarmStatus above — because changing them here is what makes the case stop
+   * following. The app numbers come from the settings cache, so what this shows can be one settings load
+   * behind; the server decides from a fresh read, not from what the page displays.
+   */
+  updateGitFetchStatus(sessionId) {
+    const statusEl = document.getElementById('gitFetchStatus');
+    const followBox = document.getElementById('modalGitFetchFollow');
+    const box = document.getElementById('modalGitFetchEnabled');
+    const num = document.getElementById('modalGitFetchInterval');
+    if (!statusEl || !followBox || !box || !num || this.editingSessionId !== sessionId) return;
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    const app = this.loadAppSettingsFromStorage() || {};
+    // No choice of its own on either field means the case follows the app. A partial one — its own switch,
+    // the app's interval — means it does not, and the row that still follows shows the app's value.
+    const follows = session.gitFetchEnabled === undefined && session.gitFetchIntervalSeconds === undefined;
+    const enabled = follows ? app.gitFetchEnabled === true : session.gitFetchEnabled ?? false;
+    const interval = follows ? app.gitFetchIntervalSeconds ?? 300 : session.gitFetchIntervalSeconds ?? 300;
+
+    followBox.checked = follows;
+    box.checked = enabled;
+    num.value = interval;
+    for (const el of [box, num]) {
+      el.closest('.set-row')?.classList.toggle('set-row-disabled', follows);
+      el.disabled = follows;
+    }
+
+    const run = session.gitFetch;
+    const parts = run
+      ? [
+          `Last run ${this._gitFetchAgo(run.ranAt)}${run.trigger === 'interval' ? ' on the interval' : ' by click'}`,
+          run.state === 'ok' ? `${run.repos} repositories` : run.state,
+          run.failed ? `${run.failed} failed` : '',
+        ]
+      : [follows ? 'Nothing fetched on a timer yet, and this case follows the app setting.' : 'Nothing fetched on a timer yet for this case.'];
+    statusEl.textContent = parts.filter(Boolean).join(' · ');
+    statusEl.hidden = false;
+  },
+
+  /** 'just now', '4m', '2h' — the short stamps the tab rows use, measured from a run's start. */
+  _gitFetchAgo(ts) {
+    const seconds = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    if (seconds < 60) return seconds < 10 ? 'just now' : `${seconds}s`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+    return `${Math.round(seconds / 3600)}h`;
+  },
+
+  async autoSaveGitFetch() {
+    if (!this.editingSessionId) return;
+    const follow = document.getElementById('modalGitFetchFollow').checked;
+    // `null` on the route means "no choice of your own", which is what following the app setting is.
+    const body = follow
+      ? { enabled: null, intervalSeconds: null }
+      : {
+          enabled: document.getElementById('modalGitFetchEnabled').checked,
+          intervalSeconds: Math.min(
+            3600,
+            Math.max(30, parseInt(document.getElementById('modalGitFetchInterval').value, 10) || 300)
+          ),
+        };
+    try {
+      const data = await this._apiPost(`/api/sessions/${this.editingSessionId}/git-fetch-settings`, body);
+      const session = this.sessions.get(this.editingSessionId);
+      const saved = data?.gitFetchSettings;
+      if (session && saved) {
+        session.gitFetchEnabled = saved.enabled ?? undefined;
+        session.gitFetchIntervalSeconds = saved.intervalSeconds ?? undefined;
+      }
+      this.updateGitFetchStatus(this.editingSessionId);
+      this.showToast('Git fetch settings saved', 'success');
+    } catch (err) {
+      this.showToast('Failed to save Git fetch settings: ' + err.message, 'error');
+    }
+  },
+
   async toggleSessionImageWatcher() {
     if (!this.editingSessionId) return;
     const enabled = document.getElementById('modalImageWatcherEnabled').checked;
@@ -3160,6 +3248,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('context-tab').classList.toggle('hidden', tabName !== 'context');
     document.getElementById('ralph-tab').classList.toggle('hidden', tabName !== 'ralph');
     document.getElementById('summary-tab').classList.toggle('hidden', tabName !== 'summary');
+    document.getElementById('git-tab').classList.toggle('hidden', tabName !== 'git');
 
     // A switched-to section starts at its own top, not at the scroll offset the
     // previous one was left at.
