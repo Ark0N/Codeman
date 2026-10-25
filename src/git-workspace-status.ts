@@ -597,7 +597,54 @@ export async function discoverChildRepos(
 
 const discoveryCache = new Map<string, { at: number; value: { dirs: string[]; truncated: boolean } }>();
 
-/** Run `fn` over `items` with at most `limit` in flight, keeping the input order. Shared with the fetch path. */
+/**
+ * A slot count fixed ONCE, so callers share it instead of each getting its own bound (see the fetch path):
+ * the count lives in the closure, so `limit` is the ceiling for everything going through THIS limiter at
+ * once, not for each call to it — which is what makes a scheduler tick's bound honest.
+ * ⚠️ One limiter cannot bound two levels of the same work: a caller that holds a slot and then waits for
+ * another slot for the work IT starts cannot get one, because the holders are exactly the ones waiting. The
+ * outer level needs its own bound (`mapLimited`), which is why the tick shares one for fetches and keeps a
+ * separate one for folders.
+ */
+export type Limiter = <T, R>(items: T[], fn: (item: T) => Promise<R>) => Promise<R[]>;
+
+export function createLimiter(limit: number): Limiter {
+  let inUse = 0;
+  const waiting: Array<() => void> = [];
+  const acquire = (): Promise<void> => {
+    if (inUse < limit) {
+      inUse++;
+      return Promise.resolve();
+    }
+    return new Promise<void>((done) => {
+      waiting.push(() => {
+        inUse++;
+        done();
+      });
+    });
+  };
+  const release = () => {
+    inUse--;
+    const next = waiting.shift();
+    if (next) next();
+  };
+  return async <T, R>(items: T[], fn: (item: T) => Promise<R>): Promise<R[]> => {
+    const out: R[] = new Array(items.length);
+    await Promise.all(
+      items.map(async (item, i) => {
+        await acquire();
+        try {
+          out[i] = await fn(item);
+        } finally {
+          release();
+        }
+      })
+    );
+    return out;
+  };
+}
+
+/** Run `fn` over `items` with at most `limit` in flight, keeping the input order. Per call; `createLimiter` shares one bound across calls. */
 export async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;

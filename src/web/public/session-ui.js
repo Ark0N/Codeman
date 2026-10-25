@@ -3048,7 +3048,7 @@ Object.assign(CodemanApp.prototype, {
     if (!session) return;
 
     const app = this.loadAppSettingsFromStorage() || {};
-    // No choice of its own on either field means the case follows the app. A partial one — its own switch,
+    // No choice of its own on either field means the session follows the app. A partial one — its own switch,
     // the app's interval — means it does not, and the row that still follows shows the app's value.
     const follows = session.gitFetchEnabled === undefined && session.gitFetchIntervalSeconds === undefined;
     const enabled = follows ? app.gitFetchEnabled === true : session.gitFetchEnabled ?? false;
@@ -3069,7 +3069,7 @@ Object.assign(CodemanApp.prototype, {
           run.state === 'ok' ? `${run.repos} repositories` : run.state,
           run.failed ? `${run.failed} failed` : '',
         ]
-      : [follows ? 'Nothing fetched on a timer yet, and this case follows the app setting.' : 'Nothing fetched on a timer yet for this case.'];
+      : [follows ? 'Nothing fetched on a timer yet, and this session follows the app setting.' : 'Nothing fetched on a timer yet for this session.'];
     statusEl.textContent = parts.filter(Boolean).join(' · ');
     statusEl.hidden = false;
   },
@@ -3096,9 +3096,18 @@ Object.assign(CodemanApp.prototype, {
           ),
         };
     try {
-      const data = await this._apiPost(`/api/sessions/${this.editingSessionId}/git-fetch-settings`, body);
+      // `_apiPost` hands back the Response without checking it, so a refused body (a 400) still read as a
+      // save. `_apiJson` is the one that says whether the call went through, and null here means it did not.
+      const data = await this._apiJson(`/api/sessions/${this.editingSessionId}/git-fetch-settings`, {
+        method: 'POST',
+        body,
+      });
+      if (!data) {
+        this.showToast('Failed to save Git fetch settings', 'error');
+        return;
+      }
       const session = this.sessions.get(this.editingSessionId);
-      const saved = data?.gitFetchSettings;
+      const saved = data.gitFetchSettings;
       if (session && saved) {
         session.gitFetchEnabled = saved.enabled ?? undefined;
         session.gitFetchIntervalSeconds = saved.intervalSeconds ?? undefined;

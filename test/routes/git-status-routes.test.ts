@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerGitStatusRoutes } from '../../src/web/routes/git-status-routes.js';
 import { clearGitStatusCache, runGit, type GitRunner } from '../../src/git-workspace-status.js';
+import { clearGitFetchLane } from '../../src/git-fetch.js';
 
 const ENV = {
   ...process.env,
@@ -44,6 +45,8 @@ async function setup(
 
 beforeEach(() => {
   clearGitStatusCache();
+  // The fetch lane is module state: a run left in it by the previous test would be joined by the next one.
+  clearGitFetchLane();
   dir = mkdtempSync(join(tmpdir(), 'git-status-route-'));
 });
 afterEach(() => {
@@ -465,6 +468,54 @@ describe('POST /api/sessions/:id/git-fetch', () => {
     expect(data.state).toBe('not-a-repo');
     // The resolver looked once and found nothing, so nothing was fetched — and never guessed a repository.
     expect(fetches()).toEqual([]);
+  });
+
+  it("publishes what the click got as the session's own fetch state, naming the trigger the user asked for", async () => {
+    git(dir, 'init', '-q', '-b', 'main');
+    const { runner } = recordingRunner();
+    const { app, ctx } = await setup({ git: runner });
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' });
+    expect(res.statusCode).toBe(200);
+    // The response body is one tab's copy of the run; the state is what every other tab open on the same
+    // folder sees, and a number the user did not ask for has to read differently from one they did.
+    expect(session.gitFetch).toMatchObject({ trigger: 'click', state: 'ok', repos: 1, failed: 0 });
+    expect(ctx.persistSessionState).toHaveBeenCalled();
+    expect(ctx.broadcast).toHaveBeenCalled();
+  });
+
+  it('joins a run already going for the same folder instead of starting a second git process in the same clone', async () => {
+    git(dir, 'init', '-q', '-b', 'main');
+    let releaseRun = () => {};
+    const held = new Promise<void>((resolve) => (releaseRun = resolve));
+    let running = () => {};
+    const runStarted = new Promise<void>((resolve) => (running = resolve));
+    const fetches: string[] = [];
+    const runner: GitRunner = async (cwd, args) => {
+      if (args[0] === 'fetch') {
+        fetches.push(cwd);
+        running();
+        await held;
+      }
+      return execFileSyncGit(cwd, args);
+    };
+    const { app } = await setup({ git: runner });
+
+    const first = app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' });
+    await runStarted; // the run is going, and still going
+    // A click from another tab open on the same clone. Two fetches there would collide on git's ref lock, so
+    // this one joins the run already going rather than starting its own.
+    const second = app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' });
+    // Assert the join BEFORE releasing the run: the lane entry goes away when the run finishes, so releasing
+    // first would let the run complete before this request reached the lane, and it would then be entitled to
+    // start its own fetch — a test that passes for the wrong reason. One tick of the loop is enough for both
+    // handlers to reach the lane while the run is still held open.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fetches).toHaveLength(1); // one run, and the second request is waiting on it, not working
+
+    releaseRun();
+    const a = (await first).json().data;
+    const b = (await second).json().data;
+    expect(b).toEqual(a); // both tabs get the same run's answer, not a partial one
   });
 
   it('404s an unknown session, running no fetch', async () => {

@@ -3611,11 +3611,13 @@ export function registerSessionRoutes(
 
   // ========== Git fetch on an interval ==========
 
-  // Per-case override for the fetch interval (src/git-fetch-scheduler.ts). `null` on either field clears
-  // the case's choice so the app-wide setting applies again, and a field left out of the body leaves the
-  // other half as it was: the Session Options rows save on their own. Refused for a remote or Docker
-  // session, exactly as the Git panel excludes them — a container can write to the repository it mounts,
-  // so git there would run that repository's own configuration on the host.
+  // Per-session override for the fetch interval (src/git-fetch-scheduler.ts), which is what the Session
+  // Options rows say it is: two sessions on one folder can hold different choices, and that folder is
+  // fetched when the first of them is due. `null` on either field clears this session's choice so the
+  // app-wide setting applies again, and a field left out of the body leaves the other half as it was: the
+  // Session Options rows save on their own. Refused for a remote or Docker session, exactly as the Git
+  // panel excludes them — a container can write to the repository it mounts, so git there would run that
+  // repository's own configuration on the host.
   app.post('/api/sessions/:id/git-fetch-settings', async (req) => {
     const { id } = req.params as { id: string };
     const body = parseBody(GitFetchSettingsSchema, req.body, 'Invalid request body');

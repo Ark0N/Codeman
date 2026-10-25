@@ -88,29 +88,36 @@ describe('Session Options modal structure', () => {
     expect(modal.match(/<button[^>]*data-tab="context"[^>]*>/)?.[0]).not.toContain('data-claude-only');
   });
 
-  it('keeps the Git rail entry for every local case, and hides it for the ones nothing is ever fetched for', () => {
+  it('keeps the Git rail entry for every local session, and hides it for the ones nothing is ever fetched for', () => {
     const modal = optionsModal();
-    // A shell case has repositories too, so Git must not ride the Claude-only flag.
+    // A shell session has repositories too, so Git must not ride the Claude-only flag.
     expect(modal.match(/<button[^>]*data-tab="git"[^>]*>/)?.[0]).not.toContain('data-claude-only');
     const open = methodBody('openSessionOptions(sessionId)');
     expect(open).toContain('.set-rail-item[data-tab="git"]');
-    // Remote and Docker cases answer 'unsupported' on both git routes and the scheduler never fetches them,
+    // Remote and Docker sessions answer 'unsupported' on both git routes and the scheduler never fetches them,
     // so the entry goes the same way the Claude-only ones do.
     expect(open).toMatch(/gitTabBtn\.style\.display = session\.remote \|\| session\.docker \? 'none' : ''/);
   });
 
-  it('makes the Git rows inert while a case follows the app, the way the keep-warm rows go inert', () => {
+  it('makes the Git rows inert while a session follows the app, the way the keep-warm rows go inert', () => {
     const modal = optionsModal();
     const update = methodBody('updateGitFetchStatus(sessionId)');
     expect(update).toContain('set-row-disabled');
     expect(update).toContain('el.disabled = follows');
-    // Decided from BOTH fields: a half-choice means the case is not following, and the half that still follows
-    // shows the app's value while the other shows its own — a switch-only check would gray out a live row.
+    // Decided from BOTH fields: a half-choice means the session is not following, and the half that still
+    // follows shows the app's value while the other shows its own — a switch-only check would gray out a live row.
     expect(update).toMatch(
       /follows = session\.gitFetchEnabled === undefined && session\.gitFetchIntervalSeconds === undefined/
     );
     // Following saves null on both halves, which is what clears the override on the route.
-    expect(methodBody('async autoSaveGitFetch()')).toContain('{ enabled: null, intervalSeconds: null }');
+    const save = methodBody('async autoSaveGitFetch()');
+    expect(save).toContain('{ enabled: null, intervalSeconds: null }');
+    // Saves through the helper that says whether the call went through: `_apiPost` hands back the Response
+    // without checking it, so a body the route refused (a 400) read as a save, and the panel showed a choice
+    // the server never took.
+    expect(save).toContain('this._apiJson(`/api/sessions/${this.editingSessionId}/git-fetch-settings`');
+    expect(save).toContain('if (!data)');
+    expect(save).not.toMatch(/await this\._apiPost\(/);
     // The status row is runtime text this method writes, so translating it would rewrite the stamp.
     expect(modal).toContain('id="gitFetchStatus" data-i18n-skip hidden');
   });

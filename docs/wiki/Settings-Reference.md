@@ -93,11 +93,13 @@ Git window lists, so the `behind` number is current without a click, and **Git f
 the start of a run, so a slow repository does not push the next one out. These are the only Git settings
 that are synced rather than per device, because the server's scheduler is what acts on them: kept per
 device, the scheduler would read nobody's number. **Session Options → Git** overrides both the switch and
-the interval for one case, and that override wins even while the app switch is off; a case that follows the
-app shows the app's values and its rows go inert until you turn **Follow the app setting** off. Nothing is
-ever fetched for a Docker or remote (SSH) case, and a repository a container can write to is refused
-before any git runs. Both default to off because `git fetch` is the one git command Codeman runs that
-writes, and the one that runs a repository's own hooks.
+the interval for one session, and that override wins even while the app switch is off; a session that follows
+the app shows the app's values and its rows go inert until you turn **Follow the app setting** off. Nothing is
+ever fetched for a Docker or remote (SSH) session, and a repository a container can write to is refused
+before any git runs. Sessions open on the same folder share one run. Both default to off because `git fetch`
+is the one git command Codeman runs that writes, and the one that can run a repository's own hooks
+(`reference-transaction`, `pre-auto-gc` through the maintenance a fetch triggers, and config commands such as
+`credential.helper`).
 
 Most default to off. The stock desktop header is system stats, File Viewer, Tiles, and the gear.
 **Header Stats Style** picks how the system stats and plan usage are drawn: *Compact*

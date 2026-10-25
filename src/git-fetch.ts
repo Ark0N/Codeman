@@ -7,7 +7,10 @@
  * fetch, so a number that is stale can only be made current by fetching. This is the one place Codeman
  * runs a git command that writes, and on a timer it is also the only one that can run without being asked.
  * Nothing here commits, checks out, merges or touches the working tree: `git fetch` updates remote-tracking
- * refs and nothing else, so an agent working in the same repository is not disturbed.
+ * refs and nothing else, and `FETCH_CONFIG_ARGS` keeps it from starting a gc in a repository an agent is
+ * already using. It is not harmless in the way a read is: a fetch holds git's ref lock, so an agent's own
+ * `git pull` in the same clone can collide with it (`cannot lock ref`), which is why one folder is fetched
+ * by at most one run at a time (`fetchWorkspaceOnce`).
  *
  * Same split as git-clone.ts: the pure half (`buildFetchArgs`, `describeFetchFailure`,
  * `gitFetchSettingsFrom`, `gitFetchStatusFrom`) holds every decision and tests without spawning, and the IO
@@ -17,10 +20,15 @@
  *   - The repository set is `resolveWorkspaceRepos`, the single source the panel and the diff route
  *     already use, so Fetch cannot reach a repository the panel would not show. The Docker rule is
  *     checked before any git runs: a repository a container can write to is refused outright, because a
- *     planted config would run on the host — and `git fetch` is exactly the command that runs a
- *     repository's own hooks (`fetch-post`), which is why a timer only runs it after the user opts in.
- *   - Bounded: the git timeout from Settings → Bottom bar per repository, `FETCH_CONCURRENCY` at a time,
- *     `MAX_REPOS_LIMIT` repositories at most, and a hard `timeout` on each spawn.
+ *     planted config would run on the host — and `git fetch` is exactly the command that can run a
+ *     repository's own hooks (`reference-transaction`, and `pre-auto-gc` through the automatic maintenance
+ *     that follows a fetch) and its config commands such as `credential.helper`, which is why a timer only
+ *     runs it after the user opts in.
+ *   - One run per folder at a time: `fetchWorkspaceOnce` joins a run already going for the same folder
+ *     instead of starting a second one, because two fetches in one clone collide on the ref lock.
+ *   - Bounded: the git timeout from Settings → Bottom bar per repository, `MAX_REPOS_LIMIT` repositories at
+ *     most, a hard `timeout` on each spawn, and `FETCH_CONCURRENCY` git processes at a time for the whole
+ *     run — one `Limiter`, shared by the scheduler's tick, not one bound per folder.
  *   - Non-interactive: `GIT_TERMINAL_PROMPT=0` and BatchMode ssh, so a private repository that needs a
  *     login fails fast instead of hanging the request on an invisible username prompt. Codeman collects
  *     no credentials; a repository the user's own git is already signed in to works because that is the
@@ -32,12 +40,13 @@
  */
 
 import { execFile } from 'node:child_process';
-import { basename, relative } from 'node:path';
+import { basename, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { classifyGitFailure, gitNonInteractiveEnv, sanitizeGitOutput, type GitFailureCode } from './git-clone.js';
 import {
+  createLimiter,
   DEFAULT_GIT_TIMEOUT_MS,
-  mapLimited,
+  type Limiter,
   resolveOverviewLimits,
   resolveWorkspaceRepos,
   type GitRunner,
@@ -45,10 +54,24 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-/** Fetches in flight at once: each is one git process, and a folder can hold up to `MAX_REPOS_LIMIT`. */
+/**
+ * Git processes in flight at once, for one run — and for a whole scheduler tick, because the tick hands ONE
+ * bound to every run (see `createLimiter`): each fetch is one git process, and a folder can hold up to
+ * `MAX_REPOS_LIMIT`. The tick bounds its folders separately, because the same semaphore cannot serve both
+ * levels — a folder holding a slot would then wait for a slot its own fetch needs.
+ */
 export const FETCH_CONCURRENCY = 4;
 /** A fetch on a busy remote can print a lot; a bound on what we will hold. */
 const MAX_FETCH_OUTPUT_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Config overrides set ahead of the argv, so an unattended fetch cannot do more than move refs: no
+ * fsmonitor hook, and no automatic maintenance or gc. A fetch is the git command that can run a
+ * repository's own hooks (`reference-transaction`, and `pre-auto-gc` through the maintenance that follows a
+ * fetch), and a gc started by a timer in a repository an agent is working in is exactly the kind of extra
+ * write this module must not do. Kept as a const so a test can pin it without spawning git.
+ */
+export const FETCH_CONFIG_ARGS = ['-c', 'core.fsmonitor=false', '-c', 'maintenance.auto=false', '-c', 'gc.auto=0'];
 
 /** The interval the user can turn on (Settings → Bottom bar, and Session Options → Git): bounds and default. */
 export const DEFAULT_GIT_FETCH_INTERVAL_SECONDS = 300;
@@ -85,6 +108,10 @@ export function buildFetchArgs(): string[] {
 }
 
 /**
+ * The `git` process also gets the `FETCH_CONFIG_ARGS` overrides ahead of this argv; they are kept separate
+ * so pinning the verb here does not have to say anything about maintenance, and so both can be tested
+ * without spawning.
+ *
  * A repository with no remote is a fact, not a fault. Git's wordings for it differ by version — 2.47
  * exits quietly and this code is never reached, older git says "no default remote repository" — so the
  * branch is pinned on literal fixtures and the code the panel shows is the code this writes.
@@ -126,7 +153,7 @@ export function describeFetchFailure(err: unknown): FetchFailure {
 
 /** Fetch is allowed to write refs, so this runner does not carry `--no-optional-locks`: fetch takes a required lock anyway. */
 export const runFetch: GitRunner = async (cwd, args, opts) => {
-  const { stdout } = await execFileAsync('git', ['-c', 'core.fsmonitor=false', ...args], {
+  const { stdout } = await execFileAsync('git', [...FETCH_CONFIG_ARGS, ...args], {
     cwd,
     timeout: opts?.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
     maxBuffer: MAX_FETCH_OUTPUT_BYTES,
@@ -198,6 +225,12 @@ export interface GitFetchOptions {
   dockerWorkspaces?: string[];
   maxRepos?: number;
   timeoutMs?: number;
+  /**
+   * The shared slot count for a whole scheduler tick. Passed in so `FETCH_CONCURRENCY` bounds the tick
+   * rather than each folder separately; without it, a tick over more than `FETCH_CONCURRENCY` folders could
+   * have that many git processes going at once inside each one.
+   */
+  limiter?: Limiter;
 }
 
 export const emptyReport = (state: GitFetchReport['state'], extra: Partial<GitFetchReport> = {}): GitFetchReport => ({
@@ -230,7 +263,8 @@ export async function fetchGitWorkspaceOverview(cwd: string, opts: GitFetchOptio
   if (!dirs.length) return emptyReport('not-a-repo');
   const { timeoutMs } = resolveOverviewLimits(opts);
   const runner = opts.git ?? runFetch;
-  const failures = await mapLimited(dirs, FETCH_CONCURRENCY, (dir) => fetchOne(dir, runner, timeoutMs));
+  const run = opts.limiter ?? createLimiter(FETCH_CONCURRENCY);
+  const failures = await run(dirs, (dir) => fetchOne(dir, runner, timeoutMs));
   const repos: GitFetchEntry[] = dirs.map((dir, i) => {
     const base = { name: basename(dir), path: relative(cwd, dir) || '.' };
     const failure = failures[i];
@@ -243,4 +277,36 @@ export async function fetchGitWorkspaceOverview(cwd: string, opts: GitFetchOptio
     repoLimit: resolveOverviewLimits(opts).maxRepos,
     fetchedAt: Date.now(),
   };
+}
+
+/**
+ * Runs already going, keyed by the resolved folder. A request for a folder another run is already working on
+ * JOINS that run instead of starting a second `git fetch` in the same clone: two fetches there collide on
+ * git's ref lock (`cannot lock ref 'refs/remotes/origin/main'`), which is what a click during a tick would
+ * otherwise do. A joiner gets the run already going's answer, including its limits — the point is not to
+ * fetch twice, not to fetch with the freshest options.
+ *
+ * Keyed by `resolve`, not `realpath`, because `realpath` is itself one of the unbounded fs calls rule #516
+ * bounds for user-chosen paths; the scheduler probes the folder bounded and calls this. Two paths that
+ * resolve the same are the same folder here; a workspace reached through a symlink resolves to the link, so
+ * a link and its target can be fetched by two runs — the accepted trade for keeping the probe bounded.
+ */
+const lane = new Map<string, Promise<GitFetchReport>>();
+
+export async function fetchWorkspaceOnce(folder: string, opts: GitFetchOptions = {}): Promise<GitFetchReport> {
+  const key = resolve(folder);
+  const going = lane.get(key);
+  if (going) return going;
+  const run = fetchGitWorkspaceOverview(key, opts).finally(() => {
+    // Only the run that is still the lane's own: a later run for the same folder must not be dropped by an
+    // earlier one finishing late.
+    if (lane.get(key) === run) lane.delete(key);
+  });
+  lane.set(key, run);
+  return run;
+}
+
+/** Test seam: an in-memory lane is not cleared by stopping the scheduler, so a test has to clear it itself. */
+export function clearGitFetchLane(): void {
+  lane.clear();
 }

@@ -1,16 +1,20 @@
 /**
  * @fileoverview Tests for the Git panel's Fetch button (src/git-fetch.ts): the one git command Codeman
- * runs that writes, and the one that runs a repository's own hooks — which is why it is a click, not a poll.
+ * runs that writes, and the one that can run a repository's own hooks — which is why it is a click, not a
+ * poll.
  *
- * Two halves, mirroring the module:
+ * Three halves, mirroring the module:
  *
- * 1. The PURE half — the fixed argv, the failure classification, and the two reads the interval scheduler
- *    depends on: what the settings say (`gitFetchSettingsFrom`) and what a run did
- *    (`gitFetchStatusFrom`). No spawning.
+ * 1. The PURE half — the fixed argv, the `-c` overrides the runner adds ahead of it, the failure
+ *    classification, and the two reads the interval scheduler depends on: what the settings say
+ *    (`gitFetchSettingsFrom`) and what a run did (`gitFetchStatusFrom`). No spawning.
  * 2. The IO half — a REAL git fetching a REAL local bare repo, so that "remote-tracking refs only" is
  *    proven against git's actual behavior: HEAD, the index and the working tree must be exactly what they
  *    were while the remote-tracking ref moves. The rest of the half uses an injected runner over real
  *    repositories on disk, because what is being pinned is WHICH repositories git is allowed to touch.
+ * 3. The join (`fetchWorkspaceOnce`) — one run per folder at a time, because two fetches in one clone
+ *    collide on git's ref lock, and the bound is ONE limiter shared with the scheduler's tick rather than a
+ *    bound each run gets for itself.
  *
  * Port: N/A (no server).
  */
@@ -23,14 +27,17 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { classifyGitFailure, isGitAvailable } from '../src/git-clone.js';
 import {
   FETCH_CONCURRENCY,
+  FETCH_CONFIG_ARGS,
   buildFetchArgs,
+  clearGitFetchLane,
   describeFetchFailure,
   fetchGitWorkspaceOverview,
+  fetchWorkspaceOnce,
   gitFetchSettingsFrom,
   gitFetchStatusFrom,
   type GitFetchReport,
 } from '../src/git-fetch.js';
-import { runGit, type GitRunner } from '../src/git-workspace-status.js';
+import { createLimiter, runGit, type GitRunner } from '../src/git-workspace-status.js';
 
 const ENV = {
   ...process.env,
@@ -172,6 +179,36 @@ describe('gitFetchStatusFrom', () => {
     expect(status.repos).toBe(0);
     expect(status.failed).toBe(0);
     expect(status.firstFailure).toBeUndefined();
+  });
+});
+
+describe('FETCH_CONFIG_ARGS', () => {
+  it('turns off the hooks and the maintenance a fetch can otherwise start, pinned without spawning git', () => {
+    expect(FETCH_CONFIG_ARGS).toEqual([
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'maintenance.auto=false',
+      '-c',
+      'gc.auto=0',
+    ]);
+    // Read as pairs: a `-c` and the setting it overrides, and every override is one of these three.
+    for (let i = 0; i < FETCH_CONFIG_ARGS.length; i += 2) {
+      expect(FETCH_CONFIG_ARGS[i]).toBe('-c');
+      expect(FETCH_CONFIG_ARGS[i + 1]).toMatch(/^(core\.fsmonitor|maintenance\.auto|gc\.auto)=/);
+    }
+    expect(FETCH_CONFIG_ARGS.filter((a) => a !== '-c').sort()).toEqual([
+      'core.fsmonitor=false',
+      'gc.auto=0',
+      'maintenance.auto=false',
+    ]);
+  });
+
+  it('is kept apart from the pinned argv so both can be read without spawning, and the runner composes them in that order', () => {
+    // The argv the recorded calls pin stays the verb alone: the overrides come from the runner, not from here.
+    for (const arg of buildFetchArgs()) expect(arg).not.toBe('-c');
+    // Overrides before the verb, which is where git will take them.
+    expect([...FETCH_CONFIG_ARGS, ...buildFetchArgs()]).toEqual([...FETCH_CONFIG_ARGS, 'fetch', '--quiet']);
   });
 });
 
@@ -345,5 +382,143 @@ describe.skipIf(!gitPresent)('fetchGitWorkspaceOverview (real git)', () => {
     const { calls, runner } = recordingRunner();
     expect(await fetchGitWorkspaceOverview(plain, { git: runner })).toMatchObject({ state: 'not-a-repo', repos: [] });
     expect(calls.filter(([, args]) => args[0] === 'fetch')).toEqual([]);
+  });
+});
+
+// ─── One run per folder, and one bound for the whole tick ────────────────────
+
+describe.skipIf(!gitPresent)('fetchWorkspaceOnce (the join)', () => {
+  // The resolver still runs real git, so these need real repositories on disk; what is injected is only the
+  // fetch, because what is being pinned here is the joining, not git's answer.
+  beforeEach(() => {
+    // The lane is module state: a run left in it by the previous test would be joined by the next one.
+    clearGitFetchLane();
+  });
+
+  it('joins a run already going for the same folder instead of starting a second git fetch in the same clone', async () => {
+    const folder = join(dir, 'folder');
+    initRepo(join(folder, 'api'));
+
+    let releaseRun = () => {};
+    const held = new Promise<void>((resolve) => (releaseRun = resolve));
+    let running = () => {};
+    const runStarted = new Promise<void>((resolve) => (running = resolve));
+    let firstRunFetches = 0;
+    const firstRunner: GitRunner = async (cwd, args) => {
+      if (args[0] === 'fetch') {
+        firstRunFetches++;
+        running();
+        await held;
+      }
+      return '';
+    };
+    const first = fetchWorkspaceOnce(folder, { git: firstRunner });
+    await runStarted; // the run is going, and still going
+
+    // A click while that run is working the folder: it joins, so it never touches git at all — not even the
+    // resolver's own probe, because it does not resolve anything for itself.
+    let joinerCalls = 0;
+    const joiner = fetchWorkspaceOnce(folder, {
+      git: async () => {
+        joinerCalls++;
+        return '';
+      },
+    });
+
+    releaseRun();
+    const answer = await first;
+    // The joiner gets that same run's answer, including its limits: the point is not to fetch twice.
+    expect(await joiner).toBe(answer);
+    expect(joinerCalls).toBe(0);
+    expect(firstRunFetches).toBe(1);
+  });
+
+  it('keys the join on the resolved folder, so the same folder written two ways is one run', async () => {
+    const folder = join(dir, 'folder');
+    initRepo(join(folder, 'api'));
+
+    let releaseRun = () => {};
+    const held = new Promise<void>((resolve) => (releaseRun = resolve));
+    let running = () => {};
+    const runStarted = new Promise<void>((resolve) => (running = resolve));
+    let fetches = 0;
+    const firstRunner: GitRunner = async (cwd, args) => {
+      if (args[0] === 'fetch') {
+        fetches++;
+        running();
+        await held;
+      }
+      return '';
+    };
+    const first = fetchWorkspaceOnce(folder, { git: firstRunner });
+    await runStarted;
+    // Two sessions on one folder reach it by different spellings; the scheduler keys by `resolve`.
+    let joinerCalls = 0;
+    const second = fetchWorkspaceOnce(join(dir, 'folder', '.'), {
+      git: async () => {
+        joinerCalls++;
+        return '';
+      },
+    });
+    releaseRun();
+    expect(await second).toBe(await first);
+    expect(joinerCalls).toBe(0);
+    expect(fetches).toBe(1);
+  });
+
+  it('releases the folder when a run lands, so the next click is a new run and not an old answer', async () => {
+    const folder = join(dir, 'folder');
+    initRepo(join(folder, 'api'));
+    let fetches = 0;
+    const runner: GitRunner = async (cwd, args) => {
+      if (args[0] === 'fetch') fetches++;
+      return '';
+    };
+    await fetchWorkspaceOnce(folder, { git: runner });
+    expect(fetches).toBe(1);
+    await fetchWorkspaceOnce(folder, { git: runner });
+    expect(fetches).toBe(2);
+  });
+
+  it('bounds a whole tick with the limiter it is handed, because two runs given a bound each would get twice the bound', async () => {
+    const left = join(dir, 'left');
+    const right = join(dir, 'right');
+    for (let i = 0; i < FETCH_CONCURRENCY + 1; i++) {
+      initRepo(join(left, `l${i}`));
+      initRepo(join(right, `r${i}`));
+    }
+    const held = () => new Promise((resolve) => setTimeout(resolve, 10));
+    // Only the fetches go through the limiter, so only they are counted here: the resolver's own probe is
+    // not a bounded git process.
+    const counting =
+      (state: { live: number; peak: number }): GitRunner =>
+      async (cwd, args) => {
+        if (args[0] !== 'fetch') return '';
+        state.live++;
+        state.peak = Math.max(state.peak, state.live);
+        await held();
+        state.live--;
+        return '';
+      };
+
+    // The scheduler hands every folder in the tick the SAME limiter, so the bound is the tick's, not the run's.
+    const shared = { live: 0, peak: 0 };
+    const sharedRunner = counting(shared);
+    const limiter = createLimiter(FETCH_CONCURRENCY);
+    await Promise.all([
+      fetchGitWorkspaceOverview(left, { git: sharedRunner, limiter }),
+      fetchGitWorkspaceOverview(right, { git: sharedRunner, limiter }),
+    ]);
+    expect(shared.peak).toBe(FETCH_CONCURRENCY);
+
+    // Without a shared limiter each run bounds only its own call, which is the failure the scheduler is there
+    // to prevent: two folders at FETCH_CONCURRENCY each, so twice as many git processes as the rule says.
+    const alone = { live: 0, peak: 0 };
+    const aloneRunner = counting(alone);
+    await Promise.all([
+      fetchGitWorkspaceOverview(left, { git: aloneRunner }),
+      fetchGitWorkspaceOverview(right, { git: aloneRunner }),
+    ]);
+    expect(alone.peak).toBe(2 * FETCH_CONCURRENCY);
   });
 });

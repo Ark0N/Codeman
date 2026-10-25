@@ -124,8 +124,9 @@ import { AI_CHECK_MODEL } from '../config/ai-defaults.js';
 import { approvalInbox } from './approval-inbox.js';
 import { SCREEN_BLOCKED_SOURCE } from './screen-blocked.js';
 import { PromptCacheKeepWarmService } from '../prompt-cache-keepwarm.js';
-import { fetchGitWorkspaceOverview } from '../git-fetch.js';
+import { fetchWorkspaceOnce } from '../git-fetch.js';
 import { GitFetchScheduler } from '../git-fetch-scheduler.js';
+import { probePathKind } from '../utils/bounded-path-probe.js';
 import { defaultDockerWorkspaces } from './routes/git-status-routes.js';
 import { composerIsEmpty, plainFrame } from '../session-submit-verifier.js';
 import { detectUsageLimitPause } from '../usage-limit-patterns.js';
@@ -405,12 +406,19 @@ export class WebServer extends EventEmitter {
     readSettings: readGitFetchSettings,
     // The same Docker list the panel's routes use: the rule has to be one rule.
     dockerWorkspaces: defaultDockerWorkspaces,
-    fetch: (cwd, opts) => fetchGitWorkspaceOverview(cwd, opts),
+    // Bounded probe, DEFAULT options (rule #516): a tick is a bulk scan, so it keeps the stall cap and must
+    // never be handed `pastCap`. A folder on a mount that stopped answering is skipped, not fetched.
+    probePath: (path) => probePathKind(path),
+    // Through the join, so the tick and the panel's Fetch button are the same run: a click on a folder the
+    // tick is already fetching joins it rather than starting a second `git fetch` in the same clone.
+    fetch: (cwd, opts) => fetchWorkspaceOnce(cwd, opts),
     publish: (id, status) => {
       const session = this.sessions.get(id);
       if (!session?.setGitFetchStatus(status)) return;
       // No new SSE event: the status rides the session state the page already listens for, and the Git
-      // panel polls on its own clock. Persisted, because what a run found is the panel's current truth.
+      // panel polls on its own clock. It is written to disk with the rest of the record, but the restore
+      // copies only the fields its own config lists and this is not one of them (src/types/session.ts), so
+      // what a run found is the panel's truth for the life of the session, not across a restart.
       this.persistSessionState(session);
       this.broadcast(SseEvent.SessionUpdated, this.getSessionStateWithRespawn(session));
     },

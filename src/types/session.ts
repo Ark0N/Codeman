@@ -893,14 +893,18 @@ export interface SessionState {
   /** What the keep-warm is doing right now; ephemeral, never restored. */
   keepWarm?: KeepWarmStatus;
   /**
-   * Git fetch on an interval for this case's repositories; absent = follow the app-wide
+   * Git fetch on an interval for this session's repositories; absent = follow the app-wide
    * `gitFetchEnabled` default. Restored on a restart, like `keepWarmEnabled`, because the choice is the
    * user's and outlives the run.
    */
   gitFetchEnabled?: boolean;
-  /** Seconds between this case's runs; absent = follow the app-wide `gitFetchIntervalSeconds` default. */
+  /** Seconds between this session's runs; absent = follow the app-wide `gitFetchIntervalSeconds` default. */
   gitFetchIntervalSeconds?: number;
-  /** What this case's last fetch did; ephemeral, never restored. */
+  /**
+   * What this session's last fetch did. Written to disk with the rest of the record, but the restore copies
+   * only the fields its own config lists and this is not one of them, so it is the panel's truth for the
+   * life of the session, not across a restart.
+   */
   gitFetch?: GitFetchStatus;
   /** Pinned to the top of the session manager list (COD-139) */
   pinned?: boolean;

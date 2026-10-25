@@ -1,7 +1,11 @@
 /**
- * @fileoverview The Git fetch interval scheduler (src/git-fetch-scheduler.ts): which cases a tick runs, and
- * which it must not. Every rule is checked by calling `tick(now)` with an explicit clock, so nothing here
+ * @fileoverview The Git fetch interval scheduler (src/git-fetch-scheduler.ts): which sessions a tick runs,
+ * and which it must not. Every rule is checked by calling `tick(now)` with an explicit clock, so nothing here
  * depends on fake timers or on how long a real tick takes — the scheduler owns no timers itself.
+ *
+ * The run belongs to the FOLDER, so these tests put two sessions on one folder and expect one fetch that
+ * both see, and they check the tick's two bounds separately: one shared bound for the fetches of the whole
+ * tick, and the folders bounded by a bound that cannot be the same semaphore.
  *
  * Port: N/A.
  */
@@ -14,11 +18,13 @@ import {
 } from '../src/git-fetch-scheduler.js';
 import {
   FETCH_CONCURRENCY,
+  type GitFetchOptions,
   type GitFetchReport,
   type GitFetchSettings,
   type GitFetchStatus,
 } from '../src/git-fetch.js';
 import { DEFAULT_GIT_TIMEOUT_MS, MAX_REPOS } from '../src/git-workspace-status.js';
+import type { PathProbeKind } from '../src/utils/bounded-path-probe.js';
 
 const SETTINGS: GitFetchSettings = { enabled: true, intervalSeconds: 300 };
 const VIEW = (id: string, extra: Partial<GitFetchSessionView> = {}): GitFetchSessionView => ({
@@ -38,10 +44,19 @@ const report = (cwd: string, name: string): GitFetchReport => ({
 type Harness = {
   scheduler: GitFetchScheduler;
   ports: GitFetchPorts;
-  calls: Array<{ id: string; opts: unknown }>;
+  /** The folders the tick actually ran, in the order they were picked. */
+  calls: Array<{ cwd: string; opts: GitFetchOptions }>;
   published: Array<{ id: string; status: GitFetchStatus }>;
+  /** Every path the tick probed, in order — the probe has to happen before anything is fetched. */
+  probed: string[];
   settings: GitFetchSettings;
   dockerReads: number;
+  /**
+   * A session that closed: the server calls `remove()` when the session is gone, so this takes it out of the
+   * ports as well as out of the scheduler. Otherwise a test that removes a session still sees it on the next
+   * tick, and the folder it was on looks still open.
+   */
+  remove(id: string): void;
 };
 
 /** A run the test decides when to let finish, so a slow repository can be held open across ticks. */
@@ -57,21 +72,32 @@ function deferred<T>(value: T) {
  */
 function harness(
   sessions: GitFetchSessionView[],
-  opts: { settings?: GitFetchSettings; fetch?: (id: string) => Promise<GitFetchReport> } = {}
+  opts: {
+    settings?: GitFetchSettings;
+    fetch?: (cwd: string, portOpts: GitFetchOptions) => Promise<GitFetchReport>;
+    /** Default: every path answers as a folder, so a test that does not care about the probe stays quiet. */
+    probe?: (path: string) => Promise<PathProbeKind>;
+  } = {}
 ): Harness {
   const customFetch = opts.fetch;
   const settings = opts.settings ?? { ...SETTINGS };
+  const gone = new Set<string>();
   const h: Harness = {
     scheduler: undefined as unknown as GitFetchScheduler,
     ports: undefined as unknown as GitFetchPorts,
     calls: [],
     published: [],
+    probed: [],
     settings,
     dockerReads: 0,
+    remove: (id) => {
+      gone.add(id);
+      h.scheduler.remove(id);
+    },
   };
   h.ports = {
-    sessionIds: () => sessions.map((s) => s.id),
-    getSession: (id) => sessions.find((s) => s.id === id),
+    sessionIds: () => sessions.filter((s) => !gone.has(s.id)).map((s) => s.id),
+    getSession: (id) => (gone.has(id) ? undefined : sessions.find((s) => s.id === id)),
     readSettings: async () => {
       if (h.settings === null) throw new Error('settings.json is mid-write');
       return h.settings;
@@ -80,10 +106,13 @@ function harness(
       h.dockerReads++;
       return [];
     },
+    probePath: async (path) => {
+      h.probed.push(path);
+      return opts.probe ? await opts.probe(path) : 'directory';
+    },
     fetch: async (cwd, portOpts) => {
-      const id = cwd.slice(3); // the '/w/<id>' the view was built with
-      h.calls.push({ id, opts: portOpts });
-      return customFetch ? customFetch(id) : report(cwd, id);
+      h.calls.push({ cwd, opts: portOpts });
+      return customFetch ? customFetch(cwd, portOpts) : report(cwd, cwd.slice(3));
     },
     publish: (id, status) => h.published.push({ id, status }),
   };
@@ -96,7 +125,8 @@ describe('a quiet tick', () => {
     const h = harness([VIEW('a'), VIEW('b')], { settings: { enabled: false, intervalSeconds: 300 } });
     expect(await h.scheduler.tick(1000)).toBe(0);
     expect(h.calls).toEqual([]);
-    // The Docker case list is only worth reading once something is actually due.
+    // The probe and the Docker case list are only worth reading once something is actually due.
+    expect(h.probed).toEqual([]);
     expect(h.dockerReads).toBe(0);
   });
 
@@ -125,16 +155,38 @@ describe('a quiet tick', () => {
     expect(logged).toHaveBeenCalled();
 
     h.settings = SETTINGS;
-    // Nothing was recorded for the failed tick, so the case is still due at once.
+    // Nothing was recorded for the failed tick, so the folder is still due at once.
     expect(await h.scheduler.tick(1000)).toBe(1);
   });
 });
 
+describe('the bounded probe', () => {
+  it('probes the folder before fetching it, and skips anything that is not a directory', async () => {
+    const kinds = new Map<string, PathProbeKind>([
+      ['/w/file', 'file'],
+      ['/w/unknown', 'unknown'],
+      ['/w/absent', 'absent'],
+    ]);
+    const h = harness([VIEW('file'), VIEW('unknown'), VIEW('absent'), VIEW('ok')], {
+      probe: async (path) => kinds.get(path) ?? 'directory',
+    });
+    const logged = vi.fn();
+    h.ports.log = logged;
+    expect(await h.scheduler.tick(0)).toBe(1);
+    expect(h.calls.map((c) => c.cwd)).toEqual(['/w/ok']);
+    // The folders that answered badly were probed and left alone, never fetched.
+    expect(h.probed).toEqual(['/w/file', '/w/unknown', '/w/absent', '/w/ok']);
+    expect(logged).toHaveBeenCalledTimes(3);
+    // `unknown` is never read as `absent`: the log says what it answered rather than what it was assumed.
+    expect(logged.mock.calls.join(' ')).toContain('unknown');
+  });
+});
+
 describe('who runs', () => {
-  it('runs every case the app setting covers, once per interval', async () => {
+  it('runs every session the app setting covers, once per interval', async () => {
     const h = harness([VIEW('a'), VIEW('b')], { settings: { enabled: true, intervalSeconds: 60 } });
     await h.scheduler.tick(0);
-    expect(h.calls.map((c) => c.id).sort()).toEqual(['a', 'b']);
+    expect(h.calls.map((c) => c.cwd).sort()).toEqual(['/w/a', '/w/b']);
 
     await h.scheduler.tick(30_000); // not due yet
     expect(h.calls.length).toBe(2);
@@ -143,29 +195,29 @@ describe('who runs', () => {
     expect(h.calls.length).toBe(4);
   });
 
-  it('runs a case that turned itself on even while the app-wide switch is off — that is what a per-case switch has to mean', async () => {
+  it('runs a session that turned itself on even while the app-wide switch is off — that is what a per-session switch has to mean', async () => {
     const h = harness([VIEW('plain'), VIEW('own', { gitFetchEnabled: true, gitFetchIntervalSeconds: 30 })], {
       settings: { enabled: false, intervalSeconds: 300 },
     });
     await h.scheduler.tick(0);
-    expect(h.calls.map((c) => c.id)).toEqual(['own']);
+    expect(h.calls.map((c) => c.cwd)).toEqual(['/w/own']);
 
     // Its own interval, not the app's: due at 30 s, not at 300.
     await h.scheduler.tick(30_000);
     expect(h.calls.length).toBe(2);
   });
 
-  it('never fetches a remote or Docker case, exactly as the Git panel excludes them', async () => {
+  it('never fetches a remote or Docker session, exactly as the Git panel excludes them', async () => {
     const h = harness([
       VIEW('ssh', { remote: { host: 'x' } }),
       VIEW('docker', { docker: { container: 'c' } }),
       VIEW('local'),
     ]);
     await h.scheduler.tick(0);
-    expect(h.calls.map((c) => c.id)).toEqual(['local']);
+    expect(h.calls.map((c) => c.cwd)).toEqual(['/w/local']);
   });
 
-  it('re-checks the Docker rule every tick, so a case that became a Docker case stops fetching', async () => {
+  it('re-checks the Docker rule every tick, so a session whose case became a Docker case stops fetching', async () => {
     const sessions = [VIEW('a')];
     const h = harness(sessions);
     await h.scheduler.tick(0);
@@ -183,16 +235,78 @@ describe('who runs', () => {
   });
 });
 
-describe('one run at a time', () => {
-  it('skips a case still being fetched instead of stacking runs on it', async () => {
-    const gate = deferred<GitFetchReport>(report('/w/a', 'a'));
-    const h = harness([VIEW('a')], { settings: { enabled: true, intervalSeconds: 30 }, fetch: () => gate.promise });
-    const running = h.scheduler.tick(0);
-    await new Promise((resolve) => setImmediate(resolve)); // the run has started, and is still held open
-    expect(await h.scheduler.tick(15_000)).toBe(0);
+describe('one folder, one run', () => {
+  it('fetches a shared folder once and publishes the result to every session open on it', async () => {
+    const h = harness([VIEW('a'), { ...VIEW('b'), workingDir: '/w/a' }]);
+    expect(await h.scheduler.tick(0)).toBe(1); // one folder, not two runs
     expect(h.calls.length).toBe(1);
-    gate.resolve(report('/w/a', 'a'));
-    await running;
+    expect(h.published.map((p) => p.id).sort()).toEqual(['a', 'b']);
+    // Both see the same run, so the panel's row says the same thing in both tabs.
+    expect(new Set(h.published.map((p) => p.status.failed)).size).toBe(1);
+  });
+
+  it('does not pick a folder again while its run is going, and does not run a second tick over the same selection', async () => {
+    const ids = Array.from({ length: FETCH_CONCURRENCY + 2 }, (_, i) => `s${i}`);
+    const gate = deferred<GitFetchReport>(report('/w/first', 'first'));
+    const h = harness(
+      ids.map((id) => VIEW(id)),
+      {
+        settings: { enabled: true, intervalSeconds: 30 },
+        fetch: () => gate.promise,
+      }
+    );
+
+    const first = h.scheduler.tick(0);
+    await new Promise((resolve) => setImmediate(resolve)); // the first runs are going, the rest are queued
+    const picked = h.calls.length;
+    expect(picked).toBe(FETCH_CONCURRENCY);
+
+    // The server fires the next tick without waiting. The schedule was stamped at selection, so the folders
+    // already picked are not picked again, and this tick is skipped while the previous one is still going.
+    expect(await h.scheduler.tick(15_000)).toBe(0);
+    expect(h.calls.length).toBe(picked);
+
+    gate.resolve(report('/w/first', 'first'));
+    await first;
+    // Every folder ran exactly once, and no folder ran twice.
+    expect(h.calls.length).toBe(ids.length);
+    expect(new Set(h.calls.map((c) => c.cwd)).size).toBe(ids.length);
+  });
+
+  it('shares one bound across the whole tick instead of giving each folder its own, and bounds the folders with a bound of its own', async () => {
+    const ids = Array.from({ length: FETCH_CONCURRENCY + 1 }, (_, i) => `s${i}`);
+    let fetchesLive = 0;
+    let fetchesPeak = 0;
+    let foldersLive = 0;
+    let foldersPeak = 0;
+    const hold = () => new Promise((resolve) => setImmediate(resolve));
+    const h = harness(
+      ids.map((id) => VIEW(id)),
+      {
+        // Every folder is handed the SAME limiter for its work, so that work cannot get its own bound: a
+        // per-call bound would let 5 folders × 6 items run at once. The folders themselves are bounded by a
+        // DIFFERENT bound, because one semaphore cannot serve both levels — a folder holding a slot and then
+        // waiting for one for its own fetch is waiting on itself, and the folders that fill the bound are
+        // exactly the ones blocking it. If the tick used one semaphore for both, this test would hang and fail
+        // as a timeout rather than as an assertion.
+        fetch: async (cwd, opts) => {
+          foldersLive++;
+          foldersPeak = Math.max(foldersPeak, foldersLive);
+          await opts.limiter?.([0, 1, 2, 3, 4, 5], async () => {
+            fetchesLive++;
+            fetchesPeak = Math.max(fetchesPeak, fetchesLive);
+            await hold();
+            fetchesLive--;
+          });
+          foldersLive--;
+          return report(cwd, cwd.slice(3));
+        },
+      }
+    );
+    await h.scheduler.tick(0);
+    expect(fetchesPeak).toBe(FETCH_CONCURRENCY); // the tick's ceiling, not each folder's own
+    expect(foldersPeak).toBe(FETCH_CONCURRENCY);
+    expect(h.calls.length).toBe(ids.length); // every folder ran, none was left waiting forever
   });
 
   it('times the interval from the START of a run, so a slow repository does not push the next one out', async () => {
@@ -203,33 +317,12 @@ describe('one run at a time', () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(h.calls.length).toBe(1);
 
-    // The run takes 200 s, longer than its own interval. Once it lands, the case is already past due: the
+    // The run takes 200 s, longer than its own interval. Once it lands, the folder is already past due: the
     // next tick runs it again instead of waiting another 30 s from when the slow one finished.
     slow.resolve(report('/w/a', 'a'));
     await first;
     expect(await h.scheduler.tick(200_000)).toBe(1);
     expect(h.calls.length).toBe(2);
-  });
-
-  it('runs at most FETCH_CONCURRENCY cases at a time, because each one is a git process', async () => {
-    const ids = Array.from({ length: FETCH_CONCURRENCY + 3 }, (_, i) => `s${i}`);
-    let live = 0;
-    let peak = 0;
-    const h = harness(
-      ids.map((id) => VIEW(id)),
-      {
-        fetch: async () => {
-          live++;
-          peak = Math.max(peak, live);
-          await new Promise((resolve) => setImmediate(resolve));
-          live--;
-          return report('/w/x', 'x');
-        },
-      }
-    );
-    await h.scheduler.tick(0);
-    expect(peak).toBe(FETCH_CONCURRENCY);
-    expect(h.calls.length).toBe(ids.length);
   });
 });
 
@@ -245,7 +338,7 @@ describe('what a run reports', () => {
     ]);
   });
 
-  it("reports a failure instead of retrying harder, and keeps the case's own next run at its own interval", async () => {
+  it("reports a failure instead of retrying harder, and keeps the folder's next run at its own interval", async () => {
     const h = harness([VIEW('a')], {
       settings: { enabled: true, intervalSeconds: 30 },
       fetch: () => Promise.reject(new Error('spawn git ENOENT')),
@@ -261,7 +354,7 @@ describe('what a run reports', () => {
 });
 
 describe('the effective choice', () => {
-  it("a case's own override wins over the app setting", () => {
+  it("a session's own override wins over the app setting", () => {
     const settings = { enabled: false, intervalSeconds: 600 };
     expect(effectiveGitFetch(VIEW('a', { gitFetchEnabled: true, gitFetchIntervalSeconds: 45 }), settings)).toEqual({
       enabled: true,
@@ -286,19 +379,30 @@ describe('the effective choice', () => {
   });
 });
 
-describe('a case that goes away', () => {
-  it('takes its schedule with it, so a reopened case starts on its own clock', async () => {
-    const h = harness([VIEW('a')]);
+describe('a session that goes away', () => {
+  it('takes its own choice with it, but keeps the folder while another session is still open on it', async () => {
+    const sessions = [VIEW('a'), { ...VIEW('b'), workingDir: '/w/a' }];
+    const h = harness(sessions);
     await h.scheduler.tick(0);
     expect(h.scheduler.tracked()).toBe(1);
 
-    h.scheduler.remove('a');
+    h.remove('a');
+    // The run belongs to the clone, so 'b' keeps the folder's schedule and its next run is still on time:
+    // the choice that got the folder going was 'a's, but the folder is not 'a's.
+    expect(h.scheduler.tracked()).toBe(1);
+    await h.scheduler.tick(1000); // not due yet, and 'b' is still open on the folder
+    expect(h.calls.length).toBe(1);
+
+    // The last session open on the folder goes, so the folder is forgotten: a session coming back on it is due
+    // at once rather than on the schedule the closed one left behind.
+    h.remove('b');
     expect(h.scheduler.tracked()).toBe(0);
-    await h.scheduler.tick(1000);
+    sessions.push({ ...VIEW('c'), workingDir: '/w/a' });
+    await h.scheduler.tick(2000);
     expect(h.calls.length).toBe(2); // remembered again, from now
   });
 
-  it('stops everything after stop(), including a case that was already due', async () => {
+  it('stops everything after stop(), including a folder that was already due', async () => {
     const h = harness([VIEW('a')]);
     h.scheduler.stop();
     expect(await h.scheduler.tick(0)).toBe(0);

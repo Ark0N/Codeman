@@ -541,22 +541,22 @@
     // Git fetch on an interval (App Settings → Bottom bar, Session Options → Git, and the save toast in
     // session-ui.js). 'Status' and 'Git' are not added: the first already has a key, the second stays a
     // technical name, and the status row's text is written at runtime.
-    "Whether Codeman fetches this case's repositories on a timer.": '{name} 是否按间隔拉取此案例的仓库。',
+    "Whether Codeman fetches this session's repositories on a timer.": '{name} 是否按间隔拉取此会话的仓库。',
     'Git fetch on an interval': 'Git 定时拉取',
-    'Runs `git fetch` for the repositories the Git window lists on a timer, so the "behind" number is current without a click. Off by default: this is the one git command Codeman runs that writes, and the one that runs a repository\'s own hooks, so nothing runs on a timer until you turn it on. A case can override both the switch and the interval in Session Options → Git.':
-      '按间隔为 Git 窗口列出的仓库运行拉取，这样“落后”的数字无需点击就是最新的。默认关闭：这是 {name} 运行的唯一会写入的 git 命令，也是唯一会运行仓库自身钩子的命令，所以在您开启之前不会有任何定时运行。案例可以在“会话选项 → Git”中同时覆盖开关和间隔。',
+    'Runs `git fetch` for the repositories the Git window lists on a timer, so the "behind" number is current without a click. Off by default: this is the one git command Codeman runs that writes, and the one that runs a repository\'s own hooks, so nothing runs on a timer until you turn it on. A session can override both the switch and the interval in Session Options → Git.':
+      '按间隔为 Git 窗口列出的仓库运行拉取，这样“落后”的数字无需点击就是最新的。默认关闭：这是 {name} 运行的唯一会写入的 git 命令，也是唯一会运行仓库自身钩子的命令，所以在您开启之前不会有任何定时运行。会话可以在“会话选项 → Git”中同时覆盖开关和间隔。',
     'Git fetch: how often': 'Git 定时拉取：多久一次',
-    'Seconds between runs for a case that has no override of its own (30 to 3600, default 300). Only a case that is on — here, or in Session Options → Git — is fetched.':
-      '没有自己覆盖设置的案例，两次运行之间的秒数（30 到 3600，默认 300）。只有已开启的案例——这里，或在“会话选项 → Git”——才会被拉取。',
+    'Seconds between runs for a session that has no override of its own (30 to 3600, default 300). Only a session that is on — here, or in Session Options → Git — is fetched, and sessions sharing one folder are fetched by one run.':
+      '没有自己覆盖设置的会话，两次运行之间的秒数（30 到 3600，默认 300）。只有已开启的会话——这里，或在“会话选项 → Git”——才会被拉取，共用一个文件夹的会话由一次运行拉取。',
     'Fetch on an interval': '按间隔拉取',
     "Fetching is the only git command Codeman runs that writes, and the only one that runs a repository's own hooks, so nothing runs on a timer until you turn it on — here, or in App Settings → Bottom bar. The panel's Fetch button is always just a click.":
       '拉取是 {name} 运行的唯一会写入的 git 命令，也是唯一会运行仓库自身钩子的命令，所以在您开启之前（这里，或“应用设置 → 底部栏”）不会有任何定时运行。该窗口中的拉取按钮始终只是一次点击。',
     'Follow the app setting': '跟随应用设置',
-    'Uses the app-wide switch and interval for this case. Switch it off to pick your own.':
-      '为此案例使用应用级的开关和间隔。关闭它即可自行选择。',
-    'Fetch this case': '拉取此案例',
-    'Runs on its own even while the app-wide switch is off: a case that turned itself on means exactly that.':
-      '即使应用级开关关闭也自行运行：一个自己开启的案例正是这个意思。',
+    'Uses the app-wide switch and interval for this session. Switch it off to pick your own.':
+      '为此会话使用应用级的开关和间隔。关闭它即可自行选择。',
+    'Fetch this session': '拉取此会话',
+    "Runs on its own even while the app-wide switch is off: a session that turned itself on means exactly that. Sessions sharing one folder share one run, and each sees that run's result.":
+      '即使应用级开关关闭也自行运行：一个自己开启的会话正是这个意思。共用一个文件夹的会话共享一次运行，每个会话都会看到该运行的结果。',
     'How often': '多久一次',
     '30 sec to 1 hr, timed from the start of a run, so a slow repository does not push the next one out.':
       '30 秒到 1 小时，从一次运行的开始计时，所以较慢的仓库不会把下一次推远。',

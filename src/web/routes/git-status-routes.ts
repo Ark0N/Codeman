@@ -16,10 +16,10 @@
 import type { FastifyInstance } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
 import { redactGitCredentials } from '../../git-clone.js';
-import { emptyReport, fetchGitWorkspaceOverview, type GitFetchReport } from '../../git-fetch.js';
+import { emptyReport, fetchWorkspaceOnce, gitFetchStatusFrom, type GitFetchReport } from '../../git-fetch.js';
 import { readDockerCases } from '../../docker-hosts.js';
 import { getDataDir } from '../../config/instance.js';
-import { findSessionOrFail } from '../route-helpers.js';
+import { findSessionOrFail, persistAndBroadcastSession } from '../route-helpers.js';
 import {
   emptyOverview,
   findWorkspaceRepo,
@@ -32,7 +32,7 @@ import {
   type GitRunner,
   type GitWorkspaceOverview,
 } from '../../git-workspace-status.js';
-import type { SessionPort } from '../ports/index.js';
+import type { EventPort, SessionPort } from '../ports/index.js';
 
 /**
  * Host paths of every Docker case workspace: repositories at or inside these are never inspected.
@@ -58,7 +58,9 @@ function limitsFrom(query: { maxRepos?: unknown; timeout?: unknown }) {
 
 export function registerGitStatusRoutes(
   app: FastifyInstance,
-  ctx: SessionPort,
+  // EventPort as well as SessionPort: the fetch route publishes the run it did, and a route that broadcasts
+  // has to say so in its own signature.
+  ctx: SessionPort & EventPort,
   git?: GitRunner,
   dockerWorkspaces: () => Promise<string[]> = defaultDockerWorkspaces
 ): void {
@@ -131,9 +133,14 @@ export function registerGitStatusRoutes(
   // Fetch, and only because the user clicked Fetch in the panel (src/git-fetch.ts): one
   // `git fetch --quiet` per repository the panel would show, through the same resolver so the two cannot
   // disagree about which repositories belong to the workspace. This is the only git command Codeman runs
-  // that writes, and it writes remote-tracking refs only — nothing commits, checks out or merges, so an
-  // agent working in the same repository is not disturbed. Remote and Docker sessions answer `unsupported`
-  // like the status route, and a repository a container can write to is refused before any git runs.
+  // that writes, and it writes remote-tracking refs only — nothing commits, checks out or merges. It is not
+  // as harmless as a read though: a fetch holds git's ref lock, so an agent's own `git pull` in the same
+  // clone can collide with it, which is why the run goes through `fetchWorkspaceOnce` — a click while a tick
+  // is already fetching this folder joins that run instead of starting a second one. It can also run a
+  // repository's own hooks (`reference-transaction`, `pre-auto-gc` through the maintenance git runs after a
+  // fetch) and its config commands such as `credential.helper`, so the `FETCH_CONFIG_ARGS` overrides turn
+  // maintenance and gc off, and a repository a container can write to is refused before any git runs. Remote
+  // and Docker sessions answer `unsupported` like the status route.
   app.post('/api/sessions/:id/git-fetch', async (req): Promise<ApiResponse<GitFetchReport>> => {
     const { id } = req.params as { id: string };
     const query = req.query as { maxRepos?: unknown; timeout?: unknown };
@@ -141,13 +148,16 @@ export function registerGitStatusRoutes(
     const session = findSessionOrFail(ctx, id, req);
     if (session.remote) return { success: true, data: emptyReport('unsupported', { reason: 'remote' }) };
     if (session.docker) return { success: true, data: emptyReport('unsupported', { reason: 'docker' }) };
-    return {
-      success: true,
-      data: await fetchGitWorkspaceOverview(session.workingDir, {
-        git,
-        ...limits,
-        dockerWorkspaces: await dockerWorkspaces(),
-      }),
-    };
+    const report = await fetchWorkspaceOnce(session.workingDir, {
+      git,
+      ...limits,
+      dockerWorkspaces: await dockerWorkspaces(),
+    });
+    // The response answers the click, and the run is also the session's current truth: what the panel's
+    // "behind" number is based on. Publishing it is what the api docs say a click does, and what makes a
+    // second tab open on the same folder see the same run — including a click that joined a tick already
+    // going, where the row has to say who last fetched.
+    if (session.setGitFetchStatus(gitFetchStatusFrom(report, 'click'))) persistAndBroadcastSession(ctx, session);
+    return { success: true, data: report };
   });
 }
