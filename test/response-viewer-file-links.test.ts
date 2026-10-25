@@ -113,7 +113,11 @@ describe('response viewer file-path linkifier', () => {
     ['**Wrote:** 120 lines to src/foo.ts', ['src/foo.ts']],
     ['- **Output:** stored in dist/app.js', ['dist/app.js']],
     ['**Created:** new file src/components/Button.tsx', ['src/components/Button.tsx']],
-  ])('keeps prose after a bold path label out of the link: %s', (markdown, expected) => {
+    ['**Files:** src/components and utils/x.ts', ['utils/x.ts']],
+    ['**Wrote:** 3 files to docs/design notes/overview.md', ['notes/overview.md']],
+    ['**Path:** /home/me/proj/out contains a.md', ['/home/me/proj/out', 'a.md']],
+    ['- /tmp/out has the logs in run.log', ['/tmp/out', 'run.log']],
+  ])('keeps prose out of the link in rendered Markdown: %s', (markdown, expected) => {
     expect(paths(linkify(renderChat(markdown))).map((a) => a.getAttribute('data-path'))).toEqual(expected);
   });
 

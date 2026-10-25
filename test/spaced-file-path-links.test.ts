@@ -119,13 +119,15 @@ describe('spaced file paths', () => {
     expect(paths(line)).toEqual([path]);
   });
 
-  it('requires a path label for relative candidates but retains absolute ambiguity', () => {
+  it('requires a path label for relative candidates but retains own-line absolute ambiguity', () => {
     expect(paths('- Fixed bug in src/My Docs/a.md')).toEqual(['Docs/a.md']);
     // Documented trade-off: a labelled relative path whose only space is in its top
     // directory reads like prose after the label, so it splits as on master.
     expect(paths('Saved to: 03 Attachments/plan.pptx')).toEqual(['Attachments/plan.pptx']);
     expect(paths('Saved to: My Docs/plan.md')).toEqual(['Docs/plan.md']);
-    expect(paths('/home/me/proj contains a.md')).toEqual(['/home/me/proj contains a.md']);
+    // Documented residual: words after an own-line absolute path that hold no prose
+    // word read like a spaced name (`/home/me/docs/Read Me.txt`), so they stay in.
+    expect(paths('/home/me/proj/out report.pdf')).toEqual(['/home/me/proj/out report.pdf']);
     expect(paths('Saved to: ~/My Docs/plan.md')).toEqual(['~/My Docs/plan.md']);
   });
 
@@ -241,10 +243,49 @@ describe('spaced file paths: shapes that keep master links', () => {
     }
   });
 
-  it('documented trade-off: prose between two `/` words after a path label stays in the link', () => {
-    // The first `/` word is not the last, so the prose guard does not fire; master
-    // linked only `utils/x.ts` here.
-    expect(paths('Files: src/components and utils/x.ts')).toEqual(['src/components and utils/x.ts']);
+  // A connective or verb before the last word puts the candidate in a sentence,
+  // whatever the shape: own line, list marker or path label, absolute or relative.
+  it.each([
+    ['/home/me/proj contains a.md', ['/home/me/proj', true], ['a.md']],
+    ['/home/me/proj in the README.md', ['/home/me/proj', true], ['README.md']],
+    ['/home/me/proj/src is where the code lives, see README.md', ['/home/me/proj/src', true], ['README.md']],
+    ['/tmp/a and b.md', ['/tmp/a', true], ['b.md']],
+    ['/home/me/proj/out vs b.md', ['/home/me/proj/out', true], ['b.md']],
+    ['- /tmp/out has the logs in run.log', ['/tmp/out', true], ['run.log']],
+    ['* /home/me/proj/docs contains a.md', ['/home/me/proj/docs', true], ['a.md']],
+    ['1. /home/me/proj/src then test/foo.test.ts', ['/home/me/proj/src', true], ['test/foo.test.ts']],
+    ['- /home/me/proj is the root, see README.md', ['/home/me/proj', true], ['README.md']],
+    ['Path: /home/me/proj/out contains a.md', ['/home/me/proj/out', true], ['a.md']],
+    ['Saved to: /home/me/out as report.docx', ['/home/me/out', true], ['report.docx']],
+    ['Files: src/components and utils/x.ts', ['utils/x.ts']],
+    ['Wrote: 3 files to docs/design notes/overview.md', ['notes/overview.md']],
+    ['Created: the file src/components/My Button/Button.tsx', ['Button/Button.tsx']],
+    ['Output: 2 files in dist/my app/a.js', ['app/a.js']],
+    ['Output: 12 KB written to dist/my app/a.js', ['app/a.js']],
+    ['/home/me/proj/out = report.pdf', ['/home/me/proj/out', true], ['report.pdf']],
+  ] as Array<[string, ...Array<[string, true?]>]>)('keeps a sentence out of the path: %s', (line, ...links) => {
+    expect(findFilePathLinks(line)).toEqual(masterLinks(line, ...links));
+  });
+
+  it('ends the path at an earlier word that holds an extension', () => {
+    expect(findFilePathLinks('/home/me/proj/src/foo.ts#L12 foo.ts')).toEqual([
+      { path: '/home/me/proj/src/foo.ts', index: 0 },
+      { path: 'foo.ts', index: 29 },
+    ]);
+  });
+
+  it('documented trade-off: a name that uses a prose word splits as on master', () => {
+    const line = '/home/me/docs/Pros and Cons.md';
+    expect(findFilePathLinks(line)).toEqual(masterLinks(line, ['/home/me/docs/Pros', true], ['Cons.md']));
+    // `at` and `of` are not prose words, so these names stay whole.
+    for (const p of [
+      '/Users/me/Desktop/Screenshot 2026-10-24 at 10.00.00.png',
+      '/home/me/docs/Copy of report.docx',
+      '/home/me/docs/Terms of Service.pdf',
+    ]) {
+      expect(paths(p)).toEqual([p]);
+      expect(paths(`Saved to: ${p}`)).toEqual([p]);
+    }
   });
 
   // A command whose executable lives under a known root, or one carrying a flag.
@@ -257,6 +298,9 @@ describe('spaced file paths: shapes that keep master links', () => {
       'test/foo.test.ts',
     ],
     ['/home/me/proj/node_modules/.bin/tsc -p tsconfig.json', '/home/me/proj/node_modules/.bin/tsc', 'tsconfig.json'],
+    ['/home/me/proj/scripts/deploy prod.yml', '/home/me/proj/scripts/deploy', 'prod.yml'],
+    ['/home/me/scripts/deploy config.yml', '/home/me/scripts/deploy', 'config.yml'],
+    ['/home/me/proj/tools/lint src/a.ts', '/home/me/proj/tools/lint', 'src/a.ts'],
   ])('does not reserve a command under a known root: %s', (line, exe, file) => {
     expect(findFilePathLinks(line)).toEqual(masterLinks(line, [exe, true], [file]));
   });

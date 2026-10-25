@@ -2241,14 +2241,18 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  * path needs a path label to be taken spaced. One trailing sentence mark is left
  * out, and a leading `./` is not a segment. The candidate must read as ONE path:
  * it ends on a known extension, a rooted one has a directory before its first
- * space, no earlier word ends on an extension or `/`, and none holds a `:` and a
- * digit (`a.ts:42`, a line suffix ends the path). Later words cannot start a new
+ * space, no earlier word holds an extension (`a.md,`, `a.ts#L12`) or ends in `/`,
+ * and none holds a `:` and a digit (`a.ts:42`, a line suffix ends the path). Later words cannot start a new
  * `/`, `~/`, `./` or `../` path, no earlier word ends in `:` or is an arrow, and
  * a run of spaces (a column gap) is refused, so two paths on a line are never
  * merged. A relative candidate whose only `/` word is its last is prose after the
  * label (`Wrote: 120 lines to src/foo.ts`) and is left alone, which also splits
- * `Saved to: My Docs/plan.md` as master does. A command line is refused: an
- * executable under `bin/` or `.bin/` as the first word, or any `-x`/`--x` flag word.
+ * `Saved to: My Docs/plan.md` as master does. An earlier word that is a lowercase
+ * connective or verb (SPACED_PATH_PROSE_WORD: `and`, `in`, `has`, `contains`, ...)
+ * or a bare `=` makes the candidate a sentence (`/tmp/out has the logs in run.log`),
+ * so a name such as `Pros and Cons.md` splits as master does. A command line is
+ * refused: an executable under `bin/`, `.bin/`, `scripts/` or `tools/` as the
+ * first word, or any `-x`/`--x` flag word.
  *
  * A candidate that is one path but not a linkable one (an unknown root such as
  * `/etc`, a `.`/`..`/empty segment) comes back with `link: false` when its last
@@ -2278,13 +2282,20 @@ function spacedFilePathOnLine(line) {
   // or `/review the changes in src/a.ts` is a command, not a spaced path.
   if (path.startsWith('/') && !/^\/[^/]+\//.test(words[0])) return null;
   // A command whose executable sits under a known root (`/opt/homebrew/bin/node a.js`,
-  // `…/node_modules/.bin/tsc -p tsconfig.json`) is not a path either.
-  if (/\/\.?bin\/[^/]+$/.test(words[0]) || words.some((word) => /^-{1,2}\w/.test(word))) return null;
+  // `/home/me/proj/node_modules/.bin/tsc -p tsconfig.json`, `/home/me/proj/scripts/deploy prod.yml`)
+  // is not a path either.
+  if (/\/(?:\.?bin|scripts?|tools)\/[^/]+$/.test(words[0]) || words.some((word) => /^-{1,2}\w/.test(word))) {
+    return null;
+  }
   for (const word of words.slice(0, -1)) {
-    if (word.endsWith('/') || word.endsWith(':') || /^(?:—|–|→|=>|->|<-)$/.test(word)) return null;
+    if (word.endsWith('/') || word.endsWith(':') || /^(?:—|–|→|=>|->|<-|=)$/.test(word)) return null;
     // `a.ts:42` (grep -n, compiler output): the path already ended at the line suffix.
     if (/:\d/.test(word)) return null;
-    if (PATH_TOKEN_ENDS_WITH_EXTENSION.test(word.replace(/[.,;:!?)\]}]+$/, ''))) return null;
+    // An extension anywhere in an earlier word (`a.md,`, `a.ts#L12`) ends a path there.
+    if (PATH_TOKEN_HAS_EXTENSION.test(word)) return null;
+    // A connective or verb joins a path to prose (`/tmp/out has the logs in run.log`,
+    // `Files: src/components and utils/x.ts`), so the candidate is a sentence.
+    if (SPACED_PATH_PROSE_WORD.test(word)) return null;
   }
   if (words.slice(1).some((word) => /^(?:\/|~\/|\.{1,2}\/)/.test(word))) return null;
   const rooted = SPACED_PATH_ROOT.test(path) || path.startsWith('~/');
@@ -2487,6 +2498,14 @@ const FILE_LINK_ROOT_GROUP = /^\(\\\/\(\?:([^()]*)\)/.exec(FILE_PATH_LINK_PATTER
 const PATH_TOKEN_ENDS_WITH_EXTENSION = new RegExp(`\\.${FILE_LINK_EXTENSION_GROUP}$`);
 const PATH_TOKEN_HAS_EXTENSION = new RegExp(`\\.${FILE_LINK_EXTENSION_GROUP}\\b`);
 const PATH_TOKEN_STARTS_NEW_PATH = new RegExp(`^(?:~\\/|\\/(?:${FILE_LINK_ROOT_GROUP})\\/)`);
+/**
+ * Lowercase connectives and verbs that put a spaced candidate in a sentence, for
+ * {@link spacedFilePathOnLine}. `at` stays out (`Screenshot 2026-10-24 at 10.00.00.png`)
+ * and so does `of` (`Copy of report.docx`); a name using a listed word
+ * (`Pros and Cons.md`) splits as it did before spaced paths were linked.
+ */
+const SPACED_PATH_PROSE_WORD =
+  /^(?:and|or|to|in|into|from|the|is|are|was|were|has|have|had|contains|holds|see|then|vs|via|as)$/;
 /** A rooted path's start (`/home/`, `/mnt/`, …), for {@link spacedFilePathOnLine}. */
 const SPACED_PATH_ROOT = new RegExp(`^\\/(?:${FILE_LINK_ROOT_GROUP})\\/`);
 /** A relative head that names its own location (`./a`, `../a`) is an entry of its own. */
