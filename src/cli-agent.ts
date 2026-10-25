@@ -376,7 +376,12 @@ export interface AgentDeps {
   now?: () => number;
 }
 
-/** Print `data` as JSON (the `--json` path) — always the envelope's `data`, never a reshaped copy. */
+/**
+ * Print `data` as JSON (the `--json` path): the envelope's `data`, never a reshaped copy,
+ * except a directory spawn, which prints `{ sessionId, workingDir, created: true, ready }`
+ * (plus `startupError` when its start fails) because `POST /api/sessions` answers with
+ * the whole session row.
+ */
 function emitJson(deps: AgentDeps, data: unknown): void {
   deps.io.out(JSON.stringify(data, null, 2));
 }
@@ -543,6 +548,11 @@ export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promis
   if (!cli) return fail(deps, `Unknown mode: ${options.mode}`, EXIT.refused);
   if (options.caseName !== undefined && options.workingDir !== undefined)
     return fail(deps, 'Use a case OR --working-dir, not both', EXIT.refused);
+  // Same rule for the flag: `--working-dir "$WT"` with WT empty (a failed
+  // `git worktree add`) must not fall through to the caller's own checkout, which
+  // `resolve('')` would make it.
+  if (options.workingDir !== undefined && options.workingDir.trim() === '')
+    return fail(deps, 'refusing: --working-dir is empty; pass an existing directory or omit the flag', EXIT.refused);
   // Only an OMITTED case means "use a directory": an empty one (`spawn "$CASE"` with
   // CASE unset) still goes to quick-start, whose schema refuses it.
   const workingDir = options.caseName !== undefined ? undefined : resolve(options.workingDir ?? process.cwd());

@@ -163,6 +163,14 @@ describe('project-preserving agent spawn', () => {
     expect(await agentSpawn(t.d, { ...base, caseName: '', workingDir: process.cwd() })).toBe(EXIT.refused);
     expect(t.calls).toEqual([]);
   });
+  it('an empty or whitespace-only --working-dir is refused before any request, never the caller cwd', async () => {
+    for (const workingDir of ['', '   ', '\t']) {
+      const t = deps([]);
+      expect(await agentSpawn(t.d, { ...base, workingDir })).toBe(EXIT.refused);
+      expect(t.calls).toEqual([]);
+      expect(t.out.join('\n')).toContain('--working-dir is empty');
+    }
+  });
   it('with ready on claude: create, then /interactive, then wait-output on the created id', async () => {
     const t = deps([ok({ session: { id: OTHER } }), ok({}), ok({ wait: { matched: true } })]);
     expect(await agentSpawn(t.d, { ...base, mode: 'claude', ready: true })).toBe(EXIT.ok);
@@ -238,6 +246,13 @@ describe('agent spawn through the real argument parser and transport', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ method: 'POST', url: '/api/v1/quick-start', body: { caseName: '' } });
     expect(exitCode).toBe(EXIT.error);
+  });
+  it('`spawn --working-dir ""` (as `--working-dir "$WT"` with WT unset) sends nothing and exits 4', async () => {
+    for (const value of ['', '   ']) {
+      const { seen, exitCode } = await runSpawn(['--working-dir', value]);
+      expect(seen).toEqual([]);
+      expect(exitCode).toBe(EXIT.refused);
+    }
   });
   it('`spawn` with no case argument creates in the caller cwd', async () => {
     const { seen, exitCode } = await runSpawn([]);

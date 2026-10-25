@@ -57,7 +57,8 @@ codeman agent rm "$SID"                                   # any session except t
 - **`spawn [case]`** uses the current directory when no case is supplied. Use
   `codeman agent spawn --working-dir /path/to/project --mode codex` for another existing
   local directory. A case and `--working-dir` cannot be combined, and an empty case
-  name (`spawn "$CASE"` with `CASE` unset) is refused rather than read as "no case".
+  name (`spawn "$CASE"` with `CASE` unset) is refused rather than read as "no case",
+  as is an empty `--working-dir` (exit 4, before any request), so it never falls back to cwd.
   Explicit case names retain quick-start behavior (creating a scratch case if missing).
   A directory launch is `POST /api/v1/sessions` followed by
   `POST /api/v1/sessions/:id/interactive` (or `/shell`); it preserves the project and

@@ -45,9 +45,10 @@ For an existing project, use one command:
 `codeman agent spawn --working-dir /path/to/project --mode codex`. With no case and
 no `--working-dir`, `spawn` uses cwd. Give editing workers separate worktrees. A
 positional case keeps quick-start behavior and cannot be combined with
-`--working-dir`. Directory launches keep parent lineage and never mark the project
-as agent scratch. If startup fails or is ambiguous, the CLI reports the exact
-created ID: inspect it before retrying or cleaning up.
+`--working-dir`; an empty `--working-dir` (`"$WT"` unset) refuses with exit 4
+rather than falling back to cwd. Directory launches keep parent lineage and never
+mark the project as agent scratch. If startup fails or is ambiguous, the CLI
+reports the exact created ID: inspect it before retrying or cleaning up.
 
 ## 0. Guard and bootstrap
 
