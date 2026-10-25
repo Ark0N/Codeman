@@ -555,21 +555,25 @@ export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promis
   let dead = false;
   const mark = composerReadyMark(options.mode);
   if (options.ready && mark) {
-    const wait = await deps.request(deps.ctx, {
-      method: 'GET',
-      path: `/api/v1/sessions/${encodeURIComponent(sid)}/wait-output`,
-      query: { match: mark, from: 'buffer', timeout: options.timeoutMs },
-      timeoutMs: options.timeoutMs + 10_000,
-    });
-    // A failed readiness call (waiter cap, 400, network) is its own error, not "the
-    // composer never showed up": report the real reason instead of the trust-dialog hint.
-    if (!wait.json?.success) readinessError = describeFailure(wait);
-    else {
-      const result = (wait.json.data as { wait?: WaitResult } | undefined)?.wait;
-      // A worker that died while we waited is exit 3 like every other wait, not a
-      // "composer not seen" timeout that sends the caller looking for a dialog.
-      dead = waitExitCode(result) === EXIT.dead;
-      ready = !dead && Boolean(result?.matched);
+    try {
+      const wait = await deps.request(deps.ctx, {
+        method: 'GET',
+        path: `/api/v1/sessions/${encodeURIComponent(sid)}/wait-output`,
+        query: { match: mark, from: 'buffer', timeout: options.timeoutMs },
+        timeoutMs: options.timeoutMs + 10_000,
+      });
+      // A failed readiness call (waiter cap, 400, network) is its own error, not "the
+      // composer never showed up": report the real reason instead of the trust-dialog hint.
+      if (!wait.json?.success) readinessError = describeFailure(wait);
+      else {
+        const result = (wait.json.data as { wait?: WaitResult } | undefined)?.wait;
+        // A worker that died while we waited is exit 3 like every other wait, not a
+        // "composer not seen" timeout that sends the caller looking for a dialog.
+        dead = waitExitCode(result) === EXIT.dead;
+        ready = !dead && Boolean(result?.matched);
+      }
+    } catch (error) {
+      readinessError = getErrorMessage(error);
     }
   }
 

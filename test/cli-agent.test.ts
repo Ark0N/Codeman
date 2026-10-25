@@ -548,6 +548,35 @@ describe('agent spawn', () => {
     expect(deps.calls).toHaveLength(1);
     expect(deps.err.join('')).toMatch(/SESSION_BUSY/);
   });
+
+  it.each([false, true])('preserves the created id when readiness throws (json=%s)', async (json) => {
+    const deps = fakeDeps((options) => {
+      if (options.path === '/api/v1/quick-start') return ok({ sessionId: OTHER, caseName: 'c' });
+      throw new Error('readiness connection reset');
+    }, json);
+    const exit = await agentSpawn(deps, { caseName: 'c', mode: 'claude', ready: true, timeoutMs: 1000 }).catch(
+      () => undefined
+    );
+
+    if (json) {
+      expect(deps.out).toHaveLength(1);
+      expect(JSON.parse(deps.out[0])).toEqual({
+        sessionId: OTHER,
+        caseName: 'c',
+        readinessError: 'readiness connection reset',
+      });
+      expect(deps.err).toEqual([]);
+    } else {
+      expect(deps.out).toEqual([OTHER]);
+      expect(deps.err.join('')).toContain('readiness check failed: readiness connection reset');
+      expect(deps.err.join('')).not.toMatch(/composer not seen|startup dialog/);
+    }
+    expect(exit).toBe(EXIT.error);
+    expect(deps.calls.map(({ method, path }) => ({ method, path }))).toEqual([
+      { method: 'POST', path: '/api/v1/quick-start' },
+      { method: 'GET', path: `/api/v1/sessions/${OTHER}/wait-output` },
+    ]);
+  });
 });
 
 describe('session id prefixes', () => {
