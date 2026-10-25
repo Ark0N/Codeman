@@ -1296,7 +1296,7 @@ const KeyboardAccessoryBar = {
           <strong>Compose prompt</strong>
           <span>Enter adds a new line</span>
         </div>
-        <textarea class="paste-textarea prompt-composer-textarea" aria-label="Prompt" placeholder="Write your prompt…" autocorrect="on" autocapitalize="sentences" spellcheck="true"></textarea>
+        <textarea class="paste-textarea prompt-composer-textarea" dir="auto" aria-label="Prompt" placeholder="Write your prompt…" autocorrect="on" autocapitalize="sentences" spellcheck="true"></textarea>
         <div class="paste-actions prompt-composer-actions">
           <button type="button" class="prompt-composer-terminal">Use terminal keyboard</button>
           <button type="button" class="paste-image">📎 Attach</button>
@@ -1309,6 +1309,8 @@ const KeyboardAccessoryBar = {
 
     this._composerOverlay = overlay;
     const textarea = overlay.querySelector('.prompt-composer-textarea');
+    // The textarea's dir="auto" lays a prompt written in Persian, Arabic or
+    // Hebrew out right to left, from its first letter (#715).
     // i18n.js skips <textarea> subtrees (what is typed there is user content),
     // so the placeholder and label are translated here, when the dialog is built.
     const i18n = typeof window !== 'undefined' ? window.CodemanI18n : undefined;

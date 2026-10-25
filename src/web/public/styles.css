@@ -15085,7 +15085,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 .rv-text ul, .rv-text ol,
 .response-viewer-body > ul, .response-viewer-body > ol {
   margin: 0.6em 0;
-  padding-left: 1.5em;
+  padding-inline-start: 1.5em;
 }
 
 .rv-text li,
@@ -15097,12 +15097,16 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 
 .rv-text blockquote,
 .response-viewer-body > blockquote {
-  border-left: 3px solid var(--accent);
+  border-inline-start: 3px solid var(--accent);
   background: rgba(var(--accent-rgb), 0.06);
   margin: 0.8em 0;
   padding: 0.5em 14px;
   color: var(--text-dim);
-  border-radius: 0 6px 6px 0;
+  /* Logical corners: the bar sits on the start side, right-to-left too (#715). */
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+  border-start-end-radius: 6px;
+  border-end-end-radius: 6px;
 }
 
 .rv-text strong,
@@ -15172,9 +15176,9 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 .response-viewer-body > table td,
 .rv-table-wrap th, .rv-table-wrap td {
   border-bottom: 1px solid var(--border);
-  border-right: 1px solid var(--border);
+  border-inline-end: 1px solid var(--border);
   padding: 8px 12px;
-  text-align: left;
+  text-align: start;
   vertical-align: top;
   white-space: normal;
 }
@@ -15183,7 +15187,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 .response-viewer-body > table th:last-child,
 .response-viewer-body > table td:last-child,
 .rv-table-wrap th:last-child, .rv-table-wrap td:last-child {
-  border-right: none;
+  border-inline-end: none;
 }
 
 .rv-text tr:last-child td,
