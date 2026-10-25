@@ -120,6 +120,54 @@ const NOT_CONTINUATION_ROWS: [string, string, string, string | null][] = [
   ['Status page: https://status.example.com/', '24/7 monitoring is on.', 'https://status.example.com/', null],
   ['Did you mean https://example.com/search?q=', 'really? no.', 'https://example.com/search?q=', null],
 ];
+// The last column of a space-aligned table: the next row opens the next record
+// in an earlier column, so its first cell is never the rest of the URL. Each
+// row is indented two spaces. The URL on each row, then any path link expected
+// on the second row.
+const TABLE_LAST_COLUMN_ROWS: [string, string, string, string, string | null][] = [
+  [
+    '  auth-api        https://auth.example.com/',
+    '  billing-api     https://billing.example.com/',
+    'https://auth.example.com/',
+    'https://billing.example.com/',
+    null,
+  ],
+  [
+    '  docs.example.com     https://docs.example.com/',
+    '  api.example.com      https://api.example.com/',
+    'https://docs.example.com/',
+    'https://api.example.com/',
+    null,
+  ],
+  [
+    '  Homepage:      https://example.com/',
+    '  Bug-reports:   https://github.com/org/repo/issues/',
+    'https://example.com/',
+    'https://github.com/org/repo/issues/',
+    null,
+  ],
+  [
+    '  user_service    https://users.example.com/v1/',
+    '  order_service   https://orders.example.com/v1/',
+    'https://users.example.com/v1/',
+    'https://orders.example.com/v1/',
+    null,
+  ],
+  [
+    '  README.md       https://example.com/docs/',
+    '  CHANGELOG.md    https://example.com/changes/',
+    'https://example.com/docs/',
+    'https://example.com/changes/',
+    'CHANGELOG.md',
+  ],
+  [
+    '  my-service-   https://svc.example.com/api/',
+    '  long-name     https://svc2.example.com/',
+    'https://svc.example.com/api/',
+    'https://svc2.example.com/',
+    null,
+  ],
+];
 // Known trade-offs: a row end counts as a cell end, so a short indented word
 // with URL punctuation still continues the URL. Pinned so a change is deliberate.
 const TRADE_OFF_ROWS: [string, string, string][] = [
@@ -237,6 +285,16 @@ describe('terminalUrlContinuationExtent (wrap joining)', () => {
       for (const row of [0, 1]) expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toBeNull();
     }
   );
+
+  it.each(TABLE_LAST_COLUMN_ROWS)('does not join the next table record after %s', (first, next) => {
+    const buffer = fakeBuffer([{ text: first }, { text: next }], 100);
+    for (const row of [0, 1]) expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toBeNull();
+  });
+
+  it('does not join an indented email address', () => {
+    const buffer = fakeBuffer([{ text: '  https://example.com/' }, { text: '  user@example.com' }], 100);
+    for (const row of [0, 1]) expect(terminalUrlContinuationExtent(buffer, row, 100, 12)).toBeNull();
+  });
 
   it.each(TRADE_OFF_ROWS)('still joins the known trade-off after %s', (first, next) => {
     const buffer = fakeBuffer([{ text: first }, { text: next }], 100);
@@ -411,6 +469,30 @@ describe('terminal link provider with wrapped table URLs', () => {
     const second = provide(2);
     expect(second.filter((link) => /^https?:/.test(link.text))).toEqual([]);
     if (pathOnNext) expect(second.map((link) => link.text)).toContain(pathOnNext);
+  });
+
+  it.each(TABLE_LAST_COLUMN_ROWS)(
+    'keeps each last-column URL on its own row: %s',
+    (first, next, url, nextUrl, pathOnNext) => {
+      const { provide, openSpy } = harness([{ text: first }, { text: next }], 100);
+      const links = provide(1).filter((link) => /^https?:/.test(link.text));
+      expect(links.map((link) => link.text)).toEqual([url]);
+      links[0].activate(null, links[0].text);
+      expect(openSpy).toHaveBeenCalledExactlyOnceWith(url, '_blank', 'noopener,noreferrer');
+      const second = provide(2);
+      expect(second.filter((link) => /^https?:/.test(link.text)).map((link) => link.text)).toEqual([nextUrl]);
+      if (pathOnNext) expect(second.map((link) => link.text)).toContain(pathOnNext);
+    }
+  );
+
+  it('keeps an indented email address out of the URL above it', () => {
+    const { provide } = harness([{ text: '  https://example.com/' }, { text: '  user@example.com' }], 100);
+    expect(
+      provide(1)
+        .filter((link) => /^https?:/.test(link.text))
+        .map((link) => link.text)
+    ).toEqual(['https://example.com/']);
+    expect(provide(2).filter((link) => /^https?:/.test(link.text))).toEqual([]);
   });
 
   it.each(TRADE_OFF_ROWS)('pins the known trade-off link after %s', (first, next, joined) => {

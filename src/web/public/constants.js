@@ -2569,12 +2569,15 @@ function findTerminalUrls(text) {
  *   - the URL fragment ends on a character a wrapper breaks after
  *     (`/ ? & = - _ % # + ~`); a following table column may be excluded;
  *   - the next row is indented, but no further right than the column the URL
- *     started in (a table cell or list item continuation, not unrelated text);
+ *     started in (a table cell or list item continuation, not unrelated text),
+ *     and no column gap lies between its indent and the URL on the first row
+ *     (that would be the next record of a table);
  *   - that row's first token looks like URL material (contains one of
  *     `% & = / ? . - _`), is not a bare number/version or list marker,
  *     and is not itself a new `scheme://`, a shell prompt (`user@host:`),
- *     a home path (`~/`) or an HTTP status line; without `% & = / ?`, the token
- *     must finish its cell (row end or a gap of at least two spaces).
+ *     a home path (`~/`), an email address or an HTTP status line; without
+ *     `% & = / ?`, the token must finish its cell (row end or a gap of at
+ *     least two spaces).
  * The last rule is what stops prose such as "…/files/" + "then run it" from
  * being glued into one link.
  *
@@ -2629,10 +2632,16 @@ function terminalUrlContinuationExtent(buffer, row, cols, maxRows) {
           / {2,}/.test(first.text.slice(indent, last.startIndex)))
       )
         break;
+      // The next row must start inside the URL's own cell: a column gap between
+      // its indent and the URL on the first row means it opens an earlier
+      // column (the next record of a table), not the rest of the URL.
+      if (/ {2,}/.test(first.text.slice(indent, last.startIndex).trimStart())) break;
       if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token) || !/^[A-Za-z0-9%_~]/.test(token)) break;
       // A shell prompt (`user@host:~/dir$`), a home path and an HTTP status line
       // are never the rest of a URL, however much URL punctuation they carry.
       if (/^[\w.-]+@[\w.-]+:|^~\/|^HTTP\/\d/i.test(token)) break;
+      // Nor is a token that is a whole email address.
+      if (/^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$/.test(token)) break;
       if (!/[%&=/?.\-_]/.test(token) || /^v?\d+(?:\.\d+)*(?:[-+][\w.-]+)?[.,;:!?)]?$/i.test(token)) break;
       // Hyphens, underscores and dots also occur in prose. Without stronger
       // URL punctuation, the token must finish its cell, not introduce a sentence.
