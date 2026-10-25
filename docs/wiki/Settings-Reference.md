@@ -106,6 +106,14 @@ memory and a restart empties it; switching it off deletes the file and keeps wha
 memory. Messages expire 12 hours after they were posted either way. See
 [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent#the-codeman-agent-commands).
 
+**Experimental agent coordination** (under **Cross-session features**, synced, off by
+default) turns on the `codeman agent inspect`, `stage` and `submit` commands: bounded,
+paged reads of another session's output, and typing a prompt into a local Codex composer
+that is sent with one Enter only after Codeman checks it is unchanged. Off, their HTTP
+routes answer `403 FORBIDDEN` naming the setting (`agentCoordinationEnabled`). They are
+experimental and may change in any release. See
+[Driving Codeman From An Agent](Driving-Codeman-From-An-Agent#the-codeman-agent-commands).
+
 ### Appearance
 
 | Setting                | Notes                                                                                     |

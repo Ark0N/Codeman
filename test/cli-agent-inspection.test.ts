@@ -92,3 +92,36 @@ it('registers required file and confirmation options and bounded inspect flags',
       ?.mandatory
   ).toBe(true);
 });
+it('shows the opt-in 403 verbatim on inspect, stage and submit while the setting is off', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'agent-stage-cli-'));
+  try {
+    const path = join(dir, 'message');
+    await writeFile(path, 'hello');
+    const message =
+      'Experimental agent coordination (inspect, stage, submit) is disabled. Turn on "Experimental agent coordination" in Settings (agentCoordinationEnabled) and save first.';
+    for (const json of [false, true]) {
+      const lines: string[] = [];
+      const refusing: AgentDeps = {
+        ctx: { apiUrl: 'http://localhost:1', selfId: SELF },
+        json,
+        now: () => 1,
+        io: { out: (line) => lines.push(line), err: (line) => lines.push(line) },
+        request: async () => ({
+          status: 403,
+          text: '',
+          json: { success: false, error: message, errorCode: 'FORBIDDEN' },
+        }),
+      };
+      expect(await agentInspect(refusing, { id: OTHER, maxBytes: 10 })).toBe(1);
+      expect(await agentStage(refusing, { id: OTHER, messageFile: path })).toBe(1);
+      expect(await agentSubmit(refusing, { id: OTHER, stageId: OTHER, confirmSha: 'a'.repeat(64) })).toBe(1);
+      expect(lines).toHaveLength(3);
+      for (const line of lines) {
+        const shown = json ? (JSON.parse(line) as { success: boolean; error: string }).error : line;
+        expect(shown).toContain(`FORBIDDEN: ${message} (HTTP 403)`);
+      }
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

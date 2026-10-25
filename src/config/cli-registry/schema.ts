@@ -384,6 +384,16 @@ const capabilitiesSchema = z
         // marker but never the footer. Still bounded, since it is also how much text the
         // pattern runs over.
         blockedLines: z.number().int().min(1).max(24).optional(),
+        // Same guard again: run over the rows under the composer each time guarded
+        // input reads the pane, and ~/.codeman/clis.json can set it.
+        composerFooterLine: z
+          .string()
+          .min(1)
+          .refine(
+            (src) => compileVersionRegex(src) !== null,
+            'composerFooterLine must be a regex compileVersionRegex() accepts: at most 200 characters, no nested quantifiers'
+          )
+          .optional(),
       })
       .strict()
       // A window with nothing to search is a typo, not a configuration. Refused at LOAD

@@ -45,8 +45,32 @@ describe('WebServer on an ephemeral port', () => {
     const session = new Session({ id: 'agent-route-wiring', workingDir: process.env.HOME!, mode: 'shell' });
     const sessions = (server as unknown as { sessions: Map<string, typeof session> }).sessions;
     sessions.set(session.id, session);
+    const { mkdirSync, rmSync, writeFileSync } = await import('node:fs');
+    const { dirname } = await import('node:path');
+    const { SETTINGS_PATH } = await import('../src/web/route-helpers.js');
+    const setEnabled = (on: boolean) => {
+      mkdirSync(dirname(SETTINGS_PATH), { recursive: true });
+      writeFileSync(SETTINGS_PATH, JSON.stringify({ agentCoordinationEnabled: on }));
+    };
     try {
       const prefix = `http://127.0.0.1:${server.boundPort}/api/v1/sessions/${session.id}`;
+      // Opt-in: off, the /api/v1 alias of every route refuses with 403 FORBIDDEN.
+      setEnabled(false);
+      for (const [method, verb] of [
+        ['GET', 'inspect'],
+        ['POST', 'stage'],
+        ['POST', 'submit'],
+      ] as const) {
+        const refused = await fetch(prefix + '/' + verb, {
+          method,
+          ...(method === 'POST' ? { headers: { 'Content-Type': 'application/json' }, body: '{}' } : {}),
+        });
+        expect(refused.status).toBe(403);
+        const body = await refused.json();
+        expect(body.errorCode).toBe('FORBIDDEN');
+        expect(body.error).toContain('agentCoordinationEnabled');
+      }
+      setEnabled(true);
       const inspected = await fetch(prefix + '/inspect');
       expect(inspected.status).toBe(200);
       expect((await inspected.json()).data.source).toBe('pane-snapshot');
@@ -63,6 +87,7 @@ describe('WebServer on an ephemeral port', () => {
         expect((await response.json()).errorCode).toBe('CONFLICT');
       }
     } finally {
+      rmSync(SETTINGS_PATH, { force: true });
       sessions.delete(session.id);
       await session.stop(false);
     }

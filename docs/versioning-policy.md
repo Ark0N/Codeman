@@ -64,17 +64,22 @@ These may change in a **MINOR** (or even PATCH) release without a MAJOR bump:
 
 ### Experimental agent coordination
 
-`codeman agent inspect`, `codeman agent stage` and `codeman agent submit` are
-experimental. The matching `GET /api/v1/sessions/:id/inspect`,
-`POST /api/v1/sessions/:id/stage` and `POST /api/v1/sessions/:id/submit` routes,
-including their unversioned `/api` aliases, share this designation. This is an
-explicit exception to both the CLI and HTTP stability promises above: these
-commands, flags, endpoint paths, payloads and behavior may change or be removed
-in a MINOR or PATCH release without a stable-surface deprecation period. Pin a
-compatible Codeman version when automating them. Existing authentication,
-ownership and shared response-envelope rules still apply. Other agent commands
-and API routes retain their existing stability guarantees. Promotion to stable
-requires an explicit documented decision.
+`codeman agent inspect`, `codeman agent stage` and `codeman agent submit`, and
+the matching `GET /api/v1/sessions/:id/inspect`, `POST /api/v1/sessions/:id/stage`
+and `POST /api/v1/sessions/:id/submit` routes (with their `/api` aliases, since
+every `/api` route is also served under `/api/v1`), are labeled experimental, so
+item 3 above applies to them: their commands, flags, endpoint paths, payloads and
+behavior may change or be removed in a MINOR or PATCH release. They are also
+opt-in: the routes answer `403 FORBIDDEN` with a message naming the synced
+`agentCoordinationEnabled` setting (default OFF) until it is turned on, so
+automation cannot come to depend on them without choosing to. Pin a compatible
+Codeman version when automating them. Existing authentication, ownership and
+shared response-envelope rules still apply. The session behavior underneath them
+(input revision tracking in the session's write paths, the SubmitVerifier
+re-press going through the shared write boundary) runs for every session and is
+covered like any other stable behavior. Other agent commands and API routes keep
+their existing guarantees. Promotion to stable requires an explicit documented
+decision.
 
 ## Deprecation policy
 

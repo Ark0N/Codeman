@@ -2,10 +2,15 @@
 
 **Experimental:** `codeman agent inspect`, `stage` and `submit`, and their
 `/api/v1/sessions/:id/inspect|stage|submit` routes (including `/api` aliases),
-are excluded from the stable CLI/HTTP contract. Their commands, flags, paths,
+are labeled experimental and so are not part of the stable CLI/HTTP contract. Their commands, flags, paths,
 payloads and behavior may change or be removed in a minor or patch release.
 Pin a compatible Codeman version when automating them. Authentication and
 session ownership checks still apply.
+
+They are also opt-in: until the user turns on **Experimental agent coordination**
+in App Settings (`agentCoordinationEnabled`, off by default), every one of them
+fails with `FORBIDDEN: ... (HTTP 403)` naming that setting. That is not something
+to retry or work around: tell the user, or use `send`/`read` instead.
 
 Use these commands inside a Codeman session. They use its authenticated HTTP API.
 They supplement `send`, `wait` and `read` over the same HTTP transport; no direct

@@ -816,10 +816,11 @@ Rules that matter:
 
 ## Experimental bounded inspection and guarded submission
 
-These three commands and their HTTP routes may change or be removed in minor or
-patch releases; they are excluded from the stable CLI/HTTP contract.
-
-Use `codeman agent inspect` for bounded evidence and incremental local Codex cursors.
+These three commands and their HTTP routes are labeled experimental, so they may
+change or be removed in minor or patch releases. They are also opt-in
+(`agentCoordinationEnabled`, off by default: a 403 naming it until the user turns
+it on). Use `codeman agent inspect` for bounded evidence and incremental local
+Codex cursors.
 Use `codeman agent stage --message-file` followed by one hash-confirmed
 `codeman agent submit --stage-id --confirm-sha` when the exact local Codex
 composer and caret can be verified. Other targets provide labeled snapshots or

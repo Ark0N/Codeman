@@ -2,7 +2,18 @@
 import { beforeEach, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { CODEX_REASONING_EFFORTS } from '../src/types/session.js';
-import { GuardedStageStore, type GuardedInputTarget } from '../src/agent-staging.js';
+import {
+  GuardedStageStore,
+  guardedComposerChrome,
+  readGuardedComposer,
+  readGuardedSnapshot,
+  type GuardedInputTarget,
+} from '../src/agent-staging.js';
+import { getCli, listClis } from '../src/config/cli-registry/registry.js';
+/** Codex's composer chrome exactly as the registry declares it: no copy of the glyph or footer here. */
+const CODEX = guardedComposerChrome(getCli('codex'))!;
+const readGuardedCodexComposer = (screen: string) => readGuardedComposer(screen, CODEX);
+const readGuardedCodexSnapshot = (snapshot: string) => readGuardedSnapshot(snapshot, CODEX);
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 let store: GuardedStageStore;
 let time: number;
@@ -110,7 +121,6 @@ it('does not issue a receipt on failed staging or intervening input during its w
 });
 
 it('reads exact composer spaces and refuses wrapped or modal frames', async () => {
-  const { readGuardedCodexComposer } = await import('../src/agent-staging.js');
   expect(readGuardedCodexComposer('› hello  world\n  GPT-6-Luna default · ~/case\n')).toBe('hello  world');
   expect(
     readGuardedCodexComposer(
@@ -122,7 +132,6 @@ it('reads exact composer spaces and refuses wrapped or modal frames', async () =
   expect(readGuardedCodexComposer('› hello\n')).toBeNull();
 });
 it('requires capture cursor geometry, rejecting invisible trailing edits and moved cursors', async () => {
-  const { readGuardedCodexSnapshot } = await import('../src/agent-staging.js');
   const { formatPaneSnapshot } = await import('../src/tmux-manager.js');
   const frame = (text: string, x: number, y = 0) =>
     formatPaneSnapshot([`› ${text}`, '  GPT-6-Luna default · ~/case'], { cols: 100, rows: 20, cursorX: x, cursorY: y });
@@ -157,7 +166,6 @@ it('reserves receipt capacity before concurrent stages type', async () => {
 it.each([...CODEX_REASONING_EFFORTS, 'default'])(
   'accepts the shared Codex effort word %s in the footer',
   async (word) => {
-    const { readGuardedCodexComposer } = await import('../src/agent-staging.js');
     expect(readGuardedCodexComposer(`› hello\n  GPT-6 ${word} · ~/case\n`)).toBe('hello');
   }
 );
@@ -167,4 +175,23 @@ it('refuses messages that reach the available pane columns before typing', async
   for (const text of ['four', '界界']) await expect(store.stage(target, 'alice', text)).rejects.toThrow();
   expect(writes).toEqual([]);
   await expect(store.stage(target, 'alice', 'abc')).resolves.toMatchObject({ submitted: false });
+});
+
+it('takes the composer glyph and footer from the registry, and only codex declares a footer', () => {
+  const codex = getCli('codex')!.capabilities.workDetect!;
+  expect(CODEX.promptGlyph).toBe(codex.promptGlyph);
+  expect(CODEX.footerLine.source).toBe(codex.composerFooterLine);
+  // Another glyph drives the same reader: nothing in it is codex-specific.
+  const other = { promptGlyph: '>>', footerLine: CODEX.footerLine };
+  expect(readGuardedComposer('>> hello\n  GPT-6 default · ~/case\n', other)).toBe('hello');
+  expect(readGuardedComposer('› hello\n  GPT-6 default · ~/case\n', other)).toBeNull();
+  const declaring = listClis()
+    .filter((entry) => entry.capabilities.workDetect?.composerFooterLine)
+    .map((entry) => entry.id);
+  expect(declaring).toEqual(['codex']);
+  expect(guardedComposerChrome(getCli('claude'))).toBeNull();
+  // A pattern the ReDoS guard refuses yields no chrome, so no guarded input.
+  const unsafe = structuredClone(getCli('codex')!);
+  unsafe.capabilities.workDetect!.composerFooterLine = '(a+)+b';
+  expect(guardedComposerChrome(unsafe)).toBeNull();
 });

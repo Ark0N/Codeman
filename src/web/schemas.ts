@@ -1545,6 +1545,13 @@ export const SettingsUpdateSchema = z
      */
     agentInboxPersistEnabled: z.boolean().optional(),
     /**
+     * Experimental agent coordination (src/web/routes/agent-session-routes.ts): bounded
+     * inspection and the guarded stage/submit routes behind `codeman agent inspect|stage|submit`.
+     * SYNCED, default OFF: the routes are labeled experimental and may change in a minor or
+     * patch release, so automation has to opt in. While OFF, all three routes answer 403.
+     */
+    agentCoordinationEnabled: z.boolean().optional(),
+    /**
      * Read My Mind predictor model override. Empty/absent = the AI-checker
      * default (opus: prediction quality is the product and it runs only on an
      * explicit press). Shell-safety is validated again at spawn time.

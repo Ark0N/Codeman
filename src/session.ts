@@ -129,7 +129,12 @@ import { DEFAULT_TMUX_HISTORY_LIMIT } from './config/terminal-history.js';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 import { getCli } from './config/cli-registry/registry.js';
 import { SubmitVerifier } from './session-submit-verifier.js';
-import { promptSha256, readGuardedCodexSnapshotDetails, type GuardedInputSnapshot } from './agent-staging.js';
+import {
+  guardedComposerChrome,
+  promptSha256,
+  readGuardedSnapshotDetails,
+  type GuardedInputSnapshot,
+} from './agent-staging.js';
 import { isKeyboardTerminalInput } from './terminal-input-classifier.js';
 import { stripAnsi } from './utils/regex-patterns.js';
 import { KEEP_WARM_NUDGE } from './prompt-cache-keepwarm.js';
@@ -4764,10 +4769,12 @@ export class Session extends EventEmitter {
       this.remote ||
       this.docker ||
       this.paneExit ||
-      getCli(this.mode)?.capabilities.transcript !== 'codex-rollout' ||
       !this._muxSession
     )
       return null;
+    // Only a CLI whose registry entry describes its composer chrome takes guarded input.
+    const chrome = guardedComposerChrome(getCli(this.mode));
+    if (!chrome) return null;
     const capture: import('./mux-interface.js').PaneCaptureOptions = {};
     const screen = this._mux?.capturePaneBuffer?.(this._muxSession.muxName, undefined, capture);
     if (!screen) return null;
@@ -4778,7 +4785,7 @@ export class Session extends EventEmitter {
     const working = this._workingLinePattern();
     working.lastIndex = 0;
     if (this._paneShowsBlocked(plain) || working.test(plain) || this._paneAwaitsWorkers(plain)) return null;
-    const composer = readGuardedCodexSnapshotDetails(screen);
+    const composer = readGuardedSnapshotDetails(screen, chrome);
     return composer === null
       ? null
       : {

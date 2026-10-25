@@ -111,7 +111,7 @@ Further detail: ⚠️ An ADOPTED container may back SEVERAL cases at different 
 
 ⚠️ `external`, `hooks` and `altScreen` are three INDEPENDENT capabilities on purpose; deriving one from another shipped the `until=stop`-hangs-on-shell bug.
 
-⚠️ Four capability fields carry a REGEX from config (`discovery.version.regex`, `capabilities.workDetect.workingLine`, `capabilities.workDetect.watchingLine` and `capabilities.workDetect.awaitingLine`) and all four must compile through `compileVersionRegex()`, which caps length and refuses nested quantifiers; `workingLine` is the one that runs on the PTY hot path.
+⚠️ Several capability fields carry a REGEX from config (`discovery.version.regex`, `capabilities.workDetect.workingLine`, `watchingLine`, `awaitingLine`, `blockedLine`, `composerFooterLine` and `capabilities.modelDetect.screenLine`) and all of them must compile through `compileVersionRegex()`, which caps length and refuses nested quantifiers; `workingLine` is the one that runs on the PTY hot path.
 
 ⚠️ **`param` is TWO namespaces.** `launch.params` keys, `env.configSetenv[].fromParam` and `capabilities.privilegedParams[].param` all name a LAUNCH PARAM; the legacy `<Mode>Config` wire field is a separate namespace, bridged only by `launch.legacyConfigAliases`. Getting `privilegedParams[].param` wrong is SILENT — it is the multi-user bypass clamp's only handle on a CLI's privilege switch, and a wrong name clamps nothing with no load error and no failing test — so `schema.ts` rejects an entry naming a param it never declared. Codex is the entry where the two names differ (`bypassApprovals` vs `dangerouslyBypassApprovals`) and therefore the one that catches a regression.
 
@@ -1264,8 +1264,15 @@ Its CLI knowledge is a GENERATED block (`npm run generate:cli-catalog`, markers 
 ## Agent inspection and guarded submission
 
 These three operations are experimental across both CLI and HTTP, including the
-`/api/v1` paths and unversioned aliases. See `docs/versioning-policy.md` for the
-explicit stability exception; do not infer stability from the URL prefix.
+`/api/v1` paths and unversioned aliases: a case of the "labeled experimental" rule
+in `docs/versioning-policy.md`, so do not infer stability from the URL prefix.
+
+⚠️ They are opt-in. All three routes answer `403 FORBIDDEN` with a message naming
+`agentCoordinationEnabled` (synced, default OFF, App Settings, Cross-session
+features) until it is on, the `cliManagementEnabled` / `mcpSyncEnabled` shape. The
+gate runs first, before session lookup or body validation, and reads
+`settings.json` fresh on every request, so a toggle applies without a restart.
+`codeman agent inspect|stage|submit` pass the 403 through verbatim.
 
 `agent-session-routes.ts` is registered by `WebServer` with the other route
 modules. Ownership is checked before transcript/pane/receipt lookup. Inspection
@@ -1275,8 +1282,24 @@ complete UTF8 JSONL records. A full page advances its cursor without claiming a
 blocked record. Opaque cursors bind caller/session/lifecycle/file identity; pane
 geometry is excluded so changing devices does not invalidate transcript paging.
 
-Staging requires a fresh, known local Codex composer/caret capture. The footer
-uses the shared `CODEX_REASONING_EFFORTS` vocabulary. Before any write, available
+⚠️ Codex never prunes `~/.codex/sessions`, so attribution must not cost a store
+walk per call. The first call walks (negative-filter prefixes read 1 KiB first,
+4 KiB only when that window holds no complete `originator` field; non-UUID file
+names are skipped unread), then the attributed `{path, dev:ino}` and its strict
+metadata are remembered per session (`attributionMemo`, bounded LRU). A later call
+re-verifies only that file's head, then scans just the date directories not older
+than its own (`sessions/YYYY/MM/DD`, compared numerically; any non-numeric name is
+never pruned) for a second candidate, which is how a codex `/new` or a new owned
+rollout beside a configured resume is still caught. A failed check drops the memo
+and falls back to one full walk. Non-`InspectionConflict` errors are `422
+OPERATION_FAILED` (never a retryable `409`) and are logged with the session id and
+error code only, never the path.
+
+Staging requires a fresh, known composer/caret capture. The composer glyph and
+footer are registry data (`capabilities.workDetect.promptGlyph` and
+`composerFooterLine`, compiled through `compileVersionRegex()`), and only a CLI
+declaring `composerFooterLine` takes guarded input (codex today). Codex's footer
+words come from the same `CODEX_EFFORT_WORDS` as its `modelDetect.screenLine`. Before any write, available
 columns are calculated from actual captured geometry and the rendered prefix,
 including indentation; reaching the last column or wrapping is refused. Stage
 cancels older verifier retries and sends no Enter. Receipts contain hashes and

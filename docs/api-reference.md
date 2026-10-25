@@ -593,10 +593,19 @@ request returns. The capture runs synchronous tmux calls on the server; the
 
 **Experimental:** `codeman agent inspect`, `stage` and `submit`, and their
 `/api/v1/sessions/:id/inspect|stage|submit` routes (including `/api` aliases),
-are excluded from the stable CLI/HTTP contract. Their commands, flags, paths,
+are labeled experimental, so the versioning policy's rule for experimental
+surfaces applies (`docs/versioning-policy.md`, "Experimental agent
+coordination"): they are not part of the stable contract. Their commands, flags, paths,
 payloads and behavior may change or be removed in a minor or patch release.
 Pin a compatible Codeman version when automating them. Authentication and
 session ownership checks still apply.
+
+**Opt-in:** all three routes answer `403 FORBIDDEN` while the synced
+`agentCoordinationEnabled` setting is off (the default; App Settings,
+Cross-session features, **Experimental agent coordination**), with a message
+naming it. The check runs before session lookup and body validation, and reads
+the saved setting on every request, so turning it on needs no restart.
+`codeman agent inspect|stage|submit` print that refusal verbatim (exit 1).
 
 These authenticated routes use the standard envelope and session ownership checks.
 `/api/v1` aliases `/api`; an inaccessible session returns `404 NOT_FOUND` before
@@ -617,7 +626,14 @@ keeping UTF8/JSONL boundaries. Evidence bytes exclude response metadata and JSON
 escaping. Record scans cap at 256 KiB plus bounded identity anchors; attribution
 separately caps at 8192 directory entries, eight directory levels, 8 MiB of
 negative-filter prefix reads and 1 MiB of candidate metadata reads (including
-final identity verification). Unreachable workspace/home/metadata directories
+final identity verification). The negative filter reads 1 KiB of each rollout
+first and 4 KiB only when that window holds no complete `originator` field. Once
+a rollout is attributed, later calls re-verify only that file (same file identity,
+same strict metadata) and rescan only the `sessions/YYYY/MM/DD` directories not
+older than its own, for a second candidate such as a codex `/new`; a failed check
+falls back to one full walk. So the caps bound the first call, not every call.
+An unexpected read error is `422 OPERATION_FAILED` (logged with the session id
+and error code only), not a retryable `409`. Unreachable workspace/home/metadata directories
 are probed with a bounded past-cap probe before canonical reads and remain
 unattributed. A full incremental page can be continued with its cursor; only a
 first pending record too large for the budget reports an output-budget block.
@@ -643,7 +659,10 @@ filesystem path is returned as cursor/identity metadata; evidence retains the
 owner's native record content, which can itself contain paths.
 
 Guarded input initially requires a local characterized Codex composer, one
-unwrapped visible line, a recognized footer and a cursor at its exact end.
+unwrapped visible line, a recognized footer and a cursor at its exact end. The
+composer glyph and footer are the CLI registry's
+`capabilities.workDetect.promptGlyph` and `composerFooterLine`; a CLI that
+declares no `composerFooterLine` is refused.
 Unknown/working/modal/shell/remote/container composers fail closed. Stage accepts
 at most 8192 UTF8 bytes, no C0/C1/DEL controls, multiline text, or trailing
 whitespace (the existing mux transport trims it). Before typing, it checks the

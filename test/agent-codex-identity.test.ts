@@ -1,9 +1,13 @@
 /** @fileoverview Strict bounded native rollout attribution without viewer heuristics. */
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { findExactCodexConversation, resolveEffectiveCodexHome } from '../src/agent-codex-identity.js';
+import {
+  __clearCodexAttributionMemo,
+  findExactCodexConversation,
+  resolveEffectiveCodexHome,
+} from '../src/agent-codex-identity.js';
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -154,3 +158,80 @@ it.each(['workspace', 'metadata'] as const)(
     }
   }
 );
+
+describe('remembered attribution on a large, never-pruned store', () => {
+  beforeEach(() => __clearCodexAttributionMemo());
+  const OWNED = '33333333-3333-4333-8333-333333333333';
+  const NEWER = '44444444-4444-4444-8444-444444444444';
+  /** codex's own layout: sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl */
+  async function dated(f: Awaited<ReturnType<typeof fixture>>, day: string, id: string, payload: object = {}) {
+    const dir = join(f.home, 'sessions', ...day.split('/'));
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `rollout-${day.replaceAll('/', '-')}T00-00-00-${id}.jsonl`);
+    await writeFile(
+      path,
+      JSON.stringify({
+        type: 'session_meta',
+        payload: { id, cwd: f.root, originator: 'codeman_managed', ...payload },
+      }) + '\n'
+    );
+    return path;
+  }
+  /** `count` unrelated 19 KiB rollouts (a real session_meta size) spread over older days. */
+  async function unrelated(f: Awaited<ReturnType<typeof fixture>>, count: number) {
+    const instructions = 'x'.repeat(19 * 1024);
+    for (let start = 0; start < count; start += 200) {
+      await Promise.all(
+        Array.from({ length: Math.min(200, count - start) }, (_, k) => {
+          const n = start + k;
+          const day = `2026/${String(1 + (n % 9)).padStart(2, '0')}/${String(1 + (n % 28)).padStart(2, '0')}`;
+          return dated(f, day, `10000000-1111-4111-8111-${String(n).padStart(12, '0')}`, {
+            originator: 'codex_cli',
+            instructions,
+          });
+        })
+      );
+    }
+  }
+  const small = { maxEntries: 20, maxBytes: 1048576 };
+
+  it('attributes one owned rollout beside 2,100 unrelated full-size rollouts', async () => {
+    const f = await fixture();
+    await unrelated(f, 2100);
+    const path = await dated(f, '2026/10/24', OWNED);
+    expect(await findExactCodexConversation(f.options)).toEqual({ id: OWNED, path });
+  }, 60_000);
+
+  it('re-verifies only the remembered file on a later call instead of re-walking the store', async () => {
+    const f = await fixture();
+    await unrelated(f, 300);
+    const path = await dated(f, '2026/10/24', OWNED);
+    expect(await findExactCodexConversation(f.options)).toEqual({ id: OWNED, path });
+    // 20 entries cannot cover 300 rollouts in 9 months of day directories: only the
+    // remembered head plus the directories not older than it fit.
+    expect(await findExactCodexConversation(f.options, small)).toEqual({ id: OWNED, path });
+    __clearCodexAttributionMemo();
+    expect(await findExactCodexConversation(f.options, small)).toBeUndefined();
+  });
+
+  it('still catches a newer owned rollout (codex /new) after remembering one', async () => {
+    const f = await fixture();
+    await unrelated(f, 50);
+    const path = await dated(f, '2026/10/24', OWNED);
+    expect(await findExactCodexConversation(f.options)).toEqual({ id: OWNED, path });
+    await dated(f, '2026/10/25', NEWER);
+    expect(await findExactCodexConversation(f.options, small)).toBeUndefined();
+    expect(await findExactCodexConversation(f.options)).toBeUndefined();
+  });
+
+  it('drops the remembered file when it is replaced, and walks again', async () => {
+    const f = await fixture();
+    const path = await dated(f, '2026/10/24', OWNED);
+    expect(await findExactCodexConversation(f.options)).toEqual({ id: OWNED, path });
+    await rm(path);
+    await dated(f, '2026/10/24', OWNED, { originator: 'codex_cli' });
+    expect(await findExactCodexConversation(f.options)).toBeUndefined();
+    const moved = await dated(f, '2026/10/23', NEWER);
+    expect(await findExactCodexConversation(f.options)).toEqual({ id: NEWER, path: moved });
+  });
+});

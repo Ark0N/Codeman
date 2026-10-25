@@ -184,6 +184,27 @@ describe('workDetect.workingLine is guarded like every other config regex', () =
     }
   });
 
+  it('holds the optional composerFooterLine to the same guard', () => {
+    // Run over the rows under the composer each time guarded input reads the pane.
+    for (const composerFooterLine of ['(a+)+b', 'a'.repeat(201), '([unclosed', '']) {
+      expectRejected((e) => {
+        (e.capabilities as Record<string, unknown>).workDetect = {
+          promptGlyph: '>',
+          workingLine: 'working',
+          composerFooterLine,
+        };
+      }, 'guarded input tests it against pane rows a clis.json override can supply');
+    }
+  });
+
+  it('accepts every shipped composerFooterLine', () => {
+    for (const entry of STOCK_CLIS) {
+      const src = entry.capabilities.workDetect?.composerFooterLine;
+      if (!src) continue;
+      expect(compileVersionRegex(src), `${entry.id} declares a composerFooterLine the guard refuses`).not.toBeNull();
+    }
+  });
+
   it('holds the optional blockedLine to the same guard', () => {
     // Run over the foot of a capture at every settle and on a timer while a dialog is
     // up, and a clis.json override can set it.

@@ -432,6 +432,15 @@ export interface CliCapabilities {
      * this is sized for the narrowest pane the CLI was measured at. Default 1.
      */
     blockedLines?: number;
+    /**
+     * Source of a regex every non-blank row BELOW an idle composer must match (at most
+     * three rows): the footer and hint rows this CLI draws there and nowhere else. It is
+     * what lets the experimental guarded stage/submit routes (`agent-staging.ts`) prove
+     * that the `promptGlyph` row they read is this CLI's own composer, at rest, and not
+     * a dialog option or a transcript line the agent printed. A CLI that omits it never
+     * takes guarded input: stage and submit refuse it. Tested one row at a time.
+     */
+    composerFooterLine?: string;
   };
   /**
    * How many columns this CLI indents its transcript body by, so a copy taken from its

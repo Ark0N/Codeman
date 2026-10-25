@@ -2,11 +2,13 @@
  * @fileoverview `codeman agent …` — session-to-session verbs for the agent running
  * inside a Codeman session, in every CLI mode.
  *
- * A thin HTTP client over endpoints that already exist (`quick-start`, `input`,
- * `wait`, `wait-output`, `last-response`, `terminal`, `DELETE sessions/:id`, and the
- * agent inbox: `inbox`, `inbox/ack`, `agent-inbox/summary`). It
- * invents no route and no transport: everything goes through `CODEMAN_API_URL`, so
- * auth, ownership and the per-session waiter cap apply unchanged. The behaviour is
+ * A thin HTTP client over the server's endpoints (`quick-start`, `input`, `wait`,
+ * `wait-output`, `last-response`, `terminal`, `DELETE sessions/:id`, the agent inbox:
+ * `inbox`, `inbox/ack`, `agent-inbox/summary`, and the experimental, opt-in
+ * `inspect`/`stage`/`submit` of `web/routes/agent-session-routes.ts`, which answer 403
+ * until `agentCoordinationEnabled` is on; that refusal is printed verbatim). It uses no
+ * transport of its own: everything goes through `CODEMAN_API_URL`, so auth, ownership
+ * and the per-session waiter cap apply unchanged. The behaviour is
  * the packaged agent skill's (`skills/codeman`), ported from shell prose into code
  * with tests, so a `codex`/`opencode`/`pi` agent — which never gets the claude-only
  * preamble — has the same verbs from one line in its AGENTS.md.
@@ -1272,7 +1274,9 @@ export function registerAgentCommands(program: Command): Command {
 
   agent
     .command('inspect <id>')
-    .description('Experimental: bounded transcript evidence or a labeled pane snapshot; opaque incremental cursors')
+    .description(
+      'Experimental, opt-in (agentCoordinationEnabled): bounded transcript evidence or a labeled pane snapshot; opaque incremental cursors'
+    )
     .option('--max-bytes <n>', 'UTF8 evidence budget (1–65536)', '8192')
     .option('--since <cursor>', 'Resume a cursor from the same owner, pane and transcript')
     .option('--json', 'Machine-readable output')
@@ -1289,7 +1293,7 @@ export function registerAgentCommands(program: Command): Command {
   agent
     .command('stage <id>')
     .description(
-      'Experimental: type a printable single-line UTF8 file without Enter; requires a verifiable local Codex composer'
+      'Experimental, opt-in (agentCoordinationEnabled): type a printable single-line UTF8 file without Enter; requires a verifiable local Codex composer'
     )
     .requiredOption('--message-file <path>', 'Regular UTF8 file, at most 8192 bytes, no trailing newline')
     .option('--json', 'Machine-readable output')
@@ -1299,7 +1303,9 @@ export function registerAgentCommands(program: Command): Command {
 
   agent
     .command('submit <id>')
-    .description('Experimental: send Enter once only when the staged composer, pane and hash still match')
+    .description(
+      'Experimental, opt-in (agentCoordinationEnabled): send Enter once only when the staged composer, pane and hash still match'
+    )
     .requiredOption('--stage-id <receipt>', 'One-shot stage receipt')
     .requiredOption('--confirm-sha <hash>', 'Exact SHA-256 returned by stage')
     .option('--json', 'Machine-readable output')

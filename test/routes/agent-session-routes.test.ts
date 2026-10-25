@@ -1,11 +1,118 @@
 /** @fileoverview Agent inspection and guarded input HTTP contracts (no live ports). */
-import { afterEach, describe, expect, it } from 'vitest';
-import { registerAgentSessionRoutes } from '../../src/web/routes/agent-session-routes.js';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  AGENT_COORDINATION_DISABLED_MESSAGE,
+  registerAgentSessionRoutes,
+} from '../../src/web/routes/agent-session-routes.js';
+import { InspectionReader } from '../../src/agent-inspection.js';
+import { SETTINGS_PATH } from '../../src/web/route-helpers.js';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 
 let harness: RouteTestHarness;
+/** The routes are opt-in (`agentCoordinationEnabled`, default OFF); undefined = key absent. */
+function setEnabled(on: boolean | undefined): void {
+  mkdirSync(dirname(SETTINGS_PATH), { recursive: true });
+  writeFileSync(SETTINGS_PATH, JSON.stringify(on === undefined ? {} : { agentCoordinationEnabled: on }));
+}
+beforeEach(() => setEnabled(true));
 afterEach(async () => {
   await harness?.app.close();
+  rmSync(SETTINGS_PATH, { force: true });
+});
+
+describe('the agentCoordinationEnabled gate', () => {
+  const requests = (id: string) => [
+    { method: 'GET' as const, url: `/api/sessions/${id}/inspect` },
+    { method: 'GET' as const, url: `/api/sessions/${id}/inspect?maxBytes=0` },
+    { method: 'POST' as const, url: `/api/sessions/${id}/stage`, payload: { message: 'hello' } },
+    {
+      method: 'POST' as const,
+      url: `/api/sessions/${id}/submit`,
+      payload: { stageId: '11111111-1111-4111-8111-111111111111', confirmSha: 'a'.repeat(64) },
+    },
+  ];
+  it.each([
+    ['absent', undefined],
+    ['false', false],
+  ] as const)('answers 403 naming the setting on every route while it is %s', async (_label, value) => {
+    setEnabled(value);
+    harness = await createRouteTestHarness(registerAgentSessionRoutes);
+    const session = [...harness.ctx.sessions.values()][0];
+    // A session id that does not exist is refused the same way: the gate runs before lookup.
+    for (const request of [...requests(session.id), ...requests('no-such-session')]) {
+      const result = await harness.app.inject(request);
+      expect(result.statusCode).toBe(403);
+      expect(result.json()).toEqual({
+        success: false,
+        error: AGENT_COORDINATION_DISABLED_MESSAGE,
+        errorCode: 'FORBIDDEN',
+      });
+    }
+    expect(AGENT_COORDINATION_DISABLED_MESSAGE).toContain('agentCoordinationEnabled');
+    expect(session.writeBuffer).toEqual([]);
+  });
+  it('answers on every route once it is on, with no restart', async () => {
+    setEnabled(false);
+    harness = await createRouteTestHarness(registerAgentSessionRoutes);
+    const session = [...harness.ctx.sessions.values()][0];
+    expect((await harness.app.inject(requests(session.id)[0])).statusCode).toBe(403);
+    setEnabled(true);
+    const [inspect, invalid, stage, submit] = await Promise.all(
+      requests(session.id).map((request) => harness.app.inject(request))
+    );
+    expect(inspect.statusCode).toBe(200);
+    expect(inspect.json().data.source).toBe('pane-snapshot');
+    expect(invalid.statusCode).toBe(400);
+    // The mock session has no characterized composer, so the guards refuse: the route answered.
+    expect(stage.statusCode).toBe(409);
+    expect(submit.statusCode).toBe(409);
+  });
+});
+
+it('reports a non-cursor inspection failure as OPERATION_FAILED and logs only the session and error code', async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { Session } = await import('../../src/session.js');
+  const root = await mkdtemp(join(tmpdir(), 'agent-inspect-fail-'));
+  const home = join(root, 'codex');
+  await mkdir(join(home, 'sessions'), { recursive: true });
+  const session = new Session({
+    id: 'inspect-fail',
+    workingDir: root,
+    mode: 'codex',
+    envOverrides: { CODEX_HOME: home },
+  });
+  const id = '11111111-1111-4111-8111-111111111111';
+  const path = join(home, 'sessions', `rollout-${id}.jsonl`);
+  await writeFile(
+    path,
+    JSON.stringify({ type: 'session_meta', payload: { id, cwd: root, originator: `codeman_${session.id}` } }) + '\n'
+  );
+  harness = await createRouteTestHarness(registerAgentSessionRoutes);
+  (harness.ctx.sessions as unknown as Map<string, Session>).set(session.id, session);
+  const read = vi
+    .spyOn(InspectionReader.prototype, 'read')
+    .mockRejectedValue(Object.assign(new Error(`EACCES: permission denied, open '${path}'`), { code: 'EACCES' }));
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const result = await harness.app.inject({ url: `/api/sessions/${session.id}/inspect` });
+    expect(read).toHaveBeenCalled();
+    expect(result.statusCode).toBe(422);
+    expect(result.json().errorCode).toBe('OPERATION_FAILED');
+    expect(result.body).not.toContain(path);
+    const logged = warn.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(logged).toContain(session.id);
+    expect(logged).toContain('EACCES');
+    expect(logged).not.toContain(home);
+  } finally {
+    read.mockRestore();
+    warn.mockRestore();
+    await session.stop(false);
+    await rm(root, { recursive: true, force: true });
+  }
 });
 describe('agent session routes', () => {
   it('returns an explicitly bounded pane snapshot when no attributed transcript exists', async () => {

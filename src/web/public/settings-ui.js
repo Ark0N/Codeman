@@ -541,6 +541,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsApprovalsInbox').checked = settings.approvalsInboxEnabled === true;
     // Agent inbox snapshot on disk: synced, default OFF.
     document.getElementById('appSettingsAgentInboxPersist').checked = settings.agentInboxPersistEnabled === true;
+    // Experimental agent coordination (inspect/stage/submit routes): synced, default OFF.
+    document.getElementById('appSettingsAgentCoordination').checked = settings.agentCoordinationEnabled === true;
     // Custom Model Endpoint Profiles: synced, default OFF. The toggle governs both
     // the Run-menu picker's generated entries and this settings panel's visibility;
     // the endpoint list itself is server state, loaded on demand below.
@@ -2929,6 +2931,7 @@ Object.assign(CodemanApp.prototype, {
       configBackupDir: document.getElementById('appSettingsConfigBackupDir').value.trim(),
       ...this._configBackupRetentionPayload(_prev),
       agentInboxPersistEnabled: document.getElementById('appSettingsAgentInboxPersist').checked,
+      agentCoordinationEnabled: document.getElementById('appSettingsAgentCoordination').checked,
       readMyMindEnabled: document.getElementById('appSettingsReadMyMind').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,

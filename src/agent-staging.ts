@@ -6,10 +6,30 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { stripAnsi } from './utils/regex-patterns.js';
 import { visibleWidth } from './tui/tui-ansi.js';
-import { CODEX_REASONING_EFFORTS } from './types/session.js';
-const FOOTER_LINE = new RegExp(
-  String.raw`^\s+(?:\d+% context left|\? for shortcuts|← for agents|\S+ (?:${[...CODEX_REASONING_EFFORTS, 'default'].join('|')}) · )`
-);
+import { compileVersionRegex } from './config/cli-registry/patterns.js';
+import type { CliEntry } from './config/cli-registry/types.js';
+
+/**
+ * The screen chrome a guarded composer read relies on, both from the CLI registry
+ * (`capabilities.workDetect`): the composer glyph and the pattern every row below an
+ * idle composer must match. Nothing here names a CLI; a CLI takes part in guarded
+ * input by declaring `composerFooterLine`.
+ */
+export interface GuardedComposerChrome {
+  promptGlyph: string;
+  footerLine: RegExp;
+}
+/** The chrome a registry entry declares, or null (no guarded input for that CLI). */
+export function guardedComposerChrome(entry: CliEntry | undefined): GuardedComposerChrome | null {
+  const detect = entry?.capabilities.workDetect;
+  if (!detect?.promptGlyph || !detect.composerFooterLine) return null;
+  // Config-supplied (~/.codeman/clis.json): compiled through the ReDoS guard, null on refusal.
+  const footerLine = compileVersionRegex(detect.composerFooterLine);
+  return footerLine ? { promptGlyph: detect.promptGlyph, footerLine } : null;
+}
+const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const composerRow = (chrome: GuardedComposerChrome) =>
+  new RegExp(String.raw`^\s*${escapeRegex(chrome.promptGlyph)}(?:\s|$)`);
 export const STAGE_MAX_BYTES = 8192;
 export const promptSha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
 export interface GuardedInputSnapshot {
@@ -34,19 +54,21 @@ interface Receipt extends GuardedInputSnapshot {
 export class GuardedInputConflict extends Error {}
 
 /**
- * Conservatively read a Codex composer: exactly one visible, unwrapped row and a
- * known footer. Never remove internal spaces, infer an unknown shell prompt, or
- * interpret dialog options as authority. An unsupported frame yields no proof.
+ * Conservatively read a composer: exactly one visible, unwrapped row and a known
+ * footer, both as the registry describes them. Never remove internal spaces, infer
+ * an unknown shell prompt, or interpret dialog options as authority. An unsupported
+ * frame yields no proof.
  */
-export function readGuardedCodexComposer(screen: string): string | null {
+export function readGuardedComposer(screen: string, chrome: GuardedComposerChrome): string | null {
+  const isComposer = composerRow(chrome);
   const lines = stripAnsi(screen)
     .split('\n')
     .map((line) => line.trimEnd());
-  const rows = lines.map((line, index) => ({ line, index })).filter((row) => /^\s*›(?:\s|$)/.test(row.line));
+  const rows = lines.map((line, index) => ({ line, index })).filter((row) => isComposer.test(row.line));
   const last = rows.at(-1);
   if (!last) return null;
   const below = lines.slice(last.index + 1).filter((line) => line.trim());
-  if (below.length === 0 || below.length > 3 || below.some((line) => !FOOTER_LINE.test(line))) return null;
+  if (below.length === 0 || below.length > 3 || below.some((line) => !chrome.footerLine.test(line))) return null;
   // Preserve exact printable content; only SGR-dim placeholder/suggestion text is excluded.
   const raw = screen.split('\n')[last.index];
   let dim = false;
@@ -65,15 +87,22 @@ export function readGuardedCodexComposer(screen: string): string | null {
       }
     } else if (!dim) visible += token;
   }
-  return stripAnsi(visible).trimStart().slice(2).trimEnd();
+  // The glyph and the one space after it are the prefix, not input.
+  return stripAnsi(visible)
+    .trimStart()
+    .slice(chrome.promptGlyph.length + 1)
+    .trimEnd();
 }
 
 /** Require the capture's caret at the exact end of the unwrapped composer. */
-export function readGuardedCodexSnapshot(snapshot: string): string | null {
-  return readGuardedCodexSnapshotDetails(snapshot)?.composer ?? null;
+export function readGuardedSnapshot(snapshot: string, chrome: GuardedComposerChrome): string | null {
+  return readGuardedSnapshotDetails(snapshot, chrome)?.composer ?? null;
 }
 /** Exact input-row prefix width, shared by proof and preflight wrapping checks. */
-export function readGuardedCodexSnapshotDetails(snapshot: string): { composer: string; prefixWidth: number } | null {
+export function readGuardedSnapshotDetails(
+  snapshot: string,
+  chrome: GuardedComposerChrome
+): { composer: string; prefixWidth: number } | null {
   // formatPaneSnapshot emits one absolute row address per line, then the caret.
   // Plain captures lack caret evidence and cannot prove invisible trailing edits.
   // eslint-disable-next-line no-control-regex
@@ -87,16 +116,17 @@ export function readGuardedCodexSnapshotDetails(snapshot: string): { composer: s
     if (Number(position[1]) !== i + 1 || position[2] !== '1') return null;
     rows.push(snapshot.slice(position.index! + position[0].length, positions[i + 1].index));
   }
-  const composer = readGuardedCodexComposer(rows.join('\n'));
+  const composer = readGuardedComposer(rows.join('\n'), chrome);
   if (composer === null) return null;
-  let composerRow = -1;
+  const isComposer = composerRow(chrome);
+  let row = -1;
   for (let i = rows.length - 1; i >= 0; i--)
-    if (/^\s*›(?:\s|$)/.test(stripAnsi(rows[i]))) {
-      composerRow = i;
+    if (isComposer.test(stripAnsi(rows[i]))) {
+      row = i;
       break;
     }
-  const prefix = stripAnsi(rows[composerRow]).match(/^(\s*›[ \u00a0])/);
-  if (!prefix || Number(caret[1]) !== composerRow + 1 || Number(caret[2]) !== visibleWidth(prefix[1] + composer) + 1)
+  const prefix = stripAnsi(rows[row]).match(new RegExp(String.raw`^(\s*${escapeRegex(chrome.promptGlyph)}[ \u00a0])`));
+  if (!prefix || Number(caret[1]) !== row + 1 || Number(caret[2]) !== visibleWidth(prefix[1] + composer) + 1)
     return null;
   return { composer, prefixWidth: visibleWidth(prefix[1]) };
 }
