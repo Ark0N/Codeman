@@ -2761,9 +2761,12 @@ function terminalLinkLine(buffer, row, cols, maxRows) {
  * edge is where its text starts after the previous ≥2-space column gap, and the
  * continuation is the token starting at exactly that column on the next row.
  * A fragment qualifies only when it is the last thing in its cell on that row
- * (row end or a ≥2-space gap follows). Every continuation must pass
- * pathContinuation and its cell must be no wider than the preceding cell's
- * text, so independent listing rows and longer prose never displace links.
+ * (row end or a ≥2-space gap follows) and ends on `/` or `-`, the only places
+ * a wrapper breaks a path; a cell that ends inside a name (`/home/u/proj` over
+ * `config.yaml`) is a whole value, never the first piece of the next row's. Every
+ * continuation must pass pathContinuation and its cell must be no wider than the
+ * preceding cell's text, so independent listing rows and longer prose never
+ * displace links.
  *
  * Pure: reads rows only. Cells are taken one per string character (xterm rows
  * with wide glyphs would shift columns; such rows simply fail the alignment).
@@ -2825,6 +2828,14 @@ function terminalCellWrappedPaths(buffer, row, maxRows) {
         const token = next.slice(cellCol, tokenEnd);
         // Include prose after the token in this cell, but not another column.
         const cellText = next.slice(cellCol).split(/ {2,}|[│┃║|]/, 1)[0].trimEnd();
+        // A wrapper breaks a path after `/` or `-`; a fragment that ends inside a
+        // name (`/home/u/proj` over `config.yaml`) is a whole value, not a piece.
+        // codex wraps table cells on Unicode line-break opportunities plus a
+        // hyphen splitter, which break after `/` and `-` but never at `_` (UAX #14
+        // class AL). Known trade-off: a directory written with its trailing slash
+        // over a relative path in the same column (`/home/u/proj/src/` over
+        // `lib/util.ts`) still joins, since it reads exactly like a wrap at `/`.
+        if (!/[/-]$/.test(joined)) break;
         if (cellText.length > previousCellLength || !pathContinuation(joined, token)) break;
         const candidate = joined + token;
         const match = absoluteFilePathPattern().exec(candidate);

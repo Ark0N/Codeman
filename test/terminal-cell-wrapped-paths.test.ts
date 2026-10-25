@@ -65,6 +65,32 @@ const LISTINGS = [
   ['Created /tmp/out', 'report.md written next to it'],
 ];
 
+// A directory that is the whole value of its cell, over the next record's file
+// name in the same column. A wrapper breaks a path after `/` or `-`, never inside
+// a name, so none of these is one path: each cell keeps its own link.
+const WHOLE_VALUE_SHAPES: Array<{ rows: string[]; dir: string; file: string }> = [
+  { rows: ['  Repo        /home/u/proj', '  Config      config.yaml'], dir: '/home/u/proj', file: 'config.yaml' },
+  {
+    rows: ['  Workspace    /home/u/proj/app', '  Entry        main.py'],
+    dir: '/home/u/proj/app',
+    file: 'main.py',
+  },
+  {
+    rows: ['│ Workspace │ /home/u/proj/app │', '│ Entry     │ main.py          │'],
+    dir: '/home/u/proj/app',
+    file: 'main.py',
+  },
+  { rows: ['  Output dir   /tmp/build/out', '  Log          build.log'], dir: '/tmp/build/out', file: 'build.log' },
+  {
+    rows: ['  Path                 Purpose', '  /home/u/proj/src     sources', '  index.ts             entry'],
+    dir: '/home/u/proj/src',
+    file: 'index.ts',
+  },
+];
+// Known trade-off: a directory written WITH its trailing slash over a relative
+// path in the same column reads exactly like a wrap at `/`, so it still joins.
+const TRAILING_SLASH_TRADE_OFF = ['  Source       /home/u/proj/src/', '  Helper       lib/util.ts'];
+
 const BEFORE = '/tmp/demo-check/docs/review/BLDMESH-243/before-overview.png';
 const AFTER = '/tmp/demo-check/docs/review/BLDMESH-243/after-overview.png';
 
@@ -81,6 +107,25 @@ describe('terminalCellWrappedPaths', () => {
   it.each(LISTINGS.map((lines) => [lines]))('does not join independent listing rows: %j', (lines) => {
     const rows = lines.map((text) => ({ text }));
     for (let row = 0; row < rows.length; row++) expect(find(fakeBuffer(rows, COLS), row)).toEqual([]);
+  });
+
+  it.each(WHOLE_VALUE_SHAPES.map((shape) => [shape.rows, shape]))(
+    'does not join a directory cell onto the next record: %j',
+    (_rows, shape) => {
+      const rows = shape.rows.map((text) => ({ text }));
+      for (let row = 0; row < rows.length; row++) expect(find(fakeBuffer(rows, COLS), row)).toEqual([]);
+    }
+  );
+
+  it('does not join a fragment that ends on `_` (codex wraps cells only after `/` or `-`)', () => {
+    const rows = [{ text: '   shot (/tmp/demo/docs/review_' }, { text: '   before.png)' }];
+    expect(find(fakeBuffer(rows, COLS), 0)).toEqual([]);
+    expect(find(fakeBuffer(rows, COLS), 1)).toEqual([]);
+  });
+
+  it('still joins a trailing-slash directory over a relative path in its column (known trade-off)', () => {
+    const rows = TRAILING_SLASH_TRADE_OFF.map((text) => ({ text }));
+    expect(find(fakeBuffer(rows, COLS), 1).map((h) => h.path)).toEqual(['/home/u/proj/src/lib/util.ts']);
   });
 
   it('places the segments on the path cells only', () => {
@@ -214,6 +259,25 @@ describe('terminal link provider with cell-wrapped paths', () => {
       expect(provide(row + 1).map((link) => link.text)).toContain(expected[row]);
     }
   });
+
+  it.each(WHOLE_VALUE_SHAPES.map((shape) => [shape.rows, shape]))(
+    'keeps the folder link and the next record’s file link: %j',
+    (_rows, shape) => {
+      const { provide, app } = harness(shape.rows.map((text) => ({ text })));
+      const dirLine = shape.rows.findIndex((text) => text.includes(shape.dir)) + 1;
+      const fileLine = shape.rows.findIndex((text) => text.includes(shape.file)) + 1;
+      const all = [...provide(dirLine), ...provide(fileLine)].map((link) => link.text);
+      expect(all.some((text) => text.includes(shape.dir + shape.file))).toBe(false);
+      const dirLink = provide(dirLine).find((link) => link.text === shape.dir);
+      expect(dirLink, `${shape.dir} on row ${dirLine}`).toBeDefined();
+      expect(dirLink!.range.start.y).toBe(dirLine);
+      const fileLink = provide(fileLine).find((link) => link.text === shape.file);
+      expect(fileLink, `${shape.file} on row ${fileLine}`).toBeDefined();
+      expect(fileLink!.range.start.y).toBe(fileLine);
+      fileLink!.activate(null, fileLink!.text);
+      expect(app.openFilePreview).not.toHaveBeenCalledWith(shape.dir + shape.file, 's1');
+    }
+  );
 
   it('makes both screenshot paths clickable from either row and opens the whole path', () => {
     const { provide, app } = harness(TABLE);
