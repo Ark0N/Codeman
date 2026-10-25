@@ -410,8 +410,9 @@ export class WebServer extends EventEmitter {
     // never be handed `pastCap`. A folder on a mount that stopped answering is skipped, not fetched.
     probePath: (path) => probePathKind(path),
     // Through the join, so the tick and the panel's Fetch button are the same run: a click on a folder the
-    // tick is already fetching joins it rather than starting a second `git fetch` in the same clone.
-    fetch: (cwd, opts) => fetchWorkspaceOnce(cwd, opts),
+    // tick is already fetching joins it rather than starting a second `git fetch` in the same clone — and the
+    // run that gets published is the one that ran, with its own trigger.
+    fetch: (cwd, opts, trigger) => fetchWorkspaceOnce(cwd, opts, trigger),
     publish: (id, status) => {
       const session = this.sessions.get(id);
       if (!session?.setGitFetchStatus(status)) return;

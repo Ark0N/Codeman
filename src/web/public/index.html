@@ -1738,7 +1738,7 @@
 
               <div class="set-group">
                 <div class="set-group-head"><h4>Fetch on an interval</h4></div>
-                <p class="set-group-hint">Fetching is the only git command Codeman runs that writes, and the only one that runs a repository's own hooks, so nothing runs on a timer until you turn it on &mdash; here, or in App Settings &rarr; Bottom bar. The panel's Fetch button is always just a click.</p>
+                <p class="set-group-hint">Fetching is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer, so nothing runs until you turn it on &mdash; here, or in App Settings &rarr; Bottom bar. Cloning and worktree management write too, but only when you asked for them at the moment you asked. The panel's Fetch button is always just a click.</p>
                 <div class="set-group-body">
                   <!-- Live from the session's own last run (session-ui.js: updateGitFetchStatus), which is the
                        run its folder got: several sessions on one folder share one run and read the same row. -->
@@ -2252,7 +2252,7 @@
                   <div class="set-row" data-search="git status uncommitted unpushed commit push indicator bottom bar toolbar">
                     <div class="set-row-text">
                       <span class="set-row-label">Git status <span class="set-scope">device</span></span>
-                      <span class="set-row-desc">Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only apart from Fetch: Codeman never commits or changes the repository, and `git fetch` — the one git command here that writes — runs only when you click Fetch in that window, or on the interval below if you turned it on. Not shown for Docker or remote sessions. Off by default.</span>
+                      <span class="set-row-desc">Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only apart from Fetch: Codeman never commits or changes the repository, and `git fetch` — the only git command the Git window runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked) — runs when you click Fetch in that window, or on the interval below if you turned it on. Not shown for Docker or remote sessions. Off by default.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsShowGitStatus"><span class="slider"></span></label>
                   </div>
@@ -2280,7 +2280,7 @@
                   <div class="set-row" data-search="git fetch interval timer behind remote tracking refs poll run automatically">
                     <div class="set-row-text">
                       <span class="set-row-label">Git fetch on an interval <span class="set-scope">synced</span></span>
-                      <span class="set-row-desc">Runs `git fetch` for the repositories the Git window lists on a timer, so the "behind" number is current without a click. Off by default: this is the one git command Codeman runs that writes, and the one that runs a repository's own hooks, so nothing runs on a timer until you turn it on. A session can override both the switch and the interval in Session Options → Git.</span>
+                      <span class="set-row-desc">Runs `git fetch` for the repositories the Git window lists on a timer, so the "behind" number is current without a click. Off by default: this is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked), so nothing runs until you turn it on. A session can override both the switch and the interval in Session Options → Git.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsGitFetchEnabled"><span class="slider"></span></label>
                   </div>

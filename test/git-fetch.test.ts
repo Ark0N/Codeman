@@ -1,26 +1,35 @@
 /**
- * @fileoverview Tests for the Git panel's Fetch button (src/git-fetch.ts): the one git command Codeman
- * runs that writes, and the one that can run a repository's own hooks — which is why it is a click, not a
- * poll.
+ * @fileoverview Tests for the Git panel's Fetch button (src/git-fetch.ts): the only git command the Git panel
+ * runs that writes, and the only one that can run without being asked — which is why it is a click, or an
+ * interval the user turned on, and why the writing and the hooks it can run are pinned here. Cloning and
+ * worktree management write too, but they write when the user asked.
  *
- * Three halves, mirroring the module:
+ * Four halves, mirroring the module:
  *
- * 1. The PURE half — the fixed argv, the `-c` overrides the runner adds ahead of it, the failure
- *    classification, and the two reads the interval scheduler depends on: what the settings say
- *    (`gitFetchSettingsFrom`) and what a run did (`gitFetchStatusFrom`). No spawning.
+ * 1. The PURE half — the fixed argv, the `-c` overrides the runner adds ahead of it, the ssh environment the
+ *    runner refuses to override (`fetchEnvFor`), the failure classification, and the two reads the interval
+ *    scheduler depends on: what the settings say (`gitFetchSettingsFrom`) and what a run did
+ *    (`gitFetchStatusFrom`). No spawning.
  * 2. The IO half — a REAL git fetching a REAL local bare repo, so that "remote-tracking refs only" is
  *    proven against git's actual behavior: HEAD, the index and the working tree must be exactly what they
  *    were while the remote-tracking ref moves. The rest of the half uses an injected runner over real
  *    repositories on disk, because what is being pinned is WHICH repositories git is allowed to touch.
- * 3. The join (`fetchWorkspaceOnce`) — one run per folder at a time, because two fetches in one clone
- *    collide on git's ref lock, and the bound is ONE limiter shared with the scheduler's tick rather than a
- *    bound each run gets for itself.
+ * 3. The process group — a timed-out fetch has to take its `git-remote-http` helper with it, against a
+ *    server that accepts and never answers, so the assertion is about what is still RUNNING after the answer
+ *    went out. A test that only checked the returned error would pass with the old `execFile` runner, which
+ *    signals the parent only.
+ * 4. The join (`fetchWorkspaceOnce`) — one run per folder at a time, because two fetches in one clone
+ *    collide on git's ref lock, the bound is ONE limiter shared with the scheduler's tick rather than a bound
+ *    each run gets for itself, and the trigger a join reports is the joined run's, not the joiner's.
  *
- * Port: N/A (no server).
+ * Port: N/A (no Codeman server). The process-group test listens on its own loopback socket, on a port the OS
+ * picks, because the point of that test is a remote that never answers.
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type AddressInfo } from 'node:http';
+import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -28,13 +37,16 @@ import { classifyGitFailure, isGitAvailable } from '../src/git-clone.js';
 import {
   FETCH_CONCURRENCY,
   FETCH_CONFIG_ARGS,
+  FETCH_KILL_ESCALATION_MS,
   buildFetchArgs,
   clearGitFetchLane,
   describeFetchFailure,
+  fetchEnvFor,
   fetchGitWorkspaceOverview,
   fetchWorkspaceOnce,
   gitFetchSettingsFrom,
   gitFetchStatusFrom,
+  runFetch,
   type GitFetchReport,
 } from '../src/git-fetch.js';
 import { createLimiter, runGit, type GitRunner } from '../src/git-workspace-status.js';
@@ -212,6 +224,30 @@ describe('FETCH_CONFIG_ARGS', () => {
   });
 });
 
+describe('fetchEnvFor', () => {
+  const BASE = { HOME: '/home/t', PATH: '/usr/bin' };
+
+  it('writes the BatchMode default when nothing else already answered', () => {
+    const env = fetchEnvFor(BASE, null);
+    expect(env.GIT_SSH_COMMAND).toContain('BatchMode=yes');
+    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+  });
+
+  it('does not override a repository that already chose its own ssh, because that choice is usually the one that works', () => {
+    const env = fetchEnvFor(BASE, 'ssh -i /home/t/work_key -o ProxyJump=gw');
+    // The whole point: nothing is written, so git takes the repository's value from its own config.
+    expect(env.GIT_SSH_COMMAND).toBeUndefined();
+    // Honouring the repository's ssh is not the same as letting it prompt, so the rest still applies.
+    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+    expect(env.SSH_ASKPASS_REQUIRE).toBe('never');
+  });
+
+  it("the user's own GIT_SSH_COMMAND still beats the repository's, because that is git's rule and not this module's to second-guess", () => {
+    const env = fetchEnvFor({ ...BASE, GIT_SSH_COMMAND: 'ssh -i /home/t/personal' }, 'ssh -i /repo/key');
+    expect(env.GIT_SSH_COMMAND).toBe('ssh -i /home/t/personal');
+  });
+});
+
 // ─── Real git, real local repository ─────────────────────────────────────────
 
 const gitPresent = isGitAvailable();
@@ -385,6 +421,143 @@ describe.skipIf(!gitPresent)('fetchGitWorkspaceOverview (real git)', () => {
   });
 });
 
+// ─── The whole tree, not just the git parent ─────────────────────────────────
+
+/** One process as /proc reports it. `null` means it is gone, which is what the last assertion is about. */
+interface Proc {
+  pid: number;
+  comm: string;
+  ppid: number;
+  /** The PROCESS GROUP. `detached: true` puts the fetch in its own, so the negative pid reaches the children. */
+  pgrp: number;
+  cmdline: string;
+}
+
+/**
+ * Every process on the machine, as /proc reports it — so this half can only run on Linux, and the fields are
+ * counted from the closing parenthesis because `comm` can hold spaces.
+ *
+ * Membership of the GROUP is what is checked, not parentage: a helper that outlives its parent stops being a
+ * child of this test process, and a test that looked for children would pass for the wrong reason.
+ */
+function scanProc(): Proc[] {
+  const out: Proc[] = [];
+  for (const entry of readdirSync('/proc')) {
+    if (!/^\d+$/.test(entry)) continue;
+    const pid = Number(entry);
+    try {
+      const stat = readFileSync(join('/proc', entry, 'stat'), 'utf8');
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      out.push({
+        pid,
+        comm: readFileSync(join('/proc', entry, 'comm'), 'utf8').trim(),
+        ppid: Number(fields[1]),
+        pgrp: Number(fields[2]),
+        cmdline: readFileSync(join('/proc', entry, 'cmdline'), 'utf8')
+          .replace(/\0/g, ' ')
+          .trim(),
+      });
+    } catch {
+      /* gone between the listing and the read */
+    }
+  }
+  return out;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe.skipIf(!gitPresent)('runFetch (the whole tree, not just the git parent)', () => {
+  it.skipIf(!existsSync('/proc/self/environ'))(
+    'kills the helper processes too, so nothing is left running after the timeout',
+    async () => {
+      const server = createServer(() => {
+        // Accept and never answer: git's http helper connects, waits, and stays.
+      });
+      const sockets = new Set<Socket>();
+      server.on('connection', (s) => {
+        sockets.add(s);
+        s.on('close', () => sockets.delete(s));
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const port = (server.address() as AddressInfo).port;
+
+      try {
+        const repo = initRepo(join(dir, 'hang'), `http://127.0.0.1:${port}/x.git`);
+        // The handler goes on the moment the promise is made, not when it is read: the timeout fires while the
+        // tree is still being looked at, and a rejection with nothing listening to it becomes an unhandled
+        // rejection instead of this test's answer.
+        const answered = runFetch(repo, buildFetchArgs(), { timeoutMs: 1_500 }).catch((e) => e);
+
+        // The tree has to be a tree before the timeout, or nothing is being proven: git itself, and the helper
+        // it spawns for an http remote. The helper is a grandchild — `git fetch` runs `git remote-http`, which
+        // spawns `git-remote-http` — so the group, not the parentage, is what proves it. Each process is
+        // remembered once found rather than re-scanned: after the kill the group is empty, and a test that kept
+        // looking would report a tree it had already destroyed. The `git config` read the runner does first is
+        // a `git` too, so the fetch is found by what it was asked to do.
+        let parent: Proc | null = null;
+        let helper: Proc | null = null;
+        for (let i = 0; i < 60 && !(parent && helper); i++) {
+          const live = scanProc();
+          parent =
+            parent ??
+            live.find((p) => p.comm === 'git' && p.cmdline.includes('fetch') && p.ppid === process.pid) ??
+            null;
+          helper =
+            helper ??
+            (parent
+              ? live.find((p) => p.pgrp === parent!.pgrp && p.pid !== parent!.pid && p.cmdline.includes('remote-http'))
+              : null);
+          if (!helper) await sleep(25);
+        }
+        expect(parent, 'the fetch was never running').not.toBeNull();
+        expect(helper, 'nothing else in the fetch group, so there was no tree to kill').not.toBeNull();
+        // `detached: true` puts the fetch in a group of its own, which is why the negative pid is the right
+        // thing to signal: a helper outside that group would survive a `child.kill()`.
+        expect(parent!.pgrp).toBe(parent!.pid);
+        expect(helper!.pgrp).toBe(parent!.pgrp);
+
+        const err = (await answered) as { code?: string; killed?: boolean };
+        expect(err.code).toBe('ETIMEDOUT');
+        expect(err.killed).toBe(true);
+
+        // The answer went out before the tree died — that is the whole point of the fix, and it is why the
+        // escalation is given its own time here instead of being cancelled when the promise settles.
+        const deadline = Date.now() + FETCH_KILL_ESCALATION_MS + 2_000;
+        while (Date.now() < deadline && scanProc().some((p) => p.pgrp === parent!.pgrp)) await sleep(50);
+        expect(scanProc().some((p) => p.pgrp === parent!.pgrp)).toBe(false);
+
+        // Nothing of this test's own is left running either.
+        await sleep(200);
+        expect(scanProc().filter((p) => p.ppid === process.pid)).toEqual([]);
+      } finally {
+        for (const s of sockets) s.destroy();
+        server.close();
+      }
+    }
+  );
+
+  it('rejects on a non-zero exit instead of resolving empty stdout, so a failure keeps a reason to be read', async () => {
+    // A remote git cannot read. A repository with no remote is not usable for this: `git fetch --quiet` exits 0
+    // there on the git this was checked against (2.47.3), so resolving empty stdout would have been the right
+    // answer and the test would prove nothing. A remote pointing at a path that is not a repository exits 128
+    // and says why, which is the case the row needs a reason for.
+    const repo = initRepo(join(dir, 'unreadable-remote'), 'file:///tmp/definitely-not-a-repo-xyz');
+    let err: unknown = null;
+    try {
+      await runFetch(repo, buildFetchArgs());
+    } catch (e) {
+      err = e;
+    }
+    expect(err, 'a fetch that failed resolved instead of rejecting').not.toBeNull();
+    const e = err as { code?: unknown; stderr?: string; killed?: boolean };
+    // The exit code, not the timeout marker, so a caller can still tell a failure from a stall.
+    expect(e.code).toBe(128);
+    expect(e.killed).toBe(false);
+    expect(e.stderr).toMatch(/does not appear to be a git repository/);
+    expect(describeFetchFailure(err).code).toBe('NOT_FOUND');
+  });
+});
+
 // ─── One run per folder, and one bound for the whole tick ────────────────────
 
 describe.skipIf(!gitPresent)('fetchWorkspaceOnce (the join)', () => {
@@ -412,18 +585,17 @@ describe.skipIf(!gitPresent)('fetchWorkspaceOnce (the join)', () => {
       }
       return '';
     };
-    const first = fetchWorkspaceOnce(folder, { git: firstRunner });
+    const first = fetchWorkspaceOnce(folder, { git: firstRunner }, 'interval');
     await runStarted; // the run is going, and still going
 
     // A click while that run is working the folder: it joins, so it never touches git at all — not even the
     // resolver's own probe, because it does not resolve anything for itself.
     let joinerCalls = 0;
-    const joiner = fetchWorkspaceOnce(folder, {
-      git: async () => {
-        joinerCalls++;
-        return '';
-      },
-    });
+    const joinerRunner: GitRunner = async () => {
+      joinerCalls++;
+      return '';
+    };
+    const joiner = fetchWorkspaceOnce(folder, { git: joinerRunner }, 'click');
 
     releaseRun();
     const answer = await first;
@@ -431,6 +603,35 @@ describe.skipIf(!gitPresent)('fetchWorkspaceOnce (the join)', () => {
     expect(await joiner).toBe(answer);
     expect(joinerCalls).toBe(0);
     expect(firstRunFetches).toBe(1);
+  });
+
+  it('a join reports the trigger of the run it joined, not the trigger that made it ask, because a click that fetched nothing cannot claim the fetch', async () => {
+    const folder = join(dir, 'folder');
+    initRepo(join(folder, 'api'));
+
+    let releaseRun = () => {};
+    const held = new Promise<void>((resolve) => (releaseRun = resolve));
+    let running = () => {};
+    const runStarted = new Promise<void>((resolve) => (running = resolve));
+    const runner: GitRunner = async (cwd, args) => {
+      if (args[0] === 'fetch') {
+        running();
+        await held;
+      }
+      return '';
+    };
+
+    // The tick got there first; the click is the joiner.
+    const intervalRun = fetchWorkspaceOnce(folder, { git: runner }, 'interval');
+    await runStarted;
+    const joinerRun = fetchWorkspaceOnce(folder, { git: async () => '' }, 'click');
+    releaseRun();
+
+    const run = await intervalRun;
+    expect(await joinerRun).toBe(run); // one run, not two answers
+    expect(run.trigger).toBe('interval');
+    // The row the panel shows is built from the run that ran, so it names the interval.
+    expect(gitFetchStatusFrom(run.report, run.trigger).trigger).toBe('interval');
   });
 
   it('keys the join on the resolved folder, so the same folder written two ways is one run', async () => {
@@ -450,16 +651,15 @@ describe.skipIf(!gitPresent)('fetchWorkspaceOnce (the join)', () => {
       }
       return '';
     };
-    const first = fetchWorkspaceOnce(folder, { git: firstRunner });
+    const first = fetchWorkspaceOnce(folder, { git: firstRunner }, 'click');
     await runStarted;
     // Two sessions on one folder reach it by different spellings; the scheduler keys by `resolve`.
     let joinerCalls = 0;
-    const second = fetchWorkspaceOnce(join(dir, 'folder', '.'), {
-      git: async () => {
-        joinerCalls++;
-        return '';
-      },
-    });
+    const joinerRunner: GitRunner = async () => {
+      joinerCalls++;
+      return '';
+    };
+    const second = fetchWorkspaceOnce(join(dir, 'folder', '.'), { git: joinerRunner }, 'click');
     releaseRun();
     expect(await second).toBe(await first);
     expect(joinerCalls).toBe(0);
@@ -474,10 +674,13 @@ describe.skipIf(!gitPresent)('fetchWorkspaceOnce (the join)', () => {
       if (args[0] === 'fetch') fetches++;
       return '';
     };
-    await fetchWorkspaceOnce(folder, { git: runner });
+    const firstRun = await fetchWorkspaceOnce(folder, { git: runner }, 'interval');
     expect(fetches).toBe(1);
-    await fetchWorkspaceOnce(folder, { git: runner });
+    const secondRun = await fetchWorkspaceOnce(folder, { git: runner }, 'click');
     expect(fetches).toBe(2);
+    // A run that is its own reports its own trigger; only a joiner borrows the trigger of the run it joined.
+    expect(firstRun.trigger).toBe('interval');
+    expect(secondRun.trigger).toBe('click');
   });
 
   it('bounds a whole tick with the limiter it is handed, because two runs given a bound each would get twice the bound', async () => {

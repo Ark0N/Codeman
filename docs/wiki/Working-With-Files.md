@@ -254,16 +254,20 @@ Click it for a draggable window, in the style of the File Viewer:
   remote (SSH) sessions.
 
 It is read-only apart from that fetch: Codeman never commits, checks out or changes the
-repository, and `git fetch` writes remote-tracking refs only — it is the one git command here that
-writes, and the one that can run a repository's own hooks (`reference-transaction`, `pre-auto-gc` through the
-maintenance a fetch triggers, and config commands such as `credential.helper`), which is why nothing runs on
-a timer until you opt in. A fetch holds git's ref lock, so an agent's own `git pull` in the same repository
+repository, and `git fetch` writes remote-tracking refs only — it is the only git command the Git window
+runs that writes, the only one that can run a repository's own hooks (`reference-transaction`,
+`pre-auto-gc` through the maintenance a fetch triggers, and config commands such as `credential.helper`),
+and the only one that can run later by itself, on a timer: cloning and worktree management write too, but
+only when you asked for them at the moment you asked, which is why nothing runs on a timer until you opt in. A fetch holds git's ref lock, so an agent's own `git pull` in the same repository
 can hit the same `cannot lock ref`, and a folder is fetched by one run at a time. It is not shown for Docker
 or remote (SSH) sessions, and a repository at or inside a Docker case
 workspace is skipped even from a local session, before any git runs (a container can write there,
 and git would run that repository's own configuration on the host). Fetch asks nothing of you: it
 uses the sign-in your own git already has, and it gives up quickly rather than waiting on an
-invisible login prompt. The
+invisible login prompt. That BatchMode ssh is a default, never an override: your own
+`GIT_SSH_COMMAND`, or the repository's `core.sshCommand`, is used when either is set, and ⚠️ the default's
+`StrictHostKeyChecking=accept-new` records an unknown host key in `~/.ssh/known_hosts` without asking —
+BatchMode stops a prompt, not a write. The
 data comes from `GET /api/sessions/:id/git-status`, `GET /api/sessions/:id/git-diff` and, on that
 click or the interval you turned on, `POST /api/sessions/:id/git-fetch`
 (see the [API reference](https://github.com/Ark0N/Codeman/blob/master/docs/api-reference.md)).

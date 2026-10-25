@@ -89,17 +89,21 @@ bounds the Git window's Fetch button; raise it for repositories on a slow networ
 
 **Git fetch on an interval** (synced, off by default) runs `git fetch` on a timer for the repositories the
 Git window lists, so the `behind` number is current without a click, and **Git fetch: how often** (synced,
-30 to 3600 seconds, default 300) is the gap between runs for a case with no choice of its own — timed from
+30 to 3600 seconds, default 300) is the gap between runs for a session that has no override of its own — timed from
 the start of a run, so a slow repository does not push the next one out. These are the only Git settings
 that are synced rather than per device, because the server's scheduler is what acts on them: kept per
 device, the scheduler would read nobody's number. **Session Options → Git** overrides both the switch and
 the interval for one session, and that override wins even while the app switch is off; a session that follows
 the app shows the app's values and its rows go inert until you turn **Follow the app setting** off. Nothing is
 ever fetched for a Docker or remote (SSH) session, and a repository a container can write to is refused
-before any git runs. Sessions open on the same folder share one run. Both default to off because `git fetch`
-is the one git command Codeman runs that writes, and the one that can run a repository's own hooks
+before any git runs. Sessions open on the same folder share one run, and a folder is fetched when ANY session open on it is due, so the order the sessions were read cannot decide which interval wins. Both default to off because `git fetch`
+is the one git command the Git window runs that writes — cloning and worktree management write too, but only
+when you asked for them at the moment you asked — and the one that can run a repository's own hooks
 (`reference-transaction`, `pre-auto-gc` through the maintenance a fetch triggers, and config commands such as
-`credential.helper`).
+`credential.helper`), and the one that can run later by itself, on a timer. The ssh it runs is BatchMode so
+nothing waits for a login, and that is a default, never an override: your own `GIT_SSH_COMMAND`, or the
+repository's `core.sshCommand`, is used when either is set. ⚠️ The default's `StrictHostKeyChecking=accept-new`
+records an unknown host key in `~/.ssh/known_hosts` without asking — BatchMode stops a prompt, not a write.
 
 Most default to off. The stock desktop header is system stats, File Viewer, Tiles, and the gear.
 **Header Stats Style** picks how the system stats and plan usage are drawn: *Compact*

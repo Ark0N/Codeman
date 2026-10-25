@@ -2,9 +2,10 @@
  * @fileoverview Git fetch on an interval: the cases the user turned on, fetched by a tick the server owns
  * (`src/git-fetch-scheduler.ts`, wired in `src/web/server.ts`).
  *
- * The fetch module (src/git-fetch.ts) is the only place Codeman runs a git command that writes, and on a
- * timer it is the only one that can run without being asked — which is why the whole feature is off until
- * the user turns it on, in Settings → Bottom bar, per session in Session Options → Git.
+ * The fetch module (src/git-fetch.ts) is the only git command the Git panel runs that writes, and on a timer
+ * it is the only one that can run without being asked — cloning and worktree management write too, but those
+ * happen when the user asks for them. Which is why the whole feature is off until the user turns it on, in
+ * Settings → Bottom bar, per session in Session Options → Git.
  *
  * The scheduler holds no timers of its own. The server ticks it (`GIT_FETCH_TICK_INTERVAL_MS`) and every
  * tick reads the app setting FRESH, so a live toggle takes effect on the next tick instead of at boot, and
@@ -23,7 +24,10 @@
  *     its result. State is keyed by `resolve(workingDir)` — deliberately not `realpath`, because `realpath`
  *     is itself one of the unbounded fs calls rule #516 bounds; the bounded probe below is the fs read.
  *     Every session open on a folder is remembered, so closing the one holding the override does not stop
- *     the folder's fetching while another session is still on it.
+ *     the folder's fetching while another session is still on it. A folder is due when ANY session open on it
+ *     is due, and the tick decides that per folder in a second pass: the order the sessions were read cannot
+ *     change which interval wins, so a 30 s session on a folder a 3600 s session last fetched ten minutes ago
+ *     is fetched now. The folder is probed once, not once per session on it.
  *   - Before anything is fetched, the folder is probed BOUNDED with the default options (rule #516): a case
  *     on a mount that stopped answering is skipped, never touched, and a probe that answers `unknown` is not
  *     read as "not a folder".
@@ -55,9 +59,10 @@ import {
   MIN_GIT_FETCH_INTERVAL_SECONDS,
   gitFetchStatusFrom,
   type GitFetchOptions,
-  type GitFetchReport,
+  type GitFetchRun,
   type GitFetchSettings,
   type GitFetchStatus,
+  type GitFetchTrigger,
 } from './git-fetch.js';
 import { clampInt, DEFAULT_GIT_TIMEOUT_MS, MAX_REPOS, createLimiter, mapLimited } from './git-workspace-status.js';
 import type { PathProbeKind } from './utils/bounded-path-probe.js';
@@ -73,6 +78,12 @@ export interface GitFetchSessionView {
   gitFetchIntervalSeconds?: number;
 }
 
+/** A session open on a folder, with the interval that makes IT due. One folder's sessions are a group. */
+interface GroupMember {
+  view: GitFetchSessionView;
+  intervalSeconds: number;
+}
+
 export interface GitFetchPorts {
   sessionIds(): Iterable<string>;
   getSession(id: string): GitFetchSessionView | undefined;
@@ -86,7 +97,7 @@ export interface GitFetchPorts {
    */
   probePath(path: string): Promise<PathProbeKind>;
   /** Called through `fetchWorkspaceOnce`, so a run already going for this folder is joined, not stacked. */
-  fetch(cwd: string, opts: GitFetchOptions): Promise<GitFetchReport>;
+  fetch(cwd: string, opts: GitFetchOptions, trigger: GitFetchTrigger): Promise<GitFetchRun>;
   publish(id: string, status: GitFetchStatus): void;
   log?(message: string): void;
 }
@@ -139,39 +150,45 @@ export class GitFetchScheduler {
         return 0;
       }
 
-      // One entry per folder, holding every session open on it. Stamped here, at selection: a tick that is
-      // still running must not pick the same folder again, and a folder already being fetched is not picked
-      // at all.
-      const due = new Map<string, GitFetchSessionView[]>();
+      // Pass 1 — who is on what, before anything is decided. Every session open on a folder is recorded here,
+      // not only the one that would get picked, so `remove()` can still see who is open on it when the session
+      // holding the override is the one that closes.
+      const groups = new Map<string, GroupMember[]>();
       for (const id of this.ports.sessionIds()) {
         const view = this.ports.getSession(id);
         if (!view || view.remote || view.docker) continue;
         const effective = effectiveGitFetch(view, settings);
         if (!effective.enabled) continue;
         const folder = resolve(view.workingDir);
-        // Recorded for EVERY session on the folder, not just the one that got picked, so `remove()` can still
-        // see who is open on it when the session holding the override is the one that closes.
         this.folderOf.set(id, folder);
-        // A session on a folder this tick already picked is the same clone: it joins that folder's run rather
-        // than starting its own. Two fetches in one clone collide on git's ref lock, so one run has to serve
-        // every session open on the folder.
-        const group = due.get(folder);
-        if (group) {
-          group.push(view);
-          continue;
-        }
+        const group = groups.get(folder);
+        const member = { view, intervalSeconds: effective.intervalSeconds };
+        if (group) group.push(member);
+        else groups.set(folder, [member]);
+      }
+
+      // Pass 2 — the folder's turn, decided from the whole group rather than from whichever session happened to
+      // be read first. A folder is due when ANY session open on it is due: a session on a 30 s interval on a
+      // folder a 3600 s session last fetched ten minutes ago has to be fetched now, because that same run
+      // satisfies the long interval too. Deciding in one pass means the session read first owns the clock — a
+      // group ordered [short, long] and a group ordered [long, short] would have behaved differently, and the
+      // run belongs to the folder, so no session in the group should.
+      const due = new Map<string, GroupMember[]>();
+      for (const [folder, group] of groups) {
         if (this.inFlight.has(folder)) continue;
         const started = this.lastRunAt.get(folder);
-        if (started !== undefined && now - started < effective.intervalSeconds * 1000) continue;
-        const kind = await this.ports.probePath(view.workingDir);
+        const isDue = started === undefined || group.some((m) => now - started >= m.intervalSeconds * 1000);
+        if (!isDue) continue;
+        // Bounded probe (rule #516), once per folder rather than once per session on it.
+        const kind = await this.ports.probePath(folder);
         if (kind !== 'directory') {
-          this.ports.log?.(`git fetch: ${view.id} skipped, folder answered ${kind}`);
+          this.ports.log?.(`git fetch: ${folder} skipped, answered ${kind}`);
           continue;
         }
         this.inFlight.add(folder);
         // The clock starts at the selection, so a slow folder does not shift its own schedule.
         this.lastRunAt.set(folder, now);
-        due.set(folder, [view]);
+        due.set(folder, group);
       }
       if (!due.size) return 0;
 
@@ -188,13 +205,20 @@ export class GitFetchScheduler {
       // processes than the module's ceiling.
       await mapLimited([...due.entries()], FETCH_CONCURRENCY, async ([folder, group]) => {
         try {
-          const report = await this.ports.fetch(folder, {
-            dockerWorkspaces,
-            maxRepos: MAX_REPOS,
-            timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
-            limiter: fetches,
-          });
-          for (const view of group) this.ports.publish(view.id, gitFetchStatusFrom(report, 'interval'));
+          const run = await this.ports.fetch(
+            folder,
+            {
+              dockerWorkspaces,
+              maxRepos: MAX_REPOS,
+              timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
+              limiter: fetches,
+            },
+            'interval'
+          );
+          // Every session on the folder gets the SAME run, with the trigger of the run that actually happened:
+          // if this tick joined a run a click had already started, the row has to say it was a click, because
+          // that is what fetched it.
+          for (const member of group) this.ports.publish(member.view.id, gitFetchStatusFrom(run.report, run.trigger));
         } catch (err) {
           // The run that failed keeps its reason in the panel's own row; here only the folder-level failure is
           // worth a line, because nothing else would say a scheduled fetch could not run at all.

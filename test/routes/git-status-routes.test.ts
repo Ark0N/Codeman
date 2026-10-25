@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerGitStatusRoutes } from '../../src/web/routes/git-status-routes.js';
 import { clearGitStatusCache, runGit, type GitRunner } from '../../src/git-workspace-status.js';
-import { clearGitFetchLane } from '../../src/git-fetch.js';
+import { clearGitFetchLane, fetchWorkspaceOnce } from '../../src/git-fetch.js';
 
 const ENV = {
   ...process.env,
@@ -516,6 +516,42 @@ describe('POST /api/sessions/:id/git-fetch', () => {
     const a = (await first).json().data;
     const b = (await second).json().data;
     expect(b).toEqual(a); // both tabs get the same run's answer, not a partial one
+  });
+
+  it('publishes the trigger of the run the click joined, because a click that fetched nothing cannot report itself as the fetch', async () => {
+    git(dir, 'init', '-q', '-b', 'main');
+    let releaseRun = () => {};
+    const held = new Promise<void>((resolve) => (releaseRun = resolve));
+    let running = () => {};
+    const runStarted = new Promise<void>((resolve) => (running = resolve));
+    const fetches: string[] = [];
+    const runner: GitRunner = async (cwd, args) => {
+      if (args[0] === 'fetch') {
+        fetches.push(cwd);
+        running();
+        await held;
+      }
+      return execFileSyncGit(cwd, args);
+    };
+    const { app, ctx } = await setup({ git: runner });
+
+    // The interval tick got to this clone first. The click joins it, so the row the other tabs see has to name
+    // the interval — the user clicked, but nothing this click did was a fetch. The request is left open, not
+    // awaited: awaiting it here would wait on the run this test is holding, and the test would wait on itself.
+    const intervalRun = fetchWorkspaceOnce(dir, { git: runner }, 'interval');
+    await runStarted;
+    const res = app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    releaseRun();
+    const run = await intervalRun;
+    const body = (await res).json().data;
+    expect(body).toEqual(run.report); // the run it joined, not a partial answer of its own
+    // Asserted after the run, so this can only pass if the click reached the lane and joined: a click that had
+    // started its own fetch would make this two, and would have nothing to call the interval.
+    expect(fetches).toHaveLength(1);
+    expect(session.gitFetch).toMatchObject({ trigger: 'interval', state: 'ok', repos: 1, failed: 0 });
+    expect(ctx.broadcast).toHaveBeenCalled();
   });
 
   it('404s an unknown session, running no fetch', async () => {

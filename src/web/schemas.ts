@@ -1491,10 +1491,11 @@ export const SettingsUpdateSchema = z
     /**
      * Git fetch on an interval (src/git-fetch-scheduler.ts): `git fetch` for the repositories the Git panel
      * lists, run on a timer instead of only on the panel's Fetch click. SYNCED, default OFF, because the
-     * server is what runs it: `git fetch` is the only git command Codeman runs that writes, and the only
-     * one that can run a repository's own hooks (`reference-transaction`, `pre-auto-gc` through the
-     * automatic maintenance a fetch triggers, config commands such as `credential.helper`), so nothing runs
-     * on a timer until the user turns this on. Cap in seconds between runs (30 to 3600, default 300). A
+     * server is what runs it: `git fetch` is the only git command the Git panel runs that writes — cloning
+     * and worktree management write too, but only when the user asked for them at the moment they asked — and
+     * the only one that can run later by itself, on a timer, and the only one that can run a repository's own
+     * hooks (`reference-transaction`, `pre-auto-gc` through the automatic maintenance a fetch triggers, config
+     * commands such as `credential.helper`), so nothing runs on a timer until the user turns this on. Cap in seconds between runs (30 to 3600, default 300). A
      * session can override both in Session Options → Git; `null` there clears the override, and sessions
      * sharing one folder are fetched by one run.
      */

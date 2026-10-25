@@ -5,7 +5,9 @@
  *
  * The run belongs to the FOLDER, so these tests put two sessions on one folder and expect one fetch that
  * both see, and they check the tick's two bounds separately: one shared bound for the fetches of the whole
- * tick, and the folders bounded by a bound that cannot be the same semaphore.
+ * tick, and the folders bounded by a bound that cannot be the same semaphore. A folder is due when ANY session
+ * open on it is due, so the order the sessions were read cannot decide it — that is checked in both orders.
+ * A run carries the trigger that caused it, and what is published says the run's, not the tick's.
  *
  * Port: N/A.
  */
@@ -20,8 +22,10 @@ import {
   FETCH_CONCURRENCY,
   type GitFetchOptions,
   type GitFetchReport,
+  type GitFetchRun,
   type GitFetchSettings,
   type GitFetchStatus,
+  type GitFetchTrigger,
 } from '../src/git-fetch.js';
 import { DEFAULT_GIT_TIMEOUT_MS, MAX_REPOS } from '../src/git-workspace-status.js';
 import type { PathProbeKind } from '../src/utils/bounded-path-probe.js';
@@ -41,11 +45,17 @@ const report = (cwd: string, name: string): GitFetchReport => ({
   fetchedAt: Date.now(),
 });
 
+/** A run: the report plus the trigger that caused it, which is what the published row has to name. */
+const run = (cwd: string, name: string, trigger: GitFetchTrigger = 'interval'): GitFetchRun => ({
+  report: report(cwd, name),
+  trigger,
+});
+
 type Harness = {
   scheduler: GitFetchScheduler;
   ports: GitFetchPorts;
-  /** The folders the tick actually ran, in the order they were picked. */
-  calls: Array<{ cwd: string; opts: GitFetchOptions }>;
+  /** The folders the tick actually ran, in the order they were picked, with the trigger the tick passed. */
+  calls: Array<{ cwd: string; opts: GitFetchOptions; trigger: GitFetchTrigger }>;
   published: Array<{ id: string; status: GitFetchStatus }>;
   /** Every path the tick probed, in order — the probe has to happen before anything is fetched. */
   probed: string[];
@@ -74,7 +84,7 @@ function harness(
   sessions: GitFetchSessionView[],
   opts: {
     settings?: GitFetchSettings;
-    fetch?: (cwd: string, portOpts: GitFetchOptions) => Promise<GitFetchReport>;
+    fetch?: (cwd: string, portOpts: GitFetchOptions, trigger: GitFetchTrigger) => Promise<GitFetchRun>;
     /** Default: every path answers as a folder, so a test that does not care about the probe stays quiet. */
     probe?: (path: string) => Promise<PathProbeKind>;
   } = {}
@@ -110,9 +120,9 @@ function harness(
       h.probed.push(path);
       return opts.probe ? await opts.probe(path) : 'directory';
     },
-    fetch: async (cwd, portOpts) => {
-      h.calls.push({ cwd, opts: portOpts });
-      return customFetch ? customFetch(cwd, portOpts) : report(cwd, cwd.slice(3));
+    fetch: async (cwd, portOpts, trigger) => {
+      h.calls.push({ cwd, opts: portOpts, trigger });
+      return customFetch ? customFetch(cwd, portOpts, trigger) : run(cwd, cwd.slice(3), trigger);
     },
     publish: (id, status) => h.published.push({ id, status }),
   };
@@ -245,9 +255,45 @@ describe('one folder, one run', () => {
     expect(new Set(h.published.map((p) => p.status.failed)).size).toBe(1);
   });
 
+  it('is due when ANY session open on the folder is due, in either read order, because the clock belongs to the folder and not to whichever session was read first', async () => {
+    const short = { ...VIEW('short'), workingDir: '/w/shared', gitFetchIntervalSeconds: 30 };
+    const long = { ...VIEW('long'), workingDir: '/w/shared', gitFetchIntervalSeconds: 300 };
+
+    for (const order of [
+      [short, long],
+      [long, short],
+    ]) {
+      const h = harness(order);
+
+      // Nothing has run yet, so both are due and both are published from the one run. The folder is probed
+      // once, not once per session open on it.
+      expect(await h.scheduler.tick(0)).toBe(1);
+      expect(h.probed).toEqual(['/w/shared']);
+      expect(h.published.map((p) => p.id).sort()).toEqual(['long', 'short']);
+
+      // Before the short interval elapses neither is due, and the order they were read in cannot change that.
+      h.published.length = 0;
+      expect(await h.scheduler.tick(15_000)).toBe(0);
+      expect(h.published).toEqual([]);
+
+      // The short session is past its own interval, so the folder is fetched — once, for both. The run that
+      // happens covers the long session's interval too, and both still get it because both are open on the
+      // folder: publishing only the session that made the folder due would leave the other tab on a stale row.
+      h.published.length = 0;
+      expect(await h.scheduler.tick(30_000)).toBe(1);
+      expect(h.calls.length).toBe(2);
+      expect(h.published.map((p) => p.id).sort()).toEqual(['long', 'short']);
+
+      // The long one's own interval comes round, so the folder is due again.
+      h.published.length = 0;
+      expect(await h.scheduler.tick(300_000)).toBe(1);
+      expect(h.published.map((p) => p.id).sort()).toEqual(['long', 'short']);
+    }
+  });
+
   it('does not pick a folder again while its run is going, and does not run a second tick over the same selection', async () => {
     const ids = Array.from({ length: FETCH_CONCURRENCY + 2 }, (_, i) => `s${i}`);
-    const gate = deferred<GitFetchReport>(report('/w/first', 'first'));
+    const gate = deferred<GitFetchRun>(run('/w/first', 'first'));
     const h = harness(
       ids.map((id) => VIEW(id)),
       {
@@ -266,7 +312,7 @@ describe('one folder, one run', () => {
     expect(await h.scheduler.tick(15_000)).toBe(0);
     expect(h.calls.length).toBe(picked);
 
-    gate.resolve(report('/w/first', 'first'));
+    gate.resolve(run('/w/first', 'first'));
     await first;
     // Every folder ran exactly once, and no folder ran twice.
     expect(h.calls.length).toBe(ids.length);
@@ -299,7 +345,7 @@ describe('one folder, one run', () => {
             fetchesLive--;
           });
           foldersLive--;
-          return report(cwd, cwd.slice(3));
+          return run(cwd, cwd.slice(3));
         },
       }
     );
@@ -310,7 +356,7 @@ describe('one folder, one run', () => {
   });
 
   it('times the interval from the START of a run, so a slow repository does not push the next one out', async () => {
-    const slow = deferred<GitFetchReport>(report('/w/a', 'a'));
+    const slow = deferred<GitFetchRun>(run('/w/a', 'a'));
     const h = harness([VIEW('a')], { settings: { enabled: true, intervalSeconds: 30 }, fetch: () => slow.promise });
 
     const first = h.scheduler.tick(0);
@@ -319,7 +365,7 @@ describe('one folder, one run', () => {
 
     // The run takes 200 s, longer than its own interval. Once it lands, the folder is already past due: the
     // next tick runs it again instead of waiting another 30 s from when the slow one finished.
-    slow.resolve(report('/w/a', 'a'));
+    slow.resolve(run('/w/a', 'a'));
     await first;
     expect(await h.scheduler.tick(200_000)).toBe(1);
     expect(h.calls.length).toBe(2);
@@ -336,6 +382,19 @@ describe('what a run reports', () => {
         status: { ranAt: expect.any(Number), trigger: 'interval', state: 'ok', repos: 1, failed: 0 },
       },
     ]);
+  });
+
+  it('publishes the trigger of the run that actually happened rather than the trigger the tick asked for, because a tick that joined a click did not fetch anything', async () => {
+    const h = harness([VIEW('a')], {
+      // The port is `fetchWorkspaceOnce`, so it can hand back a run a click had already started for this
+      // folder. The tick asked for its own; the row has to name the run.
+      fetch: (cwd, _opts, trigger) => {
+        expect(trigger).toBe('interval');
+        return Promise.resolve({ report: report(cwd, 'a'), trigger: 'click' });
+      },
+    });
+    await h.scheduler.tick(0);
+    expect(h.published[0].status.trigger).toBe('click');
   });
 
   it("reports a failure instead of retrying harder, and keeps the folder's next run at its own interval", async () => {

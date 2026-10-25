@@ -132,11 +132,13 @@ export function registerGitStatusRoutes(
 
   // Fetch, and only because the user clicked Fetch in the panel (src/git-fetch.ts): one
   // `git fetch --quiet` per repository the panel would show, through the same resolver so the two cannot
-  // disagree about which repositories belong to the workspace. This is the only git command Codeman runs
-  // that writes, and it writes remote-tracking refs only — nothing commits, checks out or merges. It is not
-  // as harmless as a read though: a fetch holds git's ref lock, so an agent's own `git pull` in the same
-  // clone can collide with it, which is why the run goes through `fetchWorkspaceOnce` — a click while a tick
-  // is already fetching this folder joins that run instead of starting a second one. It can also run a
+  // disagree about which repositories belong to the workspace. This is the only git command the Git panel runs
+  // that writes, and it writes remote-tracking refs only — nothing commits, checks out or merges. Cloning and
+  // worktree management write too, but those happen when the user asked for them; this route is the one that
+  // can also run later, on a timer. It is not as harmless as a read though: a fetch holds git's ref lock, so
+  // an agent's own `git pull` in the same clone can collide with it, which is why the run goes through
+  // `fetchWorkspaceOnce` — a click while a tick is already fetching this folder joins that run instead of
+  // starting a second one. It can also run a
   // repository's own hooks (`reference-transaction`, `pre-auto-gc` through the maintenance git runs after a
   // fetch) and its config commands such as `credential.helper`, so the `FETCH_CONFIG_ARGS` overrides turn
   // maintenance and gc off, and a repository a container can write to is refused before any git runs. Remote
@@ -148,16 +150,18 @@ export function registerGitStatusRoutes(
     const session = findSessionOrFail(ctx, id, req);
     if (session.remote) return { success: true, data: emptyReport('unsupported', { reason: 'remote' }) };
     if (session.docker) return { success: true, data: emptyReport('unsupported', { reason: 'docker' }) };
-    const report = await fetchWorkspaceOnce(session.workingDir, {
-      git,
-      ...limits,
-      dockerWorkspaces: await dockerWorkspaces(),
-    });
+    const run = await fetchWorkspaceOnce(
+      session.workingDir,
+      { git, ...limits, dockerWorkspaces: await dockerWorkspaces() },
+      'click'
+    );
     // The response answers the click, and the run is also the session's current truth: what the panel's
     // "behind" number is based on. Publishing it is what the api docs say a click does, and what makes a
-    // second tab open on the same folder see the same run — including a click that joined a tick already
-    // going, where the row has to say who last fetched.
-    if (session.setGitFetchStatus(gitFetchStatusFrom(report, 'click'))) persistAndBroadcastSession(ctx, session);
-    return { success: true, data: report };
+    // second tab open on the same folder see the same run. The trigger recorded is the RUN's, not this
+    // request's: a click that joined a tick already going fetched nothing itself, so the row has to name the
+    // interval as what fetched.
+    if (session.setGitFetchStatus(gitFetchStatusFrom(run.report, run.trigger)))
+      persistAndBroadcastSession(ctx, session);
+    return { success: true, data: run.report };
   });
 }
