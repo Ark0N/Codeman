@@ -1,6 +1,33 @@
-/** Local offline transcript commands. Deliberately separate from the agent API guard. */
+/**
+ * @fileoverview `codeman history read`: the command-line front of the offline
+ * Codex history reader (`local-history.ts`).
+ *
+ * Deliberately separate from `codeman agent` (`cli-agent.ts`): that command is
+ * a client of a running Codeman and refuses outside a managed session, while
+ * this one reads rollout files from disk and needs neither a server nor
+ * `CODEMAN_MUX`. It never writes, never inspects a live pane and never sends
+ * input.
+ *
+ * Every bound the reader enforces has a flag here with the reader's own
+ * maximum, so a large store is a matter of raising a number rather than an
+ * impossible lookup. Output is JSON unless `--format text` is given; `--json`
+ * is the JSON spelling and refuses to combine with `--format text`.
+ *
+ * @module cli-history
+ */
 import type { Command } from 'commander';
-import { formatLocalHistory, HISTORY_DEFAULT_SCAN_BYTES, readLocalHistory } from './local-history.js';
+import {
+  formatLocalHistory,
+  HISTORY_DEFAULT_MAX_ENTRIES,
+  HISTORY_DEFAULT_METADATA_BYTES,
+  HISTORY_DEFAULT_OUTPUT_BYTES,
+  HISTORY_DEFAULT_SCAN_BYTES,
+  HISTORY_MAX_ENTRIES,
+  HISTORY_MAX_METADATA_BYTES,
+  HISTORY_MAX_OUTPUT_BYTES,
+  HISTORY_MAX_SCAN_BYTES,
+  readLocalHistory,
+} from './local-history.js';
 
 export function registerHistoryCommands(program: Command): Command {
   const history = program
@@ -12,22 +39,41 @@ export function registerHistoryCommands(program: Command): Command {
     .option('--file <path>', 'Explicit local JSONL transcript (regular file only)')
     .option('--session-id <id>', 'Native Codex conversation UUID or unique prefix (at least 8 characters)')
     .option('--root-session-id <uuid>', 'Native root UUID, including transitive child conversations')
-    .option('--sessions-root <path>', 'Local Codex sessions directory (default: CODEX_HOME/sessions)')
+    .option(
+      '--sessions-root <path>',
+      'Local Codex sessions directory (default: $CODEX_HOME/sessions, else ~/.codex/sessions)'
+    )
     .option('--topic <text>', 'Case-insensitive literal match, preserving whole matching turns')
-    .option('--after <date>', 'Inclusive YYYY-MM-DD lower bound; preserves whole matching turns')
-    .option('--before <date>', 'Inclusive YYYY-MM-DD upper bound; preserves whole matching turns')
-    .option('--max-bytes <n>', 'Maximum complete output bytes (1–1048576)', '8192')
+    .option('--after <date>', 'Inclusive YYYY-MM-DD lower bound, as a UTC date; preserves whole matching turns')
+    .option('--before <date>', 'Inclusive YYYY-MM-DD upper bound, as a UTC date; preserves whole matching turns')
+    .option(
+      '--max-bytes <n>',
+      `Maximum complete output bytes (1-${HISTORY_MAX_OUTPUT_BYTES})`,
+      String(HISTORY_DEFAULT_OUTPUT_BYTES)
+    )
     .option(
       '--scan-bytes <n>',
-      'Total metadata and selected transcript read budget (1–67108864)',
+      `Read budget for the selected transcripts (1-${HISTORY_MAX_SCAN_BYTES})`,
       String(HISTORY_DEFAULT_SCAN_BYTES)
     )
+    .option(
+      '--metadata-bytes <n>',
+      `Read budget for attributing every rollout in the store (1-${HISTORY_MAX_METADATA_BYTES})`,
+      String(HISTORY_DEFAULT_METADATA_BYTES)
+    )
+    .option(
+      '--max-entries <n>',
+      `Directory entries visited in the store (1-${HISTORY_MAX_ENTRIES})`,
+      String(HISTORY_DEFAULT_MAX_ENTRIES)
+    )
     .option('--format <format>', 'json or text', 'json')
-    .option('--json', 'JSON output (also the default)')
-    .action(async (options: Record<string, string | boolean | undefined>) => {
+    .option('--json', 'JSON output (the default; conflicts with --format text)')
+    .action(async (options: Record<string, string | boolean | undefined>, command: Command) => {
       try {
-        const format = options.json ? 'json' : options.format;
-        if (format !== 'json' && format !== 'text') throw new Error('--format must be json or text');
+        if (options.format !== 'json' && options.format !== 'text') throw new Error('--format must be json or text');
+        if (options.json && options.format === 'text' && command.getOptionValueSource('format') === 'cli')
+          throw new Error('--json conflicts with --format text; pass one of them');
+        const format = options.format;
         const result = await readLocalHistory({
           file: options.file as string | undefined,
           sessionId: options.sessionId as string | undefined,
@@ -37,6 +83,8 @@ export function registerHistoryCommands(program: Command): Command {
           after: options.after as string | undefined,
           before: options.before as string | undefined,
           scanBytes: Number(options.scanBytes),
+          metadataBytes: Number(options.metadataBytes),
+          maxEntries: Number(options.maxEntries),
         });
         program.configureOutput().writeOut?.(`${formatLocalHistory(result, format, Number(options.maxBytes))}\n`);
       } catch (error) {

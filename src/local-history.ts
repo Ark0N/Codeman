@@ -1,26 +1,117 @@
-/** Offline, local-operator Codex history. No HTTP routes or running session required. */
+/**
+ * @fileoverview Offline reader for saved Codex conversations, behind
+ * `codeman history read` (`cli-history.ts`). It reads rollout JSONL files from
+ * disk directly: no HTTP route, no running server and no managed session.
+ *
+ * ## Selecting conversations
+ *
+ * Exactly one selector: `file` (one rollout, no store search), `sessionId` (a
+ * native thread id or unique prefix of at least 8 characters) or
+ * `rootSessionId` (a full id plus every transitive descendant). Identity always
+ * comes from each file's `session_meta`, never from its filename.
+ *
+ * ## Budgets
+ *
+ * Three separate bounds, each raisable from the CLI up to a fixed maximum, and
+ * each failing closed with an error rather than returning a partial answer:
+ *
+ *  - `metadataBytes`: the head reads that attribute every rollout in the store.
+ *    A `session_meta` line embeds Codex's base instructions (about 20 KiB on
+ *    every rollout measured), so this scales with the store, not the query,
+ *    and is kept apart from the transcript budget: a lookup on a store of
+ *    thousands of rollouts must not spend the budget meant for the transcripts
+ *    it returns. Each file's head read is also capped at 128 KiB.
+ *  - `scanBytes`: the selected transcripts, read whole.
+ *  - `maxEntries`: directory entries visited.
+ *
+ * ## Forks and sub-agents
+ *
+ * A thread Codex forks or spawns as a sub-agent can carry a copy of its
+ * parent's history in its own file (codex-rs `ForkPersistence::Copied`, written
+ * by `record_initial_history` in `core/src/session/mod.rs`; the copy keeps the
+ * parent's `session_meta`, see `keep_forked_rollout_item` in
+ * `core/src/agent/control/spawn.rs`). Such a file starts with its own
+ * `session_meta`, then the parent's, then the copied records, then one
+ * `thread_settings_applied` event, then the child's own records. The copy
+ * already lives in the parent's own file, so it is dropped here:
+ *
+ *  - Paginated history (`history_mode: "paginated"`) numbers every record with
+ *    an `ordinal` and declares `subagent_history_start_ordinal`; records below
+ *    it are inherited, exactly as Codex's own projection treats them
+ *    (`thread-store/src/local/thread_history_materialization.rs`). A paginated
+ *    thread with a `history_base` references its prefix in another file and has
+ *    nothing inherited to drop.
+ *  - Legacy history has no ordinals. The prefix runs from the inherited
+ *    `session_meta` to the `thread_settings_applied` event Codex appends after
+ *    the copy. A legacy copy keeps the parent's own `thread_settings_applied`
+ *    events too, so when more than one candidate follows, the boundary is the
+ *    last one whose preceding messages are still a prefix of the parent's own
+ *    messages, read from the parent's file. Without the parent's file that
+ *    cannot be proven: the cut then falls at the LAST candidate, so parent text
+ *    is never attributed to the child, and the result says so
+ *    (`unverifiedPrefixes`, `complete: false`).
+ *
+ * A later `session_meta` must be the file's own id or a declared ancestor
+ * (`parent_thread_id`, `forked_from_id`, or the shared root `session_id`, and
+ * transitively the ancestors those declare); any other id still refuses the
+ * whole file rather than attribute one conversation's answer to another.
+ *
+ * ## Live rollouts
+ *
+ * A running Codex appends to its rollout. Reads take a snapshot: the file's
+ * identity (device and inode) must match the attributed one and its size may
+ * only have grown; everything up to the last complete line is read, and an
+ * unterminated tail is reported as a partial record.
+ *
+ * ## Format
+ *
+ * The line shapes and the injected-context rule are shared with the Past
+ * Sessions scanner through `codex-rollout-format.ts`.
+ *
+ * @module local-history
+ */
 import { constants } from 'node:fs';
 import { isUtf8 } from 'node:buffer';
-import { lstat, open, opendir, type FileHandle } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { lstat, open, opendir, stat, type FileHandle } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
-export const HISTORY_DEFAULT_SCAN_BYTES = 16 * 1024 * 1024;
-export const HISTORY_MAX_SCAN_BYTES = 64 * 1024 * 1024;
-export const HISTORY_MAX_OUTPUT_BYTES = 1024 * 1024;
+import { codexMessageFromLine, codexSessionsRoot, isCodexInjectedContext } from './codex-rollout-format.js';
+
+const KIB = 1024;
+const MIB = 1024 * KIB;
+const GIB = 1024 * MIB;
+
+export const HISTORY_DEFAULT_SCAN_BYTES = 16 * MIB;
+export const HISTORY_MAX_SCAN_BYTES = 256 * MIB;
+export const HISTORY_DEFAULT_METADATA_BYTES = 1 * GIB;
+export const HISTORY_MAX_METADATA_BYTES = 16 * GIB;
+export const HISTORY_DEFAULT_MAX_ENTRIES = 65536;
+export const HISTORY_MAX_ENTRIES = 1048576;
+export const HISTORY_DEFAULT_OUTPUT_BYTES = 8192;
+export const HISTORY_MAX_OUTPUT_BYTES = 1 * MIB;
+/** Per-file head window for `session_meta`. The line itself runs to about 20 KiB. */
+const METADATA_HEAD_BYTES = 128 * KIB;
+/** Read the head in steps, so a typical rollout costs one step past its session_meta line. */
+const METADATA_CHUNK_BYTES = 32 * KIB;
+/** Codex writes `sessions/YYYY/MM/DD`; this leaves five levels of headroom. */
+const MAX_DIRECTORY_DEPTH = 8;
+
 const ID = /^[0-9a-f]{8}(?:[0-9a-f-]{0,28})$/i;
 const FULL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const METADATA_BYTES = 128 * 1024;
 type Json = Record<string, unknown>;
+
 export interface LocalHistoryOptions {
   file?: string;
   sessionId?: string;
   rootSessionId?: string;
   sessionsRoot?: string;
   topic?: string;
+  /** Inclusive UTC date, `YYYY-MM-DD`. */
   after?: string;
+  /** Inclusive UTC date, `YYYY-MM-DD`. */
   before?: string;
   scanBytes?: number;
+  metadataBytes?: number;
   maxEntries?: number;
 }
 export interface HistoryRecord {
@@ -28,16 +119,23 @@ export interface HistoryRecord {
   sessionId: string;
   timestamp: string;
   role: 'user' | 'assistant';
-  phase: string;
+  /** Codex's own phase for assistant messages (`commentary`, `final_answer`); null when none was recorded. */
+  phase: string | null;
   message: string;
 }
 interface Source {
   path: string;
   sessionId: string;
   parentId?: string;
+  forkedFromId?: string;
   rootId?: string;
+  /** `subagent_history_start_ordinal`: records below it are inherited. */
+  historyStart?: number;
   timestamp: string;
-  fingerprint?: string;
+  /** `dev:ino` of the attributed file. */
+  identity: string;
+  /** Size when attributed; a later read may only see it grow. */
+  size: number;
 }
 export interface LocalHistoryResult {
   source: 'codex-jsonl';
@@ -45,24 +143,48 @@ export interface LocalHistoryResult {
   sessions: Array<{ sessionId: string; rootSessionId: string | null; parentSessionId?: string; path: string }>;
   records: HistoryRecord[];
   scan: {
+    /** Transcript bytes read (`--scan-bytes`). */
     bytesRead: number;
+    /** Head bytes read to attribute rollouts (`--metadata-bytes`). */
+    metadataBytesRead: number;
     entries: number;
     malformedRecords: number;
     partialRecords: number;
     skippedSymlinks: number;
     unattributedFiles: number;
+    unreadableDirectories: number;
+    /** Inherited fork or sub-agent prefixes dropped (informational). */
+    inheritedPrefixes: number;
+    /** Inherited prefixes that never reached their end marker. */
+    incompletePrefixes: number;
+    /** Legacy prefixes whose end could not be checked against the parent's own file. */
+    unverifiedPrefixes: number;
   };
 }
 interface Budget {
-  remaining: number;
+  transcriptRemaining: number;
+  metadataRemaining: number;
   entriesRemaining: number;
   scan: LocalHistoryResult['scan'];
 }
+
+/** A budget ran out: always fatal, never counted. */
+class HistoryBudgetError extends Error {}
+/** One store file could not be attributed: fatal for `--file`, counted for a store scan. */
+class UnattributableFileError extends Error {}
+
 function object(value: unknown): Json {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {};
 }
 function string(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+function fullId(value: unknown): string | undefined {
+  const id = string(value);
+  return id && FULL_ID.test(id) ? id.toLowerCase() : undefined;
+}
+function fileIdentity(value: { dev: number; ino: number }): string {
+  return `${value.dev}:${value.ino}`;
 }
 function validDate(value: string | undefined): boolean {
   return (
@@ -71,6 +193,14 @@ function validDate(value: string | undefined): boolean {
       Number.isFinite(Date.parse(value)) &&
       new Date(value).toISOString().slice(0, 10) === value)
   );
+}
+/** The UTC calendar date of a native timestamp, or undefined when it does not parse. */
+function utcDate(timestamp: string): string | undefined {
+  const ms = Date.parse(timestamp);
+  return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 10) : undefined;
+}
+function checkBudget(value: number, max: number, flag: string): void {
+  if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`Invalid ${flag} (1-${max})`);
 }
 function validate(options: LocalHistoryOptions): void {
   if ([options.file, options.sessionId, options.rootSessionId].filter((v) => v !== undefined).length !== 1)
@@ -84,13 +214,11 @@ function validate(options: LocalHistoryOptions): void {
     !validDate(options.before) ||
     (options.after && options.before && options.after > options.before)
   )
-    throw new Error('Invalid date or date range (use YYYY-MM-DD)');
+    throw new Error('Invalid date or date range (use YYYY-MM-DD, UTC)');
   if (options.topic !== undefined && !options.topic.trim()) throw new Error('Invalid empty topic');
-  for (const [value, max] of [
-    [options.scanBytes ?? HISTORY_DEFAULT_SCAN_BYTES, HISTORY_MAX_SCAN_BYTES],
-    [options.maxEntries ?? 8192, 65536],
-  ])
-    if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error('Invalid scan budget');
+  checkBudget(options.scanBytes ?? HISTORY_DEFAULT_SCAN_BYTES, HISTORY_MAX_SCAN_BYTES, '--scan-bytes');
+  checkBudget(options.metadataBytes ?? HISTORY_DEFAULT_METADATA_BYTES, HISTORY_MAX_METADATA_BYTES, '--metadata-bytes');
+  checkBudget(options.maxEntries ?? HISTORY_DEFAULT_MAX_ENTRIES, HISTORY_MAX_ENTRIES, '--max-entries');
 }
 async function regularFile(path: string): Promise<FileHandle> {
   // O_NOFOLLOW prevents a final-component link swap between lstat and open. fstat
@@ -103,88 +231,148 @@ async function regularFile(path: string): Promise<FileHandle> {
   }
   return handle;
 }
-async function readChunk(handle: FileHandle, position: number, size: number, budget: Budget): Promise<Buffer> {
-  if (size > budget.remaining)
-    throw new Error('History scan byte budget exhausted; narrow the store or raise --scan-bytes');
+async function readAt(handle: FileHandle, position: number, size: number): Promise<Buffer> {
   const buffer = Buffer.alloc(size);
-  const { bytesRead } = await handle.read(buffer, 0, size, position);
-  budget.remaining -= bytesRead;
-  budget.scan.bytesRead += bytesRead;
-  return buffer.subarray(0, bytesRead);
+  let filled = 0;
+  while (filled < size) {
+    const { bytesRead } = await handle.read(buffer, filled, size - filled, position + filled);
+    if (!bytesRead) break;
+    filled += bytesRead;
+  }
+  return buffer.subarray(0, filled);
 }
-function metadata(value: unknown, path: string): Source | undefined {
+async function readMetadataChunk(handle: FileHandle, position: number, size: number, budget: Budget) {
+  if (size > budget.metadataRemaining)
+    throw new HistoryBudgetError('History metadata byte budget exhausted; raise --metadata-bytes');
+  const chunk = await readAt(handle, position, size);
+  budget.metadataRemaining -= chunk.length;
+  budget.scan.metadataBytesRead += chunk.length;
+  return chunk;
+}
+async function readTranscript(handle: FileHandle, size: number, budget: Budget): Promise<Buffer> {
+  if (size > budget.transcriptRemaining)
+    throw new HistoryBudgetError('History scan byte budget exhausted; narrow the selection or raise --scan-bytes');
+  const buffer = await readAt(handle, 0, size);
+  budget.transcriptRemaining -= buffer.length;
+  budget.scan.bytesRead += buffer.length;
+  return buffer;
+}
+
+type Identity = Omit<Source, 'identity' | 'size'>;
+function metadata(value: unknown, path: string): Identity | undefined {
   const entry = object(value);
   if (entry.type !== 'session_meta') return undefined;
   const p = object(entry.payload);
-  const sessionId = string(p.id) ?? string(p.session_id);
-  if (!sessionId || !FULL_ID.test(sessionId)) return undefined;
-  const source = object(p.source);
-  const spawn = object(object(source.subagent).thread_spawn);
-  const parentId = string(p.parent_thread_id) ?? string(p.parent_session_id) ?? string(spawn.parent_thread_id);
-  const declaredRoot = string(p.root_session_id) ?? string(p.session_id);
+  const sessionId = fullId(p.id) ?? fullId(p.session_id);
+  if (!sessionId) return undefined;
+  const spawn = object(object(object(p.source).subagent).thread_spawn);
+  const forkedFromId = fullId(p.forked_from_id);
+  // A fork with no spawn parent (a `/fork` in the TUI) still descends from its source thread.
+  const parentId =
+    fullId(p.parent_thread_id) ?? fullId(p.parent_session_id) ?? fullId(spawn.parent_thread_id) ?? forkedFromId;
+  // Codex: "session_id is equal to the root thread's ID".
+  const declaredRoot = fullId(p.root_session_id) ?? fullId(p.session_id);
+  const start = p.subagent_history_start_ordinal;
   return {
     path,
-    sessionId: sessionId.toLowerCase(),
-    parentId: parentId && FULL_ID.test(parentId) ? parentId.toLowerCase() : undefined,
-    rootId:
-      declaredRoot && declaredRoot !== sessionId && FULL_ID.test(declaredRoot) ? declaredRoot.toLowerCase() : undefined,
+    sessionId,
+    parentId,
+    forkedFromId,
+    rootId: declaredRoot && declaredRoot !== sessionId ? declaredRoot : undefined,
+    historyStart: Number.isSafeInteger(start) && (start as number) >= 0 ? (start as number) : undefined,
     timestamp: string(p.timestamp) ?? string(entry.timestamp) ?? '',
   };
 }
+function sameIdentity(a: Identity, b: Identity): boolean {
+  return (
+    a.sessionId === b.sessionId &&
+    a.parentId === b.parentId &&
+    a.forkedFromId === b.forkedFromId &&
+    a.rootId === b.rootId &&
+    a.historyStart === b.historyStart
+  );
+}
+
+/**
+ * The first `session_meta` within the file's head. Problems with the file
+ * itself throw {@link UnattributableFileError}; a budget throws
+ * {@link HistoryBudgetError}; a short file with no metadata yet returns undefined.
+ */
 async function readMetadata(path: string, budget: Budget): Promise<Source | undefined> {
-  const handle = await regularFile(path);
+  let handle: FileHandle;
+  try {
+    handle = await regularFile(path);
+  } catch (error) {
+    throw new UnattributableFileError(error instanceof Error ? error.message : String(error));
+  }
   try {
     const before = await handle.stat();
-    const parts: Buffer[] = [];
-    let offset = 0;
+    const limit = Math.min(before.size, METADATA_HEAD_BYTES);
+    let buffer = Buffer.alloc(0);
     let parsed = 0;
-    while (offset < before.size && offset < METADATA_BYTES) {
-      const chunk = await readChunk(
+    while (buffer.length < limit) {
+      const chunk = await readMetadataChunk(
         handle,
-        offset,
-        Math.min(4096, before.size - offset, METADATA_BYTES - offset),
+        buffer.length,
+        Math.min(METADATA_CHUNK_BYTES, limit - buffer.length),
         budget
       );
       if (!chunk.length) break;
-      parts.push(chunk);
-      offset += chunk.length;
-      const buffer = Buffer.concat(parts);
+      buffer = Buffer.concat([buffer, chunk]);
       let end = buffer.indexOf(10, parsed);
       while (end >= 0) {
         const line = buffer.subarray(parsed, end);
-        if (!isUtf8(line)) throw new Error('History metadata contains invalid UTF8');
-        try {
-          const found = metadata(JSON.parse(line.toString('utf8')), path);
-          if (found) {
-            const after = await handle.stat();
-            const fingerprint = (value: typeof before) =>
-              `${value.dev}:${value.ino}:${value.size}:${value.mtimeMs}:${value.ctimeMs}`;
-            if (fingerprint(before) !== fingerprint(after))
-              throw new Error('History source changed during metadata scan');
-            return { ...found, fingerprint: fingerprint(before) };
-          }
-        } catch (error) {
-          if (!(error instanceof SyntaxError)) throw error;
-        }
         parsed = end + 1;
         end = buffer.indexOf(10, parsed);
+        if (!isUtf8(line)) throw new UnattributableFileError('History metadata contains invalid UTF8');
+        let value: unknown;
+        try {
+          value = JSON.parse(line.toString('utf8'));
+        } catch {
+          continue;
+        }
+        const found = metadata(value, path);
+        if (!found) continue;
+        // session_meta is written once; a growing file is a live rollout, not a change.
+        const after = await handle.stat();
+        if (fileIdentity(after) !== fileIdentity(before) || after.size < before.size)
+          throw new UnattributableFileError('History source changed during metadata scan');
+        return { ...found, identity: fileIdentity(before), size: before.size };
       }
     }
-    if (offset < before.size)
-      throw new Error('History metadata scan budget exhausted; cannot prove family completeness');
+    if (buffer.length < limit) throw new UnattributableFileError('History source changed during metadata scan');
+    if (before.size > METADATA_HEAD_BYTES)
+      throw new UnattributableFileError('No session metadata within the first 128 KiB');
     return undefined;
   } finally {
     await handle.close();
   }
 }
+
 async function findSources(root: string, budget: Budget): Promise<Source[]> {
-  if (!(await lstat(root)).isDirectory()) throw new Error('Sessions root must be a real directory, not a symlink');
+  // The root may itself be a symlink, as the Past Sessions scanner allows
+  // (`codex-transcript.ts` reads it with readdir, which follows it); links
+  // BELOW the root are never followed by either reader.
+  let rootStat;
+  try {
+    rootStat = await stat(root);
+  } catch {
+    throw new Error(`Sessions root not found: ${root}`);
+  }
+  if (!rootStat.isDirectory()) throw new Error('Sessions root must be a directory');
   const sources: Source[] = [];
   const visit = async (dir: string, depth: number): Promise<void> => {
-    if (depth > 8) throw new Error('History directory scan depth budget exhausted');
-    const entries = await opendir(dir);
+    if (depth > MAX_DIRECTORY_DEPTH) throw new HistoryBudgetError('History directory scan depth budget exhausted');
+    let entries;
+    try {
+      entries = await opendir(dir);
+    } catch {
+      budget.scan.unreadableDirectories++;
+      return;
+    }
     for await (const entry of entries) {
-      if (--budget.entriesRemaining < 0) throw new Error('History directory scan entry budget exhausted');
+      if (--budget.entriesRemaining < 0)
+        throw new HistoryBudgetError('History directory scan entry budget exhausted; raise --max-entries');
       budget.scan.entries++;
       const path = join(dir, entry.name);
       if (entry.isSymbolicLink()) {
@@ -193,10 +381,19 @@ async function findSources(root: string, budget: Budget): Promise<Source[]> {
       }
       if (entry.isDirectory()) {
         // Recheck immediately before descending; never intentionally follow links.
-        if (!(await lstat(path)).isDirectory()) throw new Error('History directory changed during scan');
+        const now = await lstat(path).catch(() => undefined);
+        if (!now?.isDirectory()) {
+          budget.scan.unreadableDirectories++;
+          continue;
+        }
         await visit(path, depth + 1);
       } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-        const source = await readMetadata(path, budget);
+        let source: Source | undefined;
+        try {
+          source = await readMetadata(path, budget);
+        } catch (error) {
+          if (!(error instanceof UnattributableFileError)) throw error;
+        }
         if (source) sources.push(source);
         else budget.scan.unattributedFiles++;
       }
@@ -205,134 +402,167 @@ async function findSources(root: string, budget: Budget): Promise<Source[]> {
   await visit(root, 0);
   return sources;
 }
-function contentText(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (!Array.isArray(value)) return '';
-  return value
-    .map((block) => {
-      const item = object(block);
-      return typeof item.type === 'string' && ['text', 'input_text', 'output_text'].includes(item.type.toLowerCase())
-        ? (string(item.text) ?? '')
-        : '';
-    })
-    .filter(Boolean)
-    .join('\n');
-}
+
 interface Message {
   representation: 'event' | 'modern' | 'response';
   role: 'user' | 'assistant';
   message: string;
-  phase: string;
+  phase: string | null;
   timestamp: string;
 }
 function message(value: unknown): Message | undefined {
   const entry = object(value);
   const p = object(entry.payload);
   if (entry.isSidechain || p.isSidechain) return undefined;
-  let role: Message['role'] | undefined;
-  let representation: Message['representation'] = 'event';
-  let text = '';
-  let phase = string(p.phase) ?? 'progress';
-  if (entry.type === 'event_msg') {
-    if (p.type === 'user_message' || p.type === 'agent_message') {
-      role = p.type === 'user_message' ? 'user' : 'assistant';
-      text = contentText(p.message);
-    } else if (p.type === 'item_completed') {
-      representation = 'modern';
-      const item = object(p.item);
-      if (item.type === 'UserMessage' || item.type === 'AgentMessage') {
-        role = item.type === 'UserMessage' ? 'user' : 'assistant';
-        text = contentText(item.content);
-        phase = string(item.phase) ?? phase;
-      }
-    }
-  } else if (
-    entry.type === 'response_item' &&
-    (p.type === 'message' || p.type === undefined) &&
-    (p.role === 'user' || p.role === 'assistant')
-  ) {
-    role = p.role;
-    representation = 'response';
-    text = contentText(p.content);
-    // Codex context is not a human turn. Do not omit arbitrary markdown prompts.
-    if (
-      role === 'user' &&
-      /^(?:# AGENTS\.md instructions|<environment_context>|<INSTRUCTIONS>|<turn_aborted>)/.test(text)
-    )
-      return undefined;
-  }
-  if (!role || !text) return undefined;
+  const found = codexMessageFromLine(value);
+  if (!found) return undefined;
+  // Codex context is not a human turn. Real prompts also arrive as events, which are never filtered.
+  if (found.injectionProne && isCodexInjectedContext(found.text)) return undefined;
   return {
-    role,
-    message: text,
-    phase,
-    representation,
+    role: found.role,
+    message: found.text,
+    // Codex records a phase on assistant messages only; a user turn has none.
+    phase: found.role === 'assistant' ? (found.phase ?? null) : null,
+    representation: found.shape === 'item' ? 'modern' : found.shape,
     timestamp: string(entry.timestamp) ?? string(p.timestamp) ?? '',
   };
 }
-async function readMessages(source: Source, budget: Budget): Promise<Message[]> {
-  const handle = await regularFile(source.path);
-  try {
-    const before = await handle.stat();
-    if (`${before.dev}:${before.ino}:${before.size}:${before.mtimeMs}:${before.ctimeMs}` !== source.fingerprint)
-      throw new Error('History source changed after attribution; retry explicitly');
-    const buffer = await readChunk(handle, 0, before.size, budget);
-    const after = await handle.stat();
+/** Native events and response_item commonly duplicate one accepted message. */
+function collapse(items: Message[]): Message[] {
+  const records: Message[] = [];
+  let representations = new Set<Message['representation']>();
+  for (const raw of items) {
+    const item = { ...raw };
+    const previous = records.at(-1);
     if (
-      buffer.length !== before.size ||
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs
-    )
-      throw new Error('History source changed while reading; retry explicitly');
-    if (!isUtf8(buffer)) throw new Error('History source contains invalid UTF8');
-    const lines = buffer.toString('utf8').split('\n');
-    const partial = lines.pop();
-    if (partial) budget.scan.partialRecords++;
-    const records: Message[] = [];
-    let representations = new Set<Message['representation']>();
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        budget.scan.malformedRecords++;
-        continue;
-      }
-      if (object(parsed).type === 'session_meta') {
-        const declared = metadata(parsed, source.path);
-        if (
-          !declared ||
-          declared.sessionId !== source.sessionId ||
-          declared.parentId !== source.parentId ||
-          declared.rootId !== source.rootId
-        )
-          throw new Error('History source contains conflicting native metadata; attribution refused');
-        continue;
-      }
-      const item = message(parsed);
-      if (!item) continue;
-      const previous = records.at(-1);
-      // Native events and response_item commonly duplicate one accepted message.
-      if (
-        previous?.role === item.role &&
-        previous.message === item.message &&
-        !representations.has(item.representation)
-      ) {
-        representations.add(item.representation);
-        if (!previous.timestamp) previous.timestamp = item.timestamp;
-        if (item.phase === 'final_answer') previous.phase = item.phase;
-        continue;
-      }
-      records.push(item);
-      representations = new Set([item.representation]);
+      previous?.role === item.role &&
+      previous.message === item.message &&
+      !representations.has(item.representation)
+    ) {
+      representations.add(item.representation);
+      if (!previous.timestamp) previous.timestamp = item.timestamp;
+      if (item.phase === 'final_answer' || previous.phase === null) previous.phase = item.phase ?? previous.phase;
+      continue;
     }
-    return records;
+    records.push(item);
+    representations = new Set([item.representation]);
+  }
+  return records;
+}
+function isPrefixOf(prefix: Message[], whole: Message[]): boolean {
+  return (
+    prefix.length <= whole.length &&
+    prefix.every((item, i) => item.role === whole[i].role && item.message === whole[i].message)
+  );
+}
+
+interface ReadContext {
+  /** The ancestor's own messages, uncut, or undefined when its file is not in the store. */
+  ancestorMessages(id: string): Promise<Message[] | undefined>;
+}
+type Piece = Message | { boundary: true };
+interface LegacyPrefix {
+  ancestorId: string;
+  /** Messages and `thread_settings_applied` boundaries after the inherited session_meta. */
+  pieces: Piece[];
+}
+
+async function readMessages(source: Source, budget: Budget, context: ReadContext, raw = false): Promise<Message[]> {
+  const handle = await regularFile(source.path);
+  let buffer: Buffer;
+  try {
+    const now = await handle.stat();
+    // A live rollout only grows. A different file or a shorter one is a rewrite.
+    if (fileIdentity(now) !== source.identity || now.size < source.size)
+      throw new Error('History source changed after attribution; retry explicitly');
+    buffer = await readTranscript(handle, now.size, budget);
+    if (buffer.length !== now.size) throw new Error('History source shrank while reading; retry explicitly');
   } finally {
     await handle.close();
   }
+  // Snapshot up to the last complete line: a running Codex may be mid-append.
+  const end = buffer.lastIndexOf(10) + 1;
+  const complete = buffer.subarray(0, end);
+  if (buffer.subarray(end).toString('latin1').trim()) budget.scan.partialRecords++;
+  if (!isUtf8(complete)) throw new Error('History source contains invalid UTF8');
+
+  const ancestors = new Set([source.parentId, source.forkedFromId, source.rootId].filter((id): id is string => !!id));
+  const own: Message[] = [];
+  let legacy: LegacyPrefix | undefined;
+  let lastOrdinal = -1;
+  for (const line of complete.toString('utf8').split('\n')) {
+    if (!line.trim()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      budget.scan.malformedRecords++;
+      continue;
+    }
+    const entry = object(parsed);
+    const ordinal = typeof entry.ordinal === 'number' ? entry.ordinal : undefined;
+    if (ordinal !== undefined) lastOrdinal = Math.max(lastOrdinal, ordinal);
+    if (source.historyStart !== undefined && ordinal === undefined) {
+      // Codex's projection skips a paginated record without an ordinal; so does this, visibly.
+      budget.scan.malformedRecords++;
+      continue;
+    }
+    const inherited = source.historyStart !== undefined && ordinal! < source.historyStart;
+    if (entry.type === 'session_meta') {
+      const declared = metadata(parsed, source.path);
+      if (declared && declared.sessionId === source.sessionId && sameIdentity(declared, source)) continue;
+      if (!declared || declared.sessionId === source.sessionId || !ancestors.has(declared.sessionId))
+        throw new Error('History source contains conflicting native metadata; attribution refused');
+      // An ancestor that was itself a fork carries its own ancestors' metadata in the copy.
+      for (const id of [declared.parentId, declared.forkedFromId, declared.rootId]) if (id) ancestors.add(id);
+      if (raw || inherited || legacy) continue;
+      budget.scan.inheritedPrefixes++;
+      legacy = { ancestorId: declared.sessionId, pieces: [] };
+      continue;
+    }
+    if (inherited && !raw) continue;
+    if (legacy && entry.type === 'event_msg' && object(entry.payload).type === 'thread_settings_applied') {
+      legacy.pieces.push({ boundary: true });
+      continue;
+    }
+    const item = message(parsed);
+    if (!item) continue;
+    if (legacy) legacy.pieces.push(item);
+    else own.push(item);
+  }
+  if (!raw && source.historyStart !== undefined && source.historyStart > 0) {
+    budget.scan.inheritedPrefixes++;
+    // Initialization died while copying the prefix: Codex refuses to resume such a file.
+    if (lastOrdinal < source.historyStart - 1) budget.scan.incompletePrefixes++;
+  }
+  if (legacy) own.push(...(await afterLegacyPrefix(legacy, budget, context)));
+  return collapse(own);
 }
+
+/** The child's own messages after a legacy inherited prefix. */
+async function afterLegacyPrefix(prefix: LegacyPrefix, budget: Budget, context: ReadContext): Promise<Message[]> {
+  const boundaries = prefix.pieces.flatMap((piece, i) => ('boundary' in piece ? [i] : []));
+  if (!boundaries.length) {
+    budget.scan.incompletePrefixes++;
+    return [];
+  }
+  const messagesBefore = (index: number) =>
+    collapse(prefix.pieces.slice(0, index).filter((piece): piece is Message => !('boundary' in piece)));
+  let cut = boundaries[0];
+  if (boundaries.length > 1) {
+    // The last candidate whose preceding messages the parent's own file also holds.
+    const parent = await context.ancestorMessages(prefix.ancestorId);
+    const proven = parent ? boundaries.filter((candidate) => isPrefixOf(messagesBefore(candidate), parent)) : [];
+    if (proven.length) cut = proven.at(-1)!;
+    else {
+      // Unprovable: drop up to the last candidate, so parent text is never attributed to the child.
+      budget.scan.unverifiedPrefixes++;
+      cut = boundaries.at(-1)!;
+    }
+  }
+  return prefix.pieces.slice(cut + 1).filter((piece): piece is Message => !('boundary' in piece));
+}
+
 function selectedTurns(messages: Message[], options: LocalHistoryOptions): Message[] {
   const turns: Message[][] = [];
   for (const item of messages) {
@@ -345,9 +575,11 @@ function selectedTurns(messages: Message[], options: LocalHistoryOptions): Messa
       const dateMatches =
         (!options.after && !options.before) ||
         turn.some((item) => {
-          const date = item.timestamp.slice(0, 10);
+          const date = utcDate(item.timestamp);
           return (
-            validDate(date) && (!options.after || date >= options.after) && (!options.before || date <= options.before)
+            date !== undefined &&
+            (!options.after || date >= options.after) &&
+            (!options.before || date <= options.before)
           );
         });
       return dateMatches && (!needle || turn.some((item) => item.message.toLocaleLowerCase().includes(needle)));
@@ -375,30 +607,46 @@ export async function readLocalHistory(options: LocalHistoryOptions): Promise<Lo
   validate(options);
   const scan: LocalHistoryResult['scan'] = {
     bytesRead: 0,
+    metadataBytesRead: 0,
     entries: 0,
     malformedRecords: 0,
     partialRecords: 0,
     skippedSymlinks: 0,
     unattributedFiles: 0,
+    unreadableDirectories: 0,
+    inheritedPrefixes: 0,
+    incompletePrefixes: 0,
+    unverifiedPrefixes: 0,
   };
   const budget: Budget = {
-    remaining: options.scanBytes ?? HISTORY_DEFAULT_SCAN_BYTES,
-    entriesRemaining: options.maxEntries ?? 8192,
+    transcriptRemaining: options.scanBytes ?? HISTORY_DEFAULT_SCAN_BYTES,
+    metadataRemaining: options.metadataBytes ?? HISTORY_DEFAULT_METADATA_BYTES,
+    entriesRemaining: options.maxEntries ?? HISTORY_DEFAULT_MAX_ENTRIES,
     scan,
   };
   let sources: Source[];
   let attributionSources: Source[];
   if (options.file !== undefined) {
-    const source = await readMetadata(resolve(options.file), budget);
+    let source: Source | undefined;
+    try {
+      source = await readMetadata(resolve(options.file), budget);
+    } catch (error) {
+      throw error instanceof UnattributableFileError ? new Error(error.message) : error;
+    }
     if (!source) throw new Error('History source is missing valid native session metadata');
     sources = [source];
     attributionSources = sources;
   } else {
-    const root = options.sessionsRoot ?? join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'sessions');
+    const root = options.sessionsRoot ?? codexSessionsRoot();
     const all = await findSources(resolve(root), budget);
     const wanted = (options.sessionId ?? options.rootSessionId)!.toLowerCase();
-    const matches = all.filter((source) => source.sessionId.toLowerCase().startsWith(wanted));
-    if (!matches.length) throw new Error('Native session missing from history store');
+    const matches = all.filter((source) => source.sessionId.startsWith(wanted));
+    if (!matches.length)
+      throw new Error(
+        scan.unattributedFiles
+          ? `Native session missing from history store (${scan.unattributedFiles} file(s) could not be attributed)`
+          : 'Native session missing from history store'
+      );
     if (matches.length !== 1) throw new Error('Native session id is ambiguous');
     const target = matches[0];
     attributionSources = all;
@@ -428,10 +676,23 @@ export async function readLocalHistory(options: LocalHistoryOptions): Promise<Lo
   }
   sources.sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.sessionId.localeCompare(b.sessionId));
   const roots = new Map(sources.map((source) => [source.sessionId, nativeRoot(source, attributionSources)]));
+  const ancestorCache = new Map<string, Promise<Message[] | undefined>>();
+  const context: ReadContext = {
+    // A raw read never opens a legacy prefix, so this never recurses.
+    ancestorMessages(id) {
+      const cached = ancestorCache.get(id);
+      if (cached) return cached;
+      const candidates = attributionSources.filter((source) => source.sessionId === id);
+      if (candidates.length !== 1) return Promise.resolve(undefined);
+      const read = readMessages(candidates[0], budget, context, true);
+      ancestorCache.set(id, read);
+      return read;
+    },
+  };
   const records: HistoryRecord[] = [];
   for (const source of sources) {
     records.push(
-      ...selectedTurns(await readMessages(source, budget), options).map((item) => ({
+      ...selectedTurns(await readMessages(source, budget, context), options).map((item) => ({
         rootSessionId: roots.get(source.sessionId) ?? null,
         sessionId: source.sessionId,
         role: item.role,
@@ -449,6 +710,9 @@ export async function readLocalHistory(options: LocalHistoryOptions): Promise<Lo
       scan.partialRecords === 0 &&
       scan.skippedSymlinks === 0 &&
       scan.unattributedFiles === 0 &&
+      scan.unreadableDirectories === 0 &&
+      scan.incompletePrefixes === 0 &&
+      scan.unverifiedPrefixes === 0 &&
       [...roots.values()].every((root) => root !== null),
     sessions: sources.map((source) => ({
       sessionId: source.sessionId,
@@ -464,18 +728,18 @@ export async function readLocalHistory(options: LocalHistoryOptions): Promise<Lo
 export function formatLocalHistory(
   result: LocalHistoryResult,
   format: 'json' | 'text' = 'json',
-  maxBytes = 8192
+  maxBytes = HISTORY_DEFAULT_OUTPUT_BYTES
 ): string {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > HISTORY_MAX_OUTPUT_BYTES)
-    throw new Error('Invalid output byte budget');
+    throw new Error(`Invalid --max-bytes (1-${HISTORY_MAX_OUTPUT_BYTES})`);
   const body =
     format === 'json'
       ? JSON.stringify(result)
       : [
-          `source=${result.source} complete=${result.complete} scannedBytes=${result.scan.bytesRead}`,
+          `source=${result.source} complete=${result.complete} scannedBytes=${result.scan.bytesRead} metadataBytes=${result.scan.metadataBytesRead}`,
           ...result.records.map(
             (row) =>
-              `[root=${row.rootSessionId} session=${row.sessionId} ${row.timestamp} ${row.role} ${row.phase}]\n${row.message}`
+              `[root=${row.rootSessionId} session=${row.sessionId} ${row.timestamp} ${row.role}${row.phase ? ` ${row.phase}` : ''}]\n${row.message}`
           ),
         ].join('\n\n');
   if (Buffer.byteLength(body) + 1 > maxBytes)
