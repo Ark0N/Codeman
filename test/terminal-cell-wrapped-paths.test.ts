@@ -87,9 +87,27 @@ const WHOLE_VALUE_SHAPES: Array<{ rows: string[]; dir: string; file: string }> =
     file: 'index.ts',
   },
 ];
-// Known trade-off: a directory written WITH its trailing slash over a relative
-// path in the same column reads exactly like a wrap at `/`, so it still joins.
-const TRAILING_SLASH_TRADE_OFF = ['  Source       /home/u/proj/src/', '  Helper       lib/util.ts'];
+// The same records where the directory DOES end on a break character: the label
+// on the next row (`Entry`, `│ Helper │`) says it is a new record, since a wrapper
+// wraps every column of one table row together and leaves the label cell blank.
+const LABELLED_RECORD_SHAPES: Array<{ rows: string[]; dir: string; file: string }> = [
+  {
+    rows: ['  Workspace    /home/u/proj/app/', '  Entry        main.py'],
+    dir: '/home/u/proj/app/',
+    file: 'main.py',
+  },
+  {
+    rows: ['│ Source │ /home/u/proj/src/ │', '│ Helper │ lib/util.ts       │'],
+    dir: '/home/u/proj/src/',
+    file: 'lib/util.ts',
+  },
+  { rows: ['  Prefix    /tmp/run-', '  Suffix    log.txt'], dir: '/tmp/run-', file: 'log.txt' },
+];
+const SEPARATE_RECORD_SHAPES = [...WHOLE_VALUE_SHAPES, ...LABELLED_RECORD_SHAPES];
+// Known trade-off: with no label to tell them apart, a directory written WITH its
+// trailing slash over a relative path in the same column reads exactly like a
+// wrap at `/`, so it still joins.
+const TRAILING_SLASH_TRADE_OFF = ['  /home/u/proj/src/     sources', '  lib/util.ts           helpers'];
 
 const BEFORE = '/tmp/demo-check/docs/review/BLDMESH-243/before-overview.png';
 const AFTER = '/tmp/demo-check/docs/review/BLDMESH-243/after-overview.png';
@@ -109,7 +127,7 @@ describe('terminalCellWrappedPaths', () => {
     for (let row = 0; row < rows.length; row++) expect(find(fakeBuffer(rows, COLS), row)).toEqual([]);
   });
 
-  it.each(WHOLE_VALUE_SHAPES.map((shape) => [shape.rows, shape]))(
+  it.each(SEPARATE_RECORD_SHAPES.map((shape) => [shape.rows, shape]))(
     'does not join a directory cell onto the next record: %j',
     (_rows, shape) => {
       const rows = shape.rows.map((text) => ({ text }));
@@ -123,7 +141,7 @@ describe('terminalCellWrappedPaths', () => {
     expect(find(fakeBuffer(rows, COLS), 1)).toEqual([]);
   });
 
-  it('still joins a trailing-slash directory over a relative path in its column (known trade-off)', () => {
+  it('still joins an unlabelled trailing-slash directory over a relative path in its column (known trade-off)', () => {
     const rows = TRAILING_SLASH_TRADE_OFF.map((text) => ({ text }));
     expect(find(fakeBuffer(rows, COLS), 1).map((h) => h.path)).toEqual(['/home/u/proj/src/lib/util.ts']);
   });
@@ -260,8 +278,8 @@ describe('terminal link provider with cell-wrapped paths', () => {
     }
   });
 
-  it.each(WHOLE_VALUE_SHAPES.map((shape) => [shape.rows, shape]))(
-    'keeps the folder link and the next record’s file link: %j',
+  it.each(SEPARATE_RECORD_SHAPES.map((shape) => [shape.rows, shape]))(
+    'keeps the folder link and the file link of the next record: %j',
     (_rows, shape) => {
       const { provide, app } = harness(shape.rows.map((text) => ({ text })));
       const dirLine = shape.rows.findIndex((text) => text.includes(shape.dir)) + 1;

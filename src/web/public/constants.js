@@ -2763,7 +2763,10 @@ function terminalLinkLine(buffer, row, cols, maxRows) {
  * A fragment qualifies only when it is the last thing in its cell on that row
  * (row end or a ≥2-space gap follows) and ends on `/` or `-`, the only places
  * a wrapper breaks a path; a cell that ends inside a name (`/home/u/proj` over
- * `config.yaml`) is a whole value, never the first piece of the next row's. Every
+ * `config.yaml`) is a whole value, never the first piece of the next row's. A
+ * continuation row must be blank to the left of the cell (a wrapper wraps every
+ * column of one table row together), unless a path in a left column continued
+ * on it too: a label there (`Entry`, `│ Log │`) is the next record. Every
  * continuation must pass pathContinuation and its cell must be no wider than the
  * preceding cell's text, so independent listing rows and longer prose never
  * displace links.
@@ -2832,10 +2835,22 @@ function terminalCellWrappedPaths(buffer, row, maxRows) {
         // name (`/home/u/proj` over `config.yaml`) is a whole value, not a piece.
         // codex wraps table cells on Unicode line-break opportunities plus a
         // hyphen splitter, which break after `/` and `-` but never at `_` (UAX #14
-        // class AL). Known trade-off: a directory written with its trailing slash
-        // over a relative path in the same column (`/home/u/proj/src/` over
-        // `lib/util.ts`) still joins, since it reads exactly like a wrap at `/`.
+        // class AL).
         if (!/[/-]$/.test(joined)) break;
+        // A wrapper wraps every column of one table row together, so a row that
+        // carries a cell's continuation is blank to its left unless a left column
+        // wrapped on that row too. A label there (`Entry`, `│ Log │`) opens the
+        // next record, even under a directory ending in `/` (`Workspace
+        // /home/u/proj/app/` over `Entry main.py`).
+        // Known trade-off: with nothing to the left, a directory written with its
+        // trailing slash over a relative path in the same column (`/home/u/proj/`
+        // over `index.ts`) still joins, since it reads exactly like a wrap at `/`.
+        if (
+          /[^\s│┃║|]/.test(next.slice(0, cellCol)) &&
+          !found.some((hit) => hit.segments.some((seg) => seg.row === r && seg.endCol <= cellCol))
+        ) {
+          break;
+        }
         if (cellText.length > previousCellLength || !pathContinuation(joined, token)) break;
         const candidate = joined + token;
         const match = absoluteFilePathPattern().exec(candidate);
