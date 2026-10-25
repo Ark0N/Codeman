@@ -29,6 +29,8 @@
  *
  * @module cli-agent
  */
+import { stat } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
 import type { Command } from 'commander';
@@ -509,7 +511,8 @@ export async function agentLs(deps: AgentDeps): Promise<number> {
 }
 
 export interface SpawnOptions {
-  caseName: string;
+  caseName?: string;
+  workingDir?: string;
   mode: string;
   name?: string;
   /** Wait for the composer before returning, where the registry gives the mode a ready mark. */
@@ -532,23 +535,64 @@ export const AGENT_ORIGIN_HEADER = { 'X-Codeman-Agent-Origin': 'codeman-agent-cl
 export function composerReadyMark(mode: string): string | undefined {
   return getCli(mode)?.capabilities.composerReadyMark;
 }
-/** `agent spawn` — quick-start with lineage, then the readiness ladder where the mode has one. */
+/** `agent spawn` — start in a project directory or named case, preserving lineage and mode readiness. */
 export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promise<number> {
+  const cli = getCli(options.mode);
+  if (!cli) return fail(deps, `Unknown mode: ${options.mode}`, EXIT.refused);
+  if (options.caseName && options.workingDir !== undefined)
+    return fail(deps, 'Use a case OR --working-dir, not both', EXIT.refused);
+  const workingDir = options.caseName ? undefined : resolve(options.workingDir ?? process.cwd());
+  if (workingDir) {
+    // eslint-disable-next-line no-control-regex
+    if (/[\x00-\x1f\x7f]/.test(workingDir))
+      return fail(deps, 'Working directory contains control characters', EXIT.refused);
+    try {
+      if (!(await stat(workingDir)).isDirectory()) throw new Error('not a directory');
+    } catch {
+      return fail(deps, 'Working directory must be an existing local directory', EXIT.refused);
+    }
+  }
   const body: Record<string, unknown> = {
-    caseName: options.caseName,
+    ...(workingDir ? { workingDir } : { caseName: options.caseName }),
     mode: options.mode,
     parentSessionId: deps.ctx.selfId,
   };
-  if (options.name) body.sessionName = options.name;
+  if (options.name) body[workingDir ? 'name' : 'sessionName'] = options.name;
   const res = await deps.request(deps.ctx, {
     method: 'POST',
-    path: '/api/v1/quick-start',
+    path: workingDir ? '/api/v1/sessions' : '/api/v1/quick-start',
     body,
-    headers: { ...AGENT_ORIGIN_HEADER },
+    headers: workingDir ? undefined : { ...AGENT_ORIGIN_HEADER },
   });
-  const data = res.json?.data as { sessionId?: string; caseName?: string; casePath?: string } | undefined;
+  const created = res.json?.data as
+    | { id?: string; session?: { id?: string }; sessionId?: string; caseName?: string; casePath?: string }
+    | undefined;
+  const createdId = created?.session?.id ?? created?.id;
+  const data:
+    | { sessionId?: string; caseName?: string; casePath?: string; workingDir?: string; created?: boolean }
+    | undefined = workingDir && createdId ? { sessionId: createdId, workingDir, created: true } : created;
   if (!res.json?.success || !data?.sessionId) return fail(deps, describeFailure(res));
   const sid = data.sessionId;
+  if (workingDir) {
+    // Creation alone leaves a session without a pane. Report the exact created id
+    // on an ambiguous or rejected start; never retry a start or hide a leaked tab.
+    let startupError: string | undefined;
+    try {
+      const started = await deps.request(deps.ctx, {
+        method: 'POST',
+        path: `/api/v1/sessions/${encodeURIComponent(sid)}/${cli.capabilities.startMode}`,
+      });
+      if (!started.json?.success) startupError = describeFailure(started);
+    } catch (error) {
+      startupError = getErrorMessage(error) || 'Startup request failed';
+    }
+    if (startupError) {
+      if (deps.json) emitJson(deps, { ...data, ready: false, startupError });
+      else deps.io.out(sid);
+      deps.io.err(`Session ${sid} was created but startup failed or is ambiguous: ${startupError}`);
+      return EXIT.error;
+    }
+  }
 
   let ready: boolean | undefined;
   let readinessError: string | undefined;
@@ -578,7 +622,7 @@ export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promis
   } else {
     // Human lines go to stderr so `SID=$(codeman agent spawn …)` captures the id alone.
     const say = (line: string) => deps.io.err(line);
-    say(palette.ok(`${GLYPH.ok} spawned ${sid} (${options.mode}, case ${data.caseName ?? options.caseName})`));
+    say(palette.ok(`${GLYPH.ok} spawned ${sid} (${options.mode}, ${workingDir ?? data.caseName ?? options.caseName})`));
     if (ready === true) say(palette.muted('  composer up: the worker can take a prompt'));
     if (dead) say(palette.err(`${GLYPH.fail} the worker exited during the readiness wait`));
     if (ready === false && !dead) {
@@ -1059,20 +1103,23 @@ export function registerAgentCommands(program: Command): Command {
     .action((options: { json?: boolean }) => run(Boolean(options.json), agentLs));
 
   agent
-    .command('spawn <case>')
-    .description(
-      'Start a worker session in a case (created if missing) and wait for its composer where the mode draws one'
-    )
+    .command('spawn [case]')
+    .description('Start a worker in cwd, an existing directory, or a named case; wait for its composer where supported')
     .option('-m, --mode <mode>', 'Run mode id, as the Run menu names it', 'claude')
     .option('-n, --name <name>', 'Session name shown in the UI')
+    .option('--working-dir <directory>', 'Existing project directory (defaults to cwd when no case is given)')
     .option('--no-ready', 'Return as soon as the session exists, without the readiness wait')
     .option('-t, --timeout <ms>', 'Readiness budget in ms', String(DEFAULT_WAIT_MS))
     .option('--json', 'Machine-readable output')
     .action(
-      (caseName: string, options: { mode: string; name?: string; ready: boolean; timeout?: string; json?: boolean }) =>
+      (
+        caseName: string | undefined,
+        options: { mode: string; name?: string; workingDir?: string; ready: boolean; timeout?: string; json?: boolean }
+      ) =>
         run(Boolean(options.json), (deps) =>
           agentSpawn(deps, {
             caseName,
+            workingDir: options.workingDir,
             mode: options.mode,
             name: options.name,
             ready: options.ready,

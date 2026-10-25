@@ -53,6 +53,14 @@ codeman agent ack <msg-id>                                # remove what you hand
 codeman agent rm "$SID"                                   # any session except this one
 ```
 
+- **`spawn [case]`** uses the current directory when no case is supplied. Use
+  `codeman agent spawn --working-dir /path/to/project --mode codex` for another existing
+  local directory. A case and `--working-dir` cannot be combined. Explicit case names
+  retain quick-start behavior (creating a scratch case if missing). Directory launches
+  preserve the project and parent lineage, and never label it as agent scratch. Choose
+  a separate worktree for each worker that will edit code. If startup fails or its
+  response is lost, the CLI reports the exact created session ID; inspect that session
+  before deciding what to do next.
 - **Ids** may be the 8-character form `ls` prints. Anything shorter refuses, and so does an
   ambiguous prefix.
 - **`send`** takes ONE quoted argument of printable text and presses Enter. A prompt that
