@@ -471,6 +471,120 @@ describe('forked and spawned threads', () => {
   });
 });
 
+describe('one read per file, and a parent that cannot be read', () => {
+  const parentSettings = [
+    settingsApplied(),
+    ...userTurn('parent second question'),
+    ...assistantTurn('parent second answer'),
+  ];
+  const sizes = async () => {
+    const { stat } = await import('node:fs/promises');
+    const parent = (await stat(join(dir, `rollout-${ROOT}.jsonl`))).size;
+    const child = (await stat(join(dir, `rollout-${CHILD}.jsonl`))).size;
+    return { parent, child };
+  };
+
+  it('charges the parent of a legacy copy to --scan-bytes once, even when it proves the boundary', async () => {
+    await legacyFamily(dir, parentSettings, parentSettings);
+    const { parent, child } = await sizes();
+    // A budget of exactly the two files: the family read selects the parent and proves the child's cut with it.
+    const family = await history.readLocalHistory({
+      rootSessionId: ROOT,
+      sessionsRoot: dir,
+      scanBytes: parent + child,
+    });
+    expect(family.scan.bytesRead).toBe(parent + child);
+    expect(family.complete).toBe(true);
+    expect(messages(family).filter((m) => m.startsWith('b:'))).toEqual([
+      'b:child task',
+      'b:child commentary',
+      'b:child answer',
+    ]);
+    // One byte less fails closed rather than returning less.
+    await expect(
+      history.readLocalHistory({ rootSessionId: ROOT, sessionsRoot: dir, scanBytes: parent + child - 1 })
+    ).rejects.toThrow(/scan byte budget/);
+    // A child read pays for the parent it proves against, once.
+    const alone = await history.readLocalHistory({ sessionId: CHILD, sessionsRoot: dir, scanBytes: parent + child });
+    expect(alone.scan.bytesRead).toBe(parent + child);
+    expect(alone.complete).toBe(true);
+  });
+
+  it('counts a parent record once when the parent is both selected and the proof of a child', async () => {
+    await legacyFamily(dir, parentSettings, parentSettings);
+    const { appendFile } = await import('node:fs/promises');
+    await appendFile(join(dir, `rollout-${ROOT}.jsonl`), '{not json\n');
+    const family = await history.readLocalHistory({ rootSessionId: ROOT, sessionsRoot: dir });
+    expect(family.scan.malformedRecords).toBe(1);
+    expect(family.scan.inheritedPrefixes).toBe(1);
+  });
+
+  it('falls back to the unproven cut when the parent file cannot be read, instead of failing the child', async () => {
+    await legacyFamily(dir, parentSettings, parentSettings);
+    const { appendFile } = await import('node:fs/promises');
+    await appendFile(join(dir, `rollout-${ROOT}.jsonl`), Buffer.from([0xff, 0x0a]));
+    const child = await history.readLocalHistory({ sessionId: CHILD, sessionsRoot: dir });
+    expect(messages(child)).toEqual(['b:child task', 'b:child commentary', 'b:child answer']);
+    expect(child.scan.unverifiedPrefixes).toBe(1);
+    expect(child.complete).toBe(false);
+    // The parent's own read still fails: its evidence is what is broken.
+    await expect(history.readLocalHistory({ sessionId: ROOT, sessionsRoot: dir })).rejects.toThrow(/invalid UTF8/);
+  });
+
+  it('still fails when the parent read runs out of budget', async () => {
+    await legacyFamily(dir, parentSettings, parentSettings);
+    const { child } = await sizes();
+    await expect(
+      history.readLocalHistory({ sessionId: CHILD, sessionsRoot: dir, scanBytes: child + 1 })
+    ).rejects.toThrow(/scan byte budget/);
+  });
+});
+
+describe('compressed rollouts', () => {
+  const ZSTD = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x04, 0x00, 0x00, 0x00]);
+  const compressedName = (id: string) => `rollout-2026-10-24T01-00-00-${id}.jsonl.zst`;
+
+  it('counts a .jsonl.zst rollout, so a family with a compressed member is incomplete', async () => {
+    await legacyFamily(dir);
+    await mkdir(join(dir, '2026', '10', '24'), { recursive: true });
+    await writeFile(join(dir, '2026', '10', '24', compressedName(GRANDCHILD)), ZSTD);
+    const family = await history.readLocalHistory({ rootSessionId: ROOT, sessionsRoot: dir });
+    expect(family.scan.compressedFiles).toBe(1);
+    expect(family.scan.unattributedFiles).toBe(0);
+    expect(family.complete).toBe(false);
+  });
+
+  it('names the compressed rollout when the wanted thread is not otherwise found', async () => {
+    await fixture(ROOT, [row('assistant', 'root')]);
+    const path = join(dir, compressedName(CHILD));
+    await writeFile(path, ZSTD);
+    const error = await history.readLocalHistory({ sessionId: CHILD.slice(0, 8), sessionsRoot: dir }).catch((e) => e);
+    expect(error.message).toContain(path);
+    expect(error.message).toMatch(/compressed rollout/);
+    // A compressed file whose name does not carry the id is still reported, by count.
+    const other = await history.readLocalHistory({ sessionId: GRANDCHILD, sessionsRoot: dir }).catch((e) => e);
+    expect(other.message).toMatch(/1 compressed \.jsonl\.zst rollout\(s\) could not be read/);
+  });
+
+  it('skips a compressed rollout whose plain sibling exists, as Codex does', async () => {
+    const plain = await fixture(ROOT, [row('assistant', 'root')]);
+    await writeFile(`${plain}.zst`, ZSTD);
+    const result = await history.readLocalHistory({ sessionId: ROOT, sessionsRoot: dir });
+    expect(result.scan.compressedFiles).toBe(0);
+    expect(result.complete).toBe(true);
+  });
+
+  it('refuses a Zstandard file given to --file, and counts one in the store whatever its name', async () => {
+    const file = join(dir, 'renamed.jsonl');
+    await writeFile(file, ZSTD);
+    await expect(history.readLocalHistory({ file })).rejects.toThrow(/Zstandard-compressed/);
+    await fixture(ROOT, [row('assistant', 'root')]);
+    const result = await history.readLocalHistory({ sessionId: ROOT, sessionsRoot: dir });
+    expect(result.scan.unattributedFiles).toBe(1);
+    expect(result.complete).toBe(false);
+  });
+});
+
 describe('large and untidy stores', () => {
   it('finds one id among thousands of rollouts with real-sized session_meta at the default budgets', async () => {
     const count = 3500;
@@ -690,6 +804,31 @@ describe('history CLI flags', () => {
     expect(JSON.parse(await run(['--file', file, '--json'])).records[0].message).toBe('answer');
     expect(JSON.parse(await run(['--file', file, '--json', '--format', 'json'])).records[0].message).toBe('answer');
     expect(await run(['--file', file, '--format', 'text'])).toMatch(/^source=codex-jsonl/);
+  });
+
+  it('validates --max-bytes before any file is read', async () => {
+    // A missing store would be the first thing a read touches; an invalid --max-bytes must be refused first.
+    const missing = join(dir, 'no-such-store');
+    for (const value of ['0', String(history.HISTORY_MAX_OUTPUT_BYTES + 1), 'lots', '0x10', '1e3', ' 5'])
+      await expect(run(['--session-id', ROOT, '--sessions-root', missing, '--max-bytes', value])).rejects.toThrow(
+        /Invalid --max-bytes/
+      );
+    await expect(run(['--session-id', ROOT, '--sessions-root', missing, '--max-bytes', '65536'])).rejects.toThrow(
+      /Sessions root not found/
+    );
+  });
+
+  it('reads budget flags as plain decimal integers only', async () => {
+    await fixture(ROOT, [row('assistant', 'answer')]);
+    await expect(run(['--session-id', ROOT, '--sessions-root', dir, '--scan-bytes', '0x100000'])).rejects.toThrow(
+      /Invalid --scan-bytes/
+    );
+    await expect(run(['--session-id', ROOT, '--sessions-root', dir, '--max-entries', '1e3'])).rejects.toThrow(
+      /Invalid --max-entries/
+    );
+    expect(
+      JSON.parse(await run(['--session-id', ROOT, '--sessions-root', dir, '--scan-bytes', '1048576'])).complete
+    ).toBe(true);
   });
 
   it('passes the store caps through and validates them', async () => {

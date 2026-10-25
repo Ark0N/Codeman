@@ -46,15 +46,27 @@
  *    the copy. A legacy copy keeps the parent's own `thread_settings_applied`
  *    events too, so when more than one candidate follows, the boundary is the
  *    last one whose preceding messages are still a prefix of the parent's own
- *    messages, read from the parent's file. Without the parent's file that
- *    cannot be proven: the cut then falls at the LAST candidate, so parent text
- *    is never attributed to the child, and the result says so
- *    (`unverifiedPrefixes`, `complete: false`).
+ *    messages, read from the parent's file (once: a family read that selects
+ *    the parent reuses that same read, so no file is charged to `scanBytes`
+ *    twice). Without a readable parent file that cannot be proven: the cut then
+ *    falls at the LAST candidate, so parent text is never attributed to the
+ *    child, and the result says so (`unverifiedPrefixes`, `complete: false`).
+ *    Any failure of the parent's read other than a budget leads here, rather
+ *    than failing the child whose own file is intact.
  *
  * A later `session_meta` must be the file's own id or a declared ancestor
  * (`parent_thread_id`, `forked_from_id`, or the shared root `session_id`, and
  * transitively the ancestors those declare); any other id still refuses the
  * whole file rather than attribute one conversation's answer to another.
+ *
+ * ## Compressed rollouts
+ *
+ * Codex's `local_thread_store_compression` feature rewrites cold rollouts to
+ * `*.jsonl.zst` in place. This reader does not decompress them: a store scan
+ * counts each one in `compressedFiles` (so `complete` is false and a not-found
+ * error names them), skipping one whose plain `.jsonl` sibling exists, as
+ * Codex's own discovery does. A Zstandard file given to `file` is refused by
+ * its magic number, whatever its name.
  *
  * ## Live rollouts
  *
@@ -73,7 +85,7 @@
 import { constants } from 'node:fs';
 import { isUtf8 } from 'node:buffer';
 import { lstat, open, opendir, stat, type FileHandle } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 import { codexMessageFromLine, codexSessionsRoot, isCodexInjectedContext } from './codex-rollout-format.js';
 
@@ -93,6 +105,13 @@ export const HISTORY_MAX_OUTPUT_BYTES = 1 * MIB;
 const METADATA_HEAD_BYTES = 128 * KIB;
 /** Read the head in steps, so a typical rollout costs one step past its session_meta line. */
 const METADATA_CHUNK_BYTES = 32 * KIB;
+/**
+ * Codex's compressed rollout suffix (codex-rs `rollout/src/compression.rs`:
+ * `is_compressed_rollout_path` matches a name ending in `.jsonl.zst`).
+ */
+const COMPRESSED_ROLLOUT_SUFFIX = '.jsonl.zst';
+/** The Zstandard frame magic number, little-endian on disk. */
+const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 /** Codex writes `sessions/YYYY/MM/DD`; this leaves five levels of headroom. */
 const MAX_DIRECTORY_DEPTH = 8;
 
@@ -152,6 +171,11 @@ export interface LocalHistoryResult {
     partialRecords: number;
     skippedSymlinks: number;
     unattributedFiles: number;
+    /**
+     * Zstandard-compressed rollouts (`*.jsonl.zst`, Codex's `local_thread_store_compression`)
+     * this reader cannot open. Their threads are missing from the result.
+     */
+    compressedFiles: number;
     unreadableDirectories: number;
     /** Inherited fork or sub-agent prefixes dropped (informational). */
     inheritedPrefixes: number;
@@ -166,6 +190,8 @@ interface Budget {
   metadataRemaining: number;
   entriesRemaining: number;
   scan: LocalHistoryResult['scan'];
+  /** Paths behind `scan.compressedFiles`, for the not-found error. */
+  compressedPaths: string[];
 }
 
 /** A budget ran out: always fatal, never counted. */
@@ -318,6 +344,10 @@ async function readMetadata(path: string, budget: Budget): Promise<Source | unde
         budget
       );
       if (!chunk.length) break;
+      if (!buffer.length && chunk.subarray(0, ZSTD_MAGIC.length).equals(ZSTD_MAGIC))
+        throw new UnattributableFileError(
+          'History source is Zstandard-compressed (a Codex .jsonl.zst rollout); only plain .jsonl is read'
+        );
       buffer = Buffer.concat([buffer, chunk]);
       let end = buffer.indexOf(10, parsed);
       while (end >= 0) {
@@ -396,6 +426,13 @@ async function findSources(root: string, budget: Budget): Promise<Source[]> {
         }
         if (source) sources.push(source);
         else budget.scan.unattributedFiles++;
+      } else if (entry.isFile() && entry.name.endsWith(COMPRESSED_ROLLOUT_SUFFIX)) {
+        // Codex reads the plain sibling instead when both exist (`should_skip_compressed_sibling`),
+        // and that sibling is visited (or counted) on its own.
+        const plain = await lstat(path.slice(0, -'.zst'.length)).catch(() => undefined);
+        if (plain) continue;
+        budget.scan.compressedFiles++;
+        budget.compressedPaths.push(path);
       }
     }
   };
@@ -457,7 +494,10 @@ function isPrefixOf(prefix: Message[], whole: Message[]): boolean {
 }
 
 interface ReadContext {
-  /** The ancestor's own messages, uncut, or undefined when its file is not in the store. */
+  /**
+   * The ancestor's own messages, uncut, or undefined when its file is not in the
+   * store or could not be read for any reason other than a budget.
+   */
   ancestorMessages(id: string): Promise<Message[] | undefined>;
 }
 type Piece = Message | { boundary: true };
@@ -466,8 +506,16 @@ interface LegacyPrefix {
   /** Messages and `thread_settings_applied` boundaries after the inherited session_meta. */
   pieces: Piece[];
 }
+/** One read of one rollout: every view later needed of it, so no file is read (or charged) twice. */
+interface ParsedSource {
+  /** Every message in file order, inherited copies included: what a child's copy of this thread holds. */
+  raw: Message[];
+  /** Messages before any legacy inherited prefix, paginated inherited records already dropped. */
+  own: Message[];
+  legacy?: LegacyPrefix;
+}
 
-async function readMessages(source: Source, budget: Budget, context: ReadContext, raw = false): Promise<Message[]> {
+async function parseSource(source: Source, budget: Budget): Promise<ParsedSource> {
   const handle = await regularFile(source.path);
   let buffer: Buffer;
   try {
@@ -487,6 +535,7 @@ async function readMessages(source: Source, budget: Budget, context: ReadContext
   if (!isUtf8(complete)) throw new Error('History source contains invalid UTF8');
 
   const ancestors = new Set([source.parentId, source.forkedFromId, source.rootId].filter((id): id is string => !!id));
+  const raw: Message[] = [];
   const own: Message[] = [];
   let legacy: LegacyPrefix | undefined;
   let lastOrdinal = -1;
@@ -515,27 +564,34 @@ async function readMessages(source: Source, budget: Budget, context: ReadContext
         throw new Error('History source contains conflicting native metadata; attribution refused');
       // An ancestor that was itself a fork carries its own ancestors' metadata in the copy.
       for (const id of [declared.parentId, declared.forkedFromId, declared.rootId]) if (id) ancestors.add(id);
-      if (raw || inherited || legacy) continue;
+      if (inherited || legacy) continue;
       budget.scan.inheritedPrefixes++;
       legacy = { ancestorId: declared.sessionId, pieces: [] };
       continue;
     }
-    if (inherited && !raw) continue;
     if (legacy && entry.type === 'event_msg' && object(entry.payload).type === 'thread_settings_applied') {
-      legacy.pieces.push({ boundary: true });
+      if (!inherited) legacy.pieces.push({ boundary: true });
       continue;
     }
     const item = message(parsed);
     if (!item) continue;
+    raw.push(item);
+    if (inherited) continue;
     if (legacy) legacy.pieces.push(item);
     else own.push(item);
   }
-  if (!raw && source.historyStart !== undefined && source.historyStart > 0) {
+  if (source.historyStart !== undefined && source.historyStart > 0) {
     budget.scan.inheritedPrefixes++;
     // Initialization died while copying the prefix: Codex refuses to resume such a file.
     if (lastOrdinal < source.historyStart - 1) budget.scan.incompletePrefixes++;
   }
-  if (legacy) own.push(...(await afterLegacyPrefix(legacy, budget, context)));
+  return { raw: collapse(raw), own, legacy };
+}
+
+/** The thread's own messages: its inherited prefix dropped, proven against the parent where one is needed. */
+async function readMessages(parsed: ParsedSource, budget: Budget, context: ReadContext): Promise<Message[]> {
+  const own = [...parsed.own];
+  if (parsed.legacy) own.push(...(await afterLegacyPrefix(parsed.legacy, budget, context)));
   return collapse(own);
 }
 
@@ -603,6 +659,32 @@ function nativeRoot(source: Source, sources: Source[]): string | null {
   }
 }
 
+/**
+ * The not-found error, naming what the store held but could not attribute.
+ * Codex names a rollout `rollout-<timestamp>-<thread id>.jsonl[.zst]`, so a
+ * compressed file whose name carries the wanted id is named outright; the name
+ * is only a hint here, never identity.
+ */
+function missingSessionMessage(wanted: string, budget: Budget): string {
+  const { scan } = budget;
+  const notes: string[] = [];
+  if (scan.compressedFiles) {
+    // `rollout-` (8) + `YYYY-MM-DDTHH-MM-SS` (19) + `-` (1), then the thread id.
+    const named = budget.compressedPaths.filter((path) => {
+      const name = basename(path).toLowerCase();
+      return name.startsWith('rollout-') && name.slice(28).startsWith(wanted);
+    });
+    const shown = named.slice(0, 3).join(', ') + (named.length > 3 ? ` and ${named.length - 3} more` : '');
+    notes.push(
+      named.length
+        ? `it may be in compressed rollout ${shown}, which this reader cannot open; read a decompressed copy with --file (zstd -dc <path> > copy.jsonl)`
+        : `${scan.compressedFiles} compressed .jsonl.zst rollout(s) could not be read`
+    );
+  }
+  if (scan.unattributedFiles) notes.push(`${scan.unattributedFiles} file(s) could not be attributed`);
+  return `Native session missing from history store${notes.length ? ` (${notes.join('; ')})` : ''}`;
+}
+
 export async function readLocalHistory(options: LocalHistoryOptions): Promise<LocalHistoryResult> {
   validate(options);
   const scan: LocalHistoryResult['scan'] = {
@@ -613,6 +695,7 @@ export async function readLocalHistory(options: LocalHistoryOptions): Promise<Lo
     partialRecords: 0,
     skippedSymlinks: 0,
     unattributedFiles: 0,
+    compressedFiles: 0,
     unreadableDirectories: 0,
     inheritedPrefixes: 0,
     incompletePrefixes: 0,
@@ -623,6 +706,7 @@ export async function readLocalHistory(options: LocalHistoryOptions): Promise<Lo
     metadataRemaining: options.metadataBytes ?? HISTORY_DEFAULT_METADATA_BYTES,
     entriesRemaining: options.maxEntries ?? HISTORY_DEFAULT_MAX_ENTRIES,
     scan,
+    compressedPaths: [],
   };
   let sources: Source[];
   let attributionSources: Source[];
@@ -641,12 +725,7 @@ export async function readLocalHistory(options: LocalHistoryOptions): Promise<Lo
     const all = await findSources(resolve(root), budget);
     const wanted = (options.sessionId ?? options.rootSessionId)!.toLowerCase();
     const matches = all.filter((source) => source.sessionId.startsWith(wanted));
-    if (!matches.length)
-      throw new Error(
-        scan.unattributedFiles
-          ? `Native session missing from history store (${scan.unattributedFiles} file(s) could not be attributed)`
-          : 'Native session missing from history store'
-      );
+    if (!matches.length) throw new Error(missingSessionMessage(wanted, budget));
     if (matches.length !== 1) throw new Error('Native session id is ambiguous');
     const target = matches[0];
     attributionSources = all;
@@ -676,23 +755,34 @@ export async function readLocalHistory(options: LocalHistoryOptions): Promise<Lo
   }
   sources.sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.sessionId.localeCompare(b.sessionId));
   const roots = new Map(sources.map((source) => [source.sessionId, nativeRoot(source, attributionSources)]));
-  const ancestorCache = new Map<string, Promise<Message[] | undefined>>();
+  // Each selected file is read once, whether the main loop or a child's boundary proof asks first.
+  const parsedCache = new Map<Source, Promise<ParsedSource>>();
+  const parse = (source: Source) => {
+    let parsed = parsedCache.get(source);
+    if (!parsed) {
+      parsed = parseSource(source, budget);
+      parsedCache.set(source, parsed);
+    }
+    return parsed;
+  };
   const context: ReadContext = {
-    // A raw read never opens a legacy prefix, so this never recurses.
-    ancestorMessages(id) {
-      const cached = ancestorCache.get(id);
-      if (cached) return cached;
+    // Raw messages need no boundary proof of their own, so this never recurses.
+    async ancestorMessages(id) {
       const candidates = attributionSources.filter((source) => source.sessionId === id);
-      if (candidates.length !== 1) return Promise.resolve(undefined);
-      const read = readMessages(candidates[0], budget, context, true);
-      ancestorCache.set(id, read);
-      return read;
+      if (candidates.length !== 1) return undefined;
+      try {
+        return (await parse(candidates[0])).raw;
+      } catch (error) {
+        // A budget always fails the read; any other failure only leaves the boundary unproven.
+        if (error instanceof HistoryBudgetError) throw error;
+        return undefined;
+      }
     },
   };
   const records: HistoryRecord[] = [];
   for (const source of sources) {
     records.push(
-      ...selectedTurns(await readMessages(source, budget, context), options).map((item) => ({
+      ...selectedTurns(await readMessages(await parse(source), budget, context), options).map((item) => ({
         rootSessionId: roots.get(source.sessionId) ?? null,
         sessionId: source.sessionId,
         role: item.role,
@@ -710,6 +800,7 @@ export async function readLocalHistory(options: LocalHistoryOptions): Promise<Lo
       scan.partialRecords === 0 &&
       scan.skippedSymlinks === 0 &&
       scan.unattributedFiles === 0 &&
+      scan.compressedFiles === 0 &&
       scan.unreadableDirectories === 0 &&
       scan.incompletePrefixes === 0 &&
       scan.unverifiedPrefixes === 0 &&
@@ -724,14 +815,17 @@ export async function readLocalHistory(options: LocalHistoryOptions): Promise<Lo
     scan,
   };
 }
+/** The `--max-bytes` check, exported so the CLI can make it before any file is read. */
+export function validateOutputBytes(maxBytes: number): void {
+  checkBudget(maxBytes, HISTORY_MAX_OUTPUT_BYTES, '--max-bytes');
+}
 /** Output never splits a JSON document, UTF8 character, record, or selected turn. */
 export function formatLocalHistory(
   result: LocalHistoryResult,
   format: 'json' | 'text' = 'json',
   maxBytes = HISTORY_DEFAULT_OUTPUT_BYTES
 ): string {
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > HISTORY_MAX_OUTPUT_BYTES)
-    throw new Error(`Invalid --max-bytes (1-${HISTORY_MAX_OUTPUT_BYTES})`);
+  validateOutputBytes(maxBytes);
   const body =
     format === 'json'
       ? JSON.stringify(result)

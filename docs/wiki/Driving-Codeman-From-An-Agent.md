@@ -87,7 +87,8 @@ codeman history read --file /path/to/rollout.jsonl --format text
 - **Forks and sub-agents**: a child's copy of its parent's history is dropped, so every
   record belongs to the thread that wrote it.
 - **`complete: false`** in the JSON means the evidence is partial: a store file that could
-  not be attributed, a record a running Codex is still writing, an ancestor not found.
+  not be attributed, a compressed `.jsonl.zst` rollout (not read), a record a running
+  Codex is still writing, an ancestor not found.
 - **Budgets** fail closed and are raisable: `--metadata-bytes` (attributing the store,
   default 1 GiB), `--max-entries` (65536), `--scan-bytes` (the selected transcripts,
   16 MiB) and `--max-bytes` (output, 8192). `--json` and `--format text` together are an

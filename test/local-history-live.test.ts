@@ -30,7 +30,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 
 const history = await import('../src/local-history.js');
-const { assistantTurn, realMeta, userTurn, writeRollout } = await import('./fixtures/codex-rollout.js');
+const { assistantTurn, realMeta, settingsApplied, userTurn, writeRollout } =
+  await import('./fixtures/codex-rollout.js');
 
 const ROOT = 'aaaaaaaa-1111-4111-8111-111111111111';
 const CHILD = 'bbbbbbbb-1111-4111-8111-111111111111';
@@ -125,5 +126,32 @@ describe('rollouts that change while they are read', () => {
     await expect(history.readLocalHistory({ sessionId: ROOT, sessionsRoot: dir })).rejects.toThrow(
       /changed after attribution/
     );
+  });
+  it('leaves a child readable, with an unproven cut, when its parent is replaced after attribution', async () => {
+    const parentSettings = [settingsApplied(), ...userTurn('parent second question')];
+    const parent = await writeRollout(dir, 'rollout-root.jsonl', [
+      realMeta({ id: ROOT }),
+      ...userTurn('parent question'),
+      ...parentSettings,
+    ]);
+    const child = await writeRollout(dir, 'rollout-child.jsonl', [
+      realMeta({ id: CHILD, parent: ROOT }),
+      realMeta({ id: ROOT }),
+      ...userTurn('parent question'),
+      ...parentSettings,
+      settingsApplied(),
+      ...userTurn('child task'),
+    ]);
+    hooks.onOpen = async (opened, count) => {
+      // The child's transcript read comes before the parent's proof read: replace the parent in between.
+      if (opened !== child || count !== 2) return;
+      const replacement = join(dir, 'replacement.tmp');
+      await writeFile(replacement, [realMeta({ id: ROOT }), ...userTurn('rewritten')].map(line).join(''));
+      await rename(replacement, parent);
+    };
+    const result = await history.readLocalHistory({ sessionId: CHILD, sessionsRoot: dir });
+    expect(result.records.map((r) => r.message)).toEqual(['child task']);
+    expect(result.scan.unverifiedPrefixes).toBe(1);
+    expect(result.complete).toBe(false);
   });
 });

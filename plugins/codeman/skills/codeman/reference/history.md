@@ -43,27 +43,34 @@ plus scan counters and `complete`. `phase` is Codex's own (`commentary` or
 recorded. A root ID is `null` when ancestry cannot be proven.
 Report that uncertainty; never relabel the queried child as its own root.
 `complete: false` reports malformed or partial records (a running Codex may be
-mid-write), skipped links, unattributed files, unreadable directories, missing
-ancestors, or an inherited copy whose end could not be found or proven. It does not
-prove the store includes every conversation ever created, and a filtered result is
-only evidence for its selected scope.
+mid-write), skipped links, unattributed files, compressed rollouts, unreadable
+directories, missing ancestors, or an inherited copy whose end could not be found
+or proven (including when the parent's file is present but cannot be read). It
+does not prove the store includes every conversation ever created, and a filtered
+result is only evidence for its selected scope.
 
 Reads require regular UTF8 files and reject final-component symlinks, conflicting
 metadata, ambiguous IDs, cyclic ancestry and invalid selectors. A store file that
 cannot be attributed (invalid UTF8 in its head, no metadata in its first 128 KiB,
 changing while its head is read) is counted in `unattributedFiles` instead of
-failing the lookup. A selected rollout that a running Codex is appending to is read
-as a snapshot up to its last complete line; one that was replaced or truncated
-fails. Parent directories of an explicitly supplied path must be trusted; this is
+failing the lookup. Codex's optional rollout compression rewrites cold rollouts to
+`*.jsonl.zst`; those are not read. Each is counted in `compressedFiles` (one whose
+plain `.jsonl` sibling exists is skipped, as Codex skips it), and a lookup that
+misses names them. A compressed file passed to `--file` is refused; read a
+decompressed copy instead (`zstd -dc <file> > copy.jsonl`). A selected rollout
+that a running Codex is appending to is read as a snapshot up to its last complete
+line; one that was replaced or truncated fails. Parent directories of an explicitly supplied path must be trusted; this is
 not a filesystem sandbox.
 
-Budgets, each failing with an error rather than a partial answer:
+Budgets, each failing with an error rather than a partial answer. Every flag is
+validated before the first file is read, and only plain decimal integers are
+accepted:
 
 | Flag | Bounds | Default | Maximum |
 | ---- | ------ | ------- | ------- |
 | `--metadata-bytes` | head reads attributing every rollout in the store | 1 GiB | 16 GiB |
 | `--max-entries` | directory entries visited | 65536 | 1048576 |
-| `--scan-bytes` | the selected transcripts | 16 MiB | 256 MiB |
+| `--scan-bytes` | the selected transcripts, plus any parent file read to prove where a copy ends (each file charged once) | 16 MiB | 256 MiB |
 | `--max-bytes` | output, including the final newline | 8192 | 1048576 |
 
 Each rollout's `session_meta` carries Codex's base instructions (about 20 KiB), so
