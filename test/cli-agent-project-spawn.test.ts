@@ -1,8 +1,9 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Command } from 'commander';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   agentSpawn,
   registerAgentCommands,
@@ -53,7 +54,7 @@ describe('project-preserving agent spawn', () => {
     expect(JSON.parse(t.out[0])).toMatchObject({ sessionId: OTHER, workingDir: directory });
   });
   it('defaults to the current directory when no case is supplied', async () => {
-    const t = deps([ok({ id: OTHER }), ok({})]);
+    const t = deps([ok({ session: { id: OTHER } }), ok({})]);
     expect(await agentSpawn(t.d, base)).toBe(EXIT.ok);
     expect(t.calls[0].body).toMatchObject({ workingDir: process.cwd() });
   });
@@ -81,7 +82,7 @@ describe('project-preserving agent spawn', () => {
   });
   it('reports the created session ID when startup fails instead of retrying or silently leaking it', async () => {
     const t = deps([
-      ok({ id: OTHER }),
+      ok({ session: { id: OTHER } }),
       { status: 400, text: '', json: { success: false, error: 'cannot start', errorCode: 'OPERATION_FAILED' } },
     ]);
     expect(await agentSpawn(t.d, base)).toBe(EXIT.error);
@@ -134,8 +135,114 @@ describe('project-preserving agent spawn', () => {
     expect(spawn.options.some((option) => option.long === '--working-dir')).toBe(true);
   });
   it('starts a shell through its registered startMode endpoint', async () => {
-    const t = deps([ok({ id: OTHER }), ok({})]);
+    const t = deps([ok({ session: { id: OTHER } }), ok({})]);
     expect(await agentSpawn(t.d, { ...base, mode: 'shell' })).toBe(EXIT.ok);
     expect(t.calls[1].path).toBe(`/api/v1/sessions/${OTHER}/shell`);
+  });
+  it('a create answer without session.id is a failure, and nothing is started', async () => {
+    // `POST /api/sessions` answers `{ session: { id } }`; a bare `{ id }` is not that route.
+    const t = deps([ok({ id: OTHER })]);
+    expect(await agentSpawn(t.d, base)).toBe(EXIT.error);
+    expect(t.calls).toHaveLength(1);
+  });
+  it('an empty case name goes to quick-start (which refuses it), never to the caller cwd', async () => {
+    const t = deps([
+      {
+        status: 400,
+        text: '',
+        json: { success: false, error: 'Invalid case name format', errorCode: 'INVALID_INPUT' },
+      },
+    ]);
+    expect(await agentSpawn(t.d, { ...base, caseName: '' })).toBe(EXIT.error);
+    expect(t.calls).toHaveLength(1);
+    expect(t.calls[0]).toMatchObject({ method: 'POST', path: '/api/v1/quick-start', body: { caseName: '' } });
+    expect(t.calls[0].body).not.toHaveProperty('workingDir');
+  });
+  it('an empty case name with --working-dir is refused like any case plus --working-dir', async () => {
+    const t = deps([]);
+    expect(await agentSpawn(t.d, { ...base, caseName: '', workingDir: process.cwd() })).toBe(EXIT.refused);
+    expect(t.calls).toEqual([]);
+  });
+  it('with ready on claude: create, then /interactive, then wait-output on the created id', async () => {
+    const t = deps([ok({ session: { id: OTHER } }), ok({}), ok({ wait: { matched: true } })]);
+    expect(await agentSpawn(t.d, { ...base, mode: 'claude', ready: true })).toBe(EXIT.ok);
+    expect(t.calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'POST /api/v1/sessions',
+      `POST /api/v1/sessions/${OTHER}/interactive`,
+      `GET /api/v1/sessions/${OTHER}/wait-output`,
+    ]);
+    expect(t.calls[2].query).toMatchObject({ match: 'shift+tab', from: 'buffer' });
+    expect(JSON.parse(t.out[0])).toMatchObject({ sessionId: OTHER, created: true, ready: true });
+  });
+  it('without --json a failed start prints the id alone on stdout, the reason on stderr, and exits 1', async () => {
+    const t = deps([
+      ok({ session: { id: OTHER } }),
+      { status: 400, text: '', json: { success: false, error: 'cannot start', errorCode: 'OPERATION_FAILED' } },
+    ]);
+    t.d.json = false;
+    expect(await agentSpawn(t.d, { ...base, ready: true })).toBe(EXIT.error);
+    expect(t.out).toEqual([OTHER]);
+    expect(t.err).toHaveLength(1);
+    expect(t.err[0]).toContain(`Session ${OTHER} was created but startup failed`);
+    expect(t.err[0]).toContain('cannot start');
+    expect(t.calls).toHaveLength(2); // no readiness wait after a failed start
+  });
+});
+
+describe('agent spawn through the real argument parser and transport', () => {
+  async function runSpawn(args: string[]) {
+    const seen: Array<{ method?: string; url?: string; body: unknown }> = [];
+    const server = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        const raw = Buffer.concat(chunks).toString();
+        seen.push({ method: req.method, url: req.url, body: raw ? JSON.parse(raw) : undefined });
+        res
+          .writeHead(400, { 'Content-Type': 'application/json' })
+          .end(JSON.stringify({ success: false, error: 'refused', errorCode: 'INVALID_INPUT' }));
+      });
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const { port } = server.address() as { port: number };
+    const saved = { ...process.env };
+    const savedExit = process.exitCode;
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      Object.assign(process.env, {
+        CODEMAN_MUX: '1',
+        CODEMAN_API_URL: `http://127.0.0.1:${port}`,
+        CODEMAN_SESSION_ID: SELF,
+      });
+      delete process.env.CODEMAN_PASSWORD;
+      const program = new Command();
+      program.exitOverride();
+      registerAgentCommands(program);
+      await program.parseAsync(['node', 'codeman', 'agent', 'spawn', ...args, '--no-ready', '--json']);
+      return { seen, exitCode: process.exitCode };
+    } finally {
+      process.exitCode = savedExit;
+      for (const key of ['CODEMAN_MUX', 'CODEMAN_API_URL', 'CODEMAN_SESSION_ID', 'CODEMAN_PASSWORD']) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+      log.mockRestore();
+      error.mockRestore();
+      await new Promise<void>((done) => server.close(() => done()));
+    }
+  }
+
+  it('`spawn ""` (as `spawn "$CASE"` with CASE unset) reaches quick-start with caseName "" and exits 1', async () => {
+    const { seen, exitCode } = await runSpawn(['']);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ method: 'POST', url: '/api/v1/quick-start', body: { caseName: '' } });
+    expect(exitCode).toBe(EXIT.error);
+  });
+  it('`spawn` with no case argument creates in the caller cwd', async () => {
+    const { seen, exitCode } = await runSpawn([]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ method: 'POST', url: '/api/v1/sessions', body: { workingDir: process.cwd() } });
+    expect(exitCode).toBe(EXIT.error);
   });
 });

@@ -2,9 +2,11 @@
  * @fileoverview `codeman agent …` — session-to-session verbs for the agent running
  * inside a Codeman session, in every CLI mode.
  *
- * A thin HTTP client over endpoints that already exist (`quick-start`, `input`,
- * `wait`, `wait-output`, `last-response`, `terminal`, `DELETE sessions/:id`, and the
- * agent inbox: `inbox`, `inbox/ack`, `agent-inbox/summary`). It
+ * A thin HTTP client over endpoints that already exist (`quick-start` for a named
+ * case, `POST sessions` + `sessions/:id/interactive|shell` for a worker in an
+ * existing directory, `input`, `wait`, `wait-output`, `last-response`, `terminal`,
+ * `DELETE sessions/:id`, and the agent inbox: `inbox`, `inbox/ack`,
+ * `agent-inbox/summary`). It
  * invents no route and no transport: everything goes through `CODEMAN_API_URL`, so
  * auth, ownership and the per-session waiter cap apply unchanged. The behaviour is
  * the packaged agent skill's (`skills/codeman`), ported from shell prose into code
@@ -539,9 +541,11 @@ export function composerReadyMark(mode: string): string | undefined {
 export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promise<number> {
   const cli = getCli(options.mode);
   if (!cli) return fail(deps, `Unknown mode: ${options.mode}`, EXIT.refused);
-  if (options.caseName && options.workingDir !== undefined)
+  if (options.caseName !== undefined && options.workingDir !== undefined)
     return fail(deps, 'Use a case OR --working-dir, not both', EXIT.refused);
-  const workingDir = options.caseName ? undefined : resolve(options.workingDir ?? process.cwd());
+  // Only an OMITTED case means "use a directory": an empty one (`spawn "$CASE"` with
+  // CASE unset) still goes to quick-start, whose schema refuses it.
+  const workingDir = options.caseName !== undefined ? undefined : resolve(options.workingDir ?? process.cwd());
   if (workingDir) {
     // eslint-disable-next-line no-control-regex
     if (/[\x00-\x1f\x7f]/.test(workingDir))
@@ -565,9 +569,10 @@ export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promis
     headers: workingDir ? undefined : { ...AGENT_ORIGIN_HEADER },
   });
   const created = res.json?.data as
-    | { id?: string; session?: { id?: string }; sessionId?: string; caseName?: string; casePath?: string }
+    | { session?: { id?: string }; sessionId?: string; caseName?: string; casePath?: string }
     | undefined;
-  const createdId = created?.session?.id ?? created?.id;
+  // `POST /api/sessions` answers `{ session: { id, ... } }`; quick-start answers `{ sessionId, ... }`.
+  const createdId = created?.session?.id;
   const data:
     | { sessionId?: string; caseName?: string; casePath?: string; workingDir?: string; created?: boolean }
     | undefined = workingDir && createdId ? { sessionId: createdId, workingDir, created: true } : created;
