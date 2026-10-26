@@ -2857,7 +2857,9 @@ class CodemanApp {
   _bindResponseViewerInteractions(body) {
     if (!body || body.dataset.rvBound === '1') return;
     body.dataset.rvBound = '1';
-    body.addEventListener('click', async (ev) => {
+    // The two link kinds whose href is a placeholder the browser cannot open
+    // (`#`, `#fragment`). Returns true when it took the event.
+    const openPlaceholderLink = (ev) => {
       // File path (_linkifyFilePaths): open it in the preview overlay, which
       // resolves workspace and out-of-workspace paths alike.
       const pathLink = ev.target.closest('a.rv-path');
@@ -2874,7 +2876,7 @@ class CodemanApp {
         const target = pathLink.dataset.linkified ? this._resolveLinkedFilePath?.(filePath, sessionId) : filePath;
         if (filePath && pathLink.dataset.folder) this.openFolderGrid(target || filePath, sessionId);
         else if (filePath) this.openFilePreview(target || filePath, sessionId);
-        return;
+        return true;
       }
 
       // An in-document link (`[Install](#installation)`). The browser must not follow it: with
@@ -2891,8 +2893,18 @@ class CodemanApp {
           const calm = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
           target.scrollIntoView({ block: 'start', behavior: calm ? 'auto' : 'smooth' });
         }
-        return;
+        return true;
       }
+      return false;
+    };
+    // A middle click fires auxclick, never click, so the browser followed the
+    // placeholder and opened the dashboard root in a new tab: do what a click
+    // does instead. A real URL keeps the browser's own middle click.
+    body.addEventListener('auxclick', (ev) => {
+      if (ev.button === 1) openPlaceholderLink(ev);
+    });
+    body.addEventListener('click', async (ev) => {
+      if (openPlaceholderLink(ev)) return;
 
       // A `localhost` URL in the agent's answer: from another device that can
       // only load through the server, so hand it to a proxied web tab
