@@ -466,6 +466,17 @@ export interface ClaudeMessage {
 }
 
 /**
+ * A write that a guarded submit's lease could not hold, because the per-lease hold
+ * queue (`Session.MAX_GUARDED_HELD_INPUTS`) was full. Nothing was written; retry it.
+ */
+export class GuardedInputBusyError extends Error {
+  constructor() {
+    super('A guarded submit is in progress on this session; nothing was written. Retry the input.');
+    this.name = 'GuardedInputBusyError';
+  }
+}
+
+/**
  * Whether a programmatic write leaves the keep-alive turn running: the nudge itself, or a bare
  * Enter (which submits nothing new). Anything else carrying an Enter starts a turn of its own.
  */
@@ -4218,7 +4229,7 @@ export class Session extends EventEmitter {
     prompt: string,
     options?: { model?: string; onProgress?: (info: { tokens?: number; status?: string }) => void }
   ): Promise<{ result: string; cost: number }> {
-    if (this._guardedSubmitInFlight) {
+    if (this.guardedInputHeld) {
       this._guardedInputRevision++;
       throw new Error('Guarded submission in progress');
     }
@@ -4738,6 +4749,19 @@ export class Session extends EventEmitter {
   private _guardedInputRevision = 0;
   private _guardedPendingWrites = 0;
   private _guardedSubmitInFlight = false;
+  /**
+   * Input that arrived while a guarded submit held the lease, in arrival order. Each
+   * entry runs when the lease is released; an entry that returns a promise (a mux
+   * write, a named key) is waited for before the next runs, so nothing overtakes it.
+   */
+  private _guardedHeld: Array<{ run: () => void | Promise<unknown>; bytes: number }> = [];
+  private _guardedHeldBytes = 0;
+  /** True while the drain waits for a held asynchronous write to finish. */
+  private _guardedHeldDraining = false;
+  /** Held entries per lease. A lease lasts milliseconds; past this the caller backs off. */
+  static readonly MAX_GUARDED_HELD_INPUTS = 256;
+  /** Held bytes per lease (16 browser frames at the 64 KiB frame cap). */
+  static readonly MAX_GUARDED_HELD_BYTES = 16 * 64 * 1024;
   /** Ephemeral identity, never persisted or based on a potentially reused pid alone. */
   get inspectionGeneration(): string {
     return `${this._inspectionInstance}:${this._guardedPaneRevision}:${this.owner ?? ''}`;
@@ -4750,12 +4774,88 @@ export class Session extends EventEmitter {
     return this._guardedPendingWrites;
   }
   /**
-   * True while a guarded submit holds the input lease. Every write path refuses for
-   * that span (a few milliseconds), so a route that can report a refusal checks this
-   * first instead of answering as if the bytes went out.
+   * True while a guarded submit holds the input lease (a few milliseconds). Input that
+   * arrives in that span is held and written after it (see {@link guardedInputHeld}).
    */
   get guardedSubmitInFlight(): boolean {
     return this._guardedSubmitInFlight;
+  }
+  /**
+   * True while input is being held behind a guarded submit: the lease itself, or held
+   * input not yet written after it. A write that is not routed through
+   * {@link holdForGuardedLease} must refuse in this window, or it overtakes held input.
+   */
+  get guardedInputHeld(): boolean {
+    return this._guardedSubmitInFlight || this._guardedHeld.length > 0 || this._guardedHeldDraining;
+  }
+  /**
+   * Hold input behind a guarded submit's lease instead of refusing it.
+   *
+   * `free`: nothing is held, so the caller writes inline as it always did. `held`: `run`
+   * is queued and runs, in arrival order with every other held input, once the lease is
+   * released (whatever the submit's outcome). `full`: the per-lease cap is reached and
+   * nothing was queued; the caller must stop delivering from that source until it can
+   * resend in order. Refusing instead lost input: the browser's WebSocket path does not
+   * wait for ACKs, so a refused seq N was overtaken by N+1 and its redelivery was then
+   * rejected as a duplicate. `data`, when given, is observed as input on arrival, so a
+   * keystroke held during the lease still moves the input revision at once.
+   */
+  holdForGuardedLease(run: () => void | Promise<unknown>, bytes = 0, data?: string): 'free' | 'held' | 'full' {
+    if (!this.guardedInputHeld) return 'free';
+    if (data !== undefined) this._observeGuardedKeyboardInput(data);
+    if (
+      this._guardedHeld.length >= Session.MAX_GUARDED_HELD_INPUTS ||
+      this._guardedHeldBytes + bytes > Session.MAX_GUARDED_HELD_BYTES
+    )
+      return 'full';
+    this._guardedHeld.push({ run, bytes });
+    this._guardedHeldBytes += bytes;
+    return 'held';
+  }
+  /**
+   * Run an asynchronous write now, or in its turn behind a guarded submit's lease. The
+   * turn lasts until the write settles, so later held input waits for it. Resolves
+   * `whenFull` without running anything when the hold queue is full.
+   */
+  private _inGuardedTurn<T>(write: () => Promise<T>, whenFull: () => T): Promise<T> {
+    if (!this.guardedInputHeld) return write();
+    return new Promise<T>((resolve, reject) => {
+      const held = this.holdForGuardedLease(() => {
+        const running = write();
+        running.then(resolve, reject);
+        return running;
+      });
+      if (held === 'full') {
+        try {
+          resolve(whenFull());
+        } catch (err) {
+          reject(err);
+        }
+      }
+    });
+  }
+  /** Run held input in arrival order until it is all written or a new lease is taken. */
+  private _drainGuardedHeld(): void {
+    while (this._guardedHeld.length > 0 && !this._guardedSubmitInFlight && !this._guardedHeldDraining) {
+      const entry = this._guardedHeld.shift()!;
+      this._guardedHeldBytes -= entry.bytes;
+      let running: void | Promise<unknown>;
+      try {
+        running = entry.run();
+      } catch (err) {
+        console.error(`[Session ${this.id}] held input failed after a guarded submit:`, getErrorMessage(err));
+        continue;
+      }
+      if (running && typeof running.then === 'function') {
+        this._guardedHeldDraining = true;
+        void running
+          .catch(() => {})
+          .then(() => {
+            this._guardedHeldDraining = false;
+            this._drainGuardedHeld();
+          });
+      }
+    }
   }
   /** Expose only the path selection needed for attributed Codex evidence, never credentials. */
   getCodexHomeOverride(): string | undefined {
@@ -4773,7 +4873,7 @@ export class Session extends EventEmitter {
       this._closing ||
       this.paneLifecycleInFlight ||
       this._guardedPendingWrites ||
-      (!allowLease && this._guardedSubmitInFlight) ||
+      (!allowLease && this.guardedInputHeld) ||
       this.remote ||
       this.docker ||
       this.paneExit ||
@@ -4808,7 +4908,7 @@ export class Session extends EventEmitter {
   /** Stage through ordinary delivery, after cancelling any older Enter retry timer. */
   async stageGuardedInput(message: string): Promise<boolean> {
     if (/[\r\n]/.test(message)) return false;
-    if (this._guardedPendingWrites || this._guardedSubmitInFlight) {
+    if (this._guardedPendingWrites || this.guardedInputHeld) {
       this._guardedInputRevision++;
       return false;
     }
@@ -4839,18 +4939,29 @@ export class Session extends EventEmitter {
       return sent && dispatched;
     } finally {
       this._guardedSubmitInFlight = false;
+      this._drainGuardedHeld();
     }
   }
-  /** Lease/pending boundary for named keys whose bytes bypass the ordinary write methods. */
+  /**
+   * Lease/pending boundary for named keys whose bytes bypass the ordinary write methods.
+   * During a guarded submit the operation waits for the lease like any other write;
+   * only a full hold queue refuses it, with {@link GuardedInputBusyError}.
+   */
   async performAuxiliaryInput(operation: () => Promise<void>): Promise<void> {
     this._guardedInputRevision++;
-    if (this._guardedSubmitInFlight) throw new Error('Guarded submission in progress');
-    this._guardedPendingWrites++;
-    try {
-      await operation();
-    } finally {
-      this._guardedPendingWrites--;
-    }
+    return this._inGuardedTurn(
+      async () => {
+        this._guardedPendingWrites++;
+        try {
+          await operation();
+        } finally {
+          this._guardedPendingWrites--;
+        }
+      },
+      () => {
+        throw new GuardedInputBusyError();
+      }
+    );
   }
   /**
    * Sends input directly to the PTY process.
@@ -5040,7 +5151,17 @@ export class Session extends EventEmitter {
    */
   async writeViaMux(data: string, options: SessionWriteOptions = {}): Promise<boolean> {
     this._observeGuardedKeyboardInput(data);
-    if (this._guardedSubmitInFlight) return false;
+    // A guarded submit's lease lasts for its Enter only: wait for it, in arrival order,
+    // rather than refusing, so an approval answer or a programmatic prompt is not
+    // dropped. Without a lease the write starts synchronously, so the pending count
+    // rises before any await and no lease can be taken while it is in flight.
+    return this._inGuardedTurn(
+      () => this._writeViaMuxNow(data, options),
+      () => false
+    );
+  }
+
+  private async _writeViaMuxNow(data: string, options: SessionWriteOptions): Promise<boolean> {
     this._guardedPendingWrites++;
     try {
       const submittedPrompt = this._trackSubmit(data, options);
@@ -5090,7 +5211,13 @@ export class Session extends EventEmitter {
           ? null
           : this._mux.capturePaneText?.(this._muxSession.muxName),
       sendEnter: () => {
-        if (this._guardedSubmitInFlight) this._submitVerifier?.cancel();
+        // A retry Enter is never held behind a guarded submit: once that submit's
+        // Enter went out, a re-press would submit whatever is on the composer next.
+        if (this.guardedInputHeld) {
+          this._guardedInputRevision++;
+          this._submitVerifier?.cancel();
+          return Promise.resolve(false);
+        }
         return this.writeViaMux('\r');
       },
       // ⚠ NO fallback glyph here, unlike the screen-reading probe elsewhere in this file.
@@ -5261,7 +5388,7 @@ export class Session extends EventEmitter {
 
   // Legacy method for sending input - wraps runPrompt
   async sendInput(input: string): Promise<void> {
-    if (this._guardedSubmitInFlight) {
+    if (this.guardedInputHeld) {
       this._guardedInputRevision++;
       throw new Error('Guarded submission in progress');
     }

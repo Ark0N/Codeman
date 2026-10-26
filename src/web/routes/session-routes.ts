@@ -35,6 +35,7 @@ import {
   type RemoteHost,
 } from '../../types.js';
 import {
+  GuardedInputBusyError,
   Session,
   cliTakesSessionModel,
   isAltScreenStripMode,
@@ -2078,12 +2079,14 @@ export function registerSessionRoutes(
     }
 
     // A guarded submit (agent-staging.ts) holds the input lease for the few
-    // milliseconds of its conditional Enter, and every write path refuses while it
-    // does. Say so instead of answering 200 for bytes that were never written, and
-    // give the seq back so the browser's durable queue (which keeps a frame on any
-    // 409) delivers it once the lease is released. Nothing from here to the write
-    // below awaits, so the lease cannot be taken in between.
-    if (!duplicate && session.guardedSubmitInFlight === true) {
+    // milliseconds of its conditional Enter, and input that arrives meanwhile is held
+    // and written in arrival order after it. This route refuses for that span (the
+    // lease plus the held input's drain) rather than overtake held input. Say so
+    // instead of answering 200 for bytes that were never written, and give the seq
+    // back so the browser's durable queue (which keeps a frame on any 409, and whose
+    // POST drainer sends one frame at a time) delivers it on its next retry. Nothing
+    // from here to the write below awaits, so the lease cannot be taken in between.
+    if (!duplicate && session.guardedInputHeld === true) {
       if (tagged) session.forgetInputSeq(clientId as string, seq as number);
       return reply
         .code(409)
@@ -2416,7 +2419,7 @@ export function registerSessionRoutes(
   // own `capabilities.newline`. Claude Code's Ink input recognizes 0x0a as "insert newline" vs
   // 0x0d (carriage return = submit).
 
-  app.post('/api/sessions/:id/send-key', async (req) => {
+  app.post('/api/sessions/:id/send-key', async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = req.body as Record<string, unknown>;
     const key = typeof body?.key === 'string' ? body.key : '';
@@ -2461,6 +2464,11 @@ export function registerSessionRoutes(
           })
       );
     } catch (err) {
+      // A guarded submit's lease holds the key until its Enter is out; only a full
+      // hold queue refuses it, and that is a retryable conflict, not a tmux failure.
+      if (err instanceof GuardedInputBusyError) {
+        return reply.code(409).send(createErrorResponse(ApiErrorCode.CONFLICT, err.message));
+      }
       console.error('[Server] send-key failed:', err);
       return createErrorResponse(ApiErrorCode.INTERNAL_ERROR, 'tmux send-keys failed');
     }

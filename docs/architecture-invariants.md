@@ -1281,6 +1281,9 @@ candidate-metadata budgets, bounded path probes before canonical reads, and
 complete UTF8 JSONL records. A full page advances its cursor without claiming a
 blocked record. Opaque cursors bind caller/session/lifecycle/file identity; pane
 geometry is excluded so changing devices does not invalidate transcript paging.
+Cursors are capped per owner and session (`INSPECT_CURSORS_PER_SCOPE`, the newest 8,
+under the global 1,024), so one polling agent retires its own oldest cursors instead
+of evicting every other caller's from the shared FIFO.
 
 ⚠️ Codex never prunes `~/.codex/sessions`, so attribution must not cost a store
 walk per call. The first call walks (negative-filter prefixes read 1 KiB first,
@@ -1317,9 +1320,18 @@ and the first capture is often from before them; another writer or a lifecycle c
 ends the wait at once, and every refusal after typing says the message may be in the
 composer. `capturePaneBuffer()` reads the visible frame and its caret in ONE tmux call
 (`capture-pane \; display-message`, split by `splitFrameAndCursor()`), falling back to
-the two calls on any doubt; keep the poll anyway. While a guarded submit holds the
-lease, `POST .../input` answers `409` (seq returned) instead of a `200` for unwritten
-bytes. ⚠️ Submit waits `SUBMIT_QUIET_MS` (250) after the staged keys before its
+the two calls only for output it cannot split; a combined call that THREW goes to the
+capture's catch and is never rerun (a hung tmux would block the event loop for a second
+timeout on every `GET .../terminal`). Keep the poll anyway. ⚠️ Input that arrives
+while a guarded submit holds the lease is HELD, never refused (`holdForGuardedLease()`,
+`_inGuardedTurn()`), and written in arrival order when the lease is released: the
+browser's WebSocket path does not wait for ACKs, so a refused seq N was overtaken by
+N+1 and its redelivery dropped as a duplicate. A WS frame is ACKed only once written;
+a held async write (mux write, named key) holds everything behind it until it settles
+(`guardedInputHeld`); a full hold queue (256 inputs / 1 MiB) closes the socket with
+`1013` and applies nothing later from it, so the browser resends in order. `POST
+.../input` alone answers `409` (seq returned) for the lease plus the drain, since its
+browser drainer is serialized and retries. ⚠️ Submit waits `SUBMIT_QUIET_MS` (250) after the staged keys before its
 checks: stage types plain keys, codex's paste-burst detector reads them as a paste, and
 an Enter within 120 ms of one becomes a newline while submit would report it
 delivered. Stage cancels older verifier retries and sends no Enter. Receipts contain hashes and
@@ -1330,7 +1342,8 @@ Submission additionally binds input and geometry revisions and rechecks the
 exact composer/caret at the conditional Enter boundary. The route must retain
 the Session snapshot's staging generation rather than replacing it with the
 inspection generation. Managed input and auxiliary named keys participate in the
-same pending/lease boundary. Complete focus/mouse reports and empty writes are
+same pending/lease boundary: they wait for the lease, and only a full hold queue
+refuses them (`GuardedInputBusyError`, which `send-key` answers as `409 CONFLICT`). Complete focus/mouse reports and empty writes are
 not edits. Never retry ambiguous Enter delivery or clear an unverified composer.
 The ordinary SubmitVerifier uses the shared write boundary, so each re-press
 updates `lastSubmitAt` just like any other Enter.

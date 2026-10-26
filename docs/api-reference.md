@@ -427,8 +427,9 @@ turn that never started. Verified live; this is the most common silent failure o
 this endpoint.
 
 Any input, waiting or not, answers `409 CONFLICT` with nothing written while an
-experimental guarded submit holds the session's input lease (a few milliseconds;
-see [guarded input](#experimental-bounded-agent-inspection-and-guarded-input)).
+experimental guarded submit holds the session's input lease, or input held behind
+it is still being written (a few milliseconds; see
+[guarded input](#experimental-bounded-agent-inspection-and-guarded-input)).
 Retry it.
 
 A **plain prompt** (printable text followed by exactly one `\r`, nothing else) is
@@ -659,9 +660,10 @@ thread, task completion or authorization.
 
 Opaque server-side cursors bind caller, session, pane generation, conversation,
 opened-file identity, byte offset and bounded content anchors. Terminal resizes
-do not change this inspection scope. At most 1024 live
-cursors are retained for 15 minutes; restart, eviction or expiry requires a fresh
-tail baseline. Replacement, truncation, detected rewrites, reassociation, foreign
+do not change this inspection scope. Each owner and session keeps its newest 8
+cursors (a retry of the last call still works; older ones are retired), at most
+1024 live cursors are retained in all, each for 15 minutes; restart, eviction or
+expiry requires a fresh tail baseline. Replacement, truncation, detected rewrites, reassociation, foreign
 cursors or loss of the attributed source return `409 CONFLICT`. No transcript
 filesystem path is returned as cursor/identity metadata; evidence retains the
 owner's native record content, which can itself contain paths.
@@ -708,13 +710,21 @@ may already be in the composer: inspect the pane and follow the stranded-draft
 recovery (Ctrl+U) in the skill reference before staging again.
 
 While a guarded submit holds the input lease (the few milliseconds of its
-conditional Enter), every other Codeman write path refuses, and
-`POST /api/v1/sessions/:id/input` answers `409 CONFLICT` ("A guarded submit is in
-progress on this session; nothing was written") instead of a `200` for bytes
-that were never written. A tagged `clientId`/`seq` frame keeps its seq, so the
-browser's durable queue, which keeps a frame on a `409`, delivers it on the next
-retry. WebSocket keystrokes in that window are left unacknowledged and redelivered
-the same way.
+conditional Enter), input that reaches the session is held, not refused, and is
+written in arrival order as soon as the lease is released, whatever the submit's
+outcome. That covers terminal WebSocket keystrokes (each frame is acknowledged
+only once it is written, so a frame typed during the lease lands before the one
+typed after it), Shift+Enter and Ctrl+Enter from `POST .../send-key`, approval
+answers and Codeman's own managed writes. A held write that is still being sent
+holds everything behind it. `POST /api/v1/sessions/:id/input` instead answers
+`409 CONFLICT` ("A guarded submit is in progress on this session; nothing was
+written") for that span, the lease plus the held input's drain, rather than a
+`200` for bytes that were never written; a tagged `clientId`/`seq` frame keeps
+its seq, so the browser's durable queue, whose POST fallback sends one frame at a
+time and keeps it on a `409`, delivers it on the next retry. A lease holds at
+most 256 inputs or 1 MiB; past that a WebSocket is closed with code `1013` and
+nothing later from it is applied, so the browser reconnects and resends every
+unacknowledged frame in order, and `send-key` answers `409 CONFLICT`.
 
 Direct auxiliary key operations participate in the same pending-write and input
 lease checks. Complete allowlisted focus/mouse reports and empty writes preserve

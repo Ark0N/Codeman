@@ -50,7 +50,7 @@ it('fences writes and reused-pid pane lifecycles without persisting prompt conte
   expect(session.guardedInputSnapshot()).toBeNull();
 });
 
-it('checks conditional Enter at the dispatch boundary and rejects concurrent browser input', async () => {
+it('checks conditional Enter at the dispatch boundary and holds concurrent input until after it', async () => {
   let dispatch: (() => void) | undefined;
   const writes: string[] = [];
   const mux = {
@@ -84,32 +84,41 @@ it('checks conditional Enter at the dispatch boundary and rejects concurrent bro
     muxSession: { muxName: 'codeman-test', sessionId: 'test', createdAt: 1, pid: 1 },
   } as unknown as ConstructorParameters<typeof Session>[0]);
   try {
+    const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
     const expected = session.guardedInputSnapshot()!;
     const sending = session.submitGuardedInput(expected);
-    expect(await session.writeViaMux('other')).toBe(false);
+    // Held behind the lease, not refused: it still invalidates the pending Enter, and
+    // it goes out once the lease is released.
+    const other = session.writeViaMux('other');
     dispatch!();
     expect(await sending).toBe(false);
     expect(writes).toEqual([]);
+    await settle();
+    dispatch!();
+    expect(await other).toBe(true);
+    expect(writes).toEqual(['other']);
     const next = session.submitGuardedInput(session.guardedInputSnapshot()!);
     dispatch!();
     expect(await next).toBe(true);
-    expect(writes).toEqual(['\r']);
+    expect(writes).toEqual(['other', '\r']);
     const restarting = session.submitGuardedInput(session.guardedInputSnapshot()!);
     await (session as unknown as { _withPaneLifecycle(op: () => Promise<void>): Promise<void> })._withPaneLifecycle(
       async () => {}
     );
     dispatch!();
     expect(await restarting).toBe(false);
-    expect(writes).toEqual(['\r']);
+    expect(writes).toEqual(['other', '\r']);
     const auxiliary = session.submitGuardedInput(session.guardedInputSnapshot()!);
-    await expect(
-      session.performAuxiliaryInput(async () => {
-        throw new Error('must not execute');
-      })
-    ).rejects.toThrow('Guarded submission');
+    const key = session.performAuxiliaryInput(async () => {
+      writes.push('aux');
+    });
+    await settle();
+    // The named key waits for the lease instead of failing, and never runs inside it.
+    expect(writes).toEqual(['other', '\r']);
     dispatch!();
     expect(await auxiliary).toBe(false);
-    expect(writes).toEqual(['\r']);
+    await key;
+    expect(writes).toEqual(['other', '\r', 'aux']);
   } finally {
     await session.stop(false);
   }
