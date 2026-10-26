@@ -48,6 +48,7 @@ import {
   toggleService,
   SETTINGS_PATH,
 } from '../route-helpers.js';
+import { mutateSettingsFile, settingsWriteErrorResponse } from '../settings-writer.js';
 import { SseEvent } from '../sse-events.js';
 import { getInstallInfo, checkForUpdate, startUpdate, getUpdateStatusForApi } from '../self-update.js';
 
@@ -1032,11 +1033,10 @@ export function registerSystemRoutes(
 
   app.get('/api/settings', async (req) => {
     // A plain read. This route must NEVER write settings.json: readJsonConfig()
-    // answers `{}` for ANY read failure (a parse error, EACCES, EMFILE, a read
-    // that lands inside PUT's non-atomic write), not only for a missing file,
-    // and every page load calls this route, so a "persist the default when the
-    // key is absent" reconcile here replaced a whole settings file with one key
-    // on the first unlucky read. The plan-usage default is resolved by the
+    // answers `{}` for ANY read failure (a parse error, EACCES, EMFILE), not
+    // only for a missing file, and every page load calls this route, so a
+    // "persist the default when the key is absent" reconcile here replaced a
+    // whole settings file with one key on the first unlucky read. The plan-usage default is resolved by the
     // READERS instead: an absent `showPlanUsageLimits` means ON to
     // readPlanUsageTelemetryEnabled() (hooks-config.ts), the same way an absent
     // `workspaceHooksEnabled` means ON, and the client resolves its own display
@@ -1096,21 +1096,11 @@ export function registerSystemRoutes(
     }
 
     try {
-      const dir = dirname(SETTINGS_PATH);
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
-      let existing: Record<string, unknown> = {};
-      try {
-        existing = JSON.parse(await fs.readFile(SETTINGS_PATH, 'utf-8'));
-      } catch {
-        /* ignore */
-      }
       // acknowledgeUnauthTunnel is an ACTION field (not a stored setting) — strip
       // it before persisting so settings.json stays clean.
       const { acknowledgeUnauthTunnel, ...settingsToStore } = settings;
+      const { before: existing } = await mutateSettingsFile((current) => ({ ...current, ...settingsToStore }));
       const merged = { ...existing, ...settingsToStore };
-      await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
 
       // tmux 3.7+ resizes tracked panes; older versions apply this to new panes.
       // Already-evicted history cannot be recovered on either version.
@@ -1196,7 +1186,7 @@ export function registerSystemRoutes(
 
       return {};
     } catch (err) {
-      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      return settingsWriteErrorResponse(err);
     }
   });
 
@@ -1214,25 +1204,10 @@ export function registerSystemRoutes(
     const modelConfig = parseBody(ModelConfigUpdateSchema, req.body, 'Invalid model config') as Record<string, unknown>;
 
     try {
-      let existingSettings: Record<string, unknown> = {};
-      try {
-        const content = await fs.readFile(SETTINGS_PATH, 'utf-8');
-        existingSettings = JSON.parse(content);
-      } catch {
-        // File doesn't exist yet, start fresh
-      }
-
-      existingSettings.modelConfig = modelConfig;
-
-      const dir = dirname(SETTINGS_PATH);
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
-      await fs.writeFile(SETTINGS_PATH, JSON.stringify(existingSettings, null, 2));
-
+      await mutateSettingsFile((current) => ({ ...current, modelConfig }));
       return {};
     } catch (err) {
-      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      return settingsWriteErrorResponse(err);
     }
   });
 

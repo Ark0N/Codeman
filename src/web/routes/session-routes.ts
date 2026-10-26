@@ -114,11 +114,11 @@ import {
   resolveCasesDir,
   resolveParentSessionId,
   sessionCapacityMessage,
-  SETTINGS_PATH,
   validatePathWithinBase,
   waitCapacityResponse,
   abortOnClientHangUp,
 } from '../route-helpers.js';
+import { mutateSettingsFile } from '../settings-writer.js';
 import { buildAgentCaseMarker, writeAgentCaseMarker } from '../../agent-case-marker.js';
 import { agentInbox } from '../agent-inbox.js';
 import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
@@ -4576,28 +4576,14 @@ export function registerSessionRoutes(
       // settings.json, readable by every user through GET /api/settings, so a non-admin's
       // case name is not written there in multi-user mode (writes are admin-only, like
       // PUT /api/settings). isAdmin is always true in single-user mode.
+      // Awaited and serialized with every other settings.json writer (mutateSettingsFile): the
+      // un-awaited write this replaced could land after the response, over a settings save.
       if (isAdmin(req)) {
         try {
-          const settingsFilePath = SETTINGS_PATH;
-          let settings: Record<string, unknown> = {};
-          try {
-            settings = JSON.parse(await fs.readFile(settingsFilePath, 'utf-8'));
-          } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-          }
-          settings.lastUsedCase = caseName;
-          const dir = dirname(settingsFilePath);
-          if (!existsSync(dir)) {
-            mkdirSync(dir, { recursive: true });
-          }
-          // Use async write to avoid blocking event loop
-          fs.writeFile(settingsFilePath, JSON.stringify(settings, null, 2)).catch((err) => {
-            // Non-critical but log for debugging
-            console.warn('[Server] Failed to save settings (lastUsedCase):', err);
-          });
+          await mutateSettingsFile((settings) => ({ ...settings, lastUsedCase: caseName }));
         } catch (err) {
-          // Non-critical but log for debugging
-          console.warn('[Server] Failed to prepare settings update:', err);
+          // Non-critical: the session is already running.
+          console.warn('[Server] Failed to save settings (lastUsedCase):', getErrorMessage(err));
         }
       }
 
