@@ -244,7 +244,8 @@ Some things are configured before the server starts, not in the UI:
 | `CODEMAN_GESTURE`                   | Makes gesture control available to be enabled.                          |
 | `CODEMAN_DOCKER_BRIDGE_HOOKS`       | Lets in-container hooks reach the host on a loopback bind.              |
 | `CODEMAN_FILE_PICKER_ROOTS`         | Extra roots for the path picker.                                        |
-| `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledges exposing the server with no password.                  |
+| `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledges binding a non-loopback address with no password. Does not cover the tunnel. |
+| `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL` | Lets the Cloudflare tunnel start with no password (`--allow-unauthenticated-tunnel` on `codeman web`). The browser still asks first. |
 | `CODEMAN_BASE_URL`                  | Mounts Codeman under a sub-path behind a reverse proxy that forwards the prefix unchanged. See [Remote Access](Remote-Access). |
 | `CODEMAN_MAX_SESSIONS`              | Cap on concurrent sessions. 50 by default, 1 to 462 (a larger value is clamped to 462, anything that is not a positive integer falls back to 50). Read at startup. The 462 assumes the default `CODEMAN_MAX_WEBVIEWS` and no pinned closed sessions, which share the same 512-entry tab layout. In multi-user mode the per-user cap defaults to half of it unless `CODEMAN_MAX_SESSIONS_PER_USER` is set. |
 | `CODEMAN_MAX_DOWNLOAD_BYTES`        | Cap on raw file bodies and downloads. 2 GB by default, `0` for none.    |

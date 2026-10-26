@@ -1,0 +1,5 @@
+---
+'aicodeman': patch
+---
+
+Security fix: `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` (and `--allow-unauthenticated-network`) no longer lets the Cloudflare tunnel start without a password. It now acknowledges only an unauthenticated network bind, which is what the installer writes it for on a LAN install without a password, so on those installs one click on the welcome screen's tunnel link published full terminal control to a public URL with no login and no confirm. An unauthenticated tunnel has its own opt-in now, `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1` or `codeman web --allow-unauthenticated-tunnel` (carried by `codeman web -d` and `codeman service install`), which the installer never writes. If you relied on the network variable to start the tunnel without a password, set one of those instead. Without it the server still accepts an enable that carries `acknowledgeUnauthTunnel: true`, as before. With no password and no multi-user mode, the browser now asks before every tunnel enable from the welcome link, the tunnel panel and App Settings, whatever the server would accept, using the new `loginConfigured` field of `GET /api/tunnel/status`.

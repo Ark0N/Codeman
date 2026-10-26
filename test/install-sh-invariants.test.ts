@@ -531,3 +531,7 @@ describe('install.sh review fixes for #460', () => {
     expect(drive('--tailscale')).toContain('host=127.0.0.1 pw=s3cret ack=0');
   });
 });
+
+it('install.sh never contains the unauthenticated tunnel opt-in', () => {
+  expect(SOURCE).not.toContain('CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL');
+});

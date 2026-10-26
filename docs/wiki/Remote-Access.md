@@ -115,8 +115,10 @@ There is also a toggle in **App Settings → System → Remote access**.
 
 **The tunnel refuses to start without a password.** That is on purpose: a public URL with no
 authentication is a terminal on your machine handed to the internet. Acknowledging the risk
-explicitly is possible from the UI toggle, and only from there; the API will not do it for
-you.
+explicitly is possible from the UI toggle, which asks you every time, or for the whole server
+with `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1` (or `codeman web --allow-unauthenticated-tunnel`).
+`CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK`, which the installer sets for a LAN install without a
+password, does not count.
 
 ## LAN plus password
 

@@ -105,7 +105,9 @@ The warning points at three ways to secure the instance:
 2. `--host 127.0.0.1` + an authenticated tunnel (`cloudflared` / `tailscale serve`).
 3. `--allow-unauthenticated-network` / `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1`
    — explicitly accept the risk (downgrades the warning to a one‑line note). This
-   flag is **only** an acknowledgement; it does not change reachability.
+   flag is **only** an acknowledgement; it does not change reachability. It covers
+   the bind and nothing else: it does **not** let the managed Cloudflare tunnel
+   start without a password, which has its own opt‑in (§2, the tunnel caveat).
 
 `CODEMAN_API_URL` (used by hooks/child processes) is always derived as a loopback
 address (`0.0.0.0`/`localhost`/`::1` → `127.0.0.1`) so in‑process hooks reach the
@@ -209,8 +211,15 @@ requests as local:
 **Mitigation:** set `CODEMAN_PASSWORD` whenever a loopback‑connecting tunnel is
 up — it gates everything except the (secret‑gated) hook exemption and is the
 documented practice; since COD‑55 enabling the managed tunnel **refuses** to start
-without it unless `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1` explicitly
-acknowledges the exposure. Prefer `tailscale serve` (below), which authenticates
+without a login (`CODEMAN_PASSWORD` or multi‑user mode) unless
+`CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1` / `--allow-unauthenticated-tunnel`
+acknowledges the exposure, or the request carries `acknowledgeUnauthTunnel: true`
+(what the browser sends after its confirm). The network acknowledgement
+(`CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK`) does **not** count: the installer writes
+it for every LAN install without a password, so it once turned a click on the
+welcome screen's tunnel link into a public, login‑free URL with no confirm. With
+no login the browser asks before every enable, whatever the server would accept,
+reading `loginConfigured` from `GET /api/tunnel/status`. Prefer `tailscale serve` (below), which authenticates
 at the tailnet layer so untrusted clients never reach the loopback port at all.
 
 ### Host‑header & Origin allowlist (DNS‑rebinding & CSRF defense)
@@ -585,7 +594,8 @@ Opt-in and off by default: the server POSTs the Web Push events (permission prom
 | `--host` / `CODEMAN_HOST` | Bind host (default `127.0.0.1`) |
 | `CODEMAN_ALLOWED_HOSTS` | Extra `Host`/`Origin` allowlist entries for reverse proxies (comma‑separated; exact host, or leading‑dot `.suffix` for subdomains) — see §3 |
 | `--base-url` / `CODEMAN_BASE_URL` | Sub‑path prefix Codeman is mounted under behind a reverse proxy, e.g. `/codeman` (default `/`); the proxy must forward the prefix unchanged. Independent of `CODEMAN_ALLOWED_HOSTS` |
-| `--allow-unauthenticated-network` / `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledge an unauthenticated non‑loopback bind (downgrades the warning) |
+| `--allow-unauthenticated-network` / `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledge an unauthenticated non‑loopback bind (downgrades the warning). Does not cover the tunnel |
+| `--allow-unauthenticated-tunnel` / `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL` | Let the managed Cloudflare tunnel start without a login (the browser still asks first). Never written by the installer |
 | `--https` | Enable TLS (adds HSTS) |
 | `CODEMAN_INSTANCE` | Scope tmux socket + data dir for isolation |
 | `CODEMAN_GESTURE=1` | Make the gesture overlay available (widens CSP) |
