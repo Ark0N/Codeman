@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { mkdtemp, writeFile, appendFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { InspectionReader } from '../src/agent-inspection.js';
+import { INSPECT_CURSORS_PER_SCOPE, InspectionReader } from '../src/agent-inspection.js';
 let dir: string;
 let file: string;
 let reader: InspectionReader;
@@ -149,6 +149,28 @@ it('keeps cursor capacity bounded across concurrent reads', async () => {
   const results = await Promise.all(Array.from({ length: 16 }, () => reader.read(file, scope, 100)));
   const resumed = await Promise.allSettled(results.map((result) => reader.read(file, scope, 100, result.cursor)));
   expect(resumed.filter((result) => result.status === 'fulfilled').length).toBeLessThanOrEqual(2);
+});
+it('caps cursors per owner and session, so one polling scope cannot evict another', async () => {
+  await writeFile(file, '{}\n');
+  const other = { ...scope, owner: 'bob', sessionId: 't' };
+  const bobs = await reader.read(file, other, 100);
+  // Alice polls every second for well past the old global FIFO of 1,024.
+  let last = await reader.read(file, scope, 100);
+  for (let i = 0; i < 1100; i++) last = await reader.read(file, scope, 100, last.cursor);
+  // Bob's cursor survives, and so does a retry of Alice's last call.
+  await expect(reader.read(file, other, 100, bobs.cursor)).resolves.toMatchObject({ evidence: '' });
+  await expect(reader.read(file, scope, 100, last.cursor)).resolves.toMatchObject({ evidence: '' });
+  // Alice keeps only her newest cursors: the oldest of one more than the cap is retired.
+  const issued: string[] = [];
+  for (let i = 0; i <= INSPECT_CURSORS_PER_SCOPE; i++) issued.push((await reader.read(file, scope, 100)).cursor);
+  await expect(reader.read(file, scope, 100, issued[0])).rejects.toThrow(/cursor/i);
+  await expect(reader.read(file, scope, 100, issued[issued.length - 1])).resolves.toBeDefined();
+  // The cap counts owner and session: a new pane generation of Alice's session shares
+  // it, Bob's session does not.
+  const nextPane = { ...scope, generation: 'pane-2' };
+  for (let i = 0; i < INSPECT_CURSORS_PER_SCOPE; i++) await reader.read(file, nextPane, 100);
+  await expect(reader.read(file, scope, 100, issued[issued.length - 1])).rejects.toThrow(/cursor/i);
+  await expect(reader.read(file, other, 100, bobs.cursor)).resolves.toBeDefined();
 });
 it('keeps an incomplete UTF8 sequence pending until its JSONL record is complete', async () => {
   const row = Buffer.from('{"text":"😀"}\n');

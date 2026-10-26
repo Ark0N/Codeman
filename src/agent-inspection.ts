@@ -18,6 +18,8 @@ export interface InspectionScope {
 }
 interface CursorState {
   scope: string;
+  /** Owner and session only: the unit the per-scope cap counts. */
+  holder: string;
   path: string;
   identity: string;
   offset: number;
@@ -47,12 +49,16 @@ async function anchor(handle: FileHandle, offset: number): Promise<string> {
   return createHash('sha256').update(head).update(tail).digest('hex');
 }
 
+/** Cursors kept per owner and session; older ones are retired first. */
+export const INSPECT_CURSORS_PER_SCOPE = 8;
+
 export class InspectionReader {
   private readonly cursors = new Map<string, CursorState>();
   constructor(
     private readonly now = Date.now,
     private readonly capacity = 1024,
-    private readonly ttlMs = 900000
+    private readonly ttlMs = 900000,
+    private readonly perScope = INSPECT_CURSORS_PER_SCOPE
   ) {}
 
   async read(path: string, scope: InspectionScope, maxBytes: number, since?: string) {
@@ -160,10 +166,21 @@ export class InspectionReader {
       const cursor = randomUUID();
       // No await between capacity enforcement and insertion: concurrent reads
       // must not all reserve the same remaining slot while hashing anchors.
-      for (const [key, value] of this.cursors) if (value.expiresAt <= this.now()) this.cursors.delete(key);
+      // Each owner and session keeps only its newest cursors, so one agent polling in
+      // a loop retires its own oldest ones instead of pushing every other caller's out
+      // of the shared map. The cursor just used stays among the newest, so a retry of
+      // the last call still works. The global capacity is only a backstop.
+      const holder = JSON.stringify([scope.owner, scope.sessionId]);
+      const mine: string[] = [];
+      for (const [key, value] of this.cursors) {
+        if (value.expiresAt <= this.now()) this.cursors.delete(key);
+        else if (value.holder === holder) mine.push(key);
+      }
+      while (mine.length >= this.perScope) this.cursors.delete(mine.shift()!);
       while (this.cursors.size >= this.capacity) this.cursors.delete(this.cursors.keys().next().value!);
       this.cursors.set(cursor, {
         scope: scopeKey,
+        holder,
         path,
         identity,
         offset: offset + consumed,

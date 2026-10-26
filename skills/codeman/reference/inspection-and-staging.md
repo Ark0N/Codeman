@@ -45,8 +45,8 @@ these reads do not provide authoritative current-thread tracking.
 Terminal resizes preserve inspection cursors. Cursors are opaque, scoped to the
 requesting identity, session, pane lifecycle generation
 and attributed transcript, expire after 15 minutes, and disappear on server
-restart. At most 1024 are retained; capacity eviction can invalidate an older
-cursor. A replaced/truncated/rewritten source, reassociated session, foreign cursor
+restart. Each caller and session keeps its newest 8 (so retrying the last call
+works), at most 1024 in all; an older cursor can be retired. A replaced/truncated/rewritten source, reassociated session, foreign cursor
 or unavailable native source returns `409 CONFLICT`. Inspect again without
 `--since` to establish a new tail baseline; this may omit older evidence.
 
