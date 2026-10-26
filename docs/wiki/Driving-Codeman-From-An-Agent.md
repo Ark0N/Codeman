@@ -59,6 +59,8 @@ codeman agent rm "$SID"                                   # any session except t
   local directory. A case and `--working-dir` cannot be combined, and an empty case
   name (`spawn "$CASE"` with `CASE` unset) is refused rather than read as "no case",
   as is an empty `--working-dir` (exit 4, before any request), so it never falls back to cwd.
+  A cwd that is your home directory is refused the same way, because Codeman's hooks would
+  land in `~/.claude`; pass `--working-dir ~` to start a worker there on purpose.
   Explicit case names retain quick-start behavior (creating a scratch case if missing).
   A directory launch is `POST /api/v1/sessions` followed by
   `POST /api/v1/sessions/:id/interactive` (or `/shell`); it preserves the project and
@@ -82,8 +84,9 @@ codeman agent rm "$SID"                                   # any session except t
   and goes when its session is deleted.
 - **Exit codes** are the same for every verb: `0` done, `1` error, `2` timeout, `3` the
   worker exited, `4` refused. `--json` prints the response's `data`, except a directory
-  `spawn`, which prints `{ sessionId, workingDir, created: true, ready }` (plus
-  `startupError` when the start failed).
+  `spawn`, which prints `{ sessionId, workingDir, created: true }`, plus `ready` when a
+  readiness wait ran, `readinessError` when that call failed, and `startupError` when the
+  start failed.
 
 ## The MCP server
 

@@ -46,7 +46,8 @@ For an existing project, use one command:
 no `--working-dir`, `spawn` uses cwd. Give editing workers separate worktrees. A
 positional case keeps quick-start behavior and cannot be combined with
 `--working-dir`; an empty `--working-dir` (`"$WT"` unset) refuses with exit 4
-rather than falling back to cwd. Directory launches keep parent lineage and never
+rather than falling back to cwd, and a cwd that is HOME refuses too (hooks would
+land in `~/.claude`; pass `--working-dir ~` to mean it). Directory launches keep parent lineage and never
 mark the project as agent scratch. If startup fails or is ambiguous, the CLI
 reports the exact created ID: inspect it before retrying or cleaning up.
 

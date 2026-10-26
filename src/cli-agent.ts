@@ -31,7 +31,8 @@
  *
  * @module cli-agent
  */
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
@@ -378,9 +379,10 @@ export interface AgentDeps {
 
 /**
  * Print `data` as JSON (the `--json` path): the envelope's `data`, never a reshaped copy,
- * except a directory spawn, which prints `{ sessionId, workingDir, created: true, ready }`
- * (plus `startupError` when its start fails) because `POST /api/sessions` answers with
- * the whole session row.
+ * except a directory spawn, which prints `{ sessionId, workingDir, created: true }` plus
+ * `ready` when a readiness wait ran, `readinessError` when that call failed, and
+ * `startupError` when its start fails, because `POST /api/sessions` answers with the
+ * whole session row.
  */
 function emitJson(deps: AgentDeps, data: unknown): void {
   deps.io.out(JSON.stringify(data, null, 2));
@@ -542,6 +544,32 @@ export const AGENT_ORIGIN_HEADER = { 'X-Codeman-Agent-Origin': 'codeman-agent-cl
 export function composerReadyMark(mode: string): string | undefined {
   return getCli(mode)?.capabilities.composerReadyMark;
 }
+
+/** realpath, or the plain resolved path when it cannot be resolved; never throws. */
+async function canonicalPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/**
+ * Whether `directory` is the user's home directory, comparing realpaths so a symlinked
+ * HOME (or a cwd reached through a symlink) still matches. False when HOME is unknown.
+ */
+export async function isHomeDirectory(directory: string): Promise<boolean> {
+  let home: string;
+  try {
+    home = homedir();
+  } catch {
+    return false;
+  }
+  if (!home) return false;
+  const [a, b] = await Promise.all([canonicalPath(directory), canonicalPath(home)]);
+  return a === b;
+}
+
 /** `agent spawn` — start in a project directory or named case, preserving lineage and mode readiness. */
 export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promise<number> {
   const cli = getCli(options.mode);
@@ -565,6 +593,18 @@ export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promis
     } catch {
       return fail(deps, 'Working directory must be an existing local directory', EXIT.refused);
     }
+    // The server installs workspace hooks (and, with agent skill injection on, the
+    // skill) into the directory it is given, and it skips that only when the caller
+    // names no workingDir, because the cwd fallback is $HOME under installer-created
+    // services. This CLI always sends its directory explicitly, so an implicit cwd of
+    // HOME must be refused here or it would write ~/.claude/settings.local.json and
+    // ~/.claude/skills. An explicit `--working-dir ~` is the caller's choice and stays.
+    if (options.workingDir === undefined && (await isHomeDirectory(workingDir)))
+      return fail(
+        deps,
+        'refusing: the current directory is your home directory; pass --working-dir ~ to start a worker there on purpose',
+        EXIT.refused
+      );
   }
   const body: Record<string, unknown> = {
     ...(workingDir ? { workingDir } : { caseName: options.caseName }),
@@ -1122,7 +1162,10 @@ export function registerAgentCommands(program: Command): Command {
     .description('Start a worker in cwd, an existing directory, or a named case; wait for its composer where supported')
     .option('-m, --mode <mode>', 'Run mode id, as the Run menu names it', 'claude')
     .option('-n, --name <name>', 'Session name shown in the UI')
-    .option('--working-dir <directory>', 'Existing project directory (defaults to cwd when no case is given)')
+    .option(
+      '--working-dir <directory>',
+      'Existing project directory (defaults to cwd when no case is given; a cwd of HOME is refused, pass it explicitly)'
+    )
     .option('--no-ready', 'Return as soon as the session exists, without the readiness wait')
     .option('-t, --timeout <ms>', 'Readiness budget in ms', String(DEFAULT_WAIT_MS))
     .option('--json', 'Machine-readable output')

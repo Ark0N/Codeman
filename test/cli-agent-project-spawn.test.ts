@@ -1,11 +1,13 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Command } from 'commander';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   agentSpawn,
+  isHomeDirectory,
   registerAgentCommands,
   EXIT,
   type AgentDeps,
@@ -260,4 +262,92 @@ describe('agent spawn through the real argument parser and transport', () => {
     expect(seen[0]).toMatchObject({ method: 'POST', url: '/api/v1/sessions', body: { workingDir: process.cwd() } });
     expect(exitCode).toBe(EXIT.error);
   });
+  it('bare `spawn` from a HOME cwd sends nothing and exits 4; `--working-dir <HOME>` is sent', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'cod549-home-'));
+    dirs.push(home);
+    vi.stubEnv('HOME', home);
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(home);
+    try {
+      const bare = await runSpawn([]);
+      expect(bare.seen).toEqual([]);
+      expect(bare.exitCode).toBe(EXIT.refused);
+      const explicit = await runSpawn(['--working-dir', home]);
+      expect(explicit.seen).toHaveLength(1);
+      expect(explicit.seen[0]).toMatchObject({ url: '/api/v1/sessions', body: { workingDir: home } });
+    } finally {
+      cwd.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('agent spawn never treats an implicit HOME cwd as a project', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+  async function homeDir(): Promise<string> {
+    const directory = await mkdtemp(join(tmpdir(), 'cod549-home-'));
+    dirs.push(directory);
+    return directory;
+  }
+
+  it('refuses a cwd that is HOME with exit 4 before any request and names the explicit flag', async () => {
+    const home = await homeDir();
+    vi.stubEnv('HOME', home);
+    vi.spyOn(process, 'cwd').mockReturnValue(home);
+    const t = deps([]);
+    expect(await agentSpawn(t.d, { ...base, mode: 'claude' })).toBe(EXIT.refused);
+    expect(t.calls).toEqual([]);
+    expect(JSON.parse(t.out[0]).error).toContain('pass --working-dir ~');
+  });
+  it('compares realpaths, so a symlinked HOME still matches the cwd it points at', async () => {
+    const real = await homeDir();
+    const link = join(await homeDir(), 'home-link');
+    await symlink(real, link);
+    vi.stubEnv('HOME', link);
+    vi.spyOn(process, 'cwd').mockReturnValue(real);
+    const t = deps([]);
+    expect(await agentSpawn(t.d, base)).toBe(EXIT.refused);
+    expect(t.calls).toEqual([]);
+  });
+  it('allows an explicit --working-dir that is HOME, as POST /api/sessions does', async () => {
+    const home = await homeDir();
+    vi.stubEnv('HOME', home);
+    vi.spyOn(process, 'cwd').mockReturnValue(home);
+    const t = deps([ok({ session: { id: OTHER } }), ok({})]);
+    expect(await agentSpawn(t.d, { ...base, workingDir: home })).toBe(EXIT.ok);
+    expect(t.calls[0].body).toMatchObject({ workingDir: home });
+  });
+  it('allows a cwd below HOME', async () => {
+    const home = await homeDir();
+    vi.stubEnv('HOME', home);
+    const t = deps([ok({ session: { id: OTHER } }), ok({})]);
+    expect(await agentSpawn(t.d, base)).toBe(EXIT.ok);
+    expect(t.calls[0].body).toMatchObject({ workingDir: process.cwd() });
+  });
+  it('never throws when HOME cannot be resolved, and compares the resolved paths instead', async () => {
+    const missing = join(await homeDir(), 'absent');
+    vi.stubEnv('HOME', missing);
+    await expect(isHomeDirectory(process.cwd())).resolves.toBe(false);
+    await expect(isHomeDirectory(missing)).resolves.toBe(true);
+    vi.stubEnv('HOME', '');
+    await expect(isHomeDirectory(process.cwd())).resolves.toBe(false);
+  });
+});
+
+describe('the directory-spawn --json shape is documented the same way everywhere', () => {
+  // The wiki wraps lines, so whitespace is normalized before comparing.
+  const clause =
+    '`{ sessionId, workingDir, created: true }`, plus `ready` when a readiness wait ran, `readinessError` when that call failed, and `startupError` when the start failed';
+  for (const file of [
+    'README.md',
+    'docs/api-reference.md',
+    'docs/wiki/Driving-Codeman-From-An-Agent.md',
+    '.changeset/project-worker-directories.md',
+  ]) {
+    it(file, () => {
+      expect(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8').replace(/\s+/g, ' ')).toContain(clause);
+    });
+  }
 });
