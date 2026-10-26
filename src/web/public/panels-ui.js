@@ -5979,6 +5979,7 @@ Object.assign(CodemanApp.prototype, {
       CodemanBase.url(`/api/sessions/${sessionId}/tail-file?path=${encodeURIComponent(filePath)}&lines=50`)
     );
 
+    let permissionDenied = false;
     eventSource.onmessage = (e) => {
       const data = JSON.parse(e.data);
       const body = document.getElementById(`log-viewer-body-${windowId}`);
@@ -6005,6 +6006,34 @@ Object.assign(CodemanApp.prototype, {
           this.updateLogViewerStatus(windowId, 'disconnected', 'ended');
           break;
         case 'error':
+          if (data.error === 'Path must be within working directory or allowed log directories') {
+            // This is a permanent denial, not a dropped connection. Stop the
+            // SSE retry loop and offer the existing one-file preview approval;
+            // never widen the tail stream's directory boundary.
+            permissionDenied = true;
+            eventSource.close();
+            body.innerHTML = `<div class="log-error">${escapeHtml(data.error)}</div>`;
+            this.updateLogViewerStatus(windowId, 'error', 'permission needed');
+            if (this.sessions.get(sessionId)?.mode === 'codex' && filePath.startsWith('/')) {
+              const allow = document.createElement('button');
+              allow.type = 'button';
+              allow.className = 'btn-toolbar log-viewer-allow-once';
+              allow.textContent = 'Allow this file once';
+              allow.addEventListener('click', async () => {
+                if (allow.disabled) return;
+                allow.disabled = true;
+                this.closeLogViewerWindow(windowId);
+                try {
+                  await this.openFilePreview(filePath, sessionId);
+                } catch (error) {
+                  this.showToast('Unable to preview file', 'error');
+                  console.error('Failed to preview approved file:', error);
+                }
+              });
+              body.appendChild(allow);
+            }
+            break;
+          }
           body.innerHTML += `<div class="log-error">${escapeHtml(data.error)}</div>`;
           this.updateLogViewerStatus(windowId, 'error', 'error');
           break;
@@ -6012,7 +6041,7 @@ Object.assign(CodemanApp.prototype, {
     };
 
     eventSource.onerror = () => {
-      this.updateLogViewerStatus(windowId, 'disconnected', 'connection error');
+      if (!permissionDenied) this.updateLogViewerStatus(windowId, 'disconnected', 'connection error');
     };
 
     // Store reference (including drag listeners for cleanup)
