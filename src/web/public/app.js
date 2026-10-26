@@ -7141,7 +7141,9 @@ class CodemanApp {
         : `<span class="tab-harness run-mode-dot ${escapeHtml(mode)}" aria-hidden="true"></span>`;
 
       const inlineSessionActions = this.shouldInlineSessionActions();
-      const tabActionsHtml = `<span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-new" onclick="event.stopPropagation(); app.openTabNewSessionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="New session here" aria-label="New session in this tab's case" aria-haspopup="menu" tabindex="0">+</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span><button type="button" class="tab-more" onclick="event.stopPropagation(); app.openTabRailActionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="Session actions" aria-label="Session actions">&#x22EF;</button></span>`;
+      // The "+" announces a menu, so Enter and Space open it: the strip's own key
+      // handler acts only on a focused tab, and the header strip has no row menu.
+      const tabActionsHtml = `<span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-new" onclick="event.stopPropagation(); app.openTabNewSessionMenu(event, ${escapeHtml(JSON.stringify(id))})" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); app.openTabNewSessionMenu(event, ${escapeHtml(JSON.stringify(id))}); }" title="New session here" aria-label="New session in this tab's case" aria-haspopup="menu" tabindex="0">+</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span><button type="button" class="tab-more" onclick="event.stopPropagation(); app.openTabRailActionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="Session actions" aria-label="Session actions">&#x22EF;</button></span>`;
 
       rowHtml.set(id, `<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${paneExitBadge ? ' tab-agent-exited' : ''}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}${this._tileGrid?.has(id) ? ' in-tiles' : ''}"${richData}${railOrderStyle} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" data-aria-source="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
           ${_tabIdx < 9 ? '<span class="tab-number">' + (_tabIdx + 1) + '</span>' : ''}
@@ -8390,6 +8392,11 @@ class CodemanApp {
     // An ungrouped tab sends no group, so the server's case default group (if the
     // case has one) places the new session, as it does for a toolbar Run.
     const tabGroupId = this._tabRefLocation({ kind: 'session', id: sessionId })?.groupId || null;
+    // The toolbar probes only the case it has selected, so ask this tab's container
+    // now: this open reads what is already known, the next one the container's answer.
+    if (caseEntry?.location === 'docker' && !this._dockerCaseModes?.[caseName]) {
+      void this._probeDockerCaseModes(caseEntry, null);
+    }
     // The phone overview's list, gated by the Run menu's own rule for this case
     // (_runModeAvailableForCase: the container's CLIs for a Docker case; shell is
     // never gated), in the Run menu's order: agents in catalog order, the shell last.
@@ -8583,6 +8590,12 @@ class CodemanApp {
     document.addEventListener('keydown', this._tabGroupMenuKeydown, true);
     window.addEventListener('resize', this._tabGroupMenuResize);
     menu.addEventListener('keydown', (keyEvent) => {
+      // A held Enter or Space that opened the menu repeats onto the entry it
+      // focuses; cancelling the repeat keeps it from also picking that entry.
+      if (keyEvent.repeat && (keyEvent.key === 'Enter' || keyEvent.key === ' ')) {
+        keyEvent.preventDefault();
+        return;
+      }
       const buttons = [...menu.querySelectorAll('button')];
       const at = buttons.indexOf(document.activeElement);
       if (keyEvent.key === 'ArrowDown' || keyEvent.key === 'ArrowUp') {

@@ -14,7 +14,8 @@
  *  - which CLIs are offered follows the Run menu's own rule for that case
  *    (_runModeAvailableForCase): the host's CLIs for a local case, the
  *    container's for a Docker case (live probe, then the stored list, nothing
- *    gated for an owned container), only the shell for an unreadable one;
+ *    gated for an owned container), only the shell for an unreadable one; the
+ *    picker starts that probe when nothing is cached for a Docker case;
  *  - a pick runs ONE launch in the tab's case or managed worktree with the tab's
  *    named group, and an ungrouped tab sends no group (the server's case default
  *    group then applies, pinned end to end in case-default-group-routes.test.ts);
@@ -22,6 +23,9 @@
  *    the mode is changed while the launch is pending and when the server has
  *    moved lastUsedCase to the tab's case;
  *  - a failed launch reports the server's own error;
+ *  - Enter and Space on the "+" open the picker (the header strip's only
+ *    keyboard path) and stop there; every other key passes on to the strip; a
+ *    held key's repeat cannot also pick the entry the picker focuses;
  *  - the row menu offers the picker on session rows only while the setting is on;
  *  - the picker closes on a re-render and gives focus back to the tab on Escape;
  *  - the setting stays per device and OFF until switched on, and every new
@@ -301,6 +305,70 @@ describe('the tab "+" picker', () => {
     ]);
   });
 
+  it("opening on a Docker tab whose container is not probed yet probes it, so the next open lists the container's CLIs", async () => {
+    const app = makeApp();
+    const probe = vi.spyOn(app, '_probeDockerCaseModes');
+    const previousFetch = win.fetch;
+    // The network boundary: what POST /api/docker-cases/adopt-preflight answers for this container.
+    win.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ success: true, data: { ok: true, availableModes: ['codex', 'shell'] } }),
+    }));
+    try {
+      probe.mockClear();
+      win.fetch.mockClear();
+      openFrom(app, 'c');
+      // This open reads what is already known (the list stored at adoption) and starts the probe.
+      expect(entries()).toEqual([
+        ['run-mode-dot gemini', 'Gemini CLI', 'run-mode-option'],
+        ['run-mode-dot shell', 'Terminal / Shell', 'run-mode-option'],
+      ]);
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(probe.mock.calls[0][0]).toBe(CASES.find((c) => c.name === 'box'));
+      expect(probe.mock.calls[0][1]).toBeNull();
+      expect(win.fetch).toHaveBeenCalledTimes(1);
+      const [url, init] = win.fetch.mock.calls[0];
+      expect(url).toBe('/api/docker-cases/adopt-preflight');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body)).toStrictEqual({ hostId: 'h1', container: 'box' });
+      await flush();
+      app.closeTabGroupMenu();
+
+      // The next open lists what the container answered, and probes no more.
+      probe.mockClear();
+      win.fetch.mockClear();
+      openFrom(app, 'c');
+      expect(entries()).toEqual([
+        ['run-mode-dot codex', 'Codex', 'run-mode-option selected'],
+        ['run-mode-dot shell', 'Terminal / Shell', 'run-mode-option'],
+      ]);
+      expect(probe).not.toHaveBeenCalled();
+      expect(win.fetch).not.toHaveBeenCalled();
+      app.closeTabGroupMenu();
+
+      // An owned container with nothing probed is probed as well.
+      probe.mockClear();
+      openFrom(app, 'd');
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(probe.mock.calls[0][0]).toBe(CASES.find((c) => c.name === 'own'));
+      expect(probe.mock.calls[0][1]).toBeNull();
+      await flush();
+      app.closeTabGroupMenu();
+
+      // Local, remote and worktree tabs have no container to ask.
+      for (const id of ['a', 'g', 'r', 'f']) {
+        probe.mockClear();
+        win.fetch.mockClear();
+        openFrom(app, id);
+        expect(probe).not.toHaveBeenCalled();
+        expect(win.fetch).not.toHaveBeenCalled();
+        app.closeTabGroupMenu();
+      }
+    } finally {
+      win.fetch = previousFetch;
+    }
+  });
+
   it('finds the case by what the session runs on, never a same-path case elsewhere', async () => {
     const app = makeApp();
     const runs: unknown[] = [];
@@ -337,6 +405,129 @@ describe('the tab "+" picker', () => {
       "This tab's folder is not a case, so there is nothing to start beside it.",
       'info'
     );
+  });
+});
+
+describe('the "+" from the keyboard', () => {
+  /**
+   * Wire the "+"'s inline keydown handler the way a browser wires an on* attribute
+   * (the attribute's text as the body of a function of `event`, `this` the
+   * element, `app` the page's global), since this JSDOM does not run inline handlers.
+   */
+  function wireInlineKeydown(app: Record<string, any>, el: HTMLElement) {
+    win.app = app;
+    const body = el.getAttribute('onkeydown');
+    expect(body).not.toBeNull();
+    const handler = new win.Function('event', body);
+    el.addEventListener('keydown', function (this: HTMLElement, event: Event) {
+      handler.call(this, event);
+    });
+  }
+  const press = (el: HTMLElement, key: string) => {
+    const event = new win.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+    el.dispatchEvent(event);
+    return event;
+  };
+
+  it('Enter and Space on the header strip\'s "+" open its picker, and the key goes no further', () => {
+    const app = makeApp({ orientation: 'horizontal' });
+    const strip = document.getElementById('sessionTabs')!;
+    // The header strip: a flat tablist, no row menu to fall back on.
+    expect(strip.getAttribute('role')).toBe('tablist');
+    const open = vi.spyOn(app, 'openTabNewSessionMenu');
+    const reachedStrip = vi.fn();
+    strip.addEventListener('keydown', reachedStrip);
+    wireInlineKeydown(app, plus('a'));
+    for (const key of ['Enter', ' ']) {
+      open.mockClear();
+      reachedStrip.mockClear();
+      const event = press(plus('a'), key);
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(open.mock.calls[0][0]).toBe(event);
+      expect(open.mock.calls[0][1]).toBe('a');
+      expect(event.defaultPrevented).toBe(true);
+      expect(reachedStrip).not.toHaveBeenCalled();
+      expect(entries()).toEqual([
+        ['run-mode-dot claude', 'Claude Code', 'run-mode-option'],
+        ['run-mode-dot codex', 'Codex', 'run-mode-option selected'],
+        ['run-mode-dot shell', 'Terminal / Shell', 'run-mode-option'],
+      ]);
+      // Anchored on the "+" itself; Escape gives focus back to its tab row (the shared menu's design).
+      expect(app._tabGroupMenuTrigger).toBe(plus('a'));
+      app.closeTabGroupMenu();
+    }
+    strip.removeEventListener('keydown', reachedStrip);
+  });
+
+  it('on a tab whose folder is no case the key still stops at the "+", so Space does not scroll the page', () => {
+    const app = makeApp({ orientation: 'horizontal' });
+    const strip = document.getElementById('sessionTabs')!;
+    const reachedStrip = vi.fn();
+    strip.addEventListener('keydown', reachedStrip);
+    wireInlineKeydown(app, plus('e'));
+    app.showToast.mockClear();
+    const event = press(plus('e'), ' ');
+    expect(event.defaultPrevented).toBe(true);
+    expect(reachedStrip).not.toHaveBeenCalled();
+    expect(picker()).toBeNull();
+    expect(app.showToast).toHaveBeenCalledWith(
+      "This tab's folder is not a case, so there is nothing to start beside it.",
+      'info'
+    );
+    strip.removeEventListener('keydown', reachedStrip);
+  });
+
+  it('every other key leaves the "+" alone and reaches the strip as before', () => {
+    const app = makeApp({ orientation: 'horizontal' });
+    const strip = document.getElementById('sessionTabs')!;
+    const open = vi.spyOn(app, 'openTabNewSessionMenu');
+    const reachedStrip = vi.fn();
+    strip.addEventListener('keydown', reachedStrip);
+    wireInlineKeydown(app, plus('a'));
+    for (const key of ['a', 'ArrowRight', 'ArrowDown', 'Escape', 'Tab', 'F2']) {
+      open.mockClear();
+      reachedStrip.mockClear();
+      const event = press(plus('a'), key);
+      expect(open).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+      expect(reachedStrip).toHaveBeenCalledTimes(1);
+      expect(picker()).toBeNull();
+    }
+    strip.removeEventListener('keydown', reachedStrip);
+  });
+
+  it('a held Enter or Space that opened the picker cannot also pick its focused entry', async () => {
+    const app = makeApp({ orientation: 'horizontal' });
+    const runs: unknown[] = [];
+    app.run = vi.fn(async (options: unknown) => {
+      runs.push(structuredClone(options));
+    });
+    wireInlineKeydown(app, plus('a'));
+    for (const key of ['Enter', ' ']) {
+      press(plus('a'), key);
+      const focused = document.activeElement as HTMLElement;
+      expect(focused.textContent).toBe('Codex');
+      // The key's auto-repeat lands on the entry the picker just focused: its
+      // native activation is cancelled, so nothing launches and the picker stays.
+      const repeat = new win.KeyboardEvent('keydown', { key, repeat: true, bubbles: true, cancelable: true });
+      focused.dispatchEvent(repeat);
+      expect(repeat.defaultPrevented).toBe(true);
+      expect(picker()).not.toBeNull();
+      // A fresh press on an entry keeps its native activation.
+      const fresh = new win.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+      focused.dispatchEvent(fresh);
+      expect(fresh.defaultPrevented).toBe(false);
+      app.closeTabGroupMenu();
+    }
+    // Other repeated keys keep their own handling (ArrowDown still moves).
+    press(plus('a'), 'Enter');
+    const arrow = new win.KeyboardEvent('keydown', { key: 'ArrowDown', repeat: true, bubbles: true, cancelable: true });
+    document.activeElement!.dispatchEvent(arrow);
+    expect(arrow.defaultPrevented).toBe(true);
+    expect(document.activeElement?.textContent).toBe('Terminal / Shell');
+    app.closeTabGroupMenu();
+    await flush();
+    expect(runs).toStrictEqual([]);
   });
 });
 

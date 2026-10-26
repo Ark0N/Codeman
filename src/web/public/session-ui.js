@@ -823,7 +823,8 @@ Object.assign(CodemanApp.prototype, {
    * never gated; both callers skip it before asking.
    *
    * Reads only what is already known and never starts a container probe: the
-   * Run menu starts one (_probeDockerCaseModes), and its answer lands in
+   * Run menu and a tab's "+" (openTabNewSessionMenu, app.js) start one
+   * (_probeDockerCaseModes), and its answer lands in
    * _dockerCaseModes, which this reads. Until then (a probe still in flight)
    * the stored availableModes decide, else nothing is gated.
    */
