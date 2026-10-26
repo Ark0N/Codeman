@@ -4295,7 +4295,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   capturePaneBuffer(muxName: string, paneTarget?: string, opts?: PaneCaptureOptions): string | null {
-    if (IS_TEST_MODE) return '';
+    const exec = this.captureRunner();
+    if (!exec) return '';
     const target = resolveTmuxPaneTarget(muxName, paneTarget);
     if (!target) {
       console.error('[TmuxManager] Invalid pane target in capturePaneBuffer:', { muxName, paneTarget });
@@ -4341,13 +4342,20 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // caret belongs to the frame. Two separate calls raced the CLI's repaint: a
       // CLI that redraws its composer a few ms after input arrives (codex) could be
       // captured before the redraw and its caret queried after it, and guarded
-      // stage then refused a frame the keys had already reached. Any doubt about
-      // the combined output (a failed call, a last line that is not the query's)
-      // falls back to the two separate calls, which is what this always did.
-      const combined = fullHistory ? null : this.captureFrameWithCursor(`${captureCommand} \\; ${cursorQuery}`);
+      // stage then refused a frame the keys had already reached. Only output that
+      // splitFrameAndCursor() cannot split (a last line that is not the query's)
+      // falls back to the two separate calls, which is what this always did. A call
+      // that THREW (a hung tmux timing out) goes to the catch below like any other
+      // capture failure: retrying it would block the event loop for a second timeout
+      // on every `GET .../terminal` load.
+      const combined = fullHistory
+        ? null
+        : splitFrameAndCursor(
+            exec(`${captureCommand} \\; ${cursorQuery}`, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS })
+          );
       const rawCapture = joinScrollbackAndFrame(
         scrollbackOverride,
-        combined?.frame ?? execSync(captureCommand, execOpts),
+        combined?.frame ?? exec(captureCommand, execOpts),
         scrollbackOverride !== undefined ? opts?.scrollbackOverrideScreen : undefined
       );
       // Query the cursor BEFORE deciding anything else. On the full-history path
@@ -4357,7 +4365,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const geometry = queryPaneCursor(() =>
         combined
           ? combined.cursor
-          : execSync(`${this.tmux()} ${cursorQuery}`, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS })
+          : exec(`${this.tmux()} ${cursorQuery}`, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS })
       );
       // Report the size the pane was really drawing at. The visible-frame path
       // below addresses every row absolutely, so a consumer whose terminal is
@@ -4423,13 +4431,16 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
   }
 
-  /** One combined capture-and-cursor-query call, split; null when it failed or is ambiguous. */
-  private captureFrameWithCursor(command: string): { frame: string; cursor: string } | null {
-    try {
-      return splitFrameAndCursor(execSync(command, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }));
-    } catch {
-      return null;
-    }
+  /**
+   * How {@link capturePaneBuffer} runs tmux, or null where it must not (vitest).
+   * Split out like {@link inputRunner} so a test subclass can count and script the
+   * calls a capture makes.
+   */
+  protected captureRunner():
+    | ((cmd: string, opts: { encoding: 'utf-8'; timeout: number; maxBuffer?: number }) => string)
+    | null {
+    if (IS_TEST_MODE) return null;
+    return (cmd, opts) => execSync(cmd, opts);
   }
 
   /**

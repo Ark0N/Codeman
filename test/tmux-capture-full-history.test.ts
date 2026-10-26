@@ -10,13 +10,14 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   formatCursorRestore,
   formatPaneSnapshot,
   hasVisibleContent,
   queryPaneCursor,
   splitFrameAndCursor,
+  TmuxManager,
 } from '../src/tmux-manager.js';
 
 describe('tmux full-history pane capture (COD-47)', () => {
@@ -282,9 +283,9 @@ describe('the visible frame and its caret come from one tmux invocation', () => 
     // after input): the frame could predate the caret, and guarded stage refused it.
     // Two backslashes in the source: one escaped backslash in the shell command, which hands tmux its `;`.
     const chained = '${captureCommand} ' + '\\'.repeat(2) + '; ${cursorQuery}';
-    expect(methodBody).toContain('fullHistory ? null : this.captureFrameWithCursor(`' + chained + '`)');
-    // Any doubt falls back to the two calls the capture always made.
-    expect(methodBody).toContain('combined?.frame ?? execSync(captureCommand, execOpts)');
+    expect(methodBody).toContain('exec(`' + chained + '`');
+    // Output it cannot split falls back to the two calls the capture always made.
+    expect(methodBody).toContain('combined?.frame ?? exec(captureCommand, execOpts)');
     expect(methodBody).toContain('combined\n          ? combined.cursor');
   });
   it('splits the combined output into the rows and the cursor line tmux prints last', () => {
@@ -298,5 +299,56 @@ describe('the visible frame and its caret come from one tmux invocation', () => 
     expect(splitFrameAndCursor('› hello\n  footer\n')).toBeNull();
     expect(splitFrameAndCursor('row\nworld 1 2 3 4\n')).toBeNull();
     expect(splitFrameAndCursor('')).toBeNull();
+  });
+});
+
+describe('how many tmux calls one visible-frame capture makes', () => {
+  type Run = (cmd: string, opts: { encoding: 'utf-8'; timeout: number; maxBuffer?: number }) => string;
+  class ScriptedTmux extends TmuxManager {
+    calls: string[] = [];
+    constructor(private readonly answer: (cmd: string) => string) {
+      super();
+    }
+    protected override captureRunner(): Run {
+      return (cmd) => {
+        this.calls.push(cmd.includes(' \\; ') ? 'combined' : cmd.includes('display-message') ? 'cursor' : 'capture');
+        return this.answer(cmd);
+      };
+    }
+  }
+  const quiet = () => vi.spyOn(console, 'error').mockImplementation(() => {});
+
+  it('makes ONE call when the combined output splits', () => {
+    const tmux = new ScriptedTmux(() => '› hello\n  footer\n7 0 100 20 0 0\n');
+    expect(tmux.capturePaneBuffer('codeman-12345678')).toContain('hello');
+    expect(tmux.calls).toEqual(['combined']);
+  });
+
+  it('does not rerun a combined call that threw: a hung tmux costs one timeout, not two', () => {
+    const errors = quiet();
+    try {
+      const tmux = new ScriptedTmux(() => {
+        throw Object.assign(new Error('spawnSync /bin/sh ETIMEDOUT'), { code: 'ETIMEDOUT' });
+      });
+      expect(tmux.capturePaneBuffer('codeman-12345678')).toBeNull();
+      expect(tmux.calls).toEqual(['combined']);
+      expect(errors).toHaveBeenCalledTimes(1);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it('falls back to the two separate calls only for output it cannot split', () => {
+    const tmux = new ScriptedTmux((cmd) =>
+      cmd.includes(' \\; ') ? '› hello\n  footer\n' : cmd.includes('display-message') ? '7 0 100 20 0 0\n' : '› hello\n'
+    );
+    expect(tmux.capturePaneBuffer('codeman-12345678')).toContain('hello');
+    expect(tmux.calls).toEqual(['combined', 'capture', 'cursor']);
+  });
+
+  it('keeps the full-history path on its two calls', () => {
+    const tmux = new ScriptedTmux((cmd) => (cmd.includes('display-message') ? '0 0 80 24 0 0\n' : 'row\n'));
+    tmux.capturePaneBuffer('codeman-12345678', undefined, { fullHistory: true });
+    expect(tmux.calls).toEqual(['capture', 'cursor']);
   });
 });
