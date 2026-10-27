@@ -2592,8 +2592,8 @@ function findTerminalUrls(text) {
  * @param {number} [maxRows]
  * @returns {{startRow: number, endRow: number, firstRowUrlEnd?: number} | null}
  *          `firstRowUrlEnd` is where the URL's cell ends on the first row when
- *          other table columns follow it; null means the row is not part of a
- *          URL continued this way.
+ *          other table columns follow it and that row does not soft-wrap; null
+ *          means the row is not part of a URL continued this way.
  */
 function terminalUrlContinuationExtent(buffer, row, cols, maxRows) {
   const bound = Math.max(1, maxRows || 12);
@@ -2611,8 +2611,15 @@ function terminalUrlContinuationExtent(buffer, row, cols, maxRows) {
     while (endRow - start + 1 < bound) {
       const urls = findTerminalUrls(text);
       const last = urls[urls.length - 1];
+      // Only on a one-row first line: firstRowUrlEnd cuts the first PHYSICAL
+      // row (terminalLinkLine), so a column sitting on the soft-wrapped part of
+      // the URL's row would stay in the text and take the next row with it.
       const trailingColumns =
-        endRow === first.endRow && last && last.rawEnd < text.length && /^ {2,}\S/.test(text.slice(last.rawEnd));
+        first.startRow === first.endRow &&
+        endRow === first.endRow &&
+        last &&
+        last.rawEnd < text.length &&
+        /^ {2,}\S/.test(text.slice(last.rawEnd));
       const urlText = trailingColumns ? text.slice(0, last.rawEnd) : text;
       if (!last || last.rawEnd !== urlText.length || !/[/?&=\-_%#+~]$/.test(urlText)) break;
       if (urlStartCol < 0) urlStartCol = first.offsetToCell(last.startIndex).col;
@@ -2838,10 +2845,13 @@ function terminalCellWrappedPaths(buffer, row, maxRows) {
         // class AL).
         if (!/[/-]$/.test(joined)) break;
         // A wrapper wraps every column of one table row together, so a row that
-        // carries a cell's continuation is blank to its left unless a left column
-        // wrapped on that row too. A label there (`Entry`, `│ Log │`) opens the
-        // next record, even under a directory ending in `/` (`Workspace
-        // /home/u/proj/app/` over `Entry main.py`).
+        // carries a cell's continuation is blank to its left unless a path in a
+        // left column continued on that row too. A label there (`Entry`,
+        // `│ Log │`) opens the next record, even under a directory ending in `/`
+        // (`Workspace /home/u/proj/app/` over `Entry main.py`). A left column of
+        // wrapped prose (a `Description | Path` table) fills that row as well, so
+        // the path beside it is not joined and keeps its per-row fragment links:
+        // the safe direction.
         // Known trade-off: with nothing to the left, a directory written with its
         // trailing slash over a relative path in the same column (`/home/u/proj/`
         // over `index.ts`) still joins, since it reads exactly like a wrap at `/`.

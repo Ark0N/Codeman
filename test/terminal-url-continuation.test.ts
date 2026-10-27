@@ -241,6 +241,15 @@ const STILL_CONTINUES_ROWS: [string, string, string][] = [
   ['  Docs: https://example.com/guide?', '  x=1&y=2 more text', 'https://example.com/guide?x=1&y=2'],
   ['  https://example.com/files/', '  2026%20Plan.xlsx', 'https://example.com/files/2026%20Plan.xlsx'],
 ];
+// A URL row that soft-wraps at 41 columns with a table column on its wrapped
+// part, over an indented row: the column and that row are separate links, never
+// one glued `/tmp/report.txtccc/x.html`.
+const SOFT_WRAP_COLS = 41;
+const SOFT_WRAPPED_URL_ROWS: Row[] = [
+  { text: '  Doc  https://example.com/aaaaaaaaaaaaaa' },
+  { text: 'bbb/    /tmp/report.txt', isWrapped: true },
+  { text: '       ccc/x.html' },
+];
 
 describe('findTerminalUrls (grammar)', () => {
   const { findTerminalUrls } = loadPure();
@@ -438,6 +447,13 @@ describe('terminalUrlContinuationExtent (wrap joining)', () => {
     const extent = terminalUrlContinuationExtent(fakeBuffer(rows, 80), 0, 80, 5);
     expect(extent).not.toBeNull();
     expect(extent!.endRow - extent!.startRow + 1).toBeLessThanOrEqual(5);
+  });
+
+  it('does not continue a URL whose row soft-wraps with a column on the wrapped part', () => {
+    const buffer = fakeBuffer(SOFT_WRAPPED_URL_ROWS, SOFT_WRAP_COLS);
+    for (const row of [0, 1, 2]) {
+      expect(terminalUrlContinuationExtent(buffer, row, SOFT_WRAP_COLS, 12)).toBeNull();
+    }
   });
 });
 
@@ -663,6 +679,14 @@ describe('terminal link provider with wrapped table URLs', () => {
     expect(segments[2].range.start.x).toBe(CELL + 1);
     // Ends on `true`, not on the closing paren after it.
     expect(segments[2].range.end.x).toBe(TABLE[3].text.length - 1);
+  });
+
+  it('links the column on a soft-wrapped URL row and the row below it separately', () => {
+    const { provide } = harness(SOFT_WRAPPED_URL_ROWS, SOFT_WRAP_COLS);
+    const texts = [1, 2, 3].flatMap((line) => provide(line).map((link) => link.text));
+    expect(texts.filter((text) => text.includes('report.txtccc'))).toEqual([]);
+    expect(provide(2).map((link) => link.text)).toContain('/tmp/report.txt');
+    expect(provide(3).map((link) => link.text)).toContain('ccc/x.html');
   });
 
   it('keeps a single-row URL with a paren pair whole', () => {
