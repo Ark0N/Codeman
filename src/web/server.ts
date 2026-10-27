@@ -406,7 +406,8 @@ export class WebServer extends EventEmitter {
     sessionIds: () => this.sessions.keys(),
     getSession: (id) => this.sessions.get(id),
     readSettings: readGitFetchSettings,
-    // The same Docker list the panel's routes use: the rule has to be one rule.
+    // The same Docker list the panel's Fetch button uses: the rule has to be one rule. It rejects on a list
+    // that cannot be read, and the tick then fetches nothing (fail closed).
     dockerWorkspaces: defaultDockerWorkspaces,
     // Bounded probe, DEFAULT options (rule #516): a tick is a bulk scan, so it keeps the stall cap and must
     // never be handed `pastCap`. A folder on a mount that stopped answering is skipped, not fetched.

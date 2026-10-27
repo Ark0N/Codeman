@@ -9,7 +9,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRouteTestHarness } from './_route-test-utils.js';
-import { registerGitStatusRoutes } from '../../src/web/routes/git-status-routes.js';
+import { defaultDockerWorkspaces, registerGitStatusRoutes } from '../../src/web/routes/git-status-routes.js';
+import { getDataDir } from '../../src/config/instance.js';
 import { clearGitStatusCache, runGit, type GitRunner } from '../../src/git-workspace-status.js';
 import { clearGitFetchLane, fetchWorkspaceOnce } from '../../src/git-fetch.js';
 
@@ -30,14 +31,18 @@ let dir: string;
 let session: Record<string, unknown>;
 
 async function setup(
-  opts: { git?: GitRunner; authUser?: { username: string; role: 'admin' | 'user' }; dockerWorkspaces?: string[] } = {}
+  opts: {
+    git?: GitRunner;
+    authUser?: { username: string; role: 'admin' | 'user' };
+    /** A fixed list, a reader of the test's own, or `'real'` for the route's default (the data dir's file). */
+    dockerWorkspaces?: string[] | (() => Promise<string[]>) | 'real';
+  } = {}
 ) {
-  const h = await createRouteTestHarness(
-    (app, ctx) => registerGitStatusRoutes(app, ctx, opts.git, async () => opts.dockerWorkspaces ?? []),
-    {
-      authUser: opts.authUser,
-    }
-  );
+  const docker = opts.dockerWorkspaces;
+  const reader = docker === 'real' ? undefined : typeof docker === 'function' ? docker : async () => docker ?? [];
+  const h = await createRouteTestHarness((app, ctx) => registerGitStatusRoutes(app, ctx, opts.git, reader), {
+    authUser: opts.authUser,
+  });
   session = h.ctx._session as unknown as Record<string, unknown>;
   session.workingDir = dir;
   return h;
@@ -459,6 +464,58 @@ describe('POST /api/sessions/:id/git-fetch', () => {
     expect(res.json().data).toMatchObject({ state: 'unsupported', reason: 'docker' });
     expect(fetches()).toEqual([]);
     expect(calls).toEqual([]);
+  });
+
+  /**
+   * docker-cases.json is rewritten in place (truncate, then write), so a read can land on an empty or
+   * half-written file. Read as "no Docker workspaces", a fetch would run git, and with it the repository's
+   * hooks, inside a folder a container can write to.
+   */
+  it('fetches nothing when the Docker case list cannot be read, and answers a failed run', async () => {
+    git(dir, 'init', '-q', '-b', 'main');
+    const { calls, runner } = recordingRunner();
+    const { app, ctx } = await setup({
+      git: runner,
+      dockerWorkspaces: async () => {
+        throw new Error('docker-cases.json is not a valid JSON array');
+      },
+    });
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toMatchObject({ state: 'error', repos: [] });
+    expect(res.json().data.error).toMatch(/Docker case list/);
+    expect(calls).toEqual([]); // not even the resolver's rev-parse
+    expect(session.gitFetch).toMatchObject({ trigger: 'click', state: 'error', repos: 0, failed: 0 });
+    expect(ctx.broadcast).toHaveBeenCalled();
+  });
+
+  it('reads the real Docker case list strictly for a fetch, and leaves the status route as it was', async () => {
+    git(dir, 'init', '-q', '-b', 'main');
+    mkdirSync(getDataDir(), { recursive: true });
+    const listPath = join(getDataDir(), 'docker-cases.json');
+    try {
+      writeFileSync(listPath, '[{"name":"c","hostWorkspacePath":"/x"');
+      await expect(defaultDockerWorkspaces()).rejects.toThrow(/not a valid JSON array/);
+      const { calls, fetches, runner } = recordingRunner();
+      const { app } = await setup({ git: runner, dockerWorkspaces: 'real' });
+      const fetched = await app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' });
+      expect(fetched.json().data.state).toBe('error');
+      expect(calls).toEqual([]);
+      // The read-only status route still reads an unreadable list as none, as it always has.
+      const status = await app.inject({ method: 'GET', url: '/api/sessions/test-session-1/git-status' });
+      expect(status.json().data.state).toBe('ok');
+      expect(fetches()).toEqual([]);
+
+      // A readable list that names this folder refuses the fetch as a Docker workspace, so the strict
+      // reader is the one the route really reads.
+      writeFileSync(listPath, JSON.stringify([{ name: 'c', hostWorkspacePath: realpathSync(dir) }]));
+      expect(await defaultDockerWorkspaces()).toEqual([realpathSync(dir)]);
+      const refused = await app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' });
+      expect(refused.json().data).toMatchObject({ state: 'unsupported', reason: 'docker' });
+      expect(fetches()).toEqual([]);
+    } finally {
+      rmSync(listPath, { force: true });
+    }
   });
 
   it('answers not-a-repo for a folder that is not a repository, running no fetch', async () => {

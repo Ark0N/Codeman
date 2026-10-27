@@ -12,7 +12,8 @@
  * Port: N/A.
  */
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   GitFetchScheduler,
@@ -277,6 +278,43 @@ describe('who runs', () => {
     sessions[0] = { ...sessions[0], docker: { container: 'c' } };
     await h.scheduler.tick(400_000);
     expect(h.calls.length).toBe(1);
+  });
+
+  /**
+   * The Docker case list is rewritten in place, so a read can land on a half-written file. Read as "no Docker
+   * workspaces", a tick would run git (and the repository's hooks) inside a folder a container can write to.
+   */
+  it('fetches nothing when the Docker case list cannot be read, keeps the folders due, and logs it once', async () => {
+    const h = harness([VIEW('a'), VIEW('b')]);
+    let unreadable = true;
+    h.ports.dockerWorkspaces = async () => {
+      h.dockerReads++;
+      if (unreadable) throw new Error('docker-cases.json is not a valid JSON array');
+      return [];
+    };
+    const logged = vi.fn();
+    h.ports.log = logged;
+    expect(await h.scheduler.tick(0)).toBe(0);
+    expect(await h.scheduler.tick(15_000)).toBe(0);
+    expect(h.calls).toEqual([]);
+    expect(h.dockerReads).toBe(2); // the picks were undone, so the next tick picked them again
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(h.scheduler.tracked()).toBe(0); // nothing left in flight or stamped
+
+    // The list reads again: both folders run at once, not an interval after the failed ticks.
+    unreadable = false;
+    expect(await h.scheduler.tick(30_000)).toBe(2);
+    expect(h.calls.map((c) => c.cwd).sort()).toEqual(['/w/a', '/w/b']);
+    // And their interval is timed from that run.
+    expect(await h.scheduler.tick(30_000 + 299_000)).toBe(0);
+    expect(await h.scheduler.tick(30_000 + 300_000)).toBe(2);
+  });
+
+  it('is wired to the strict Docker reader the Fetch button uses', () => {
+    const server = readFileSync(resolve(import.meta.dirname, '../src/web/server.ts'), 'utf8');
+    const block = server.slice(server.indexOf('new GitFetchScheduler('));
+    // defaultDockerWorkspaces is the strict one: test/routes/git-status-routes.test.ts pins that it rejects.
+    expect(block.slice(0, block.indexOf('});'))).toContain('dockerWorkspaces: defaultDockerWorkspaces,');
   });
 
   it('uses the module defaults for the limit and the timeout, because those settings are per device and never reach the server', async () => {

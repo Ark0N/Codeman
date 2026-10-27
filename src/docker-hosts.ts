@@ -130,6 +130,32 @@ export async function readDockerCases(configDir: string): Promise<DockerCase[]> 
   return readJsonArray<DockerCase>(dockerCasesPath(configDir));
 }
 
+/**
+ * The Docker cases for a caller that must fail CLOSED (the git fetch paths): a missing file is no cases,
+ * but a file that cannot be read, does not parse or is not an array rejects, where {@link readDockerCases}
+ * reads all of those as `[]`. The writer truncates and rewrites the file in place, so a read can land on an
+ * empty or half-written file, and to a caller deciding where git may run that must never look like "no
+ * Docker workspaces". The parser's own message is not repeated (V8 quotes the text around the fault).
+ */
+export async function readDockerCasesOrThrow(configDir: string): Promise<DockerCase[]> {
+  const path = dockerCasesPath(configDir);
+  let raw: string;
+  try {
+    raw = await fs.readFile(path, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = undefined;
+  }
+  if (!Array.isArray(parsed)) throw new Error(`${path} is not a valid JSON array`);
+  return parsed as DockerCase[];
+}
+
 export async function writeDockerCases(configDir: string, cases: DockerCase[]): Promise<void> {
   await writeJsonArray(configDir, dockerCasesPath(configDir), cases);
 }

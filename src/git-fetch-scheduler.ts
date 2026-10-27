@@ -18,7 +18,10 @@
  *     app-wide switch is off — that is what a per-session switch has to mean.
  *   - Remote and Docker sessions are never fetched, exactly as the Git panel excludes them, and the Docker
  *     workspace roots are checked again every tick, so a session whose case became a Docker case stops
- *     fetching at the next tick.
+ *     fetching at the next tick. A Docker case list that cannot be read fails CLOSED: the tick fetches
+ *     nothing (a fetch runs a repository's hooks, and without the list nothing tells which folders a
+ *     container can write to), the folders it picked stay due for the next tick, and it is logged once
+ *     until a read succeeds again.
  *   - A folder is fetched by at most one run at a time, and the run belongs to the FOLDER, not to one
  *     session: two sessions open on the same folder are the same clone, so they share one run and both get
  *     its result. State is keyed by `resolve(workingDir)` — deliberately not `realpath`, because `realpath`
@@ -91,6 +94,10 @@ export interface GitFetchPorts {
   getSession(id: string): GitFetchSessionView | undefined;
   /** Read FRESH every tick; that is the whole point of the tick-driven shape. */
   readSettings(): Promise<GitFetchSettings>;
+  /**
+   * Host paths of every Docker case workspace. REJECTS when the list exists but cannot be read or parsed; the
+   * tick then fetches nothing and the folders it picked are due again on the next tick.
+   */
   dockerWorkspaces(): Promise<string[]>;
   /**
    * Bounded probe (rule #516), default options: a bulk scan keeps the stall cap, so this must not be called
@@ -134,6 +141,8 @@ export class GitFetchScheduler {
   private stopped = false;
   /** The last settings read failed and was logged; cleared by the next read that succeeds. */
   private settingsUnreadable = false;
+  /** The same for the Docker case list. */
+  private dockerCasesUnreadable = false;
 
   constructor(ports: GitFetchPorts) {
     this.ports = ports;
@@ -185,6 +194,9 @@ export class GitFetchScheduler {
       // group ordered [short, long] and a group ordered [long, short] would have behaved differently, and the
       // run belongs to the folder, so no session in the group should.
       const due = new Map<string, GroupMember[]>();
+      // What each picked folder's clock said before this tick stamped it, so a tick that ends up fetching
+      // nothing (an unreadable Docker case list, below) can leave the folders due again.
+      const stampedOver = new Map<string, number | undefined>();
       for (const [folder, group] of groups) {
         if (this.inFlight.has(folder)) continue;
         const started = this.lastRunAt.get(folder);
@@ -198,13 +210,35 @@ export class GitFetchScheduler {
         }
         this.inFlight.add(folder);
         // The clock starts at the selection, so a slow folder does not shift its own schedule.
+        stampedOver.set(folder, started);
         this.lastRunAt.set(folder, now);
         due.set(folder, group);
       }
       if (!due.size) return 0;
 
       // Only now, because nothing above needs it: a quiet tick does not read the Docker case list.
-      const dockerWorkspaces = await this.ports.dockerWorkspaces();
+      let dockerWorkspaces: string[];
+      try {
+        dockerWorkspaces = await this.ports.dockerWorkspaces();
+      } catch (err) {
+        // Fail CLOSED: a fetch runs the repository's hooks, and without the list nothing tells which folders a
+        // container can write to. Nothing ran, so the picks are undone (a stamp a `remove()` already cleared
+        // stays cleared) and the folders are due again on the next tick instead of after their interval.
+        for (const [folder, started] of stampedOver) {
+          this.inFlight.delete(folder);
+          if (this.lastRunAt.get(folder) !== now) continue;
+          if (started === undefined) this.lastRunAt.delete(folder);
+          else this.lastRunAt.set(folder, started);
+        }
+        if (!this.dockerCasesUnreadable) {
+          this.dockerCasesUnreadable = true;
+          this.ports.log?.(
+            `git fetch: Docker case list unreadable, nothing fetched until it reads again: ${getErrorMessage(err)}`
+          );
+        }
+        return 0;
+      }
+      this.dockerCasesUnreadable = false;
       // ONE bound for the git processes of the whole tick, handed to every run so no folder gets its own:
       // each fetch is one git process, and a folder can hold up to `MAX_REPOS_LIMIT` of them, so a bound per
       // run would let `FETCH_CONCURRENCY` folders × `MAX_REPOS_LIMIT` processes run at once.
