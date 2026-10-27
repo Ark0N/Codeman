@@ -343,6 +343,18 @@ export const httpRequest: ApiRequest = (ctx, options) => {
   });
 };
 
+/**
+ * One line describing a thrown request error. Node 22 rejects a refused connection to a host
+ * that resolves to both ::1 and 127.0.0.1 with an AggregateError whose `message` is empty, so
+ * fall back to its `code` (ECONNREFUSED) before a generic line rather than printing nothing.
+ */
+export function describeRequestError(error: unknown): string {
+  const message = getErrorMessage(error);
+  if (message) return message;
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return code ? String(code) : 'request failed without a message';
+}
+
 /** One line describing a failed response, for humans. Plain-text guards (401/403/429) have no envelope. */
 export function describeFailure(res: ApiResponse): string {
   if (res.json && !res.json.success) {
@@ -555,21 +567,25 @@ export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promis
   let dead = false;
   const mark = composerReadyMark(options.mode);
   if (options.ready && mark) {
-    const wait = await deps.request(deps.ctx, {
-      method: 'GET',
-      path: `/api/v1/sessions/${encodeURIComponent(sid)}/wait-output`,
-      query: { match: mark, from: 'buffer', timeout: options.timeoutMs },
-      timeoutMs: options.timeoutMs + 10_000,
-    });
-    // A failed readiness call (waiter cap, 400, network) is its own error, not "the
-    // composer never showed up": report the real reason instead of the trust-dialog hint.
-    if (!wait.json?.success) readinessError = describeFailure(wait);
-    else {
-      const result = (wait.json.data as { wait?: WaitResult } | undefined)?.wait;
-      // A worker that died while we waited is exit 3 like every other wait, not a
-      // "composer not seen" timeout that sends the caller looking for a dialog.
-      dead = waitExitCode(result) === EXIT.dead;
-      ready = !dead && Boolean(result?.matched);
+    try {
+      const wait = await deps.request(deps.ctx, {
+        method: 'GET',
+        path: `/api/v1/sessions/${encodeURIComponent(sid)}/wait-output`,
+        query: { match: mark, from: 'buffer', timeout: options.timeoutMs },
+        timeoutMs: options.timeoutMs + 10_000,
+      });
+      // A failed readiness call (waiter cap, 400, network) is its own error, not "the
+      // composer never showed up": report the real reason instead of the trust-dialog hint.
+      if (!wait.json?.success) readinessError = describeFailure(wait);
+      else {
+        const result = (wait.json.data as { wait?: WaitResult } | undefined)?.wait;
+        // A worker that died while we waited is exit 3 like every other wait, not a
+        // "composer not seen" timeout that sends the caller looking for a dialog.
+        dead = waitExitCode(result) === EXIT.dead;
+        ready = !dead && Boolean(result?.matched);
+      }
+    } catch (error) {
+      readinessError = describeRequestError(error);
     }
   }
 
@@ -1038,7 +1054,7 @@ async function run(json: boolean, verb: (deps: AgentDeps) => Promise<number>): P
   try {
     process.exitCode = await verb(deps);
   } catch (err) {
-    console.error(palette.err(`${GLYPH.fail} ${getErrorMessage(err)}`));
+    console.error(palette.err(`${GLYPH.fail} ${describeRequestError(err)}`));
     process.exitCode = EXIT.error;
   }
 }
