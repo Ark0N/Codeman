@@ -48,6 +48,16 @@ verbs over the same endpoints, with the guards below (no control bytes, no self-
 no guessed URL) enforced in code, and it is also your own way through when this
 machine has no `jq` for the preamble below.
 
+For an existing project, use one command:
+`codeman agent spawn --working-dir /path/to/project --mode codex`. With no case and
+no `--working-dir`, `spawn` uses cwd. Give editing workers separate worktrees. A
+positional case keeps quick-start behavior and cannot be combined with
+`--working-dir`; an empty `--working-dir` (`"$WT"` unset) refuses with exit 4
+rather than falling back to cwd, and a cwd that is HOME refuses too (hooks would
+land in `~/.claude`; pass `--working-dir ~` to mean it). Directory launches keep parent lineage and never
+mark the project as agent scratch. If startup fails or is ambiguous, the CLI
+reports the exact created ID: inspect it before retrying or cleaning up.
+
 ## 0. Guard and bootstrap
 
 For live API operations, if `CODEMAN_MUX` is not `1`, **stop and say so**.

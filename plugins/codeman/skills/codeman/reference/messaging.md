@@ -48,7 +48,7 @@ own head: the worker enforcing the cap is the one who has to be told about it.
 
 | Job | Channel |
 | --- | --- |
-| spawn a worker, create its case | HTTP `quick-start` (the only path) |
+| spawn a worker, create its case | HTTP `quick-start` (the only path that creates a case); an existing directory is `POST sessions` + `interactive` (`codeman agent spawn --working-dir`) |
 | readiness, incl. the trust dialog | HTTP, Flow 1 (a message cannot answer a dialog) |
 | deliver a task to a READY claude worker | **messaging** (preferred) or HTTP input |
 | steer a BUSY claude worker mid-turn | **messaging** (read between the worker's tool calls; the HTTP path can only type into the composer, where text waits for the turn to end) |

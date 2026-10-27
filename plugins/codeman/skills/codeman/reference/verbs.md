@@ -31,7 +31,7 @@ wrong directory.** `quick-start` with a new `caseName` does not find your repo: 
 |-------------------|------|------------------------------|
 | a fresh scratch dir (throwaway experiments) | `POST /api/v1/quick-start {"caseName":"scratch-1","mode":"claude"}` with a **new** case name | Codeman creates the directory and **writes hooks**: `stop` and `blocked` fire, send-and-wait is trustworthy |
 | a linked case (a real repo in the linked-cases registry) | same call with the linked name | **hooks installed at session create**, so `stop` fires here too. Not guaranteed: the operator can turn it off. Check |
-| any other absolute path, e.g. a git worktree you made | `POST /api/v1/sessions {"workingDir":"/abs/path","mode":"claude"}` then `POST /api/v1/sessions/:id/interactive` | same: **hooks installed at session create**, subject to the same setting. Check |
+| any other absolute path, e.g. a git worktree you made | `POST /api/v1/sessions {"workingDir":"/abs/path","mode":"claude"}` then `POST /api/v1/sessions/:id/interactive` (what `codeman agent spawn --working-dir /abs/path` sends) | same: **hooks installed at session create**, subject to the same setting. Check |
 
 Read `.data.casePath` back from the `quick-start` response and check it is where you
 meant. `caseName` accepts letters, digits, `-` and `_` only, and it resolves through

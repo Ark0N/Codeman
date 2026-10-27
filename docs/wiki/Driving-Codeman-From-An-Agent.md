@@ -41,6 +41,7 @@ act outside a Codeman session. One line in a case's `AGENTS.md` is enough: *"oth
 ```bash
 codeman agent ls                                          # sessions; * marks this one
 SID=$(codeman agent spawn scratch-1 --mode claude)        # quick-start + wait for the composer where the mode has a ready mark
+SID=$(codeman agent spawn --working-dir ~/src/app --mode codex)   # no case: an existing directory (cwd by default)
 codeman agent send "$SID" 'review src/, then say DONE' --until stop,exit --timeout 300000
 codeman agent read "$SID"                                 # last answer (as the server reads it for that mode)
 codeman agent read "$SID" --tail 3000                     # terminal tail, ANSI stripped (every mode)
@@ -53,6 +54,21 @@ codeman agent ack <msg-id>                                # remove what you hand
 codeman agent rm "$SID"                                   # any session except this one
 ```
 
+- **`spawn [case]`** uses the current directory when no case is supplied. Use
+  `codeman agent spawn --working-dir /path/to/project --mode codex` for another existing
+  local directory. A case and `--working-dir` cannot be combined. An empty case name
+  (`spawn "$CASE"` with `CASE` unset) is never read as "no case": it goes to quick-start,
+  which refuses it (exit 1). An empty `--working-dir` is refused before any request
+  (exit 4), so it never falls back to cwd.
+  A cwd that is your home directory is refused the same way, because Codeman's hooks would
+  land in `~/.claude`; pass `--working-dir ~` to start a worker there on purpose.
+  Explicit case names retain quick-start behavior (creating a scratch case if missing).
+  A directory launch is `POST /api/v1/sessions` followed by
+  `POST /api/v1/sessions/:id/interactive` (or `/shell`); it preserves the project and
+  parent lineage, and never labels it as agent scratch. Choose a separate worktree for
+  each worker that will edit code. If startup fails or its response is lost, the CLI
+  reports the exact created session ID and exits `1`; inspect that session before
+  deciding what to do next.
 - **Ids** may be the 8-character form `ls` prints. Anything shorter refuses, and so does an
   ambiguous prefix.
 - **`send`** takes ONE quoted argument of printable text and presses Enter. A prompt that
@@ -68,7 +84,10 @@ codeman agent rm "$SID"                                   # any session except t
   **Keep agent inbox across restarts** is on (see [Settings Reference](Settings-Reference)),
   and goes when its session is deleted.
 - **Exit codes** are the same for every verb: `0` done, `1` error, `2` timeout, `3` the
-  worker exited, `4` refused. `--json` prints the response's `data`.
+  worker exited, `4` refused. `--json` prints the response's `data`, except a directory
+  `spawn`, which prints `{ sessionId, workingDir, created: true }`, plus `ready` when a
+  readiness wait ran, `readinessError` when that call failed, and `startupError` when the
+  start failed.
 
 ## Reading saved Codex conversations
 
