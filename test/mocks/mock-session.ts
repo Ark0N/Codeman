@@ -11,6 +11,7 @@ import type {
   SessionStatus,
   SessionRemote,
 } from '../../src/types.js';
+import type { GitFetchStatus } from '../../src/git-fetch.js';
 
 /**
  * Enhanced mock session for testing RespawnController.
@@ -67,6 +68,22 @@ export class MockSession extends EventEmitter {
   setKeepWarmStatus(status: KeepWarmStatus): boolean {
     const changed = JSON.stringify(status) !== JSON.stringify(this.keepWarm);
     this.keepWarm = status;
+    return changed;
+  }
+  /**
+   * Mirrors the Git fetch interval surface on Session (src/git-fetch.ts): the case's own override, `undefined`
+   * for either half meaning the app-wide setting applies, and what the scheduler last reported.
+   */
+  gitFetchEnabled: boolean | undefined = undefined;
+  gitFetchIntervalSeconds: number | undefined = undefined;
+  setGitFetchSettings(enabled: boolean | undefined, intervalSeconds: number | undefined): void {
+    this.gitFetchEnabled = enabled;
+    this.gitFetchIntervalSeconds = intervalSeconds;
+  }
+  gitFetch: GitFetchStatus | null = null;
+  setGitFetchStatus(status: GitFetchStatus): boolean {
+    const changed = JSON.stringify(status) !== JSON.stringify(this.gitFetch);
+    this.gitFetch = status;
     return changed;
   }
   private _activeChildProcesses: { pid: number; command: string }[] = [];

@@ -140,11 +140,13 @@ describe('the Bottom bar settings group in zh-CN', () => {
   /** What may stay Latin here: the git and Docker names, and the product name. */
   const left = (text: string) => text.replace(/\b(Git|git|Docker|Codeman)\b/g, '').match(/[A-Za-z]+/g) ?? [];
 
-  it("finds the heading and the four Git status rows, #543's two included (the check is not vacuous)", () => {
-    expect(englishGroup.size).toBe(9);
+  it("finds the heading and the six Git rows, #543's two included and the fetch pair among them (the check is not vacuous)", () => {
+    expect(englishGroup.size).toBe(13);
     expect(englishGroup.get('heading')).toBe('Bottom bar');
     expect(englishGroup.get('appSettingsGitStatusMaxRepos label')).toBe('Git status: max repositories');
     expect(englishGroup.get('appSettingsGitStatusTimeout label')).toBe('Git status: git timeout');
+    expect(englishGroup.get('appSettingsGitFetchEnabled label')).toBe('Git fetch on an interval');
+    expect(englishGroup.get('appSettingsGitFetchIntervalSeconds label')).toBe('Git fetch: how often');
   });
 
   it('translates the heading, every label and every description, with no English left', () => {
@@ -167,7 +169,8 @@ describe('the Bottom bar settings group in zh-CN', () => {
     expect([...englishGroup.values()].filter((s) => t.t(s) !== s)).toEqual([]);
     en.window.close();
     const repeated = [...englishGroup.values()].filter((s) => {
-      const key = s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // A key with an apostrophe is written escaped in the object literal, so the pattern must allow both spellings.
+      const key = s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/'/g, "(?:\\\\)?'");
       return (I18N.match(new RegExp(`^\\s*(?:'${key}'|"${key}"|${key}):`, 'gm')) ?? []).length !== 1;
     });
     expect(repeated).toEqual([]);
@@ -179,6 +182,6 @@ describe('the Bottom bar settings group in zh-CN', () => {
     const labels = [...doc.querySelectorAll('#gitStatusPanel .git-status-actions button')].map((b) =>
       b.getAttribute('aria-label')
     );
-    expect(labels).toEqual(['刷新 Git 状态', '关闭 Git 状态']);
+    expect(labels).toEqual(['刷新 Git 状态', '拉取 Git 状态', '关闭 Git 状态']);
   });
 });

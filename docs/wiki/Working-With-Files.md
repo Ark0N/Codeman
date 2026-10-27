@@ -245,12 +245,31 @@ Click it for a draggable window, in the style of the File Viewer:
   left out; the **git timeout** setting raises how long it waits. They all start collapsed (each summary line shows its branch and
   what is outstanding), and the ones you open stay open when the window refreshes; an unrelated repository above the workspace (a dotfiles repo
   in your home folder) is ignored.
+- **Fetch** in the header runs `git fetch` for the repositories the window lists, on your click; the
+  window then re-reads, so "behind" is as of that fetch. A repository that could not be fetched keeps
+  its row and shows why. **Git fetch on an interval** (Settings → Bottom bar, off by default) runs the
+  same fetch on a timer for every session that is on, and **Session Options → Git** overrides both the
+  switch and the interval for one session — a session that turned itself on runs even while the app-wide
+  switch is off, sessions open on the same folder share one run, and nothing is ever fetched for Docker or
+  remote (SSH) sessions.
 
-It is read-only and offline: Codeman never fetches, commits or changes the repository, so
-"behind" is as of your last fetch. It is not shown for Docker or remote (SSH) sessions, and a repository at or inside a Docker case
-workspace is skipped even from a local session (a container can write there, and git would run
-that repository's own configuration on the host). The
-data comes from `GET /api/sessions/:id/git-status` and `GET /api/sessions/:id/git-diff`
+It is read-only apart from that fetch: Codeman never commits, checks out or changes the
+repository, and `git fetch` writes remote-tracking refs only — it is the only git command the Git window
+runs that writes, the only one that can run a repository's own hooks (`reference-transaction`,
+`pre-auto-gc` through the maintenance a fetch triggers, and config commands such as `credential.helper`),
+and the only one that can run later by itself, on a timer: cloning and worktree management write too, but
+only when you asked for them at the moment you asked, which is why nothing runs on a timer until you opt in. A fetch holds git's ref lock, so an agent's own `git pull` in the same repository
+can hit the same `cannot lock ref`, and a folder is fetched by one run at a time. It is not shown for Docker
+or remote (SSH) sessions, and a repository at or inside a Docker case
+workspace is skipped even from a local session, before any git runs (a container can write there,
+and git would run that repository's own configuration on the host). Fetch asks nothing of you: it
+uses the sign-in your own git already has, and it gives up quickly rather than waiting on an
+invisible login prompt. That BatchMode ssh is a default, never an override: your own
+`GIT_SSH_COMMAND`, or the repository's `core.sshCommand`, is used when either is set, and ⚠️ the default's
+`StrictHostKeyChecking=accept-new` records an unknown host key in `~/.ssh/known_hosts` without asking —
+BatchMode stops a prompt, not a write. The
+data comes from `GET /api/sessions/:id/git-status`, `GET /api/sessions/:id/git-diff` and, on that
+click or the interval you turned on, `POST /api/sessions/:id/git-fetch`
 (see the [API reference](https://github.com/Ark0N/Codeman/blob/master/docs/api-reference.md)).
 
 ## Gotchas

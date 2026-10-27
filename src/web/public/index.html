@@ -625,6 +625,7 @@
         <span class="git-status-title">Git <span class="git-status-branch" id="gitStatusBranch" data-i18n-skip></span></span>
         <div class="git-status-actions">
           <button class="btn-icon-sm" onclick="app.refreshGitStatusNow()" title="Refresh" aria-label="Refresh git status">&#x21BB;</button>
+          <button class="btn-icon-sm" id="gitStatusFetchBtn" onclick="app.fetchGitStatusNow()" title="Fetch" aria-label="Fetch git status">&#x2913;</button>
           <button class="btn-icon-sm" onclick="app.closeGitStatusPanel()" title="Close" aria-label="Close git status">&times;</button>
         </div>
       </div>
@@ -1331,6 +1332,13 @@
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><polyline points="7 14 11 10 14 13 20 7"/></svg>
                 <span>Summary</span>
               </button>
+              <!-- Git is last: the section shows for every local session, but until the interval feature is
+                   in use it holds one toggle and a status row that has never run, so it earns its place at the
+                   end of the rail rather than among the tabs a session uses every day. -->
+              <button type="button" class="set-rail-item" data-tab="git" onclick="app.switchOptionsTab('git')">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 3v12"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+                <span>Git</span>
+              </button>
             </div>
             <p class="set-rail-foot">These options belong to the selected session and save as you change them.</p>
           </nav>
@@ -1714,6 +1722,54 @@
                       <button class="btn-toolbar btn-sm" onclick="app.refreshRunSummary()" title="Refresh summary">&#x21BB; Refresh</button>
                       <button class="btn-toolbar btn-sm" onclick="app.exportRunSummary('json')" title="Export as JSON">Export JSON</button>
                       <button class="btn-toolbar btn-sm" onclick="app.exportRunSummary('md')" title="Export as Markdown">Export MD</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ Git ══════════════════════════════════════════════════════ -->
+            <section class="set-section hidden" id="git-tab" data-label="Git">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 3v12"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+                <h2>Git</h2>
+              </div>
+              <p class="set-section-blurb">Whether Codeman fetches this session's repositories on a timer.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Fetch on an interval</h4></div>
+                <p class="set-group-hint">Fetching is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer, so nothing runs until you turn it on &mdash; here, or in App Settings &rarr; Bottom bar. Cloning and worktree management write too, but only when you asked for them at the moment you asked. The panel's Fetch button is always just a click.</p>
+                <div class="set-group-body">
+                  <!-- Live from the session's own last run (session-ui.js: updateGitFetchStatus), which is the
+                       run its folder got: several sessions on one folder share one run and read the same row. -->
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Status</span>
+                      <span class="set-row-desc" id="gitFetchStatus" data-i18n-skip hidden></span>
+                    </div>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Follow the app setting</span>
+                      <span class="set-row-desc">Uses the app-wide switch and interval for this session. Switch it off to pick your own.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="modalGitFetchFollow" checked onchange="app.autoSaveGitFetch()"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="gitFetchEnabledRow">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Fetch this session</span>
+                      <span class="set-row-desc">Runs on its own even while the app-wide switch is off: a session that turned itself on means exactly that. Sessions sharing one folder share one run, and each sees that run's result.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="modalGitFetchEnabled" onchange="app.autoSaveGitFetch()"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="gitFetchIntervalRow">
+                    <div class="set-row-text">
+                      <span class="set-row-label">How often</span>
+                      <span class="set-row-desc">30 sec to 1 hr, timed from the start of a run, so a slow repository does not push the next one out.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <input type="number" id="modalGitFetchInterval" class="set-num set-num-wide" value="300" min="30" max="3600" step="30" onchange="app.autoSaveGitFetch()">
+                      <span class="set-unit">sec</span>
                     </div>
                   </div>
                 </div>
@@ -2196,7 +2252,7 @@
                   <div class="set-row" data-search="git status uncommitted unpushed commit push indicator bottom bar toolbar">
                     <div class="set-row-text">
                       <span class="set-row-label">Git status <span class="set-scope">device</span></span>
-                      <span class="set-row-desc">Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only: Codeman never fetches or changes the repository. Not shown for Docker or remote sessions. Off by default.</span>
+                      <span class="set-row-desc">Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only apart from Fetch: Codeman never commits or changes the repository, and `git fetch` — the only git command the Git window runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked) — runs when you click Fetch in that window, or on the interval below if you turned it on. Not shown for Docker or remote sessions. Off by default.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsShowGitStatus"><span class="slider"></span></label>
                   </div>
@@ -2220,6 +2276,20 @@
                       <span class="set-row-desc">Seconds one git command may run before that repository is reported as unreadable (5 to 120, default 30). Raise it for repositories on a slow network share.</span>
                     </div>
                     <input type="number" id="appSettingsGitStatusTimeout" class="set-num" value="30" min="5" max="120" step="1">
+                  </div>
+                  <div class="set-row" data-search="git fetch interval timer behind remote tracking refs poll run automatically">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Git fetch on an interval <span class="set-scope">synced</span></span>
+                      <span class="set-row-desc">Runs `git fetch` for the repositories the Git window lists on a timer, so the "behind" number is current without a click. Off by default: this is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked), so nothing runs until you turn it on. A session can override both the switch and the interval in Session Options → Git.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsGitFetchEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="git fetch how often seconds between runs interval case override session options">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Git fetch: how often <span class="set-scope">synced</span></span>
+                      <span class="set-row-desc">Seconds between runs for a session that has no override of its own (30 to 3600, default 300). Only a session that is on — here, or in Session Options → Git — is fetched, and sessions sharing one folder are fetched by one run.</span>
+                    </div>
+                    <input type="number" id="appSettingsGitFetchIntervalSeconds" class="set-num" value="300" min="30" max="3600" step="1">
                   </div>
                 </div>
               </div>

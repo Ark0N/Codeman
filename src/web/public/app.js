@@ -2455,6 +2455,10 @@ class CodemanApp {
     // Update parentSessionName for any subagents belonging to this session
     // (fixes stale name display after session rename)
     this.updateSubagentParentNames(session.id);
+    // A scheduled fetch publishes the session's result on this same event, so an open Session Options modal
+    // on that session shows it without polling its own (session-ui.js: updateGitFetchStatus, which leaves the
+    // control being typed in alone).
+    if (this.editingSessionId === session.id) this.updateGitFetchStatus(session.id);
     // If claudeSessionId was just set, re-check orphan subagents
     // This connects subagents that were waiting for the session to identify itself
     if (claudeSessionIdJustSet) {
