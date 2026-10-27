@@ -105,7 +105,7 @@ describe('Session Options modal structure', () => {
     expect(update).toContain('set-row-disabled');
     expect(update).toContain('el.disabled = follows');
     // Decided from BOTH fields: a half-choice means the session is not following, and the half that still
-    // follows shows the app's value while the other shows its own — a switch-only check would gray out a live row.
+    // follows shows the app's value while the other shows its own; a switch-only check would gray out a live row.
     expect(update).toMatch(
       /follows = session\.gitFetchEnabled === undefined && session\.gitFetchIntervalSeconds === undefined/
     );

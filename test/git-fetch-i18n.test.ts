@@ -2,11 +2,11 @@
  * @fileoverview The Git fetch interval rows (App Settings → Bottom bar, Session Options → Git) in Chinese
  * (zh-CN): each label and description runs through the real translator over the real index.html in JSDOM and
  * reads in Chinese with no English left beyond the product name and the technical names Git / git fetch, and
- * every new key — the save toast in session-ui.js included — is in the dictionary exactly once (a repeated key
+ * every new key (the save toast in session-ui.js included) is in the dictionary exactly once (a repeated key
  * in the object literal silently replaces the first).
  *
  * The Git tab's Status row is not here: its text is written at runtime by updateGitFetchStatus and carries
- * data-i18n-skip, so translating it would rewrite the stamp the code builds. 'sec' is not a key either — only
+ * data-i18n-skip, so translating it would rewrite the stamp the code builds. 'sec' is not a key either: only
  * whole unit words are ('hours'), so 'sec' stays as written.
  *
  * Port: N/A.

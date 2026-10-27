@@ -3,8 +3,8 @@
  * (`src/git-fetch-scheduler.ts`, wired in `src/web/server.ts`).
  *
  * The fetch module (src/git-fetch.ts) is the only git command the Git panel runs that writes, and on a timer
- * it is the only one that can run without being asked — cloning and worktree management write too, but those
- * happen when the user asks for them. Which is why the whole feature is off until the user turns it on, in
+ * it is the only one that can run without being asked (cloning and worktree management write too, but those
+ * happen when the user asks for them). Which is why the whole feature is off until the user turns it on, in
  * Settings → Bottom bar, per session in Session Options → Git.
  *
  * The scheduler holds no timers of its own. The server ticks it (`GIT_FETCH_TICK_INTERVAL_MS`) and every
@@ -15,7 +15,7 @@
  * Rules the code keeps and the tests pin:
  *   - Nothing runs when nothing is on: no repository set is read and nothing is spawned, so a quiet
  *     install costs one settings read per tick. A session that turned itself on still runs even while the
- *     app-wide switch is off — that is what a per-session switch has to mean.
+ *     app-wide switch is off: that is what a per-session switch has to mean.
  *   - Remote and Docker sessions are never fetched, exactly as the Git panel excludes them, and the Docker
  *     workspace roots are checked again every tick, so a session whose case became a Docker case stops
  *     fetching at the next tick. A Docker case list that cannot be read fails CLOSED: the tick fetches
@@ -24,7 +24,7 @@
  *     until a read succeeds again.
  *   - A folder is fetched by at most one run at a time, and the run belongs to the FOLDER, not to one
  *     session: two sessions open on the same folder are the same clone, so they share one run and both get
- *     its result. State is keyed by `resolve(workingDir)` — deliberately not `realpath`, because `realpath`
+ *     its result. State is keyed by `resolve(workingDir)`, deliberately not `realpath`, because `realpath`
  *     is itself one of the unbounded fs calls rule #516 bounds; the bounded probe below is the fs read.
  *     Every session open on a folder is remembered, so closing the one holding the override does not stop
  *     the folder's fetching while another session is still on it. A folder is due when ANY session open on it
@@ -101,7 +101,7 @@ export interface GitFetchPorts {
   dockerWorkspaces(): Promise<string[]>;
   /**
    * Bounded probe (rule #516), default options: a bulk scan keeps the stall cap, so this must not be called
-   * with `pastCap`. Anything that is not `directory` — including `unknown`, which is never `absent` — is
+   * with `pastCap`. Anything that is not `directory` (including `unknown`, which is never `absent`) is
    * skipped, not fetched.
    */
   probePath(path: string): Promise<PathProbeKind>;
@@ -170,7 +170,7 @@ export class GitFetchScheduler {
       }
       this.settingsUnreadable = false;
 
-      // Pass 1 — who is on what, before anything is decided. Every session open on a folder is recorded here,
+      // Pass 1: who is on what, before anything is decided. Every session open on a folder is recorded here,
       // not only the one that would get picked, so `remove()` can still see who is open on it when the session
       // holding the override is the one that closes.
       const groups = new Map<string, GroupMember[]>();
@@ -187,10 +187,10 @@ export class GitFetchScheduler {
         else groups.set(folder, [member]);
       }
 
-      // Pass 2 — the folder's turn, decided from the whole group rather than from whichever session happened to
+      // Pass 2: the folder's turn, decided from the whole group rather than from whichever session happened to
       // be read first. A folder is due when ANY session open on it is due: a session on a 30 s interval on a
       // folder a 3600 s session last fetched ten minutes ago has to be fetched now, because that same run
-      // satisfies the long interval too. Deciding in one pass means the session read first owns the clock — a
+      // satisfies the long interval too. Deciding in one pass means the session read first owns the clock: a
       // group ordered [short, long] and a group ordered [long, short] would have behaved differently, and the
       // run belongs to the folder, so no session in the group should.
       const due = new Map<string, GroupMember[]>();
@@ -244,7 +244,7 @@ export class GitFetchScheduler {
       // run would let `FETCH_CONCURRENCY` folders × `MAX_REPOS_LIMIT` processes run at once.
       const fetches = createLimiter(FETCH_CONCURRENCY);
       // The folders get their OWN bound, because the same semaphore cannot serve both levels: a folder that
-      // holds a slot and then waits for a slot for its own fetch is waiting on itself — once
+      // holds a slot and then waits for a slot for its own fetch is waiting on itself: once
       // `FETCH_CONCURRENCY` folders fill the bound, the ones holding slots are exactly the ones that can
       // never get one back. Both bounds are `FETCH_CONCURRENCY`, so the tick still never runs more git
       // processes than the module's ceiling.
@@ -280,7 +280,7 @@ export class GitFetchScheduler {
 
   /**
    * A session that closed or was detached: its schedule goes with it, but the FOLDER's stays while another
-   * session is still open on it — the run belongs to the clone, not to the session that asked for it.
+   * session is still open on it: the run belongs to the clone, not to the session that asked for it.
    */
   remove(id: string): void {
     const folder = this.folderOf.get(id);

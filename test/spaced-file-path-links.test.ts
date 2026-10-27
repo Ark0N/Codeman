@@ -1,4 +1,4 @@
-// Port: none (a pure function in a vm context — no browser, no server).
+// Port: none (a pure function in a vm context: no browser, no server).
 //
 // File paths with spaces in them (`OneDrive - Contoso/…`, `90 Sensitive/…`) were
 // cut at the first space by every path pattern, so the terminal and the response

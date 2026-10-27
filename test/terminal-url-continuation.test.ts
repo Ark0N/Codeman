@@ -1,4 +1,4 @@
-// Port: none (pure functions + the link provider in a vm context — no browser, no server).
+// Port: none (pure functions + the link provider in a vm context: no browser, no server).
 //
 // Terminal URL links that stopped short.
 //

@@ -594,7 +594,7 @@ export async function isHomeDirectory(directory: string): Promise<boolean> {
   return a === b;
 }
 
-/** `agent spawn` — start in a project directory or named case, preserving lineage and mode readiness. */
+/** `agent spawn`: start in a project directory or named case, preserving lineage and mode readiness. */
 export async function agentSpawn(deps: AgentDeps, options: SpawnOptions): Promise<number> {
   const cli = getCli(options.mode);
   if (!cli) return fail(deps, `Unknown mode: ${options.mode}`, EXIT.refused);

@@ -523,7 +523,7 @@ describe('POST /api/sessions/:id/git-fetch', () => {
     const { app } = await setup({ git: runner });
     const data = (await app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' })).json().data;
     expect(data.state).toBe('not-a-repo');
-    // The resolver looked once and found nothing, so nothing was fetched — and never guessed a repository.
+    // The resolver looked once and found nothing, so nothing was fetched, and it never guessed a repository.
     expect(fetches()).toEqual([]);
   });
 
@@ -564,7 +564,7 @@ describe('POST /api/sessions/:id/git-fetch', () => {
     const second = app.inject({ method: 'POST', url: '/api/sessions/test-session-1/git-fetch' });
     // Assert the join BEFORE releasing the run: the lane entry goes away when the run finishes, so releasing
     // first would let the run complete before this request reached the lane, and it would then be entitled to
-    // start its own fetch — a test that passes for the wrong reason. One tick of the loop is enough for both
+    // start its own fetch: a test that passes for the wrong reason. One tick of the loop is enough for both
     // handlers to reach the lane while the run is still held open.
     await new Promise((resolve) => setImmediate(resolve));
     expect(fetches).toHaveLength(1); // one run, and the second request is waiting on it, not working
@@ -593,7 +593,7 @@ describe('POST /api/sessions/:id/git-fetch', () => {
     const { app, ctx } = await setup({ git: runner });
 
     // The interval tick got to this clone first. The click joins it, so the row the other tabs see has to name
-    // the interval — the user clicked, but nothing this click did was a fetch. The request is left open, not
+    // the interval: the user clicked, but nothing this click did was a fetch. The request is left open, not
     // awaited: awaiting it here would wait on the run this test is holding, and the test would wait on itself.
     const intervalRun = fetchWorkspaceOnce(dir, { git: runner }, 'interval');
     await runStarted;

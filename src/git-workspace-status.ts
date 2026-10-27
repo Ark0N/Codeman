@@ -600,7 +600,7 @@ const discoveryCache = new Map<string, { at: number; value: { dirs: string[]; tr
 /**
  * A slot count fixed ONCE, so callers share it instead of each getting its own bound (see the fetch path):
  * the count lives in the closure, so `limit` is the ceiling for everything going through THIS limiter at
- * once, not for each call to it — which is what makes a scheduler tick's bound honest.
+ * once, not for each call to it, which is what makes a scheduler tick's bound honest.
  * ⚠️ One limiter cannot bound two levels of the same work: a caller that holds a slot and then waits for
  * another slot for the work IT starts cannot get one, because the holders are exactly the ones waiting. The
  * outer level needs its own bound (`mapLimited`), which is why the tick shares one for fetches and keeps a

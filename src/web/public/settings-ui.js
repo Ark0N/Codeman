@@ -606,7 +606,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsGitStatusTimeout').value = settings.gitStatusTimeoutSeconds ?? defaults.gitStatusTimeoutSeconds ?? 30;
     // Git fetch on an interval: synced, default OFF, interval default 300 s (DEFAULT_GIT_FETCH_INTERVAL_SECONDS).
     // Synced means the SERVER decides whether to fetch, so these keys stay out of the per-device display list
-    // below and are not stripped from a save — a stripped key would never reach the scheduler.
+    // below and are not stripped from a save: a stripped key would never reach the scheduler.
     document.getElementById('appSettingsGitFetchEnabled').checked = settings.gitFetchEnabled === true;
     document.getElementById('appSettingsGitFetchIntervalSeconds').value = settings.gitFetchIntervalSeconds ?? 300;
     // Gesture control lives in the Input section (alongside Local Echo / CJK Input)

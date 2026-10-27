@@ -249,12 +249,12 @@ Click it for a draggable window, in the style of the File Viewer:
   window then re-reads, so "behind" is as of that fetch. A repository that could not be fetched keeps
   its row and shows why. **Git fetch on an interval** (Settings → Bottom bar, off by default) runs the
   same fetch on a timer for every session that is on, and **Session Options → Git** overrides both the
-  switch and the interval for one session — a session that turned itself on runs even while the app-wide
+  switch and the interval for one session: a session that turned itself on runs even while the app-wide
   switch is off, sessions open on the same folder share one run, and nothing is ever fetched for Docker or
   remote (SSH) sessions.
 
 It is read-only apart from that fetch: Codeman never commits, checks out or changes the
-repository, and `git fetch` writes remote-tracking refs only — it is the only git command the Git window
+repository, and `git fetch` writes remote-tracking refs only; it is the only git command the Git window
 runs that writes, the only one that can run a repository's own hooks (`reference-transaction`,
 `pre-auto-gc` through the maintenance a fetch triggers, and config commands such as `credential.helper`),
 and the only one that can run later by itself, on a timer: cloning and worktree management write too, but
@@ -266,7 +266,7 @@ and git would run that repository's own configuration on the host). Fetch asks n
 uses the sign-in your own git already has, and it gives up quickly rather than waiting on an
 invisible login prompt. That BatchMode ssh is a default, never an override: your own
 `GIT_SSH_COMMAND`, or the repository's `core.sshCommand`, is used when either is set, and ⚠️ the default's
-`StrictHostKeyChecking=accept-new` records an unknown host key in `~/.ssh/known_hosts` without asking —
+`StrictHostKeyChecking=accept-new` records an unknown host key in `~/.ssh/known_hosts` without asking:
 BatchMode stops a prompt, not a write. The
 data comes from `GET /api/sessions/:id/git-status`, `GET /api/sessions/:id/git-diff` and, on that
 click or the interval you turned on, `POST /api/sessions/:id/git-fetch`

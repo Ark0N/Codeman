@@ -3101,7 +3101,7 @@ Object.assign(CodemanApp.prototype, {
     statusEl.hidden = false;
   },
 
-  /** 'just now', '4m', '2h' — the short stamps the tab rows use, measured from a run's start. */
+  /** 'just now', '4m', '2h': the short stamps the tab rows use, measured from a run's start. */
   _gitFetchAgo(ts) {
     const seconds = Math.max(0, Math.round((Date.now() - ts) / 1000));
     if (seconds < 60) return seconds < 10 ? 'just now' : `${seconds}s`;

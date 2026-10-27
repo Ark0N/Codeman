@@ -13,8 +13,8 @@
  * repository, so the "behind" number reflects the last `git fetch`, which the panel footer says. Fetching
  * happens when the user clicks Fetch in that window's header (`POST /api/sessions/:id/git-fetch`,
  * src/git-fetch.ts), or on the interval when the session is on: this is the only git command the Git panel
- * runs that writes, and the only one Codeman runs on a timer — cloning and worktree management write too,
- * but only when the user asked for them at that moment. Remote (SSH)
+ * runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too,
+ * but only when the user asked for them at that moment). Remote (SSH)
  * and Docker sessions answer `unsupported`, show no indicator, and cannot be fetched.
  *
  * Everything that comes from git (file names, commit subjects, author names) is untrusted text: it is
@@ -273,7 +273,7 @@ Object.assign(CodemanApp.prototype, {
    * Fetch, on this click only: one `git fetch --quiet` per repository the panel shows
    * (`POST /api/sessions/:id/git-fetch`). It is the only git command the Git panel runs that writes, and the
    * only one Codeman runs on a timer, and it updates remote-tracking refs only: nothing here commits or
-   * touches the working tree, so an agent's own work is left alone — though a fetch does hold git's ref lock,
+   * touches the working tree, so an agent's own work is left alone, though a fetch does hold git's ref lock,
    * so an agent's `git pull` in the same repository can hit the same `cannot lock ref` while it runs. One
    * click means one fetch per repository: the button is busy and a second click is ignored while it runs, and
    * a click that joins a fetch already running reports that run, not itself. The panel then re-reads, so the
@@ -532,7 +532,7 @@ Object.assign(CodemanApp.prototype, {
       if (data.behind) {
         const behind = el('span', 'git-status-chip', `↓ ${data.behind} behind`);
         behind.title =
-          'As of the last git fetch — click Fetch in this window, or turn on the fetch interval in Settings, to bring it current.';
+          'As of the last git fetch. Click Fetch in this window, or turn on the fetch interval in Settings, to bring it current.';
         line.append(behind);
       }
     } else if (data.hasRemote) {

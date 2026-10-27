@@ -399,8 +399,8 @@ export class WebServer extends EventEmitter {
   });
   // Git fetch on an interval (git-fetch-scheduler.ts): the due-tracking lives in the service; the server
   // lends it the facts a decision needs and stores what it reports on the session. A field initializer for
-  // the same reason as the keep-warm one above, and the scheduler reads the app setting FRESH on every tick
-  // — that is what makes a live toggle take effect on the next tick, and what makes turning it off actually
+  // the same reason as the keep-warm one above, and the scheduler reads the app setting FRESH on every tick:
+  // that is what makes a live toggle take effect on the next tick, and what makes turning it off actually
   // stop the fetching. Default OFF, so an install that never enabled it spawns nothing at all.
   private readonly gitFetchScheduler = new GitFetchScheduler({
     sessionIds: () => this.sessions.keys(),
@@ -413,7 +413,7 @@ export class WebServer extends EventEmitter {
     // never be handed `pastCap`. A folder on a mount that stopped answering is skipped, not fetched.
     probePath: (path) => probePathKind(path),
     // Through the join, so the tick and the panel's Fetch button are the same run: a click on a folder the
-    // tick is already fetching joins it rather than starting a second `git fetch` in the same clone — and the
+    // tick is already fetching joins it rather than starting a second `git fetch` in the same clone, and the
     // run that gets published is the one that ran, with its own trigger.
     fetch: (cwd, opts, trigger) => fetchWorkspaceOnce(cwd, opts, trigger),
     publish: (id, status) => {
@@ -1287,7 +1287,7 @@ export class WebServer extends EventEmitter {
     registerReadMyMindRoutes(this.app, ctx);
     registerGitStatusRoutes(this.app, ctx);
     // Git fetch on an interval: this is only the wake-up, the scheduler itself decides what is due. Off in
-    // tests for the same reason as the polls below — a test drives `tick()` directly instead of waiting on
+    // tests for the same reason as the polls below: a test drives `tick()` directly instead of waiting on
     // a timer the harness would have to keep alive. The setting is read FRESH inside `tick()`, so turning
     // it on takes effect on the next tick and turning it off actually stops the fetching.
     if (!this.testMode) {

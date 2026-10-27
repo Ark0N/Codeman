@@ -31,7 +31,7 @@
  * stop at the first frame end, and the supported range still includes those
  * versions: measured on a real 56-line transcript, Node returned 158 bytes /
  * 1 line where the CLI returned 43,747 bytes / 56 lines. That is a silent
- * truncation to the session header — every call would have reported "no answer
+ * truncation to the session header: every call would have reported "no answer
  * yet" forever. `decodeZstdFrames()` below walks the frame headers itself and
  * decompresses each frame, and `test/deepseek-transcript.test.ts` pins it
  * against multi-frame fixtures.

@@ -1,6 +1,6 @@
 /**
  * `POST /api/sessions/:id/git-fetch-settings` (session-routes.ts): the per-case half of the fetch interval
- * (src/git-fetch-scheduler.ts) — the case's own switch and its own interval. `null` on either half clears
+ * (src/git-fetch-scheduler.ts): the case's own switch and its own interval. `null` on either half clears
  * that half so the app-wide setting applies again, and a body that names one row leaves the other as it was,
  * because the Session Options rows save on their own. Refused for remote and Docker cases, the same rule the
  * Git panel and the scheduler use. app.inject(), no port.

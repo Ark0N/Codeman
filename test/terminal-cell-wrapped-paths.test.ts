@@ -1,4 +1,4 @@
-// Port: none (pure functions + the link provider in a vm context — no browser, no server).
+// Port: none (pure functions + the link provider in a vm context: no browser, no server).
 //
 // Absolute file paths codex word-wrapped inside a markdown table cell were not
 // clickable: the first fragment has no extension and the continuation has no

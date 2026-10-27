@@ -533,7 +533,7 @@
     // scope tag. The Session Options → Git strings are in that group's own block further down.
     'Bottom bar': '底部栏',
     'Git status': 'Git 状态',
-    "Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only apart from Fetch: Codeman never commits or changes the repository, and `git fetch` — the only git command the Git window runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked) — runs when you click Fetch in that window, or on the interval below if you turned it on. Not shown for Docker or remote sessions. Off by default.":
+    "Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only apart from Fetch: Codeman never commits or changes the repository, and `git fetch` runs only when you click Fetch in that window, or on the interval below if you turned it on. It is the only git command the Git window runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked). Not shown for Docker or remote sessions. Off by default.":
       '在底部栏右侧显示当前会话的仓库（或其文件夹内向下两层以内的每个仓库）是否有未提交的文件或未推送的提交。点击可查看列表。除拉取外只读：{name} 从不提交或更改仓库，而拉取是 Git 窗口运行的唯一会写入的 git 命令，也是 {name} 唯一会按间隔自行运行的命令（克隆和工作树管理也会写入，但只在您当时要求时才运行），它只在您点击该窗口中的拉取按钮时运行，或在您开启了下方的定时后按间隔运行。Docker 和远程会话不显示。默认关闭。',
     'Git status: group files by folder': 'Git 状态：按文件夹分组显示文件',
     'In the Git window, show changed files under their folders, collapsed until you click a folder. Off lists every file by its full path. On by default.':
@@ -548,8 +548,8 @@
     'Runs `git fetch` for the repositories the Git window lists on a timer, so the "behind" number is current without a click. Off by default: this is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked), so nothing runs until you turn it on. A session can override both the switch and the interval in Session Options → Git.':
       '按间隔为 Git 窗口列出的仓库运行拉取，这样“落后”的数字无需点击就是最新的。默认关闭：这是 Git 窗口运行的唯一会写入的 git 命令，也是 {name} 唯一会按间隔自行运行的命令（克隆和工作树管理也会写入，但只在您当时要求时才运行），所以在您开启之前不会有任何运行。会话可以在“会话选项 → Git”中同时覆盖开关和间隔。',
     'Git fetch: how often': 'Git 定时拉取：多久一次',
-    'Seconds between runs for a session that has no override of its own (30 to 3600, default 300). Only a session that is on — here, or in Session Options → Git — is fetched, and sessions sharing one folder are fetched by one run.':
-      '没有自己覆盖设置的会话，两次运行之间的秒数（30 到 3600，默认 300）。只有已开启的会话——这里，或在“会话选项 → Git”——才会被拉取，共用一个文件夹的会话由一次运行拉取。',
+    'Seconds between runs for a session that has no override of its own (30 to 3600, default 300). Only a session that is on (here, or in Session Options → Git) is fetched, and sessions sharing one folder are fetched by one run.':
+      '没有自己覆盖设置的会话，两次运行之间的秒数（30 到 3600，默认 300）。只有已开启的会话（这里，或在“会话选项 → Git”）才会被拉取，共用一个文件夹的会话由一次运行拉取。',
     'Fetch git status': '拉取 Git 状态',
     'Refresh git status': '刷新 Git 状态',
     'Close git status': '关闭 Git 状态',
@@ -860,7 +860,7 @@
     // by updateGitFetchStatus, and 'Git' stays a technical name.
     "Whether Codeman fetches this session's repositories on a timer.": '{name} 是否按间隔拉取此会话的仓库。',
     'Fetch on an interval': '按间隔拉取',
-    "Fetching is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer, so nothing runs until you turn it on — here, or in App Settings → Bottom bar. Cloning and worktree management write too, but only when you asked for them at the moment you asked. The panel's Fetch button is always just a click.":
+    "Fetching is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer, so nothing runs until you turn it on (here, or in App Settings → Bottom bar). Cloning and worktree management write too, but only when you asked for them at the moment you asked. The panel's Fetch button is always just a click.":
       '拉取是 Git 窗口运行的唯一会写入的 git 命令，也是 {name} 唯一会按间隔自行运行的命令，所以在您开启之前（这里，或“应用设置 → 底部栏”）不会有任何运行。克隆和工作树管理也会写入，但只在您当时要求时才运行。该窗口中的拉取按钮始终只是一次点击。',
     'Follow the app setting': '跟随应用设置',
     'Uses the app-wide switch and interval for this session. Switch it off to pick your own.':

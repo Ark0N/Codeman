@@ -22,7 +22,7 @@
  *   - The repository set is `resolveWorkspaceRepos`, the single source the panel and the diff route
  *     already use, so Fetch cannot reach a repository the panel would not show. The Docker rule is
  *     checked before any git runs: a repository a container can write to is refused outright, because a
- *     planted config would run on the host — and `git fetch` is exactly the command that can run a
+ *     planted config would run on the host, and `git fetch` is exactly the command that can run a
  *     repository's own hooks (`reference-transaction`, and `pre-auto-gc` through the automatic maintenance
  *     that follows a fetch) and its config commands such as `credential.helper`, which is why a timer only
  *     runs it after the user opts in.
@@ -30,7 +30,7 @@
  *     instead of starting a second one, because two fetches in one clone collide on the ref lock.
  *   - Bounded: the git timeout from Settings → Bottom bar per repository, `MAX_REPOS_LIMIT` repositories at
  *     most, a hard wall-clock bound on each spawn, and `FETCH_CONCURRENCY` git processes at a time for the
- *     whole run — one `Limiter`, shared by the scheduler's tick, not one bound per folder.
+ *     whole run: one `Limiter`, shared by the scheduler's tick, not one bound per folder.
  *   - Non-interactive: `GIT_TERMINAL_PROMPT=0` and BatchMode ssh, so a private repository that needs a
  *     login fails fast instead of hanging the request on an invisible username prompt. Codeman collects
  *     no credentials; a repository the user's own git is already signed in to works because that is the
@@ -38,11 +38,11 @@
  *     a default, never an override: `fetchEnvFor` keeps whatever the repository's `core.sshCommand`, the
  *     user's own `GIT_SSH_COMMAND` or a `GIT_SSH` already says, because on a machine with several ssh setups
  *     that choice is usually the one that works. ⚠️ The default still leaves a record: `StrictHostKeyChecking=accept-new`
- *     writes an unknown host key into `~/.ssh/known_hosts` without asking — BatchMode stops a prompt, not a
+ *     writes an unknown host key into `~/.ssh/known_hosts` without asking: BatchMode stops a prompt, not a
  *     write.
  *   - The timeout kills the PROCESS GROUP, not just the `git` parent. A fetch over http spawns
  *     `git-remote-http` children, and `execFile`'s `timeout` signals the parent only, so the answer can go
- *     out while a helper is still running — and on a timer that repeats every tick with nobody watching.
+ *     out while a helper is still running, and on a timer that repeats every tick with nobody watching.
  *     `spawn` with `detached: true` puts the tree in its own group so the escalation (SIGTERM, then SIGKILL
  *     `FETCH_KILL_ESCALATION_MS` later) reaches the children too, which is why the negative pid is used
  *     rather than `child.kill()`. Same shape as `runGit` in git-clone.ts, without that module's slot queue:
@@ -69,10 +69,10 @@ import {
 const execFileAsync = promisify(execFile);
 
 /**
- * Git processes in flight at once, for one run — and for a whole scheduler tick, because the tick hands ONE
+ * Git processes in flight at once, for one run, and for a whole scheduler tick, because the tick hands ONE
  * bound to every run (see `createLimiter`): each fetch is one git process, and a folder can hold up to
  * `MAX_REPOS_LIMIT`. The tick bounds its folders separately, because the same semaphore cannot serve both
- * levels — a folder holding a slot would then wait for a slot its own fetch needs.
+ * levels: a folder holding a slot would then wait for a slot its own fetch needs.
  */
 export const FETCH_CONCURRENCY = 4;
 /** A fetch on a busy remote can print a lot; a bound on what we will hold. */
@@ -123,7 +123,7 @@ export function gitFetchSettingsFrom(settings: Record<string, unknown> | undefin
 
 /**
  * The only git command this module runs. Kept as a function so a test can pin the verb: nothing here
- * commits, checks out, merges or prunes, and no operand is interpolated — the repository is the process
+ * commits, checks out, merges or prunes, and no operand is interpolated: the repository is the process
  * `cwd` and the argv is fixed.
  */
 export function buildFetchArgs(): string[] {
@@ -135,8 +135,8 @@ export function buildFetchArgs(): string[] {
  * so pinning the verb here does not have to say anything about maintenance, and so both can be tested
  * without spawning.
  *
- * A repository with no remote is a fact, not a fault. Git's wordings for it differ by version — 2.47
- * exits quietly and this code is never reached, older git says "no default remote repository" — so the
+ * A repository with no remote is a fact, not a fault. Git's wordings for it differ by version (2.47
+ * exits quietly and this code is never reached, older git says "no default remote repository"), so the
  * branch is pinned on literal fixtures and the code the panel shows is the code this writes.
  */
 export type FetchFailureCode = GitFailureCode | 'NO_REMOTE';
@@ -151,7 +151,7 @@ export interface FetchFailure {
 
 /**
  * A thrown git error as the panel should show it. `classifyGitFailure` (git-clone.ts) already knows the
- * network reasons — auth, an unreachable host, a missing git — so they are reused here; only its timeout
+ * network reasons (auth, an unreachable host, a missing git), so they are reused here; only its timeout
  * wording is written for clones, so the fetch path replaces it with what the user can actually do.
  */
 export function describeFetchFailure(err: unknown): FetchFailure {
@@ -179,7 +179,7 @@ export function describeFetchFailure(err: unknown): FetchFailure {
  *
  * `gitNonInteractiveEnv` supplies the BatchMode default, and the default is only a default: git reads
  * `GIT_SSH_COMMAND` from the environment ahead of the repository's `core.sshCommand`, so setting it would
- * override a repository that already chose its own ssh — an alternative host, an identity file, a jump box —
+ * override a repository that already chose its own ssh (an alternative host, an identity file, a jump box)
  * and break a setup that works today. The server's own `GIT_SSH` is the same kind of answer: git reads it
  * after both of those (`GIT_SSH_COMMAND`, then `core.sshCommand`, then `GIT_SSH`), so a written default would
  * hide it too. That is the only case where this module makes an ssh choice on the user's behalf, so it is the
@@ -202,7 +202,7 @@ export function fetchEnvFor(base: NodeJS.ProcessEnv, repoSshCommand: string | nu
  * hook or filter runs on the way to it.
  *
  * The read happens inside the same slot and the same wall-clock bound as the fetch it serves, so it cannot
- * add a fifth git process or push a fetch past the user's timeout — it spends part of it.
+ * add a fifth git process or push a fetch past the user's timeout: it spends part of it.
  */
 export async function readRepoSshCommand(cwd: string, timeoutMs: number): Promise<string | null> {
   try {
@@ -232,7 +232,7 @@ export async function readRepoSshCommand(cwd: string, timeoutMs: number): Promis
  *
  * The thrown error keeps the shape `describeFetchFailure` reads: `stderr` for the reason, `message` for a
  * spawn failure (`spawn git ENOENT` → GIT_MISSING), `killed` and `code` for the timeout. A non-zero exit
- * rejects the way `execFile` would — `code` is then the exit code — because resolving it would report a real
+ * rejects the way `execFile` would (`code` is then the exit code), because resolving it would report a real
  * failure as a clean run with an empty reason.
  *
  * `timeoutMs` bounds the `core.sshCommand` read and the fetch TOGETHER: the spawn is armed with what the read
@@ -320,7 +320,7 @@ export const runFetch: GitRunner = async (cwd, args, opts) => {
       if (settled) return;
       // execFile's contract, which `describeFetchFailure` depends on: a non-zero exit rejects, so a real
       // git failure keeps its reason in `stderr` instead of becoming a green row with an empty one. `null`
-      // means a signal, reachable only when something outside this runner killed the group — our own timeout
+      // means a signal, reachable only when something outside this runner killed the group: our own timeout
       // has already answered by then, and `settled` above is what keeps that answer the answer.
       if (code !== 0) return fail(undefined, code);
       settled = true;
@@ -468,14 +468,14 @@ export async function fetchGitWorkspaceOverview(cwd: string, opts: GitFetchOptio
  * Runs already going, keyed by the resolved folder. A request for a folder another run is already working on
  * JOINS that run instead of starting a second `git fetch` in the same clone: two fetches there collide on
  * git's ref lock (`cannot lock ref 'refs/remotes/origin/main'`), which is what a click during a tick would
- * otherwise do. A joiner gets the run already going's answer, including its limits and its trigger — the point
+ * otherwise do. A joiner gets the run already going's answer, including its limits and its trigger: the point
  * is not to fetch twice, not to fetch with the freshest options, and a click that fetched nothing cannot
  * report itself as the fetch.
  *
  * Keyed by `resolve`, not `realpath`, because `realpath` is itself one of the unbounded fs calls rule #516
  * bounds for user-chosen paths; the scheduler probes the folder bounded and calls this. Two paths that
  * resolve the same are the same folder here; a workspace reached through a symlink resolves to the link, so
- * a link and its target can be fetched by two runs — the accepted trade for keeping the probe bounded.
+ * a link and its target can be fetched by two runs, the accepted trade for keeping the probe bounded.
  */
 const lane = new Map<string, Promise<GitFetchRun>>();
 

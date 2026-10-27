@@ -3682,7 +3682,7 @@ export function registerSessionRoutes(
   // fetched when the first of them is due. `null` on either field clears this session's choice so the
   // app-wide setting applies again, and a field left out of the body leaves the other half as it was: the
   // Session Options rows save on their own. Refused for a remote or Docker session, exactly as the Git
-  // panel excludes them — a container can write to the repository it mounts, so git there would run that
+  // panel excludes them: a container can write to the repository it mounts, so git there would run that
   // repository's own configuration on the host.
   app.post('/api/sessions/:id/git-fetch-settings', async (req) => {
     const { id } = req.params as { id: string };

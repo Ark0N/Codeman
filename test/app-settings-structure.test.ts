@@ -222,7 +222,7 @@ describe('App Settings modal structure', () => {
     // The strip destructure is the other half: an aliased key here never reaches the settings PUT.
     expect(settingsUi).not.toMatch(/gitFetch(?:Enabled|IntervalSeconds):\s*_\w+/);
 
-    // Declared in the .strict() schema — an undeclared key 400s the whole settings PUT.
+    // Declared in the .strict() schema: an undeclared key 400s the whole settings PUT.
     expect(SettingsUpdateSchema.safeParse({ gitFetchEnabled: true, gitFetchIntervalSeconds: 300 }).success).toBe(true);
 
     // Off by default (only an explicit true loads as on), and an empty box falls back to the default interval.

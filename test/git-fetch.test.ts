@@ -1,24 +1,24 @@
 /**
  * @fileoverview Tests for the Git panel's Fetch button (src/git-fetch.ts): the only git command the Git panel
- * runs that writes, and the only one that can run without being asked — which is why it is a click, or an
+ * runs that writes, and the only one that can run without being asked, which is why it is a click, or an
  * interval the user turned on, and why the writing and the hooks it can run are pinned here. Cloning and
  * worktree management write too, but they write when the user asked.
  *
  * Four halves, mirroring the module:
  *
- * 1. The PURE half — the fixed argv, the `-c` overrides the runner adds ahead of it, the ssh environment the
+ * 1. The PURE half: the fixed argv, the `-c` overrides the runner adds ahead of it, the ssh environment the
  *    runner refuses to override (`fetchEnvFor`), the failure classification, and the two reads the interval
  *    scheduler depends on: what the settings say (`gitFetchSettingsFrom`) and what a run did
  *    (`gitFetchStatusFrom`). No spawning.
- * 2. The IO half — a REAL git fetching a REAL local bare repo, so that "remote-tracking refs only" is
+ * 2. The IO half: a REAL git fetching a REAL local bare repo, so that "remote-tracking refs only" is
  *    proven against git's actual behavior: HEAD, the index and the working tree must be exactly what they
  *    were while the remote-tracking ref moves. The rest of the half uses an injected runner over real
  *    repositories on disk, because what is being pinned is WHICH repositories git is allowed to touch.
- * 3. The process group — a timed-out fetch has to take its `git-remote-http` helper with it, against a
+ * 3. The process group: a timed-out fetch has to take its `git-remote-http` helper with it, against a
  *    server that accepts and never answers, so the assertion is about what is still RUNNING after the answer
  *    went out. A test that only checked the returned error would pass with the old `execFile` runner, which
  *    signals the parent only.
- * 4. The join (`fetchWorkspaceOnce`) — one run per folder at a time, because two fetches in one clone
+ * 4. The join (`fetchWorkspaceOnce`): one run per folder at a time, because two fetches in one clone
  *    collide on git's ref lock, the bound is ONE limiter shared with the scheduler's tick rather than a bound
  *    each run gets for itself, and the trigger a join reports is the joined run's, not the joiner's.
  *
@@ -311,7 +311,7 @@ describe.skipIf(!gitPresent)('fetchGitWorkspaceOverview (real git)', () => {
     git(work, 'push', '-q', 'origin', 'main');
 
     // A commit made elsewhere and pushed: work's origin/main cannot hear about it until a fetch runs.
-    // This has to be a clone of origin, not a fresh init — a commit on its own root commit is no
+    // This has to be a clone of origin, not a fresh init: a commit on its own root commit is no
     // descendant of what origin already holds, so pushing it is rejected as non-fast-forward.
     const other = join(dir, 'other');
     git(dir, 'clone', '-q', origin, 'other');
@@ -441,7 +441,7 @@ interface Proc {
 }
 
 /**
- * Every process on the machine, as /proc reports it — so this half can only run on Linux, and the fields are
+ * Every process on the machine, as /proc reports it, so this half can only run on Linux, and the fields are
  * counted from the closing parenthesis because `comm` can hold spaces.
  *
  * Membership of the GROUP is what is checked, not parentage: a helper that outlives its parent stops being a
@@ -496,8 +496,8 @@ describe.skipIf(!gitPresent)('runFetch (the whole tree, not just the git parent)
         const answered = runFetch(repo, buildFetchArgs(), { timeoutMs: 1_500 }).catch((e) => e);
 
         // The tree has to be a tree before the timeout, or nothing is being proven: git itself, and the helper
-        // it spawns for an http remote. The helper is a grandchild — `git fetch` runs `git remote-http`, which
-        // spawns `git-remote-http` — so the group, not the parentage, is what proves it. Each process is
+        // it spawns for an http remote. The helper is a grandchild (`git fetch` runs `git remote-http`, which
+        // spawns `git-remote-http`), so the group, not the parentage, is what proves it. Each process is
         // remembered once found rather than re-scanned: after the kill the group is empty, and a test that kept
         // looking would report a tree it had already destroyed. The `git config` read the runner does first is
         // a `git` too, so the fetch is found by what it was asked to do.
@@ -527,7 +527,7 @@ describe.skipIf(!gitPresent)('runFetch (the whole tree, not just the git parent)
         expect(err.code).toBe('ETIMEDOUT');
         expect(err.killed).toBe(true);
 
-        // The answer went out before the tree died — that is the whole point of the fix, and it is why the
+        // The answer went out before the tree died: that is the whole point of the fix, and it is why the
         // escalation is given its own time here instead of being cancelled when the promise settles.
         const deadline = Date.now() + FETCH_KILL_ESCALATION_MS + 2_000;
         while (Date.now() < deadline && scanProc().some((p) => p.pgrp === parent!.pgrp)) await sleep(50);
@@ -631,7 +631,7 @@ describe.skipIf(!gitPresent)('fetchWorkspaceOnce (the join)', () => {
     const first = fetchWorkspaceOnce(folder, { git: firstRunner }, 'interval');
     await runStarted; // the run is going, and still going
 
-    // A click while that run is working the folder: it joins, so it never touches git at all — not even the
+    // A click while that run is working the folder: it joins, so it never touches git at all, not even the
     // resolver's own probe, because it does not resolve anything for itself.
     let joinerCalls = 0;
     const joinerRunner: GitRunner = async () => {

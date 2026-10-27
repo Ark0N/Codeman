@@ -36,7 +36,7 @@ import type { EventPort, SessionPort } from '../ports/index.js';
 
 /**
  * Host paths of every Docker case workspace: repositories at or inside these are never inspected.
- * Exported so the interval scheduler (src/git-fetch-scheduler.ts) uses the SAME list — the Docker rule has
+ * Exported so the interval scheduler (src/git-fetch-scheduler.ts) uses the SAME list: the Docker rule has
  * to be one rule, checked by every path that could run git.
  *
  * REJECTS when `docker-cases.json` exists but cannot be read or parsed (its writer truncates and rewrites it
@@ -142,11 +142,11 @@ export function registerGitStatusRoutes(
   // Fetch, and only because the user clicked Fetch in the panel (src/git-fetch.ts): one
   // `git fetch --quiet` per repository the panel would show, through the same resolver so the two cannot
   // disagree about which repositories belong to the workspace. This is the only git command the Git panel runs
-  // that writes, and it writes remote-tracking refs only — nothing commits, checks out or merges. Cloning and
+  // that writes, and it writes remote-tracking refs only: nothing commits, checks out or merges. Cloning and
   // worktree management write too, but those happen when the user asked for them; this route is the one that
   // can also run later, on a timer. It is not as harmless as a read though: a fetch holds git's ref lock, so
   // an agent's own `git pull` in the same clone can collide with it, which is why the run goes through
-  // `fetchWorkspaceOnce` — a click while a tick is already fetching this folder joins that run instead of
+  // `fetchWorkspaceOnce`: a click while a tick is already fetching this folder joins that run instead of
   // starting a second one. It can also run a
   // repository's own hooks (`reference-transaction`, `pre-auto-gc` through the maintenance git runs after a
   // fetch) and its config commands such as `credential.helper`, so the `FETCH_CONFIG_ARGS` overrides turn

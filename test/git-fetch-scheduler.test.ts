@@ -1,12 +1,12 @@
 /**
  * @fileoverview The Git fetch interval scheduler (src/git-fetch-scheduler.ts): which sessions a tick runs,
  * and which it must not. Every rule is checked by calling `tick(now)` with an explicit clock, so nothing here
- * depends on fake timers or on how long a real tick takes — the scheduler owns no timers itself.
+ * depends on fake timers or on how long a real tick takes: the scheduler owns no timers itself.
  *
  * The run belongs to the FOLDER, so these tests put two sessions on one folder and expect one fetch that
  * both see, and they check the tick's two bounds separately: one shared bound for the fetches of the whole
  * tick, and the folders bounded by a bound that cannot be the same semaphore. A folder is due when ANY session
- * open on it is due, so the order the sessions were read cannot decide it — that is checked in both orders.
+ * open on it is due, so the order the sessions were read cannot decide it, and that is checked in both orders.
  * A run carries the trigger that caused it, and what is published says the run's, not the tick's.
  *
  * Port: N/A.
@@ -62,7 +62,7 @@ type Harness = {
   /** The folders the tick actually ran, in the order they were picked, with the trigger the tick passed. */
   calls: Array<{ cwd: string; opts: GitFetchOptions; trigger: GitFetchTrigger }>;
   published: Array<{ id: string; status: GitFetchStatus }>;
-  /** Every path the tick probed, in order — the probe has to happen before anything is fetched. */
+  /** Every path the tick probed, in order: the probe has to happen before anything is fetched. */
   probed: string[];
   settings: GitFetchSettings;
   dockerReads: number;
@@ -247,7 +247,7 @@ describe('who runs', () => {
     expect(h.calls.length).toBe(4);
   });
 
-  it('runs a session that turned itself on even while the app-wide switch is off — that is what a per-session switch has to mean', async () => {
+  it('runs a session that turned itself on even while the app-wide switch is off: that is what a per-session switch has to mean', async () => {
     const h = harness([VIEW('plain'), VIEW('own', { gitFetchEnabled: true, gitFetchIntervalSeconds: 30 })], {
       settings: { enabled: false, intervalSeconds: 300 },
     });
@@ -355,7 +355,7 @@ describe('one folder, one run', () => {
       expect(await h.scheduler.tick(15_000)).toBe(0);
       expect(h.published).toEqual([]);
 
-      // The short session is past its own interval, so the folder is fetched — once, for both. The run that
+      // The short session is past its own interval, so the folder is fetched (once, for both). The run that
       // happens covers the long session's interval too, and both still get it because both are open on the
       // folder: publishing only the session that made the folder due would leave the other tab on a stale row.
       h.published.length = 0;
@@ -410,7 +410,7 @@ describe('one folder, one run', () => {
       {
         // Every folder is handed the SAME limiter for its work, so that work cannot get its own bound: a
         // per-call bound would let 5 folders × 6 items run at once. The folders themselves are bounded by a
-        // DIFFERENT bound, because one semaphore cannot serve both levels — a folder holding a slot and then
+        // DIFFERENT bound, because one semaphore cannot serve both levels: a folder holding a slot and then
         // waiting for one for its own fetch is waiting on itself, and the folders that fill the bound are
         // exactly the ones blocking it. If the tick used one semaphore for both, this test would hang and fail
         // as a timeout rather than as an assertion.
