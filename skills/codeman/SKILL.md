@@ -8,11 +8,18 @@ description: >-
   read their output, and clean up; where available, message claude workers directly
   (Claude Code cross-session messaging). Use when asked to orchestrate or parallelize
   work across Codeman sessions, get a second opinion from another CLI or model, watch
-  another session, or start and manage workers. Only usable inside a Codeman-managed
-  session (CODEMAN_MUX=1); refuse to act otherwise.
+  another session, start and manage workers, or retrieve saved local Codex history
+  by file/native ID or root and descendants with topic/date filters. Live API
+  operations require a Codeman-managed session (CODEMAN_MUX=1). Offline history
+  reads do not require a server or managed session.
 ---
 
 # Driving Codeman from inside a session
+
+For **saved Codex conversation history**, use `codeman history read` and
+[reference/history.md](reference/history.md). This is a read-only local command:
+route to it **before §0**, including outside a managed session. It needs no API
+URL, credentials or running server. All live API operations below retain §0.
 
 You are an agent running inside a Codeman-managed terminal session. Codeman is the
 server that spawned you; its HTTP API can start, prompt, watch, and delete other
@@ -43,8 +50,8 @@ machine has no `jq` for the preamble below.
 
 ## 0. Guard and bootstrap
 
-If `CODEMAN_MUX` is not `1`, **stop and say so**. Do not guess an API URL; a server
-you are not part of is not yours to drive.
+For live API operations, if `CODEMAN_MUX` is not `1`, **stop and say so**.
+Do not guess an API URL; a server you are not part of is not yours to drive.
 
 Two failures come from your CLI, not from Codeman: name them to the user instead of
 retrying.

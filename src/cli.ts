@@ -29,6 +29,7 @@ import {
 import type { AgentSkillDir } from './config/cli-registry/types.js';
 import { getCli, listClis } from './config/cli-registry/registry.js';
 import { registerAgentCommands } from './cli-agent.js';
+import { registerHistoryCommands } from './cli-history.js';
 import { resolveMcpConfig, runMcpStdio } from './mcp-server.js';
 import { getSessionManager } from './session-manager.js';
 import { getTaskQueue } from './task-queue.js';
@@ -324,6 +325,7 @@ skillCmd
 // ============ Agent Commands (session-to-session, any CLI mode) ============
 
 registerAgentCommands(program);
+registerHistoryCommands(program);
 
 // ============ MCP server (any MCP client drives Codeman) ============
 

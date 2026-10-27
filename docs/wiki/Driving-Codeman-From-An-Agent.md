@@ -70,6 +70,33 @@ codeman agent rm "$SID"                                   # any session except t
 - **Exit codes** are the same for every verb: `0` done, `1` error, `2` timeout, `3` the
   worker exited, `4` refused. `--json` prints the response's `data`.
 
+## Reading saved Codex conversations
+
+`codeman history read` is the one command here that needs no server and no Codeman
+session: it reads Codex's own saved rollouts (`$CODEX_HOME/sessions`, else
+`~/.codex/sessions`) from disk and writes nothing.
+
+```bash
+codeman history read --session-id 019fc604                      # one conversation, by id or 8+ character prefix
+codeman history read --root-session-id <uuid> --topic auth       # it and every sub-agent or fork under it
+codeman history read --file /path/to/rollout.jsonl --format text
+```
+
+- **Filters** keep whole user/assistant turns: `--topic` is a literal, case-insensitive
+  match, and `--after`/`--before` are inclusive UTC dates.
+- **Forks and sub-agents**: a child's copy of its parent's history is dropped, so every
+  record belongs to the thread that wrote it.
+- **`complete: false`** in the JSON means the evidence is partial: a store file that could
+  not be attributed, a compressed `.jsonl.zst` rollout (not read), a record a running
+  Codex is still writing, an ancestor not found.
+- **Budgets** fail closed and are raisable: `--metadata-bytes` (attributing the store,
+  default 1 GiB), `--max-entries` (65536), `--scan-bytes` (the selected transcripts,
+  16 MiB) and `--max-bytes` (output, 8192). `--json` and `--format text` together are an
+  error.
+
+The full reference ships with the skill as
+[`reference/history.md`](https://github.com/Ark0N/Codeman/blob/master/skills/codeman/reference/history.md).
+
 ## The MCP server
 
 `codeman mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP

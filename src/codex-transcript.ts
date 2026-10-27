@@ -37,13 +37,20 @@
  *    summaries), so they are read only when neither shape above appears, and
  *    the obvious injections are dropped.
  *
+ * The shapes, the injected-context rule and the store location live in
+ * `codex-rollout-format.ts`, shared with the offline reader `local-history.ts`.
+ *
  * @module codex-transcript
  */
 
 import { open, readdir, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import {
+  codexMessageFromLine,
+  codexSessionsRoot,
+  isCodexInjectedContext as isInjectedContext,
+} from './codex-rollout-format.js';
 import { LRUMap } from './utils/lru-map.js';
 
 /** Covers `session_meta` (~19 KiB) plus the first user message (~69 KiB behind it). */
@@ -134,11 +141,6 @@ function shouldCacheIdentity(identity: RolloutIdentity, fileSize: number): boole
   return identity.firstPrompt !== undefined || fileSize >= HEAD_BYTES;
 }
 
-function codexSessionsRoot(): string {
-  const home = process.env.CODEX_HOME || join(homedir(), '.codex');
-  return join(home, 'sessions');
-}
-
 /** Read at most `bytes` from the front of a file. Returns '' when unreadable. */
 async function readHead(path: string, bytes: number): Promise<string> {
   const fh = await open(path, 'r').catch(() => null);
@@ -176,55 +178,16 @@ async function readTail(path: string, size: number, bytes: number): Promise<stri
   }
 }
 
-/** Flatten codex's message content, which is a string or an array of text blocks. */
-function contentText(content: unknown): string {
-  if (typeof content === 'string') return content.trim();
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter(
-      (b): b is { text: string } => !!b && typeof b === 'object' && typeof (b as { text?: unknown }).text === 'string'
-    )
-    .map((b) => b.text)
-    .join('\n')
-    .trim();
-}
-
-/** One line's user-prompt text, whichever of the three shapes it is. */
-function userPromptFromLine(entry: {
-  type?: string;
-  payload?: {
-    type?: string;
-    role?: string;
-    content?: unknown;
-    message?: unknown;
-    item?: { type?: string; content?: unknown };
-  };
-}): { text: string; injectionProne: boolean } | null {
-  const p = entry.payload;
-  if (!p) return null;
-
-  if (entry.type === 'event_msg' && p.type === 'item_completed' && p.item?.type === 'UserMessage') {
-    const text = contentText(p.item.content);
-    return text ? { text, injectionProne: false } : null;
-  }
-  if (entry.type === 'event_msg' && p.type === 'user_message') {
-    const text = typeof p.message === 'string' ? p.message.trim() : contentText(p.message);
-    return text ? { text, injectionProne: false } : null;
-  }
-  if (entry.type === 'response_item' && p.role === 'user') {
-    const text = contentText(p.content);
-    return text ? { text, injectionProne: true } : null;
-  }
-  return null;
-}
-
 /**
- * Injected context rather than something the user typed. Codex prepends the
- * repository's AGENTS.md and wraps environment context in a tag, and both arrive
- * as `response_item` user rows.
+ * One line's user-prompt text, whichever of the three shapes it is. The shapes
+ * and the injected-context rule are shared with the offline history reader
+ * (`codex-rollout-format.ts`), so the two never disagree about what a prompt is.
  */
-function isInjectedContext(text: string): boolean {
-  return text.startsWith('#') || text.startsWith('<');
+function userPromptFromLine(entry: unknown): { text: string; injectionProne: boolean } | null {
+  const message = codexMessageFromLine(entry);
+  if (!message || message.role !== 'user') return null;
+  const text = message.text.trim();
+  return text ? { text, injectionProne: message.injectionProne } : null;
 }
 
 /** Collapse to one line and cap, so a row carries a title rather than an essay. */
