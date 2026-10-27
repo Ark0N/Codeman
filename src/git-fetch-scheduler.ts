@@ -1,5 +1,5 @@
 /**
- * @fileoverview Git fetch on an interval: the cases the user turned on, fetched by a tick the server owns
+ * @fileoverview Git fetch on an interval: the sessions the user turned on, fetched by a tick the server owns
  * (`src/git-fetch-scheduler.ts`, wired in `src/web/server.ts`).
  *
  * The fetch module (src/git-fetch.ts) is the only git command the Git panel runs that writes, and on a timer

@@ -2685,7 +2685,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('modalKeepWarmEnabled').checked =
       session.keepWarm?.enabled ?? session.keepWarmEnabled ?? false;
     this.updateKeepWarmStatus(sessionId);
-    // Git: the case's own choice if it has one, otherwise the app setting. updateGitFetchStatus is also
+    // Git: the session's own choice if it has one, otherwise the app setting. updateGitFetchStatus is also
     // what SSE calls when a scheduled run lands, so the rows stay current while the modal is open.
     this.updateGitFetchStatus(sessionId);
     document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
@@ -3032,11 +3032,15 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * The Git tab: the case's last scheduled run, and which values its rows show. A case with no choice of its
-   * own follows the app setting, so its switch and interval display the app's numbers and go inert — the same
-   * inert-row pattern as updateKeepWarmStatus above — because changing them here is what makes the case stop
-   * following. The app numbers come from the settings cache, so what this shows can be one settings load
+   * The Git tab: the session's last scheduled run, and which values its rows show. A session with no choice of
+   * its own follows the app setting, so its switch and interval display the app's numbers and go inert (the
+   * same inert-row pattern as updateKeepWarmStatus above), because changing them here is what makes the session
+   * stop following. The app numbers come from the settings cache, so what this shows can be one settings load
    * behind; the server decides from a fresh read, not from what the page displays.
+   *
+   * SSE calls this on every `session:updated` for the open session (app.js `_onSessionUpdated`), and a working
+   * session sends one on each working/idle change, so a control the user is in (`document.activeElement`) is
+   * left as it is: rewriting it put a half-typed interval back to the stored one before `onchange` could save it.
    */
   updateGitFetchStatus(sessionId) {
     const statusEl = document.getElementById('gitFetchStatus');
@@ -3048,15 +3052,17 @@ Object.assign(CodemanApp.prototype, {
     if (!session) return;
 
     const app = this.loadAppSettingsFromStorage() || {};
-    // No choice of its own on either field means the session follows the app. A partial one — its own switch,
-    // the app's interval — means it does not, and the row that still follows shows the app's value.
+    // No choice of its own on either field means the session follows the app. A partial one (its own switch,
+    // the app's interval) means it does not, and the row that still follows shows the app's value, which is
+    // also the value the scheduler runs it with (a default here would show one number and fetch at another).
     const follows = session.gitFetchEnabled === undefined && session.gitFetchIntervalSeconds === undefined;
-    const enabled = follows ? app.gitFetchEnabled === true : session.gitFetchEnabled ?? false;
-    const interval = follows ? app.gitFetchIntervalSeconds ?? 300 : session.gitFetchIntervalSeconds ?? 300;
+    const enabled = session.gitFetchEnabled ?? (app.gitFetchEnabled === true);
+    const interval = session.gitFetchIntervalSeconds ?? app.gitFetchIntervalSeconds ?? 300;
 
-    followBox.checked = follows;
-    box.checked = enabled;
-    num.value = interval;
+    const focused = document.activeElement;
+    if (followBox !== focused) followBox.checked = follows;
+    if (box !== focused) box.checked = enabled;
+    if (num !== focused) num.value = interval;
     for (const el of [box, num]) {
       el.closest('.set-row')?.classList.toggle('set-row-disabled', follows);
       el.disabled = follows;
@@ -3085,16 +3091,17 @@ Object.assign(CodemanApp.prototype, {
   async autoSaveGitFetch() {
     if (!this.editingSessionId) return;
     const follow = document.getElementById('modalGitFetchFollow').checked;
+    const num = document.getElementById('modalGitFetchInterval');
     // `null` on the route means "no choice of your own", which is what following the app setting is.
     const body = follow
       ? { enabled: null, intervalSeconds: null }
       : {
           enabled: document.getElementById('modalGitFetchEnabled').checked,
-          intervalSeconds: Math.min(
-            3600,
-            Math.max(30, parseInt(document.getElementById('modalGitFetchInterval').value, 10) || 300)
-          ),
+          intervalSeconds: Math.min(3600, Math.max(30, parseInt(num.value, 10) || 300)),
         };
+    // Enter fires `onchange` with the field still focused, and updateGitFetchStatus leaves a focused field
+    // alone, so the clamped number is written back here or the field would keep showing what was typed.
+    if (!follow) num.value = body.intervalSeconds;
     try {
       // `_apiPost` hands back the Response without checking it, so a refused body (a 400) still read as a
       // save. `_apiJson` is the one that says whether the call went through, and null here means it did not.

@@ -1550,7 +1550,7 @@ export class WebServer extends EventEmitter {
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     this.keepWarmService.remove(sessionId);
-    // A closed case takes its place in the fetch schedule with it: otherwise a detached-and-forgotten id
+    // A closed session takes its place in the fetch schedule with it: otherwise a detached-and-forgotten id
     // would still count as tracked, and its next run would land on a session that no longer exists.
     this.gitFetchScheduler.remove(sessionId);
     const pinned = session?.pinned === true || this.store.getSession(sessionId)?.pinned === true;
@@ -3819,9 +3819,9 @@ export class WebServer extends EventEmitter {
               // below, a future `expiresAt` re-arms the timer once the pane is attached.
               lastRealPromptAt: savedState?.lastRealPromptAt,
               keepWarmEnabled: savedState?.keepWarmEnabled,
-              // The case's own fetch switch and interval, carried over rather than reset to the app default:
+              // The session's own fetch switch and interval, carried over rather than reset to the app default:
               // the choice is the user's and outlives the run that made it. The scheduler reads them fresh
-              // on its next tick, so a restored case is back on its own schedule without a restart.
+              // on its next tick, so a restored session is back on its own schedule without a restart.
               gitFetchEnabled: savedState?.gitFetchEnabled,
               gitFetchIntervalSeconds: savedState?.gitFetchIntervalSeconds,
               // Conversations this pane provably owned, oldest first. Its tail is

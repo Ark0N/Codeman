@@ -75,7 +75,7 @@ export const ITERATION_PAUSE_MS = 2000;
 // ============================================================================
 
 /**
- * How often the fetch scheduler (src/git-fetch-scheduler.ts) wakes to check which cases are due (ms). A
+ * How often the fetch scheduler (src/git-fetch-scheduler.ts) wakes to check which sessions are due (ms). A
  * run lands within one tick of the interval the user set, because the interval is timed from the start of
  * a run; a tick is a settings read and a due check, not a spawn, so a quiet install costs nothing.
  */

@@ -538,7 +538,7 @@
       '单条 git 命令可运行的秒数，超时后该仓库会被报告为无法读取（5 到 120，默认 30）。仓库位于较慢的网络共享上时请调高此值。',
     'Git fetch on an interval': 'Git 定时拉取',
     'Runs `git fetch` for the repositories the Git window lists on a timer, so the "behind" number is current without a click. Off by default: this is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked), so nothing runs until you turn it on. A session can override both the switch and the interval in Session Options → Git.':
-      '按间隔为 Git 窗口列出的仓库运行拉取，这样“落后”的数字无需点击就是最新的。默认关闭：这是 {name} 运行的唯一会写入的 git 命令，也是唯一会按间隔自行运行的命令（克隆和工作树管理也会写入，但只在您当时要求时才运行），所以在您开启之前不会有任何运行。会话可以在“会话选项 → Git”中同时覆盖开关和间隔。',
+      '按间隔为 Git 窗口列出的仓库运行拉取，这样“落后”的数字无需点击就是最新的。默认关闭：这是 Git 窗口运行的唯一会写入的 git 命令，也是 {name} 唯一会按间隔自行运行的命令（克隆和工作树管理也会写入，但只在您当时要求时才运行），所以在您开启之前不会有任何运行。会话可以在“会话选项 → Git”中同时覆盖开关和间隔。',
     'Git fetch: how often': 'Git 定时拉取：多久一次',
     'Seconds between runs for a session that has no override of its own (30 to 3600, default 300). Only a session that is on — here, or in Session Options → Git — is fetched, and sessions sharing one folder are fetched by one run.':
       '没有自己覆盖设置的会话，两次运行之间的秒数（30 到 3600，默认 300）。只有已开启的会话——这里，或在“会话选项 → Git”——才会被拉取，共用一个文件夹的会话由一次运行拉取。',

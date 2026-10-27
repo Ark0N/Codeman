@@ -35,9 +35,9 @@
  *     login fails fast instead of hanging the request on an invisible username prompt. Codeman collects
  *     no credentials; a repository the user's own git is already signed in to works because that is the
  *     user's existing setup, so unlike a clone no credential helper is disabled here. That BatchMode ssh is
- *     a default, never an override: `fetchEnvFor` keeps whatever the repository's `core.sshCommand` or the
- *     user's own `GIT_SSH_COMMAND` already says, because on a machine with several ssh setups that choice
- *     is usually the one that works. ⚠️ The default still leaves a record: `StrictHostKeyChecking=accept-new`
+ *     a default, never an override: `fetchEnvFor` keeps whatever the repository's `core.sshCommand`, the
+ *     user's own `GIT_SSH_COMMAND` or a `GIT_SSH` already says, because on a machine with several ssh setups
+ *     that choice is usually the one that works. ⚠️ The default still leaves a record: `StrictHostKeyChecking=accept-new`
  *     writes an unknown host key into `~/.ssh/known_hosts` without asking — BatchMode stops a prompt, not a
  *     write.
  *   - The timeout kills the PROCESS GROUP, not just the `git` parent. A fetch over http spawns
@@ -180,15 +180,18 @@ export function describeFetchFailure(err: unknown): FetchFailure {
  * `gitNonInteractiveEnv` supplies the BatchMode default, and the default is only a default: git reads
  * `GIT_SSH_COMMAND` from the environment ahead of the repository's `core.sshCommand`, so setting it would
  * override a repository that already chose its own ssh — an alternative host, an identity file, a jump box —
- * and break a setup that works today. That is the only case where this module makes an ssh choice on the
- * user's behalf, so it is the whole decision here: the caller supplies the value it read, and this decides
- * between the user's environment and the repository's own answer.
+ * and break a setup that works today. The server's own `GIT_SSH` is the same kind of answer: git reads it
+ * after both of those (`GIT_SSH_COMMAND`, then `core.sshCommand`, then `GIT_SSH`), so a written default would
+ * hide it too. That is the only case where this module makes an ssh choice on the user's behalf, so it is the
+ * whole decision here: the caller supplies the value it read, and this decides between the user's
+ * environment and the repository's own answer.
  */
 export function fetchEnvFor(base: NodeJS.ProcessEnv, repoSshCommand: string | null): NodeJS.ProcessEnv {
   const env = gitNonInteractiveEnv(base);
   // `gitNonInteractiveEnv` only writes the default when the environment had nothing, so this is exactly the
-  // case where it was a choice rather than a pass-through — and the repository's own answer wins over it.
-  if (!base.GIT_SSH_COMMAND && repoSshCommand) delete env.GIT_SSH_COMMAND;
+  // case where it was a choice rather than a pass-through, and the repository's own answer, or a `GIT_SSH` in
+  // the environment, wins over it.
+  if (!base.GIT_SSH_COMMAND && (repoSshCommand || base.GIT_SSH)) delete env.GIT_SSH_COMMAND;
   return env;
 }
 
@@ -231,10 +234,23 @@ export async function readRepoSshCommand(cwd: string, timeoutMs: number): Promis
  * spawn failure (`spawn git ENOENT` → GIT_MISSING), `killed` and `code` for the timeout. A non-zero exit
  * rejects the way `execFile` would — `code` is then the exit code — because resolving it would report a real
  * failure as a clean run with an empty reason.
+ *
+ * `timeoutMs` bounds the `core.sshCommand` read and the fetch TOGETHER: the spawn is armed with what the read
+ * left, so a `git` that never answers costs one timeout, not two. A read that used the whole bound answers
+ * as a timeout without starting the fetch.
  */
 export const runFetch: GitRunner = async (cwd, args, opts) => {
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS;
+  const startedAt = Date.now();
   const env = fetchEnvFor(process.env, await readRepoSshCommand(cwd, timeoutMs));
+  const remainingMs = timeoutMs - (Date.now() - startedAt);
+  if (remainingMs <= 0) {
+    throw Object.assign(new Error(`Command failed: git ${args.join(' ')}`), {
+      stderr: '',
+      killed: true,
+      code: 'ETIMEDOUT',
+    });
+  }
 
   return new Promise<string>((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
@@ -289,7 +305,7 @@ export const runFetch: GitRunner = async (cwd, args, opts) => {
       killTree('SIGTERM');
       killTimer = setTimeout(() => killTree('SIGKILL'), FETCH_KILL_ESCALATION_MS);
       fail();
-    }, timeoutMs);
+    }, remainingMs);
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdoutBytes += chunk.length;

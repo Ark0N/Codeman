@@ -246,6 +246,13 @@ describe('fetchEnvFor', () => {
     const env = fetchEnvFor({ ...BASE, GIT_SSH_COMMAND: 'ssh -i /home/t/personal' }, 'ssh -i /repo/key');
     expect(env.GIT_SSH_COMMAND).toBe('ssh -i /home/t/personal');
   });
+
+  it("leaves a GIT_SSH in the server's environment to git, which reads it last and would never see it under a written default", () => {
+    const env = fetchEnvFor({ ...BASE, GIT_SSH: '/home/t/bin/work-ssh' }, null);
+    expect(env.GIT_SSH_COMMAND).toBeUndefined();
+    expect(env.GIT_SSH).toBe('/home/t/bin/work-ssh');
+    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+  });
 });
 
 // ─── Real git, real local repository ─────────────────────────────────────────
@@ -555,6 +562,42 @@ describe.skipIf(!gitPresent)('runFetch (the whole tree, not just the git parent)
     expect(e.killed).toBe(false);
     expect(e.stderr).toMatch(/does not appear to be a git repository/);
     expect(describeFetchFailure(err).code).toBe('NOT_FOUND');
+  });
+});
+
+// ─── One bound for the config read and the fetch ─────────────────────────────
+
+describe.skipIf(process.platform === 'win32')('runFetch (one bound for the config read and the fetch)', () => {
+  it('answers at the timeout when git never answers, not at twice it, because the core.sshCommand read spends part of the bound', async () => {
+    // A `git` that never answers anything, first on PATH, so the read ahead of the fetch hangs exactly as long as
+    // the fetch would. Both spawns take PATH from process.env at call time. It records its arguments, so the test
+    // can tell which of the two it was asked to run.
+    const bin = join(dir, 'bin');
+    const calls = join(dir, 'calls');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'git'), `#!/bin/sh\necho "$*" >> '${calls}'\nexec sleep 30\n`, { mode: 0o755 });
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${bin}:${savedPath ?? ''}`;
+    try {
+      const started = Date.now();
+      const err = (await runFetch(dir, buildFetchArgs(), { timeoutMs: 1_000 }).catch((e) => e)) as {
+        code?: unknown;
+        killed?: boolean;
+      };
+      const elapsed = Date.now() - started;
+
+      expect(err.code).toBe('ETIMEDOUT');
+      expect(err.killed).toBe(true);
+      expect(describeFetchFailure(err).code).toBe('TIMEOUT');
+      // One bound, not one per spawn: the read used all of it, so the fetch got nothing and was not started
+      // (2019 ms here before the fix, when the fetch was armed with a fresh timeout of its own).
+      expect(elapsed).toBeGreaterThanOrEqual(950);
+      expect(elapsed).toBeLessThan(1_600);
+      expect(readFileSync(calls, 'utf8').trim().split('\n')).toEqual(['config --get core.sshCommand']);
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+    }
   });
 });
 

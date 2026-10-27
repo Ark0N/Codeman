@@ -615,9 +615,9 @@ export class Session extends EventEmitter {
   private _keepWarmEnabled: boolean | undefined;
   /** Last status the keep-warm service published for this session; ephemeral. */
   private _keepWarm: KeepWarmStatus | null = null;
-  /** Git fetch on an interval for this case; undefined = follow the app-wide default. Persisted. */
+  /** Git fetch on an interval for this session; undefined = follow the app-wide default. Persisted. */
   private _gitFetchEnabled: boolean | undefined;
-  /** Seconds between this case's fetch runs; undefined = follow the app-wide default. Persisted. */
+  /** Seconds between this session's fetch runs; undefined = follow the app-wide default. Persisted. */
   private _gitFetchIntervalSeconds: number | undefined;
   /** Last status the fetch scheduler published for this session; ephemeral. */
   private _gitFetch: GitFetchStatus | null = null;
@@ -933,9 +933,9 @@ export class Session extends EventEmitter {
       lastRealPromptAt?: number;
       /** Restored prompt-cache keep-warm choice (see `keepWarmEnabled`). */
       keepWarmEnabled?: boolean;
-      /** Restored Git fetch override for this case (see `gitFetchEnabled`). */
+      /** Restored Git fetch override for this session (see `gitFetchEnabled`). */
       gitFetchEnabled?: boolean;
-      /** Restored Git fetch interval for this case (see `gitFetchIntervalSeconds`). */
+      /** Restored Git fetch interval for this session (see `gitFetchIntervalSeconds`). */
       gitFetchIntervalSeconds?: number;
       /** Restored conversation chain, oldest first (see `claudeSessionChain`). */
       claudeSessionChain?: string[];
@@ -1594,18 +1594,18 @@ export class Session extends EventEmitter {
     return changed;
   }
 
-  /** Git fetch override for this case; undefined means the app-wide setting applies. */
+  /** Git fetch override for this session; undefined means the app-wide setting applies. */
   get gitFetchEnabled(): boolean | undefined {
     return this._gitFetchEnabled;
   }
 
-  /** Interval override for this case; undefined means the app-wide setting applies. */
+  /** Interval override for this session; undefined means the app-wide setting applies. */
   get gitFetchIntervalSeconds(): number | undefined {
     return this._gitFetchIntervalSeconds;
   }
 
   /**
-   * Set the case's override. The Session Options rows save on their own, so a caller passes what it has
+   * Set the session's override. The Session Options rows save on their own, so a caller passes what it has
    * and leaves the other half as it was; `undefined` on either means the app-wide setting applies again.
    */
   setGitFetchSettings(enabled: boolean | undefined, intervalSeconds: number | undefined): void {

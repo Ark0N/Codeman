@@ -7151,33 +7151,6 @@ html[data-skin="og"] .welcome-primary:hover {
   background: var(--bg-hover);
 }
 
-/* A Fetch button cannot be clicked twice while its fetch is running, and is not offered for a session
-   there is nothing to fetch for (no repository, remote or Docker). */
-.btn-icon-sm[disabled] {
-  color: var(--text-dim);
-  opacity: 0.45;
-  cursor: default;
-}
-
-.btn-icon-sm[disabled]:hover {
-  background: none;
-}
-
-.btn-icon-sm[aria-busy='true'] {
-  color: var(--text);
-  animation: btn-icon-busy 1.1s ease-in-out infinite;
-}
-
-@keyframes btn-icon-busy {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 0.9;
-  }
-}
-
 .settings-section {
   margin-bottom: 1.25rem;
   padding-bottom: 1rem;
@@ -22173,6 +22146,42 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
 .git-status-actions {
   display: flex;
   gap: 0.25rem;
+}
+
+/* A Fetch button cannot be clicked twice while its fetch is running, and is not offered for a session
+   there is nothing to fetch for (no repository, remote or Docker). Scoped to the Git panel's header: the
+   File Viewer's Back/Forward and the folder grid's Up button are .btn-icon-sm too, and keep their own look. */
+.git-status-actions .btn-icon-sm[disabled] {
+  color: var(--text-dim);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.git-status-actions .btn-icon-sm[disabled]:hover {
+  background: none;
+}
+
+.git-status-actions .btn-icon-sm[aria-busy='true'] {
+  color: var(--text);
+  animation: btn-icon-busy 1.1s ease-in-out infinite;
+}
+
+@keyframes btn-icon-busy {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* No pulse under reduced motion: the button holds the pulse's brighter step, still dimmer than at rest. */
+@media (prefers-reduced-motion: reduce) {
+  .git-status-actions .btn-icon-sm[aria-busy='true'] {
+    animation: none;
+    opacity: 0.7;
+  }
 }
 
 .git-status-body {
