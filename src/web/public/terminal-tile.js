@@ -646,9 +646,10 @@
     // Recovered text goes straight to _onTerminalData(), never through xterm's
     // onData, so it is not counted as xterm's own (see connect()'s onData).
     // Created after terminal.open(): xterm's capture `input` listener on the
-    // textarea is registered there, and must run before the controller's. No
-    // device or mode gate, as in the primary pane: with a hardware keyboard it
-    // costs one assignment per keydown. A failure leaves xterm's own handling.
+    // textarea is registered there, and must run before the controller's.
+    // create() returns null on a fine pointer (#716): the recovery is for soft
+    // keyboards, and on a desktop it delivers a dead-key character twice.
+    // A failure leaves xterm's own handling.
     _createKeyCode229Recovery() {
       this._destroyKeyCode229Recovery();
       if (!this.terminal) return;

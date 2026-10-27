@@ -40,6 +40,29 @@ describe('orphaned terminal input recovery wiring', () => {
     baseUrl = `http://localhost:${server.boundPort}`;
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage();
+    // Headless Chromium is a fine pointer, and create() then returns null (#716).
+    // The recovery cases below are the soft-keyboard path, so this page reports
+    // a coarse pointer. Other media queries stay native.
+    await page.addInitScript(() => {
+      const native = window.matchMedia.bind(window);
+      window.matchMedia = (query: string) => {
+        if (query === '(pointer: coarse)') {
+          return {
+            matches: true,
+            media: query,
+            onchange: null,
+            addListener() {},
+            removeListener() {},
+            addEventListener() {},
+            removeEventListener() {},
+            dispatchEvent() {
+              return false;
+            },
+          };
+        }
+        return native(query);
+      };
+    });
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
     await page.waitForFunction(() => (window as any).app?._keyCode229Recovery, null, { timeout: 30000 });
@@ -49,6 +72,18 @@ describe('orphaned terminal input recovery wiring', () => {
     if (browser) await browser.close();
     if (server) await server.stop();
   }, 60000);
+
+  it('does not install recovery when the primary pointer is fine', async () => {
+    const fine = await browser.newPage();
+    try {
+      await fine.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+      await fine.waitForFunction(() => (window as any).app?.terminal?.textarea, null, { timeout: 30000 });
+      const installed = await fine.evaluate(() => (window as any).app?._keyCode229Recovery ?? null);
+      expect(installed).toBeNull();
+    } finally {
+      await fine.close();
+    }
+  });
 
   /**
    * Drive one keystroke through the real textarea and report what reached the

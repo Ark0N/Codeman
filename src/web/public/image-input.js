@@ -244,20 +244,64 @@ Object.assign(CodemanApp.prototype, {
 
       if (imageFiles.length > 0) {
         self._uploadAndInsertImages(imageFiles, { sessionId: sessionId });
-      } else {
-        // No image -- route text through xterm's paste() so bracketed-paste
-        // markers (CSI 200~ ... CSI 201~) survive when the inner application
-        // has enabled bracketed-paste mode (Claude Code does). Sending text
-        // via raw sendInput() strips those markers and makes pasted input
-        // indistinguishable from typed input, weakening the CLI's
-        // prompt-injection defenses.
-        if (text && terminal) terminal.paste(text);
+      } else if (text) {
+        // No image. xterm's paste() emits CSI 200~/201~ only while its DECSET
+        // 2004 mirror is on, and a terminal replay clears that mirror, so the
+        // markers never arrive and a copied newline submits (#716). Build the
+        // frame here, the same bytes keyboard-accessory.js sends, and deliver
+        // it on the session input path. Do not useMux: the mux fallback strips
+        // every \r, which is the line separator inside the frame.
+        self._deliverBracketedPaste(sessionId, text);
       }
     });
 
     // Trigger the browser's native paste via execCommand
     // (this fires the paste event on our focused trap element)
     document.execCommand('paste');
+  },
+
+  /**
+   * Plain-text Ctrl+V as one bracketed paste on the session-bound input path.
+   * Mirrors keyboard-accessory.js `_sendBracketedPaste`: drop nested 200/201
+   * markers (a clipboard carrying ESC[201~ would end the bracket early), map
+   * newlines to CR (what xterm's prepareTextForTerminal did), wrap with
+   * CSI 200~ / CSI 201~. The composer's length cap is not applied here;
+   * `_sendInputAsync` already splits a large paste and refuses one past its
+   * own ceiling.
+   *
+   * When the local-echo overlay owns this session's prompt, flush its unsent
+   * text first and delay the frame. That is the onData bracketed-paste branch
+   * (#219): Codex drops bytes that share a PTY read with a bracketed paste,
+   * and the typed prefix has to land ahead of the block.
+   */
+  _deliverBracketedPaste(sessionId, text) {
+    if (!sessionId || typeof text !== 'string' || text === '' || typeof this._sendInputAsync !== 'function') return;
+    try {
+      this._predictiveEcho?.clearPredictions?.();
+    } catch {
+      // Predictions are visual only.
+    }
+    const pasteText = text.replace(/\x1b\[20[01]~/g, '').replace(/\r?\n/g, '\r');
+    const framed = `\x1b[200~${pasteText}\x1b[201~`;
+    const echoOwns =
+      this.activeSessionId === sessionId &&
+      this._localEchoEnabled &&
+      this._localEchoOverlay &&
+      !this._echoPassthroughSessions?.has?.(sessionId) &&
+      !this._tilesOwnTerminal?.() &&
+      typeof this._flushLocalEchoPending === 'function';
+    if (echoOwns) {
+      const hadPending = !!this._localEchoOverlay.pendingText;
+      this._flushLocalEchoPending();
+      if (hadPending) {
+        const prefix = this._pendingInput || '';
+        this._pendingInput = '';
+        if (prefix) this._sendInputAsync(sessionId, prefix);
+        setTimeout(() => this._sendInputAsync(sessionId, framed), 80);
+        return;
+      }
+    }
+    this._sendInputAsync(sessionId, framed);
   },
 
   /** What a pick or a paste may upload: 'image', 'video' for the camera roll's

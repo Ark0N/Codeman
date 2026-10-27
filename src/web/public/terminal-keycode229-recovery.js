@@ -7,6 +7,13 @@
  * that guard, so xterm returns without emitting and the committed character is
  * silently dropped.
  *
+ * ⚠ Desktop fine pointers must not run this (#716). xterm already forwards the
+ * composed character, and a second forward doubles a dead-key backtick.
+ * `create()` returns null unless `matchMedia('(pointer: coarse)')` matches, so
+ * soft keyboards keep the recovery and a desktop does not attach it. A missing
+ * or throwing `matchMedia` stands down: a missed recovery is acceptable, a
+ * duplicated keystroke is not.
+ *
  * ⚠ The gap is NARROWER than "keyCode 229", and assuming otherwise produces a
  * controller that looks useful while doing nothing. For a keydown that really
  * does report `keyCode: 229`, xterm ALREADY self-rescues: `CompositionHelper
@@ -64,7 +71,20 @@
     return { deleted: a.length - prefix, inserted: b.slice(prefix).join('') };
   }
 
+  /**
+   * Touch / coarse pointer only. See the file header: on a fine pointer this
+   * forward runs on top of xterm's own composition handling.
+   */
+  function isCoarsePointer() {
+    try {
+      return global.matchMedia?.('(pointer: coarse)')?.matches === true;
+    } catch {
+      return false;
+    }
+  }
+
   function create(options) {
+    if (!isCoarsePointer()) return null;
     const textarea = options?.textarea;
     const emitRecovered = options?.emitRecovered;
     if (!textarea?.addEventListener || !textarea?.removeEventListener || typeof emitRecovered !== 'function') {

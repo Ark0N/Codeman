@@ -48,6 +48,17 @@ function loadContext() {
     // would run against no controller at all.
     setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
     clearTimeout: (id: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(id),
+    // The real controller attaches only for a coarse pointer (#716). Tile tests
+    // that exercise soft-keyboard recovery opt in; a test sets this false to
+    // prove a desktop fine pointer installs nothing.
+    __coarsePointer: true,
+    matchMedia(query: string) {
+      return {
+        matches: query === '(pointer: coarse)' && windowStub.__coarsePointer !== false,
+        addEventListener() {},
+        removeEventListener() {},
+      };
+    },
   };
   const context = vm.createContext({
     console: { ...console, log: vi.fn(), debug: vi.fn() },
@@ -151,6 +162,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  windowStub.__coarsePointer = true;
   FakeTerminal.coreFactory = null;
   FakeFit.proposed = { cols: 80, rows: 24 };
   FakeSocket.instances = [];
@@ -1183,6 +1195,13 @@ function lineOf(frames: Array<{ d?: string }>) {
 type ControllerTile = Tile & { _keyCode229Recovery: unknown };
 
 describe("TerminalTile wires the primary pane's soft-keyboard controller (#441, #541)", () => {
+  it('does not install the controller on a fine pointer', async () => {
+    windowStub.__coarsePointer = false;
+    const { tile, term } = await connectTile(makeApp());
+    expect((tile as ControllerTile)._keyCode229Recovery).toBeNull();
+    expect(term.textareaListeners).toEqual([]);
+  });
+
   it("installs on THIS tile's composition helper and textarea, and destroy() restores xterm's own", async () => {
     const helpers = withCompositionHelpers();
     const { tile, term } = await connectTile(makeApp());

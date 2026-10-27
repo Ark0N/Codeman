@@ -33,11 +33,20 @@ interface FakeTrap {
   addEventListener: (ev: string, fn: TrapListener) => void;
 }
 
+interface SentInput {
+  sessionId: string;
+  data: string;
+}
+
 interface Harness {
   /** Fire a paste event on the trap the last _handleImagePaste() call created. */
   firePaste: (payload: { text?: string; images?: string[] }) => void;
   /** Text handed to xterm's terminal.paste(), one entry per call. */
   pastedText: string[];
+  /** Frames handed to _sendInputAsync(), in order. */
+  sentInputs: SentInput[];
+  /** How many times predictive-echo predictions were cleared. */
+  predictionsCleared: () => number;
   /** Image batches handed to _uploadAndInsertImages(), one entry per call. */
   uploadedBatches: Array<Array<{ type: string }>>;
   /** Messages handed to showToast(), one entry per call. */
@@ -47,7 +56,14 @@ interface Harness {
   runTimers: () => void;
 }
 
-function loadPasteHarness(): Harness {
+interface PasteHarnessOptions {
+  /** Session the paste trap is aimed at. Defaults to the active session. */
+  sessionId?: string;
+  /** Unsent overlay text. Enables the local-echo flush path when set. */
+  localEchoPending?: string;
+}
+
+function loadPasteHarness(options: PasteHarnessOptions = {}): Harness {
   const traps: FakeTrap[] = [];
   const listeners: TrapListener[] = [];
   const attached = new Set<FakeTrap>();
@@ -99,20 +115,51 @@ function loadPasteHarness(): Harness {
   const CodemanApp = vm.runInContext('CodemanApp', context) as new () => Record<string, unknown>;
 
   const pastedText: string[] = [];
+  const sentInputs: SentInput[] = [];
   const uploadedBatches: Array<Array<{ type: string }>> = [];
+  let predictionsCleared = 0;
   const app = new CodemanApp();
   app.activeSessionId = 'session-1';
+  // Replay leaves xterm's DECSET 2004 mirror off. Text must still go out bracketed,
+  // and must not ask terminal.paste() to consult that mirror (#716).
   app.terminal = {
     paste: (text: string) => pastedText.push(text),
     focus: () => {},
+    modes: { bracketedPasteMode: false },
   };
+  app._sendInputAsync = (sessionId: string, data: string) => {
+    sentInputs.push({ sessionId, data });
+  };
+  app._predictiveEcho = { clearPredictions: () => { predictionsCleared += 1; } };
   app._uploadAndInsertImages = (files: Array<{ type: string }>) => {
     uploadedBatches.push(Array.from(files));
   };
+  if (options.localEchoPending !== undefined) {
+    app._localEchoEnabled = true;
+    app._pendingInput = '';
+    app._localEchoOverlay = {
+      pendingText: options.localEchoPending,
+      clear() {
+        this.pendingText = '';
+      },
+      suppressBufferDetection() {},
+    };
+    app._flushedOffsets = new Map();
+    app._flushedTexts = new Map();
+    app._flushLocalEchoPending = function (this: Record<string, any>) {
+      const pending = this._localEchoOverlay?.pendingText || '';
+      this._localEchoOverlay.clear();
+      this._localEchoOverlay.suppressBufferDetection();
+      this._flushedOffsets?.delete(this.activeSessionId);
+      this._flushedTexts?.delete(this.activeSessionId);
+      if (pending) this._pendingInput += pending;
+    };
+  }
   const toasts: string[] = [];
   app.showToast = (message: string) => toasts.push(message);
 
-  (app._handleImagePaste as () => void).call(app);
+  const target = options.sessionId ? { terminal: app.terminal, sessionId: options.sessionId } : undefined;
+  (app._handleImagePaste as (t?: object) => void).call(app, target);
 
   return {
     firePaste({ text = '', images = [] }) {
@@ -128,6 +175,8 @@ function loadPasteHarness(): Harness {
       for (const fn of listeners) fn(event);
     },
     pastedText,
+    sentInputs,
+    predictionsCleared: () => predictionsCleared,
     uploadedBatches,
     toasts,
     attachedTraps: () => attached.size,
@@ -154,12 +203,50 @@ function loadImageInputApp() {
 }
 
 describe('Ctrl+V paste trap', () => {
-  it('sends clipboard text to the terminal once for a single paste event', () => {
+  it('sends clipboard text once as a bracketed paste, not through xterm paste()', () => {
     const h = loadPasteHarness();
 
     h.firePaste({ text: 'hello world' });
 
-    expect(h.pastedText).toEqual(['hello world']);
+    // terminal.paste() would drop the markers: the harness mirror is off, which
+    // is what a replay leaves behind.
+    expect(h.pastedText).toEqual([]);
+    expect(h.sentInputs).toEqual([{ sessionId: 'session-1', data: '\x1b[200~hello world\x1b[201~' }]);
+    expect(h.predictionsCleared()).toBe(1);
+  });
+
+  it('brackets a multi-line paste and strips nested paste markers', () => {
+    const h = loadPasteHarness();
+
+    h.firePaste({ text: 'line one\nline two\r\n\x1b[200~nested\x1b[201~\n' });
+
+    expect(h.pastedText).toEqual([]);
+    expect(h.sentInputs).toEqual([
+      { sessionId: 'session-1', data: '\x1b[200~line one\rline two\rnested\r\x1b[201~' },
+    ]);
+  });
+
+  it('addresses the bracketed paste to the pane that received Ctrl+V', () => {
+    const h = loadPasteHarness({ sessionId: 'pane-b' });
+
+    h.firePaste({ text: 'into pane b' });
+
+    expect(h.sentInputs).toEqual([{ sessionId: 'pane-b', data: '\x1b[200~into pane b\x1b[201~' }]);
+    expect(h.pastedText).toEqual([]);
+  });
+
+  it('flushes unsent local-echo text ahead of the bracketed paste', () => {
+    const h = loadPasteHarness({ localEchoPending: 'hi' });
+
+    h.firePaste({ text: 'world\n' });
+
+    expect(h.sentInputs).toEqual([{ sessionId: 'session-1', data: 'hi' }]);
+    h.runTimers();
+    expect(h.sentInputs).toEqual([
+      { sessionId: 'session-1', data: 'hi' },
+      { sessionId: 'session-1', data: '\x1b[200~world\r\x1b[201~' },
+    ]);
+    expect(h.pastedText).toEqual([]);
   });
 
   it('ignores a second paste event for the same Ctrl+V', () => {
@@ -170,7 +257,8 @@ describe('Ctrl+V paste trap', () => {
     h.firePaste({ text: 'hello world' });
     h.firePaste({ text: 'hello world' });
 
-    expect(h.pastedText).toEqual(['hello world']);
+    expect(h.sentInputs).toEqual([{ sessionId: 'session-1', data: '\x1b[200~hello world\x1b[201~' }]);
+    expect(h.pastedText).toEqual([]);
   });
 
   it('uploads a pasted image once when the trap sees two paste events', () => {
@@ -182,6 +270,7 @@ describe('Ctrl+V paste trap', () => {
     expect(h.uploadedBatches).toHaveLength(1);
     expect(h.uploadedBatches[0]).toEqual([{ type: 'image/png' }]);
     expect(h.pastedText).toEqual([]);
+    expect(h.sentInputs).toEqual([]);
   });
 
   it('a paste mixing an image with a refused file uploads the image and says what it skipped', () => {
@@ -199,7 +288,8 @@ describe('Ctrl+V paste trap', () => {
     // Copying from a document can carry both: the text is what the user gets.
     h.firePaste({ text: 'echo hi', images: ['application/x-sh'] });
 
-    expect(h.pastedText).toEqual(['echo hi']);
+    expect(h.sentInputs).toEqual([{ sessionId: 'session-1', data: '\x1b[200~echo hi\x1b[201~' }]);
+    expect(h.pastedText).toEqual([]);
     expect(h.uploadedBatches).toEqual([]);
     expect(h.toasts).toEqual([]);
   });
