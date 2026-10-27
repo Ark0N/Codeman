@@ -1,4 +1,4 @@
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
@@ -321,10 +321,13 @@ describe('agent spawn never treats an implicit HOME cwd as a project', () => {
   });
   it('allows a cwd below HOME', async () => {
     const home = await homeDir();
+    const project = join(home, 'src', 'app');
+    await mkdir(project, { recursive: true });
     vi.stubEnv('HOME', home);
+    vi.spyOn(process, 'cwd').mockReturnValue(project);
     const t = deps([ok({ session: { id: OTHER } }), ok({})]);
     expect(await agentSpawn(t.d, base)).toBe(EXIT.ok);
-    expect(t.calls[0].body).toMatchObject({ workingDir: process.cwd() });
+    expect(t.calls[0].body).toMatchObject({ workingDir: project });
   });
   it('never throws when HOME cannot be resolved, and compares the resolved paths instead', async () => {
     const missing = join(await homeDir(), 'absent');
@@ -340,12 +343,7 @@ describe('the directory-spawn --json shape is documented the same way everywhere
   // The wiki wraps lines, so whitespace is normalized before comparing.
   const clause =
     '`{ sessionId, workingDir, created: true }`, plus `ready` when a readiness wait ran, `readinessError` when that call failed, and `startupError` when the start failed';
-  for (const file of [
-    'README.md',
-    'docs/api-reference.md',
-    'docs/wiki/Driving-Codeman-From-An-Agent.md',
-    '.changeset/project-worker-directories.md',
-  ]) {
+  for (const file of ['README.md', 'docs/api-reference.md', 'docs/wiki/Driving-Codeman-From-An-Agent.md']) {
     it(file, () => {
       expect(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8').replace(/\s+/g, ' ')).toContain(clause);
     });

@@ -13,7 +13,8 @@
  * with tests, so a `codex`/`opencode`/`pi` agent — which never gets the claude-only
  * preamble — has the same verbs from one line in its AGENTS.md.
  *
- * Invariants (each asserted in `test/cli-agent.test.ts`):
+ * Invariants (each asserted in `test/cli-agent.test.ts` or
+ * `test/cli-agent-project-spawn.test.ts`):
  * 1. Refuses outside a Codeman session (`CODEMAN_MUX=1` + `CODEMAN_API_URL`); it
  *    never guesses a URL — a server you are not part of is not yours to drive.
  * 2. `send` transmits printable text plus `\r` only. ESC exists solely as
@@ -25,6 +26,12 @@
  * 4. An id shorter than 8 characters refuses (exit 4) before any request, on every
  *    verb. `9` would resolve to whichever session is alone with that first
  *    character, the user's own interactive tab included.
+ * 5. `spawn` without a case starts the worker in an existing directory (cwd, or
+ *    `--working-dir`) via `POST sessions` + `interactive|shell`, without the
+ *    `X-Codeman-Agent-Origin` header, so no agent-case marker is written. It refuses
+ *    (exit 4, before any request) an empty `--working-dir` and a bare spawn from a
+ *    HOME cwd: it always sends an explicit `workingDir`, so the server's skip of
+ *    workspace hooks for a request that names none cannot protect `~/.claude`.
  *
  * Commands live here as functions returning an exit code, not calling
  * `process.exit`, so the whole surface is unit-testable against a fake server.

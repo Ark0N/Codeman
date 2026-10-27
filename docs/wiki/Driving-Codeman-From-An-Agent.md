@@ -56,9 +56,10 @@ codeman agent rm "$SID"                                   # any session except t
 
 - **`spawn [case]`** uses the current directory when no case is supplied. Use
   `codeman agent spawn --working-dir /path/to/project --mode codex` for another existing
-  local directory. A case and `--working-dir` cannot be combined, and an empty case
-  name (`spawn "$CASE"` with `CASE` unset) is refused rather than read as "no case",
-  as is an empty `--working-dir` (exit 4, before any request), so it never falls back to cwd.
+  local directory. A case and `--working-dir` cannot be combined. An empty case name
+  (`spawn "$CASE"` with `CASE` unset) is never read as "no case": it goes to quick-start,
+  which refuses it (exit 1). An empty `--working-dir` is refused before any request
+  (exit 4), so it never falls back to cwd.
   A cwd that is your home directory is refused the same way, because Codeman's hooks would
   land in `~/.claude`; pass `--working-dir ~` to start a worker there on purpose.
   Explicit case names retain quick-start behavior (creating a scratch case if missing).
