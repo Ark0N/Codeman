@@ -8615,10 +8615,12 @@ class CodemanApp {
     // menu's own items are not a departure, and neither is focus going nowhere:
     // Safari never focuses a clicked button, so a press on an item blurs the
     // focused one with no relatedTarget, and closing then dropped its click
-    // (the tile count menu's rule, tile-grid.js).
+    // (the tile count menu's rule, tile-grid.js). Nor is focus landing on the
+    // trigger: a press on a focusable one (a tab's "+") focuses it before its
+    // click, and closing there let that click open the menu again.
     menu.addEventListener('focusout', (focusEvent) => {
       const to = focusEvent.relatedTarget;
-      if (!to || menu.contains(to)) return;
+      if (!to || menu.contains(to) || trigger?.contains?.(to)) return;
       if (this._tabGroupMenu === menu) this.closeTabGroupMenu();
     });
     (menu.querySelector('button.selected') || menu.querySelector('button'))?.focus();

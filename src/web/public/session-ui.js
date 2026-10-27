@@ -2025,12 +2025,14 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Re-reads the case list after a launch. The no-argument reload re-selects the
-   * server's `lastUsedCase`, which quick-start has just set to the launched case,
-   * so a launch in a case it names (a tab's "+") keeps the toolbar on its own.
+   * Re-reads the case list after a launch, keeping the toolbar on its own case.
+   * The no-argument reload would re-select the server's `lastUsedCase`, and a
+   * tab's "+" launching through quick-start sets that to the tab's case while the
+   * toolbar stays where it was, so every later launch (a worktree's, a plain Run,
+   * a group's "New session") would otherwise move the toolbar there.
    */
-  _reloadCasesAfterRun(options) {
-    this.loadQuickStartCases(options.caseName ? document.getElementById('quickStartCase').value : null);
+  _reloadCasesAfterRun() {
+    this.loadQuickStartCases(document.getElementById('quickStartCase').value || null);
   },
 
   async runClaude(options = {}) {
@@ -2142,7 +2144,7 @@ Object.assign(CodemanApp.prototype, {
         this._appendSessionLaunchStatus(ownsLaunchTerminal, `All ${tabCount} remote session(s) ready`);
         if (remoteIds[0]) {
           await this.selectSession(remoteIds[0]);
-          this._reloadCasesAfterRun(options);
+          this._reloadCasesAfterRun();
         }
         this.terminal.focus();
         return;
@@ -2221,7 +2223,7 @@ Object.assign(CodemanApp.prototype, {
       // Auto-switch to the new session using selectSession (does proper refresh)
       if (firstSessionId) {
         await this.selectSession(firstSessionId);
-        this._reloadCasesAfterRun(options);
+        this._reloadCasesAfterRun();
       }
 
       this.terminal.focus();

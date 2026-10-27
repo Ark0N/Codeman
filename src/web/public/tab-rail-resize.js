@@ -319,6 +319,7 @@ Object.assign(CodemanApp.prototype, {
     event.preventDefault();
     event.stopPropagation();
     this.closeTabRailActionMenu();
+    this.closeTabGroupMenu?.();
     const trigger = event.currentTarget;
     const menu = document.createElement('div');
     menu.className = 'tab-rail-action-menu';
@@ -327,8 +328,8 @@ Object.assign(CodemanApp.prototype, {
     const settings = this.loadAppSettingsFromStorage();
     const actions = [
       { label: 'Session options', run: () => this.openSessionOptions(sessionId) },
-      // The row's "+" (showTabNewButton on) as a menu item: its keyboard route, since
-      // Enter on the "+" itself does nothing, and its only route in the compact rail,
+      // The row's "+" (showTabNewButton on) as a menu item: a keyboard route beside
+      // Enter or Space on the "+" itself, and its only route in the compact rail,
       // which hides it. Session rows only: tiles share this menu and carry no "+".
       ...(document.documentElement.classList.contains('tabs-show-new') && trigger.closest('.session-tab')
         ? [{ label: 'New session here…', run: () => this.openTabNewSessionMenu({ currentTarget: trigger }, sessionId) }]

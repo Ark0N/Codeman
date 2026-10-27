@@ -21,7 +21,9 @@
  *    group then applies, pinned end to end in case-default-group-routes.test.ts);
  *  - the Run button's mode and the toolbar case are left as they were, also when
  *    the mode is changed while the launch is pending and when the server has
- *    moved lastUsedCase to the tab's case;
+ *    moved lastUsedCase to the tab's case, and a later launch that names no case
+ *    (a worktree tab's "+", the toolbar Run, a group's "New session") keeps the
+ *    toolbar's case too;
  *  - a failed launch reports the server's own error;
  *  - Enter and Space on the "+" open the picker (the header strip's only
  *    keyboard path) and stop there; every other key passes on to the strip; a
@@ -643,11 +645,11 @@ describe('a pick from the "+"', () => {
     expect(app._apiPut).toHaveBeenCalledWith('/api/settings', { runMode: 'claude' });
   });
 
-  it.each([
-    ['a remote Claude launch (quick-start)', 'rem', 'r'],
-    ['a local Claude launch', 'proj', 'a'],
-  ])("%s leaves the toolbar on its own case, though the server's lastUsedCase moved", async (_label, tabCase, id) => {
-    const app = makeApp();
+  /**
+   * Readies a Claude launch with the shipping case-list reload and the server's
+   * lastUsedCase at `lastUsedCase`; the returned wait resolves once that reload ran.
+   */
+  function useShippingCaseReload(app: Record<string, any>, lastUsedCase: string) {
     app._runMode = 'claude';
     app.getAdvisorSetting = () => undefined;
     app._onSessionCreated = () => {};
@@ -656,25 +658,65 @@ describe('a pick from the "+"', () => {
     for (const name of ['updateDirDisplayForCase', 'updateMobileCaseLabel', 'updateCasePickerInput'])
       app[name] = () => {};
     for (const name of ['renderCasePickerList', 'closeCasePicker', 'setupQuickStartCasePicker']) app[name] = () => {};
-    const select = document.getElementById('quickStartCase') as HTMLSelectElement;
-    const record = CASES.find((c) => c.name === tabCase)!;
     win.fetch = vi.fn(async (url: string) => {
       const json = (value: unknown) => ({ ok: true, status: 200, json: async () => value });
       // quick-start saved the launched case as lastUsedCase (session-routes.ts).
-      if (url === '/api/settings') return json({ success: true, data: { lastUsedCase: tabCase } });
+      if (url === '/api/settings') return json({ success: true, data: { lastUsedCase } });
       if (url === '/api/cases') return json({ success: true, data: CASES });
-      if (url === `/api/cases/${tabCase}`) return json({ success: true, data: record });
+      if (url.startsWith('/api/cases/')) {
+        const record = CASES.find((c) => `/api/cases/${c.name}` === url);
+        return json(record ? { success: true, data: record } : { success: false, errorCode: 'NOT_FOUND' });
+      }
       if (url === '/api/quick-start')
         return json({ success: true, data: { sessionId: 'new1', session: { id: 'new1' } } });
       if (url === '/api/sessions') return json({ success: true, data: { session: { id: 'new1', name: 'w1' } } });
       return json({ success: true, data: {} });
     });
+    return async () => {
+      await vi.waitFor(() => expect(app.selectSession).toHaveBeenCalledWith('new1'));
+      // The case list is reloaded after the launch (not awaited by it).
+      await vi.waitFor(() => expect(win.fetch.mock.calls.map((call: unknown[]) => call[0])).toContain('/api/cases'));
+      await flush();
+    };
+  }
+
+  it.each([
+    ['a remote Claude launch (quick-start)', 'rem', 'r'],
+    ['a local Claude launch', 'proj', 'a'],
+  ])("%s leaves the toolbar on its own case, though the server's lastUsedCase moved", async (_label, tabCase, id) => {
+    const app = makeApp();
+    const reloaded = useShippingCaseReload(app, tabCase);
+    const select = document.getElementById('quickStartCase') as HTMLSelectElement;
     openFrom(app, id);
     pick('Claude Code');
-    await vi.waitFor(() => expect(app.selectSession).toHaveBeenCalledWith('new1'));
-    // The case list is reloaded after the launch (not awaited by it).
-    await vi.waitFor(() => expect(win.fetch.mock.calls.map((call: unknown[]) => call[0])).toContain('/api/cases'));
-    await flush();
+    await reloaded();
+    expect(select.value).toBe('toolbar-case');
+  });
+
+  // An earlier "+" launch through quick-start left lastUsedCase on the tab's case
+  // (proj); a later Claude launch that names no case must not follow it there.
+  it.each([
+    [
+      'a "+" Claude launch from a managed worktree tab',
+      'horizontal',
+      (app: Record<string, any>) => {
+        openFrom(app, 'f');
+        pick('Claude Code');
+      },
+    ],
+    ['the toolbar Run with Claude', 'horizontal', (app: Record<string, any>) => app.run()],
+    [
+      'a group\'s "New session" with Claude',
+      'vertical',
+      (app: Record<string, any>) => app.createSessionInTabGroup('gx'),
+    ],
+  ])('%s keeps the toolbar on its own case after a "+" moved lastUsedCase', async (_label, orientation, launch) => {
+    const app = makeApp({ orientation });
+    const reloaded = useShippingCaseReload(app, 'proj');
+    const select = document.getElementById('quickStartCase') as HTMLSelectElement;
+    (document.getElementById('tabCount') as HTMLInputElement).value = '1';
+    void launch(app);
+    await reloaded();
     expect(select.value).toBe('toolbar-case');
   });
 });
