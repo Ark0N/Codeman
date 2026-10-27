@@ -2165,12 +2165,15 @@ const RELATIVE_FILE_PATH_LINK_PATTERN =
 const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LINK_PATTERN.source)[1];
 
 /**
- * Every linkable file path in `text`, in order: absolute (rooted) paths first,
- * then `~/` and relative ones, then folder paths — each only where it overlaps
- * neither an earlier one nor a URL.
+ * Every linkable file path in `text`, sorted by position. Spaced candidates
+ * reserve their whole span first, even when unlinkable; rooted, `~/`, relative
+ * and folder detectors then skip reserved spans, earlier matches and URLs.
  *
  * The one entry point for both consumers (terminal link provider, response
- * viewer), so a path form is clickable in both or in neither.
+ * viewer). The viewer carries a leading bold label into the text it passes
+ * (spacedFilePathOnLine judges it, as for the same line in the terminal) and
+ * reads a text node that follows another inline element as mid-line; paths
+ * split across inline elements are still detected per text node.
  *
  * @param {string} text
  * @returns {Array<{path: string, index: number, folder?: true}>} `index` is where `path` starts in
@@ -2189,25 +2192,145 @@ function findFilePathLinks(text) {
   while ((match = webUrlPattern.exec(value)) !== null) urls.push({ index: match.index, path: match[0] });
   const inUrl = (index, length) => urls.some((u) => index < u.index + u.path.length && u.index < index + length);
 
+  // A path with spaces is taken whole, or the span it covers links nothing
+  // (spacedFilePathOnLine). Either way no detector below may cut a fragment out of it.
+  const reserved = [];
+  let lineStart = 0;
+  for (const line of value.split('\n')) {
+    const spaced = spacedFilePathOnLine(line);
+    if (spaced && !inUrl(lineStart + spaced.index, spaced.path.length)) {
+      const index = lineStart + spaced.index;
+      reserved.push({ index, path: spaced.path });
+      if (spaced.link) found.push({ path: spaced.path, index });
+    }
+    lineStart += line.length + 1;
+  }
+  const isReserved = (index, length) =>
+    reserved.some((r) => index < r.index + r.path.length && r.index < index + length);
+
   const absolute = absoluteFilePathPattern();
   while ((match = absolute.exec(value)) !== null) {
-    if (!inUrl(match.index, match[1].length)) found.push({ path: match[1], index: match.index });
+    if (!inUrl(match.index, match[1].length) && !isReserved(match.index, match[1].length)) {
+      found.push({ path: match[1], index: match.index });
+    }
   }
   const relative = new RegExp(RELATIVE_FILE_PATH_LINK_PATTERN.source, 'g');
   while ((match = relative.exec(value)) !== null) {
     const path = match[2];
     const index = match.index + match[1].length;
-    if (overlaps(index, path.length) || inUrl(index, path.length)) continue;
+    if (overlaps(index, path.length) || inUrl(index, path.length) || isReserved(index, path.length)) continue;
     found.push({ path, index });
   }
   const folders = new RegExp(FOLDER_PATH_LINK_PATTERN.source, 'g');
   while ((match = folders.exec(value)) !== null) {
     const path = folderLinkPath(match[2]);
     const index = match.index + match[1].length;
-    if (!path || overlaps(index, path.length) || inUrl(index, path.length)) continue;
+    if (!path || overlaps(index, path.length) || inUrl(index, path.length) || isReserved(index, path.length)) continue;
     found.push({ path, index, folder: true });
   }
   return found.sort((a, b) => a.index - b.index);
+}
+
+/** Labels that explicitly identify a path, for {@link spacedFilePathOnLine}. */
+const SPACED_FILE_PATH_LABEL_PATTERN =
+  /^(?:path|files?|saved (?:to|as)|wrote|written to|output|created|location|attachment):[ \t]*$/i;
+
+/**
+ * A file path WITH SPACES on one line, or null.
+ *
+ * Every path pattern ends a path at whitespace, so `/mnt/c/OneDrive - Contoso/a.docx`
+ * linked `/mnt/c/OneDrive` plus a relative `Contoso/a.docx`, two links to the
+ * wrong targets. A space is only safe inside a path where the line itself bounds
+ * the path, so a spaced path is recognised in exactly these shapes:
+ *
+ *   /mnt/c/My Docs/report.docx              the whole line is the path
+ *   - /mnt/c/My Docs/report.docx            after a list marker (`-`, `*`, `•`, `1.`, `2)`)
+ *   Saved to: 03 Attachments/Build SIPOC Design/plan.pptx      after a path label (SPACED_FILE_PATH_LABEL_PATTERN)
+ *
+ * An absolute path may stand alone or follow a marker. Any label, before an
+ * absolute, relative or `~/` path, must be an explicit path label
+ * (SPACED_FILE_PATH_LABEL_PATTERN), with an optional marker before it: generic
+ * labels (`Error:`, `Note:`) and bare bullets also introduce prose, so a relative
+ * path needs a path label to be taken spaced. One trailing sentence mark is left
+ * out, and a leading run of `./` or `../` is not a segment. The candidate must read as ONE path:
+ * it ends on a known extension, a rooted one has a directory before its first
+ * space, no earlier word holds an extension (`a.md,`, `a.ts#L12`) or ends in `/`,
+ * and none holds a `:` and a digit (`a.ts:42`, a line suffix ends the path). Later words cannot start a new
+ * `/`, `~/`, `./` or `../` path, no earlier word ends in `:`, is an arrow or has
+ * no letter or digit (a prompt glyph such as `❯` or `$`; a bare `-` is kept), and
+ * a run of spaces (a column gap) is refused, so two paths on a line are never
+ * merged. A relative candidate whose only `/` word is its last is prose after the
+ * label (`Wrote: 120 lines to src/foo.ts`) and is left alone, which also splits
+ * `Saved to: My Docs/plan.md` as master does. An earlier word that is a lowercase
+ * connective or verb (SPACED_PATH_PROSE_WORD: `and`, `in`, `has`, `contains`, ...)
+ * or a bare `=` makes the candidate a sentence (`/tmp/out has the logs in run.log`),
+ * so a name such as `Pros and Cons.md` splits as master does. A command line is
+ * refused: an executable under `bin/`, `.bin/`, `scripts/` or `tools/` as the
+ * first word, a first word ending in `$` (a shell prompt, `/home/me/proj$ cat a.md`),
+ * or any `-x`/`--x` flag word.
+ *
+ * A candidate that is one path but not a linkable one (an unknown root such as
+ * `/etc`, a `.`/`..`/empty segment) comes back with `link: false` when its last
+ * word still holds a `/`: its span links nothing, rather than the fragment after
+ * its last space. Otherwise (`/usr/bin/env node build.js`) the line is left to
+ * the ordinary detectors.
+ *
+ * Linear: one bounded prefix match, then string scans.
+ *
+ * @param {string} line One line, no newline.
+ * @returns {{path: string, index: number, link: boolean} | null}
+ */
+function spacedFilePathOnLine(line) {
+  const text = String(line || '');
+  const prefix = /^[ \t]*((?:\d{1,3}[.)]|[-*•])[ \t]+)?((?:[A-Za-z][\w-]{0,30}(?: [\w-]{1,30}){0,3}):[ \t]+)?/.exec(text);
+  const index = prefix[0].length;
+  const path = text.slice(index).trimEnd().replace(/[.,;:!?]$/, '');
+  if (!path.includes(' ') || !path.includes('/') || path.length > 1000) return null;
+  // After a label, only a path label introduces a path; with no label, only an
+  // absolute path may stand alone. `Error: /a/b contains c.md` is prose.
+  if (prefix[2] ? !SPACED_FILE_PATH_LABEL_PATTERN.test(prefix[2]) : !path.startsWith('/')) return null;
+  if (!PATH_TOKEN_ENDS_WITH_EXTENSION.test(path)) return null;
+  // A run of spaces is a column gap (`git status`, `ls -l`), not a name.
+  if (/[\t"'`<>|;&\x00-\x1f\\]/.test(path) || path.includes('://') || path.includes('  ')) return null;
+  const words = path.split(' ');
+  // A rooted candidate must have a directory before its first space: `/usr/bin/env node a.js`
+  // or `/review the changes in src/a.ts` is a command, not a spaced path.
+  if (path.startsWith('/') && !/^\/[^/]+\//.test(words[0])) return null;
+  // A command whose executable sits under a known root (`/opt/homebrew/bin/node a.js`,
+  // `/home/me/proj/node_modules/.bin/tsc -p tsconfig.json`, `/home/me/proj/scripts/deploy prod.yml`)
+  // is not a path either.
+  if (/\/(?:\.?bin|scripts?|tools)\/[^/]+$/.test(words[0]) || words.some((word) => /^-{1,2}\w/.test(word))) {
+    return null;
+  }
+  // A shell prompt that prints its working directory in full (`/home/me/proj$ cat
+  // notes.md`; WSL's `/mnt/c/...` is outside `$HOME`) is a command line too.
+  if (words[0].endsWith('$')) return null;
+  for (const word of words.slice(0, -1)) {
+    if (word.endsWith('/') || word.endsWith(':') || /^(?:—|–|→|=>|->|<-|=)$/.test(word)) return null;
+    // A word with no letter or digit (a prompt glyph `❯` or `$`, a `✓`) is never
+    // part of a file name, apart from a bare `-` (`OneDrive - Contoso`).
+    if (word !== '-' && !/[\p{L}\p{N}]/u.test(word)) return null;
+    // `a.ts:42` (grep -n, compiler output): the path already ended at the line suffix.
+    if (/:\d/.test(word)) return null;
+    // An extension anywhere in an earlier word (`a.md,`, `a.ts#L12`) ends a path there.
+    if (PATH_TOKEN_HAS_EXTENSION.test(word)) return null;
+    // A connective or verb joins a path to prose (`/tmp/out has the logs in run.log`,
+    // `Files: src/components and utils/x.ts`), so the candidate is a sentence.
+    if (SPACED_PATH_PROSE_WORD.test(word)) return null;
+  }
+  if (words.slice(1).some((word) => /^(?:\/|~\/|\.{1,2}\/)/.test(word))) return null;
+  const rooted = SPACED_PATH_ROOT.test(path) || path.startsWith('~/');
+  const segments = path.replace(/^(?:~?\/|(?:\.\.?\/)+)/, '').split('/');
+  const link = (rooted || !path.startsWith('/')) && segments.every((seg) => seg && seg !== '.' && seg !== '..');
+  // A path label vouches that a path follows, not for the words before it: when
+  // only the last word holds a `/` (`Wrote: 120 lines to src/foo.ts`), the spaces
+  // are prose, so a relative candidate is left to the ordinary detectors.
+  const firstSlash = words.findIndex((word) => word.includes('/'));
+  if (link && firstSlash === words.length - 1 && !path.startsWith('/')) return null;
+  // Reserve an unlinkable span only when it still reads as a path to its end;
+  // otherwise leave the line to the ordinary detectors.
+  if (!link && !words[words.length - 1].includes('/')) return null;
+  return { path, index, link };
 }
 
 /**
@@ -2404,6 +2527,16 @@ const FILE_LINK_ROOT_GROUP = /^\(\\\/\(\?:([^()]*)\)/.exec(FILE_PATH_LINK_PATTER
 const PATH_TOKEN_ENDS_WITH_EXTENSION = new RegExp(`\\.${FILE_LINK_EXTENSION_GROUP}$`);
 const PATH_TOKEN_HAS_EXTENSION = new RegExp(`\\.${FILE_LINK_EXTENSION_GROUP}\\b`);
 const PATH_TOKEN_STARTS_NEW_PATH = new RegExp(`^(?:~\\/|\\/(?:${FILE_LINK_ROOT_GROUP})\\/)`);
+/**
+ * Lowercase connectives and verbs that put a spaced candidate in a sentence, for
+ * {@link spacedFilePathOnLine}. `at` stays out (`Screenshot 2026-10-24 at 10.00.00.png`)
+ * and so does `of` (`Copy of report.docx`); a name using a listed word
+ * (`Pros and Cons.md`) splits as it did before spaced paths were linked.
+ */
+const SPACED_PATH_PROSE_WORD =
+  /^(?:and|or|to|in|into|from|the|is|are|was|were|has|have|had|contains|holds|see|then|vs|via|as)$/;
+/** A rooted path's start (`/home/`, `/mnt/`, …), for {@link spacedFilePathOnLine}. */
+const SPACED_PATH_ROOT = new RegExp(`^\\/(?:${FILE_LINK_ROOT_GROUP})\\/`);
 /** A relative head that names its own location (`./a`, `../a`) is an entry of its own. */
 const PATH_TOKEN_STARTS_EXPLICIT_RELATIVE = /^\.{1,2}\//;
 /** First directory of a path, a leading `/` or `./` ignored: `src` for `src/a.ts` and `/src/a.ts`. */

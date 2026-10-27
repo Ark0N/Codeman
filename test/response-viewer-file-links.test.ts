@@ -53,6 +53,15 @@ function loadCodemanAppClass() {
   return (context as { __CodemanApp: { prototype: { _linkifyFilePaths(root: unknown): void } } }).__CodemanApp;
 }
 
+const markedContext = vm.createContext({});
+vm.runInContext(
+  readFileSync(resolve(import.meta.dirname, '../src/web/public/vendor/marked.min.js'), 'utf8'),
+  markedContext
+);
+const marked = markedContext.marked as { parse(text: string, options?: object): string };
+/** The options `_renderMarkdown` passes, so the tests see chat's real markup (a newline becomes `<br>`). */
+const renderChat = (markdown: string) => marked.parse(markdown, { breaks: true, gfm: true });
+
 const CodemanApp = loadCodemanAppClass();
 const APP_SOURCE = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
 
@@ -69,6 +78,83 @@ function linkify(html: string): HTMLElement {
 const paths = (root: HTMLElement) => Array.from(root.querySelectorAll('a.rv-path'));
 
 describe('response viewer file-path linkifier', () => {
+  it.each([
+    ['- 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx', ['Design/Build-SIPOC.pptx']],
+    ['- notes/a b/c.md', ['b/c.md']],
+    [
+      '**Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      ['03 Attachments/Build SIPOC Design/Build-SIPOC.pptx'],
+    ],
+    ['**Saved to:** ~/My Docs/plan.md', ['~/My Docs/plan.md']],
+    ['- **Path:** notes/a b/c.md', ['notes/a b/c.md']],
+    ['- /mnt/c/My Docs/a.docx', ['/mnt/c/My Docs/a.docx']],
+    ['**Saved to:** /mnt/c/My Docs/a.docx', ['/mnt/c/My Docs/a.docx']],
+    ['**Tests:** 45/45 pass in test/foo.test.ts', ['test/foo.test.ts']],
+    ['**Error:** I/O failure reading data.json', ['data.json']],
+    [
+      'Done.\n**Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      ['03 Attachments/Build SIPOC Design/Build-SIPOC.pptx'],
+    ],
+    [
+      '**Size:** 2 MB\n**Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      ['03 Attachments/Build SIPOC Design/Build-SIPOC.pptx'],
+    ],
+  ])('links rendered Markdown with consumed markers and labels: %s', (markdown, expected) => {
+    const html = renderChat(markdown);
+    const original = document.createElement('div');
+    original.innerHTML = html;
+    const root = linkify(html);
+    expect(paths(root).map((a) => a.getAttribute('data-path'))).toEqual(expected);
+    expect(root.textContent).toBe(original.textContent);
+    expect(root.querySelector('strong')?.textContent).toBe(original.querySelector('strong')?.textContent);
+  });
+
+  it.each([
+    ['**Wrote:** 120 lines to src/foo.ts', ['src/foo.ts']],
+    ['- **Output:** stored in dist/app.js', ['dist/app.js']],
+    ['**Created:** new file src/components/Button.tsx', ['src/components/Button.tsx']],
+    ['**Files:** src/components and utils/x.ts', ['utils/x.ts']],
+    ['**Wrote:** 3 files to docs/design notes/overview.md', ['notes/overview.md']],
+    ['**Path:** /home/me/proj/out contains a.md', ['/home/me/proj/out', 'a.md']],
+    ['- /tmp/out has the logs in run.log', ['/tmp/out', 'run.log']],
+  ])('keeps prose out of the link in rendered Markdown: %s', (markdown, expected) => {
+    expect(paths(linkify(renderChat(markdown))).map((a) => a.getAttribute('data-path'))).toEqual(expected);
+  });
+
+  // The terminal splits these lines (`Note:` is not a path label, and the path does
+  // not start the line), so the viewer must split them too.
+  it.each([
+    ['**Note:** /home/me/proj/out report.pdf', ['/home/me/proj/out', 'report.pdf']],
+    ['Use `--config` /home/me/proj/cfg data.json', ['/home/me/proj/cfg', 'data.json']],
+  ])('splits a spaced candidate the terminal splits: %s', (markdown, expected) => {
+    const html = renderChat(markdown);
+    const original = document.createElement('div');
+    original.innerHTML = html;
+    const root = linkify(html);
+    expect(paths(root).map((a) => a.getAttribute('data-path'))).toEqual(expected);
+    expect(root.textContent).toBe(original.textContent);
+  });
+
+  it('still links a spaced path inside inline code whole, after another inline element too', () => {
+    const root = linkify(renderChat('Use `--config` `/home/me/My Docs/cfg data.json`'));
+
+    const links = paths(root);
+    expect(links.map((a) => a.getAttribute('data-path'))).toEqual(['/home/me/My Docs/cfg data.json']);
+    expect(links[0].closest('code')).not.toBeNull();
+  });
+
+  it('does not inherit a bold label from earlier prose or another block', () => {
+    for (const markdown of [
+      'See **Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      '**Saved to:**\n\n03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+      'Done.\nSee **Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',
+    ]) {
+      expect(paths(linkify(renderChat(markdown))).map((a) => a.getAttribute('data-path'))).toEqual([
+        'Design/Build-SIPOC.pptx',
+      ]);
+    }
+  });
+
   it('links an absolute path written as prose', () => {
     const path = '/tmp/claude-1000/-home-arkon-default-claudeman/7b3fefd2/scratchpad/probe-run-native.png';
     const root = linkify(`<p>Saved the capture to ${path} — have a look.</p>`);

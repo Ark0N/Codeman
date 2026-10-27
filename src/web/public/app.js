@@ -3048,7 +3048,27 @@ class CodemanApp {
     const targets = [];
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (node.parentElement?.closest('a')) continue;
-      const found = findFilePathLinks(node.nodeValue || '');
+      // Markdown puts **Saved to:** in a separate <strong> node. Carry a bold
+      // label that starts its line into detection and let spacedFilePathOnLine()
+      // judge it, as it does the same line in the terminal (`Note:` is not a
+      // path label); never a label from another block. Chat renders with
+      // `breaks: true`, so a later line of a paragraph starts after a <br>.
+      // A text node after any other inline element (`Use <code>--config</code>
+      // /a/b c.json`) starts mid-line, so a placeholder word stands in for what
+      // precedes it. The label itself stays untouched.
+      const label = node.previousSibling;
+      let beforeLabel = label?.previousSibling;
+      if (beforeLabel?.nodeType === 3 && !beforeLabel.nodeValue.trim()) beforeLabel = beforeLabel.previousSibling;
+      const leadingLabel =
+        label?.nodeName === 'STRONG' &&
+        /^(?:P|LI)$/.test(node.parentElement?.tagName || '') &&
+        (!beforeLabel || beforeLabel.nodeName === 'BR');
+      let prefix = '';
+      if (leadingLabel) prefix = `${label.textContent} `;
+      else if (label?.nodeType === 1 && label.nodeName !== 'BR') prefix = 'x ';
+      const found = findFilePathLinks(prefix + (node.nodeValue || ''))
+        .filter((hit) => hit.index >= prefix.length)
+        .map((hit) => ({ ...hit, index: hit.index - prefix.length }));
       if (found.length > 0) targets.push([node, found]);
     }
 
