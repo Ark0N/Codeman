@@ -1228,9 +1228,9 @@ export function registerSystemRoutes(
             reply.code(403);
             return createErrorResponse(ApiErrorCode.OPERATION_FAILED, unauthenticatedTunnelRefusal(true));
           }
-          // Loud warning whenever a public tunnel is started with no password, whether
+          // Loud warning whenever a public tunnel is started with no login in front of it, whether
           // acknowledged via the tunnel opt-in or the per-request UI confirmation.
-          if (!process.env.CODEMAN_PASSWORD) {
+          if (!isLoginConfigured()) {
             console.warn(
               '⚠️  [tunnel] Starting an UNAUTHENTICATED public Cloudflare tunnel — no CODEMAN_PASSWORD set. ' +
                 'Anyone with the tunnel URL gets full terminal control (effectively RCE). ' +
