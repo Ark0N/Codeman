@@ -2859,7 +2859,8 @@ function terminalUrlContinuationExtent(buffer, row, cols, maxRows) {
  * continues from, which fills the width), a HARD continuation's indent is
  * dropped (the cell mapping keeps the cells), and the first row stops at the
  * URL's cell when other table columns follow it, so those columns never sit
- * between the URL's pieces.
+ * between the URL's pieces. Those columns still link: they are moved after the
+ * stitched rows as a segment of their own, mapped back to their cells.
  *
  * @returns Same shape as {@link terminalPathLine}; null when the row does not exist.
  */
@@ -2872,12 +2873,16 @@ function terminalLinkLine(buffer, row, cols, maxRows) {
   const endRow = Math.max(extent.endRow, base.endRow);
   const segments = [];
   let text = '';
+  let columnsAfterUrl = '';
   for (let r = startRow; r <= endRow; r++) {
     const line = buffer.getLine(r);
     if (!line) break;
     const next = r < endRow ? buffer.getLine(r + 1) : null;
     let rowText = line.translateToString(!(next && next.isWrapped)) || '';
-    if (r === extent.startRow && extent.firstRowUrlEnd != null) rowText = rowText.slice(0, extent.firstRowUrlEnd);
+    if (r === extent.startRow && extent.firstRowUrlEnd != null) {
+      columnsAfterUrl = rowText.slice(extent.firstRowUrlEnd);
+      rowText = rowText.slice(0, extent.firstRowUrlEnd);
+    }
     let colStart = 0;
     if (r > startRow && !line.isWrapped) {
       colStart = rowText.length - rowText.replace(/^\s+/, '').length;
@@ -2886,6 +2891,17 @@ function terminalLinkLine(buffer, row, cols, maxRows) {
     segments.push({ row: r, textStart: text.length, colStart });
     text += rowText;
   }
+  const lastRow = segments[segments.length - 1].row;
+  // The columns cut off the URL's first row (a path or date column of a table)
+  // are scanned after the stitched rows, so they keep their links on that row.
+  // They open with the cell gap, which keeps them apart from the URL; the one
+  // space before them belongs to the last row, so an end offset there still
+  // maps onto that row and never onto their first cell.
+  if (columnsAfterUrl.trim()) {
+    text += ' ';
+    segments.push({ row: extent.startRow, textStart: text.length, colStart: extent.firstRowUrlEnd });
+    text += columnsAfterUrl;
+  }
   const offsetToCell = (offset) => {
     for (let i = segments.length - 1; i >= 0; i--) {
       const seg = segments[i];
@@ -2893,11 +2909,13 @@ function terminalLinkLine(buffer, row, cols, maxRows) {
     }
     return { row: startRow, col: offset };
   };
+  // The cut row has two segments: the one starting at or left of the cell owns it.
   const cellToOffset = (targetRow, targetCol) => {
-    const seg = segments.find((s) => s.row === targetRow);
+    let seg = null;
+    for (const s of segments) if (s.row === targetRow && (!seg || s.colStart <= targetCol)) seg = s;
     return seg ? seg.textStart + Math.max(0, targetCol - seg.colStart) : -1;
   };
-  return { startRow, endRow: segments[segments.length - 1].row, text, offsetToCell, cellToOffset };
+  return { startRow, endRow: lastRow, text, offsetToCell, cellToOffset };
 }
 
 /**

@@ -30,7 +30,7 @@ type Link = {
 function loadPure() {
   const context = vm.createContext({ console, window: undefined });
   vm.runInContext(
-    `${CONSTANTS}\nglobalThis.__urls = findTerminalUrls; globalThis.__extent = terminalUrlContinuationExtent; globalThis.__logical = terminalLogicalLine;`,
+    `${CONSTANTS}\nglobalThis.__urls = findTerminalUrls; globalThis.__extent = terminalUrlContinuationExtent; globalThis.__logical = terminalLogicalLine; globalThis.__linkLine = terminalLinkLine;`,
     context,
     { filename: 'constants.js' }
   );
@@ -38,13 +38,23 @@ function loadPure() {
     __urls: (text: string) => UrlRef[];
     __extent: (buffer: unknown, row: number, cols: number, maxRows?: number) => Extent;
     __logical: (buffer: unknown, row: number, cols: number, maxRows?: number) => Extent;
+    __linkLine: (buffer: unknown, row: number, cols: number, maxRows?: number) => LinkLine | null;
   };
   return {
     findTerminalUrls: ctx.__urls,
     terminalUrlContinuationExtent: ctx.__extent,
     terminalLogicalLine: ctx.__logical,
+    terminalLinkLine: ctx.__linkLine,
   };
 }
+
+type LinkLine = {
+  startRow: number;
+  endRow: number;
+  text: string;
+  offsetToCell: (offset: number) => { row: number; col: number };
+  cellToOffset: (row: number, col: number) => number;
+};
 
 function fakeBuffer(rows: Row[], cols: number) {
   const lines = rows.map((row) => ({
@@ -94,6 +104,32 @@ const TABLE_WITH_TRAILING_COLUMNS: Row[] = [
   TABLE[4],
 ];
 const TABLE_COLS = 220;
+// A wrapped URL with another column to its right. The URL's first row is cut at
+// its cell to stitch the URL, and the column after it must still link on that
+// row (a release-review regression: only the URL's pieces were offered there).
+const WIKI_URL = 'https://wiki.example.com/spaces/ENG/pages/12345/Design-Spec-v2';
+const URL_THEN_PATH_COLS = 140;
+const URL_THEN_PATH_ROWS: Row[] = [
+  { text: '  1   Design spec     https://wiki.example.com/spaces/ENG/pages/12345/      /home/me/proj/docs/design.md' },
+  { text: '                      Design-Spec-v2' },
+  { text: '  2   Notes           n/a                                                     /home/me/proj/notes.md' },
+];
+// The same shape with a relative and a home path in the columns after the URL.
+const URL_THEN_PATHS_ROWS: Row[] = [
+  {
+    text: '  1   Design spec     https://wiki.example.com/spaces/ENG/pages/12345/      docs/design.md    ~/notes/todo.txt',
+  },
+  { text: '                      Design-Spec-v2' },
+];
+// A URL in the column after the wrapped one is the row's LAST URL, and only the
+// last URL on a row is continued, so this row is never stitched or cut: both URLs
+// link on row 1 as single-row links, as before the wrap joining existed.
+const URL_THEN_URL_ROWS: Row[] = [
+  {
+    text: '  1   Design spec     https://wiki.example.com/spaces/ENG/pages/12345/      https://other.example.com/notes.md',
+  },
+  { text: '                      Design-Spec-v2' },
+];
 const PROSE_ROWS = [
   [
     '⏺ The guide lives at https://example.com/guide/',
@@ -457,6 +493,32 @@ describe('terminalUrlContinuationExtent (wrap joining)', () => {
   });
 });
 
+describe('terminalLinkLine (the text the provider scans)', () => {
+  const { terminalLinkLine } = loadPure();
+
+  it('keeps the columns after a wrapped URL, mapped back to their own cells', () => {
+    const buffer = fakeBuffer(URL_THEN_PATH_ROWS, URL_THEN_PATH_COLS);
+    const row = URL_THEN_PATH_ROWS[0].text;
+    const pathCol = row.indexOf('/home/');
+    const urlCol = row.indexOf('https://');
+    for (const hovered of [0, 1]) {
+      const line = terminalLinkLine(buffer, hovered, URL_THEN_PATH_COLS, 12)!;
+      expect(line).toMatchObject({ startRow: 0, endRow: 1 });
+      // The URL reads whole, and the path column follows it.
+      expect(line.text).toContain(WIKI_URL);
+      const pathOffset = line.text.indexOf('/home/me/proj/docs/design.md');
+      expect(pathOffset).toBeGreaterThan(line.text.indexOf(WIKI_URL));
+      expect(line.offsetToCell(pathOffset)).toEqual({ row: 0, col: pathCol });
+      expect(line.cellToOffset(0, pathCol)).toBe(pathOffset);
+      expect(line.cellToOffset(0, urlCol)).toBe(line.text.indexOf(WIKI_URL));
+      // The end of the URL's last row still maps onto that row, never onto the
+      // first cell of the column moved after it.
+      const urlEnd = line.text.indexOf(WIKI_URL) + WIKI_URL.length;
+      expect(line.offsetToCell(urlEnd)).toEqual({ row: 1, col: URL_THEN_PATH_ROWS[1].text.length });
+    }
+  });
+});
+
 describe('native OSC 8 terminal URLs', () => {
   it('opens complete HTTP links through the terminal opener and rejects unsafe schemes', () => {
     const open = vi.fn();
@@ -538,7 +600,7 @@ describe('terminal link provider with wrapped table URLs', () => {
       });
       return links ?? [];
     };
-    return { provide, openSpy };
+    return { provide, openSpy, app };
   }
 
   it.each(PROSE_ROWS)('preserves the original clickable URL before prose: %s', (first, next, url) => {
@@ -666,6 +728,58 @@ describe('terminal link provider with wrapped table URLs', () => {
       link!.activate(null, link!.text);
       expect(openSpy).toHaveBeenLastCalledWith(URL, '_blank', 'noopener,noreferrer');
     }
+  });
+
+  it('links the path in the column right of a wrapped URL on the URL first row', () => {
+    const { provide, app } = harness(URL_THEN_PATH_ROWS, URL_THEN_PATH_COLS);
+    const pathStart = URL_THEN_PATH_ROWS[0].text.indexOf('/home/');
+    const links = provide(1);
+    const path = links.find((link) => link.text === '/home/me/proj/docs/design.md');
+    expect(path).toBeDefined();
+    expect(path!.range.start).toEqual({ x: pathStart + 1, y: 1 });
+    expect(path!.range.end.y).toBe(1);
+    // The stitched URL keeps one link per row, and its first-row piece ends
+    // before the path's column.
+    const urlPieces = links.filter((link) => /^https?:/.test(link.text));
+    expect(new Set(urlPieces.map((link) => link.text))).toEqual(new Set([WIKI_URL]));
+    expect(urlPieces.map((link) => link.range.start.y)).toEqual([1, 2]);
+    expect(urlPieces[0].range.end.x).toBeLessThan(pathStart + 1);
+    // Nothing else is linked, so nothing glues the column onto the URL.
+    expect(links.map((link) => link.text).sort()).toEqual([WIKI_URL, WIKI_URL, '/home/me/proj/docs/design.md'].sort());
+    path!.activate(null, path!.text);
+    expect(app.openFilePreview).toHaveBeenCalledExactlyOnceWith('/home/me/proj/docs/design.md', 's1');
+    // The URL's second row still opens the whole URL, and the next record keeps its path.
+    expect(
+      new Set(
+        provide(2)
+          .filter((link) => /^https?:/.test(link.text))
+          .map((link) => link.text)
+      )
+    ).toEqual(new Set([WIKI_URL]));
+    expect(provide(3).map((link) => link.text)).toContain('/home/me/proj/notes.md');
+  });
+
+  it('links a relative and a home path in the columns right of a wrapped URL', () => {
+    const { provide } = harness(URL_THEN_PATHS_ROWS, URL_THEN_PATH_COLS);
+    const row = URL_THEN_PATHS_ROWS[0].text;
+    const links = provide(1);
+    const startOf = (text: string) => links.find((link) => link.text === text)?.range.start;
+    expect(startOf('docs/design.md')).toEqual({ x: row.indexOf('docs/design.md') + 1, y: 1 });
+    expect(startOf('~/notes/todo.txt')).toEqual({ x: row.indexOf('~/notes/todo.txt') + 1, y: 1 });
+    expect(new Set(links.filter((link) => /^https?:/.test(link.text)).map((link) => link.text))).toEqual(
+      new Set([WIKI_URL])
+    );
+  });
+
+  it('links a URL in the column right of another URL whole, without stitching either', () => {
+    const { provide } = harness(URL_THEN_URL_ROWS, URL_THEN_PATH_COLS);
+    const row = URL_THEN_URL_ROWS[0].text;
+    const links = provide(1).filter((link) => /^https?:/.test(link.text));
+    expect(links.map((link) => [link.text, link.range.start.x, link.range.start.y])).toEqual([
+      ['https://wiki.example.com/spaces/ENG/pages/12345/', row.indexOf('https://wiki') + 1, 1],
+      ['https://other.example.com/notes.md', row.indexOf('https://other') + 1, 1],
+    ]);
+    expect(provide(2).filter((link) => /^https?:/.test(link.text))).toEqual([]);
   });
 
   it('underlines only the URL cells on each row, never the indent between pieces', () => {
