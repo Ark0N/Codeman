@@ -67,7 +67,6 @@ describe('Command-K agent arrow keys in Chromium', () => {
       await page.keyboard.press('Shift+End');
       await page.keyboard.press('ArrowLeft');
       expect(await label.innerText()).toBe('Codex');
-      await page.screenshot({ path: '/tmp/codeman-21-palette.png' });
       await page.keyboard.press('ArrowDown');
       expect(
         await page.evaluate(
