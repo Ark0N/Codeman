@@ -6,6 +6,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  resolveServicePlan,
   buildLaunchAgentPlist,
   buildServiceEnv,
   buildServicePath,
@@ -175,5 +176,28 @@ describe('detectServiceKind', () => {
   it('maps the platform to its supervisor', () => {
     const expected = process.platform === 'darwin' ? 'launchd' : process.platform === 'linux' ? 'systemd' : null;
     expect(detectServiceKind()).toBe(expected);
+  });
+});
+
+describe('resolveServicePlan tunnel opt-in', () => {
+  it.each(['systemd', 'launchd'] as const)('carries the tunnel flag into %s args', (kind) => {
+    const options = {
+      host: '0.0.0.0',
+      port: 8080,
+      https: false,
+      allowUnauthenticatedNetwork: true,
+      allowUnauthenticatedTunnel: true,
+      multiuser: true,
+    };
+    expect(resolveServicePlan(kind, options).args).toEqual([
+      'web',
+      '--host',
+      '0.0.0.0',
+      '--port',
+      '8080',
+      '--allow-unauthenticated-network',
+      '--allow-unauthenticated-tunnel',
+      '--multiuser',
+    ]);
   });
 });

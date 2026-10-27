@@ -7,13 +7,26 @@ export function isExplicitlyEnabled(value: string | undefined): boolean {
 }
 
 /**
- * True when unauthenticated network exposure is acceptable: either a password is
- * set (auth active) or the operator explicitly acknowledged it. Used by the
- * tunnel-enable guard (COD-55) to refuse publishing an unauthenticated public URL.
+ * True when an unauthenticated non-loopback BIND is acceptable: either a password is
+ * set (auth active) or the operator explicitly acknowledged it. Quiets the startup
+ * warning only; it does not cover the Cloudflare tunnel (#706), which has its own
+ * acknowledgement below.
  */
 export function isUnauthenticatedNetworkAcknowledged(allowFlag = false): boolean {
   if (process.env.CODEMAN_PASSWORD) return true;
   return allowFlag || isExplicitlyEnabled(process.env.CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK);
+}
+
+/**
+ * True when the operator opted in to an unauthenticated public Cloudflare tunnel:
+ * `--allow-unauthenticated-tunnel` (passed in as `allowFlag`) or
+ * CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL. Used by the tunnel-enable guard (COD-55) in
+ * place of a login. Kept apart from the network acknowledgement on purpose (#706):
+ * install.sh writes that one for every passwordless LAN install, and it must never
+ * also publish the machine to the internet. install.sh never writes this one.
+ */
+export function isUnauthenticatedTunnelAcknowledged(allowFlag = false): boolean {
+  return allowFlag || isExplicitlyEnabled(process.env.CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL);
 }
 
 export function isLoopbackBindHost(host: string): boolean {

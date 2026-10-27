@@ -2271,10 +2271,16 @@ Object.assign(CodemanApp.prototype, {
     btn.disabled = true;
     try {
       const newEnabled = !isActive;
+      const gate = newEnabled ? await this._confirmTunnelEnable() : { proceed: true, acknowledge: false };
+      if (!gate.proceed) {
+        this._updateWelcomeTunnelBtn(false);
+        btn.disabled = false;
+        return;
+      }
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tunnelEnabled: newEnabled }),
+        body: JSON.stringify({ tunnelEnabled: newEnabled, ...(gate.acknowledge ? { acknowledgeUnauthTunnel: true } : {}) }),
       });
       // COD-55: server refuses an unauthenticated public tunnel (403). Surface it.
       if (newEnabled && (await this._handleTunnelEnableRefusal(res))) {
@@ -2583,10 +2589,66 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * End an App Settings save whose tunnel enable did not go through (confirm cancelled, or
+   * refused by the server): the WHOLE settings PUT is off, so turn the tunnel toggle back
+   * off in the UI and localStorage. Other settings persisted to localStorage still apply locally.
+   */
+  _abandonTunnelEnable(settings, keepOpen) {
+    settings.tunnelEnabled = false;
+    this.saveAppSettingsToStorage(settings);
+    const cb = document.getElementById('appSettingsTunnelEnabled');
+    if (cb) cb.checked = false;
+    if (!keepOpen) this.closeAppSettings();
+  },
+
+  /** The one SECURITY WARNING prompt for an unauthenticated public tunnel. */
+  _askUnauthTunnel() {
+    return confirm(
+      '⚠️ SECURITY WARNING — no password set\n\n' +
+        'Enabling the Cloudflare tunnel will publish THIS machine to a public URL with ' +
+        'NO login. Anyone who gets the URL has full terminal control — effectively remote ' +
+        'code execution on your computer.\n\n' +
+        'Strongly recommended: set CODEMAN_PASSWORD instead.\n\n' +
+        'Enable the unauthenticated public tunnel anyway?'
+    );
+  },
+
+  /**
+   * #706: ask BEFORE a tunnel enable whenever the server has no login (no CODEMAN_PASSWORD,
+   * not multi-user), every time, whatever the server would accept. With
+   * CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL set the PUT is never refused, so the refusal
+   * handler below would never ask. The ONE gate for the welcome link, the tunnel panel and
+   * the App Settings save. A tunnel that is already running is not being turned on, and
+   * the server does not guard it either. When the status cannot be read, the PUT goes out
+   * without the acknowledgement and `_handleTunnelEnableRefusal` stays the fallback.
+   * @returns {Promise<{ proceed: boolean, acknowledge: boolean }>} proceed=false: cancelled,
+   *   send nothing; acknowledge: send `acknowledgeUnauthTunnel: true` with the enable.
+   */
+  async _confirmTunnelEnable() {
+    let status = null;
+    try {
+      const res = await fetch('/api/tunnel/status');
+      if (res.ok) {
+        const env = await res.json();
+        status = env?.success === true ? env.data : env;
+      }
+    } catch {
+      /* unknown: the 403 handler asks instead */
+    }
+    if (!status || status.running || status.loginConfigured !== false) return { proceed: true, acknowledge: false };
+    if (!this._askUnauthTunnel()) {
+      this.showToast('Tunnel not enabled', 'info');
+      return { proceed: false, acknowledge: false };
+    }
+    return { proceed: true, acknowledge: true };
+  },
+
+  /**
    * COD-55: detect the server's refusal to start an unauthenticated public tunnel.
    * The PUT /api/settings route returns a 4xx with { success:false, error } when no
-   * CODEMAN_PASSWORD is set and the unauthenticated-network opt-in is not acknowledged.
-   * Shows the server's (actionable) message as an error toast.
+   * CODEMAN_PASSWORD is set and the unauthenticated-tunnel opt-in is not acknowledged.
+   * Shows the server's (actionable) message as an error toast. Since #706 this is the
+   * fallback for when `_confirmTunnelEnable` could not read the tunnel status.
    * @param {Response|null} res - the fetch Response from the settings PUT
    * @returns {Promise<boolean>} true if the tunnel-enable was refused (caller should abort)
    */
@@ -2612,14 +2674,7 @@ Object.assign(CodemanApp.prototype, {
     // 403 = the no-password safety refusal (COD-55). Warn loudly and let the
     // operator acknowledge the risk; on confirm, retry with explicit acknowledgment.
     if (res.status === 403) {
-      const confirmed = confirm(
-        '⚠️ SECURITY WARNING — no password set\n\n' +
-          'Enabling the Cloudflare tunnel will publish THIS machine to a public URL with ' +
-          'NO login. Anyone who gets the URL has full terminal control — effectively remote ' +
-          'code execution on your computer.\n\n' +
-          'Strongly recommended: set CODEMAN_PASSWORD instead.\n\n' +
-          'Enable the unauthenticated public tunnel anyway?'
-      );
+      const confirmed = this._askUnauthTunnel();
       if (!confirmed) {
         this._dismissTunnelConnecting?.();
         this.showToast('Tunnel not enabled', 'info');
@@ -2664,10 +2719,15 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
     try {
+      const gate = enable ? await this._confirmTunnelEnable() : { proceed: true, acknowledge: false };
+      if (!gate.proceed) {
+        this.closeTunnelPanel();
+        return;
+      }
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tunnelEnabled: enable }),
+        body: JSON.stringify({ tunnelEnabled: enable, ...(gate.acknowledge ? { acknowledgeUnauthTunnel: true } : {}) }),
       });
       // COD-55: server refuses an unauthenticated public tunnel (403). Surface it.
       if (enable && (await this._handleTunnelEnableRefusal(res))) {
@@ -3270,11 +3330,21 @@ Object.assign(CodemanApp.prototype, {
     let webhookError = '';
     let serverSaved = false;
     try {
+      // #706: a save that turns the tunnel on asks first when the server has no login
+      // (one already running is not asked about, see _confirmTunnelEnable).
+      const tunnelGate = settings.tunnelEnabled && !settingsReadOnly
+        ? await this._confirmTunnelEnable()
+        : { proceed: true, acknowledge: false };
+      if (!tunnelGate.proceed) {
+        this._abandonTunnelEnable(settings, keepOpen);
+        return;
+      }
       // A non-admin's save is not sent at all (see settingsReadOnly above): the server
       // would refuse it with a 403, the plan-usage collection flip included.
       const res = settingsReadOnly ? null : await this._apiPut('/api/settings', {
         ...serverSettings,
         ...(_chipFlip !== undefined ? { showPlanUsageLimits: _chipFlip } : {}),
+        ...(tunnelGate.acknowledge ? { acknowledgeUnauthTunnel: true } : {}),
         notificationPreferences: notifPrefsToSave,
         voiceSettings,
       });
@@ -3292,14 +3362,9 @@ Object.assign(CodemanApp.prototype, {
 
       // COD-55: the server refuses an unauthenticated public tunnel with a 403 — which
       // rejects the WHOLE settings PUT. Surface the message and revert the tunnel toggle
-      // (in the UI + localStorage) so it doesn't look enabled. Other settings persisted
-      // to localStorage above still apply locally.
+      // so it doesn't look enabled.
       if (!refusedAsNonAdmin && settings.tunnelEnabled && (await this._handleTunnelEnableRefusal(res))) {
-        settings.tunnelEnabled = false;
-        this.saveAppSettingsToStorage(settings);
-        const cb = document.getElementById('appSettingsTunnelEnabled');
-        if (cb) cb.checked = false;
-        if (!keepOpen) this.closeAppSettings();
+        this._abandonTunnelEnable(settings, keepOpen);
         return;
       }
 

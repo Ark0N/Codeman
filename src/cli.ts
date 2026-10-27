@@ -951,6 +951,10 @@ function addWebLaunchOptions(cmd: Command): Command {
       'Allow non-loopback web access without CODEMAN_PASSWORD (dangerous; terminal control is exposed)'
     )
     .option(
+      '--allow-unauthenticated-tunnel',
+      'Allow starting the Cloudflare tunnel without CODEMAN_PASSWORD (dangerous; publishes terminal control to a public URL; env: CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL)'
+    )
+    .option(
       '--multiuser',
       'Enable opt-in multi-user mode (named users in ~/.codeman/users.json; env: CODEMAN_MULTIUSER)'
     );
@@ -964,6 +968,7 @@ function toWebLaunchOptions(options: {
   baseUrl?: string;
   titleHostname?: string;
   allowUnauthenticatedNetwork?: boolean;
+  allowUnauthenticatedTunnel?: boolean;
   multiuser?: boolean;
 }): WebLaunchOptions {
   const port = parseInt(options.port, 10);
@@ -985,6 +990,7 @@ function toWebLaunchOptions(options: {
     basePath,
     titleHostname: options.titleHostname,
     allowUnauthenticatedNetwork: !!options.allowUnauthenticatedNetwork,
+    allowUnauthenticatedTunnel: !!options.allowUnauthenticatedTunnel,
     multiuser: !!options.multiuser,
   };
 }
@@ -1072,6 +1078,7 @@ webCmd.action(async (options) => {
   const https = launch.https;
   const titleHostname = options.titleHostname;
   const allowUnauthenticatedNetwork = launch.allowUnauthenticatedNetwork ?? false;
+  const allowUnauthenticatedTunnel = launch.allowUnauthenticatedTunnel ?? false;
   const basePath = launch.basePath ?? '';
   // Single source of truth for subsystems that read it directly (e.g. renderers).
   if (basePath) process.env.CODEMAN_BASE_URL = basePath;
@@ -1086,7 +1093,16 @@ webCmd.action(async (options) => {
   try {
     // The server prints its own "running at" line (it also covers the daemon and
     // service launch paths), so this one used to be a duplicate of it.
-    const server = await startWebServer(port, https, false, host, titleHostname, allowUnauthenticatedNetwork, basePath);
+    const server = await startWebServer(
+      port,
+      https,
+      false,
+      host,
+      titleHostname,
+      allowUnauthenticatedNetwork,
+      basePath,
+      allowUnauthenticatedTunnel
+    );
     if (https) {
       console.log(palette.warn('  Note: Accept the self-signed certificate in your browser on first visit'));
     }

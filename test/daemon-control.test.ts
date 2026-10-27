@@ -30,6 +30,36 @@ async function closedPort(): Promise<number> {
 }
 
 describe('buildWebArgs', () => {
+  it('forwards the tunnel opt-in between the network and multi-user flags', () => {
+    const options = {
+      host: '0.0.0.0',
+      port: 8080,
+      https: true,
+      titleHostname: 'tower',
+      allowUnauthenticatedNetwork: true,
+      allowUnauthenticatedTunnel: true,
+      multiuser: true,
+    };
+    expect(buildWebArgs(options)).toEqual([
+      'web',
+      '--host',
+      '0.0.0.0',
+      '--port',
+      '8080',
+      '--https',
+      '--title-hostname',
+      'tower',
+      '--allow-unauthenticated-network',
+      '--allow-unauthenticated-tunnel',
+      '--multiuser',
+    ]);
+  });
+
+  it.each([false, undefined])('omits the tunnel opt-in when it is %s', (allowUnauthenticatedTunnel) => {
+    const options = { host: '127.0.0.1', port: 8080, https: false, allowUnauthenticatedTunnel };
+    expect(buildWebArgs(options)).toEqual(['web', '--host', '127.0.0.1', '--port', '8080']);
+  });
+
   it('always passes host and port through explicitly', () => {
     expect(buildWebArgs({ host: '127.0.0.1', port: 3000, https: false })).toEqual([
       'web',
