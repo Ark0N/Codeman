@@ -6,7 +6,8 @@
  * /api/sessions, remote/docker and external-CLI /api/quick-start), that the
  * one-session count overrides the toolbar steppers without touching them, that
  * the layout returned by the create response is adopted BEFORE the new tab is
- * drawn (so it is drawn inside its group), and that an ordinary Run sends no
+ * drawn (so it is drawn inside its group), that a tab's "+" (`caseName`) starts
+ * in that case rather than the toolbar's, and that an ordinary Run sends no
  * group at all.
  *
  * Port: none (vm sandbox, stubbed fetch).
@@ -36,7 +37,7 @@ function harness(caseData: Record<string, unknown>, extra: { mode?: string } = {
       const body = init?.body ? JSON.parse(init.body) : undefined;
       requests.push({ url, body });
       const json = (value: unknown) => ({ json: async () => value });
-      if (url === '/api/cases/proj') return json({ success: true, data: caseData });
+      if (url.startsWith('/api/cases/')) return json({ success: true, data: caseData });
       if (url.endsWith('/status')) return json({ success: true, data: { available: true, runnable: true } });
       if (url === '/api/sessions') {
         const id = `sess-${++counter}`;
@@ -122,6 +123,25 @@ describe('launching into a tab group', () => {
     expect(made[0].url).toBe('/api/quick-start');
     expect(made[0].body.tabGroupId).toBe('g1');
     expect(app._applyTabLayout).toHaveBeenCalledWith(LAYOUT);
+  });
+
+  // A tab's "+" launches beside that tab: its case, never the toolbar's selected one.
+  it.each([
+    // Claude's create body names no mode: it is the server's default.
+    ['local Claude', 'claude', '/api/sessions', { workingDir: '/tmp/other' }],
+    ['local Shell', 'shell', '/api/sessions', { mode: 'shell', workingDir: '/tmp/other' }],
+    ['an external CLI', 'gemini', '/api/quick-start', { mode: 'gemini', caseName: 'other' }],
+  ])('%s launches in `caseName` instead of the toolbar case', async (_label, mode, url, where) => {
+    const { app, elements, requests } = harness({ name: 'other', path: '/tmp/other' }, { mode });
+    await app.run({ count: 1, caseName: 'other' });
+    const made = creates(requests);
+    expect(made).toHaveLength(1);
+    expect(made[0].url).toBe(url);
+    expect(made[0].body).toMatchObject(where);
+    expect(JSON.stringify(made[0].body)).not.toContain('proj');
+    // The local paths look the case up by the given name, never the toolbar's.
+    if (url === '/api/sessions') expect(requests[0].url).toBe('/api/cases/other');
+    expect(elements.quickStartCase.value).toBe('proj');
   });
 
   it('an ordinary Run sends no group and keeps the stepper count', async () => {

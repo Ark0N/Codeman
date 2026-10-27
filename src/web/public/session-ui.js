@@ -684,9 +684,12 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Run using the selected mode (Claude Code, OpenCode, Codex, Gemini, or Antigravity).
-   * `options` comes from the tab group menu's "New session": `count` overrides
-   * the instance steppers for this launch only, `tabGroupId` rides every create
-   * request so the server places the session in that group.
+   * `options` comes from the tab group menu's "New session", `_launchOnce` (a
+   * worktree, a tab's "+"): `count` overrides the instance steppers for this
+   * launch only, `tabGroupId` rides every create request so the server places the
+   * session in that group, `caseName` launches in that case instead of the
+   * toolbar's selected one, and `mode` starts that CLI instead of the Run
+   * button's mode, which is never touched.
    */
   async run(options = {}) {
     if (this._runInFlight) return;
@@ -701,7 +704,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     try {
-      const mode = this._runMode || 'claude';
+      const mode = options.mode || this._runMode || 'claude';
       if (mode === 'shell') {
         return await this.runShell(options);
       }
@@ -820,7 +823,8 @@ Object.assign(CodemanApp.prototype, {
    * never gated; both callers skip it before asking.
    *
    * Reads only what is already known and never starts a container probe: the
-   * Run menu starts one (_probeDockerCaseModes), and its answer lands in
+   * Run menu and a tab's "+" (openTabNewSessionMenu, app.js) start one
+   * (_probeDockerCaseModes), and its answer lands in
    * _dockerCaseModes, which this reads. Until then (a probe still in flight)
    * the stored availableModes decide, else nothing is gated.
    */
@@ -2014,11 +2018,28 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /** The case a launch runs in: its worktree's, the one it names (a tab's "+"), else the toolbar's. */
+  _runCaseName(options) {
+    if (options.worktree) return options.worktree.caseName;
+    return options.caseName || document.getElementById('quickStartCase').value || 'testcase';
+  },
+
+  /**
+   * Re-reads the case list after a launch, keeping the toolbar on its own case.
+   * The no-argument reload would re-select the server's `lastUsedCase`, and a
+   * tab's "+" launching through quick-start sets that to the tab's case while the
+   * toolbar stays where it was, so every later launch (a worktree's, a plain Run,
+   * a group's "New session") would otherwise move the toolbar there.
+   */
+  _reloadCasesAfterRun() {
+    this.loadQuickStartCases(document.getElementById('quickStartCase').value || null);
+  },
+
   async runClaude(options = {}) {
     // `options.worktree` ({ caseName, name, path }, from the worktree modal): the session runs in
     // that git worktree of the case and its tab is named after the worktree.
     const wt = options.worktree || null;
-    const caseName = wt ? wt.caseName : document.getElementById('quickStartCase').value || 'testcase';
+    const caseName = this._runCaseName(options);
     const nameBase = wt ? wt.name : caseName;
     const tabCount = this._readTabCount(options.count);
     const group = options.tabGroupId ? { tabGroupId: options.tabGroupId } : {};
@@ -2123,7 +2144,7 @@ Object.assign(CodemanApp.prototype, {
         this._appendSessionLaunchStatus(ownsLaunchTerminal, `All ${tabCount} remote session(s) ready`);
         if (remoteIds[0]) {
           await this.selectSession(remoteIds[0]);
-          this.loadQuickStartCases();
+          this._reloadCasesAfterRun();
         }
         this.terminal.focus();
         return;
@@ -2202,7 +2223,7 @@ Object.assign(CodemanApp.prototype, {
       // Auto-switch to the new session using selectSession (does proper refresh)
       if (firstSessionId) {
         await this.selectSession(firstSessionId);
-        this.loadQuickStartCases();
+        this._reloadCasesAfterRun();
       }
 
       this.terminal.focus();
@@ -2249,7 +2270,7 @@ Object.assign(CodemanApp.prototype, {
   async runShell(options = {}) {
     // `options.worktree`: see runClaude.
     const wt = options.worktree || null;
-    const caseName = wt ? wt.caseName : document.getElementById('quickStartCase').value || 'testcase';
+    const caseName = this._runCaseName(options);
     const nameBase = wt ? wt.name : caseName;
     // Run Shell reads the toolbar's one instance stepper, like every other run*();
     // its own second `− 1 +` group (#shellCount) was removed (#428).
@@ -2450,7 +2471,7 @@ Object.assign(CodemanApp.prototype, {
     // `options.worktree`: see runClaude. Quick-start resolves it server-side (`worktree`), so the
     // session starts through the same path as any other, only in the worktree's folder.
     const wt = options.worktree || null;
-    const caseName = wt ? wt.caseName : document.getElementById('quickStartCase').value || 'testcase';
+    const caseName = this._runCaseName(options);
     // Remote/docker cases run the CLI on the OTHER side — the local status
     // probe and the local-only config/env below don't apply (quick-start
     // rejects them for remote cases).
@@ -5859,7 +5880,7 @@ Object.assign(CodemanApp.prototype, {
       const created = r.data.worktree;
       this.showToast?.(`Worktree ${created.name} created on branch ${created.branch}`, 'success');
       this.closeWorktreeModal();
-      await this._launchInWorktree({ caseName, name: created.name, path: created.path }, mode);
+      await this._launchOnce(mode, { worktree: { caseName, name: created.name, path: created.path } });
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -5871,26 +5892,22 @@ Object.assign(CodemanApp.prototype, {
     if (!caseName || !wt) return;
     const mode = this._selectedWorktreeMode();
     this.closeWorktreeModal();
-    await this._launchInWorktree({ caseName, name, path: wt.path }, mode);
+    await this._launchOnce(mode, { worktree: { caseName, name, path: wt.path } });
   },
 
   /**
-   * Start ONE session of `mode` in a worktree through run(), the Run button's own entry (its
-   * launch lock, its per-mode paths), with the same temporary `_runMode` swap the custom-model
-   * entries use, so the Run button's chosen mode is untouched afterwards.
+   * Start ONE session of `mode` through run(), the Run button's own entry (its launch lock, its
+   * per-mode paths), outside the toolbar's choices: `runOptions` names a worktree, or a case and
+   * tab group (a tab's "+"). The mode rides the call (`run({ mode })`) rather than a swap of the
+   * Run button's mode, so a mode the user picks while the launch is pending is never overwritten.
    */
-  async _launchInWorktree(worktree, mode) {
+  async _launchOnce(mode, runOptions) {
     if (this._runInFlight) {
       this.showToast?.('A launch is already in progress', 'info');
       return;
     }
-    const previous = this._runMode;
-    this._runMode = mode || previous;
-    try {
-      await this.run({ count: 1, worktree });
-    } finally {
-      this._runMode = previous;
-    }
+    if (runOptions.tabGroupId) this.toggleTabGroupCollapsed?.(runOptions.tabGroupId, false);
+    await this.run({ count: 1, ...runOptions, ...(mode ? { mode } : {}) });
   },
 
   /** The Codeman-managed worktree a session runs in, or null (see managedWorktreeOfDir). */

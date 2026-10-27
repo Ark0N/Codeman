@@ -7169,7 +7169,9 @@ class CodemanApp {
         : `<span class="tab-harness run-mode-dot ${escapeHtml(mode)}" aria-hidden="true"></span>`;
 
       const inlineSessionActions = this.shouldInlineSessionActions();
-      const tabActionsHtml = `<span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span><button type="button" class="tab-more" onclick="event.stopPropagation(); app.openTabRailActionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="Session actions" aria-label="Session actions">&#x22EF;</button></span>`;
+      // The "+" announces a menu, so Enter and Space open it: the strip's own key
+      // handler acts only on a focused tab, and the header strip has no row menu.
+      const tabActionsHtml = `<span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-new" onclick="event.stopPropagation(); app.openTabNewSessionMenu(event, ${escapeHtml(JSON.stringify(id))})" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); app.openTabNewSessionMenu(event, ${escapeHtml(JSON.stringify(id))}); }" title="New session here" aria-label="New session in this tab's case" aria-haspopup="menu" tabindex="0">+</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span><button type="button" class="tab-more" onclick="event.stopPropagation(); app.openTabRailActionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="Session actions" aria-label="Session actions">&#x22EF;</button></span>`;
 
       rowHtml.set(id, `<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${paneExitBadge ? ' tab-agent-exited' : ''}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}${this._tileGrid?.has(id) ? ' in-tiles' : ''}"${richData}${railOrderStyle} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" data-aria-source="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
           ${_tabIdx < 9 ? '<span class="tab-number">' + (_tabIdx + 1) + '</span>' : ''}
@@ -8398,12 +8400,100 @@ class CodemanApp {
     return true;
   }
 
+  /**
+   * A tab's "+" (and the row menu's "New session here…"): the CLIs that tab's
+   * case can start, each as its logo and name like the Run menus. A pick starts
+   * ONE session beside that tab: its case (or the managed worktree it runs in)
+   * and its named group, if it has one, through `_launchOnce`, so the Run
+   * button's mode and case are untouched.
+   */
+  openTabNewSessionMenu(event, sessionId) {
+    const session = this.sessions.get(sessionId);
+    const worktree = this._managedWorktreeOfSession?.(session) || null;
+    const caseEntry = worktree ? null : this._tabCaseOf(session);
+    if (!worktree && !caseEntry) {
+      event?.stopPropagation?.();
+      this.showToast?.("This tab's folder is not a case, so there is nothing to start beside it.", 'info');
+      return false;
+    }
+    const caseName = worktree ? worktree.caseName : caseEntry.name;
+    // An ungrouped tab sends no group, so the server's case default group (if the
+    // case has one) places the new session, as it does for a toolbar Run.
+    const tabGroupId = this._tabRefLocation({ kind: 'session', id: sessionId })?.groupId || null;
+    // The toolbar probes only the case it has selected, so ask this tab's container
+    // now: this open reads what is already known, the next one the container's answer.
+    if (caseEntry?.location === 'docker' && !this._dockerCaseModes?.[caseName]) {
+      void this._probeDockerCaseModes(caseEntry, null);
+    }
+    // The phone overview's list, gated by the Run menu's own rule for this case
+    // (_runModeAvailableForCase: the container's CLIs for a Docker case; shell is
+    // never gated), in the Run menu's order: agents in catalog order, the shell last.
+    const isShell = (entry) => registryCliById(entry.mode)?.kind === 'shell';
+    const available = mobileOverviewRunModes().filter(
+      (entry) => isShell(entry) || this._runModeAvailableForCase(entry.mode, caseName)
+    );
+    const modes = [...available.filter((entry) => !isShell(entry)), ...available.filter(isShell)];
+    const current = this.runMode;
+    const actions = modes.map((entry) => ({
+      label: entry.label,
+      icon: entry.mode,
+      className: 'run-mode-option',
+      selected: entry.mode === current,
+      run: () =>
+        this._launchOnce(entry.mode, {
+          ...(worktree ? { worktree } : { caseName }),
+          ...(tabGroupId ? { tabGroupId } : {}),
+        }),
+    }));
+    return this._openTabLayoutMenu(event, `new:${sessionId}`, 'New session here', actions, { anyLayout: true });
+  }
+
+  /**
+   * The case a session tab belongs to, by what the session runs on. GET /api/cases
+   * gives a remote or Docker case a DISPLAY path (`user@host:/path`,
+   * `container:/path`) with the raw values under `remote` / `docker`, while a
+   * session carries its raw folder, so a path match alone misses those cases or
+   * lands on a local case at the same folder. A Docker session belongs to its
+   * container's case on its own engine host, a remote one to the case on its own
+   * host whose path encloses its own, a local one to the deepest case enclosing
+   * its folder (a display path never encloses one). Null when none fits.
+   */
+  _tabCaseOf(session) {
+    if (!session) return null;
+    const cases = this.cases || [];
+    const deepestEnclosing = (dir, candidates, rootOf) => {
+      let best = null;
+      let bestLength = -1;
+      for (const c of candidates) {
+        const root = (rootOf(c) || '').replace(/\/+$/, '');
+        if (!root || (dir !== root && !dir.startsWith(`${root}/`)) || root.length <= bestLength) continue;
+        best = c;
+        bestLength = root.length;
+      }
+      return best;
+    };
+    if (session.docker) {
+      const { hostId, containerName } = session.docker;
+      return (
+        cases.find((c) => c.location === 'docker' && c.docker?.hostId === hostId && c.docker?.container === containerName) ||
+        null
+      );
+    }
+    if (session.remote) {
+      const { hostId, remotePath } = session.remote;
+      const onHost = cases.filter((c) => c.location === 'remote' && c.remote?.hostId === hostId);
+      return deepestEnclosing((remotePath || '').replace(/\/+$/, ''), onHost, (c) => c.remote.path);
+    }
+    return deepestEnclosing((session.workingDir || '').replace(/\/+$/, ''), cases, (c) => c.path);
+  }
+
   // ─── Group and web-tab menus (right-click, the header's ⋯, Shift+F10) ──
 
   /**
-   * Close the open group / web-tab menu. Every dismissal path lands here:
-   * Escape, a pointer outside it, focus leaving it, Tab, a viewport resize, an
-   * action, and any full re-render of the rail (which would orphan its trigger).
+   * Close the open group / web-tab / tab "+" menu. Every dismissal path lands
+   * here: Escape, a pointer outside it, focus moving to an element outside it,
+   * Tab, a viewport resize, an action, and any full re-render of the rail (which
+   * would orphan its trigger).
    */
   closeTabGroupMenu({ restoreFocus = false } = {}) {
     const menu = this._tabGroupMenu;
@@ -8463,7 +8553,7 @@ class CodemanApp {
     ]);
   }
 
-  _openTabLayoutMenu(event, identity, ariaLabel, actions) {
+  _openTabLayoutMenu(event, identity, ariaLabel, actions, { anyLayout = false } = {}) {
     event?.preventDefault?.();
     event?.stopPropagation?.();
     const trigger = event?.currentTarget || null;
@@ -8474,7 +8564,7 @@ class CodemanApp {
     }
     this.closeTabGroupMenu();
     this.closeTabRailActionMenu?.();
-    if (!this._tabLayoutEditable()) return false;
+    if (!anyLayout && !this._tabLayoutEditable()) return false;
     const menu = document.createElement('div');
     menu.className = 'tab-rail-action-menu tab-layout-group-action-menu';
     menu.setAttribute('role', 'menu');
@@ -8483,8 +8573,17 @@ class CodemanApp {
       const button = document.createElement('button');
       button.type = 'button';
       button.setAttribute('role', 'menuitem');
-      button.textContent = action.label;
+      if (action.icon) {
+        // A Run menu entry's markup (renderRegistryRunOptions): the CLI's logo, then its name.
+        const dot = document.createElement('span');
+        dot.className = `run-mode-dot ${action.icon}`;
+        dot.setAttribute('aria-hidden', 'true');
+        button.append(dot, action.label);
+      } else {
+        button.textContent = action.label;
+      }
       if (action.className) button.className = action.className;
+      if (action.selected) button.classList.add('selected');
       button.addEventListener('click', () => {
         this.closeTabGroupMenu();
         action.run();
@@ -8519,6 +8618,12 @@ class CodemanApp {
     document.addEventListener('keydown', this._tabGroupMenuKeydown, true);
     window.addEventListener('resize', this._tabGroupMenuResize);
     menu.addEventListener('keydown', (keyEvent) => {
+      // A held Enter or Space that opened the menu repeats onto the entry it
+      // focuses; cancelling the repeat keeps it from also picking that entry.
+      if (keyEvent.repeat && (keyEvent.key === 'Enter' || keyEvent.key === ' ')) {
+        keyEvent.preventDefault();
+        return;
+      }
       const buttons = [...menu.querySelectorAll('button')];
       const at = buttons.indexOf(document.activeElement);
       if (keyEvent.key === 'ArrowDown' || keyEvent.key === 'ArrowUp') {
@@ -8533,13 +8638,20 @@ class CodemanApp {
         this.closeTabGroupMenu({ restoreFocus: true });
       }
     });
-    // Focus leaving by any other route (a click elsewhere, a programmatic move).
-    // Hops between the menu's own items are not a departure.
+    // Focus moving to another element outside the menu (a programmatic move;
+    // a click elsewhere is the pointerdown listener's). Hops between the
+    // menu's own items are not a departure, and neither is focus going nowhere:
+    // Safari never focuses a clicked button, so a press on an item blurs the
+    // focused one with no relatedTarget, and closing then dropped its click
+    // (the tile count menu's rule, tile-grid.js). Nor is focus landing on the
+    // trigger: a press on a focusable one (a tab's "+") focuses it before its
+    // click, and closing there let that click open the menu again.
     menu.addEventListener('focusout', (focusEvent) => {
-      if (focusEvent.relatedTarget && menu.contains(focusEvent.relatedTarget)) return;
+      const to = focusEvent.relatedTarget;
+      if (!to || menu.contains(to) || trigger?.contains?.(to)) return;
       if (this._tabGroupMenu === menu) this.closeTabGroupMenu();
     });
-    menu.querySelector('button')?.focus();
+    (menu.querySelector('button.selected') || menu.querySelector('button'))?.focus();
     return true;
   }
 

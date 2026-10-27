@@ -6,7 +6,7 @@
  * - a worktree launch goes through the EXISTING create paths with the worktree's folder:
  *   POST /api/sessions with `workingDir` for claude and shell, quick-start with `worktree` for
  *   every other CLI; never a case lookup or scaffold, and tabs named after the worktree;
- * - `_launchInWorktree()` swaps the run mode for the one launch and puts it back.
+ * - `_launchOnce()` starts the one launch in the chosen mode without touching the Run button's mode.
  *
  * Port: N/A.
  */
@@ -138,15 +138,15 @@ describe('launching in a worktree', () => {
     });
   });
 
-  it('_launchInWorktree runs ONE session of the chosen mode and restores the Run button mode', async () => {
+  it("_launchOnce runs ONE session of the chosen mode in the worktree and leaves the Run button's mode", async () => {
     const { app } = load(async () => json({}));
     app._runMode = 'claude';
     const seen: Array<{ mode: string; options: unknown }> = [];
     app.run = vi.fn(async (options: unknown) => {
       seen.push({ mode: app._runMode, options });
     });
-    await app._launchInWorktree(WT, 'codex');
-    expect(seen).toEqual([{ mode: 'codex', options: { count: 1, worktree: WT } }]);
+    await app._launchOnce('codex', { worktree: WT });
+    expect(seen).toEqual([{ mode: 'claude', options: { count: 1, worktree: WT, mode: 'codex' } }]);
     expect(app._runMode).toBe('claude');
   });
 

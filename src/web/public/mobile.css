@@ -949,6 +949,29 @@ html.mobile-init .file-browser-panel {
     display: none !important;
   }
 
+  /* The "+" is opt-in (showTabNewButton, per-device; html.tabs-show-new).
+     Switched on it joins gear + close on the active tab only, and the label
+     reserve above grows to clear all three (test/mobile-tab-tap-zones). */
+  .session-tab .tab-new {
+    display: none;
+  }
+
+  html.tabs-show-new .session-tab.active .tab-new {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    line-height: 1;
+    width: 28px;
+    height: 32px;
+    padding: 0;
+    opacity: 0.8;
+  }
+
+  html.tabs-show-new .session-tab.active .tab-name {
+    min-width: 68px;
+  }
+
   /* Gear icon on active tab - tiny, subtle */
   .session-tab.active .tab-gear {
     display: inline-flex;
@@ -3427,7 +3450,8 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 @media (hover: none) and (pointer: coarse) {
   /* Remove hover-dependent UI patterns */
   .session-tab .tab-close,
-  .session-tab .tab-gear {
+  .session-tab .tab-gear,
+  .session-tab .tab-new {
     opacity: 1;
     width: auto;
     padding: 0.15rem 0.25rem;
@@ -4127,6 +4151,7 @@ html[data-session-list="sidebar"] .session-sidebar .session-tab {
    Matches the (hover: none) block above, but has to be repeated here because
    the phone block hides them on non-active tabs with (0,2,0). */
 html[data-session-list="sidebar"] .session-sidebar .session-tab .tab-gear,
+html[data-session-list="sidebar"] .session-sidebar .session-tab .tab-new,
 html[data-session-list="sidebar"] .session-sidebar .session-tab .tab-close {
   display: inline-flex;
   align-items: center;
