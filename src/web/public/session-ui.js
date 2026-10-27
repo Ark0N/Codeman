@@ -2709,7 +2709,10 @@ Object.assign(CodemanApp.prototype, {
     // Git: the session's own choice if it has one, otherwise the app setting. updateGitFetchStatus is also
     // what SSE calls when a scheduled run lands, so the rows stay current while the modal is open.
     this.updateGitFetchStatus(sessionId);
-    document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
+    const imageWatcherToggle = document.getElementById('modalImageWatcherEnabled');
+    imageWatcherToggle.checked = session.imageWatcherEnabled ?? true;
+    // The server never watches a remote session's directory (it is on another host), so the row is hidden.
+    imageWatcherToggle.closest('.set-row').style.display = session.remote ? 'none' : '';
     document.getElementById('modalFlickerFilterEnabled').checked = session.flickerFilterEnabled ?? false;
 
     // Populate session name input with prefix/suffix split

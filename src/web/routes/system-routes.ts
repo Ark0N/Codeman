@@ -1183,9 +1183,10 @@ export function registerSystemRoutes(
 
       // Handle image watcher toggle dynamically
       toggleService((merged.imageWatcherEnabled as boolean) ?? false, imageWatcher, 'Image watcher', () => {
-        // Re-watch all active sessions that have image watcher enabled
+        // Re-watch all active sessions that have image watcher enabled (never a remote session: its
+        // workingDir is a path on the remote host, not on this disk)
         for (const session of ctx.sessions.values()) {
-          if (session.imageWatcherEnabled) {
+          if (session.imageWatcherEnabled && !session.remote) {
             imageWatcher.watchSession(session.id, session.workingDir);
           }
         }

@@ -3780,6 +3780,11 @@ export function registerSessionRoutes(
     const { id } = req.params as { id: string };
     const body = parseBody(ImageWatcherSchema, req.body, 'Invalid request body');
     const session = findSessionOrFail(ctx, id, req);
+    // A remote session's workingDir is a path on the remote host; the watcher would watch it on the
+    // LOCAL disk (a missing folder, or a same-named local one whose images are not the session's).
+    if (body.enabled && session.remote) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Image watching does not run for remote sessions');
+    }
 
     if (body.enabled) {
       imageWatcher.watchSession(session.id, session.workingDir);
