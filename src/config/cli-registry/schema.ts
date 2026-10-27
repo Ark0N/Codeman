@@ -301,6 +301,9 @@ const capabilitiesSchema = z
     // the CLI to page its own transcript. Distinct from wheelForward (SGR reports).
     // Optional: absent means no paging, the safe default for an unmeasured CLI.
     transcriptPageKeys: z.boolean().optional(),
+    // Keep the PTY's rows while a phone keyboard is up (inline renderers only).
+    // Optional: absent means the keyboard resizes, the safe default.
+    keyboardHold: z.literal('inline').optional(),
     keyboardAccessory: z.enum(['agent', 'shell']),
     privilegedCommandGate: z.boolean(),
     startMode: z.enum(['interactive', 'shell']),

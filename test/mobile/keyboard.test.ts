@@ -323,6 +323,99 @@ describe('Virtual Keyboard', () => {
       expect(mainPadding).toBe('');
     });
 
+    it('holds the PTY rows under the keyboard and keeps the Claude composer inside the visible box', async () => {
+      // #672: a keyboard-driven height change makes Claude's inline renderer reprint
+      // only the tail that fits and lose the rest, so the rows are held instead, and
+      // --kb-clip has to keep the composer in view of a screen now taller than its box.
+      const modes = await page.evaluate(() => (window as any).__codemanKeyboardHoldModes);
+      expect(modes).toEqual(['claude']);
+      const rowsBefore = await page.evaluate(async () => {
+        (window as any).__resizes = [];
+        app.activeSessionId = 'mobile-keyboard-hold-test';
+        app.sessions.set('mobile-keyboard-hold-test', {
+          id: 'mobile-keyboard-hold-test',
+          mode: 'claude',
+          status: 'running',
+        });
+        app.hideWelcome();
+        // Fit the terminal to its box first, as a selected session is: these are
+        // the keyboard-free rows the hold must keep.
+        app.syncTerminalGeometry();
+        app.sendResize = (id: string) => {
+          (window as any).__resizes.push({ id, ...app.getTerminalDimensions() });
+          return Promise.resolve(true);
+        };
+        app.terminal.reset();
+        const cols = app.terminal.cols;
+        const rule = '\u2500'.repeat(cols);
+        const transcript = Array.from({ length: 100 }, (_, i) => `KBTEST-${String(i + 1).padStart(3, '0')}`);
+        const frame = [...transcript, rule, '\u276f ', rule, '  ? for shortcuts'].join('\r\n');
+        await new Promise<void>((resolve) => app.terminal.write(`${frame}\x1b[2A\x1b[3G`, resolve));
+        return app.terminal.rows;
+      });
+
+      await showKeyboard(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
+      await page.waitForTimeout(800);
+
+      const held = await page.evaluate(() => {
+        const term = app.terminal;
+        const buffer = term.buffer.active;
+        const rowOf = (pattern: RegExp) => {
+          for (let row = 0; row < term.rows; row++) {
+            if (pattern.test(buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? '')) return row;
+          }
+          return -1;
+        };
+        const container = document.getElementById('terminalContainer') as HTMLElement;
+        const box = container.getBoundingClientRect();
+        const screen = (container.querySelector('.xterm-screen') as HTMLElement).getBoundingClientRect();
+        const cell = term._core._renderService.dimensions.css.cell.height;
+        const composer = rowOf(/^\u276f/);
+        const footer = rowOf(/\? for shortcuts/);
+        return {
+          rows: term.rows,
+          heldRows: app._keyboardHeldRows,
+          clip: container.style.getPropertyValue('--kb-clip'),
+          composer,
+          footer,
+          // Where the rows land on the page with the clip applied.
+          composerTop: screen.top + composer * cell,
+          footerBottom: screen.top + (footer + 1) * cell,
+          // Where they would land without it: below the box, i.e. under the keyboard.
+          footerBottomUnclipped: box.top + (footer + 1) * cell,
+          boxTop: box.top,
+          boxBottom: box.bottom,
+          viewportBottom:
+            (window.visualViewport?.offsetTop ?? 0) + (window.visualViewport?.height ?? window.innerHeight),
+          resizes: (window as any).__resizes,
+        };
+      });
+
+      expect(held.rows).toBe(rowsBefore);
+      expect(held.heldRows).toBe(rowsBefore);
+      // Every resize sent while the keyboard was up carried the held rows.
+      for (const r of held.resizes) expect(r.rows).toBe(rowsBefore);
+      expect([held.composer, held.footer]).toEqual([rowsBefore - 3, rowsBefore - 1]);
+      // Not vacuous: unclipped, the footer would sit below the box.
+      expect(held.footerBottomUnclipped).toBeGreaterThan(held.boxBottom + 1);
+      expect(parseFloat(held.clip)).toBeGreaterThan(0);
+      expect(held.composerTop).toBeGreaterThanOrEqual(held.boxTop - 1);
+      expect(held.footerBottom).toBeLessThanOrEqual(held.boxBottom + 1);
+      expect(held.boxBottom).toBeLessThanOrEqual(held.viewportBottom + 1);
+
+      await hideKeyboard(page);
+      await page.waitForTimeout(800);
+      // Released: no hold, no offset, and the rows follow the box again (the box
+      // after a keyboard cycle need not be the one before it, so compare with the fit).
+      const released = await page.evaluate(() => ({
+        heldRows: app._keyboardHeldRows,
+        clip: (document.getElementById('terminalContainer') as HTMLElement).style.getPropertyValue('--kb-clip'),
+        rows: app.terminal.rows,
+        fits: window.CodemanTerminalGeometry.clampTerminalDimensions(app.fitAddon.proposeDimensions()).rows,
+      }));
+      expect(released).toEqual({ heldRows: 0, clip: '', rows: released.fits, fits: released.fits });
+    });
+
     it('coalesces keyboard animation frames into one final terminal fit', async () => {
       const result = await page.evaluate(async () => {
         // `app.terminal` and `app.fitAddon` are only assigned by initTerminal(),

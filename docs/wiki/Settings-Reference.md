@@ -21,7 +21,7 @@ desktop.
 
 | Category                | Examples                                                                        |
 | ----------------------- | ------------------------------------------------------------------------------- |
-| **Per-device, local**   | Skin, WebGL renderer, local echo, CJK input, extended keyboard bar, File Viewer and Cron header buttons. Never sent to the server at all. |
+| **Per-device, local**   | Skin, WebGL renderer, local echo, keep size under keyboard, CJK input, extended keyboard bar, File Viewer and Cron header buttons. Never sent to the server at all. |
 | **Per-device policy**   | Most `show*` toggles, plan usage chip, language. Stored server-side, but a device only takes the server value when it has no local one of its own. |
 | **Synced**              | Models, effort, CLI options, notification preferences, voice settings, display name, the agent skill and approvals toggles. |
 
@@ -46,6 +46,7 @@ supervised by systemd or launchd; npm installs report as non-updatable. See
 | Setting                       | Default              | Notes                                                                 |
 | ----------------------------- | -------------------- | --------------------------------------------------------------------- |
 | Local Echo                    | On for touch devices | Paints keystrokes locally and flushes on Enter. See [Input And Voice](Input-And-Voice). |
+| Keep Size Under Keyboard      | On                   | For local Claude sessions, the on-screen keyboard no longer resizes the session: the terminal keeps its rows and the view scrolls so the prompt sits just above the keyboard. Resizing made Claude reprint its screen and drop transcript lines from history. Codex, Claude's fullscreen mode, remote and Docker sessions resize as before. See [Mobile Guide](Mobile-Guide). |
 | CJK Input                     | Off                  | IME composition through a dedicated text field.                        |
 | Extended Keyboard Bar         | Per device           | Which accessory bar phones get. Shell sessions override it while they are active. |
 | Wheel Scrolls Local History   | Off                  | Keeps the wheel on the local buffer instead of forwarding it to the CLI. |
