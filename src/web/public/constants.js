@@ -2266,8 +2266,8 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  * or a bare `=` makes the candidate a sentence (`/tmp/out has the logs in run.log`),
  * so a name such as `Pros and Cons.md` splits as master does. A command line is
  * refused: an executable under `bin/`, `.bin/`, `scripts/` or `tools/` as the
- * first word, a first word ending in `$` (a shell prompt, `/home/me/proj$ cat a.md`),
- * or any `-x`/`--x` flag word.
+ * first word, any earlier word ending in `$` (a shell prompt, `/home/me/proj$ cat a.md`,
+ * `/mnt/c/My Docs$ ls a.md`), or any `-x`/`--x` flag word.
  *
  * A candidate that is one path but not a linkable one (an unknown root such as
  * `/etc`, a `.`/`..`/empty segment) comes back with `link: false` when its last
@@ -2302,11 +2302,13 @@ function spacedFilePathOnLine(line) {
   if (/\/(?:\.?bin|scripts?|tools)\/[^/]+$/.test(words[0]) || words.some((word) => /^-{1,2}\w/.test(word))) {
     return null;
   }
-  // A shell prompt that prints its working directory in full (`/home/me/proj$ cat
-  // notes.md`; WSL's `/mnt/c/...` is outside `$HOME`) is a command line too.
-  if (words[0].endsWith('$')) return null;
   for (const word of words.slice(0, -1)) {
     if (word.endsWith('/') || word.endsWith(':') || /^(?:—|–|→|=>|->|<-|=)$/.test(word)) return null;
+    // A shell prompt that prints its working directory in full (`/home/me/proj$ cat
+    // notes.md`; WSL's `/mnt/c/...` is outside `$HOME`) is a command line too, and so is
+    // one whose directory has a space in it (`/mnt/c/My Docs$ ls notes.md`): the `$`
+    // can end any earlier word, not only the first.
+    if (word.endsWith('$')) return null;
     // A word with no letter or digit (a prompt glyph `❯` or `$`, a `✓`) is never
     // part of a file name, apart from a bare `-` (`OneDrive - Contoso`).
     if (word !== '-' && !/[\p{L}\p{N}]/u.test(word)) return null;

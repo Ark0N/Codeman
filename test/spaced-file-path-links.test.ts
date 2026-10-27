@@ -337,13 +337,15 @@ describe('spaced file paths: shapes that keep master links', () => {
   });
 
   // A shell prompt that prints its working directory in full (WSL's `/mnt/c/...` is
-  // outside `$HOME`): a word with no letter or digit, or a first word ending in `$`,
-  // is never part of a file name, so every earlier command in the scrollback keeps
-  // master's links.
+  // outside `$HOME`): a word with no letter or digit, or any earlier word ending in `$`
+  // (the first, or a later one when the directory has a space in it), is never part of
+  // a file name, so every earlier command in the scrollback keeps master's links.
   it.each([
     ['/mnt/c/proj ❯ code notes.md', ['/mnt/c/proj', true], ['notes.md']],
     ['/home/me/proj $ cat notes.md', ['/home/me/proj', true], ['notes.md']],
     ['/home/me/proj$ cat notes.md', ['/home/me/proj', true], ['notes.md']],
+    ['/mnt/c/Users/me/OneDrive - Contoso/proj$ code notes.md', ['/mnt/c/Users/me/OneDrive', true], ['notes.md']],
+    ['/mnt/c/My Docs$ ls notes.md', ['/mnt/c/My', true], ['notes.md']],
     ['/home/me/proj ❯ git add src/a.ts', ['/home/me/proj', true], ['src/a.ts']],
     ['/mnt/c/Users/me/OneDrive - Contoso/proj ❯ code notes.md', ['/mnt/c/Users/me/OneDrive', true], ['notes.md']],
     ['/home/me/proj/out ✓ report.pdf', ['/home/me/proj/out', true], ['report.pdf']],
