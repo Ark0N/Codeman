@@ -121,6 +121,28 @@ describe('response viewer file-path linkifier', () => {
     expect(paths(linkify(renderChat(markdown))).map((a) => a.getAttribute('data-path'))).toEqual(expected);
   });
 
+  // The terminal splits these lines (`Note:` is not a path label, and the path does
+  // not start the line), so the viewer must split them too.
+  it.each([
+    ['**Note:** /home/me/proj/out report.pdf', ['/home/me/proj/out', 'report.pdf']],
+    ['Use `--config` /home/me/proj/cfg data.json', ['/home/me/proj/cfg', 'data.json']],
+  ])('splits a spaced candidate the terminal splits: %s', (markdown, expected) => {
+    const html = renderChat(markdown);
+    const original = document.createElement('div');
+    original.innerHTML = html;
+    const root = linkify(html);
+    expect(paths(root).map((a) => a.getAttribute('data-path'))).toEqual(expected);
+    expect(root.textContent).toBe(original.textContent);
+  });
+
+  it('still links a spaced path inside inline code whole, after another inline element too', () => {
+    const root = linkify(renderChat('Use `--config` `/home/me/My Docs/cfg data.json`'));
+
+    const links = paths(root);
+    expect(links.map((a) => a.getAttribute('data-path'))).toEqual(['/home/me/My Docs/cfg data.json']);
+    expect(links[0].closest('code')).not.toBeNull();
+  });
+
   it('does not inherit a bold label from earlier prose or another block', () => {
     for (const markdown of [
       'See **Saved to:** 03 Attachments/Build SIPOC Design/Build-SIPOC.pptx',

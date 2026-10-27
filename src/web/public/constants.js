@@ -2159,8 +2159,10 @@ const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LIN
  * and folder detectors then skip reserved spans, earlier matches and URLs.
  *
  * The one entry point for both consumers (terminal link provider, response
- * viewer). The viewer restores a leading bold path label's context, but paths
- * split across other inline elements are still detected per text node.
+ * viewer). The viewer carries a leading bold label into the text it passes
+ * (spacedFilePathOnLine judges it, as for the same line in the terminal) and
+ * reads a text node that follows another inline element as mid-line; paths
+ * split across inline elements are still detected per text node.
  *
  * @param {string} text
  * @returns {Array<{path: string, index: number, folder?: true}>} `index` is where `path` starts in
@@ -2218,7 +2220,7 @@ function findFilePathLinks(text) {
   return found.sort((a, b) => a.index - b.index);
 }
 
-/** Labels that explicitly identify a path, shared with the rendered-markdown linkifier. */
+/** Labels that explicitly identify a path, for {@link spacedFilePathOnLine}. */
 const SPACED_FILE_PATH_LABEL_PATTERN =
   /^(?:path|files?|saved (?:to|as)|wrote|written to|output|created|location|attachment):[ \t]*$/i;
 
@@ -2239,11 +2241,12 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  * (SPACED_FILE_PATH_LABEL_PATTERN), with an optional marker before it: generic
  * labels (`Error:`, `Note:`) and bare bullets also introduce prose, so a relative
  * path needs a path label to be taken spaced. One trailing sentence mark is left
- * out, and a leading `./` is not a segment. The candidate must read as ONE path:
+ * out, and a leading run of `./` or `../` is not a segment. The candidate must read as ONE path:
  * it ends on a known extension, a rooted one has a directory before its first
  * space, no earlier word holds an extension (`a.md,`, `a.ts#L12`) or ends in `/`,
  * and none holds a `:` and a digit (`a.ts:42`, a line suffix ends the path). Later words cannot start a new
- * `/`, `~/`, `./` or `../` path, no earlier word ends in `:` or is an arrow, and
+ * `/`, `~/`, `./` or `../` path, no earlier word ends in `:`, is an arrow or has
+ * no letter or digit (a prompt glyph such as `❯` or `$`; a bare `-` is kept), and
  * a run of spaces (a column gap) is refused, so two paths on a line are never
  * merged. A relative candidate whose only `/` word is its last is prose after the
  * label (`Wrote: 120 lines to src/foo.ts`) and is left alone, which also splits
@@ -2252,7 +2255,8 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  * or a bare `=` makes the candidate a sentence (`/tmp/out has the logs in run.log`),
  * so a name such as `Pros and Cons.md` splits as master does. A command line is
  * refused: an executable under `bin/`, `.bin/`, `scripts/` or `tools/` as the
- * first word, or any `-x`/`--x` flag word.
+ * first word, a first word ending in `$` (a shell prompt, `/home/me/proj$ cat a.md`),
+ * or any `-x`/`--x` flag word.
  *
  * A candidate that is one path but not a linkable one (an unknown root such as
  * `/etc`, a `.`/`..`/empty segment) comes back with `link: false` when its last
@@ -2287,8 +2291,14 @@ function spacedFilePathOnLine(line) {
   if (/\/(?:\.?bin|scripts?|tools)\/[^/]+$/.test(words[0]) || words.some((word) => /^-{1,2}\w/.test(word))) {
     return null;
   }
+  // A shell prompt that prints its working directory in full (`/home/me/proj$ cat
+  // notes.md`; WSL's `/mnt/c/...` is outside `$HOME`) is a command line too.
+  if (words[0].endsWith('$')) return null;
   for (const word of words.slice(0, -1)) {
     if (word.endsWith('/') || word.endsWith(':') || /^(?:—|–|→|=>|->|<-|=)$/.test(word)) return null;
+    // A word with no letter or digit (a prompt glyph `❯` or `$`, a `✓`) is never
+    // part of a file name, apart from a bare `-` (`OneDrive - Contoso`).
+    if (word !== '-' && !/[\p{L}\p{N}]/u.test(word)) return null;
     // `a.ts:42` (grep -n, compiler output): the path already ended at the line suffix.
     if (/:\d/.test(word)) return null;
     // An extension anywhere in an earlier word (`a.md,`, `a.ts#L12`) ends a path there.
@@ -2299,7 +2309,7 @@ function spacedFilePathOnLine(line) {
   }
   if (words.slice(1).some((word) => /^(?:\/|~\/|\.{1,2}\/)/.test(word))) return null;
   const rooted = SPACED_PATH_ROOT.test(path) || path.startsWith('~/');
-  const segments = path.replace(/^(?:~?\/|\.\/)/, '').split('/');
+  const segments = path.replace(/^(?:~?\/|(?:\.\.?\/)+)/, '').split('/');
   const link = (rooted || !path.startsWith('/')) && segments.every((seg) => seg && seg !== '.' && seg !== '..');
   // A path label vouches that a path follows, not for the words before it: when
   // only the last word holds a `/` (`Wrote: 120 lines to src/foo.ts`), the spaces

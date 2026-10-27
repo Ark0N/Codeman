@@ -326,6 +326,37 @@ describe('spaced file paths: shapes that keep master links', () => {
     expect(paths('Saved to: ./My Docs/plan.md')).toEqual(['./My Docs/plan.md']);
     expect(paths('Saved to: ./notes.md')).toEqual(['./notes.md']);
   });
+
+  it('reads a leading run of ../ as parent directories, not segments', () => {
+    expect(paths('Saved to: ../My Docs/plan.md')).toEqual(['../My Docs/plan.md']);
+    expect(paths('Saved to: ../../My Docs/plan.md')).toEqual(['../../My Docs/plan.md']);
+    expect(paths('Saved to: ../notes.md')).toEqual(['../notes.md']);
+    // An interior `..` is still a segment, so the span links nothing.
+    expect(paths('Saved to: My Docs/../plan.md')).toEqual([]);
+    expect(paths('Saved to: ../My Docs/../x/plan.md')).toEqual([]);
+  });
+
+  // A shell prompt that prints its working directory in full (WSL's `/mnt/c/...` is
+  // outside `$HOME`): a word with no letter or digit, or a first word ending in `$`,
+  // is never part of a file name, so every earlier command in the scrollback keeps
+  // master's links.
+  it.each([
+    ['/mnt/c/proj ❯ code notes.md', ['/mnt/c/proj', true], ['notes.md']],
+    ['/home/me/proj $ cat notes.md', ['/home/me/proj', true], ['notes.md']],
+    ['/home/me/proj$ cat notes.md', ['/home/me/proj', true], ['notes.md']],
+    ['/home/me/proj ❯ git add src/a.ts', ['/home/me/proj', true], ['src/a.ts']],
+    ['/mnt/c/Users/me/OneDrive - Contoso/proj ❯ code notes.md', ['/mnt/c/Users/me/OneDrive', true], ['notes.md']],
+    ['/home/me/proj/out ✓ report.pdf', ['/home/me/proj/out', true], ['report.pdf']],
+  ] as Array<[string, ...Array<[string, true?]>]>)('keeps a shell prompt out of the path: %s', (line, ...links) => {
+    expect(findFilePathLinks(line)).toEqual(masterLinks(line, ...links));
+  });
+
+  it.each([LONG, '/mnt/c/Program Files (x86)/app/readme.txt', '/mnt/c/Users/me/Docs - Copy/a.docx'])(
+    'keeps a name whose words hold a letter or digit, or a bare -, whole: %s',
+    (line) => {
+      expect(paths(line)).toEqual([line]);
+    }
+  );
 });
 
 describe('terminal link provider with spaced paths', () => {
@@ -381,6 +412,13 @@ describe('terminal link provider with spaced paths', () => {
     expect(links.map((l) => l.text)).toEqual([rel]);
     links[0].activate(null, links[0].text);
     expect(opened).toEqual([`/workspace/project/${rel}`]);
+  });
+
+  it('links a labelled spaced path under ../ and opens it outside the workspace', () => {
+    const { links, opened } = linksFor('Saved to: ../My Docs/plan.md');
+    expect(links.map((l) => l.text)).toEqual(['../My Docs/plan.md']);
+    links[0].activate(null, links[0].text);
+    expect(opened).toEqual(['/workspace/My Docs/plan.md']);
   });
 
   it('links nothing for an unlinkable spaced path', () => {
