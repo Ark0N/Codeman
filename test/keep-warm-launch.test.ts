@@ -159,8 +159,8 @@ describe('readKeepWarmSettings', () => {
 
   /**
    * The service keeps what it reads until the next keep-warm settings change, so its reader must
-   * never hand back a fallback for a file it could not read: settings.json is rewritten in place
-   * by several routes, and defaults kept from a mid-write read would hold keep-warm off.
+   * never hand back a fallback for a file it could not read: defaults kept from a file that does
+   * not parse (a hand edit; writes are atomic) would hold keep-warm off after it is fixed.
    */
   it('the service reader rejects an unreadable file instead of falling back, and the server wires it', async () => {
     expect(await readKeepWarmSettingsOrThrow()).toEqual({ keepWarmDefault: false, maxHours: 2 });

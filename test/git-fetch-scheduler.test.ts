@@ -11,6 +11,8 @@
  *
  * Port: N/A.
  */
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   GitFetchScheduler,
@@ -29,6 +31,8 @@ import {
 } from '../src/git-fetch.js';
 import { DEFAULT_GIT_TIMEOUT_MS, MAX_REPOS } from '../src/git-workspace-status.js';
 import type { PathProbeKind } from '../src/utils/bounded-path-probe.js';
+import { readGitFetchSettings, readKeepWarmSettingsOrThrow } from '../src/hooks-config.js';
+import { SETTINGS_PATH } from '../src/web/route-helpers.js';
 
 const SETTINGS: GitFetchSettings = { enabled: true, intervalSeconds: 300 };
 const VIEW = (id: string, extra: Partial<GitFetchSessionView> = {}): GitFetchSessionView => ({
@@ -109,7 +113,7 @@ function harness(
     sessionIds: () => sessions.filter((s) => !gone.has(s.id)).map((s) => s.id),
     getSession: (id) => (gone.has(id) ? undefined : sessions.find((s) => s.id === id)),
     readSettings: async () => {
-      if (h.settings === null) throw new Error('settings.json is mid-write');
+      if (h.settings === null) throw new Error('settings.json is not valid JSON');
       return h.settings;
     },
     dockerWorkspaces: async () => {
@@ -155,7 +159,7 @@ describe('a quiet tick', () => {
     expect(h.calls.length).toBe(1);
   });
 
-  it('skips this tick only when a settings read fails, because settings.json is rewritten in place', async () => {
+  it('skips this tick only when a settings read fails, rather than deciding from defaults', async () => {
     const h = harness([VIEW('a')]);
     h.settings = null as unknown as GitFetchSettings;
     const logged = vi.fn();
@@ -167,6 +171,43 @@ describe('a quiet tick', () => {
     h.settings = SETTINGS;
     // Nothing was recorded for the failed tick, so the folder is still due at once.
     expect(await h.scheduler.tick(1000)).toBe(1);
+  });
+
+  /**
+   * The tick runs every 15 s whether or not the feature is on, so an unreadable settings.json would be logged
+   * every 15 s, and V8's parse message quotes the text around the fault: a hand edit with single quotes put
+   * the API key it held into the log on every tick.
+   */
+  it('logs an unreadable settings.json once until it reads again, and never with the text of the file', async () => {
+    const secret = 'sk-leak42';
+    const broken = `{"voiceSettings":{"apiKey":'${secret}'}}`;
+    await mkdir(dirname(SETTINGS_PATH), { recursive: true });
+    await writeFile(SETTINGS_PATH, broken);
+    try {
+      // The real readers: what they reject with is what gets logged.
+      await expect(readGitFetchSettings()).rejects.toThrow(/not valid JSON/);
+      await expect(readGitFetchSettings()).rejects.not.toThrow(secret);
+      await expect(readKeepWarmSettingsOrThrow()).rejects.not.toThrow(secret);
+
+      const h = harness([VIEW('a')]);
+      h.ports.readSettings = readGitFetchSettings;
+      const logged = vi.fn();
+      h.ports.log = logged;
+      for (const now of [0, 15_000, 30_000]) expect(await h.scheduler.tick(now)).toBe(0);
+      expect(h.calls).toEqual([]);
+      expect(logged).toHaveBeenCalledTimes(1);
+
+      // A read that succeeds in between re-arms the warning for the next failure.
+      await writeFile(SETTINGS_PATH, JSON.stringify({ gitFetchEnabled: true }));
+      expect(await h.scheduler.tick(45_000)).toBe(1);
+      await writeFile(SETTINGS_PATH, broken);
+      expect(await h.scheduler.tick(400_000)).toBe(0);
+      expect(await h.scheduler.tick(415_000)).toBe(0);
+      expect(logged).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(logged.mock.calls)).not.toContain(secret);
+    } finally {
+      await rm(SETTINGS_PATH, { force: true });
+    }
   });
 });
 

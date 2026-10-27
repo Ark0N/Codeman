@@ -45,8 +45,10 @@
  *     `DEFAULT_GIT_TIMEOUT_MS`): both settings are per device and never reach the server, so the server
  *     cannot know what a device chose.
  *   - A failure is reported, not retried harder: the folder keeps its schedule and gets its next run at its
- *     own interval. A settings read that fails skips this tick only, because settings.json is rewritten in
- *     place and a kept fallback would hold the feature off until the next settings change.
+ *     own interval. A settings read that fails skips this tick only, rather than deciding from defaults.
+ *     settings.json is replaced atomically, so such a failure is a file that does not parse (a hand edit) or
+ *     a real read error, which lasts until someone fixes it: it is logged once, and again only after a read
+ *     has succeeded in between, not every 15 s tick.
  *
  * @module git-fetch-scheduler
  */
@@ -130,6 +132,8 @@ export class GitFetchScheduler {
   private readonly folderOf = new Map<string, string>();
   private running = false;
   private stopped = false;
+  /** The last settings read failed and was logged; cleared by the next read that succeeds. */
+  private settingsUnreadable = false;
 
   constructor(ports: GitFetchPorts) {
     this.ports = ports;
@@ -144,11 +148,18 @@ export class GitFetchScheduler {
       try {
         settings = await this.ports.readSettings();
       } catch (err) {
-        // A read can land mid-write. Skipping this tick costs one interval; deciding from a fallback would
-        // hold the feature off until the next settings change.
-        this.ports.log?.(`git fetch: settings unreadable, tick skipped: ${getErrorMessage(err)}`);
+        // Writes are atomic, so this is a real read error or a file that does not parse (a hand edit), and it
+        // stays that way until it is fixed: logged once, not on every tick. The reader never puts the file's
+        // text in its error (readGitFetchSettings), since settings.json can hold an API key.
+        if (!this.settingsUnreadable) {
+          this.settingsUnreadable = true;
+          this.ports.log?.(
+            `git fetch: settings unreadable, ticks skipped until it reads again: ${getErrorMessage(err)}`
+          );
+        }
         return 0;
       }
+      this.settingsUnreadable = false;
 
       // Pass 1 — who is on what, before anything is decided. Every session open on a folder is recorded here,
       // not only the one that would get picked, so `remove()` can still see who is open on it when the session
