@@ -36,12 +36,24 @@ const mockedRename = vi.mocked(fs.rename);
 
 /**
  * settings.json writes as [path, contents]. The writer (settings-writer.ts) writes each one to a
- * temp file and renames it over settings.json, so a write counts once its rename lands.
+ * temp file and renames it over settings.json, so a write counts once its rename lands. Every
+ * writeFile must be such a temp file and every one must be renamed into place: a direct write to
+ * settings.json, or any other write that was never renamed, fails here rather than going unseen.
  */
 function settingsWrites(): [string, string][] {
-  return mockedRename.mock.calls.map(([from, to]) => {
-    const write = mockedWriteFile.mock.calls.find(([path]) => path === from);
-    return [String(to), String(write?.[1])];
+  const writes = mockedWriteFile.mock.calls.map(([path, contents]) => [String(path), String(contents)]);
+  const renames = mockedRename.mock.calls.map(([from, to]) => [String(from), String(to)]);
+  const isTemp = (path: string) => path.startsWith(`${SETTINGS_PATH}.`) && path.endsWith('.tmp');
+  const notRenamed = writes.filter(([path]) => !isTemp(path) || !renames.some(([from]) => from === path));
+  expect(
+    notRenamed.map(([path]) => path),
+    'writes that were not a temp file renamed into place'
+  ).toEqual([]);
+  expect(renames.length, 'one rename per write').toBe(writes.length);
+  return renames.map(([from, to]) => {
+    const write = writes.find(([path]) => path === from);
+    expect(write, `rename of ${from}, which was never written`).toBeDefined();
+    return [to, String(write?.[1])];
   });
 }
 
@@ -228,15 +240,21 @@ describe('tunnel enable authorization across a concurrent stop', () => {
       return JSON.stringify(storedSettings);
     });
     const pending = new Map<string, string>();
-    mockedWriteFile.mockImplementation(async (path, contents) => {
-      pending.set(String(path), contents as string);
-    });
-    mockedRename.mockImplementation(async (from, to) => {
-      expect(to).toBe(SETTINGS_PATH);
-      storedSettings = JSON.parse(pending.get(String(from)) as string);
+    const store = (contents: string) => {
+      storedSettings = JSON.parse(contents);
       // The stop becomes visible during the awaited write, regardless of isRunning() call count.
       if (stopDuringWrite) running = false;
       afterWrite?.();
+    };
+    mockedWriteFile.mockImplementation(async (path, contents) => {
+      // A direct write to settings.json lands at once, so the stored file is what the route really left;
+      // settingsWrites() then fails it for not going through a temp file and a rename.
+      if (path === SETTINGS_PATH) store(contents as string);
+      else pending.set(String(path), contents as string);
+    });
+    mockedRename.mockImplementation(async (from, to) => {
+      expect(to).toBe(SETTINGS_PATH);
+      store(pending.get(String(from)) as string);
     });
   });
 
