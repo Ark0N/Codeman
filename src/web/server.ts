@@ -194,6 +194,7 @@ import {
 import { isMultiUserMode } from '../config/multiuser.js';
 import { bootstrapInitialAdmin, hasUsers, resolveClaudeModeForUsername } from '../user-store.js';
 import { installRouteErrorHandler } from './route-error-handler.js';
+import { installEmptyApiPostParser } from './request-body-parser.js';
 import { isExplicitlyEnabled, isLoopbackBindHost, buildHostPolicy, type HostPolicy } from './network-auth-policy.js';
 import {
   registerPushRoutes,
@@ -969,6 +970,9 @@ export class WebServer extends EventEmitter {
       this.userFailures = authState.userFailures;
       this.userIpFailures = authState.userIpFailures;
     }
+
+    // Bodyless API POSTs may arrive as empty chunked streams through a proxy.
+    installEmptyApiPostParser(this.app);
 
     // WebSocket support (terminal I/O — low-latency bidirectional channel)
     await this.app.register(fastifyWebsocket);
