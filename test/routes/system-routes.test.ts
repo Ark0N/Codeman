@@ -22,6 +22,11 @@ vi.mock('node:fs/promises', () => ({
   default: {
     readFile: vi.fn(async () => '{}'),
     writeFile: vi.fn(async () => undefined),
+    // settings.json is written to a temp file and renamed over the real one (settings-writer.ts).
+    realpath: vi.fn(async (p: string) => p),
+    mkdir: vi.fn(async () => undefined),
+    rename: vi.fn(async () => undefined),
+    rm: vi.fn(async () => undefined),
   },
 }));
 

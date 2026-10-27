@@ -1158,8 +1158,9 @@ export async function readKeepWarmSettings(): Promise<KeepWarmSettings> {
 /**
  * The same two keys for the keep-warm service, which keeps what it reads until the next
  * settings change. A missing file is the defaults, but any other read or parse failure rejects
- * rather than falling back: settings.json is rewritten in place, so a read can land mid-write,
- * and a fallback kept from it would hold keep-warm off until the next keep-warm settings change.
+ * rather than falling back: settings.json is replaced atomically, so such a failure is a real
+ * read error or a file that does not parse (a hand edit), never a write in progress, and a
+ * fallback kept from it would hold keep-warm off until the next keep-warm settings change.
  */
 export async function readKeepWarmSettingsOrThrow(): Promise<KeepWarmSettings> {
   let text: string;

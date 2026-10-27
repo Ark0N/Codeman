@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   symlinkSync,
@@ -25,6 +26,7 @@ import { SETTINGS_PATH, resolveCasesDir } from '../../src/web/route-helpers.js';
 import { caseSessionSettled, claudeProjectDirName } from '../../src/case-rename.js';
 import { Session } from '../../src/session.js';
 import { safeRmHomeTree } from '../mocks/index.js';
+import { mutateSettingsFile } from '../../src/web/settings-writer.js';
 
 const LINKED = () => dataPath('linked-cases.json');
 const CASES_DIR = () => join(homedir(), 'codeman-cases');
@@ -286,6 +288,64 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     expect(settings()).toEqual({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj' });
   });
 
+  it('puts back only the keys it wrote, keeping a settings write made in between', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    const real = join(work, 'my-project');
+    mkdirSync(real);
+    writeFileSync(LINKED(), JSON.stringify({ proj: real }));
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj' }));
+    chmodSync(LINKED(), 0o444);
+    // Another writer (a settings save) lands after the rename wrote settings.json and before the
+    // registry write fails.
+    const realWriteFile = fs.writeFile;
+    const spy = vi.spyOn(fs, 'writeFile').mockImplementation(async (file, data, options) => {
+      if (file === LINKED()) await mutateSettingsFile((current) => ({ ...current, agentSkillEnabled: true }));
+      return realWriteFile(file, data, options);
+    });
+    try {
+      const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
+      expect(res.statusCode).toBe(500);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(settings()).toEqual({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj', agentSkillEnabled: true });
+  });
+
+  it('refuses to rename while settings.json is not a JSON object, leaving the folder and the file alone', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    const oldDir = localCase('alpha');
+    const torn = '{\n  "agentSkillEnabled": true\n}tail"\n}';
+    writeFileSync(SETTINGS_PATH, torn);
+    const res = await rename(app, 'alpha', { newName: 'beta' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      success: false,
+      errorCode: 'CONFLICT',
+      error: `${SETTINGS_PATH} is not a valid JSON object, so this change was not saved (saving would have replaced every other setting in it). Fix or delete the file, or restore it from a config backup, then try again.`,
+    });
+    expect(existsSync(oldDir)).toBe(true);
+    expect(existsSync(join(CASES_DIR(), 'beta'))).toBe(false);
+    expect(readFileSync(SETTINGS_PATH, 'utf8')).toBe(torn);
+  });
+
+  it('checks settings.json before it stops any session, so none is ended for a rename that cannot complete', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerCaseRoutes);
+    const oldDir = localCase('alpha');
+    const torn = '{\n  "agentSkillEnabled": true\n}tail"\n}';
+    writeFileSync(SETTINGS_PATH, torn);
+    (ctx.sessions as Map<string, unknown>).set('s1', { id: 's1', name: 'w1', workingDir: oldDir });
+
+    const res = await rename(app, 'alpha', { newName: 'beta', stopSessions: true });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().errorCode).toBe('CONFLICT');
+    expect(res.json().error).toContain('is not a valid JSON object');
+    expect(ctx.cleanupSession).not.toHaveBeenCalled();
+    expect(existsSync(oldDir)).toBe(true);
+    expect(existsSync(join(CASES_DIR(), 'beta'))).toBe(false);
+    expect(readFileSync(SETTINGS_PATH, 'utf8')).toBe(torn);
+  });
+
   it('says where the folder is when it cannot be moved back', async () => {
     const { app } = await createRouteTestHarness(registerCaseRoutes);
     const real = join(work, 'my-project');
@@ -328,12 +388,24 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     mkdirSync(real);
     writeFileSync(LINKED(), JSON.stringify({ proj: real, other: join(work, 'x') }));
     writeFileSync(SETTINGS_PATH, JSON.stringify({ caseOrder: ['proj'] }));
-    chmodSync(SETTINGS_PATH, 0o444);
-    const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
-    chmodSync(SETTINGS_PATH, 0o644);
+    // settings.json is replaced by renaming a temp file over it, which a read-only file does not stop,
+    // so the failure is injected at that rename.
+    const realRename = fs.rename;
+    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (to === SETTINGS_PATH) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      return realRename(from, to);
+    });
+    let res;
+    try {
+      res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
+    } finally {
+      spy.mockRestore();
+    }
     expect(res.statusCode).toBe(500);
     expect(existsSync(real)).toBe(true);
     expect(linked()).toEqual({ proj: real, other: join(work, 'x') });
+    // The failed write leaves no temp file behind.
+    expect(readdirSync(dirname(SETTINGS_PATH)).filter((n) => n.startsWith('settings.json.'))).toEqual([]);
   });
 
   it('answers 404 for a linked case a non-admin cannot see in multi-user mode', async () => {

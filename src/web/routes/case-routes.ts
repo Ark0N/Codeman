@@ -78,6 +78,12 @@ import {
   parseBody,
   readJsonConfig,
 } from '../route-helpers.js';
+import {
+  assertSettingsWritable,
+  mutateSettingsFile,
+  SettingsWriteRefusedError,
+  settingsWriteErrorResponse,
+} from '../settings-writer.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import type { AuthUser } from '../../types.js';
 import { SseEvent } from '../sse-events.js';
@@ -1849,6 +1855,17 @@ export function registerCaseRoutes(
     if (open.some((s) => !canAccessOwned(user, s.owner))) {
       return fail(403, ApiErrorCode.FORBIDDEN, "Another user's session has this case open");
     }
+    // The admin's rename writes settings.json only after the sessions are ended and the folder moved, and
+    // the writer refuses a file that is not a JSON object: check it by the writer's own rule now, so no
+    // session is ended for a rename that cannot complete. Not between the starting check and the lock below.
+    if (isAdmin(req)) {
+      try {
+        await assertSettingsWritable();
+      } catch (err) {
+        if (err instanceof SettingsWriteRefusedError) return fail(409, ApiErrorCode.CONFLICT, err.message);
+        throw err;
+      }
+    }
     // A session being created in the folder is not in ctx.sessions yet, so it could be neither listed nor
     // stopped: it would start in the old path after the move. Checked in the same tick that takes the lock
     // below (nothing is awaited in between), and the Session constructor refuses the folder from then on.
@@ -1876,27 +1893,23 @@ export function registerCaseRoutes(
         }
         if (moveFolder) await moveCaseFolder(oldPath, newPath);
         const originalLinks = isLinked ? await readLinkedCases() : undefined;
-        // The settings.json content before this rename wrote it, set only once a write is attempted (an
-        // absent file reads as {}, which must not be written back as a file that never existed).
-        let originalSettings: Record<string, unknown> | undefined;
+        // The settings.json values this rename replaced, set only once it wrote them. A failure puts back
+        // these keys alone, so a settings save that landed in between is kept.
+        let settingsUndo: Record<string, unknown> | undefined;
         try {
           // settings.json is server-wide and caseOrder/lastUsedCase name the admin's cases, so only the
           // admin's rename touches it (a non-admin's own rename must not rewrite someone else's list).
           // Written before linked-cases.json so a failure here leaves the registry untouched.
           if (isAdmin(req)) {
-            const existing = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings.json', {});
-            const order = renameInOrder(existing.caseOrder, name, newName);
-            const last = existing.lastUsedCase === name ? newName : undefined;
-            if (order || last) {
-              originalSettings = existing;
-              await fs.writeFile(
-                SETTINGS_PATH,
-                JSON.stringify(
-                  { ...existing, ...(order ? { caseOrder: order } : {}), ...(last ? { lastUsedCase: last } : {}) },
-                  null,
-                  2
-                )
-              );
+            const { before, after } = await mutateSettingsFile((existing) => {
+              const order = renameInOrder(existing.caseOrder, name, newName);
+              const last = existing.lastUsedCase === name ? newName : undefined;
+              if (!order && !last) return undefined;
+              return { ...existing, ...(order ? { caseOrder: order } : {}), ...(last ? { lastUsedCase: last } : {}) };
+            });
+            if (after) {
+              const keys = ['caseOrder', 'lastUsedCase'].filter((k) => after[k] !== before[k]);
+              settingsUndo = Object.fromEntries(keys.map((k) => [k, before[k]]));
             }
           }
           if (originalLinks) {
@@ -1913,9 +1926,8 @@ export function registerCaseRoutes(
         } catch (err) {
           // The folder moved but the registries did not follow: put settings.json and the folder back
           // rather than leave a case whose name and folder disagree.
-          if (originalSettings) {
-            await fs.writeFile(SETTINGS_PATH, JSON.stringify(originalSettings, null, 2)).catch(() => {});
-          }
+          const undo = settingsUndo;
+          if (undo) await mutateSettingsFile((current) => ({ ...current, ...undo })).catch(() => {});
           if (moveFolder) {
             const movedBack = await fs.rename(newPath, oldPath).then(
               () => true,
@@ -1970,22 +1982,11 @@ export function registerCaseRoutes(
     const { order } = parseBody(CaseOrderSchema, req.body, 'Invalid order data');
 
     try {
-      const dir = getDataDir();
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
-      let existing: Record<string, unknown> = {};
-      try {
-        existing = JSON.parse(await fs.readFile(SETTINGS_PATH, 'utf-8'));
-      } catch {
-        /* ignore */
-      }
-      const merged = { ...existing, caseOrder: order };
-      await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
+      await mutateSettingsFile((current) => ({ ...current, caseOrder: order }));
       ctx.broadcast(SseEvent.CaseOrderChanged, { order });
       return { success: true, data: { order } };
     } catch (err) {
-      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      return settingsWriteErrorResponse(err);
     }
   });
 

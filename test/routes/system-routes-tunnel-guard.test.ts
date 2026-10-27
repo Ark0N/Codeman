@@ -11,6 +11,11 @@ vi.mock('node:fs/promises', () => ({
   default: {
     readFile: vi.fn(async () => '{}'),
     writeFile: vi.fn(async () => undefined),
+    // settings.json is written to a temp file and renamed over the real one (settings-writer.ts).
+    realpath: vi.fn(async (p: string) => p),
+    mkdir: vi.fn(async () => undefined),
+    rename: vi.fn(async () => undefined),
+    rm: vi.fn(async () => undefined),
   },
 }));
 
@@ -27,6 +32,18 @@ vi.mock('node:fs', async (importOriginal) => {
 import fs from 'node:fs/promises';
 import { SETTINGS_PATH } from '../../src/web/route-helpers.js';
 const mockedWriteFile = vi.mocked(fs.writeFile);
+const mockedRename = vi.mocked(fs.rename);
+
+/**
+ * settings.json writes as [path, contents]. The writer (settings-writer.ts) writes each one to a
+ * temp file and renames it over settings.json, so a write counts once its rename lands.
+ */
+function settingsWrites(): [string, string][] {
+  return mockedRename.mock.calls.map(([from, to]) => {
+    const write = mockedWriteFile.mock.calls.find(([path]) => path === from);
+    return [String(to), String(write?.[1])];
+  });
+}
 
 const STATUS = { running: false, url: null };
 
@@ -94,7 +111,7 @@ describe('tunnel authentication policy', () => {
     expect(res.statusCode).toBe(200);
     expect(tunnel.start.mock.calls).toEqual([[harness.ctx.port, harness.ctx.https]]);
     expect(tunnel.stop.mock.calls).toEqual([]);
-    expect(mockedWriteFile.mock.calls).toEqual([[SETTINGS_PATH, JSON.stringify({ tunnelEnabled: true }, null, 2)]]);
+    expect(settingsWrites()).toEqual([[SETTINGS_PATH, JSON.stringify({ tunnelEnabled: true }, null, 2)]]);
   }
 
   it('refuses the incident: network acknowledgement does not authorize a public tunnel', async () => {
@@ -154,7 +171,7 @@ describe('tunnel authentication policy', () => {
     expect(res.statusCode).toBe(200);
     expect(tunnel.start.mock.calls).toEqual([]);
     expect(tunnel.stop.mock.calls).toEqual([[]]);
-    expect(mockedWriteFile.mock.calls).toEqual([[SETTINGS_PATH, JSON.stringify({ tunnelEnabled: false }, null, 2)]]);
+    expect(settingsWrites()).toEqual([[SETTINGS_PATH, JSON.stringify({ tunnelEnabled: false }, null, 2)]]);
   });
 
   it.each([
@@ -210,9 +227,13 @@ describe('tunnel enable authorization across a concurrent stop', () => {
       expect(path).toBe(SETTINGS_PATH);
       return JSON.stringify(storedSettings);
     });
+    const pending = new Map<string, string>();
     mockedWriteFile.mockImplementation(async (path, contents) => {
-      expect(path).toBe(SETTINGS_PATH);
-      storedSettings = JSON.parse(contents as string);
+      pending.set(String(path), contents as string);
+    });
+    mockedRename.mockImplementation(async (from, to) => {
+      expect(to).toBe(SETTINGS_PATH);
+      storedSettings = JSON.parse(pending.get(String(from)) as string);
       // The stop becomes visible during the awaited write, regardless of isRunning() call count.
       if (stopDuringWrite) running = false;
       afterWrite?.();
@@ -229,6 +250,7 @@ describe('tunnel enable authorization across a concurrent stop', () => {
       });
       vi.mocked(fs.readFile).mockResolvedValue('{}');
       mockedWriteFile.mockResolvedValue(undefined);
+      mockedRename.mockResolvedValue(undefined);
     }
   });
 
@@ -243,7 +265,7 @@ describe('tunnel enable authorization across a concurrent stop', () => {
     const expected = { tunnelEnabled, subagentTrackingEnabled: false, autoNameSessions: false };
     // Check every write so a transient unauthorized enable followed by a rollback also fails.
     expect
-      .soft(mockedWriteFile.mock.calls.map(([path, contents]) => ({ path, settings: JSON.parse(contents as string) })))
+      .soft(settingsWrites().map(([path, contents]) => ({ path, settings: JSON.parse(contents) })))
       .toEqual([{ path: SETTINGS_PATH, settings: expected }]);
     expect.soft(storedSettings).toEqual(expected);
   }

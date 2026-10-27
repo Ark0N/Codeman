@@ -128,8 +128,8 @@ export async function runConfigBackup(
   reason: string,
   opts: { force?: boolean } = {}
 ): Promise<{ result: ConfigBackupResult; removed: string[] } | null> {
-  // Read settings.json directly: readJsonConfig answers {} for ANY failure, so a syntax error or a read
-  // that lands inside PUT /api/settings's non-atomic write used to prune with the defaults (20 / 30
+  // Read settings.json directly: readJsonConfig answers {} for ANY failure, so a syntax error (or, before
+  // settings writes became atomic, a read that landed inside one) used to prune with the defaults (20 / 30
   // days) and drop the longer history the user asked to keep.
   const raw = await readSettingsForBackup();
   const unreadable = raw === 'unreadable';
