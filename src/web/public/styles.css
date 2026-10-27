@@ -621,8 +621,9 @@ body {
    and only the rows beside the toolbar stop short of it. A flex line cannot
    be shortened on its own, so the strip lays its tabs out inline, around a
    float the size of the toolbar's box (measured into --tab-corner-width and
-   --tab-corner-height). The strip scrolls, so it contains the float and is
-   never shorter than the toolbar it now holds up. Inline tabs space their
+   --tab-corner-height). The strip is a scroll container, so it contains the
+   float and is never shorter than the toolbar it now holds up; a strip that
+   would actually scroll keeps the plain wrap instead. Inline tabs space their
    rows with a bottom margin (the old row-gap, lineage's included); the strip
    carries no font size of its own, so the whitespace between tabs is 0 wide. */
 .header:has(> .session-tabs-host > .session-tabs.tabs-corner) > .header-right {

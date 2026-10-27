@@ -6996,7 +6996,12 @@ class CodemanApp {
       container.style.removeProperty('--tab-corner-width');
       container.style.removeProperty('--tab-corner-height');
     };
-    if (!on) {
+    // A strip past its max-height scrolls, and the float would scroll its tabs
+    // under the toolbar, which stays put: keep the plain wrap. The plain strip
+    // is measured here (updateTabOverflowMode took .tabs-corner off), before
+    // the class goes on; toggling it on a scrolled strip lets scroll anchoring
+    // move the strip.
+    if (!on || container.scrollHeight > container.clientHeight + 1) {
       off();
       return;
     }
@@ -7021,8 +7026,9 @@ class CodemanApp {
     const style = getComputedStyle(container);
     const strip = container.getBoundingClientRect();
     const box = right.getBoundingClientRect();
-    // The float sits in the strip's scrolled content, at its padding edge.
-    const contentTop = strip.top + parseFloat(style.paddingTop) - container.scrollTop;
+    // The float sits at the strip's content padding edge (the plain strip did
+    // not scroll, so scrollTop is 0).
+    const contentTop = strip.top + parseFloat(style.paddingTop);
     const contentLeft = strip.left + container.clientLeft + parseFloat(style.paddingLeft);
     const contentRight = strip.left + container.clientLeft + container.clientWidth - parseFloat(style.paddingRight);
     // A first tab that cannot fit beside the toolbar would drop the whole first
@@ -7040,6 +7046,9 @@ class CodemanApp {
     if (container.style.getPropertyValue('--tab-corner-height') !== height) {
       container.style.setProperty('--tab-corner-height', height);
     }
+    // A plain strip just under its max-height can pass it once the float is in:
+    // fall back to the plain strip, which fit.
+    if (container.scrollHeight > container.clientHeight + 1) off();
   }
 
   /**
