@@ -100,6 +100,17 @@ export function mutateSettingsFile(
   return run;
 }
 
+/**
+ * Rejects with `SettingsWriteRefusedError` when `mutateSettingsFile()` would refuse a write right
+ * now: the writer's own read-for-write rule, run on its own. For a route that does something it
+ * cannot take back (case rename ends sessions) before its settings write. A check only, outside
+ * the chain (writes are atomic, so it never reads a half-written file); the file can still change
+ * before the write.
+ */
+export async function assertSettingsWritable(): Promise<void> {
+  await readSettingsForWrite(SETTINGS_PATH);
+}
+
 /** A refused write answers 409 CONFLICT with the fix; any other failure stays OPERATION_FAILED. */
 export function settingsWriteErrorResponse(err: unknown): ApiResponse<never> {
   if (err instanceof SettingsWriteRefusedError) return createErrorResponse(ApiErrorCode.CONFLICT, err.message);

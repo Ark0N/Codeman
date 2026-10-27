@@ -78,7 +78,12 @@ import {
   parseBody,
   readJsonConfig,
 } from '../route-helpers.js';
-import { mutateSettingsFile, settingsWriteErrorResponse } from '../settings-writer.js';
+import {
+  assertSettingsWritable,
+  mutateSettingsFile,
+  SettingsWriteRefusedError,
+  settingsWriteErrorResponse,
+} from '../settings-writer.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import type { AuthUser } from '../../types.js';
 import { SseEvent } from '../sse-events.js';
@@ -1849,6 +1854,17 @@ export function registerCaseRoutes(
       : [];
     if (open.some((s) => !canAccessOwned(user, s.owner))) {
       return fail(403, ApiErrorCode.FORBIDDEN, "Another user's session has this case open");
+    }
+    // The admin's rename writes settings.json only after the sessions are ended and the folder moved, and
+    // the writer refuses a file that is not a JSON object: check it by the writer's own rule now, so no
+    // session is ended for a rename that cannot complete. Not between the starting check and the lock below.
+    if (isAdmin(req)) {
+      try {
+        await assertSettingsWritable();
+      } catch (err) {
+        if (err instanceof SettingsWriteRefusedError) return fail(409, ApiErrorCode.CONFLICT, err.message);
+        throw err;
+      }
     }
     // A session being created in the folder is not in ctx.sessions yet, so it could be neither listed nor
     // stopped: it would start in the old path after the move. Checked in the same tick that takes the lock

@@ -317,13 +317,30 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     const torn = '{\n  "agentSkillEnabled": true\n}tail"\n}';
     writeFileSync(SETTINGS_PATH, torn);
     const res = await rename(app, 'alpha', { newName: 'beta' });
-    expect(res.statusCode).toBe(500);
+    expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({
       success: false,
-      errorCode: 'OPERATION_FAILED',
+      errorCode: 'CONFLICT',
       error: `${SETTINGS_PATH} is not a valid JSON object, so this change was not saved (saving would have replaced every other setting in it). Fix or delete the file, or restore it from a config backup, then try again.`,
-      stoppedSessions: 0,
     });
+    expect(existsSync(oldDir)).toBe(true);
+    expect(existsSync(join(CASES_DIR(), 'beta'))).toBe(false);
+    expect(readFileSync(SETTINGS_PATH, 'utf8')).toBe(torn);
+  });
+
+  it('checks settings.json before it stops any session, so none is ended for a rename that cannot complete', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerCaseRoutes);
+    const oldDir = localCase('alpha');
+    const torn = '{\n  "agentSkillEnabled": true\n}tail"\n}';
+    writeFileSync(SETTINGS_PATH, torn);
+    (ctx.sessions as Map<string, unknown>).set('s1', { id: 's1', name: 'w1', workingDir: oldDir });
+
+    const res = await rename(app, 'alpha', { newName: 'beta', stopSessions: true });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().errorCode).toBe('CONFLICT');
+    expect(res.json().error).toContain('is not a valid JSON object');
+    expect(ctx.cleanupSession).not.toHaveBeenCalled();
     expect(existsSync(oldDir)).toBe(true);
     expect(existsSync(join(CASES_DIR(), 'beta'))).toBe(false);
     expect(readFileSync(SETTINGS_PATH, 'utf8')).toBe(torn);
