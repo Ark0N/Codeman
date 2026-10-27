@@ -4,10 +4,11 @@
  * Two of these assertions exist because the obvious implementation was measured
  * to be wrong against real files:
  *
- * - dsh appends ONE ZSTD FRAME PER WRITE, and Node's `zlib` zstd decoder stops
- *   at the first frame end. A 56-line transcript decoded as 1 line / 158 bytes,
- *   which reads as "the worker never answered" rather than as an error. The
- *   multi-frame fixtures below are the guard.
+ * - dsh appends ONE ZSTD FRAME PER WRITE, and Node's `zlib` zstd decoder
+ *   before 24.22 and 26.10 stops at the first frame end. A 56-line transcript
+ *   decoded as 1 line / 158 bytes, which reads as "the worker never answered"
+ *   rather than as an error. Newer Node decodes every frame (nodejs/node#65865),
+ *   so the multi-frame fixtures below pin the walker itself, not Node's decoder.
  * - a fresh worker in a case directory that had been used before answered its
  *   first `last-response` with the PREVIOUS session's reply. Session-to-
  *   transcript pairing is therefore its own describe block.
@@ -66,10 +67,6 @@ describe.skipIf(!zstdSupported())('zstd frame walking', () => {
   it('decodes every frame, not just the first (the silent-truncation bug)', () => {
     const lines = Array.from({ length: 40 }, (_, i) => JSON.stringify({ type: 'noise', seq: i }));
     const buf = framed(lines);
-
-    // The one-shot decoder is what this module had to replace.
-    const oneShot = (zlib as unknown as { zstdDecompressSync?: (b: Buffer) => Buffer }).zstdDecompressSync!(buf);
-    expect(oneShot.toString('utf8').trim().split('\n')).toHaveLength(1);
 
     expect(zstdFrameRanges(buf)).toHaveLength(40);
     expect(decodeZstdFrames(buf).trim().split('\n')).toHaveLength(40);
