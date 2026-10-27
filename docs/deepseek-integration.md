@@ -238,7 +238,8 @@ reader (`src/deepseek-transcript.ts`):
   of them, Node's `zlib` zstd decoder before 24.22 and 26.10 stops at the first:
   a real 56-line transcript came back as 1 line. The reader walks frame headers
   itself, which stays correct on a Node that decodes every frame
-  (nodejs/node#65865). On a Node older than 22.15 (no zstd at all) the mode falls back to the pane, as before.
+  (nodejs/node#65865). On a Node older than 22.15 (no zstd at all) the mode
+  falls back to the pane, as before.
 - **Not every `user/message` is the user.** Each turn also records a
   plugin-sourced runtime-context snapshot; only `source.kind === 'user'` is a
   prompt.

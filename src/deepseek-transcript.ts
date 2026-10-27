@@ -30,10 +30,11 @@
  * (nodejs/node#65865) `zlib.zstdDecompress()` and `createZstdDecompress()` both
  * stop at the first frame end, and the supported range still includes those
  * versions: measured on a real 56-line transcript, Node returned 158 bytes /
- * 1 line where the CLI returned 43,747 bytes / 56 lines. That is a silent truncation to the session header —
- * every call would have reported "no answer yet" forever. `decodeZstdFrames()`
- * below walks the frame headers itself and decompresses each frame, and
- * `test/deepseek-transcript.test.ts` pins it against multi-frame fixtures.
+ * 1 line where the CLI returned 43,747 bytes / 56 lines. That is a silent
+ * truncation to the session header — every call would have reported "no answer
+ * yet" forever. `decodeZstdFrames()` below walks the frame headers itself and
+ * decompresses each frame, and `test/deepseek-transcript.test.ts` pins it
+ * against multi-frame fixtures.
  *
  * **2. The user's prompts are mixed with injected context.** Every turn also
  * writes a `user/message` whose source is a plugin (the runtime-context
