@@ -1989,8 +1989,10 @@ export class WebServer extends EventEmitter {
     this.runSummaryTrackers.set(session.id, summaryTracker);
     summaryTracker.recordSessionStarted(session.mode, session.workingDir);
 
-    // Set working directory for Ralph tracker to auto-load @fix_plan.md (not supported for external CLIs)
-    if (!isExternalCliMode(session.mode)) {
+    // Set working directory for Ralph tracker to auto-load @fix_plan.md (not supported for external CLIs).
+    // A remote session's workingDir is a path on the remote host, and the watcher reads and
+    // fs.watch()es it on the LOCAL disk, so it is skipped there too.
+    if (!isExternalCliMode(session.mode) && !session.remote) {
       session.ralphTracker.setWorkingDir(session.workingDir);
     }
 
