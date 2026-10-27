@@ -3389,8 +3389,8 @@ const KEYBOARD_CLIP_CURSOR_REACH = 2;
  * - Reading history: the offset follows the scroll position, so the top of the
  *   scrollback is reachable and scrolling stays continuous.
  *
- * ponytail: recomputed on every render with no hysteresis; add some if a TUI's
- * mid-redraw frames ever make the view jitter.
+ * Recomputed on every render with no hysteresis; add some if a TUI's mid-redraw
+ * frames ever make the view jitter.
  *
  * @param {{rows: number, cellHeight: number, viewHeight: number, cursorRow: number,
  *   lastContentRow: number, following: boolean, viewportY: number, baseY: number}} input

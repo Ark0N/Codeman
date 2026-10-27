@@ -6638,7 +6638,7 @@ Object.assign(CodemanApp.prototype, {
     if (!container) return;
     const rows = this._keyboardHeldRowsActive() ? this.terminal.rows : 0;
     const cellHeight = rows ? this.terminal._core?._renderService?.dimensions?.css?.cell?.height : 0;
-    const viewHeight = container.clientHeight;
+    const viewHeight = rows ? container.clientHeight : 0;
     let clip = 0;
     if (cellHeight && viewHeight) {
       const buffer = this.terminal.buffer.active;
