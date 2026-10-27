@@ -1330,8 +1330,15 @@ N+1 and its redelivery dropped as a duplicate. A WS frame is ACKed only once wri
 a held async write (mux write, named key) holds everything behind it until it settles
 (`guardedInputHeld`); a full hold queue (256 inputs / 1 MiB) closes the socket with
 `1013` and applies nothing later from it, so the browser resends in order. `POST
-.../input` alone answers `409` (seq returned) for the lease plus the drain, since its
-browser drainer is serialized and retries. ⚠️ Submit waits `SUBMIT_QUIET_MS` (250) after the staged keys before its
+.../input` answers `409` (seq returned) to TAGGED input for the lease plus the drain,
+since its browser drainer is serialized and retries; untagged input there (the phone
+accessory keys and the Stop button's Ctrl+C, fire-and-forget POSTs that never read the
+answer) is held instead, the raw write through `holdForGuardedLease()` and a mux write
+by `writeViaMux`'s own turn (never wrap `writeViaMux` in a hold: the drain would queue
+it again behind later input and wait on itself). `write()` refuses during the lease
+only, since the drain writes held input through it, so a direct `write()` caller such
+as cron's `paste` mode (`cron-service.ts`) can land ahead of input still draining.
+⚠️ Submit waits `SUBMIT_QUIET_MS` (250) after the staged keys before its
 checks: stage types plain keys, codex's paste-burst detector reads them as a paste, and
 an Enter within 120 ms of one becomes a newline while submit would report it
 delivered. Stage cancels older verifier retries and sends no Enter. Receipts contain hashes and

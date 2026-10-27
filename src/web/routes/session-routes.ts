@@ -2080,15 +2080,18 @@ export function registerSessionRoutes(
 
     // A guarded submit (agent-staging.ts) holds the input lease for the few
     // milliseconds of its conditional Enter, and input that arrives meanwhile is held
-    // and written in arrival order after it. This route refuses for that span (the
-    // lease plus the held input's drain) rather than overtake held input. Say so
+    // and written in arrival order after it. A TAGGED request is refused for that span
+    // (the lease plus the held input's drain) rather than overtake held input: say so
     // instead of answering 200 for bytes that were never written, and give the seq
     // back so the browser's durable queue (which keeps a frame on any 409, and whose
-    // POST drainer sends one frame at a time) delivers it on its next retry. Nothing
-    // from here to the write below awaits, so the lease cannot be taken in between.
-    if (!duplicate && session.guardedInputHeld === true) {
-      if (tagged) session.forgetInputSeq(clientId as string, seq as number);
-      return reply
+    // POST drainer sends one frame at a time) delivers it on its next retry. An
+    // UNTAGGED request has no retry behind it (the phone accessory keys and the Stop
+    // button's Ctrl+C are fire-and-forget POSTs that never read the answer), so it is
+    // held instead, like a WebSocket frame: `writeViaMux` takes its own turn behind
+    // the lease, and the raw write below is held explicitly. Nothing from here to the
+    // write below awaits, so the lease cannot be taken in between.
+    const refuseGuarded = () =>
+      reply
         .code(409)
         .send(
           createErrorResponse(
@@ -2096,6 +2099,9 @@ export function registerSessionRoutes(
             'A guarded submit is in progress on this session; nothing was written. Retry the input.'
           )
         );
+    if (!duplicate && tagged && session.guardedInputHeld === true) {
+      session.forgetInputSeq(clientId as string, seq as number);
+      return refuseGuarded();
     }
 
     // Only a waiting request pays for the tmux probe: the browser's plain input path
@@ -2208,7 +2214,38 @@ export function registerSessionRoutes(
       // Same rollback. NOT an error response, deliberately: a session can
       // legitimately have no PTY yet (created but not started), and callers have
       // always been able to write to one without a 4xx.
-      delivered = session.write(inputStr, { fromUser: true });
+      //
+      // During a guarded submit (untagged only: a tagged one was refused above) the
+      // write is held and runs in arrival order once the lease is released. The answer
+      // is a 200 once held; a send-and-wait reads `delivered` from the held write. Only
+      // a full hold queue refuses, after releasing the waiter registered above.
+      let heldWrite: Promise<boolean> | null = null;
+      if (session.guardedInputHeld === true) {
+        let settle!: (written: boolean) => void;
+        const written = new Promise<boolean>((resolve) => {
+          settle = resolve;
+        });
+        const held = session.holdForGuardedLease(
+          () => {
+            let ok = false;
+            try {
+              ok = session.write(inputStr, { fromUser: true });
+            } finally {
+              settle(ok);
+            }
+          },
+          inputStr.length,
+          inputStr
+        );
+        if (held === 'full') {
+          abort.abort();
+          stopDeathWatch();
+          return refuseGuarded();
+        }
+        if (held === 'held') heldWrite = written;
+      }
+      if (heldWrite && !waitPromise) return {};
+      delivered = heldWrite ? await heldWrite : session.write(inputStr, { fromUser: true });
       if (!delivered && tagged) {
         session.forgetInputSeq(clientId as string, seq as number);
       }

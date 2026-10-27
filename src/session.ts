@@ -4784,6 +4784,9 @@ export class Session extends EventEmitter {
    * True while input is being held behind a guarded submit: the lease itself, or held
    * input not yet written after it. A write that is not routed through
    * {@link holdForGuardedLease} must refuse in this window, or it overtakes held input.
+   * `write()` is the known exception: it refuses during the lease only, since the drain
+   * writes held input through it, so a direct `write()` caller (cron's `paste` mode in
+   * `cron/cron-service.ts`) can still land ahead of input that is draining.
    */
   get guardedInputHeld(): boolean {
     return this._guardedSubmitInFlight || this._guardedHeld.length > 0 || this._guardedHeldDraining;
@@ -4983,6 +4986,7 @@ export class Session extends EventEmitter {
    */
   write(data: string, options: SessionWriteOptions = {}): boolean {
     this._observeGuardedKeyboardInput(data);
+    // The lease only, not the drain, which writes held input through here (see guardedInputHeld).
     if (this._guardedSubmitInFlight) return false;
     const submittedPrompt = this._trackSubmit(data, options);
     if (!this.ptyProcess) return false;

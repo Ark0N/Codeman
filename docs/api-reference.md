@@ -426,11 +426,12 @@ worker's prompt but never submitted, and the wait then runs its full timeout on 
 turn that never started. Verified live; this is the most common silent failure on
 this endpoint.
 
-Any input, waiting or not, answers `409 CONFLICT` with nothing written while an
-experimental guarded submit holds the session's input lease, or input held behind
-it is still being written (a few milliseconds; see
-[guarded input](#experimental-bounded-agent-inspection-and-guarded-input)).
-Retry it.
+Input tagged with `clientId` and `seq`, waiting or not, answers `409 CONFLICT`
+with nothing written while an experimental guarded submit holds the session's
+input lease, or input held behind it is still being written (a few milliseconds;
+see [guarded input](#experimental-bounded-agent-inspection-and-guarded-input)).
+Retry it. Untagged input is held instead and written in arrival order once the
+lease is released.
 
 A **plain prompt** (printable text followed by exactly one `\r`, nothing else) is
 delivered through tmux even without `useMux`: the text is typed, Enter is pressed as
@@ -716,15 +717,18 @@ outcome. That covers terminal WebSocket keystrokes (each frame is acknowledged
 only once it is written, so a frame typed during the lease lands before the one
 typed after it), Shift+Enter and Ctrl+Enter from `POST .../send-key`, approval
 answers and Codeman's own managed writes. A held write that is still being sent
-holds everything behind it. `POST /api/v1/sessions/:id/input` instead answers
-`409 CONFLICT` ("A guarded submit is in progress on this session; nothing was
-written") for that span, the lease plus the held input's drain, rather than a
-`200` for bytes that were never written; a tagged `clientId`/`seq` frame keeps
-its seq, so the browser's durable queue, whose POST fallback sends one frame at a
-time and keeps it on a `409`, delivers it on the next retry. A lease holds at
-most 256 inputs or 1 MiB; past that a WebSocket is closed with code `1013` and
+holds everything behind it. A tagged `POST /api/v1/sessions/:id/input` (one
+carrying `clientId` and `seq`) instead answers `409 CONFLICT` ("A guarded submit
+is in progress on this session; nothing was written") for that span, the lease
+plus the held input's drain, rather than a `200` for bytes that were never
+written; it keeps its seq, so the browser's durable queue, whose POST fallback
+sends one frame at a time and keeps it on a `409`, delivers it on the next retry.
+Untagged input to that route is held like a WebSocket frame, because its senders
+(the phone accessory keys, the Stop button) never read the answer. A lease holds
+at most 256 inputs or 1 MiB; past that a WebSocket is closed with code `1013` and
 nothing later from it is applied, so the browser reconnects and resends every
-unacknowledged frame in order, and `send-key` answers `409 CONFLICT`.
+unacknowledged frame in order, and `send-key` and an untagged raw input answer
+`409 CONFLICT`.
 
 Direct auxiliary key operations participate in the same pending-write and input
 lease checks. Complete allowlisted focus/mouse reports and empty writes preserve

@@ -9,12 +9,14 @@
  * is still unACKed afterwards, in seq order, the way `_redeliverSweep` does.
  */
 import { EventEmitter } from 'node:events';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { formatPaneSnapshot } from '../src/tmux-manager.js';
 import { GuardedInputBusyError, Session } from '../src/session.js';
 import { registerWsRoutes } from '../src/web/routes/ws-routes.js';
+import { registerSessionRoutes } from '../src/web/routes/session-routes.js';
 import type { SessionPort } from '../src/web/ports/session-port.js';
+import { createRouteTestHarness } from './routes/_route-test-utils.js';
 
 type Frame = { t: 'i'; d: string; seq?: number; cid?: string };
 
@@ -372,6 +374,59 @@ describe('input during a guarded submit lease', () => {
       expect(socket.acks()).toEqual([1, 2]);
       expect(h.session.guardedInputHeld).toBe(false);
     } finally {
+      await h.stop();
+    }
+  });
+
+  it('holds an untagged raw POST .../input during the lease and writes it after the Enter', async () => {
+    const h = harness();
+    const route = await createRouteTestHarness(registerSessionRoutes);
+    try {
+      (route.ctx.sessions as unknown as Map<string, Session>).set(h.session.id, h.session);
+      const submit = h.session.submitGuardedInput(h.session.guardedInputSnapshot()!);
+      await Promise.resolve();
+      expect(h.session.guardedSubmitInFlight).toBe(true);
+      // The Stop button's Ctrl+C: an untagged POST whose answer nobody reads.
+      const res = await route.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${h.session.id}/input`,
+        payload: { input: '\x03' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(h.pty).toEqual([]);
+      h.finishEnter(true);
+      await expect(submit).resolves.toBe(true);
+      expect(h.pty).toEqual(['\r', '\x03']);
+    } finally {
+      await route.app.close();
+      await h.stop();
+    }
+  });
+
+  it('a held untagged raw send-and-wait reports the held write as delivered', async () => {
+    const h = harness();
+    const route = await createRouteTestHarness(registerSessionRoutes);
+    try {
+      (route.ctx.sessions as unknown as Map<string, Session>).set(h.session.id, h.session);
+      const submit = h.session.submitGuardedInput(h.session.guardedInputSnapshot()!);
+      await Promise.resolve();
+      const answer = route.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${h.session.id}/input`,
+        payload: { input: '\x03', useMux: false, wait: 'exit', waitTimeout: 1000 },
+      });
+      // Private, but the only proof the route reached the hold before the lease ends.
+      const queue = (h.session as unknown as { _guardedHeld: unknown[] })._guardedHeld;
+      await vi.waitFor(() => expect(queue).toHaveLength(1));
+      expect(h.pty).toEqual([]);
+      h.finishEnter(true);
+      await submit;
+      const res = await answer;
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data).toMatchObject({ delivered: true, duplicate: false });
+      expect(h.pty).toEqual(['\r', '\x03']);
+    } finally {
+      await route.app.close();
       await h.stop();
     }
   });
