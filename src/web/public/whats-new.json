@@ -1,13 +1,13 @@
 {
-  "version": "1.45.0",
+  "version": "1.46.0",
   "highlights": [
-    "Rename a case and its folder (#680)",
-    "A per-session agent inbox (#690)",
-    "Pick the agent from Cmd+K (#685)",
-    "A resizable header toolbar (#689)",
-    "GPU and CPU clock readings (#692, opt-in)",
-    "A tunnel no longer locks everyone out after ten typos (#684, multi-user mode)",
-    "The first wheel notch moves a Codex transcript (#699)",
-    "The wheel no longer moves a Codex menu's selection (#698)"
+    "Fetch from the Git status window (#714)",
+    "Start a session beside any tab (#712, opt-in)",
+    "The phone keyboard no longer costs Claude its transcript (#711)",
+    "Typing stays smooth in a long prompt (#713)",
+    "Links survive wrapping and spaces (#686, #687)",
+    "`codeman agent spawn` in a project directory (#708)",
+    "Read saved Codex conversations offline (#707)",
+    "Experimental: bounded inspection and guarded submission for agents (#694, opt-in)"
   ]
 }
