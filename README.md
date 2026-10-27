@@ -1227,7 +1227,7 @@ Full details: [`docs/archive/code-structure-findings.md`](docs/archive/code-stru
 
 [![npm](https://img.shields.io/npm/v/xterm-zerolag-input?style=flat-square&color=22c55e)](https://www.npmjs.com/package/xterm-zerolag-input)
 
-Instant keystroke feedback overlay for xterm.js. Eliminates perceived input latency over high-RTT connections by rendering typed characters immediately as a pixel-perfect DOM overlay. Zero dependencies, 6.1 kB gzipped, configurable prompt detection, CJK/emoji wide-character support, full state machine with 238 tests.
+Instant keystroke feedback overlay for xterm.js. Eliminates perceived input latency over high-RTT connections by rendering typed characters immediately as a pixel-perfect DOM overlay. Zero dependencies, 5.7 kB minified and gzipped, configurable prompt detection, CJK/emoji wide-character support, full state machine with 276 tests. Typing cost does not grow with prompt length.
 
 ```bash
 npm install xterm-zerolag-input
