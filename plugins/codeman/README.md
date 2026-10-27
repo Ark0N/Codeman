@@ -7,7 +7,7 @@ The agent skill for [Codeman](https://getcodeman.com), the self-hosted mission c
 /plugin install codeman@codeman
 ```
 
-The skill acts only inside a Codeman-managed session (`CODEMAN_MUX=1`) and refuses everywhere else, so installing it globally costs nothing for unrelated sessions.
+The skill acts inside a Codeman-managed session (`CODEMAN_MUX=1`). Outside one it only reads saved Codex conversations offline (`codeman history read`) and refuses everything else, so installing it globally costs nothing for unrelated sessions.
 
 Pick one install route. Codeman can inject the skill into each case itself (App Settings, Agent Skill), and `codeman skill install` writes a user-level copy; a Claude Code that has one of those AND this plugin lists the skill twice, as `codeman` and `codeman:codeman`. Both work, the second is just noise.
 

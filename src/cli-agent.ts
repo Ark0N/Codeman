@@ -1272,7 +1272,7 @@ export function registerAgentCommands(program: Command): Command {
   const agent = program
     .command('agent')
     .description(
-      'Talk to other sessions from inside one (any CLI mode): list, spawn, send, wait, read, interrupt, rm, and the inbox: post, inbox, ack'
+      'Talk to other sessions from inside one (any CLI mode): list, spawn, send, wait, read, interrupt, rm, the inbox: post, inbox, ack, and the experimental, opt-in inspect, stage, submit'
     );
 
   agent

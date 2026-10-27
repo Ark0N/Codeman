@@ -585,6 +585,8 @@ loginctl enable-linger $USER
 
 通过隧道暴露前**务必设置 `CODEMAN_PASSWORD`** —— 否则任何拿到 URL 的人都能完全访问你的会话。
 
+Codeman 自己管理的隧道（App Settings → System → Remote access）在没有登录（`CODEMAN_PASSWORD` 或多用户模式）时拒绝启动，除非用 `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1` 或 `codeman web --allow-unauthenticated-tunnel` 确认这种暴露，或者你在浏览器的确认框里点了同意；没有登录时，每次开启前浏览器都会先问。`CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` 只管网络绑定，并不能让隧道启动。
+
 </details>
 
 ### 二维码认证
@@ -826,12 +828,14 @@ deleted 9f2d8e5f, aff9c691, be9f1f15    标签消失
 | [`reference/recipes.md`](skills/codeman/reference/recipes.md)       | 8 个完整流程：claude、DeepSeek Harness 与 shell 工作会话、扇出、盯住被卡住的工作会话、消息扇出。按需加载。 |
 | [`reference/endpoints.md`](skills/codeman/reference/endpoints.md)   | 完整端点表、错误码、各模式的信号表、容量限制。按需加载。                                     |
 | [`reference/messaging.md`](skills/codeman/reference/messaging.md)   | 通过 Claude Code 跨会话消息直接和 claude 工作会话对话。按需加载。                            |
+| [`reference/history.md`](skills/codeman/reference/history.md)       | 用 `codeman history read` 离线读取已保存的 Codex 对话：选择器、过滤条件、分叉、预算。按需加载。 |
+| [`reference/inspection-and-staging.md`](skills/codeman/reference/inspection-and-staging.md) | 实验性功能，需要手动开启：用 `codeman agent inspect`、`stage` 和 `submit` 做有界的窗格检查和受保护的提交。按需加载。 |
 
 里面的每一个配方都在真实服务器上验证过，注释记录的是实测出来而不是猜出来的失败模式。
 
 #### 两件值得知道的事
 
-- **它会自我门禁。** 不在 Codeman 会话里（`CODEMAN_MUX` 未设置）时，技能拒绝动作，也不去猜 API 地址，所以全局安装对无关的 Claude Code 会话没有任何代价。
+- **它会自我门禁。** 它在 Codeman 管理的会话里工作。不在这样的会话里（`CODEMAN_MUX` 未设置）时，它只会离线读取已保存的 Codex 对话（`codeman history read`），其他一律拒绝，也从不去猜 API 地址，所以全局安装对无关的 Claude Code 会话没有任何代价。
 - **它刻意保守。** 未经提示，它只会拉起会话、给它们发提示，并删除**它在同一段对话里自己创建的**会话（按精确 id，经由一个拒绝删除智能体自身会话的失败即关闭守卫）。删除 case（会抹掉一个真实的代码目录）、批量杀会话、改动 respawn/ralph/cron/orchestrator 以及写设置，都需要你开口并指名目标。
 
 ⚠️ 把 `agentSkillEnabled` 关回去**不会删掉已经注入的副本**（在创建时做清扫，会把技能从共用同一个工作区的其他活动会话脚下抽走）。要删就按 case 删：`codeman skill uninstall --case <name>`。
@@ -993,7 +997,7 @@ codeman agent rm "$SID"                                   # 除当前会话外�
 
 ### MCP 服务器（`codeman mcp`）：从任意 MCP 客户端驱动 Codeman
 
-`codeman mcp` 是一个走 stdio 的 [Model Context Protocol](https://modelcontextprotocol.io) 服务器，因此任何 MCP 客户端（Claude Code、Claude Desktop、Codex、Gemini CLI、Cursor 等）都能在任意已安装的智能体 CLI 里启动 Codeman 会话、给它们发提示、等它们完成、读取回答并清理，无论是在 Codeman 内部还是外部。和 `codeman agent` 一样，它是 HTTP API 的客户端：没有新路由，认证和归属规则不变。
+`codeman mcp` 是一个走 stdio 的 [Model Context Protocol](https://modelcontextprotocol.io) 服务器，因此任何 MCP 客户端（Claude Code、Claude Desktop、Codex、Gemini CLI、Cursor 等）都能在任意已安装的智能体 CLI 里启动 Codeman 会话、给它们发提示、等它们完成、读取回答并清理，无论是在 Codeman 内部还是外部。和 `codeman agent` 一样，它是 HTTP API 的客户端。MCP 服务器自己不新增任何路由，认证和归属规则不变。
 
 ```bash
 # Claude Code

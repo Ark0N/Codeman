@@ -96,14 +96,19 @@ failed or was ambiguous, the pane or input changed, or no frame verified in time
 says the message may already be in the composer: no receipt was issued. Do not
 stage again on top of it; follow [Recover a stranded draft](#recover-a-stranded-draft) below first.
 
-While a submit's Enter is in flight (milliseconds), `send` and other input to that
-session answer `409 CONFLICT` with nothing written; retry the input.
+While a submit's Enter is in flight (milliseconds, plus the moment it takes to
+write input held behind it), TAGGED input to that session (`clientId` and `seq`,
+which `codeman agent send` and `interrupt` always carry) answers `409 CONFLICT`
+with nothing written; retry it. Untagged input, terminal keystrokes, `send-key`
+and Codeman's own managed writes are held instead and written in arrival order
+once the Enter is out.
 
 Submit checks the caller, session, hash, expiry, pane lifecycle, input revision,
 geometry, exact composer and caret, then sends one conditional Enter at the session's input
 boundary. It first waits until 250 ms have passed since stage typed (Codex turns an
 Enter that follows typed text within 120 ms into a newline), so submitting right
-after stage is fine. Competing Codeman writes are refused during dispatch. Browser/API/key
+after stage is fine. Competing Codeman writes are held during dispatch and written
+after it, except tagged input, which is refused with `409`. Browser/API/key
 input and managed restarts invalidate receipts even when the visible text or pid
 is restored. Direct tmux edits are outside that input serialization; captures
 remain evidence at the time observed, rather than terminal isolation.

@@ -717,7 +717,11 @@ outcome. That covers terminal WebSocket keystrokes (each frame is acknowledged
 only once it is written, so a frame typed during the lease lands before the one
 typed after it), Shift+Enter and Ctrl+Enter from `POST .../send-key`, approval
 answers and Codeman's own managed writes. A held write that is still being sent
-holds everything behind it. A tagged `POST /api/v1/sessions/:id/input` (one
+holds everything behind it, with one exception: when the hold queue is full (256
+inputs or 1 MiB), a managed write (`writeViaMux`, which `POST .../input` uses for a plain
+prompt or `useMux`) is not held and that route falls back to a direct write, which
+is refused during the lease itself but can land ahead of input still being written
+after it. A tagged `POST /api/v1/sessions/:id/input` (one
 carrying `clientId` and `seq`) instead answers `409 CONFLICT` ("A guarded submit
 is in progress on this session; nothing was written") for that span, the lease
 plus the held input's drain, rather than a `200` for bytes that were never

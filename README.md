@@ -584,6 +584,8 @@ loginctl enable-linger $USER
 
 **Always set `CODEMAN_PASSWORD`** before exposing via tunnel — without it, anyone with the URL has full access to your sessions.
 
+The tunnel Codeman manages (App Settings → System → Remote access) refuses to start without a login (`CODEMAN_PASSWORD` or multi-user mode) unless `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1` or `codeman web --allow-unauthenticated-tunnel` acknowledges the exposure, or you accept the browser's confirm, which it asks before every enable while no login is set. `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` covers only the network bind: it does not let the tunnel start.
+
 </details>
 
 ### QR Code Authentication
@@ -825,12 +827,14 @@ Those `DONE_<task>_<random>` strings are the skill's **split marker** trick, and
 | [`reference/recipes.md`](skills/codeman/reference/recipes.md)       | 8 worked flows: claude, DeepSeek Harness and shell workers, fan-out, blocked-worker watch, messaging fan-out. On demand. |
 | [`reference/endpoints.md`](skills/codeman/reference/endpoints.md)   | Full endpoint tables, error codes, per-mode signal table, capacity limits. On demand.        |
 | [`reference/messaging.md`](skills/codeman/reference/messaging.md)   | Talking to claude workers directly via Claude Code cross-session messaging. On demand.       |
+| [`reference/history.md`](skills/codeman/reference/history.md)       | Reading saved Codex conversations offline with `codeman history read`: selectors, filters, forks, budgets. On demand. |
+| [`reference/inspection-and-staging.md`](skills/codeman/reference/inspection-and-staging.md) | Experimental and opt-in: bounded pane inspection and guarded submission with `codeman agent inspect`, `stage` and `submit`. On demand. |
 
 Every recipe in there was verified against a live server, and the comments record the failure modes that were measured rather than guessed.
 
 #### Two things worth knowing
 
-- **It self-gates.** Outside a Codeman session (`CODEMAN_MUX` unset) the skill refuses to act and does not guess an API URL, so a global install costs an unrelated Claude Code session nothing.
+- **It self-gates.** It acts inside a Codeman-managed session. Outside one (`CODEMAN_MUX` unset) it only reads saved Codex conversations offline (`codeman history read`) and refuses everything else, and it never guesses an API URL, so a global install costs an unrelated Claude Code session nothing.
 - **It is deliberately conservative.** Unprompted, it may only spawn sessions, prompt them, and delete ones **it created in that same conversation, by exact id**, through a fail-closed guard that refuses to delete the agent's own session. Deleting a case (which erases a real directory of your code), bulk kills, respawn/ralph/cron/orchestrator changes and settings writes all require you to ask, naming the target.
 
 ⚠️ Turning `agentSkillEnabled` back off **does not remove already-injected copies** (a create-time sweep would yank the skill out from under other live sessions sharing that workspace). Remove them per case with `codeman skill uninstall --case <name>`.
@@ -1014,7 +1018,7 @@ Filters keep whole user/assistant turns (`--topic` is a literal, case-insensitiv
 
 ### MCP server (`codeman mcp`): drive Codeman from any MCP client
 
-`codeman mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server on stdio, so any MCP client (Claude Code, Claude Desktop, Codex, Gemini CLI, Cursor, ...) can start Codeman sessions in any installed agent CLI, prompt them, wait for them, read their answers and clean up, from inside Codeman or from outside it. Like `codeman agent`, it is a client of the HTTP API: no new route, auth and ownership unchanged.
+`codeman mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server on stdio, so any MCP client (Claude Code, Claude Desktop, Codex, Gemini CLI, Cursor, ...) can start Codeman sessions in any installed agent CLI, prompt them, wait for them, read their answers and clean up, from inside Codeman or from outside it. Like `codeman agent`, it is a client of the HTTP API. The MCP server adds no routes of its own, and auth and ownership are unchanged.
 
 ```bash
 # Claude Code

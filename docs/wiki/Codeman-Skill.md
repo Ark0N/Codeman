@@ -157,6 +157,7 @@ The skill checks for both and says so instead of acting.
 | [`reference/endpoints.md`](https://github.com/Ark0N/Codeman/blob/master/skills/codeman/reference/endpoints.md) | Endpoint tables, error codes, the signals each mode emits, capacity limits. Loaded on demand. |
 | [`reference/messaging.md`](https://github.com/Ark0N/Codeman/blob/master/skills/codeman/reference/messaging.md) | Talking to claude workers directly through Claude Code's cross-session messaging. Loaded on demand. |
 | [`reference/history.md`](https://github.com/Ark0N/Codeman/blob/master/skills/codeman/reference/history.md) | Reading saved Codex conversations offline with `codeman history read`: selectors, filters, forks, budgets. Loaded on demand. |
+| [`reference/inspection-and-staging.md`](https://github.com/Ark0N/Codeman/blob/master/skills/codeman/reference/inspection-and-staging.md) | Experimental and opt-in (App Settings, Experimental agent coordination): bounded pane inspection and guarded submission with `codeman agent inspect`, `stage` and `submit`. Loaded on demand. |
 
 Only `SKILL.md` sits in the agent's context; the references load when a job needs them, so a
 quick run stays quick.
