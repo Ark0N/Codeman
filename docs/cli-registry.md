@@ -47,9 +47,12 @@ interface CliEntry {
   env: CliEnv; // exports, tmux setenv keys, the env-override allowlist
   capabilities: CliCapabilities; // what every call site reads instead of the id
   //   .workDetect?: { promptGlyph, workingLine, watchingLine?, watchingLines?, awaitingLine?,
-  //                   blockedLine?, blockedLines? }
+  //                   blockedLine?, blockedLines?, composerFooterLine?, composerPopupLine?,
+  //                   composerCommandPrefixes?, composerCompletionSigils? }
   //   (how this CLI's pane shows work, work it started in the background, a turn
-  //   that ended waiting for workers it will resume from, and a dialog it is blocked on)
+  //   that ended waiting for workers it will resume from, a dialog it is blocked on,
+  //   the rows around its idle composer that guarded input relies on, and what a
+  //   draft can trigger)
   //   .modelDetect?: { screenLine, screenLines? }
   //   (where this CLI's own chrome names the model it runs: SessionState.displayModel)
   //   .launchDefaults?: { [launchParam]: settingsKey }
@@ -63,7 +66,7 @@ interface CliEntry {
 
 ### Regexes that come from config
 
-Six capability fields carry a regular expression an override file can set: `discovery.version.regex`, `capabilities.workDetect.workingLine`, `capabilities.workDetect.watchingLine`, `capabilities.workDetect.awaitingLine`, `capabilities.workDetect.blockedLine` and `capabilities.modelDetect.screenLine`. All six go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
+Eight capability fields carry a regular expression an override file can set: `discovery.version.regex`, `capabilities.workDetect.workingLine`, `capabilities.workDetect.watchingLine`, `capabilities.workDetect.awaitingLine`, `capabilities.workDetect.blockedLine`, `capabilities.workDetect.composerFooterLine`, `capabilities.workDetect.composerPopupLine` and `capabilities.modelDetect.screenLine`. All eight go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
 
 `workingLine` is the one that matters most, because it is compiled once per session and then run against every accumulated PTY chunk and every pane capture. A nested quantifier there is a ReDoS against the event loop for the whole server, not just that session. The guard therefore runs in two places, and neither is redundant: `schema.ts` rejects the entry at LOAD time so a bad pattern never reaches a session, and `_workingLinePattern()` in `session.ts` compiles through the same helper so the runtime cannot end up with a pattern the schema would have refused.
 
@@ -123,6 +126,33 @@ IDLE prompt from a codex session ever reaches the approvals inbox (its screen-re
 below, open PERMISSION items, which a watching label never acknowledges), so a forged label
 costs a wrong badge and cannot silence an alert. Before giving a CLI idle signals and a
 pattern, make sure its row is one the agent cannot write.
+
+### The idle composer guarded input reads (`composerFooterLine`)
+
+The experimental guarded `stage`/`submit` routes (`src/agent-staging.ts`, opt-in through
+`agentCoordinationEnabled`) type into a composer only after proving, from a fresh capture,
+that the newest `promptGlyph` row is the CLI's own composer at rest, with the caret at the
+exact end of its text. `composerFooterLine` is the second half of that proof: every
+non-blank row below the composer (at most three) must match it, one row at a time. A CLI
+that declares none never takes guarded input; only codex declares one, built from the same
+effort-word list as its `modelDetect.screenLine` (`CODEX_EFFORT_WORDS` in `stock.ts`), so a
+codex footer change is a one-place edit. Like `blockedLine`, the rows it sees are near the
+foot of the screen, so a pattern must anchor on chrome only that CLI draws there.
+
+Three more fields cover what a draft can do to Enter. Codex draws every suggestion popup
+(its slash-command list, file search, skill and mention lists) ABOVE the composer and
+leaves the footer below it alone, so the footer check reads `› /stat` with the command
+list open as an idle draft, and Enter would run the highlighted `/status`.
+`composerPopupLine` matches a popup row; it is tested against the contiguous block of
+non-blank rows directly above the composer (past at most three blank rows, at most twelve
+rows), never further up, and any match refuses the frame. `composerCommandPrefixes` lists
+the characters that, first in a draft, make Enter run a command (codex: `/!`), and
+`composerCompletionSigils` the ones that, starting the word under the caret, open a popup
+(codex: `@$`); stage refuses such a message before typing, the sigils only on the last
+word since the caret ends there. Both are 1 to 8 ASCII punctuation characters. Codex's
+values were read from `codex-rs/tui/src/bottom_pane` at `rust-v0.162.0`; a file-search
+popup with results shows bare path rows no pattern can tell from prose, which is why the
+trigger refusal is there as well as the frame check.
 
 ### Dialogs a CLI blocks on (`blockedLine`)
 

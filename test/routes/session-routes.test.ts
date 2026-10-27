@@ -25,7 +25,7 @@ import { tmpdir } from 'node:os';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
-import { Session } from '../../src/session.js';
+import { GuardedInputBusyError, Session } from '../../src/session.js';
 import { agentInbox } from '../../src/web/agent-inbox.js';
 
 // Mock execFile so the send-key route's `tmux` invocation is observable (not run for real).
@@ -263,6 +263,33 @@ describe('session-routes', () => {
       it('falls back to a line feed for a mode the registry does not know', async () => {
         expect(await sentHex('no-such-cli', 'S-Enter')).toEqual(['0a']);
       });
+    });
+
+    it('answers 409 CONFLICT, without an error log, when a guarded submit cannot hold the key', async () => {
+      execFile.mockReset();
+      const session = harness.ctx._session as unknown as {
+        performAuxiliaryInput: (op: () => Promise<void>) => Promise<void>;
+      };
+      const original = session.performAuxiliaryInput;
+      session.performAuxiliaryInput = async () => {
+        throw new GuardedInputBusyError();
+      };
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const res = await harness.app.inject({
+          method: 'POST',
+          url: '/api/sessions/test-session-1/send-key',
+          payload: { key: 'S-Enter' },
+        });
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toMatchObject({ success: false, errorCode: 'CONFLICT' });
+        expect(res.json().error).toMatch(/guarded submit is in progress.*nothing was written/);
+        expect(errors).not.toHaveBeenCalled();
+        expect(execFile).not.toHaveBeenCalled();
+      } finally {
+        errors.mockRestore();
+        session.performAuxiliaryInput = original;
+      }
     });
 
     it('rejects keys outside the hex allowlist without invoking tmux', async () => {
@@ -1195,6 +1222,93 @@ describe('session-routes', () => {
       expect(next.statusCode).toBe(200);
 
       expect(session.writeBuffer).toEqual(['prompt', '\r']);
+    });
+
+    it('refuses tagged input with 409 and gives the seq back while a guarded submit holds the input lease', async () => {
+      const url = `/api/sessions/${harness.ctx._sessionId}/input`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = harness.ctx.sessions.get(harness.ctx._sessionId) as any;
+      session.writeBuffer.length = 0;
+      const post = (payload: unknown) => harness.app.inject({ method: 'POST', url, payload });
+      session.guardedInputHeld = true;
+      for (const payload of [
+        { input: 'tagged', seq: 7, clientId: 'cid-guard' },
+        { input: 'prompt\r', useMux: true, seq: 1, clientId: 'cid-guard-mux' },
+      ]) {
+        const refused = await post(payload);
+        expect(refused.statusCode, JSON.stringify(payload)).toBe(409);
+        expect(refused.json()).toMatchObject({ success: false, errorCode: 'CONFLICT' });
+        expect(refused.json().error).toMatch(/guarded submit is in progress.*nothing was written/);
+      }
+      expect(session.writeBuffer).toEqual([]);
+      expect(session.heldGuardedInput).toEqual([]);
+      // Once the lease is released the browser's retry of the same seq is applied, not
+      // rejected as a duplicate.
+      session.releaseGuardedLease();
+      expect((await post({ input: 'tagged', seq: 7, clientId: 'cid-guard' })).statusCode).toBe(200);
+      expect(session.writeBuffer).toEqual(['tagged']);
+    });
+
+    it('holds an untagged raw POST during a guarded submit and writes it once the lease is released', async () => {
+      // The phone accessory keys and the Stop button's Ctrl+C are untagged, fire-and-forget
+      // POSTs that never read the answer, so a 409 here silently lost the tap.
+      const url = `/api/sessions/${harness.ctx._sessionId}/input`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = harness.ctx.sessions.get(harness.ctx._sessionId) as any;
+      session.writeBuffer.length = 0;
+      session.guardedInputHeld = true;
+      try {
+        for (const input of ['\x03', '\x1b[A']) {
+          const res = await harness.app.inject({ method: 'POST', url, payload: { input } });
+          expect(res.statusCode, JSON.stringify(input)).toBe(200);
+          expect(res.json()).toMatchObject({ success: true });
+        }
+        expect(session.writeBuffer).toEqual([]);
+        session.releaseGuardedLease();
+        expect(session.writeBuffer).toEqual(['\x03', '\x1b[A']);
+      } finally {
+        session.releaseGuardedLease();
+      }
+    });
+
+    it('lets untagged mux input wait its own turn behind the lease instead of refusing it', async () => {
+      const url = `/api/sessions/${harness.ctx._sessionId}/input`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = harness.ctx.sessions.get(harness.ctx._sessionId) as any;
+      session.writeBuffer.length = 0;
+      const post = (payload: unknown) => harness.app.inject({ method: 'POST', url, payload });
+      session.guardedInputHeld = true;
+      try {
+        // Fire-and-forget `useMux`: answered at once, written in its turn.
+        expect((await post({ input: 'x', useMux: true })).statusCode).toBe(200);
+        // A plain prompt's mux write is awaited, so it answers once written.
+        const prompt = post({ input: 'prompt\r' });
+        await vi.waitFor(() => expect(session.heldGuardedInput).toHaveLength(2));
+        expect(session.writeBuffer).toEqual([]);
+        session.releaseGuardedLease();
+        expect((await prompt).statusCode).toBe(200);
+        expect(session.writeBuffer).toEqual(['x', 'prompt\r']);
+      } finally {
+        session.releaseGuardedLease();
+      }
+    });
+
+    it('refuses an untagged raw POST with 409 only when the hold queue is full', async () => {
+      const url = `/api/sessions/${harness.ctx._sessionId}/input`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = harness.ctx.sessions.get(harness.ctx._sessionId) as any;
+      session.writeBuffer.length = 0;
+      session.guardedInputHeld = true;
+      session.holdForGuardedLease = () => 'full';
+      try {
+        const res = await harness.app.inject({ method: 'POST', url, payload: { input: '\x03' } });
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toMatchObject({ success: false, errorCode: 'CONFLICT' });
+        expect(session.writeBuffer).toEqual([]);
+      } finally {
+        delete session.holdForGuardedLease;
+        session.releaseGuardedLease();
+      }
     });
 
     it('always applies untagged input (curl/legacy, no dedup)', async () => {

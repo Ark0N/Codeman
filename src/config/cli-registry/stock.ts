@@ -13,6 +13,14 @@
 import type { CliEntry } from './types.js';
 import { CODEX_REASONING_EFFORTS } from '../../types/session.js';
 
+/**
+ * Codex's footer effort words: every CODEX_REASONING_EFFORTS level plus `default` (what
+ * codex prints when no effort is configured), as one regex alternation. Shared by the two
+ * patterns that read that footer (`modelDetect.screenLine` and
+ * `workDetect.composerFooterLine`), so a new level is a one-place edit.
+ */
+const CODEX_EFFORT_WORDS = [...CODEX_REASONING_EFFORTS, 'default'].join('|');
+
 const HOME_DIRS = {
   local: '~/.local/bin',
   usrLocal: '/usr/local/bin',
@@ -734,6 +742,34 @@ const CODEX: CliEntry = {
       watchingLines: 4,
       blockedLine: String.raw`(?:^|\n) {0,4}› \d\. [\s\S]*\n {2}(?:Press enter to confirm|tab (?:to add|or esc to clear) notes|enter continue)(?:[^\n]|\n {2}(?=[a-z←])){0,120}(?:cancel|interrupt|quit|back|answer|all)$`,
       blockedLines: 20,
+      // The rows codex draws under an idle composer, tested one at a time by guarded
+      // stage/submit (agent-staging.ts): the model footer (`  gpt-5.6-terra default ·
+      // ~/case`, effort words from CODEX_EFFORT_WORDS as in modelDetect below), the
+      // `? for shortcuts` / `← for agents` hint row 0.162.0 adds at rest, and the older
+      // `NN% context left` footer. Indented, so the `›` composer row itself never matches.
+      composerFooterLine: String.raw`^\s+(?:\d+% context left|\? for shortcuts|← for agents|\S+ (?:${CODEX_EFFORT_WORDS}) · )`,
+      // Read from codex-rs/tui/src/bottom_pane at rust-v0.162.0 (chat_composer/
+      // popup_state.rs, composer_layout.rs and the popups' render code and snapshots):
+      // every suggestion popup renders ABOVE the composer and keeps the footer below it,
+      // so the footer alone cannot tell `› /stat` with the command list open from an
+      // idle draft, and Enter then runs the highlighted `/status`. What sits in the
+      // block just above the composer (past its blank top padding row):
+      //   command list (`/`)           `› /status      show current session ...`
+      //                                `  /statusline  configure which items ...`
+      //   skill and mention lists      `  enter insert · esc close` (key-hint row)
+      //   (`$`, `@` with mentions on)  `  enter/tab insert · esc close · ↑/↓ select · ←/→ filter`
+      //   file search (`@`)            `  loading...` / `  no matches`, else bare path
+      //                                rows, which no pattern can tell from prose
+      // The last case is why stage also refuses the triggers themselves (below).
+      composerPopupLine: String.raw`^ {0,2}(?:enter(?:/tab)? insert · esc close|loading\.\.\.$|no matches$)|^[› ] /[\w:-]+ {2,}\S`,
+      // Same source. A draft starting with `/` is a slash command (the popup opens while
+      // the caret is in its name, and Enter runs a command either way), and one starting
+      // with `!` is a shell command (codex switches its prompt to `!` and runs it). Popups
+      // open for the word under the caret only: `@` (file search, or the unified mention
+      // list) and `$` (skills and mentions; whether a given `$word` opens it depends on
+      // codex's skill catalog, so every `$` word is refused).
+      composerCommandPrefixes: '/!',
+      composerCompletionSigils: '@$',
     },
     // The footer under the composer, measured on a live 0.147.0 pane:
     // `  gpt-5.6-terra default · ~/codeman-cases/th-scratch` (model, reasoning effort,
@@ -757,7 +793,7 @@ const CODEX: CliEntry = {
     // and the `›` composer, and a forged footer-shaped transcript line is not followed by
     // an indented row, so it is not read.
     modelDetect: {
-      screenLine: String.raw`(?:^|\n) {2}([A-Za-z0-9][\w.:/@+-]{0,79}) (?:${[...CODEX_REASONING_EFFORTS, 'default'].join('|')}) · [^\n]*(?:\n {2}[^\n]*)?$`,
+      screenLine: String.raw`(?:^|\n) {2}([A-Za-z0-9][\w.:/@+-]{0,79}) (?:${CODEX_EFFORT_WORDS}) · [^\n]*(?:\n {2}[^\n]*)?$`,
       screenLines: 2,
     },
     // App Settings → Codex model / reasoning effort (synced), filled into a LOCAL launch's

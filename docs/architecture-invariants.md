@@ -111,7 +111,7 @@ Further detail: ⚠️ An ADOPTED container may back SEVERAL cases at different 
 
 ⚠️ `external`, `hooks` and `altScreen` are three INDEPENDENT capabilities on purpose; deriving one from another shipped the `until=stop`-hangs-on-shell bug.
 
-⚠️ Four capability fields carry a REGEX from config (`discovery.version.regex`, `capabilities.workDetect.workingLine`, `capabilities.workDetect.watchingLine` and `capabilities.workDetect.awaitingLine`) and all four must compile through `compileVersionRegex()`, which caps length and refuses nested quantifiers; `workingLine` is the one that runs on the PTY hot path.
+⚠️ Several capability fields carry a REGEX from config (`discovery.version.regex`, `capabilities.workDetect.workingLine`, `watchingLine`, `awaitingLine`, `blockedLine`, `composerFooterLine`, `composerPopupLine` and `capabilities.modelDetect.screenLine`) and all of them must compile through `compileVersionRegex()`, which caps length and refuses nested quantifiers; `workingLine` is the one that runs on the PTY hot path.
 
 ⚠️ **`param` is TWO namespaces.** `launch.params` keys, `env.configSetenv[].fromParam` and `capabilities.privilegedParams[].param` all name a LAUNCH PARAM; the legacy `<Mode>Config` wire field is a separate namespace, bridged only by `launch.legacyConfigAliases`. Getting `privilegedParams[].param` wrong is SILENT — it is the multi-user bypass clamp's only handle on a CLI's privilege switch, and a wrong name clamps nothing with no load error and no failing test — so `schema.ts` rejects an entry naming a param it never declared. Codex is the entry where the two names differ (`bypassApprovals` vs `dangerouslyBypassApprovals`) and therefore the one that catches a regression.
 
@@ -205,7 +205,7 @@ History: before the tree, every pair got a U-bridge bezier hanging below the str
 
 **Three owners, one setter.** `SessionState.nameSource` is `placeholder` | `auto` | `manual`. The constructor infers a missing value from the name (`isGeneratedSessionName()` = `w<n>-<case>` / `s<n>-<case>`, or no name at all, is a placeholder; anything else was a person's), the create routes pass none, the boot restore passes the persisted one. The `name` setter is the manual path and the ONLY thing that produces `manual` after construction; `applyAutoName()` is the only thing that produces `auto`, and it does so whether or not the string changed, which is what makes "first prompt" mean the first. A prompt whose title is null (`/clear`, `! npm test`, blank) never reaches it, so the session stays eligible: the first REAL prompt names the tab.
 
-**The origin gate defaults to "system".** `write()` / `writeViaMux()` take `SessionWriteOptions.fromUser`; only the browser WS path and `POST /api/sessions/:id/input` set it. Every other caller (Ralph, respawn, cron, approvals, the orchestrator's `/compact`, auto-ops, the trust-dialog keys) is system by omission, so a new user-input path that forgets the flag fails toward a tab that keeps its placeholder, never toward a tab named after a Ralph prompt. `_lastSubmitAt` is still stamped for every write; only the tracker feed is gated. The shell gate is `getCli(mode)?.capabilities.startMode !== 'shell'`, a capability rather than an id check (the no-id-branching guard), and the send-key route feeds `trackUserInput()` by hand because its `tmux send-keys -H` newline (always a line feed for Ctrl+Enter; for Shift+Enter a line feed unless the CLI declares another `capabilities.newline` chord) never passes through the session.
+**The origin gate defaults to "system".** `write()` / `writeViaMux()` take `SessionWriteOptions.fromUser`; only the browser WS path, `POST /api/sessions/:id/input` and the experimental guarded stage (`stageGuardedInput()`, behind `POST /api/sessions/:id/stage`) set it. Every other caller (Ralph, respawn, cron, approvals, the orchestrator's `/compact`, auto-ops, the trust-dialog keys) is system by omission, so a new user-input path that forgets the flag fails toward a tab that keeps its placeholder, never toward a tab named after a Ralph prompt. `_lastSubmitAt` is still stamped for every write; only the tracker feed is gated. The shell gate is `getCli(mode)?.capabilities.startMode !== 'shell'`, a capability rather than an id check (the no-id-branching guard), and the send-key route feeds `trackUserInput()` by hand because its `tmux send-keys -H` newline (always a line feed for Ctrl+Enter; for Shift+Enter a line feed unless the CLI declares another `capabilities.newline` chord) never passes through the session.
 
 **The tracker is a best-effort transcript with explicit per-key rules**, not a byte filter. Mirrored: printable text, backspace, Ctrl+W, Ctrl+U/Ctrl+C (composer emptied), `\n` and Alt+Enter (a newline IN the composer, joined with a space), bracketed paste (newlines inside it likewise). Ignored: cursor keys, Home/End/Delete, Shift+Tab, Tab, SGR mouse and focus reports, Alt chords, OSC/DCS, the rest of C0. Tainting: Up/Down (CSI and SS3), Ctrl+P/N/R, Ctrl+_, because the composer then holds a history line the tracker never saw and Enter must submit nothing rather than a fragment. A bare Esc is resolved at the END of the chunk it arrives in, since xterm hands each key's whole sequence to one write and the programmatic senders send Esc alone; a CSI split across chunks still resumes. The draft keeps its HEAD past 8192 code points (the title is the first sentence, so keeping the tail would title a long paste by its last line) and an escape sequence is abandoned past 64 bytes.
 
@@ -1264,3 +1264,97 @@ Its CLI knowledge is a GENERATED block (`npm run generate:cli-catalog`, markers 
 ⚠️ It must stay **bash 3.2** clean — macOS ships it and the documented install is `curl | bash` under `set -euo pipefail`, so `declare -A`, `mapfile`, namerefs, `${x,,}` and here-strings are all fatal there; CI runs `bash -n` plus a real `bash:3.2` container, since expanding an EMPTY array under `set -u` is a runtime abort `bash -n` cannot see.
 
 ⚠️ It executes ONLY commands from the embedded block (`CLI_INSTALL_CMD_TRUSTED`) — there is no network fetch of the catalogue at install time to worry about at all.
+
+## Agent inspection and guarded submission
+
+These three operations are experimental across both CLI and HTTP, including the
+`/api/v1` paths and unversioned aliases: a case of the "labeled experimental" rule
+in `docs/versioning-policy.md`, so do not infer stability from the URL prefix.
+
+⚠️ They are opt-in. All three routes answer `403 FORBIDDEN` with a message naming
+`agentCoordinationEnabled` (synced, default OFF, App Settings, Cross-session
+features) until it is on, the `cliManagementEnabled` / `mcpSyncEnabled` shape. The
+gate runs first, before session lookup or body validation, and reads
+`settings.json` fresh on every request, so a toggle applies without a restart.
+`codeman agent inspect|stage|submit` pass the 403 through verbatim.
+
+`agent-session-routes.ts` is registered by `WebServer` with the other route
+modules. Ownership is checked before transcript/pane/receipt lookup. Inspection
+uses strict native metadata attribution, bounded traversal, separate prefix and
+candidate-metadata budgets, bounded path probes before canonical reads, and
+complete UTF8 JSONL records. A full page advances its cursor without claiming a
+blocked record. Opaque cursors bind caller/session/lifecycle/file identity; pane
+geometry is excluded so changing devices does not invalidate transcript paging.
+Cursors are capped per owner and session (`INSPECT_CURSORS_PER_SCOPE`, the newest 8,
+under the global 1,024), so one polling agent retires its own oldest cursors instead
+of evicting every other caller's from the shared FIFO.
+
+⚠️ Codex never prunes `~/.codex/sessions`, so attribution must not cost a store
+walk per call. The first call walks (negative-filter prefixes read 1 KiB first,
+4 KiB only when that window holds no complete `originator` field; non-UUID file
+names are skipped unread), then the attributed `{path, dev:ino}` and its strict
+metadata are remembered per session (`attributionMemo`, bounded LRU). A later call
+re-verifies only that file's head, then scans just the date directories not older
+than its own (`sessions/YYYY/MM/DD`, compared numerically; any non-numeric name is
+never pruned) for a second candidate, which is how a codex `/new` or a new owned
+rollout beside a configured resume is still caught. A head that no longer verifies
+drops the memo and falls back to one full walk; a verified head whose incremental
+scan fails (a second candidate, an exhausted budget, an unreadable entry) drops it
+and answers unattributed without one, because the full walk reads a superset of that
+scan under the same budget and could only fail the same way. Non-`InspectionConflict` errors are `422
+OPERATION_FAILED` (never a retryable `409`) and are logged with the session id and
+error code only, never the path.
+
+Staging requires a fresh, known composer/caret capture. The composer glyph and
+footer are registry data (`capabilities.workDetect.promptGlyph` and
+`composerFooterLine`, compiled through `compileVersionRegex()`), and only a CLI
+declaring `composerFooterLine` takes guarded input (codex today). Codex's footer
+words come from the same `CODEX_EFFORT_WORDS` as its `modelDetect.screenLine`. Before any write, available
+columns are calculated from actual captured geometry and the rendered prefix,
+including indentation; reaching the last column or wrapping is refused. A message
+starting with a `composerCommandPrefixes` character or whose last word starts with a
+`composerCompletionSigils` one is refused before typing (codex `/!` and `@$`), and a
+frame with a `composerPopupLine` row in the block just above the composer is refused at
+stage and submit: codex draws its popups there and keeps its footer, so the footer
+alone read `› /stat` with the command list open as idle, and Enter ran `/status`.
+⚠️ After typing, stage polls (`STAGE_SETTLE_TIMEOUT_MS` 1000 / `STAGE_SETTLE_INTERVAL_MS`
+50) for the first frame with the same generation, `revision === before + 1` and
+`composerSha === promptSha256(message)`, since codex repaints 30 to 60 ms after the keys
+and the first capture is often from before them; another writer or a lifecycle change
+ends the wait at once, and every refusal after typing says the message may be in the
+composer. `capturePaneBuffer()` reads the visible frame and its caret in ONE tmux call
+(`capture-pane \; display-message`, split by `splitFrameAndCursor()`), falling back to
+the two calls only for output it cannot split; a combined call that THREW goes to the
+capture's catch and is never rerun (a hung tmux would block the event loop for a second
+timeout on every `GET .../terminal`). Keep the poll anyway. ⚠️ Input that arrives
+while a guarded submit holds the lease is HELD, never refused (`holdForGuardedLease()`,
+`_inGuardedTurn()`), and written in arrival order when the lease is released: the
+browser's WebSocket path does not wait for ACKs, so a refused seq N was overtaken by
+N+1 and its redelivery dropped as a duplicate. A WS frame is ACKed only once written;
+a held async write (mux write, named key) holds everything behind it until it settles
+(`guardedInputHeld`); a full hold queue (256 inputs / 1 MiB) closes the socket with
+`1013` and applies nothing later from it, so the browser resends in order. `POST
+.../input` answers `409` (seq returned) to TAGGED input for the lease plus the drain,
+since its browser drainer is serialized and retries; untagged input there (the phone
+accessory keys and the Stop button's Ctrl+C, fire-and-forget POSTs that never read the
+answer) is held instead, the raw write through `holdForGuardedLease()` and a mux write
+by `writeViaMux`'s own turn (never wrap `writeViaMux` in a hold: the drain would queue
+it again behind later input and wait on itself). `write()` refuses during the lease
+only, since the drain writes held input through it, so a direct `write()` caller such
+as cron's `paste` mode (`cron-service.ts`) can land ahead of input still draining.
+⚠️ Submit waits `SUBMIT_QUIET_MS` (250) after the staged keys before its
+checks: stage types plain keys, codex's paste-burst detector reads them as a paste, and
+an Enter within 120 ms of one becomes a newline while submit would report it
+delivered. Stage cancels older verifier retries and sends no Enter. Receipts contain hashes and
+bounded ephemeral identities only, expire, and are consumed before awaited
+submission, including failures.
+
+Submission additionally binds input and geometry revisions and rechecks the
+exact composer/caret at the conditional Enter boundary. The route must retain
+the Session snapshot's staging generation rather than replacing it with the
+inspection generation. Managed input and auxiliary named keys participate in the
+same pending/lease boundary: they wait for the lease, and only a full hold queue
+refuses them (`GuardedInputBusyError`, which `send-key` answers as `409 CONFLICT`). Complete focus/mouse reports and empty writes are
+not edits. Never retry ambiguous Enter delivery or clear an unverified composer.
+The ordinary SubmitVerifier uses the shared write boundary, so each re-press
+updates `lastSubmitAt` just like any other Enter.

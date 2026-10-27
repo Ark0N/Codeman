@@ -35,6 +35,7 @@ import {
   type RemoteHost,
 } from '../../types.js';
 import {
+  GuardedInputBusyError,
   Session,
   cliTakesSessionModel,
   isAltScreenStripMode,
@@ -2078,6 +2079,32 @@ export function registerSessionRoutes(
       }
     }
 
+    // A guarded submit (agent-staging.ts) holds the input lease for the few
+    // milliseconds of its conditional Enter, and input that arrives meanwhile is held
+    // and written in arrival order after it. A TAGGED request is refused for that span
+    // (the lease plus the held input's drain) rather than overtake held input: say so
+    // instead of answering 200 for bytes that were never written, and give the seq
+    // back so the browser's durable queue (which keeps a frame on any 409, and whose
+    // POST drainer sends one frame at a time) delivers it on its next retry. An
+    // UNTAGGED request has no retry behind it (the phone accessory keys and the Stop
+    // button's Ctrl+C are fire-and-forget POSTs that never read the answer), so it is
+    // held instead, like a WebSocket frame: `writeViaMux` takes its own turn behind
+    // the lease, and the raw write below is held explicitly. Nothing from here to the
+    // write below awaits, so the lease cannot be taken in between.
+    const refuseGuarded = () =>
+      reply
+        .code(409)
+        .send(
+          createErrorResponse(
+            ApiErrorCode.CONFLICT,
+            'A guarded submit is in progress on this session; nothing was written. Retry the input.'
+          )
+        );
+    if (!duplicate && tagged && session.guardedInputHeld === true) {
+      session.forgetInputSeq(clientId as string, seq as number);
+      return refuseGuarded();
+    }
+
     // Only a waiting request pays for the tmux probe: the browser's plain input path
     // (thousands of calls per session) must stay exec-free.
     const workerDead = wantsWait && workerIsDead(ctx.mux, session);
@@ -2188,7 +2215,38 @@ export function registerSessionRoutes(
       // Same rollback. NOT an error response, deliberately: a session can
       // legitimately have no PTY yet (created but not started), and callers have
       // always been able to write to one without a 4xx.
-      delivered = session.write(inputStr, { fromUser: true });
+      //
+      // During a guarded submit (untagged only: a tagged one was refused above) the
+      // write is held and runs in arrival order once the lease is released. The answer
+      // is a 200 once held; a send-and-wait reads `delivered` from the held write. Only
+      // a full hold queue refuses, after releasing the waiter registered above.
+      let heldWrite: Promise<boolean> | null = null;
+      if (session.guardedInputHeld === true) {
+        let settle!: (written: boolean) => void;
+        const written = new Promise<boolean>((resolve) => {
+          settle = resolve;
+        });
+        const held = session.holdForGuardedLease(
+          () => {
+            let ok = false;
+            try {
+              ok = session.write(inputStr, { fromUser: true });
+            } finally {
+              settle(ok);
+            }
+          },
+          inputStr.length,
+          inputStr
+        );
+        if (held === 'full') {
+          abort.abort();
+          stopDeathWatch();
+          return refuseGuarded();
+        }
+        if (held === 'held') heldWrite = written;
+      }
+      if (heldWrite && !waitPromise) return {};
+      delivered = heldWrite ? await heldWrite : session.write(inputStr, { fromUser: true });
       if (!delivered && tagged) {
         session.forgetInputSeq(clientId as string, seq as number);
       }
@@ -2399,7 +2457,7 @@ export function registerSessionRoutes(
   // own `capabilities.newline`. Claude Code's Ink input recognizes 0x0a as "insert newline" vs
   // 0x0d (carriage return = submit).
 
-  app.post('/api/sessions/:id/send-key', async (req) => {
+  app.post('/api/sessions/:id/send-key', async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = req.body as Record<string, unknown>;
     const key = typeof body?.key === 'string' ? body.key : '';
@@ -2429,18 +2487,26 @@ export function registerSessionRoutes(
     try {
       // Route through the dedicated Codeman socket — bare `tmux` would target the
       // user's default server and never find this session (same #80 regression class).
-      await new Promise<void>((resolve, reject) => {
-        execFile(
-          'tmux',
-          ['-L', ctx.mux.muxSocket, 'send-keys', '-H', '-t', muxName, ...hex],
-          { timeout: 5000 },
-          (err) => {
-            if (err) reject(err);
-            else resolve();
-          }
-        );
-      });
+      await session.performAuxiliaryInput(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            execFile(
+              'tmux',
+              ['-L', ctx.mux.muxSocket, 'send-keys', '-H', '-t', muxName, ...hex],
+              { timeout: 5000 },
+              (err) => {
+                if (err) reject(err);
+                else resolve();
+              }
+            );
+          })
+      );
     } catch (err) {
+      // A guarded submit's lease holds the key until its Enter is out; only a full
+      // hold queue refuses it, and that is a retryable conflict, not a tmux failure.
+      if (err instanceof GuardedInputBusyError) {
+        return reply.code(409).send(createErrorResponse(ApiErrorCode.CONFLICT, err.message));
+      }
       console.error('[Server] send-key failed:', err);
       return createErrorResponse(ApiErrorCode.INTERNAL_ERROR, 'tmux send-keys failed');
     }

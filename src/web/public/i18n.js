@@ -706,6 +706,9 @@
     'New sessions for this case land in this group': '此案例的新会话将放入此分组',
     'Could not save the default session group.': '无法保存默认会话分组。',
     'Remote auto-reconnect': '远程自动重连',
+    'Experimental agent coordination': '实验性智能体协作',
+    "Lets agents read another session's output in bounded pages and type a prompt into a local Codex composer, then press Enter once after checking it is unchanged (the inspect, stage and submit commands). Experimental: the commands and their HTTP routes may change in any release. Off by default; while off those routes refuse every request.":
+      '允许智能体分页读取另一个会话的输出（每页有上限），并把提示词输入本地 Codex 输入框，确认未被改动后只按一次 Enter（即 inspect、stage 和 submit 命令）。实验性功能：这些命令及其 HTTP 路由可能在任何版本中变化。默认关闭；关闭时这些路由拒绝所有请求。',
     'Pin tab names on the CLI': '在 CLI 上固定标签名',
     "Launch every Claude session with its tab name, so the CLI's prompt label and /resume list match your tabs. Claude then stops generating its own titles for those sessions, and a rename in Codeman holds only until the next turn. Applies from the next session start or respawn, no server restart needed.":
       '以标签名启动每个 Claude 会话，让 CLI 的提示框标签和 /resume 列表与你的标签一致。Claude 随后不再为这些会话生成自己的标题，在 Codeman 中的重命名也只保留到下一轮。从下一次会话启动或重新生成时生效，无需重启服务器。',

@@ -130,6 +130,14 @@ import { DEFAULT_TMUX_HISTORY_LIMIT } from './config/terminal-history.js';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 import { getCli } from './config/cli-registry/registry.js';
 import { SubmitVerifier } from './session-submit-verifier.js';
+import {
+  guardedComposerChrome,
+  promptSha256,
+  readGuardedSnapshotDetails,
+  type GuardedInputSnapshot,
+} from './agent-staging.js';
+import { isKeyboardTerminalInput } from './terminal-input-classifier.js';
+import { stripAnsi } from './utils/regex-patterns.js';
 import { KEEP_WARM_NUDGE } from './prompt-cache-keepwarm.js';
 import { compileVersionRegex } from './config/cli-registry/patterns.js';
 import { resolveSessionCliVersion } from './utils/cli-resolver.js';
@@ -456,6 +464,17 @@ export interface ClaudeMessage {
   total_cost_usd?: number;
   /** Total duration in milliseconds (on result messages) */
   duration_ms?: number;
+}
+
+/**
+ * A write that a guarded submit's lease could not hold, because the per-lease hold
+ * queue (`Session.MAX_GUARDED_HELD_INPUTS`) was full. Nothing was written; retry it.
+ */
+export class GuardedInputBusyError extends Error {
+  constructor() {
+    super('A guarded submit is in progress on this session; nothing was written. Retry the input.');
+    this.name = 'GuardedInputBusyError';
+  }
 }
 
 /**
@@ -1323,6 +1342,7 @@ export class Session extends EventEmitter {
 
   /** Set the owning username (used by recovery to restore ownership). */
   set owner(username: string | undefined) {
+    if (this._owner !== username) this._guardedPaneRevision++;
     this._owner = username;
   }
 
@@ -1427,11 +1447,13 @@ export class Session extends EventEmitter {
    * tmux session whose record is about to be deleted (Ark0N/Codeman#446).
    */
   markClosing(closing: boolean): void {
+    if (this._closing !== closing) this._guardedPaneRevision++;
     this._closing = closing;
   }
 
   /** Run one pane start, attach or relaunch with {@link paneLifecycleInFlight} raised. */
   private async _withPaneLifecycle<T>(op: () => Promise<T>): Promise<T> {
+    this._guardedPaneRevision++;
     this._paneLifecycleOps++;
     try {
       return await op();
@@ -1458,6 +1480,7 @@ export class Session extends EventEmitter {
    * Ark0N/Codeman#446 review; both now persist on their success path.
    */
   private clearPaneExitForNewPane(): void {
+    this._guardedPaneRevision++;
     this.setPaneExit(undefined);
     if (this._muxSession) this._mux?.clearPaneExit?.(this._muxSession.muxName);
   }
@@ -4255,6 +4278,11 @@ export class Session extends EventEmitter {
     prompt: string,
     options?: { model?: string; onProgress?: (info: { tokens?: number; status?: string }) => void }
   ): Promise<{ result: string; cost: number }> {
+    if (this.guardedInputHeld) {
+      this._guardedInputRevision++;
+      throw new Error('Guarded submission in progress');
+    }
+    this._guardedPaneRevision++;
     return new Promise((resolve, reject) => {
       if (this.ptyProcess) {
         reject(new Error('Session already has a running process'));
@@ -4764,6 +4792,229 @@ export class Session extends EventEmitter {
 
   // Note: checkAutoCompact/checkAutoClear moved to SessionAutoOps (this._autoOps)
 
+  private readonly _inspectionInstance = uuidv4();
+  private _guardedPaneRevision = 0;
+  private _guardedGeometryRevision = 0;
+  private _guardedInputRevision = 0;
+  private _guardedPendingWrites = 0;
+  private _guardedSubmitInFlight = false;
+  /**
+   * Input that arrived while a guarded submit held the lease, in arrival order. Each
+   * entry runs when the lease is released; an entry that returns a promise (a mux
+   * write, a named key) is waited for before the next runs, so nothing overtakes it.
+   */
+  private _guardedHeld: Array<{ run: () => void | Promise<unknown>; bytes: number }> = [];
+  private _guardedHeldBytes = 0;
+  /** True while the drain waits for a held asynchronous write to finish. */
+  private _guardedHeldDraining = false;
+  /** Held entries per lease. A lease lasts milliseconds; past this the caller backs off. */
+  static readonly MAX_GUARDED_HELD_INPUTS = 256;
+  /** Held bytes per lease (16 browser frames at the 64 KiB frame cap). */
+  static readonly MAX_GUARDED_HELD_BYTES = 16 * 64 * 1024;
+  /** Ephemeral identity, never persisted or based on a potentially reused pid alone. */
+  get inspectionGeneration(): string {
+    return `${this._inspectionInstance}:${this._guardedPaneRevision}:${this.owner ?? ''}`;
+  }
+  /** Staging additionally binds geometry; transcript cursors survive a terminal resize. */
+  get guardedInputGeneration(): string {
+    return `${this.inspectionGeneration}:${this._guardedGeometryRevision}`;
+  }
+  get guardedInputPendingWrites(): number {
+    return this._guardedPendingWrites;
+  }
+  /**
+   * True while a guarded submit holds the input lease (a few milliseconds). Input that
+   * arrives in that span is held and written after it (see {@link guardedInputHeld}).
+   */
+  get guardedSubmitInFlight(): boolean {
+    return this._guardedSubmitInFlight;
+  }
+  /**
+   * True while input is being held behind a guarded submit: the lease itself, or held
+   * input not yet written after it. A write that is not routed through
+   * {@link holdForGuardedLease} must refuse in this window, or it overtakes held input.
+   * `write()` is the known exception: it refuses during the lease only, since the drain
+   * writes held input through it, so a direct `write()` caller (cron's `paste` mode in
+   * `cron/cron-service.ts`) can still land ahead of input that is draining.
+   */
+  get guardedInputHeld(): boolean {
+    return this._guardedSubmitInFlight || this._guardedHeld.length > 0 || this._guardedHeldDraining;
+  }
+  /**
+   * Hold input behind a guarded submit's lease instead of refusing it.
+   *
+   * `free`: nothing is held, so the caller writes inline as it always did. `held`: `run`
+   * is queued and runs, in arrival order with every other held input, once the lease is
+   * released (whatever the submit's outcome). `full`: the per-lease cap is reached and
+   * nothing was queued; the caller must stop delivering from that source until it can
+   * resend in order. Refusing instead lost input: the browser's WebSocket path does not
+   * wait for ACKs, so a refused seq N was overtaken by N+1 and its redelivery was then
+   * rejected as a duplicate. `data`, when given, is observed as input on arrival, so a
+   * keystroke held during the lease still moves the input revision at once.
+   */
+  holdForGuardedLease(run: () => void | Promise<unknown>, bytes = 0, data?: string): 'free' | 'held' | 'full' {
+    if (!this.guardedInputHeld) return 'free';
+    if (data !== undefined) this._observeGuardedKeyboardInput(data);
+    if (
+      this._guardedHeld.length >= Session.MAX_GUARDED_HELD_INPUTS ||
+      this._guardedHeldBytes + bytes > Session.MAX_GUARDED_HELD_BYTES
+    )
+      return 'full';
+    this._guardedHeld.push({ run, bytes });
+    this._guardedHeldBytes += bytes;
+    return 'held';
+  }
+  /**
+   * Run an asynchronous write now, or in its turn behind a guarded submit's lease. The
+   * turn lasts until the write settles, so later held input waits for it. Resolves
+   * `whenFull` without running anything when the hold queue is full.
+   */
+  private _inGuardedTurn<T>(write: () => Promise<T>, whenFull: () => T): Promise<T> {
+    if (!this.guardedInputHeld) return write();
+    return new Promise<T>((resolve, reject) => {
+      const held = this.holdForGuardedLease(() => {
+        const running = write();
+        running.then(resolve, reject);
+        return running;
+      });
+      if (held === 'full') {
+        try {
+          resolve(whenFull());
+        } catch (err) {
+          reject(err);
+        }
+      }
+    });
+  }
+  /** Run held input in arrival order until it is all written or a new lease is taken. */
+  private _drainGuardedHeld(): void {
+    while (this._guardedHeld.length > 0 && !this._guardedSubmitInFlight && !this._guardedHeldDraining) {
+      const entry = this._guardedHeld.shift()!;
+      this._guardedHeldBytes -= entry.bytes;
+      let running: void | Promise<unknown>;
+      try {
+        running = entry.run();
+      } catch (err) {
+        console.error(`[Session ${this.id}] held input failed after a guarded submit:`, getErrorMessage(err));
+        continue;
+      }
+      if (running && typeof running.then === 'function') {
+        this._guardedHeldDraining = true;
+        void running
+          .catch(() => {})
+          .then(() => {
+            this._guardedHeldDraining = false;
+            this._drainGuardedHeld();
+          });
+      }
+    }
+  }
+  /** Expose only the path selection needed for attributed Codex evidence, never credentials. */
+  getCodexHomeOverride(): string | undefined {
+    return this._envOverrides?.CODEX_HOME || undefined;
+  }
+  private _observeGuardedKeyboardInput(data: string): void {
+    if (data && isKeyboardTerminalInput(data)) this._guardedInputRevision++;
+  }
+  guardedInputSnapshot(): GuardedInputSnapshot | null {
+    return this._readGuardedInputSnapshot(false);
+  }
+  private _readGuardedInputSnapshot(allowLease: boolean): GuardedInputSnapshot | null {
+    if (
+      this._isStopped ||
+      this._closing ||
+      this.paneLifecycleInFlight ||
+      this._guardedPendingWrites ||
+      (!allowLease && this.guardedInputHeld) ||
+      this.remote ||
+      this.docker ||
+      this.paneExit ||
+      !this._muxSession
+    )
+      return null;
+    // Only a CLI whose registry entry describes its composer chrome takes guarded input.
+    const chrome = guardedComposerChrome(getCli(this.mode));
+    if (!chrome) return null;
+    const capture: import('./mux-interface.js').PaneCaptureOptions = {};
+    const screen = this._mux?.capturePaneBuffer?.(this._muxSession.muxName, undefined, capture);
+    if (!screen) return null;
+    // tmux's replay has CUP addresses rather than line breaks. Read the SAME
+    // fresh frame for dialog/work chrome and exact composer/caret proof.
+    // eslint-disable-next-line no-control-regex
+    const plain = stripAnsi(screen.replace(/\x1b\[\d+;\d+H/g, '\n'));
+    const working = this._workingLinePattern();
+    working.lastIndex = 0;
+    if (this._paneShowsBlocked(plain) || working.test(plain) || this._paneAwaitsWorkers(plain)) return null;
+    const composer = readGuardedSnapshotDetails(screen, chrome);
+    return composer === null
+      ? null
+      : {
+          generation: this.guardedInputGeneration,
+          revision: this._guardedInputRevision,
+          composerSha: promptSha256(composer.composer),
+          availableColumns: Number.isFinite(capture.capturedGeometry?.cols)
+            ? capture.capturedGeometry!.cols - composer.prefixWidth
+            : 0,
+        };
+  }
+  /** Stage through ordinary delivery, after cancelling any older Enter retry timer. */
+  async stageGuardedInput(message: string): Promise<boolean> {
+    if (/[\r\n]/.test(message)) return false;
+    if (this._guardedPendingWrites || this.guardedInputHeld) {
+      this._guardedInputRevision++;
+      return false;
+    }
+    this._submitVerifier?.cancel();
+    return this.writeViaMux(message, { fromUser: true });
+  }
+  /** One conditional Enter. An ambiguous acknowledgement is never replayed. */
+  async submitGuardedInput(expected: GuardedInputSnapshot): Promise<boolean> {
+    const matches = (current: GuardedInputSnapshot | null): boolean =>
+      !!current &&
+      current.generation === expected.generation &&
+      current.revision === expected.revision &&
+      current.composerSha === expected.composerSha &&
+      current.availableColumns === expected.availableColumns;
+    if (!matches(this.guardedInputSnapshot()) || !this._mux || !this._muxSession) return false;
+    this._guardedSubmitInFlight = true;
+    let dispatched = false;
+    try {
+      const sent = await this._mux.sendInput(this.id, '\r', {
+        beforeDispatch: () => {
+          if (!matches(this._readGuardedInputSnapshot(true))) return false;
+          this._guardedInputRevision++;
+          dispatched = true;
+          return true;
+        },
+      });
+      if (sent && dispatched) this._emitSubmittedPrompt(this._trackSubmit('\r', { fromUser: true }));
+      return sent && dispatched;
+    } finally {
+      this._guardedSubmitInFlight = false;
+      this._drainGuardedHeld();
+    }
+  }
+  /**
+   * Lease/pending boundary for named keys whose bytes bypass the ordinary write methods.
+   * During a guarded submit the operation waits for the lease like any other write;
+   * only a full hold queue refuses it, with {@link GuardedInputBusyError}.
+   */
+  async performAuxiliaryInput(operation: () => Promise<void>): Promise<void> {
+    this._guardedInputRevision++;
+    return this._inGuardedTurn(
+      async () => {
+        this._guardedPendingWrites++;
+        try {
+          await operation();
+        } finally {
+          this._guardedPendingWrites--;
+        }
+      },
+      () => {
+        throw new GuardedInputBusyError();
+      }
+    );
+  }
   /**
    * Sends input directly to the PTY process.
    *
@@ -4783,6 +5034,9 @@ export class Session extends EventEmitter {
    * input could disappear while the caller believed it had been delivered.
    */
   write(data: string, options: SessionWriteOptions = {}): boolean {
+    this._observeGuardedKeyboardInput(data);
+    // The lease only, not the drain, which writes held input through here (see guardedInputHeld).
+    if (this._guardedSubmitInFlight) return false;
     const submittedPrompt = this._trackSubmit(data, options);
     if (!this.ptyProcess) return false;
     this.ptyProcess.write(data);
@@ -4831,6 +5085,7 @@ export class Session extends EventEmitter {
    * separator. Reports submissions like a write would (a line feed never is one).
    */
   trackUserInput(data: string): void {
+    this._observeGuardedKeyboardInput(data);
     if (!this._acceptsPrompts) return;
     this._emitSubmittedPrompt(this._submittedPromptTracker.feed(data));
   }
@@ -4852,6 +5107,7 @@ export class Session extends EventEmitter {
    * their prompt must count as real and alert normally.
    */
   markPromptSubmitted(prompt?: string): void {
+    this._guardedInputRevision++;
     if (prompt !== undefined && prompt.trim() !== KEEP_WARM_NUDGE) this._keepAliveTurnUntil = 0;
     this._stampSubmit();
   }
@@ -4947,22 +5203,39 @@ export class Session extends EventEmitter {
    * ```
    */
   async writeViaMux(data: string, options: SessionWriteOptions = {}): Promise<boolean> {
-    const submittedPrompt = this._trackSubmit(data, options);
-    if (this._mux && this._muxSession) {
-      const sent = await this._mux.sendInput(this.id, data);
-      if (sent) {
-        this._emitSubmittedPrompt(submittedPrompt);
-        this._verifySubmitted(data);
+    this._observeGuardedKeyboardInput(data);
+    // A guarded submit's lease lasts for its Enter only: wait for it, in arrival order,
+    // rather than refusing, so an approval answer or a programmatic prompt is not
+    // dropped. Without a lease the write starts synchronously, so the pending count
+    // rises before any await and no lease can be taken while it is in flight.
+    return this._inGuardedTurn(
+      () => this._writeViaMuxNow(data, options),
+      () => false
+    );
+  }
+
+  private async _writeViaMuxNow(data: string, options: SessionWriteOptions): Promise<boolean> {
+    this._guardedPendingWrites++;
+    try {
+      const submittedPrompt = this._trackSubmit(data, options);
+      if (this._mux && this._muxSession) {
+        const sent = await this._mux.sendInput(this.id, data);
+        if (sent) {
+          this._emitSubmittedPrompt(submittedPrompt);
+          this._verifySubmitted(data);
+        }
+        return sent;
       }
-      return sent;
+      // Fallback to PTY write
+      if (this.ptyProcess) {
+        this.ptyProcess.write(data);
+        this._emitSubmittedPrompt(submittedPrompt);
+        return true;
+      }
+      return false;
+    } finally {
+      this._guardedPendingWrites--;
     }
-    // Fallback to PTY write
-    if (this.ptyProcess) {
-      this.ptyProcess.write(data);
-      this._emitSubmittedPrompt(submittedPrompt);
-      return true;
-    }
-    return false;
   }
 
   /**
@@ -4990,7 +5263,16 @@ export class Session extends EventEmitter {
         this._isStopped || !this._mux || !this._muxSession
           ? null
           : this._mux.capturePaneText?.(this._muxSession.muxName),
-      sendEnter: () => this._mux?.sendInput(this.id, '\r'),
+      sendEnter: () => {
+        // A retry Enter is never held behind a guarded submit: once that submit's
+        // Enter went out, a re-press would submit whatever is on the composer next.
+        if (this.guardedInputHeld) {
+          this._guardedInputRevision++;
+          this._submitVerifier?.cancel();
+          return Promise.resolve(false);
+        }
+        return this.writeViaMux('\r');
+      },
       // ⚠ NO fallback glyph here, unlike the screen-reading probe elsewhere in this file.
       // Only claude, codex, pi, opencode, omp, gemini and antigravity declare a promptGlyph; the other modes would fall back
       // to claude's `❯`, which is ALSO starship's default shell prompt (and pure's, and
@@ -5019,6 +5301,7 @@ export class Session extends EventEmitter {
    * `resize()` skipped a real resize that happened to match them.
    */
   private _notePtySpawnGeometry(cols: number, rows: number): void {
+    this._guardedPaneRevision++;
     this._ptyCols = cols;
     this._ptyRows = rows;
   }
@@ -5141,6 +5424,7 @@ export class Session extends EventEmitter {
     }
     const dimsChanged = cols !== this._ptyCols || rows !== this._ptyRows;
     if (this.ptyProcess && (dimsChanged || options.force)) {
+      this._guardedGeometryRevision++;
       this._ptyCols = cols;
       this._ptyRows = rows;
       if (!IS_TEST_MODE && this._mux && this._muxSession) {
@@ -5157,6 +5441,10 @@ export class Session extends EventEmitter {
 
   // Legacy method for sending input - wraps runPrompt
   async sendInput(input: string): Promise<void> {
+    if (this.guardedInputHeld) {
+      this._guardedInputRevision++;
+      throw new Error('Guarded submission in progress');
+    }
     this._status = 'busy';
     this._markActivity(true);
     this.runPrompt(input).catch((err) => {

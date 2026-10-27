@@ -45,6 +45,9 @@ SID=$(codeman agent spawn --working-dir ~/src/app --mode codex)   # no case: an 
 codeman agent send "$SID" 'review src/, then say DONE' --until stop,exit --timeout 300000
 codeman agent read "$SID"                                 # last answer (as the server reads it for that mode)
 codeman agent read "$SID" --tail 3000                     # terminal tail, ANSI stripped (every mode)
+codeman agent inspect "$SID" --max-bytes 8192 --json     # experimental, opt-in: recent evidence + opaque cursor
+codeman agent stage "$SID" --message-file /tmp/prompt.txt --json  # experimental, opt-in: no Enter; local Codex composer only
+codeman agent submit "$SID" --stage-id "$STAGE_ID" --confirm-sha "$SHA256" --json  # experimental, opt-in: one conditional Enter
 codeman agent send "$SID" 'run the tests, then print WORKDONE followed by _4711'   # hook-less modes: the marker in halves …
 codeman agent wait "$SID" --match WORKDONE_4711           # … and the wait on the joined form
 codeman agent interrupt "$SID"                            # a bare ESC, conversation intact
@@ -83,6 +86,17 @@ codeman agent rm "$SID"                                   # any session except t
   `ls` shows each session's mail in an INBOX column. Mail lives in memory unless
   **Keep agent inbox across restarts** is on (see [Settings Reference](Settings-Reference)),
   and goes when its session is deleted.
+- **`inspect`, `stage`, `submit`** are experimental and opt-in: they answer `403 FORBIDDEN`
+  naming the setting until **Experimental agent coordination** is on (see
+  [Settings Reference](Settings-Reference); `agentCoordinationEnabled`, synced, off by
+  default), and they may change in any release. `inspect` returns bounded evidence with an
+  opaque cursor. `stage` types one printable UTF8 line without trailing whitespace into a
+  local Codex composer, with no Enter, and returns a receipt that expires after two minutes
+  once the pane shows exactly that text; it refuses slash (`/`) and shell (`!`) commands
+  and a message whose last word starts with `@` or `$` (those open a Codex popup that Enter
+  would accept), so send commands with `send`. `submit` sends one Enter only if the
+  composer still shows exactly that text, and never replays it. `send --no-enter` alone has no receipt. Details:
+  [API reference](https://github.com/Ark0N/Codeman/blob/master/docs/api-reference.md#experimental-bounded-agent-inspection-and-guarded-input).
 - **Exit codes** are the same for every verb: `0` done, `1` error, `2` timeout, `3` the
   worker exited, `4` refused. `--json` prints the response's `data`, except a directory
   `spawn`, which prints `{ sessionId, workingDir, created: true }`, plus `ready` when a

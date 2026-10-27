@@ -2,13 +2,15 @@
  * @fileoverview `codeman agent …` — session-to-session verbs for the agent running
  * inside a Codeman session, in every CLI mode.
  *
- * A thin HTTP client over endpoints that already exist (`quick-start` for a named
+ * A thin HTTP client over the server's endpoints (`quick-start` for a named
  * case, `POST sessions` + `sessions/:id/interactive|shell` for a worker in an
  * existing directory, `input`, `wait`, `wait-output`, `last-response`, `terminal`,
- * `DELETE sessions/:id`, and the agent inbox: `inbox`, `inbox/ack`,
- * `agent-inbox/summary`). It
- * invents no route and no transport: everything goes through `CODEMAN_API_URL`, so
- * auth, ownership and the per-session waiter cap apply unchanged. The behaviour is
+ * `DELETE sessions/:id`, the agent inbox: `inbox`, `inbox/ack`,
+ * `agent-inbox/summary`, and the experimental, opt-in
+ * `inspect`/`stage`/`submit` of `web/routes/agent-session-routes.ts`, which answer 403
+ * until `agentCoordinationEnabled` is on; that refusal is printed verbatim). It uses no
+ * transport of its own: everything goes through `CODEMAN_API_URL`, so auth, ownership
+ * and the per-session waiter cap apply unchanged. The behaviour is
  * the packaged agent skill's (`skills/codeman`), ported from shell prose into code
  * with tests, so a `codex`/`opencode`/`pi` agent — which never gets the claude-only
  * preamble — has the same verbs from one line in its AGENTS.md.
@@ -38,11 +40,14 @@
  *
  * @module cli-agent
  */
-import { realpath, stat } from 'node:fs/promises';
+import { open, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
+import { isUtf8 } from 'node:buffer';
+import { STAGE_MAX_BYTES } from './agent-staging.js';
+import { INSPECT_MAX_BYTES } from './agent-inspection.js';
 import type { Command } from 'commander';
 import {
   basicAuthHeader,
@@ -879,6 +884,103 @@ export async function agentWait(deps: AgentDeps, options: WaitOptions): Promise<
   return waitExitCode(data?.wait);
 }
 
+/** Bounded incremental evidence, with an opaque server-owned cursor. */
+export async function agentInspect(
+  deps: AgentDeps,
+  options: { id: string; maxBytes: number; since?: string }
+): Promise<number> {
+  if (!Number.isInteger(options.maxBytes) || options.maxBytes < 1 || options.maxBytes > INSPECT_MAX_BYTES)
+    return fail(deps, '--max-bytes must be between 1 and 65536', EXIT.refused);
+  const target = await resolveSessionId(deps, options.id);
+  if ('error' in target) return fail(deps, target.error, target.code);
+  const response = await deps.request(deps.ctx, {
+    method: 'GET',
+    path: `/api/v1/sessions/${encodeURIComponent(target.id)}/inspect`,
+    query: { maxBytes: options.maxBytes, since: options.since },
+  });
+  if (!response.json?.success) return fail(deps, describeFailure(response));
+  if (deps.json) emitJson(deps, response.json.data);
+  else {
+    const data = response.json.data as {
+      source?: string;
+      evidence?: string;
+      truncated?: boolean;
+      cursor?: string;
+      blockedReason?: string;
+    };
+    deps.io.out(
+      `[${data.source ?? 'unknown'}]${data.truncated ? ' truncated' : ''}${data.blockedReason ? ` (${data.blockedReason})` : ''}`
+    );
+    deps.io.out(data.evidence ?? '');
+    if (data.cursor) deps.io.out(`cursor: ${data.cursor}`);
+  }
+  return EXIT.ok;
+}
+
+/** Stage exactly the printable UTF8 file contents; never sends Enter. */
+export async function agentStage(deps: AgentDeps, options: { id: string; messageFile: string }): Promise<number> {
+  if (isSelfSession(deps.ctx.selfId, options.id)) return fail(deps, `refusing: ${options.id} is me`, EXIT.refused);
+  let message: string;
+  try {
+    const info = await stat(options.messageFile);
+    if (!info.isFile() || info.size > STAGE_MAX_BYTES)
+      return fail(deps, 'message file must be a regular file within 8192 UTF8 bytes', EXIT.refused);
+    const handle = await open(options.messageFile, 'r');
+    try {
+      const buffer = Buffer.alloc(STAGE_MAX_BYTES + 1);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      const bytes = buffer.subarray(0, bytesRead);
+      if (bytesRead > STAGE_MAX_BYTES || !isUtf8(bytes))
+        return fail(deps, 'message file must contain at most 8192 bytes of UTF8', EXIT.refused);
+      message = bytes.toString('utf8');
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    return fail(deps, `cannot read message file: ${getErrorMessage(error)}`, EXIT.refused);
+  }
+  const refusal = inputRefusal(message);
+  if (refusal || message !== message.trimEnd())
+    return fail(deps, refusal ?? 'stage refuses trailing whitespace', EXIT.refused);
+  const target = await resolveSessionId(deps, options.id);
+  if ('error' in target) return fail(deps, target.error, target.code);
+  const response = await deps.request(deps.ctx, {
+    method: 'POST',
+    path: `/api/v1/sessions/${encodeURIComponent(target.id)}/stage`,
+    body: { message },
+  });
+  if (!response.json?.success) return fail(deps, describeFailure(response));
+  if (deps.json) emitJson(deps, response.json.data);
+  else {
+    const data = response.json.data as { stageId: string; sha256: string; expiresAt: number };
+    deps.io.out(
+      `staged (no Enter): ${data.stageId}\nsha256: ${data.sha256}\nexpires: ${new Date(data.expiresAt).toISOString()}`
+    );
+  }
+  return EXIT.ok;
+}
+
+/** Submit one verified staged composer; failure never automatically replays Enter. */
+export async function agentSubmit(
+  deps: AgentDeps,
+  options: { id: string; stageId: string; confirmSha: string }
+): Promise<number> {
+  if (isSelfSession(deps.ctx.selfId, options.id)) return fail(deps, `refusing: ${options.id} is me`, EXIT.refused);
+  if (!/^[a-f0-9]{64}$/.test(options.confirmSha) || !/^[a-f0-9-]{36}$/.test(options.stageId))
+    return fail(deps, 'submit requires a stage UUID and its exact SHA-256', EXIT.refused);
+  const target = await resolveSessionId(deps, options.id);
+  if ('error' in target) return fail(deps, target.error, target.code);
+  const response = await deps.request(deps.ctx, {
+    method: 'POST',
+    path: `/api/v1/sessions/${encodeURIComponent(target.id)}/submit`,
+    body: { stageId: options.stageId, confirmSha: options.confirmSha },
+  });
+  if (!response.json?.success) return fail(deps, describeFailure(response));
+  if (deps.json) emitJson(deps, response.json.data);
+  else deps.io.out('Enter delivered once; inspect or wait for acceptance (no automatic retry).');
+  return EXIT.ok;
+}
+
 export interface ReadOptions {
   id: string;
   /** Bytes of raw terminal to fetch; ANSI is stripped for humans. */
@@ -1295,6 +1397,49 @@ export function registerAgentCommands(program: Command): Command {
             timeoutMs: parsePositiveInt(options.timeout, DEFAULT_WAIT_MS),
           })
         )
+    );
+
+  agent
+    .command('inspect <id>')
+    .description(
+      'Experimental, opt-in (agentCoordinationEnabled): bounded transcript evidence or a labeled pane snapshot; opaque incremental cursors'
+    )
+    .option('--max-bytes <n>', 'UTF8 evidence budget (1–65536)', '8192')
+    .option('--since <cursor>', 'Resume a cursor from the same owner, pane and transcript')
+    .option('--json', 'Machine-readable output')
+    .action((id: string, options: { maxBytes: string; since?: string; json?: boolean }) =>
+      run(Boolean(options.json), (deps) =>
+        agentInspect(deps, {
+          id,
+          maxBytes: parsePositiveInt(options.maxBytes, 8192, '--max-bytes'),
+          since: options.since,
+        })
+      )
+    );
+
+  agent
+    .command('stage <id>')
+    .description(
+      'Experimental, opt-in (agentCoordinationEnabled): type a printable single-line UTF8 file without Enter; requires a verifiable local Codex composer, and refuses slash or shell commands and a last word starting with @ or $ (use send)'
+    )
+    .requiredOption('--message-file <path>', 'Regular UTF8 file, at most 8192 bytes, no trailing newline')
+    .option('--json', 'Machine-readable output')
+    .action((id: string, options: { messageFile: string; json?: boolean }) =>
+      run(Boolean(options.json), (deps) => agentStage(deps, { id, messageFile: options.messageFile }))
+    );
+
+  agent
+    .command('submit <id>')
+    .description(
+      'Experimental, opt-in (agentCoordinationEnabled): send Enter once only when the staged composer, pane and hash still match'
+    )
+    .requiredOption('--stage-id <receipt>', 'One-shot stage receipt')
+    .requiredOption('--confirm-sha <hash>', 'Exact SHA-256 returned by stage')
+    .option('--json', 'Machine-readable output')
+    .action((id: string, options: { stageId: string; confirmSha: string; json?: boolean }) =>
+      run(Boolean(options.json), (deps) =>
+        agentSubmit(deps, { id, stageId: options.stageId, confirmSha: options.confirmSha })
+      )
     );
 
   agent

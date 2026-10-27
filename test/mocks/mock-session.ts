@@ -124,6 +124,26 @@ export class MockSession extends EventEmitter {
   /** Mirrors Session.trackUserInput (the send-key route feeds it around the write path). */
   trackUserInput(_data: string): void {}
 
+  async performAuxiliaryInput(operation: () => Promise<void>): Promise<void> {
+    await operation();
+  }
+
+  /** Mirrors Session.guardedInputHeld; a route test sets it to stand in for a guarded submit's lease. */
+  guardedInputHeld = false;
+  /** Input held behind that lease, in arrival order (see releaseGuardedLease). */
+  heldGuardedInput: Array<() => void | Promise<unknown>> = [];
+  /** Mirrors Session.holdForGuardedLease, without the cap (a test replaces it to model a full queue). */
+  holdForGuardedLease(run: () => void | Promise<unknown>, _bytes = 0, _data?: string): 'free' | 'held' | 'full' {
+    if (!this.guardedInputHeld) return 'free';
+    this.heldGuardedInput.push(run);
+    return 'held';
+  }
+  /** Ends the stand-in lease and runs the held input in arrival order, as Session does. */
+  releaseGuardedLease(): void {
+    this.guardedInputHeld = false;
+    for (const run of this.heldGuardedInput.splice(0)) void run();
+  }
+
   private _muxName: string | null = null;
 
   constructor(id: string = 'mock-session-id') {
@@ -147,9 +167,14 @@ export class MockSession extends EventEmitter {
 
   /** Write via mux (used by respawn controller) */
   async writeViaMux(data: string): Promise<boolean> {
-    if (this.failWrites) return false;
-    this.writeBuffer.push(data);
-    return true;
+    const write = (): boolean => {
+      if (this.failWrites) return false;
+      this.writeBuffer.push(data);
+      return true;
+    };
+    // Like Session.writeViaMux, it waits its turn behind a stand-in guarded lease.
+    if (!this.guardedInputHeld) return write();
+    return new Promise<boolean>((resolve) => this.heldGuardedInput.push(() => resolve(write())));
   }
 
   /**

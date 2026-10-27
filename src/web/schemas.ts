@@ -1558,6 +1558,13 @@ export const SettingsUpdateSchema = z
      */
     agentInboxPersistEnabled: z.boolean().optional(),
     /**
+     * Experimental agent coordination (src/web/routes/agent-session-routes.ts): bounded
+     * inspection and the guarded stage/submit routes behind `codeman agent inspect|stage|submit`.
+     * SYNCED, default OFF: the routes are labeled experimental and may change in a minor or
+     * patch release, so automation has to opt in. While OFF, all three routes answer 403.
+     */
+    agentCoordinationEnabled: z.boolean().optional(),
+    /**
      * Read My Mind predictor model override. Empty/absent = the AI-checker
      * default (opus: prediction quality is the product and it runs only on an
      * explicit press). Shell-safety is validated again at spawn time.
@@ -2432,3 +2439,15 @@ export const CustomModelSelectionSchema = z.union([
   }),
   z.object({ clear: z.literal(true) }),
 ]);
+
+/** Agent inspection bounds are bytes of evidence, independent of the JSON envelope. */
+export const AgentInspectQuerySchema = z
+  .object({
+    maxBytes: z.coerce.number().int().min(1).max(65536).default(8192),
+    since: z.string().uuid().optional(),
+  })
+  .strict();
+export const AgentStageSchema = z.object({ message: z.string().min(1).max(8192) }).strict();
+export const AgentSubmitSchema = z
+  .object({ stageId: z.string().uuid(), confirmSha: z.string().regex(/^[a-f0-9]{64}$/) })
+  .strict();
