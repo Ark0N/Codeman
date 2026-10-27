@@ -579,7 +579,6 @@
     Send: '发送',
     Permission: '权限',
     Question: '问题',
-    Idle: '空闲',
     'Read My Mind': '读心术',
     'Read My Mind: predict your next prompt': '读心术：预测您的下一条提示',
     'Predict my next prompt': '预测我的下一条提示',
