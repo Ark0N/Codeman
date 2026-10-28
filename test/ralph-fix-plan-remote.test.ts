@@ -18,7 +18,7 @@
  * Drives the real `WebServer.setupSessionListeners()`, like
  * discard-partially-built-session.test.ts.
  */
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -98,6 +98,38 @@ describe('Ralph @fix_plan.md watcher and the session location', () => {
     expect(log.mock.calls.some((args) => String(args[0]).includes('Could not watch @fix_plan.md'))).toBe(false);
     // Same authority as a local session: the output-based completion guessers stay off.
     expect(session.ralphTracker.isFileAuthoritative).toBe(true);
+  });
+
+  it('never reads a same-named local file for a remote session', async () => {
+    // The remote path exists locally too (an sshfs mount, a leftover checkout) and holds a plan.
+    writeFileSync(join(WORKSPACE, '@fix_plan.md'), '- [ ] a local task the remote session never had\n');
+    try {
+      const session = new Session({
+        id: SESSION_ID,
+        workingDir: WORKSPACE,
+        mode: 'claude',
+        name: 'remote session over a local twin',
+        mux,
+        useMux: true,
+        remote: {
+          hostId: 'proxx',
+          label: 'proxx',
+          host: 'proxx.example.lan',
+          username: 'user',
+          remotePath: WORKSPACE,
+          owned: true,
+        },
+      });
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await internals.registerSessionWithLayout(session);
+      await internals.setupSessionListeners(session);
+
+      expect(await session.ralphTracker.loadFixPlanFromDisk()).toBe(0);
+      expect(session.ralphTracker.todos).toEqual([]);
+    } finally {
+      rmSync(join(WORKSPACE, '@fix_plan.md'), { force: true });
+    }
   });
 
   it('keeps a remote session todo list out of the prose completion guessers', async () => {
