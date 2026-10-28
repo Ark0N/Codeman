@@ -9,9 +9,10 @@
  * remote session (and where a same-named local directory did exist, it watched
  * the wrong tree). Setting the path also made the tracker treat the unreadable
  * file as authoritative (`isFileAuthoritative`), which switched off its
- * output-based todo completion for every remote session. `setupSessionListeners()` already skips external CLI modes for
- * the same reason (the tracker is not supported there); a remote location is the
- * other case with no local file to watch.
+ * output-based todo completion for every remote session.
+ * `setupSessionListeners()` already skips external CLI modes (the tracker is
+ * not supported there); a remote location is the other case with no local
+ * file to watch.
  *
  * Drives the real `WebServer.setupSessionListeners()`, like
  * discard-partially-built-session.test.ts.

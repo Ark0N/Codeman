@@ -429,6 +429,11 @@ path but the SESSION (`session.remote`): a remote session never falls back to lo
 `fs`, and a local session never opens an ssh connection — including for attachment
 records, which are keyed to the session that registered them.
 
+**Local watchers skip a remote session.** The Ralph tracker's `@fix_plan.md` auto-load
+(and the `fs.watch` behind it) never runs for a remote session: `setupSessionListeners()`
+(`server.ts`) does not hand the tracker a remote `workingDir`, because the watcher reads
+the LOCAL disk, where that path is missing or a different tree.
+
 ## Wake-on-LAN from user input
 
 A durable remote session survives an SSH drop (COD-104/108), but nothing brought the
