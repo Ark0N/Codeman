@@ -7,12 +7,13 @@
  * so every server start logged
  * `[RalphFixPlanWatcher] Could not watch @fix_plan.md: Error: ENOENT ...` once per
  * remote session (and where a same-named local directory did exist, it watched
- * the wrong tree). Setting the path also made the tracker treat the unreadable
- * file as authoritative (`isFileAuthoritative`), which switched off its
- * output-based todo completion for every remote session.
- * `setupSessionListeners()` already skips external CLI modes (the tracker is
- * not supported there); a remote location is the other case with no local
- * file to watch.
+ * the wrong tree). A remote session therefore only RECORDS the path
+ * (`setRemoteWorkingDir`): nothing is read or watched locally, and the fix
+ * plan stays authoritative (`isFileAuthoritative`) exactly as for a local
+ * session, so the tracker's output-based completion guessers stay off. They
+ * are off for every session with a working directory; turning them on for
+ * remote sessions alone would let a prose line such as "All tasks completed"
+ * mark every todo done and end the loop there and nowhere else.
  *
  * Drives the real `WebServer.setupSessionListeners()`, like
  * discard-partially-built-session.test.ts.
@@ -86,16 +87,41 @@ describe('Ralph @fix_plan.md watcher and the session location', () => {
   it('does not watch a remote session working directory on the local disk', async () => {
     const session = buildSession(true);
     const setWorkingDir = vi.spyOn(session.ralphTracker, 'setWorkingDir');
+    const setRemoteWorkingDir = vi.spyOn(session.ralphTracker, 'setRemoteWorkingDir');
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     await internals.registerSessionWithLayout(session);
     await internals.setupSessionListeners(session);
 
     expect(setWorkingDir).not.toHaveBeenCalled();
+    expect(setRemoteWorkingDir).toHaveBeenCalledWith(REMOTE_PATH);
     expect(log.mock.calls.some((args) => String(args[0]).includes('Could not watch @fix_plan.md'))).toBe(false);
-    // A fix-plan path that can never be read must not make the file "authoritative":
-    // that turns off the tracker's output-based todo completion for the session.
-    expect(session.ralphTracker.isFileAuthoritative).toBe(false);
+    // Same authority as a local session: the output-based completion guessers stay off.
+    expect(session.ralphTracker.isFileAuthoritative).toBe(true);
+  });
+
+  it('keeps a remote session todo list out of the prose completion guessers', async () => {
+    const session = buildSession(true);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await internals.registerSessionWithLayout(session);
+    await internals.setupSessionListeners(session);
+
+    const tracker = session.ralphTracker;
+    tracker.enable();
+    tracker.startLoop('ALLDONE');
+    const completions: string[] = [];
+    tracker.on('completionDetected', (phrase: string) => completions.push(phrase));
+    tracker.processTerminalData('- [ ] Write the parser\n- [ ] Add tests\n');
+    const pending = () => tracker.todos.filter((t) => t.status !== 'completed').length;
+    expect(pending()).toBe(2);
+
+    // Prose, not the configured completion phrase: it must not end the loop.
+    tracker.processTerminalData('All tasks completed\n');
+
+    expect(pending()).toBe(2);
+    expect(tracker.loopState.active).toBe(true);
+    expect(completions).toEqual([]);
   });
 
   it('still watches a local session working directory', async () => {

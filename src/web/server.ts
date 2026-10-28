@@ -2068,9 +2068,15 @@ export class WebServer extends EventEmitter {
 
     // Set working directory for Ralph tracker to auto-load @fix_plan.md (not supported for external CLIs).
     // A remote session's workingDir is a path on the remote host, and the watcher reads and
-    // fs.watch()es it on the LOCAL disk, so it is skipped there too.
-    if (!isExternalCliMode(session.mode) && !session.remote) {
-      session.ralphTracker.setWorkingDir(session.workingDir);
+    // fs.watch()es it on the LOCAL disk, so a remote session only records the path: the fix plan stays
+    // authoritative as for a local session (keeping the output-based completion guessers off), and its
+    // file is read over ssh only on an explicit import (fix-plan/read).
+    if (!isExternalCliMode(session.mode)) {
+      if (session.remote) {
+        session.ralphTracker.setRemoteWorkingDir(session.workingDir);
+      } else {
+        session.ralphTracker.setWorkingDir(session.workingDir);
+      }
     }
 
     // Start watching for new images in this session's working directory (if enabled globally and per-session).

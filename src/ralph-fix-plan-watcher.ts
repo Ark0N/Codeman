@@ -249,6 +249,20 @@ export class RalphFixPlanWatcher extends EventEmitter {
   }
 
   /**
+   * Record a REMOTE session's working directory (a path on the remote host) without reading or
+   * watching it: the local disk holds nothing of it. The fix plan stays authoritative exactly as for a
+   * local session, so the output-based completion guessers stay off (they are off for every session
+   * with a working directory); the file reaches the tracker only through an explicit import
+   * (`POST .../fix-plan/read`, which reads it over ssh).
+   * @param workingDir - The session's working directory on the remote host
+   */
+  setRemoteWorkingDir(workingDir: string): void {
+    this.stopWatchingFixPlan();
+    this._workingDir = workingDir;
+    this._fixPlanPath = join(workingDir, '@fix_plan.md');
+  }
+
+  /**
    * Load @fix_plan.md from disk if it exists.
    * Called on initialization and when file changes are detected.
    */

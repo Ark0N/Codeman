@@ -432,9 +432,12 @@ path but the SESSION (`session.remote`): a remote session never falls back to lo
 records, which are keyed to the session that registered them.
 
 **Local watchers skip a remote session.** The Ralph tracker's `@fix_plan.md` auto-load
-(and the `fs.watch` behind it) never runs for a remote session: `setupSessionListeners()`
-(`server.ts`) does not hand the tracker a remote `workingDir`, because the watcher reads
-the LOCAL disk, where that path is missing or a different tree.
+(and the `fs.watch` behind it) never runs for a remote session, because the watcher reads
+the LOCAL disk, where that path is missing or a different tree: `setupSessionListeners()`
+(`server.ts`) calls `setRemoteWorkingDir()` instead, which only records the path. The fix
+plan stays authoritative exactly as for a local session, so the tracker's output-based
+completion guessers stay off there too; the file reaches the tracker only through
+`fix-plan/read`, over ssh. The image watcher skips remote sessions the same way.
 
 ## Wake-on-LAN from user input
 
