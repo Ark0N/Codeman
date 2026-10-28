@@ -1,4 +1,23 @@
-/** Accept empty, untyped API POSTs even when a reverse proxy frames them as chunked. */
+/**
+ * @fileoverview Accept empty, untyped API POSTs even when a reverse proxy frames them as chunked.
+ *
+ * Cloudflare Tunnel (cloudflared, Go's HTTP client) forwards a bodyless POST as an HTTP/1.1
+ * chunked request with no Content-Type and a zero-length body. Fastify only skips its
+ * content-type check for a `Content-Length: 0` request, so this framing was refused 415
+ * (`FST_ERR_CTP_INVALID_MEDIA_TYPE`) before the route ran, breaking actions such as opening a
+ * saved web tab. This parser lets such a request reach its route with `request.body === undefined`,
+ * exactly as a `Content-Length: 0` request does.
+ *
+ * Scope is POST under `/api/` only: Go frames an empty body of unknown length as chunked for
+ * POST, PUT and PATCH and drops it for DELETE, and every PUT/PATCH the frontend sends carries a
+ * JSON body. Anything else (another method, a non-API route, a Content-Type, a non-zero
+ * Content-Length, or a single body byte) is still the 415 Fastify would have answered.
+ *
+ * ⚠️ It owns the ROOT `'*'` content-type slot. The JSON, `text/plain` (kept RAW, see the CSRF
+ * note in CLAUDE.md) and multipart parsers match first; the web-tab proxy registers its own
+ * `'*'` in an encapsulated scope and is unaffected. Fastify refuses a second root `'*'` parser at
+ * boot (`FST_ERR_CTP_ALREADY_PRESENT`), so extend this function instead of adding one.
+ */
 import { errorCodes, type FastifyInstance, type FastifyRequest } from 'fastify';
 import type { Readable } from 'node:stream';
 
