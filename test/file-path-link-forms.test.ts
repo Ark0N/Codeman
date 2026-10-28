@@ -343,23 +343,53 @@ describe('terminal link provider', () => {
     expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
   });
 
-  it.each([400, 403, 404, 500, 503])(
-    'does not open an unregistered spaced alternative after HTTP %s',
-    async (status) => {
-      const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
-      app._registerExternalPreview
-        .mockResolvedValueOnce({ status: 404, error: 'File not found' })
-        .mockResolvedValueOnce({ status, error: 'Alternative unavailable' });
+  it('uses the original opener when both hard-wrap filenames are missing', async () => {
+    for (const row of [1, 2]) {
+      const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], row, 120);
+      app._registerExternalPreview.mockResolvedValue({ status: 404, error: 'Attachment file not found' });
       await links[0].activate({}, links[0].text);
       expect(app._registerExternalPreview.mock.calls).toEqual([
         ['/mnt/data/KoboeReader.conf', 's1'],
         ['/mnt/data/Kobo eReader.conf', 's1'],
       ]);
-      expect(app.openFilePreview).not.toHaveBeenCalled();
-      expect(app.openLogViewerWindow).not.toHaveBeenCalled();
-      expect(app.showToast).toHaveBeenCalledWith('Alternative unavailable', 'error');
+      expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+      expect(app.showToast).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['Path: ', '- ', '- Path: ', '  Path: '])(
+    'resolves the filename without its parenthesised prefix %j',
+    async (prefix) => {
+      for (const row of [1, 2]) {
+        const { app, links } = linksOn([`Saved the notes (${prefix}/home/me/proj/out/My`, '  Notes.md).'], row, 120);
+        app._registerExternalPreview
+          .mockResolvedValueOnce({ status: 404, error: 'Attachment file not found' })
+          .mockResolvedValueOnce({ attachmentId: 'att-spaced' });
+        expect(links.map((link) => link.text)).toEqual(['/home/me/proj/out/MyNotes.md']);
+        await links[0].activate({}, links[0].text);
+        expect(app._registerExternalPreview.mock.calls).toEqual([
+          ['/home/me/proj/out/MyNotes.md', 's1'],
+          ['/home/me/proj/out/My Notes.md', 's1'],
+        ]);
+        expect(app.openFilePreview).toHaveBeenCalledWith('/home/me/proj/out/My Notes.md', 's1');
+      }
     }
   );
+
+  it.each([400, 403, 500, 503])('does not open an unregistered spaced alternative after HTTP %s', async (status) => {
+    const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
+    app._registerExternalPreview
+      .mockResolvedValueOnce({ status: 404, error: 'File not found' })
+      .mockResolvedValueOnce({ status, error: 'Alternative unavailable' });
+    await links[0].activate({}, links[0].text);
+    expect(app._registerExternalPreview.mock.calls).toEqual([
+      ['/mnt/data/KoboeReader.conf', 's1'],
+      ['/mnt/data/Kobo eReader.conf', 's1'],
+    ]);
+    expect(app.openFilePreview).not.toHaveBeenCalled();
+    expect(app.openLogViewerWindow).not.toHaveBeenCalled();
+    expect(app.showToast).toHaveBeenCalledWith('Alternative unavailable', 'error');
+  });
 
   it('keeps the session selected at click time while a path lookup is pending', async () => {
     const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);

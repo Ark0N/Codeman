@@ -2637,7 +2637,7 @@ function terminalPathLine(buffer, row, cols, maxRows) {
           const after = next.text.slice(0, closing).trimStart();
           const spaced = spacedFilePathOnLine(`${before} ${after}`, { parenthesised: true });
           if (!before.includes(')') && !/[/-]$/.test(before) && !after.includes('/') && spaced?.link) {
-            alternatives.push({ path: before + after, spacedPath: spaced.path });
+            alternatives.push({ path: before.slice(spaced.index) + after, spacedPath: spaced.path });
           }
         }
       }

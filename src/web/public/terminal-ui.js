@@ -2347,6 +2347,7 @@ Object.assign(CodemanApp.prototype, {
               if (original.status !== 404) return activateFilePath(target, false, sessionId);
               const path = self._resolveLinkedFilePath(alternative.spacedPath, sessionId);
               const registered = await self._registerExternalPreview(path, sessionId);
+              if (registered.status === 404) return activateFilePath(target, false, sessionId);
               if (!registered.attachmentId) {
                 self.showToast(registered.error || 'Cannot open this file', 'error');
                 return;

@@ -17,18 +17,20 @@ describe('wrapped configuration file links (Chromium)', () => {
   });
 
   it.each([
-    { wrap: 'soft', originalExists: false, extension: 'conf', registrationStatus: 200 },
-    { wrap: 'hard', originalExists: false, extension: 'conf', registrationStatus: 200 },
-    { wrap: 'hard', originalExists: true, extension: 'conf', registrationStatus: 200 },
-    { wrap: 'hard', originalExists: true, extension: 'svg', registrationStatus: 400 },
-    { wrap: 'hard', originalExists: true, extension: 'markdown', registrationStatus: 400 },
-    { wrap: 'hard', originalExists: false, extension: 'svg', registrationStatus: 400 },
+    { wrap: 'soft', originalExists: false, extension: 'conf', registrationStatus: 200, prefix: '' },
+    { wrap: 'hard', originalExists: false, extension: 'conf', registrationStatus: 200, prefix: '' },
+    { wrap: 'hard', originalExists: true, extension: 'conf', registrationStatus: 200, prefix: '' },
+    { wrap: 'hard', originalExists: true, extension: 'svg', registrationStatus: 400, prefix: '' },
+    { wrap: 'hard', originalExists: true, extension: 'markdown', registrationStatus: 400, prefix: '' },
+    { wrap: 'hard', originalExists: false, extension: 'svg', registrationStatus: 400, prefix: '' },
+    { wrap: 'hard', originalExists: false, extension: 'conf', registrationStatus: 404, prefix: '' },
+    { wrap: 'hard', originalExists: false, extension: 'markdown', registrationStatus: 200, prefix: 'Path: ' },
   ])(
-    'handles .$extension links on both rows: $wrap, original exists: $originalExists',
-    async ({ wrap, originalExists, extension, registrationStatus }) => {
+    'handles .$extension links on both rows: $wrap, original exists: $originalExists, prefix: $prefix',
+    async ({ wrap, originalExists, extension, registrationStatus, prefix }) => {
       const path = basePath.replace('.conf', `.${extension}`);
       const original = path.replace('Kobo eReader', 'KoboeReader');
-      const expected = wrap === 'hard' && originalExists ? original : path;
+      const expected = wrap === 'hard' && (originalExists || registrationStatus === 404) ? original : path;
       const lookupFails = registrationStatus === 400 && !originalExists;
       const lookups: string[] = [];
       const page = await browser.newPage({ viewport: { width: 1920, height: 600 } });
@@ -61,10 +63,10 @@ describe('wrapped configuration file links (Chromium)', () => {
           await page.addScriptTag({ content: readFileSync(resolve(publicDir, file), 'utf8') });
         }
         await page.evaluate(
-          async ({ path, wrap, workingDir }) => {
+          async ({ path, wrap, workingDir, prefix }) => {
             const w = window as any;
             const boundary = path.lastIndexOf(' ');
-            const first = `Found it: prepared a corrected configuration (${path.slice(0, boundary)}`;
+            const first = `Found it: prepared a corrected configuration (${prefix}${path.slice(0, boundary)}`;
             const terminal = new w.Terminal({ cols: first.length + (wrap === 'soft' ? 1 : 20), rows: 6 });
             terminal.open(document.getElementById('terminal'));
             w.opened = [];
@@ -82,7 +84,7 @@ describe('wrapped configuration file links (Chromium)', () => {
             await new Promise<void>((done) => terminal.write(text, done));
             await new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
           },
-          { path, wrap, workingDir: registrationStatus === 400 ? '/mnt/user/Scratch/Kobo' : '/workspace' }
+          { path, wrap, workingDir: registrationStatus === 400 ? '/mnt/user/Scratch/Kobo' : '/workspace', prefix }
         );
 
         expect(lookups).toEqual([]);
