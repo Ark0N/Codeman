@@ -2108,6 +2108,7 @@ Object.assign(CodemanApp.prototype, {
     // Twin: TerminalTile (terminal-tile.js _createKeyCode229Recovery and its
     // connect() key handler and onData) wires its own controller the same way
     // for every grid tile and the split's Pane B; keep the two in step.
+    // create() returns null unless the primary pointer is coarse (#716).
     try {
       this._keyCode229Recovery = window.CodemanKeyCode229Recovery?.create?.({
         textarea: this.terminal.textarea,

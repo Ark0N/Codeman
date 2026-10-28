@@ -344,9 +344,10 @@
         if (global.app?.tileShortcutFor?.(ev)) return false;
         // Ctrl+V / Cmd+V: the primary pane's paste trap, aimed at THIS pane, so
         // a pasted image uploads to this pane's session and its path is typed
-        // here, and pasted text goes into this xterm with its bracketed-paste
-        // markers intact. Mirrors terminal-ui.js's own Ctrl+V gate; without it
-        // xterm's default only ever pasted text.
+        // here. Plain text goes to this pane's session as a Codeman-built
+        // bracketed-paste frame; this terminal is only refocused and receives
+        // input(framed), which onData delivers. Mirrors terminal-ui.js's own
+        // Ctrl+V gate; without it xterm's default only ever pasted text.
         if ((ev.ctrlKey || ev.metaKey) && ev.key === 'v' && ev.type === 'keydown') {
           global.app?._handleImagePaste?.({ terminal: this.terminal, sessionId: this.sessionId });
           return false;
@@ -646,9 +647,10 @@
     // Recovered text goes straight to _onTerminalData(), never through xterm's
     // onData, so it is not counted as xterm's own (see connect()'s onData).
     // Created after terminal.open(): xterm's capture `input` listener on the
-    // textarea is registered there, and must run before the controller's. No
-    // device or mode gate, as in the primary pane: with a hardware keyboard it
-    // costs one assignment per keydown. A failure leaves xterm's own handling.
+    // textarea is registered there, and must run before the controller's.
+    // create() returns null on a fine pointer (#716): the recovery is for soft
+    // keyboards, and on a desktop it delivers a dead-key character twice.
+    // A failure leaves xterm's own handling.
     _createKeyCode229Recovery() {
       this._destroyKeyCode229Recovery();
       if (!this.terminal) return;

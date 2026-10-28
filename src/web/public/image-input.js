@@ -193,7 +193,10 @@ Object.assign(CodemanApp.prototype, {
   // the result for images. Works on plain HTTP (no Clipboard API needed).
   // `target` names the terminal the Ctrl+V came from and its session; both
   // default to the primary pane. A second terminal (the split pane) passes its
-  // own, so text pastes into THAT xterm and images upload to THAT session.
+  // own. Images upload to THAT session. Plain text goes to that pane's session
+  // as a Codeman-built bracketed-paste frame: the terminal is only refocused
+  // and receives input(framed). onData delivers the frame; it is not written
+  // into the xterm buffer.
   _handleImagePaste(target = {}) {
     const self = this;
     const terminal = target.terminal || this.terminal;
@@ -244,14 +247,17 @@ Object.assign(CodemanApp.prototype, {
 
       if (imageFiles.length > 0) {
         self._uploadAndInsertImages(imageFiles, { sessionId: sessionId });
-      } else {
-        // No image -- route text through xterm's paste() so bracketed-paste
-        // markers (CSI 200~ ... CSI 201~) survive when the inner application
-        // has enabled bracketed-paste mode (Claude Code does). Sending text
-        // via raw sendInput() strips those markers and makes pasted input
-        // indistinguishable from typed input, weakening the CLI's
-        // prompt-injection defenses.
-        if (text && terminal) terminal.paste(text);
+      } else if (text && terminal) {
+        // No image. xterm's paste() emits CSI 200~/201~ only while its DECSET
+        // 2004 mirror is on, and a terminal replay clears that mirror, so the
+        // markers never arrive and a copied newline submits (#716). Build the
+        // frame here and hand it to this terminal through input(). That fires
+        // onData as user input (scroll to the bottom, clear the selection).
+        // The main pane's bracketed-paste branch and a tile's _onTerminalData
+        // deliver it, including the local-echo flush (#219). Do not also write
+        // the frame from here.
+        const body = text.replace(/\x1b\[20[01]~/g, '').replace(/\r?\n/g, '\r');
+        terminal.input(`\x1b[200~${body}\x1b[201~`);
       }
     });
 
