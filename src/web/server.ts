@@ -2069,8 +2069,10 @@ export class WebServer extends EventEmitter {
       session.ralphTracker.setWorkingDir(session.workingDir);
     }
 
-    // Start watching for new images in this session's working directory (if enabled globally and per-session)
-    if ((await this.isImageWatcherEnabled()) && session.imageWatcherEnabled) {
+    // Start watching for new images in this session's working directory (if enabled globally and per-session).
+    // A remote session's workingDir is a path on the remote host, and the watcher watches it on the LOCAL
+    // disk, so it is skipped there (the per-session and app-wide toggles skip it too).
+    if ((await this.isImageWatcherEnabled()) && session.imageWatcherEnabled && !session.remote) {
       imageWatcher.watchSession(session.id, session.workingDir);
     }
 
