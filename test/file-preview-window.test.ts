@@ -391,6 +391,9 @@ describe('file viewer rendered markdown width', () => {
     const rvBase = stylesCss.match(/\.rv-text,\s*\.response-viewer-body > :not\(\.rv-message\) \{[^}]*\}/);
     expect(rvBase, 'the shared prose rule').not.toBeNull();
     expect(rvBase![0], 'no width cap on the shared prose rule').not.toMatch(/max-width/);
+    // ASCII-diagram blocks cap themselves at var(--rv-content-max, 720px), which only the
+    // Response Viewer sets; the document lifts it so a diagram follows the window too.
+    expect(mdRule![0], 'diagram blocks follow the window').toMatch(/--rv-content-max:\s*none;/);
   });
 });
 
