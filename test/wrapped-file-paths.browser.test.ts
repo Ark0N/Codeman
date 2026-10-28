@@ -1,4 +1,4 @@
-/** Real xterm clicks must open the complete spaced filename from either wrapped row. */
+/** Real xterm clicks resolve the complete filename or report its lookup error from either wrapped row. */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -22,12 +22,14 @@ describe('wrapped configuration file links (Chromium)', () => {
     { wrap: 'hard', originalExists: true, extension: 'conf', registrationStatus: 200 },
     { wrap: 'hard', originalExists: true, extension: 'svg', registrationStatus: 400 },
     { wrap: 'hard', originalExists: true, extension: 'markdown', registrationStatus: 400 },
+    { wrap: 'hard', originalExists: false, extension: 'svg', registrationStatus: 400 },
   ])(
-    'opens the existing .$extension file from both rows: $wrap, original exists: $originalExists',
+    'handles .$extension links on both rows: $wrap, original exists: $originalExists',
     async ({ wrap, originalExists, extension, registrationStatus }) => {
       const path = basePath.replace('.conf', `.${extension}`);
       const original = path.replace('Kobo eReader', 'KoboeReader');
       const expected = wrap === 'hard' && originalExists ? original : path;
+      const lookupFails = registrationStatus === 400 && !originalExists;
       const lookups: string[] = [];
       const page = await browser.newPage({ viewport: { width: 1920, height: 600 } });
       try {
@@ -106,7 +108,16 @@ describe('wrapped configuration file links (Chromium)', () => {
           await page.waitForFunction(() => (window as any).app._linkHovered === true);
           await page.mouse.click(point.x, point.y);
           await page.waitForFunction((count) => (window as any).opened.length === count, row + 1);
-          expect(await page.evaluate(() => (window as any).opened)).toEqual(Array(row + 1).fill(expected));
+          const opened = await page.evaluate(() => (window as any).opened as string[]);
+          if (lookupFails) {
+            for (const message of opened) {
+              expect(message).toMatch(/^error:/);
+              expect(message).toContain(path);
+              expect(message).not.toContain('outside the session workspace');
+            }
+          } else {
+            expect(opened).toEqual(Array(row + 1).fill(expected));
+          }
           await page.mouse.move(0, 0);
         }
         expect(lookups).toEqual(

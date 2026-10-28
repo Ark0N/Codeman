@@ -46,6 +46,14 @@ describe('spaced file paths', () => {
     expect(paths('Updated (/home/me/proj, config.json)')).toEqual(['/home/me/proj', 'config.json']);
   });
 
+  it.each([
+    ['/mnt/c/Users/me/Smith, John/report.docx', '/mnt/c/Users/me/Smith, John/report.docx'],
+    ['- /home/me/Clients/Acme, Inc/contract.pdf', '/home/me/Clients/Acme, Inc/contract.pdf'],
+    ['Saved to: /home/me/proj/Invoice 12, final.pdf', '/home/me/proj/Invoice 12, final.pdf'],
+  ])('keeps commas in a non-parenthesised spaced path: %s', (line, path) => {
+    expect(findFilePathLinks(line)).toEqual([{ path, index: line.indexOf(path) }]);
+  });
+
   it('links an own-line absolute path with spaces whole', () => {
     expect(paths(LONG)).toEqual([LONG]);
     expect(paths('/mnt/c/proj/My Big Docs/report.docx')).toEqual(['/mnt/c/proj/My Big Docs/report.docx']);

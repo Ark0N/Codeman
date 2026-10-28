@@ -2210,7 +2210,7 @@ function findFilePathLinks(text) {
     // Parentheses bound an inline path just as a whole line bounds a standalone path.
     const parenthesised = /\(([^()\r\n]{1,1000})\)/g;
     while ((match = parenthesised.exec(line)) !== null) {
-      reserve(spacedFilePathOnLine(match[1]), lineStart + match.index + 1);
+      reserve(spacedFilePathOnLine(match[1], { parenthesised: true }), lineStart + match.index + 1);
     }
     lineStart += line.length + 1;
   }
@@ -2263,7 +2263,7 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  * it ends on a known extension, a rooted one has a directory before its first
  * space, no earlier word holds an extension (`a.md,`, `a.ts#L12`) or ends in `/`,
  * and none holds a `:` and a digit (`a.ts:42`, a line suffix ends the path). Later words cannot start a new
- * `/`, `~/`, `./` or `../` path, no earlier word ends in `:` or `,`, is an arrow or has
+ * `/`, `~/`, `./` or `../` path, no earlier word ends in `:` (or `,` inside parentheses), is an arrow or has
  * no letter or digit (a prompt glyph such as `❯` or `$`; a bare `-` is kept), and
  * a run of spaces (a column gap) is refused, so two paths on a line are never
  * merged. A relative candidate whose only `/` word is its last is prose after the
@@ -2285,9 +2285,10 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  * Linear: one bounded prefix match, then string scans.
  *
  * @param {string} line One line, no newline.
+ * @param {{parenthesised?: boolean}} [options] Refuse comma-separated lists inside parentheses only.
  * @returns {{path: string, index: number, link: boolean} | null}
  */
-function spacedFilePathOnLine(line) {
+function spacedFilePathOnLine(line, options = {}) {
   const text = String(line || '');
   const prefix = /^[ \t]*((?:\d{1,3}[.)]|[-*•])[ \t]+)?((?:[A-Za-z][\w-]{0,30}(?: [\w-]{1,30}){0,3}):[ \t]+)?/.exec(text);
   const index = prefix[0].length;
@@ -2310,7 +2311,8 @@ function spacedFilePathOnLine(line) {
     return null;
   }
   for (const word of words.slice(0, -1)) {
-    if (word.endsWith('/') || /[,:]$/.test(word) || /^(?:—|–|→|=>|->|<-|=)$/.test(word)) return null;
+    if (word.endsWith('/') || word.endsWith(':') || /^(?:—|–|→|=>|->|<-|=)$/.test(word)) return null;
+    if (options.parenthesised && word.endsWith(',')) return null;
     // A shell prompt that prints its working directory in full (`/home/me/proj$ cat
     // notes.md`; WSL's `/mnt/c/...` is outside `$HOME`) is a command line too, and so is
     // one whose directory has a space in it (`/mnt/c/My Docs$ ls notes.md`): the `$`
@@ -2633,7 +2635,7 @@ function terminalPathLine(buffer, row, cols, maxRows) {
         if (opening >= 0 && closing > 0) {
           const before = text.slice(opening + 1);
           const after = next.text.slice(0, closing).trimStart();
-          const spaced = spacedFilePathOnLine(`${before} ${after}`);
+          const spaced = spacedFilePathOnLine(`${before} ${after}`, { parenthesised: true });
           if (!before.includes(')') && !/[/-]$/.test(before) && !after.includes('/') && spaced?.link) {
             alternatives.push({ path: before + after, spacedPath: spaced.path });
           }
