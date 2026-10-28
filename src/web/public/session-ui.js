@@ -613,6 +613,9 @@ Object.assign(CodemanApp.prototype, {
           this.updateCasePickerInput(select.value);
         });
         select.dataset.listenerAdded = 'true';
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') this._syncCaseStateFromServer();
+        });
       }
       this.setupQuickStartCasePicker();
       // The phone overview labels rows with their case name, and a case rename or
@@ -3542,6 +3545,60 @@ Object.assign(CodemanApp.prototype, {
 
   saveCaseSettings(caseName, settings) {
     localStorage.setItem('caseSettings_' + caseName, JSON.stringify(settings));
+    if (this._caseStateSyncOn()) this._pushCaseSettings(caseName, settings);
+  },
+
+  // ── Opt-in case sync (`syncCaseState`): case options live on the server, the selected case follows other devices ──
+
+  /** Off unless the user turned it on; a non-admin in multi-user mode cannot write the shared settings.json. */
+  _caseStateSyncOn() {
+    return this.loadAppSettingsFromStorage().syncCaseState === true && !this._settingsReadOnly?.();
+  },
+
+  async _pushCaseSettings(caseName, settings) {
+    try {
+      // PUT replaces the whole map, so merge into the server's current one rather than this device's copy.
+      const current = await fetch('/api/settings').then((r) => r.json()).then((env) => env?.data ?? {});
+      await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          caseSettings: {
+            ...(current.caseSettings || {}),
+            [caseName]: { agentTeams: !!settings.agentTeams, opusContext1m: !!settings.opusContext1m },
+          },
+        }),
+      });
+    } catch (err) {
+      console.error('Failed to sync case settings:', err);
+    }
+  },
+
+  /** Server copy wins: write the synced per-case options into the local keys getCaseSettings() reads. */
+  _applyServerCaseSettings(server) {
+    if (server?.syncCaseState !== true || !server.caseSettings) return;
+    try {
+      for (const [name, s] of Object.entries(server.caseSettings)) {
+        localStorage.setItem('caseSettings_' + name, JSON.stringify(s));
+      }
+    } catch { /* storage blocked: this device keeps what it has */ }
+  },
+
+  /** On returning to the tab: take the other devices' case options and selected case. */
+  async _syncCaseStateFromServer() {
+    if (!this._caseStateSyncOn()) return;
+    try {
+      const server = await fetch('/api/settings').then((r) => r.json()).then((env) => env?.data ?? null);
+      this._applyServerCaseSettings(server);
+      const select = document.getElementById('quickStartCase');
+      const last = server?.lastUsedCase;
+      if (select && last && last !== select.value && this.cases?.some((c) => c.name === last)) {
+        select.value = last;
+        this.updateDirDisplayForCase(last);
+        this.updateMobileCaseLabel(last);
+        this.updateCasePickerInput(last);
+      }
+    } catch { /* offline: try again next time the tab is shown */ }
   },
 
   onCaseSettingChanged() {
