@@ -2300,6 +2300,14 @@ Object.assign(CodemanApp.prototype, {
         btn.disabled = false;
         return;
       }
+      // A stop the server did not store (a 409 for a settings.json that does not parse) left the
+      // tunnel running: say so, and leave the button showing it on.
+      const stopError = newEnabled ? '' : await this._settingsWriteError(res);
+      if (stopError) {
+        this.showToast(`Tunnel not stopped: ${stopError}`, 'error', { duration: 0 });
+        btn.disabled = false;
+        return;
+      }
       if (newEnabled) {
         this._showTunnelConnecting();
         // Poll tunnel status as fallback in case SSE event is missed
@@ -2661,9 +2669,11 @@ Object.assign(CodemanApp.prototype, {
    * Shows the server's (actionable) message as an error toast. Since #706 this is the
    * fallback for when `_confirmTunnelEnable` could not read the tunnel status.
    * @param {Response|null} res - the fetch Response from the settings PUT
+   * @param {object} [sent] - what that PUT sent, resent with the acknowledgement: the refusal
+   *   rejected all of it, so an App Settings save retried with the tunnel keys alone lost the rest
    * @returns {Promise<boolean>} true if the tunnel-enable was refused (caller should abort)
    */
-  async _handleTunnelEnableRefusal(res) {
+  async _handleTunnelEnableRefusal(res, sent = { tunnelEnabled: true }) {
     if (!res || res.ok) return false;
     let message = 'Tunnel refused: set CODEMAN_PASSWORD before exposing Codeman publicly.';
     let errorCode = '';
@@ -2695,7 +2705,7 @@ Object.assign(CodemanApp.prototype, {
         const retry = await fetch('/api/settings', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tunnelEnabled: true, acknowledgeUnauthTunnel: true }),
+          body: JSON.stringify({ ...sent, acknowledgeUnauthTunnel: true }),
         });
         if (retry.ok) {
           this.showToast('Public tunnel enabling — no password set ⚠️', 'warning');
@@ -2742,6 +2752,13 @@ Object.assign(CodemanApp.prototype, {
       });
       // COD-55: server refuses an unauthenticated public tunnel (403). Surface it.
       if (enable && (await this._handleTunnelEnableRefusal(res))) {
+        this.closeTunnelPanel();
+        return;
+      }
+      // A stop the server did not store left the tunnel running (see toggleTunnelFromWelcome).
+      const stopError = enable ? '' : await this._settingsWriteError(res);
+      if (stopError) {
+        this.showToast(`Tunnel not stopped: ${stopError}`, 'error', { duration: 0 });
         this.closeTunnelPanel();
         return;
       }
@@ -2963,7 +2980,11 @@ Object.assign(CodemanApp.prototype, {
     // Gesture overlay is injected at page render (server-side), so a change to it
     // only takes effect on reload — remember the prior value to decide below.
     const _prev = this.loadAppSettingsFromStorage();
-    const _prevGestureEnabled = (_prev.gestureControlEnabled ?? false) === true;
+    // After a save the server did not store, this device's blob is ahead of the server, so the
+    // two server-side changes judged against it (the gesture reload, the plan-usage collection
+    // flip) are judged against the blob that save started from until a save lands.
+    const _prevServer = this._unsavedSettingsBaseline ?? _prev;
+    const _prevGestureEnabled = (_prevServer.gestureControlEnabled ?? false) === true;
     // WebGL toggle: default ON (desktop), so only an explicit stored false counts
     // as "previously off" — used below to detect a real OFF→ON flip.
     const _prevWebglEnabled = (_prev.webglRendererEnabled ?? true) === true;
@@ -3282,7 +3303,7 @@ Object.assign(CodemanApp.prototype, {
     // switch collection off for every desktop, whose chip then went stale with
     // no error anywhere. An explicit toggle on any device still writes it, in
     // either direction.
-    const _chipFlip = this.planUsageCollectionFlip(_prev, settings.showPlanUsageLimits);
+    const _chipFlip = this.planUsageCollectionFlip(_prevServer, settings.showPlanUsageLimits);
     const {
       localEchoEnabled: _leo,
       // Per-device (it is about this screen's keyboard) and absent from
@@ -3355,6 +3376,7 @@ Object.assign(CodemanApp.prototype, {
       ...serverSettings
     } = settings;
     let webhookError = '';
+    let saveError = '';
     let serverSaved = false;
     try {
       // #706: a save that turns the tunnel on asks first when the server has no login
@@ -3368,13 +3390,14 @@ Object.assign(CodemanApp.prototype, {
       }
       // A non-admin's save is not sent at all (see settingsReadOnly above): the server
       // would refuse it with a 403, the plan-usage collection flip included.
-      const res = settingsReadOnly ? null : await this._apiPut('/api/settings', {
+      const body = {
         ...serverSettings,
         ...(_chipFlip !== undefined ? { showPlanUsageLimits: _chipFlip } : {}),
         ...(tunnelGate.acknowledge ? { acknowledgeUnauthTunnel: true } : {}),
         notificationPreferences: notifPrefsToSave,
         voiceSettings,
-      });
+      };
+      const res = settingsReadOnly ? null : await this._apiPut('/api/settings', body);
 
       // Multi-user mode, a non-admin whose role was not known when this save started
       // (/api/me had not answered, or failed and admin-ui.js fell back to a single-user
@@ -3389,15 +3412,24 @@ Object.assign(CodemanApp.prototype, {
 
       // COD-55: the server refuses an unauthenticated public tunnel with a 403 — which
       // rejects the WHOLE settings PUT. Surface the message and revert the tunnel toggle
-      // so it doesn't look enabled.
-      if (!refusedAsNonAdmin && settings.tunnelEnabled && (await this._handleTunnelEnableRefusal(res))) {
+      // so it doesn't look enabled. Only a 403: any other failure with the switch on is
+      // not about the tunnel, and turning the switch off for it would be wrong too.
+      const tunnelRefused = !refusedAsNonAdmin && settings.tunnelEnabled && res?.status === 403;
+      if (tunnelRefused && (await this._handleTunnelEnableRefusal(res, body))) {
         this._abandonTunnelEnable(settings, keepOpen);
         return;
       }
 
       // `_apiPut` answers null or a non-ok response instead of throwing, so this is the only
-      // evidence the server kept the flags the Apply refresh below reads.
-      serverSaved = !!res?.ok;
+      // evidence the server kept the flags the Apply refresh below reads (a tunnel 403 still
+      // here was retried with the whole save and accepted).
+      serverSaved = !!res?.ok || tunnelRefused;
+      // Any other failure (a 409 for a settings.json that does not parse, a 400, a 500, a dropped
+      // connection) stored nothing on the server, so the save must not say it did. A known
+      // non-admin sent nothing (res is null).
+      saveError =
+        settingsReadOnly || refusedAsNonAdmin || tunnelRefused ? '' : await this._settingsWriteError(res);
+      this._unsavedSettingsBaseline = saveError ? _prevServer : null;
 
       // Save model configuration separately. For a non-admin it is not sent either, and the
       // answer says whether this save would have changed it.
@@ -3408,7 +3440,9 @@ Object.assign(CodemanApp.prototype, {
       // it. Only when the group was edited: an untouched group must not re-PUT. A refusal (bad URL,
       // enabled with no URL) keeps the modal open below, with the pasted URL still in the box.
       webhookError = this._webhookPending() ? await this.saveWebhook() : '';
-      if (webhookError) {
+      if (saveError) {
+        this.showToast(`Saved on this device, not on the server: ${saveError}`, 'warning', { duration: 0 });
+      } else if (webhookError) {
         this.showToast(`Settings saved, but not the webhook: ${webhookError}`, 'warning');
       } else if (syncedChangeRefused || modelConfigRefused || refusedAsNonAdmin) {
         // ONE toast for the whole save, and only when the user really changed a server-wide
@@ -3421,7 +3455,7 @@ Object.assign(CodemanApp.prototype, {
 
       // Show tunnel-specific feedback if toggled on (never for a non-admin, whose save
       // starts nothing: the box only shows what the server already has)
-      if (settings.tunnelEnabled && !settingsReadOnly && !refusedAsNonAdmin) {
+      if (settings.tunnelEnabled && !settingsReadOnly && !refusedAsNonAdmin && !saveError) {
         this.showToast('Tunnel starting — QR code will appear when ready...', 'info');
       }
     } catch (err) {
@@ -3433,9 +3467,10 @@ Object.assign(CodemanApp.prototype, {
     // old flags, and a webhook-only failure still saved the rest, so this runs ahead of that branch.
     if (keepOpen && serverSaved) this._refreshSettingsAfterApply(settings);
 
+    // A failed settings PUT keeps the modal open too, with the form as the user left it.
     if (webhookError) {
       document.getElementById('webhookGroup')?.scrollIntoView({ block: 'center' });
-    } else if (!keepOpen) {
+    } else if (!keepOpen && !saveError) {
       this.closeAppSettings();
     }
 
@@ -3446,10 +3481,10 @@ Object.assign(CodemanApp.prototype, {
     // The gesture overlay is injected at page render (server reads
     // gestureControlEnabled from settings.json), so a change only takes effect on
     // reload. Reload when it actually changed — the server PUT above already
-    // persisted the new value.
+    // persisted the new value (not after a failed PUT: the reload would render the old one).
     // `?? false`: a non-admin's save puts a synced key the server never stored back to
     // absent (_keepServerSyncedSettings), and absent means off, as in _prevGestureEnabled.
-    if ((settings.gestureControlEnabled ?? false) !== _prevGestureEnabled) {
+    if (!saveError && (settings.gestureControlEnabled ?? false) !== _prevGestureEnabled) {
       this.showToast(
         settings.gestureControlEnabled ? 'Enabling gesture control — reloading…' : 'Disabling gesture control — reloading…',
         'info'
@@ -3496,6 +3531,35 @@ Object.assign(CodemanApp.prototype, {
     if (body?.errorCode !== 'FORBIDDEN') return false;
     this._settingsWriteForbidden = true;
     return true;
+  },
+
+  /**
+   * Why a settings write did not land, or '' when it did: the server's `error` (a 409 when
+   * settings.json does not parse, a 400, ...), else the HTTP status, else, for the null that
+   * `_apiPut` answers a dropped connection with, that the server could not be reached. Reads a
+   * clone, like _noteSettingsWriteRefusal.
+   * @returns {Promise<string>}
+   */
+  async _settingsWriteError(res) {
+    if (!res) return 'the server could not be reached';
+    if (res.ok) return '';
+    let body = null;
+    try {
+      body = await res.clone().json();
+    } catch {
+      /* not JSON: the status is all there is */
+    }
+    return body?.error || `HTTP ${res.status}`;
+  },
+
+  /**
+   * The end of a background settings write (run mode, respawn presets): the admin-only refusal is
+   * _noteSettingsWriteRefusal's, and any other failure says that `what` stayed on this device only.
+   */
+  async _noteSettingsWriteResult(res, what) {
+    if (await this._noteSettingsWriteRefusal(res)) return;
+    const error = await this._settingsWriteError(res);
+    if (error) this.showToast(`${what} saved on this device, not on the server: ${error}`, 'warning', { duration: 0 });
   },
 
   /**

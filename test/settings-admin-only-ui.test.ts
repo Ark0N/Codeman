@@ -95,6 +95,7 @@ const REAL = new Set([
   '_keepServerSyncedSettings',
   '_displaySettingKeySet',
   '_noteSettingsWriteRefusal',
+  '_settingsWriteError',
   '_applyOwnSettings',
   '_readOwnSettings',
   '_ownSettingsKey',
