@@ -427,3 +427,35 @@ describe('terminal link provider with spaced paths', () => {
     expect(linksFor('/etc/secret files/passwords.txt').links).toEqual([]);
   });
 });
+
+describe('parenthesised paths with spaces (#733)', () => {
+  const KOBO = '/mnt/data/Kobo/Kobo eReader.conf';
+
+  it('links a parenthesised absolute path whole, not as a folder prefix plus a tail', () => {
+    const line = `Prepared a corrected configuration (${KOBO}).`;
+    expect(findFilePathLinks(line)).toEqual([{ path: KOBO, index: line.indexOf(KOBO) }]);
+    expect(line.slice(line.indexOf(KOBO), line.indexOf(KOBO) + KOBO.length)).toBe(KOBO);
+  });
+
+  it('links a parenthesised relative path and a bare spaced filename whole', () => {
+    expect(paths('wrote (docs/Kobo eReader.conf) today')).toEqual(['docs/Kobo eReader.conf']);
+    expect(paths('edited (Kobo eReader.conf) in place')).toEqual(['Kobo eReader.conf']);
+    expect(paths('kept (~/Kobo/Kobo eReader.conf) aside')).toEqual(['~/Kobo/Kobo eReader.conf']);
+  });
+
+  it('links .conf the way other text extensions are linked', () => {
+    expect(paths('see /mnt/data/Kobo/reader.conf please')).toEqual(['/mnt/data/Kobo/reader.conf']);
+    expect(paths('see config/reader.conf')).toEqual(['config/reader.conf']);
+  });
+
+  it('does not take prose or an /etc path inside parentheses', () => {
+    expect(paths('(see the notes.conf)')).not.toContain('see the notes.conf');
+    expect(paths('(/etc/secret files/passwords.txt)')).toEqual([]);
+  });
+
+  it('still links Program Files (x86) as one path', () => {
+    const line = '/mnt/c/Program Files (x86)/app/readme.txt';
+    expect(paths(line)).toEqual([line]);
+    expect(paths(`(${line})`)).toEqual([line]);
+  });
+});

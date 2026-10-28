@@ -201,6 +201,26 @@ describe('terminalPathLine', () => {
       expect(paths(line.text)).toEqual([BROKEN_PATH]);
     });
   });
+
+  // A parenthesised filename word-wrapped between its words (#733). The space
+  // the wrap consumed has to come back, and the clickable cells stay on the
+  // characters that are actually on each row.
+  it('keeps the space in a hard-wrapped parenthesised filename and maps both rows', () => {
+    const rows = ['Prepared a corrected configuration (/mnt/data/Kobo/Kobo', '  eReader.conf).'];
+    const path = '/mnt/data/Kobo/Kobo eReader.conf';
+    for (const row of [0, 1]) {
+      const line = terminalPathLine(buffer(rows), row, 80)!;
+      expect([line.startRow, line.endRow]).toEqual([0, 1]);
+      expect(line.text).toBe(`Prepared a corrected configuration (${path}).`);
+      const [found] = findFilePathLinks(line.text);
+      expect(found).toEqual({ path, index: line.text.indexOf(path) });
+      expect(line.offsetToCell(found.index)).toEqual({ row: 0, col: rows[0].indexOf('/') });
+      expect(line.offsetToCell(found.index + found.path.length - 1)).toEqual({
+        row: 1,
+        col: rows[1].lastIndexOf('f'),
+      });
+    }
+  });
 });
 
 type Link = {
@@ -325,6 +345,22 @@ describe('terminal link provider', () => {
   it('never adds a path link overlapping a URL link', () => {
     const { links } = linksOn(['see https://x.io/view?img=shots/a.png now'], 1);
     expect(links.map((l) => l.text)).toEqual(['https://x.io/view?img=shots/a.png']);
+  });
+
+  it('opens a hard-wrapped spaced .conf path from either row, on the cells that hold it', () => {
+    const rows = ['Prepared a corrected configuration (/mnt/data/Kobo/Kobo', '  eReader.conf).'];
+    const path = '/mnt/data/Kobo/Kobo eReader.conf';
+    const endCol = rows[1].lastIndexOf('f');
+    for (const row of [1, 2]) {
+      const { app, links } = linksOn(rows, row);
+      expect(links.map((l) => l.text)).toEqual([path]);
+      expect(links[0].range.start).toEqual({ x: rows[0].indexOf('/') + 1, y: 1 });
+      // The provider's end cell is the one after the last character of the path.
+      expect(links[0].range.end).toEqual({ x: endCol + 2, y: 2 });
+      links[0].activate({}, links[0].text);
+      expect(app.openLogViewerWindow).toHaveBeenCalledWith(path, 's1');
+      expect(app.openFilePreview).not.toHaveBeenCalled();
+    }
   });
 });
 
