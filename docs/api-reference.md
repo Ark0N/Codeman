@@ -969,6 +969,15 @@ also pure decoration: it confers no permission, and a child is unaffected by its
 parent exiting. It appears on session state as `parentSessionId` (absent when
 unresolved) and survives a server restart.
 
+## Pane directory (`cwd`)
+
+Session state (`GET /api/v1/sessions`, the `session:updated` event) may carry `cwd`,
+the directory the session's local tmux pane is in now (`#{pane_current_path}`), which
+the web UI uses as the base for a relative path printed in the terminal. It is
+runtime-only (never persisted, so a restart starts without it), absent for remote,
+Docker, direct-PTY and rediscovered sessions and for a session split into several panes,
+and never a confinement root: file routes stay confined to `workingDir`.
+
 ## Session model (`displayModel`)
 
 Session state (`GET /api/v1/sessions`, the `session:updated` event) carries the model a

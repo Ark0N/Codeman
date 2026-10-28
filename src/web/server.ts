@@ -2819,10 +2819,12 @@ export class WebServer extends EventEmitter {
       // for such a session anyway.
       if (!muxName) continue;
       // The pane's live directory rides the same read: it is the base a relative
-      // path printed in the terminal resolves against. A session missing from
-      // the read keeps its last answer (a failed read reports nothing).
-      const cwd = getPaneCurrentPath?.(muxName);
-      const cwdChanged = cwd !== undefined && session.setCwd(cwd);
+      // path printed in the terminal resolves against. The manager's answer is
+      // applied as given, `undefined` included: it keeps its map across a failed
+      // or empty read and carries a blank `#{pane_current_path}` forward, so an
+      // `undefined` here means an authoritative read listed no single directory
+      // for the session (split into several panes, or gone from the socket).
+      const cwdChanged = getPaneCurrentPath ? session.setCwd(getPaneCurrentPath(muxName)) : false;
       if (session.setPaneExit(getPaneExit(muxName))) {
         this.persistSessionState(session);
       } else if (!cwdChanged) {
