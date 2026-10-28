@@ -3152,9 +3152,17 @@ Object.assign(CodemanApp.prototype, {
 
   async toggleSessionImageWatcher() {
     if (!this.editingSessionId) return;
-    const enabled = document.getElementById('modalImageWatcherEnabled').checked;
+    const toggle = document.getElementById('modalImageWatcherEnabled');
+    const enabled = toggle.checked;
     try {
-      await this._apiPost(`/api/sessions/${this.editingSessionId}/image-watcher`, { enabled });
+      const res = await this._apiPost(`/api/sessions/${this.editingSessionId}/image-watcher`, { enabled });
+      // `_apiPost` hands back the Response without checking it, so a refused request (a 400) must not
+      // read as a save: put the switch back and say so.
+      if (!res?.ok) {
+        toggle.checked = !enabled;
+        this.showToast('Failed to toggle image watcher', 'error');
+        return;
+      }
       // Update local session state
       const session = this.sessions.get(this.editingSessionId);
       if (session) {
