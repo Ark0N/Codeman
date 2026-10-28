@@ -767,7 +767,11 @@ const FILESYSTEM_IMAGE_PREVIEW_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif'
 const FILESYSTEM_TEXT_PREVIEW_EXTENSIONS = new Set(['md', 'txt', 'json']);
 const FILESYSTEM_DOCUMENT_PREVIEW_EXTENSIONS = new Set(['pdf', 'docx', 'pptx']);
 
-function isPathWithinRoot(root: string, candidate: string): boolean {
+/**
+ * Whether `candidate` is `root` itself or lies beneath it (both already resolved). The one lexical
+ * containment check for workspace confinement; ralph-routes.ts uses it for a remote `@fix_plan.md`.
+ */
+export function isPathWithinRoot(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
 }

@@ -29,7 +29,13 @@ import { writeHooksConfig, stripCaseEnvKeys } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { buildRalphLoopPrompt } from '../../prompts/index.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
+import { remoteProbePaths, remoteReadFile, RemoteFileAccessError } from '../../remote-files.js';
+import type { SessionRemote } from '../../types/session.js';
+import { isPathWithinRoot } from './file-routes.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
+
+/** Cap on a remote `@fix_plan.md` read over ssh (a task list, not a document). */
+const MAX_REMOTE_FIX_PLAN_BYTES = 1024 * 1024;
 
 export function registerRalphRoutes(
   app: FastifyInstance,
@@ -191,6 +197,15 @@ export function registerRalphRoutes(
   app.post('/api/sessions/:id/fix-plan/write', async (req) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id, req);
+    // A remote session's workingDir is a path on the remote host. Writing it with local fs would land
+    // the file in a same-named local folder (or fail), and remote writes are out of scope by design
+    // (src/remote-files.ts is read-only), so it is refused, like the File Viewer's remote edit.
+    if (session.remote) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Writing @fix_plan.md is not supported for a remote (SSH) session'
+      );
+    }
 
     const workingDir = session.workingDir;
     if (!workingDir) {
@@ -227,7 +242,14 @@ export function registerRalphRoutes(
     const filePath = join(workingDir, '@fix_plan.md');
 
     try {
-      const content = await fs.readFile(filePath, 'utf-8');
+      // A remote session's workingDir is a path on the remote host: read the file there, over the
+      // same ssh path the File Viewer uses, never a same-named local file.
+      const content = session.remote
+        ? await readRemoteFixPlan(session.remote, workingDir, filePath)
+        : await fs.readFile(filePath, 'utf-8');
+      if (content === null) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, '@fix_plan.md not found in working directory');
+      }
       const importedCount = session.ralphTracker.importFixPlanMarkdown(content);
       ctx.persistSessionState(session);
 
@@ -243,7 +265,8 @@ export function registerRalphRoutes(
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, '@fix_plan.md not found in working directory');
       }
-      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${error}`);
+      const reason = error instanceof RemoteFileAccessError ? error.message : String(error);
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${reason}`);
     }
   });
 
@@ -257,6 +280,13 @@ export function registerRalphRoutes(
     const { id } = req.params as { id: string };
     const { content } = parseBody(RalphPromptWriteSchema, req.body, 'Invalid request body');
     const session = findSessionOrFail(ctx, id, req);
+    // Same rule as fix-plan/write: never write a remote session's file on the local disk.
+    if (session.remote) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Writing @ralph_prompt.md is not supported for a remote (SSH) session'
+      );
+    }
 
     const workingDir = session.workingDir;
     if (!workingDir) {
@@ -510,4 +540,23 @@ export function registerRalphRoutes(
       data: { sessionId, caseName },
     };
   });
+}
+
+/**
+ * Read a remote session's `@fix_plan.md` on its host. `null` = no such file, or one that resolves outside
+ * the workspace (the caller's `NOT_FOUND`, as for a local ENOENT); anything that is not a regular file, a
+ * file over the cap, or an ssh failure throws `RemoteFileAccessError`, which the route reports as a failed
+ * read.
+ */
+async function readRemoteFixPlan(remote: SessionRemote, workingDir: string, filePath: string): Promise<string | null> {
+  // The file and the workspace in one round trip, so a symlinked @fix_plan.md that resolves outside the
+  // workspace is refused like any missing file (the File Viewer's confinement, file-routes.ts).
+  const [probe, rootProbe] = await remoteProbePaths(remote, [filePath, workingDir]);
+  if (!probe) return null;
+  if (!isPathWithinRoot(rootProbe?.realPath ?? resolve(workingDir), probe.realPath)) return null;
+  if (probe.kind !== 'file') throw new RemoteFileAccessError('@fix_plan.md is not a regular file');
+  if (probe.size > MAX_REMOTE_FIX_PLAN_BYTES) {
+    throw new RemoteFileAccessError(`@fix_plan.md is larger than ${MAX_REMOTE_FIX_PLAN_BYTES / 1024 / 1024}MB`);
+  }
+  return (await remoteReadFile(remote, probe.realPath, MAX_REMOTE_FIX_PLAN_BYTES)).toString('utf-8');
 }
