@@ -2342,12 +2342,11 @@ Object.assign(CodemanApp.prototype, {
           const alternative = !folder && logical.pathAlternatives?.find((candidate) => candidate.path === text);
           if (alternative && !verifiedSessionId) {
             return (async () => {
-              let path = target;
-              let registered = await self._registerExternalPreview(path, sessionId);
-              if (registered.status === 404) {
-                path = self._resolveLinkedFilePath(alternative.spacedPath, sessionId);
-                registered = await self._registerExternalPreview(path, sessionId);
-              }
+              const original = await self._registerExternalPreview(target, sessionId);
+              // Attachment policy must not gate the workspace's normal opener.
+              if (original.status !== 404) return activateFilePath(target, false, sessionId);
+              const path = self._resolveLinkedFilePath(alternative.spacedPath, sessionId);
+              const registered = await self._registerExternalPreview(path, sessionId);
               if (!registered.attachmentId) {
                 self.showToast(registered.error || 'Cannot open this file', 'error');
                 return;

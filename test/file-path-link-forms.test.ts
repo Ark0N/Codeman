@@ -259,6 +259,27 @@ function linksOn(lines: string[], row: number, cols = 80, wrappedRows = new Set<
 }
 
 describe('terminal link provider', () => {
+  it.each(['svg', 'markdown', 'avif', 'bmp', 'ico', 'zip'])(
+    'keeps the workspace opener for a hard-wrapped .%s rejected by the attachment registry',
+    async (extension) => {
+      for (const row of [1, 2]) {
+        const path = `/home/me/proj/out/system_architecture.${extension}`;
+        const { app, links } = linksOn(
+          ['Saved the diagram (/home/me/proj/out/system_archi', `  tecture.${extension}).`],
+          row,
+          120
+        );
+        app.sessions = new Map([['s1', { workingDir: '/home/me/proj' }]]);
+        app._registerExternalPreview.mockResolvedValue({ status: 400, error: 'Unsupported attachment type' });
+        await links[0].activate({}, links[0].text);
+        const opener = extension === 'zip' ? app.openLogViewerWindow : app.openFilePreview;
+        expect(opener).toHaveBeenCalledWith(path, 's1');
+        expect(app._registerExternalPreview.mock.calls).toEqual([[path, 's1']]);
+        expect(app.showToast).not.toHaveBeenCalled();
+      }
+    }
+  );
+
   it.each([
     [
       ['Saved the screenshot (/home/me/proj/out/ghost1b_game', '  play.png).'],
@@ -310,10 +331,35 @@ describe('terminal link provider', () => {
     app._registerExternalPreview.mockResolvedValue({ status, error: 'Lookup refused' });
     await links[0].activate({}, links[0].text);
     expect(app._registerExternalPreview).toHaveBeenCalledTimes(1);
-    expect(app.openFilePreview).not.toHaveBeenCalled();
-    expect(app.openLogViewerWindow).not.toHaveBeenCalled();
-    expect(app.showToast).toHaveBeenCalledWith('Lookup refused', 'error');
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+    expect(app.showToast).not.toHaveBeenCalled();
   });
+
+  it('keeps the original opener when the lookup cannot reach the server', async () => {
+    const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
+    app._registerExternalPreview.mockResolvedValue({ error: 'Connection lost' });
+    await links[0].activate({}, links[0].text);
+    expect(app._registerExternalPreview).toHaveBeenCalledTimes(1);
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+  });
+
+  it.each([400, 403, 404, 500, 503])(
+    'does not open an unregistered spaced alternative after HTTP %s',
+    async (status) => {
+      const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
+      app._registerExternalPreview
+        .mockResolvedValueOnce({ status: 404, error: 'File not found' })
+        .mockResolvedValueOnce({ status, error: 'Alternative unavailable' });
+      await links[0].activate({}, links[0].text);
+      expect(app._registerExternalPreview.mock.calls).toEqual([
+        ['/mnt/data/KoboeReader.conf', 's1'],
+        ['/mnt/data/Kobo eReader.conf', 's1'],
+      ]);
+      expect(app.openFilePreview).not.toHaveBeenCalled();
+      expect(app.openLogViewerWindow).not.toHaveBeenCalled();
+      expect(app.showToast).toHaveBeenCalledWith('Alternative unavailable', 'error');
+    }
+  );
 
   it('keeps the session selected at click time while a path lookup is pending', async () => {
     const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);

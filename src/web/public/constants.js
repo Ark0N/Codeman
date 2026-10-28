@@ -2656,6 +2656,8 @@ function terminalPathLine(buffer, row, cols, maxRows) {
     if (!prev || rows + rowsOf(prev) > bound) break;
     first = prev;
     rows += rowsOf(prev);
+    const tail = /[^\s"'<>|;&]+$/.exec(first.text.trimEnd())?.[0] || '';
+    if (!tail.includes('/')) continue;
     const candidate = extend(first);
     if (candidate.parts[candidate.parts.length - 1].endRow >= base.startRow) extended = candidate;
   }

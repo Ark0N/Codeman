@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 
 const publicDir = resolve(import.meta.dirname, '../src/web/public');
-const path = '/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo eReader.conf';
+const basePath = '/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo eReader.conf';
 
 describe('wrapped configuration file links (Chromium)', () => {
   let browser: Browser;
@@ -17,12 +17,15 @@ describe('wrapped configuration file links (Chromium)', () => {
   });
 
   it.each([
-    { wrap: 'soft', originalExists: false },
-    { wrap: 'hard', originalExists: false },
-    { wrap: 'hard', originalExists: true },
+    { wrap: 'soft', originalExists: false, extension: 'conf', registrationStatus: 200 },
+    { wrap: 'hard', originalExists: false, extension: 'conf', registrationStatus: 200 },
+    { wrap: 'hard', originalExists: true, extension: 'conf', registrationStatus: 200 },
+    { wrap: 'hard', originalExists: true, extension: 'svg', registrationStatus: 400 },
+    { wrap: 'hard', originalExists: true, extension: 'markdown', registrationStatus: 400 },
   ])(
-    'opens the existing file from both rows: $wrap, original exists: $originalExists',
-    async ({ wrap, originalExists }) => {
+    'opens the existing .$extension file from both rows: $wrap, original exists: $originalExists',
+    async ({ wrap, originalExists, extension, registrationStatus }) => {
+      const path = basePath.replace('.conf', `.${extension}`);
       const original = path.replace('Kobo eReader', 'KoboeReader');
       const expected = wrap === 'hard' && originalExists ? original : path;
       const lookups: string[] = [];
@@ -39,11 +42,13 @@ describe('wrapped configuration file links (Chromium)', () => {
           expect(body.notify).toBe(false);
           lookups.push(body.path);
           const exists = body.path === path || (originalExists && body.path === original);
+          const status = exists ? registrationStatus : 404;
           await route.fulfill({
-            status: exists ? 200 : 404,
-            json: exists
-              ? { success: true, data: { attachmentId: 'att-fixture' } }
-              : { success: false, error: 'File not found' },
+            status,
+            json:
+              status === 200
+                ? { success: true, data: { attachmentId: 'att-fixture' } }
+                : { success: false, error: status === 400 ? 'Unsupported attachment type' : 'File not found' },
           });
         });
         await page.goto('http://fixture.test/');
@@ -54,28 +59,28 @@ describe('wrapped configuration file links (Chromium)', () => {
           await page.addScriptTag({ content: readFileSync(resolve(publicDir, file), 'utf8') });
         }
         await page.evaluate(
-          async ({ path, wrap }) => {
+          async ({ path, wrap, workingDir }) => {
             const w = window as any;
-            const first = `Found it: prepared a corrected configuration (${path.slice(0, -' eReader.conf'.length)}`;
+            const boundary = path.lastIndexOf(' ');
+            const first = `Found it: prepared a corrected configuration (${path.slice(0, boundary)}`;
             const terminal = new w.Terminal({ cols: first.length + (wrap === 'soft' ? 1 : 20), rows: 6 });
             terminal.open(document.getElementById('terminal'));
             w.opened = [];
             w.app = Object.assign(new w.CodemanApp(), {
               terminal,
               activeSessionId: 'fixture',
-              sessions: new Map([['fixture', { workingDir: '/workspace' }]]),
-              _isExternalPreviewPath: () => true,
+              sessions: new Map([['fixture', { workingDir }]]),
               openFilePreview: (file: string) => w.opened.push(file),
               openLogViewerWindow: (file: string) => w.opened.push(`log:${file}`),
               openFolderGrid: (file: string) => w.opened.push(`folder:${file}`),
               showToast: (message: string) => w.opened.push(`error:${message}`),
             });
             w.app.registerFilePathLinkProvider();
-            const text = `${first}${wrap === 'soft' ? ' ' : '\r\n  '}eReader.conf).`;
+            const text = `${first}${wrap === 'soft' ? ' ' : '\r\n  '}${path.slice(boundary + 1)}).`;
             await new Promise<void>((done) => terminal.write(text, done));
             await new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
           },
-          { path, wrap }
+          { path, wrap, workingDir: registrationStatus === 400 ? '/mnt/user/Scratch/Kobo' : '/workspace' }
         );
 
         expect(lookups).toEqual([]);
