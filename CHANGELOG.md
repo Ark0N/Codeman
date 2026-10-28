@@ -1,5 +1,30 @@
 # aicodeman
 
+## 1.47.0
+
+### Minor Changes
+
+- 1ab01bb: ### Thanks
+  - @timkjr for five PRs: a wrapped tab strip that uses the space under the toolbar (#721), three fixes that stop Codeman reading and watching a remote session's folder on the local disk (#722, #727, #728), and a quieter build (#729).
+  - @kdxcxs for bodyless requests that work through Cloudflare Tunnel (#725), traced through a real Access + Tunnel hostname.
+  - @Hugo-DDT for a desktop dead key typed once and a Ctrl+V that stays a paste after a replay (#726), and @hedburgaren for reporting both in #716.
+  - @opticon454 for rendered Markdown that fills a resized File Viewer (#730).
+  - @JDProfresh for a middle click on a file path that opens the file (#731).
+
+  **The wrapped tab strip uses the room under the toolbar (#721).** When the classic header strip wraps onto more rows (automatically, or with the two-rows setting), only the rows beside the toolbar stop short of it now; every row below runs the full header width, so long tab names no longer end up one per row. A strip that fits on one row looks exactly as before, and a strip tall enough to scroll keeps the plain wrap.
+
+  **Fixes.**
+  - **Bodyless requests work through Cloudflare Tunnel (#725).** cloudflared forwards a POST with no body as an empty chunked request with no Content-Type, which the server refused with `415` before the route ran, so actions such as opening a saved web tab failed through a tunnel. An empty, untyped POST under `/api/` now reaches its route exactly like a `Content-Length: 0` one; anything with a body or another method is still refused as before.
+  - **A desktop dead key is typed once, and Ctrl+V stays a paste after a replay (#726, #716).** The soft-keyboard recovery for Android IMEs now stays off on a desktop (a fine pointer that is not Android), so a dead-key backtick no longer arrives twice. Plain-text Ctrl+V is now framed as a bracketed paste by Codeman itself, because xterm stops adding the markers once a terminal replay clears its paste mode, and a copied newline then submitted the prompt. The paste still scrolls to the bottom and clears the selection, in the main pane, grid tiles and the split pane.
+  - **Remote sessions no longer touch the local disk at their path (#722, #727, #728).** A remote (SSH) session's folder is a path on the remote host, but the Ralph `@fix_plan.md` watcher and the image watcher watched it on this machine (logging `ENOENT` at every start, or watching an unrelated local folder of the same name), and the Ralph file routes read and wrote it locally. Both watchers now skip remote sessions (the Session Options image-watcher switch is hidden there), the Ralph menu's **Import from File** reads `@fix_plan.md` on the remote host over the same ssh path the File Viewer uses, and **Write to File** (and the `@ralph_prompt.md` write) is refused for a remote session instead of landing in a local folder.
+  - **Rendered Markdown fills a resized File Viewer (#730).** The document kept a fixed 960px column from before the window could be resized, so it stopped reflowing once you dragged or expanded the window past it.
+  - **A middle click on a file path opens the file (#731).** In the Response Viewer and the File Viewer's rendered Markdown, a middle click on a file path or an in-document link opened the dashboard root in a new tab. It now does what a left click does; real web links keep the browser's own middle click.
+  - **No more duplicate-key warning on build (#729).** The Chinese translation table carried `Idle` twice.
+
+  **Fixes applied while landing.** A remote session's fix plan stays authoritative as it is for a local one, so a prose line such as "All tasks completed" cannot mark every todo done and end a remote Ralph loop when it cannot end a local one (#722). The Session Options image-watcher switch flips back and says so when the server refuses the change, instead of reporting success (#727). The remote `@fix_plan.md` read uses the File Viewer's own containment check rather than a copy of it (#728). ASCII-diagram blocks in the File Viewer's rendered Markdown follow the window instead of staying 720px wide (#730). A paste marker hidden inside another one (`ESC[20` + `ESC[201~` + `1~`) can no longer survive the strip and end the bracketed paste early, in Ctrl+V and in the phone composer alike, and an Android device with a mouse, a trackpad cover or a stylus keeps the soft-keyboard fixes, which turned off there because Chromium reports such a pointer as fine (#726).
+
+  **Docs and tests.** The L-shaped strip in the frontend notes and the architecture notes, the remote-session rows for the Ralph file routes and the two watchers in the remote-sessions guide and the architecture notes, and an overview of the empty-POST parser in its module.
+
 ## 1.46.0
 
 ### Minor Changes

@@ -1,13 +1,12 @@
 {
-  "version": "1.46.0",
+  "version": "1.47.0",
   "highlights": [
-    "Fetch from the Git status window (#714)",
-    "Start a session beside any tab (#712, opt-in)",
-    "The phone keyboard no longer costs Claude its transcript (#711)",
-    "Typing stays smooth in a long prompt (#713)",
-    "Links survive wrapping and spaces (#686, #687)",
-    "`codeman agent spawn` in a project directory (#708)",
-    "Read saved Codex conversations offline (#707)",
-    "Experimental: bounded inspection and guarded submission for agents (#694, opt-in)"
+    "The wrapped tab strip uses the room under the toolbar (#721)",
+    "Bodyless requests work through Cloudflare Tunnel (#725)",
+    "A desktop dead key is typed once, and Ctrl+V stays a paste after a replay (#726, #716)",
+    "Remote sessions no longer touch the local disk at their path (#722, #727, #728)",
+    "Rendered Markdown fills a resized File Viewer (#730)",
+    "A middle click on a file path opens the file (#731)",
+    "No more duplicate-key warning on build (#729)"
   ]
 }
