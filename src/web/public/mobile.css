@@ -3480,14 +3480,15 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
      hover rules own box-shadow, so a background or shadow :active lost to them
      on every non-og skin. Nothing on these buttons sets transform or filter
      (the base .btn-toolbar:active nudge sits at lower specificity), so one rule
-     reads the same on all of them. 80ms so a quick tap shows the press at all. */
+     reads the same on all of them. 80ms so a quick tap shows the press at all,
+     on the press's own properties rather than `all`. */
   .toolbar .btn-toolbar,
   .btn-voice-mobile,
   .btn-attach-mobile,
   .btn-settings-mobile,
   .accessory-btn {
     -webkit-tap-highlight-color: transparent;
-    transition: all 80ms ease;
+    transition: transform 80ms ease, filter 80ms ease, background-color 80ms ease, border-color 80ms ease;
   }
 
   .toolbar .btn-toolbar:active,

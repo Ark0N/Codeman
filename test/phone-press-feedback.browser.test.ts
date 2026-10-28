@@ -42,6 +42,12 @@ const TARGETS = [
 
 const PRESSED_SCALE = 'matrix(0.94, 0, 0, 0.94, 0, 0)';
 
+/** The press transition, read at rest: the 250ms hold below would also pass a slower one. */
+const PRESS_TRANSITION = {
+  property: 'transform, filter, background-color, border-color',
+  duration: '0.08s, 0.08s, 0.08s, 0.08s',
+};
+
 function toolbarMarkup(): string {
   const start = html.indexOf('<footer class="toolbar">');
   const end = html.indexOf('</footer>', start);
@@ -96,6 +102,10 @@ describe('phone toolbar and accessory press feedback in Chromium', () => {
     const read = () =>
       target.evaluate((el) => ({ transform: getComputedStyle(el).transform, filter: getComputedStyle(el).filter }));
     const rest = await read();
+    const transition = await target.evaluate((el) => ({
+      property: getComputedStyle(el).transitionProperty,
+      duration: getComputedStyle(el).transitionDuration,
+    }));
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
     await page.waitForTimeout(250);
@@ -104,7 +114,7 @@ describe('phone toolbar and accessory press feedback in Chromium', () => {
     await page.mouse.move(0, 0);
     await page.mouse.up();
     await page.waitForTimeout(250);
-    return { rest, held };
+    return { rest, held, transition };
   }
 
   for (const [skins, brightness] of [
@@ -120,6 +130,7 @@ describe('phone toolbar and accessory press feedback in Chromium', () => {
               name,
               rest: { transform: 'none', filter: 'none' },
               held: { transform: PRESSED_SCALE, filter: brightness },
+              transition: PRESS_TRANSITION,
             });
           }
         } finally {
@@ -140,6 +151,7 @@ describe('phone toolbar and accessory press feedback in Chromium', () => {
           name,
           rest: { transform: 'none', filter: 'none' },
           held: { transform: 'none', filter: brightness },
+          transition: PRESS_TRANSITION,
         });
       }
     } finally {
