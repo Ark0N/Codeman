@@ -4,7 +4,36 @@ This folder contains the Compose configuration, server image Dockerfile, and env
 
 ## Start
 
-From the repository root, create the runtime environment file and set the required values, especially `CODEMAN_PASSWORD`.
+From a fresh clone, on Linux:
+
+```sh
+git clone https://github.com/Ark0N/Codeman.git && cd Codeman
+bash docker/Start-Codeman.sh
+```
+
+The first run checks that Docker, the Compose v2 plugin (2.27.2 or newer) and the daemon are usable, naming the fix when one is not. It then asks three questions, and Enter takes the default for each:
+
+| Question    | Default                                                                                                                        |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Data folder | `~/codeman-docker`. It becomes the container's home: Codeman's state, CLI logins, and the `codeman-cases` folder for projects. |
+| Port        | 3000, or the next free port when something on the machine already uses 3000.                                                   |
+| Password    | A generated 24-character password, printed once.                                                                               |
+
+It writes `docker/.env` from `.env.example` (readable only by you, with this host's time zone filled in), builds the image, starts the container, waits until Codeman answers, and prints the URL to open, the address for other devices on your network, and the commands for logs and stopping. The first build takes a few minutes.
+
+Your account has to be able to use Docker without sudo. If it cannot, the script says so: run `sudo usermod -aG docker $USER`, then log out and back in. The first run refuses to set up as root, because Codeman's data folder must belong to a normal account.
+
+| Option         | Effect                                                                                                    |
+| -------------- | --------------------------------------------------------------------------------------------------------- |
+| `--yes`, `-y`  | Take every default without asking. This also happens when no terminal is attached.                        |
+| `--setup-only` | Write `docker/.env` and stop, so you can review it (or add the optional settings below) before the build. |
+| `--no-wait`    | Start the container without waiting for Codeman to answer.                                                |
+
+On a first run, `CODEMAN_APPDATA_PATH`, `CODEMAN_PORT` and `CODEMAN_PASSWORD` set in the environment replace the defaults. Every later run reads `docker/.env` as it is, asks nothing and never edits it. Change a value by editing the file and running the script again. The script refuses to start while `CODEMAN_PASSWORD` is still the example's `changeme`, because the container is reachable from your network and controls Docker on the host.
+
+### Setting it up by hand
+
+Hosts where everything runs as root (Unraid), and Compose run without the script, take a hand-written `.env` instead. From the repository root, copy the template and set the required values, especially `CODEMAN_PASSWORD` and a `CODEMAN_APPDATA_PATH` owned by an unprivileged account:
 
 ```sh
 cp docker/.env.example docker/.env
@@ -198,7 +227,7 @@ volumes:
     target: /home/${CODEMAN_RUNTIME_USER}
 ```
 
-Set `CODEMAN_APPDATA_PATH` in `.env` to a directory that the Docker daemon can access. The example value is `/mnt/user/appdata/codeman`.
+Set `CODEMAN_APPDATA_PATH` in `.env` to a directory that the Docker daemon can access. The example value is `/mnt/user/appdata/codeman` (an Unraid layout); the first run of `Start-Codeman.sh` suggests `~/codeman-docker` instead.
 
 `CODEMAN_CASES_PATH` is the separate host directory for managed case workspaces. It is mounted into Codeman at the same absolute path, allowing the host Docker daemon to bind it into an isolated case container. Set it to a child directory of `CODEMAN_APPDATA_PATH` unless you deliberately store workspaces elsewhere.
 
