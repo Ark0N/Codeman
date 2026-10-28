@@ -9,10 +9,14 @@
  *
  * ⚠ Desktop fine pointers must not run this (#716). xterm already forwards the
  * composed character, and a second forward doubles a dead-key backtick.
- * `create()` returns null unless `matchMedia('(pointer: coarse)')` matches, so
- * soft keyboards keep the recovery and a desktop does not attach it. A missing
- * or throwing `matchMedia` stands down: a missed recovery is acceptable, a
- * duplicated keystroke is not.
+ * `create()` returns null unless `matchMedia('(pointer: coarse)')` matches or
+ * the browser is Android, so soft keyboards keep the recovery and a desktop
+ * does not attach it. Android is checked by user agent because Chromium reports
+ * its PRIMARY pointer as fine once a mouse, a trackpad cover or a stylus is
+ * attached, while the text still comes from the soft keyboard (#441, #541 were
+ * measured there); Android always ran this before #716, so the check keeps it.
+ * A missing or throwing `matchMedia` stands down elsewhere: a missed recovery is
+ * acceptable, a duplicated keystroke is not.
  *
  * ⚠ The gap is NARROWER than "keyCode 229", and assuming otherwise produces a
  * controller that looks useful while doing nothing. For a keydown that really
@@ -72,11 +76,13 @@
   }
 
   /**
-   * Touch / coarse pointer only. See the file header: on a fine pointer this
-   * forward runs on top of xterm's own composition handling.
+   * Touch / coarse pointer, or any Android browser. See the file header: on a
+   * desktop fine pointer this forward runs on top of xterm's own composition
+   * handling.
    */
-  function isCoarsePointer() {
+  function isSoftKeyboardPlatform() {
     try {
+      if (/Android/i.test(global.navigator?.userAgent || '')) return true;
       return global.matchMedia?.('(pointer: coarse)')?.matches === true;
     } catch {
       return false;
@@ -84,7 +90,7 @@
   }
 
   function create(options) {
-    if (!isCoarsePointer()) return null;
+    if (!isSoftKeyboardPlatform()) return null;
     const textarea = options?.textarea;
     const emitRecovered = options?.emitRecovered;
     if (!textarea?.addEventListener || !textarea?.removeEventListener || typeof emitRecovered !== 'function') {

@@ -46,9 +46,9 @@ function inputEvent(data: string, overrides: Record<string, unknown> = {}) {
   return { data, inputType: 'insertText', isComposing: false, ...overrides };
 }
 
-function harness({ screenReader = false, coarse = true, matchMedia = true } = {}) {
+function harness({ screenReader = false, coarse = true, matchMedia = true, userAgent = '' } = {}) {
   const source = readFileSync(new URL('../src/web/public/terminal-keycode229-recovery.js', import.meta.url), 'utf8');
-  const exposed: Record<string, any> = {};
+  const exposed: Record<string, any> = { navigator: { userAgent } };
   if (matchMedia) {
     // create() attaches only for a coarse pointer (#716). The recovery cases
     // below are the soft-keyboard behaviour, so they opt in. A fine pointer
@@ -134,6 +134,30 @@ describe('orphaned terminal input recovery', () => {
     const h = harness({ matchMedia: false });
     expect(h.controller).toBeNull();
     expect(h.textarea.listenerCount()).toBe(0);
+  });
+
+  it('attaches on Android even when the primary pointer reports fine (a mouse or stylus attached)', () => {
+    // Chromium makes a mouse, a trackpad cover or an S Pen the primary pointer, but the text still comes
+    // from the soft keyboard, so the #441/#541 recovery must stay on there.
+    const h = harness({
+      coarse: false,
+      userAgent:
+        'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
+    });
+    expect(h.controller).not.toBeNull();
+    h.keydown();
+    h.input('`');
+    h.flushTimers();
+    expect(h.emitted).toEqual(['`']);
+  });
+
+  it('stays off on a desktop fine pointer that is not Android', () => {
+    const h = harness({
+      coarse: false,
+      userAgent:
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+    });
+    expect(h.controller).toBeNull();
   });
 
   it('still recovers a dropped insertText on a coarse pointer', () => {
