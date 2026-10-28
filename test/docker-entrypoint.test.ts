@@ -26,7 +26,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { readFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, chownSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -309,6 +309,13 @@ describe('Update-Codeman.sh (the scripted major-update path — docker/README.md
         const casesPath = join(dir, 'cases');
         const socketPath = join(dir, 'docker.sock'); // deliberately NOT a real socket — see above
         mkdirSync(appdataPath);
+        // Both scripts derive PUID:PGID from the appdata owner and REFUSE a
+        // root-owned one (correctly: the container must never run as root).
+        // mkdirSync gives it the runner's uid, so under a root runner (a CI or
+        // agent container) the update path stopped at that guard before its
+        // build. Give it the non-root owner docker/README.md's own
+        // `chown -R 99:100` example sets up, as a real deployment would have.
+        if (process.getuid?.() === 0) chownSync(appdataPath, 99, 100);
         mkdirSync(casesPath);
         writeFileSync(socketPath, '');
 
