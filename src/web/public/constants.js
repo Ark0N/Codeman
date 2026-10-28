@@ -2166,7 +2166,7 @@ const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LIN
 
 /**
  * Every linkable file path in `text`, sorted by position. Spaced candidates
- * reserve their whole span first, even when unlinkable; rooted, `~/`, relative
+ * reserve their whole span first, including paths bounded by parentheses, even when unlinkable; rooted, `~/`, relative
  * and folder detectors then skip reserved spans, earlier matches and URLs.
  *
  * The one entry point for both consumers (terminal link provider, response
@@ -2247,8 +2247,9 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  * Every path pattern ends a path at whitespace, so `/mnt/c/OneDrive - Contoso/a.docx`
  * linked `/mnt/c/OneDrive` plus a relative `Contoso/a.docx`, two links to the
  * wrong targets. A space is only safe inside a path where the line itself bounds
- * the path, so a spaced path is recognised in exactly these shapes:
+ * the path or a parenthesised group bounds it, so a spaced path is recognised in these shapes:
  *
+ *   Updated (/mnt/c/My Docs/report.docx)   inside parentheses in prose
  *   /mnt/c/My Docs/report.docx              the whole line is the path
  *   - /mnt/c/My Docs/report.docx            after a list marker (`-`, `*`, `•`, `1.`, `2)`)
  *   Saved to: 03 Attachments/Build SIPOC Design/plan.pptx      after a path label (SPACED_FILE_PATH_LABEL_PATTERN)
@@ -2262,7 +2263,7 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  * it ends on a known extension, a rooted one has a directory before its first
  * space, no earlier word holds an extension (`a.md,`, `a.ts#L12`) or ends in `/`,
  * and none holds a `:` and a digit (`a.ts:42`, a line suffix ends the path). Later words cannot start a new
- * `/`, `~/`, `./` or `../` path, no earlier word ends in `:`, is an arrow or has
+ * `/`, `~/`, `./` or `../` path, no earlier word ends in `:` or `,`, is an arrow or has
  * no letter or digit (a prompt glyph such as `❯` or `$`; a bare `-` is kept), and
  * a run of spaces (a column gap) is refused, so two paths on a line are never
  * merged. A relative candidate whose only `/` word is its last is prose after the
@@ -2309,7 +2310,7 @@ function spacedFilePathOnLine(line) {
     return null;
   }
   for (const word of words.slice(0, -1)) {
-    if (word.endsWith('/') || word.endsWith(':') || /^(?:—|–|→|=>|->|<-|=)$/.test(word)) return null;
+    if (word.endsWith('/') || /[,:]$/.test(word) || /^(?:—|–|→|=>|->|<-|=)$/.test(word)) return null;
     // A shell prompt that prints its working directory in full (`/home/me/proj$ cat
     // notes.md`; WSL's `/mnt/c/...` is outside `$HOME`) is a command line too, and so is
     // one whose directory has a space in it (`/mnt/c/My Docs$ ls notes.md`): the `$`
@@ -2554,8 +2555,7 @@ const pathFirstSegment = (path) => path.replace(/^(?:\.?\/)+/, '').split('/')[0]
  * Whether the line `nextText` carries on a file path `prevText` broke off.
  *
  * Answers `'join'` when the path ends (reaches a known extension) on the next
- * line, `'join-spaced'` for a filename word wrapped inside parentheses, and
- * `'chain'` when the next line is nothing but more of the path (a path
+ * line, `'chain'` when the next line is nothing but more of the path (a path
  * spanning three or more lines; only worth keeping once a later line ends it),
  * and `null` otherwise. The broken-off token must already look like a path in
  * progress: it contains a `/`, ends on a path character and does not yet end
@@ -2566,21 +2566,6 @@ const pathFirstSegment = (path) => path.replace(/^(?:\.?\/)+/, '').split('/')[0]
 function pathContinuation(prevText, nextText) {
   const previous = String(prevText || '').trimEnd();
   const next = String(nextText || '').replace(/^\s+/, '');
-  const opening = previous.lastIndexOf('(');
-  const closing = next.indexOf(')');
-  if (opening >= 0 && closing > 0) {
-    const before = previous.slice(opening + 1);
-    const after = next.slice(0, closing);
-    // A word wrap in a parenthesised filename replaces its separating space.
-    if (
-      !before.includes(')') &&
-      !/[/-]$/.test(before) &&
-      !after.includes('/') &&
-      spacedFilePathOnLine(`${before} ${after}`)?.link
-    ) {
-      return 'join-spaced';
-    }
-  }
   const tail = /[^\s"'<>|;&]+$/.exec(previous)?.[0] || '';
   if (!tail.includes('/') || !/[\w\-.~+@%/]$/.test(tail) || PATH_TOKEN_ENDS_WITH_EXTENSION.test(tail)) return null;
   const head = /^[^\s"'<>|;&]+/.exec(next)?.[0] || '';
@@ -2609,7 +2594,9 @@ function pathContinuation(prevText, nextText) {
  * A following logical line is glued on (its indent dropped, cell mapping kept
  * exact) when {@link pathContinuation} says it carries the path on and the row it
  * broke off is at least as long as the row it continues on. Bounded by the same
- * `maxRows` as the logical line.
+ * `maxRows` as the logical line. Hard breaks concatenate without inserting spaces.
+ * An ambiguous parenthesised filename also carries `pathAlternatives` for a
+ * guarded lookup on activation; its text and cell mapping remain unchanged.
  *
  * @returns Same shape as {@link terminalLogicalLine}; null when the row does not exist.
  */
@@ -2630,6 +2617,7 @@ function terminalPathLine(buffer, row, cols, maxRows) {
   /** `first` and the lines a path carries on into, stopping at the last confirmed join. */
   const extend = (first) => {
     const parts = [first];
+    const alternatives = [];
     let text = first.text;
     let rows = rowsOf(first);
     let confirmed = 1;
@@ -2639,32 +2627,44 @@ function terminalPathLine(buffer, row, cols, maxRows) {
       const kind = continues(parts[parts.length - 1], next, text);
       if (!kind) break;
       parts.push(next);
-      if (kind === 'join-spaced') text += ' ';
+      if (kind === 'join') {
+        const opening = text.lastIndexOf('(');
+        const closing = next.text.indexOf(')');
+        if (opening >= 0 && closing > 0) {
+          const before = text.slice(opening + 1);
+          const after = next.text.slice(0, closing).trimStart();
+          const spaced = spacedFilePathOnLine(`${before} ${after}`);
+          if (!before.includes(')') && !/[/-]$/.test(before) && !after.includes('/') && spaced?.link) {
+            alternatives.push({ path: before + after, spacedPath: spaced.path });
+          }
+        }
+      }
       text += next.text.replace(/^\s+/, '');
       rows += rowsOf(next);
-      if (kind !== 'chain') confirmed = parts.length;
+      if (kind === 'join') confirmed = parts.length;
     }
-    return parts.slice(0, confirmed);
+    return { parts: parts.slice(0, confirmed), alternatives };
   };
 
-  // The hovered row may be the second or third line of a broken path: walk back
-  // to where it could start, then let the forward pass decide what really joins.
+  // A middle fragment may have no slash, so only a forward pass from its
+  // rooted start can confirm a path spanning three or more rows.
+  let extended = extend(base);
   let first = base;
   let rows = rowsOf(base);
   while (first.startRow > 0) {
     const prev = lineAt(first.startRow - 1);
-    if (!prev || rows + rowsOf(prev) > bound || !continues(prev, first, prev.text)) break;
+    if (!prev || rows + rowsOf(prev) > bound) break;
     first = prev;
     rows += rowsOf(prev);
+    const candidate = extend(first);
+    if (candidate.parts[candidate.parts.length - 1].endRow >= base.startRow) extended = candidate;
   }
-  let parts = extend(first);
-  if (parts[parts.length - 1].endRow < base.startRow) parts = extend(base);
+  const { parts, alternatives } = extended;
   if (parts.length === 1) return parts[0];
 
   const segments = [];
   let text = '';
   for (const [i, part] of parts.entries()) {
-    if (i > 0 && continues(parts[i - 1], part, text) === 'join-spaced') text += ' ';
     const skip = i === 0 ? 0 : part.text.length - part.text.replace(/^\s+/, '').length;
     segments.push({ part, textStart: text.length, skip });
     text += part.text.slice(skip);
@@ -2684,7 +2684,14 @@ function terminalPathLine(buffer, row, cols, maxRows) {
     }
     return -1;
   };
-  return { startRow: parts[0].startRow, endRow: parts[parts.length - 1].endRow, text, offsetToCell, cellToOffset };
+  return {
+    startRow: parts[0].startRow,
+    endRow: parts[parts.length - 1].endRow,
+    text,
+    offsetToCell,
+    cellToOffset,
+    ...(alternatives.length ? { pathAlternatives: alternatives } : {}),
+  };
 }
 
 /**
@@ -2940,7 +2947,14 @@ function terminalLinkLine(buffer, row, cols, maxRows) {
     for (const s of segments) if (s.row === targetRow && (!seg || s.colStart <= targetCol)) seg = s;
     return seg ? seg.textStart + Math.max(0, targetCol - seg.colStart) : -1;
   };
-  return { startRow, endRow: lastRow, text, offsetToCell, cellToOffset };
+  return {
+    startRow,
+    endRow: lastRow,
+    text,
+    offsetToCell,
+    cellToOffset,
+    ...(base.pathAlternatives ? { pathAlternatives: base.pathAlternatives } : {}),
+  };
 }
 
 /**

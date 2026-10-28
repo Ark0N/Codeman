@@ -212,6 +212,27 @@ function loadApp(fetchImpl: (url: string, init?: { body?: string }) => unknown) 
   return { app, elements, keyHandlers, fetch: context.fetch as ReturnType<typeof vi.fn> };
 }
 
+describe('guarded attachment registration results', () => {
+  it.each([404, 403, 500, 503])('preserves HTTP %s for the activation decision', async (status) => {
+    const { app, fetch } = loadApp(async () => ({
+      ok: false,
+      status,
+      json: async () => ({ error: 'Cannot read file' }),
+    }));
+    const result = await Object.getPrototypeOf(app)._registerExternalPreview.call(app, '/mnt/data/a.conf', 's1');
+    expect(result).toEqual({ error: 'Cannot read file', status });
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ path: '/mnt/data/a.conf', notify: false });
+  });
+
+  it('does not turn a connection failure into a missing file', async () => {
+    const { app } = loadApp(async () => {
+      throw new Error('Connection lost');
+    });
+    const result = await Object.getPrototypeOf(app)._registerExternalPreview.call(app, '/mnt/data/a.conf', 's1');
+    expect(result).toEqual({ error: 'Connection lost' });
+  });
+});
+
 const LISTING = {
   folderId: 'fld_1',
   path: '/mnt/raid1/styleframes',

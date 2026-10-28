@@ -2318,7 +2318,7 @@ Object.assign(CodemanApp.prototype, {
         // Pattern 3: Bash() tool output
         const bashPattern = /Bash\([^)]*?(\/(?:home|tmp|var|etc|opt)[^\s"'<>|;&\)\n\x00-\x1f]+)/g;
 
-        const activateFilePath = (text, folder = false) => {
+        const activateFilePath = (text, folder = false, verifiedSessionId = null) => {
           // Tailing a PNG in the log viewer shows binary noise; the file preview
           // already renders images, PDFs, documents and media inline — and it
           // now reaches files outside the workspace too, which is where an
@@ -2336,8 +2336,26 @@ Object.assign(CodemanApp.prototype, {
           // A relative path is resolved against the session's working
           // directory first, and a `~/` path always previews (only the
           // server knows that host's home, and the log viewer cannot ask).
-          const sessionId = getSessionId();
+          const sessionId = verifiedSessionId || getSessionId();
+          if (!sessionId) return;
           const target = self._resolveLinkedFilePath(text, sessionId);
+          const alternative = !folder && logical.pathAlternatives?.find((candidate) => candidate.path === text);
+          if (alternative && !verifiedSessionId) {
+            return (async () => {
+              let path = target;
+              let registered = await self._registerExternalPreview(path, sessionId);
+              if (registered.status === 404) {
+                path = self._resolveLinkedFilePath(alternative.spacedPath, sessionId);
+                registered = await self._registerExternalPreview(path, sessionId);
+              }
+              if (!registered.attachmentId) {
+                self.showToast(registered.error || 'Cannot open this file', 'error');
+                return;
+              }
+              // The normal opener rechecks its guards; attachment registration deduplicates the path.
+              return activateFilePath(path, false, sessionId);
+            })();
+          }
           // A folder path opens the folder grid (which falls back to the
           // preview if the server finds a file there after all).
           if (folder) {
@@ -2372,7 +2390,7 @@ Object.assign(CodemanApp.prototype, {
               underline: true,
             },
             activate(_event, text) {
-              activateFilePath(text, folder);
+              return activateFilePath(text, folder);
             },
             hover() {
               setHovered(true);

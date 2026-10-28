@@ -4204,7 +4204,7 @@ Object.assign(CodemanApp.prototype, {
    * full attachment guard (blocked secret trees, extension allowlist, symlinks
    * resolved), so a refusal here is a policy answer worth showing verbatim.
    *
-   * @returns {Promise<{attachmentId?: string, size?: number, error?: string}>}
+   * @returns {Promise<{attachmentId?: string, size?: number, error?: string, status?: number}>}
    */
   async _registerExternalPreview(filePath, sessionId) {
     try {
@@ -4224,10 +4224,11 @@ Object.assign(CodemanApp.prototype, {
       if (/unsupported/i.test(reason)) {
         const ext = (filePath.split('.').pop() || '').toLowerCase();
         return {
+          status: res.status,
           error: `Cannot preview .${ext} from outside the session workspace (images, video, audio, PDF, Office documents and text files only).`,
         };
       }
-      return { error: reason };
+      return { error: reason, status: res.status };
     } catch (err) {
       return { error: err.message || 'Cannot open this file' };
     }

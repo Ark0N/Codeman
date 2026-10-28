@@ -42,6 +42,10 @@ describe('spaced file paths', () => {
     expect(paths('Do not link (/mnt/data/../private files/settings.conf).')).toEqual([]);
   });
 
+  it('does not take a comma-separated list inside parentheses as one spaced filename', () => {
+    expect(paths('Updated (/home/me/proj, config.json)')).toEqual(['/home/me/proj', 'config.json']);
+  });
+
   it('links an own-line absolute path with spaces whole', () => {
     expect(paths(LONG)).toEqual([LONG]);
     expect(paths('/mnt/c/proj/My Big Docs/report.docx')).toEqual(['/mnt/c/proj/My Big Docs/report.docx']);

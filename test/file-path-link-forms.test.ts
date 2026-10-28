@@ -241,6 +241,8 @@ function loadApp() {
   app.sessions = new Map([['s1', { workingDir: '/mnt/build/neon_getaway-mgr-hebel' }]]);
   app.openFilePreview = vi.fn();
   app.openLogViewerWindow = vi.fn();
+  app._registerExternalPreview = vi.fn(async () => ({ attachmentId: 'att-fixture' }));
+  app.showToast = vi.fn();
   app._isExternalPreviewPath = (p: string) => p.startsWith('~/');
   return app;
 }
@@ -257,7 +259,30 @@ function linksOn(lines: string[], row: number, cols = 80, wrappedRows = new Set<
 }
 
 describe('terminal link provider', () => {
-  it('retains the filename space when the CLI word-wraps a parenthesised path', () => {
+  it.each([
+    [
+      ['Saved the screenshot (/home/me/proj/out/ghost1b_game', '  play.png).'],
+      '/home/me/proj/out/ghost1b_gameplay.png',
+    ],
+    [
+      ['  ⎿  Wrote (/mnt/build/neon/builds/captures/ghost1b_gamepl', '     ay.png) ok'],
+      '/mnt/build/neon/builds/captures/ghost1b_gameplay.png',
+    ],
+    [
+      ['Saved the screenshot (/home/me/proj/out/ghost1b_', '  very_long_game', '  play.png).'],
+      '/home/me/proj/out/ghost1b_very_long_gameplay.png',
+    ],
+  ])('preserves a parenthesised filename without spaces across hard wraps: %s', async (rows, path) => {
+    for (let row = 1; row <= rows.length; row++) {
+      const { app, links } = linksOn(rows, row, 120);
+      expect(links.map((link) => link.text)).toEqual([path]);
+      await links[0].activate({}, links[0].text);
+      expect(app.openFilePreview).toHaveBeenCalledWith(path, 's1');
+      expect(app._registerExternalPreview.mock.calls).toEqual([[path, 's1']]);
+    }
+  });
+
+  it('uses the spaced filename only when the unspaced hard-wrap target is missing', async () => {
     const path = '/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo eReader.conf';
     const rows = [
       'Found it: I prepared a corrected configuration (/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo',
@@ -265,11 +290,38 @@ describe('terminal link provider', () => {
     ];
     for (const row of [1, 2]) {
       const { app, links } = linksOn(rows, row, 120);
-      expect(links.map((link) => link.text)).toEqual([path]);
+      const unspaced = path.replace('Kobo eReader', 'KoboeReader');
+      expect(links.map((link) => link.text)).toEqual([unspaced]);
       expect(links[0].range.end).toEqual({ x: '  eReader.conf'.length + 1, y: 2 });
-      links[0].activate({}, links[0].text);
+      app._registerExternalPreview.mockImplementation(async (candidate: string) =>
+        candidate === path ? { attachmentId: 'att-fixture' } : { status: 404, error: 'File not found' }
+      );
+      await links[0].activate({}, links[0].text);
       expect(app.openLogViewerWindow).toHaveBeenCalledWith(path, 's1');
+      expect(app._registerExternalPreview.mock.calls).toEqual([
+        [unspaced, 's1'],
+        [path, 's1'],
+      ]);
     }
+  });
+
+  it.each([403, 500, 503])('does not try another path after a guarded lookup returns HTTP %s', async (status) => {
+    const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
+    app._registerExternalPreview.mockResolvedValue({ status, error: 'Lookup refused' });
+    await links[0].activate({}, links[0].text);
+    expect(app._registerExternalPreview).toHaveBeenCalledTimes(1);
+    expect(app.openFilePreview).not.toHaveBeenCalled();
+    expect(app.openLogViewerWindow).not.toHaveBeenCalled();
+    expect(app.showToast).toHaveBeenCalledWith('Lookup refused', 'error');
+  });
+
+  it('keeps the session selected at click time while a path lookup is pending', async () => {
+    const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
+    const pending = links[0].activate({}, links[0].text);
+    app.activeSessionId = 'another-session';
+    await pending;
+    expect(app._registerExternalPreview).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
   });
 
   it('opens the complete parenthesised configuration path from either wrapped row', () => {
