@@ -282,6 +282,27 @@ describe('what xterm generates never enters the durable queue', () => {
     expect(ws.inputFrames()).toEqual([{ t: 'i', d: '\x1b[I' }]);
     expect(app._pendingDeliveries.get('s-tile')).toBeUndefined();
   });
+
+  it('queues a Ctrl+V bracketed-paste frame on the durable path', async () => {
+    // image-input.js hands this shape to terminal.input(). onData must not
+    // drop it as a query reply or send it once as a mouse/focus report: the
+    // same two predicates gate the primary pane before its bracketed-paste branch.
+    const app = makeApp();
+    const { ws, term } = await connectTile(app);
+    ws.open();
+    const input = windowStub.CodemanTerminalInput as {
+      shouldSuppressTerminalQueryResponse(data: string): boolean;
+      isTerminalFocusOrMouseReport(data: string): boolean;
+    };
+    const framed = '\x1b[200~line one\r\x1b[?1;2c\r\x1b[<0;10;5M\r\x1b[I\x1b[201~';
+
+    expect(input.shouldSuppressTerminalQueryResponse(framed)).toBe(false);
+    expect(input.isTerminalFocusOrMouseReport(framed)).toBe(false);
+    term.type(framed);
+
+    expect(ws.inputFrames().map((f) => [f.d, f.seq, f.cid])).toEqual([[framed, 1, 'c-test']]);
+    expect(app._pendingDeliveries.get('s-tile')?.map((r) => r.data)).toEqual([framed]);
+  });
 });
 
 describe('TerminalTile leaves the input-socket map', () => {

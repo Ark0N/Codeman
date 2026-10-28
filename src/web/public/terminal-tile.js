@@ -344,9 +344,10 @@
         if (global.app?.tileShortcutFor?.(ev)) return false;
         // Ctrl+V / Cmd+V: the primary pane's paste trap, aimed at THIS pane, so
         // a pasted image uploads to this pane's session and its path is typed
-        // here, and pasted text goes into this xterm with its bracketed-paste
-        // markers intact. Mirrors terminal-ui.js's own Ctrl+V gate; without it
-        // xterm's default only ever pasted text.
+        // here. Plain text goes to this pane's session as a Codeman-built
+        // bracketed-paste frame; this terminal is only refocused and receives
+        // input(framed), which onData delivers. Mirrors terminal-ui.js's own
+        // Ctrl+V gate; without it xterm's default only ever pasted text.
         if ((ev.ctrlKey || ev.metaKey) && ev.key === 'v' && ev.type === 'keydown') {
           global.app?._handleImagePaste?.({ terminal: this.terminal, sessionId: this.sessionId });
           return false;
