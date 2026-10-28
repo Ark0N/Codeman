@@ -52,13 +52,13 @@ const { findFilePathLinks, resolveLinkedFilePath, terminalPathLine } = loadHelpe
 const paths = (text: string) => findFilePathLinks(text).map((f) => f.path);
 
 /** An xterm buffer stand-in: hard-broken rows (no `isWrapped`), as Claude Code emits them. */
-function buffer(lines: string[], cols = 80) {
+function buffer(lines: string[], cols = 80, wrappedRows = new Set<number>()) {
   return {
     length: lines.length,
     getLine: (row: number) =>
       row >= 0 && row < lines.length
         ? {
-            isWrapped: false,
+            isWrapped: wrappedRows.has(row),
             translateToString: (trim?: boolean) => (trim ? lines[row].replace(/\s+$/, '') : lines[row].padEnd(cols)),
           }
         : undefined,
@@ -157,6 +157,10 @@ describe('terminalPathLine', () => {
     // A path that already ended, and a next line opening a new rooted path.
     expect(terminalPathLine(buffer(['see /tmp/a/b.png', 'c/d.png']), 0, 80)).toMatchObject({ endRow: 0 });
     expect(terminalPathLine(buffer(['/home/joe/dir/', '/home/x.png']), 0, 80)).toMatchObject({ endRow: 0 });
+    expect(terminalPathLine(buffer(['see (/mnt/raid1/folder)', '  file.conf)']), 0, 80)).toMatchObject({ endRow: 0 });
+    expect(terminalPathLine(buffer(['see (/mnt/raid1/folder', '  /mnt/other/file.conf)']), 0, 80)).toMatchObject({
+      endRow: 0,
+    });
   });
 
   // `git ls-files`, `find` and `ls -R` print one path per row. An extensionless
@@ -241,9 +245,9 @@ function loadApp() {
   return app;
 }
 
-function linksOn(lines: string[], row: number) {
+function linksOn(lines: string[], row: number, cols = 80, wrappedRows = new Set<number>()) {
   const app = loadApp();
-  app.terminal = { cols: 80, registerLinkProvider: vi.fn(), buffer: { active: buffer(lines) } };
+  app.terminal = { cols, registerLinkProvider: vi.fn(), buffer: { active: buffer(lines, cols, wrappedRows) } };
   const provider = app.registerFilePathLinkProvider() as Provider;
   let out: Link[] = [];
   provider.provideLinks(row, (links) => {
@@ -253,6 +257,36 @@ function linksOn(lines: string[], row: number) {
 }
 
 describe('terminal link provider', () => {
+  it('retains the filename space when the CLI word-wraps a parenthesised path', () => {
+    const path = '/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo eReader.conf';
+    const rows = [
+      'Found it: I prepared a corrected configuration (/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo',
+      '  eReader.conf).',
+    ];
+    for (const row of [1, 2]) {
+      const { app, links } = linksOn(rows, row, 120);
+      expect(links.map((link) => link.text)).toEqual([path]);
+      expect(links[0].range.end).toEqual({ x: '  eReader.conf'.length + 1, y: 2 });
+      links[0].activate({}, links[0].text);
+      expect(app.openLogViewerWindow).toHaveBeenCalledWith(path, 's1');
+    }
+  });
+
+  it('opens the complete parenthesised configuration path from either wrapped row', () => {
+    const path = '/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo eReader.conf';
+    const text = `Found it: I prepared a corrected configuration (${path}).`;
+    const split = text.indexOf(' eReader') + 1;
+    const rows = [text.slice(0, split), text.slice(split)];
+    for (const row of [1, 2]) {
+      const { app, links } = linksOn(rows, row, split, new Set([1]));
+      expect(links.map((link) => link.text)).toEqual([path]);
+      expect(links[0].range.start).toEqual({ x: text.indexOf(path) + 1, y: 1 });
+      expect(links[0].range.end).toEqual({ x: 'eReader.conf'.length + 1, y: 2 });
+      links[0].activate({}, links[0].text);
+      expect(app.openLogViewerWindow).toHaveBeenCalledWith(path, 's1');
+    }
+  });
+
   it('links a broken path once, across both rows, and opens the whole path', () => {
     const { app, links } = linksOn(BROKEN, 2);
     expect(links.map((l) => l.text)).toEqual([BROKEN_PATH]);

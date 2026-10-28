@@ -2106,7 +2106,7 @@ function computeRewriteScrollLine(input) {
  * a `/g` regex, so {@link absoluteFilePathPattern} mints a fresh one per call.
  */
 const FILE_PATH_LINK_PATTERN =
-  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
+  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|conf|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
 
 /** A fresh, zero-state instance of {@link FILE_PATH_LINK_PATTERN}. */
 function absoluteFilePathPattern() {
@@ -2159,7 +2159,7 @@ function previewsInFileViewer(filePath) {
  * {@link findFilePathLinks}.
  */
 const RELATIVE_FILE_PATH_LINK_PATTERN =
-  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
+  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|conf|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
 
 /** The `(?:log|txt|…)` extension group, read off the rooted pattern so it cannot drift. */
 const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LINK_PATTERN.source)[1];
@@ -2195,19 +2195,25 @@ function findFilePathLinks(text) {
   // A path with spaces is taken whole, or the span it covers links nothing
   // (spacedFilePathOnLine). Either way no detector below may cut a fragment out of it.
   const reserved = [];
+  const isReserved = (index, length) =>
+    reserved.some((r) => index < r.index + r.path.length && r.index < index + length);
+  const reserve = (spaced, index) => {
+    if (!spaced) return;
+    const start = index + spaced.index;
+    if (inUrl(start, spaced.path.length) || isReserved(start, spaced.path.length)) return;
+    reserved.push({ index: start, path: spaced.path });
+    if (spaced.link) found.push({ path: spaced.path, index: start });
+  };
   let lineStart = 0;
   for (const line of value.split('\n')) {
-    const spaced = spacedFilePathOnLine(line);
-    if (spaced && !inUrl(lineStart + spaced.index, spaced.path.length)) {
-      const index = lineStart + spaced.index;
-      reserved.push({ index, path: spaced.path });
-      if (spaced.link) found.push({ path: spaced.path, index });
+    reserve(spacedFilePathOnLine(line), lineStart);
+    // Parentheses bound an inline path just as a whole line bounds a standalone path.
+    const parenthesised = /\(([^()\r\n]{1,1000})\)/g;
+    while ((match = parenthesised.exec(line)) !== null) {
+      reserve(spacedFilePathOnLine(match[1]), lineStart + match.index + 1);
     }
     lineStart += line.length + 1;
   }
-  const isReserved = (index, length) =>
-    reserved.some((r) => index < r.index + r.path.length && r.index < index + length);
-
   const absolute = absoluteFilePathPattern();
   while ((match = absolute.exec(value)) !== null) {
     if (!inUrl(match.index, match[1].length) && !isReserved(match.index, match[1].length)) {
@@ -2548,7 +2554,8 @@ const pathFirstSegment = (path) => path.replace(/^(?:\.?\/)+/, '').split('/')[0]
  * Whether the line `nextText` carries on a file path `prevText` broke off.
  *
  * Answers `'join'` when the path ends (reaches a known extension) on the next
- * line, `'chain'` when the next line is nothing but more of the path (a path
+ * line, `'join-spaced'` for a filename word wrapped inside parentheses, and
+ * `'chain'` when the next line is nothing but more of the path (a path
  * spanning three or more lines; only worth keeping once a later line ends it),
  * and `null` otherwise. The broken-off token must already look like a path in
  * progress: it contains a `/`, ends on a path character and does not yet end
@@ -2557,9 +2564,25 @@ const pathFirstSegment = (path) => path.replace(/^(?:\.?\/)+/, '').split('/')[0]
  * top directory the broken token did (the next entry of a listing).
  */
 function pathContinuation(prevText, nextText) {
-  const tail = /[^\s"'<>|;&]+$/.exec(String(prevText || '').replace(/\s+$/, ''))?.[0] || '';
-  if (!tail.includes('/') || !/[\w\-.~+@%/]$/.test(tail) || PATH_TOKEN_ENDS_WITH_EXTENSION.test(tail)) return null;
+  const previous = String(prevText || '').trimEnd();
   const next = String(nextText || '').replace(/^\s+/, '');
+  const opening = previous.lastIndexOf('(');
+  const closing = next.indexOf(')');
+  if (opening >= 0 && closing > 0) {
+    const before = previous.slice(opening + 1);
+    const after = next.slice(0, closing);
+    // A word wrap in a parenthesised filename replaces its separating space.
+    if (
+      !before.includes(')') &&
+      !/[/-]$/.test(before) &&
+      !after.includes('/') &&
+      spacedFilePathOnLine(`${before} ${after}`)?.link
+    ) {
+      return 'join-spaced';
+    }
+  }
+  const tail = /[^\s"'<>|;&]+$/.exec(previous)?.[0] || '';
+  if (!tail.includes('/') || !/[\w\-.~+@%/]$/.test(tail) || PATH_TOKEN_ENDS_WITH_EXTENSION.test(tail)) return null;
   const head = /^[^\s"'<>|;&]+/.exec(next)?.[0] || '';
   if (!head || PATH_TOKEN_STARTS_NEW_PATH.test(head) || PATH_TOKEN_STARTS_EXPLICIT_RELATIVE.test(head)) return null;
   // A listing (`git ls-files`, `find`, `ls -R`) puts one path per row, so `src/components`
@@ -2616,9 +2639,10 @@ function terminalPathLine(buffer, row, cols, maxRows) {
       const kind = continues(parts[parts.length - 1], next, text);
       if (!kind) break;
       parts.push(next);
+      if (kind === 'join-spaced') text += ' ';
       text += next.text.replace(/^\s+/, '');
       rows += rowsOf(next);
-      if (kind === 'join') confirmed = parts.length;
+      if (kind !== 'chain') confirmed = parts.length;
     }
     return parts.slice(0, confirmed);
   };
@@ -2640,6 +2664,7 @@ function terminalPathLine(buffer, row, cols, maxRows) {
   const segments = [];
   let text = '';
   for (const [i, part] of parts.entries()) {
+    if (i > 0 && continues(parts[i - 1], part, text) === 'join-spaced') text += ' ';
     const skip = i === 0 ? 0 : part.text.length - part.text.replace(/^\s+/, '').length;
     segments.push({ part, textStart: text.length, skip });
     text += part.text.slice(skip);

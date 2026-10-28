@@ -28,6 +28,20 @@ const LONG =
   '/mnt/c/Users/someone/OneDrive - Contoso/01_Projects/Other/kb/out/deliverables/fy27-messaging-market-story.docx';
 
 describe('spaced file paths', () => {
+  it('keeps a parenthesised configuration filename whole inside a sentence', () => {
+    const path = '/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo eReader.conf';
+    const text = `Prepared a corrected configuration (${path}).`;
+    expect(findFilePathLinks(text)).toEqual([{ path, index: text.indexOf(path) }]);
+  });
+
+  it('keeps separate parenthesised paths and the surrounding prose separate', () => {
+    const first = '/mnt/data/Kobo/Kobo eReader.conf';
+    const second = '/home/me/My Docs/notes.md';
+    expect(paths(`Updated (${first}) and (${second}).`)).toEqual([first, second]);
+    expect(paths('Do not link (/etc/private files/settings.conf).')).toEqual([]);
+    expect(paths('Do not link (/mnt/data/../private files/settings.conf).')).toEqual([]);
+  });
+
   it('links an own-line absolute path with spaces whole', () => {
     expect(paths(LONG)).toEqual([LONG]);
     expect(paths('/mnt/c/proj/My Big Docs/report.docx')).toEqual(['/mnt/c/proj/My Big Docs/report.docx']);
