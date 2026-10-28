@@ -1246,7 +1246,11 @@ const KeyboardAccessoryBar = {
     // the single-line input transport and is what terminal.paste() emitted.
     // Paste markers inside the text are dropped first: a clipboard carrying
     // `ESC[201~` would end the bracket early and run the rest without Enter.
-    const pasteText = text.replace(/\x1b\[20[01]~/g, '').replace(/\r?\n/g, '\r');
+    // Strip until none is left: one pass over `ESC[20` + `ESC[201~` + `1~` leaves
+    // an `ESC[201~` behind.
+    let pasteText = text;
+    while (/\x1b\[20[01]~/.test(pasteText)) pasteText = pasteText.replace(/\x1b\[20[01]~/g, '');
+    pasteText = pasteText.replace(/\r?\n/g, '\r');
     if (pasteText.length > this._composerMaxLength) {
       app.showToast?.(`${label} is too long to send (maximum ${this._composerMaxLength.toLocaleString()} characters)`, 'error');
       return false;

@@ -255,8 +255,11 @@ Object.assign(CodemanApp.prototype, {
         // onData as user input (scroll to the bottom, clear the selection).
         // The main pane's bracketed-paste branch and a tile's _onTerminalData
         // deliver it, including the local-echo flush (#219). Do not also write
-        // the frame from here.
-        const body = text.replace(/\x1b\[20[01]~/g, '').replace(/\r?\n/g, '\r');
+        // the frame from here. Markers are stripped until none is left: one pass over
+        // `ESC[20` + `ESC[201~` + `1~` leaves an `ESC[201~` that would end the frame early.
+        let body = text;
+        while (/\x1b\[20[01]~/.test(body)) body = body.replace(/\x1b\[20[01]~/g, '');
+        body = body.replace(/\r?\n/g, '\r');
         terminal.input(`\x1b[200~${body}\x1b[201~`);
       }
     });

@@ -725,6 +725,16 @@ describe('mobile shell Paste', () => {
     expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '\x1b[200~echo safe\rrm -rf ~/x\x1b[201~');
   });
 
+  it('drops a paste marker hidden inside another one', () => {
+    const { app, input, send } = openShellPaste();
+    // One pass over this leaves `ESC[201~` between `ok` and the command.
+    input.value = 'ok\x1b[20\x1b[201~1~\nrm -rf ~/x';
+
+    send.click();
+
+    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '\x1b[200~ok\rrm -rf ~/x\x1b[201~');
+  });
+
   it('refuses a paste longer than one input frame and keeps the text for trimming', () => {
     const { app, bar, document, input, send } = openShellPaste();
     input.value = 'x'.repeat(bar._composerMaxLength + 1);

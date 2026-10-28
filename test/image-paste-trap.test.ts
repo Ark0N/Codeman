@@ -259,6 +259,15 @@ describe('Ctrl+V paste trap', () => {
     expect(h.sentInputs).toEqual([]);
   });
 
+  it('strips a marker hidden inside another, so the clipboard cannot end the frame early', () => {
+    const h = loadPasteHarness();
+
+    // One pass over this leaves `ESC[201~` between `ok` and the command.
+    h.firePaste({ text: 'ok\x1b[20\x1b[201~1~\nrm -rf ~/x\n' });
+
+    expect(h.inputted).toEqual(['\x1b[200~ok\rrm -rf ~/x\r\x1b[201~']);
+  });
+
   it('addresses the bracketed paste to the pane that received Ctrl+V', () => {
     const paneInputs: string[] = [];
     const pane: TargetTerminal = {
