@@ -46,3 +46,10 @@ export const MAX_STALLED_PATH_PROBES = Math.min(
   PATH_PROBE_STALL_CEILING,
   envInt('CODEMAN_PATH_PROBE_MAX_STALLED', Math.max(1, PATH_PROBE_STALL_CEILING - 1), 1, 64)
 );
+
+/**
+ * How long a session waits before trying again to resolve its workspace's symlinks
+ * after the folder did not answer, so a mount that recovers is picked up (the pane
+ * directory reading stays in the resolved spelling meanwhile).
+ */
+export const WORKSPACE_REALPATH_RETRY_MS = 60_000;

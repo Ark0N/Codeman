@@ -974,9 +974,12 @@ unresolved) and survives a server restart.
 Session state (`GET /api/v1/sessions`, the `session:updated` event) may carry `cwd`,
 the directory the session's local tmux pane is in now (`#{pane_current_path}`), which
 the web UI uses as the base for a relative path printed in the terminal. It is
-runtime-only (never persisted, so a restart starts without it), absent for remote,
+never restored after a restart (it is written to `state.json` with the rest of the
+session state but not read back), absent for remote,
 Docker, direct-PTY and rediscovered sessions and for a session split into several panes,
 and never a confinement root: file routes stay confined to `workingDir`.
+tmux reports the resolved directory, so for a workspace reached through a symlink a
+directory at or under the resolved workspace is reported in `workingDir`'s spelling.
 
 ## Session model (`displayModel`)
 

@@ -432,9 +432,11 @@ export function derivePaneExits(rows: PaneRow[], now: number): Map<string, PaneE
  * - Only sessions with EXACTLY ONE pane answer, for the reason
  *   {@link derivePaneExits} gives: a hand-split session has no single "the"
  *   pane to speak for it.
- * - Only absolute paths count. A blank field is a tmux that did not answer
- *   (it could not read the process cwd that tick), so a single-pane session
- *   with a blank field keeps its entry from `previous` instead of losing it.
+ * - Only absolute paths count. A blank field is a tmux that could not read the
+ *   process cwd: usually a pane whose program exited under `remain-on-exit`
+ *   (tmux 3.4 then reports it blank on every read), otherwise a read that
+ *   failed that tick. Either way the directory is unknown, not gone, so a
+ *   single-pane session with a blank field keeps its entry from `previous`.
  *   A session split into several panes, or one the read no longer lists, gets
  *   no entry: those are authoritative absences, not unanswered questions.
  *

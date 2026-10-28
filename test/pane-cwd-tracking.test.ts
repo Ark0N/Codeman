@@ -23,14 +23,18 @@
  *  5. Resolution order in the browser: live cwd, then `workingDir`. The
  *     resolved path still goes through the same preview routing, so a target
  *     outside the workspace takes the attachment route like any other.
+ *  6. Spelling: tmux reports the RESOLVED directory, so a workspace reached
+ *     through a symlink has its reading written back in `workingDir`'s
+ *     spelling, or every relative link would route as out-of-workspace.
  *
  * Port: ephemeral
  */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import vm from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Session } from '../src/session.js';
+import { Session, rebasePath } from '../src/session.js';
 import { WebServer } from '../src/web/server.js';
 import type { SessionDocker, SessionRemote } from '../src/types.js';
 import type { MuxSession, TerminalMultiplexer } from '../src/mux-interface.js';
@@ -485,5 +489,118 @@ describe('confinement is unchanged by the live cwd', () => {
     const app = loadApp({ workingDir: '/work/proj', cwd: '/work/other' });
     expect(app.target('src/a.js')).toBe('/work/other/src/a.js');
     expect(app.external(app.target('src/a.js'))).toBe(true);
+  });
+});
+
+describe('a workspace reached through a symlink', () => {
+  // tmux reads `/proc/<pgrp>/cwd`, always the resolved path, while `workingDir`
+  // keeps the spelling the case was created with. Without the rewrite, the
+  // browser's lexical routing check would call every relative link external.
+  let root: string;
+  let physical: string;
+  let link: string;
+
+  const read = (name: string) => readFileSync(resolve(import.meta.dirname, '../src/web/public', name), 'utf8');
+  const routingFor = (session: Record<string, unknown>) => {
+    const context = vm.createContext({
+      console,
+      CodemanApp: class CodemanApp {},
+      document: { addEventListener: vi.fn(), getElementById: () => null },
+      window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+      localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    });
+    vm.runInContext(
+      `${read('constants.js')}\n${read('terminal-ui.js')}\n${read('panels-ui.js')}\nglobalThis.__proto = CodemanApp.prototype;`,
+      context
+    );
+    const proto = (
+      context as unknown as {
+        __proto: {
+          _resolveLinkedFilePath: (p: string, id: string) => string;
+          _isExternalPreviewPath: (p: string, id: string) => boolean;
+        };
+      }
+    ).__proto;
+    const app = { sessions: new Map([['s1', session]]) };
+    return (p: string) => proto._isExternalPreviewPath.call(app, proto._resolveLinkedFilePath.call(app, p, 's1'), 's1');
+  };
+
+  /** Feed a reading until the background resolution has settled and it is taken. */
+  const settle = async (session: Session, reading: string) => {
+    await vi.waitFor(() => {
+      session.setCwd(reading);
+      expect(session.cwd).toBeDefined();
+    });
+  };
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const setup = () => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'pane-cwd-link-')));
+    physical = join(root, 'data', 'app');
+    mkdirSync(join(physical, 'src'), { recursive: true });
+    mkdirSync(join(root, 'other'), { recursive: true });
+    link = join(root, 'cases-app');
+    symlinkSync(physical, link);
+  };
+
+  it('writes a reading of the resolved workspace back in workingDir spelling', async () => {
+    setup();
+    const session = localMuxSession({ workingDir: link });
+    await settle(session, physical);
+    expect(session.cwd).toBe(link);
+    expect(session.setCwd(join(physical, 'src'))).toBe(true);
+    expect(session.cwd).toBe(join(link, 'src'));
+  });
+
+  it('keeps an in-workspace relative link on the workspace route from the first reading', async () => {
+    setup();
+    const session = localMuxSession({ workingDir: link });
+    await settle(session, physical);
+    const external = routingFor(session.toState() as unknown as Record<string, unknown>);
+    expect(external('src/index.ts')).toBe(false);
+  });
+
+  it('still routes a cd outside the workspace through the attachment route', async () => {
+    setup();
+    const session = localMuxSession({ workingDir: link });
+    await settle(session, join(root, 'other'));
+    expect(session.cwd).toBe(join(root, 'other'));
+    const external = routingFor(session.toState() as unknown as Record<string, unknown>);
+    expect(external('notes.md')).toBe(true);
+  });
+
+  it('withholds an out-of-workspace reading until the resolution settles', () => {
+    setup();
+    const session = localMuxSession({ workingDir: link });
+    // The first call starts the resolution; a physical reading cannot be told
+    // apart from a real cd yet, so it is not stored this tick.
+    expect(session.setCwd(physical)).toBe(false);
+    expect(session.cwd).toBeUndefined();
+    // A reading lexically inside workingDir needs no translation and is taken.
+    expect(session.setCwd(join(link, 'src'))).toBe(true);
+  });
+
+  it('leaves the reading alone when workingDir has no symlink in it', async () => {
+    setup();
+    const session = localMuxSession({ workingDir: physical });
+    await settle(session, join(physical, 'src'));
+    expect(session.cwd).toBe(join(physical, 'src'));
+  });
+
+  it('takes readings untranslated once a missing workingDir has settled', async () => {
+    setup();
+    const session = localMuxSession({ workingDir: join(root, 'gone') });
+    await settle(session, join(root, 'other'));
+    expect(session.cwd).toBe(join(root, 'other'));
+  });
+});
+
+describe('rebasePath', () => {
+  it('rewrites the prefix itself and paths under it, and nothing else', () => {
+    expect(rebasePath('/mnt/data/app', '/mnt/data/app', '/home/u/app')).toBe('/home/u/app');
+    expect(rebasePath('/mnt/data/app/src', '/mnt/data/app', '/home/u/app')).toBe('/home/u/app/src');
+    expect(rebasePath('/mnt/data/application', '/mnt/data/app', '/home/u/app')).toBe('/mnt/data/application');
+    expect(rebasePath('/mnt/other', '/mnt/data/app', '/home/u/app')).toBe('/mnt/other');
   });
 });
