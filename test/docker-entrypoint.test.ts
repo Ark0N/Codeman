@@ -315,7 +315,15 @@ describe('Update-Codeman.sh (the scripted major-update path — docker/README.md
         // agent container) the update path stopped at that guard before its
         // build. Give it the non-root owner docker/README.md's own
         // `chown -R 99:100` example sets up, as a real deployment would have.
-        if (process.getuid?.() === 0) chownSync(appdataPath, 99, 100);
+        if (process.getuid?.() === 0) {
+          try {
+            chownSync(appdataPath, 99, 100);
+          } catch {
+            // No CAP_CHOWN (root with --cap-drop ALL, as Codeman's own Docker
+            // case containers run) or a single-uid user namespace: leave it
+            // root-owned and let the scripts' own guard refuse, as before.
+          }
+        }
         mkdirSync(casesPath);
         writeFileSync(socketPath, '');
 
