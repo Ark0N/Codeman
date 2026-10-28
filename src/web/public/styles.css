@@ -616,6 +616,45 @@ body {
   padding-left: var(--lineage-spine-channel);
 }
 
+/* L-shaped strip (`_syncTabStripCorner()`, app.js): a wrapped classic strip
+   runs the header's full width, the toolbar sits over its top-right corner,
+   and only the rows beside the toolbar stop short of it. A flex line cannot
+   be shortened on its own, so the strip lays its tabs out inline, around a
+   float the size of the toolbar's box (measured into --tab-corner-width and
+   --tab-corner-height). The strip is a scroll container, so it contains the
+   float and is never shorter than the toolbar it now holds up; a strip that
+   would actually scroll keeps the plain wrap instead. Inline tabs space their
+   rows with a bottom margin (the old row-gap, lineage's included); the strip
+   carries no font size of its own, so the whitespace between tabs is 0 wide. */
+.header:has(> .session-tabs-host > .session-tabs.tabs-corner) > .header-right {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.75rem;
+}
+
+.session-tabs-host > .session-tabs.tabs-corner {
+  display: block;
+  font-size: 0;
+  padding-bottom: 0;
+}
+
+.session-tabs-host > .session-tabs.tabs-corner::before {
+  content: '';
+  float: right;
+  width: var(--tab-corner-width, 0px);
+  height: var(--tab-corner-height, 0px);
+}
+
+.session-tabs-host > .session-tabs.tabs-corner > .session-tab {
+  display: inline-flex;
+  vertical-align: top;
+  margin: 0 2px var(--lineage-row-gap, 4px) 0;
+}
+
+.session-tabs-host > .session-tabs.lineage-tree.tabs-corner {
+  padding-bottom: calc(var(--lineage-bottom-room) - var(--lineage-row-gap));
+}
+
 .session-tabs::-webkit-scrollbar {
   width: 4px;
   height: 0;
