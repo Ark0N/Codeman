@@ -348,6 +348,8 @@ and it follows the same rule as the launch path: every ssh command line comes fr
 | `POST /api/sessions/:id/folders` | Lists a folder (absolute or `~/`) on the **remote** host in one ssh round trip (`remoteListFolder`): resolved with `cd -P`, missing → `404`, a file → `400 Not a folder` |
 | `GET /api/sessions/:id/folders/:folderId/files/:name/raw` | Streams one file of a granted remote folder over ssh after the same re-probe + guard as an attachment; `preview` (office) and `thumbnail` answer `400` |
 | `GET /api/sessions/:id/attachments/:attachmentId`, `GET …/attachments` (history) | Size/mtime/existence resolved over ssh, so a remote entry is not reported `missing`; the history list resolves EVERY entry in one batched probe, never one connection per entry |
+| `POST /api/sessions/:id/fix-plan/read` | Reads `@fix_plan.md` on the **remote** host (one probe of the file and the workspace, the same confinement, a 1 MB cap); missing or resolving outside the workspace → `NOT_FOUND`, not a regular file, over the cap or an ssh failure → `OPERATION_FAILED`; never a local fallback |
+| `POST /api/sessions/:id/fix-plan/write`, `POST /api/sessions/:id/ralph-prompt/write` | `400` (`INVALID_INPUT`) before any disk is touched: remote writes are out of scope, and a local write would land in a same-named local folder |
 
 ⚠️ The attachment route is the one a clicked path takes when it is **outside** the case
 directory (a remote `/tmp` scratchpad capture, a screenshot elsewhere in the home dir):

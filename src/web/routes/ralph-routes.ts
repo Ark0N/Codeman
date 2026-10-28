@@ -5,7 +5,7 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { join, resolve, relative, isAbsolute, sep } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
@@ -31,6 +31,7 @@ import { buildRalphLoopPrompt } from '../../prompts/index.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import { remoteProbePaths, remoteReadFile, RemoteFileAccessError } from '../../remote-files.js';
 import type { SessionRemote } from '../../types/session.js';
+import { isPathWithinRoot } from './file-routes.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
 
 /** Cap on a remote `@fix_plan.md` read over ssh (a task list, not a document). */
@@ -543,16 +544,16 @@ export function registerRalphRoutes(
 
 /**
  * Read a remote session's `@fix_plan.md` on its host. `null` = no such file, or one that resolves outside
- * the workspace (the caller's 404, as for a local ENOENT); anything that is not a regular file, a file over the cap, or an ssh failure throws
- * `RemoteFileAccessError`, which the route reports as a failed read.
+ * the workspace (the caller's `NOT_FOUND`, as for a local ENOENT); anything that is not a regular file, a
+ * file over the cap, or an ssh failure throws `RemoteFileAccessError`, which the route reports as a failed
+ * read.
  */
 async function readRemoteFixPlan(remote: SessionRemote, workingDir: string, filePath: string): Promise<string | null> {
   // The file and the workspace in one round trip, so a symlinked @fix_plan.md that resolves outside the
   // workspace is refused like any missing file (the File Viewer's confinement, file-routes.ts).
   const [probe, rootProbe] = await remoteProbePaths(remote, [filePath, workingDir]);
   if (!probe) return null;
-  const rel = relative(rootProbe?.realPath ?? resolve(workingDir), probe.realPath);
-  if (rel === '' || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return null;
+  if (!isPathWithinRoot(rootProbe?.realPath ?? resolve(workingDir), probe.realPath)) return null;
   if (probe.kind !== 'file') throw new RemoteFileAccessError('@fix_plan.md is not a regular file');
   if (probe.size > MAX_REMOTE_FIX_PLAN_BYTES) {
     throw new RemoteFileAccessError(`@fix_plan.md is larger than ${MAX_REMOTE_FIX_PLAN_BYTES / 1024 / 1024}MB`);
