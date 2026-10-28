@@ -52,13 +52,13 @@ const { findFilePathLinks, resolveLinkedFilePath, terminalPathLine } = loadHelpe
 const paths = (text: string) => findFilePathLinks(text).map((f) => f.path);
 
 /** An xterm buffer stand-in: hard-broken rows (no `isWrapped`), as Claude Code emits them. */
-function buffer(lines: string[], cols = 80) {
+function buffer(lines: string[], cols = 80, wrappedRows = new Set<number>()) {
   return {
     length: lines.length,
     getLine: (row: number) =>
       row >= 0 && row < lines.length
         ? {
-            isWrapped: false,
+            isWrapped: wrappedRows.has(row),
             translateToString: (trim?: boolean) => (trim ? lines[row].replace(/\s+$/, '') : lines[row].padEnd(cols)),
           }
         : undefined,
@@ -157,6 +157,10 @@ describe('terminalPathLine', () => {
     // A path that already ended, and a next line opening a new rooted path.
     expect(terminalPathLine(buffer(['see /tmp/a/b.png', 'c/d.png']), 0, 80)).toMatchObject({ endRow: 0 });
     expect(terminalPathLine(buffer(['/home/joe/dir/', '/home/x.png']), 0, 80)).toMatchObject({ endRow: 0 });
+    expect(terminalPathLine(buffer(['see (/mnt/raid1/folder)', '  file.conf)']), 0, 80)).toMatchObject({ endRow: 0 });
+    expect(terminalPathLine(buffer(['see (/mnt/raid1/folder', '  /mnt/other/file.conf)']), 0, 80)).toMatchObject({
+      endRow: 0,
+    });
   });
 
   // `git ls-files`, `find` and `ls -R` print one path per row. An extensionless
@@ -237,13 +241,15 @@ function loadApp() {
   app.sessions = new Map([['s1', { workingDir: '/mnt/build/neon_getaway-mgr-hebel' }]]);
   app.openFilePreview = vi.fn();
   app.openLogViewerWindow = vi.fn();
+  app._registerExternalPreview = vi.fn(async () => ({ attachmentId: 'att-fixture' }));
+  app.showToast = vi.fn();
   app._isExternalPreviewPath = (p: string) => p.startsWith('~/');
   return app;
 }
 
-function linksOn(lines: string[], row: number) {
+function linksOn(lines: string[], row: number, cols = 80, wrappedRows = new Set<number>()) {
   const app = loadApp();
-  app.terminal = { cols: 80, registerLinkProvider: vi.fn(), buffer: { active: buffer(lines) } };
+  app.terminal = { cols, registerLinkProvider: vi.fn(), buffer: { active: buffer(lines, cols, wrappedRows) } };
   const provider = app.registerFilePathLinkProvider() as Provider;
   let out: Link[] = [];
   provider.provideLinks(row, (links) => {
@@ -253,6 +259,162 @@ function linksOn(lines: string[], row: number) {
 }
 
 describe('terminal link provider', () => {
+  it.each(['svg', 'markdown', 'avif', 'bmp', 'ico', 'zip'])(
+    'keeps the workspace opener for a hard-wrapped .%s rejected by the attachment registry',
+    async (extension) => {
+      for (const row of [1, 2]) {
+        const path = `/home/me/proj/out/system_architecture.${extension}`;
+        const { app, links } = linksOn(
+          ['Saved the diagram (/home/me/proj/out/system_archi', `  tecture.${extension}).`],
+          row,
+          120
+        );
+        app.sessions = new Map([['s1', { workingDir: '/home/me/proj' }]]);
+        app._registerExternalPreview.mockResolvedValue({ status: 400, error: 'Unsupported attachment type' });
+        await links[0].activate({}, links[0].text);
+        const opener = extension === 'zip' ? app.openLogViewerWindow : app.openFilePreview;
+        expect(opener).toHaveBeenCalledWith(path, 's1');
+        expect(app._registerExternalPreview.mock.calls).toEqual([[path, 's1']]);
+        expect(app.showToast).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it.each([
+    [
+      ['Saved the screenshot (/home/me/proj/out/ghost1b_game', '  play.png).'],
+      '/home/me/proj/out/ghost1b_gameplay.png',
+    ],
+    [
+      ['  ⎿  Wrote (/mnt/build/neon/builds/captures/ghost1b_gamepl', '     ay.png) ok'],
+      '/mnt/build/neon/builds/captures/ghost1b_gameplay.png',
+    ],
+    [
+      ['Saved the screenshot (/home/me/proj/out/ghost1b_', '  very_long_game', '  play.png).'],
+      '/home/me/proj/out/ghost1b_very_long_gameplay.png',
+    ],
+  ])('preserves a parenthesised filename without spaces across hard wraps: %s', async (rows, path) => {
+    for (let row = 1; row <= rows.length; row++) {
+      const { app, links } = linksOn(rows, row, 120);
+      expect(links.map((link) => link.text)).toEqual([path]);
+      await links[0].activate({}, links[0].text);
+      expect(app.openFilePreview).toHaveBeenCalledWith(path, 's1');
+      expect(app._registerExternalPreview.mock.calls).toEqual([[path, 's1']]);
+    }
+  });
+
+  it('uses the spaced filename only when the unspaced hard-wrap target is missing', async () => {
+    const path = '/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo eReader.conf';
+    const rows = [
+      'Found it: I prepared a corrected configuration (/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo',
+      '  eReader.conf).',
+    ];
+    for (const row of [1, 2]) {
+      const { app, links } = linksOn(rows, row, 120);
+      const unspaced = path.replace('Kobo eReader', 'KoboeReader');
+      expect(links.map((link) => link.text)).toEqual([unspaced]);
+      expect(links[0].range.end).toEqual({ x: '  eReader.conf'.length + 1, y: 2 });
+      app._registerExternalPreview.mockImplementation(async (candidate: string) =>
+        candidate === path ? { attachmentId: 'att-fixture' } : { status: 404, error: 'File not found' }
+      );
+      await links[0].activate({}, links[0].text);
+      expect(app.openLogViewerWindow).toHaveBeenCalledWith(path, 's1');
+      expect(app._registerExternalPreview.mock.calls).toEqual([
+        [unspaced, 's1'],
+        [path, 's1'],
+      ]);
+    }
+  });
+
+  it.each([403, 500, 503])('does not try another path after a guarded lookup returns HTTP %s', async (status) => {
+    const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
+    app._registerExternalPreview.mockResolvedValue({ status, error: 'Lookup refused' });
+    await links[0].activate({}, links[0].text);
+    expect(app._registerExternalPreview).toHaveBeenCalledTimes(1);
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+    expect(app.showToast).not.toHaveBeenCalled();
+  });
+
+  it('keeps the original opener when the lookup cannot reach the server', async () => {
+    const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
+    app._registerExternalPreview.mockResolvedValue({ error: 'Connection lost' });
+    await links[0].activate({}, links[0].text);
+    expect(app._registerExternalPreview).toHaveBeenCalledTimes(1);
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+  });
+
+  it('uses the original opener when both hard-wrap filenames are missing', async () => {
+    for (const row of [1, 2]) {
+      const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], row, 120);
+      app._registerExternalPreview.mockResolvedValue({ status: 404, error: 'Attachment file not found' });
+      await links[0].activate({}, links[0].text);
+      expect(app._registerExternalPreview.mock.calls).toEqual([
+        ['/mnt/data/KoboeReader.conf', 's1'],
+        ['/mnt/data/Kobo eReader.conf', 's1'],
+      ]);
+      expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+      expect(app.showToast).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['Path: ', '- ', '- Path: ', '  Path: '])(
+    'resolves the filename without its parenthesised prefix %j',
+    async (prefix) => {
+      for (const row of [1, 2]) {
+        const { app, links } = linksOn([`Saved the notes (${prefix}/home/me/proj/out/My`, '  Notes.md).'], row, 120);
+        app._registerExternalPreview
+          .mockResolvedValueOnce({ status: 404, error: 'Attachment file not found' })
+          .mockResolvedValueOnce({ attachmentId: 'att-spaced' });
+        expect(links.map((link) => link.text)).toEqual(['/home/me/proj/out/MyNotes.md']);
+        await links[0].activate({}, links[0].text);
+        expect(app._registerExternalPreview.mock.calls).toEqual([
+          ['/home/me/proj/out/MyNotes.md', 's1'],
+          ['/home/me/proj/out/My Notes.md', 's1'],
+        ]);
+        expect(app.openFilePreview).toHaveBeenCalledWith('/home/me/proj/out/My Notes.md', 's1');
+      }
+    }
+  );
+
+  it.each([400, 403, 500, 503])('does not open an unregistered spaced alternative after HTTP %s', async (status) => {
+    const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
+    app._registerExternalPreview
+      .mockResolvedValueOnce({ status: 404, error: 'File not found' })
+      .mockResolvedValueOnce({ status, error: 'Alternative unavailable' });
+    await links[0].activate({}, links[0].text);
+    expect(app._registerExternalPreview.mock.calls).toEqual([
+      ['/mnt/data/KoboeReader.conf', 's1'],
+      ['/mnt/data/Kobo eReader.conf', 's1'],
+    ]);
+    expect(app.openFilePreview).not.toHaveBeenCalled();
+    expect(app.openLogViewerWindow).not.toHaveBeenCalled();
+    expect(app.showToast).toHaveBeenCalledWith('Alternative unavailable', 'error');
+  });
+
+  it('keeps the session selected at click time while a path lookup is pending', async () => {
+    const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], 1, 120);
+    const pending = links[0].activate({}, links[0].text);
+    app.activeSessionId = 'another-session';
+    await pending;
+    expect(app._registerExternalPreview).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+  });
+
+  it('opens the complete parenthesised configuration path from either wrapped row', () => {
+    const path = '/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo eReader.conf';
+    const text = `Found it: I prepared a corrected configuration (${path}).`;
+    const split = text.indexOf(' eReader') + 1;
+    const rows = [text.slice(0, split), text.slice(split)];
+    for (const row of [1, 2]) {
+      const { app, links } = linksOn(rows, row, split, new Set([1]));
+      expect(links.map((link) => link.text)).toEqual([path]);
+      expect(links[0].range.start).toEqual({ x: text.indexOf(path) + 1, y: 1 });
+      expect(links[0].range.end).toEqual({ x: 'eReader.conf'.length + 1, y: 2 });
+      links[0].activate({}, links[0].text);
+      expect(app.openLogViewerWindow).toHaveBeenCalledWith(path, 's1');
+    }
+  });
+
   it('links a broken path once, across both rows, and opens the whole path', () => {
     const { app, links } = linksOn(BROKEN, 2);
     expect(links.map((l) => l.text)).toEqual([BROKEN_PATH]);
