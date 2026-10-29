@@ -423,6 +423,46 @@ export function derivePaneExits(rows: PaneRow[], now: number): Map<string, PaneE
 }
 
 /**
+ * Decide, from every pane tmux listed, which directory each tmux session's pane
+ * is in now (`#{pane_current_path}`). Exported for unit testing.
+ *
+ * This is what a relative path printed in the terminal is relative TO: a
+ * session's `workingDir` is fixed at create time and never follows a `cd`.
+ *
+ * - Only sessions with EXACTLY ONE pane answer, for the reason
+ *   {@link derivePaneExits} gives: a hand-split session has no single "the"
+ *   pane to speak for it.
+ * - Only absolute paths count. A blank field is a tmux that could not read the
+ *   process cwd: usually a pane whose program exited under `remain-on-exit`
+ *   (tmux 3.4 then reports it blank on every read), otherwise a read that
+ *   failed that tick. Either way the directory is unknown, not gone, so a
+ *   single-pane session with a blank field keeps its entry from `previous`.
+ *   A session split into several panes, or one the read no longer lists, gets
+ *   no entry: those are authoritative absences, not unanswered questions.
+ *
+ * The launch directory is NOT filtered here (unlike the rediscovery path): a
+ * remote or docker pane that never leaves it is refused by `Session.setCwd()`,
+ * and a local pane reporting it really is there.
+ */
+export function derivePaneCurrentPaths(
+  rows: PaneRow[],
+  previous: ReadonlyMap<string, string> = new Map()
+): Map<string, string> {
+  const panesPerSession = new Map<string, number>();
+  for (const row of rows) {
+    panesPerSession.set(row.sessionName, (panesPerSession.get(row.sessionName) ?? 0) + 1);
+  }
+  const paths = new Map<string, string>();
+  for (const row of rows) {
+    if (panesPerSession.get(row.sessionName) !== 1) continue;
+    const path = row.currentPath ?? previous.get(row.sessionName);
+    if (!path || !path.startsWith('/')) continue;
+    paths.set(row.sessionName, path);
+  }
+  return paths;
+}
+
+/**
  * Could any of these tmux sessions ever produce a pane-exit answer? Exported
  * for unit testing.
  *
@@ -2005,6 +2045,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * raw pane reading.
    */
   private paneExits: Map<string, TrackedPaneExit> = new Map();
+  /**
+   * muxName -> `#{pane_current_path}` from the last authoritative pane read
+   * ({@link derivePaneCurrentPaths}). Replaced wholesale by each non-empty read,
+   * so it is bounded by the panes on the socket. Like {@link paneExits} it holds
+   * the raw reading; `Session.setCwd()` decides which sessions may use it.
+   */
+  private paneCurrentPaths: Map<string, string> = new Map();
   /** The pane-exit watcher's own interval. Runs whether or not stats are on. */
   private paneExitInterval: NodeJS.Timeout | null = null;
   /**
@@ -3508,6 +3555,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * The directory the session's pane was in at the last authoritative pane
+   * read, or `undefined` when unknown. Costs nothing: it reads the map the
+   * pane-exit watcher's batched `list-panes -a` fills, so no tmux call is made
+   * per click. A failed or empty read keeps the previous answers, and so does
+   * a blank `#{pane_current_path}` on a single-pane session. After a successful
+   * read, `undefined` means that read listed no single directory for the
+   * session: it was split into several panes or is no longer on the socket.
+   */
+  getPaneCurrentPath(muxName: string): string | undefined {
+    return this.paneCurrentPaths.get(muxName);
+  }
+
+  /**
    * What the last pane read saw of this tmux session's agent. `undefined` is
    * the UNKNOWN answer and must never be rendered as "alive": it covers a pane
    * that is running, a tmux session that no longer exists, a probe that failed,
@@ -3568,6 +3628,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       this.paneExitReadInFlight = false;
     }
     if (rows.length === 0) return;
+    // The directory reading rides the same read. It is applied before the
+    // generation check below: a respawn invalidates an exit observation, but the
+    // pane's directory at read time is still the best answer there is. A blank
+    // field on a single-pane session carries the previous answer forward.
+    this.paneCurrentPaths = derivePaneCurrentPaths(rows, this.paneCurrentPaths);
     // A pane was respawned or killed while this read was out, so what it saw is
     // already history. Dropping it is what stops a freshly respawned pane from
     // being republished as exited.

@@ -2812,13 +2812,24 @@ export class WebServer extends EventEmitter {
   private applyPaneExits(): void {
     const getPaneExit = this.mux.getPaneExit?.bind(this.mux);
     if (!getPaneExit) return;
+    const getPaneCurrentPath = this.mux.getPaneCurrentPath?.bind(this.mux);
     for (const session of this.sessions.values()) {
       const muxName = session.muxName;
       // No pane, so nothing to report — and `setPaneExit()` would force UNKNOWN
       // for such a session anyway.
       if (!muxName) continue;
-      if (!session.setPaneExit(getPaneExit(muxName))) continue;
-      this.persistSessionState(session);
+      // The pane's live directory rides the same read: it is the base a relative
+      // path printed in the terminal resolves against. The manager's answer is
+      // applied as given, `undefined` included: it keeps its map across a failed
+      // or empty read and carries a blank `#{pane_current_path}` forward, so an
+      // `undefined` here means an authoritative read listed no single directory
+      // for the session (split into several panes, or gone from the socket).
+      const cwdChanged = getPaneCurrentPath ? session.setCwd(getPaneCurrentPath(muxName)) : false;
+      if (session.setPaneExit(getPaneExit(muxName))) {
+        this.persistSessionState(session);
+      } else if (!cwdChanged) {
+        continue;
+      }
       this.broadcastSessionStateDebounced(session.id);
     }
     this.closeCleanlyExitedSessions();

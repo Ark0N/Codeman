@@ -2398,6 +2398,31 @@ function resolveLinkedFilePath(filePath, workingDir) {
 }
 
 /**
+ * The directory a RELATIVE path printed for a session is relative TO.
+ *
+ * `workingDir` is recorded once at create time and never follows a `cd`, so it
+ * stops describing where a shell (or an agent that changed directory) really
+ * is. `session.cwd` is the pane's live `#{pane_current_path}`, published by the
+ * server from its pane read. It only changes which BASE a relative path joins;
+ * the result is then routed like any other path, so a target outside the
+ * workspace still goes through the attachment routes.
+ *
+ * Remote and Docker sessions are excluded (the server never sends them a cwd,
+ * and this checks again): their local pane runs the ssh / docker-exec CLIENT,
+ * so its directory says nothing about the agent. An unknown cwd falls back to
+ * `workingDir`.
+ *
+ * @param {{workingDir?: string, cwd?: string, remote?: unknown, docker?: unknown}} [session]
+ * @returns {string|undefined}
+ */
+function relativeResolutionBase(session) {
+  if (!session) return undefined;
+  const cwd = session.cwd;
+  if (!session.remote && !session.docker && typeof cwd === 'string' && cwd.startsWith('/')) return cwd;
+  return session.workingDir;
+}
+
+/**
  * Extensions the file preview renders as a PAGE, from the sandboxed
  * `/html-view/<cap>/` route (src/web/routes/html-view-routes.ts, whose
  * HTML_VIEW_EXTENSIONS this mirrors; test/file-preview-html-page.test.ts pins
@@ -4025,6 +4050,7 @@ if (typeof window !== 'undefined') {
     absoluteFilePathPattern,
     findFilePathLinks,
     resolveLinkedFilePath,
+    relativeResolutionBase,
     previewsInFileViewer,
     FILE_PREVIEW_EXTENSIONS,
     rendersAsPage,

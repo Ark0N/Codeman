@@ -30,6 +30,7 @@
 
 import { EventEmitter } from 'node:events';
 import { basename } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { execSync, execFileSync } from 'node:child_process';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
@@ -71,6 +72,8 @@ import {
 import type { GitFetchStatus } from './git-fetch.js';
 import { resolveAndClaimOmpSessionId } from './utils/omp-session-resolver.js';
 import { claudeTranscriptExists } from './utils/claude-transcript.js';
+import { probePathKind } from './utils/bounded-path-probe.js';
+import { PATH_PROBE_TIMEOUT_MS, WORKSPACE_REALPATH_RETRY_MS } from './config/path-probe.js';
 import { matchesPattern } from './config/cli-registry/patterns.js';
 import { probeDockerCliVersion } from './docker-hosts.js';
 import { probeRemoteCliVersion } from './remote-hosts.js';
@@ -397,6 +400,21 @@ const TEST_PTY_SCRIPT = 'if (process.stdin.isTTY) process.stdin.setRawMode(true)
 const DOCKER_CLI_VERSION_PROBE_DELAY_MS = 3000;
 /** Delay before the over-ssh Claude CLI version probe (keeps session start off the ssh round-trip). */
 const REMOTE_CLI_VERSION_PROBE_DELAY_MS = 3000;
+
+/** Whether absolute `path` is `root` or lies under it (a lexical compare). */
+function isSameOrUnder(path: string, root: string): boolean {
+  return path === root || path.startsWith(root === '/' ? '/' : `${root}/`);
+}
+
+/**
+ * Rewrite `path` from under `from` to the same place under `to`; a path not at or
+ * under `from` comes back unchanged. Exported for unit testing.
+ */
+export function rebasePath(path: string, from: string, to: string): string {
+  if (path === from) return to;
+  if (path.startsWith(`${from}/`)) return to + path.slice(from.length);
+  return path;
+}
 
 /**
  * Ask tmux for the current window geometry of `muxName` so a re-attaching PTY
@@ -743,6 +761,21 @@ export class Session extends EventEmitter {
    * rendered as "alive".
    */
   private _paneExit: PaneExit | null = null;
+  /**
+   * The pane's live directory, from the pane-exit watcher's read. Runtime-only:
+   * serialized by toState() but never restored by the constructor.
+   */
+  private _cwd: string | undefined;
+  /**
+   * `workingDir` with symlinks resolved, so a pane reading (tmux reads the
+   * process cwd, always the resolved path) can be put back into `workingDir`'s
+   * spelling. `undefined` until the first resolution settles; `null` when there
+   * is nothing to translate (no symlink in the path) or it could not be resolved.
+   */
+  private _workspaceRealPath: string | null | undefined;
+  private _workspaceRealPathPending = false;
+  /** When a resolution that met an unreachable folder may be tried again (0 = never). */
+  private _workspaceRealPathRetryAt = 0;
   /**
    * How many starts, attaches or relaunches are running for this session's
    * pane. While one is, a dead-pane reading may describe a pane that is being
@@ -1485,6 +1518,99 @@ export class Session extends EventEmitter {
     if (this._muxSession) this._mux?.clearPaneExit?.(this._muxSession.muxName);
   }
 
+  /** The pane's live working directory, when the pane read has reported one. */
+  get cwd(): string | undefined {
+    return this._cwd;
+  }
+
+  /**
+   * Record the pane's live directory. Returns whether it CHANGED, so the caller
+   * broadcasts only on a real transition.
+   *
+   * Scoped by {@link paneExitApplies}, the same rule as the exit reading: a
+   * remote session's local pane runs the ssh client and a docker case's runs a
+   * `docker exec`, so their pane directory is a host directory the agent was
+   * never in, and a direct-PTY or rediscovered session has no pane Codeman can
+   * vouch for. A relative value is refused rather than stored.
+   *
+   * tmux reads the pane's directory from the process cwd, which is always the
+   * resolved path, while `workingDir` keeps the spelling the case was created
+   * with. A workspace reached through a symlink would otherwise read as outside
+   * itself, and the browser's preview routing (a lexical compare against
+   * `workingDir`) would send every relative link to the attachment route. So a
+   * reading at or under the workspace's resolved path is written back in
+   * `workingDir`'s spelling. Until that resolution has settled, only a reading
+   * lexically inside `workingDir` is accepted.
+   */
+  setCwd(next: string | undefined): boolean {
+    let resolved = this.paneExitApplies && next?.startsWith('/') ? next : undefined;
+    if (resolved !== undefined) {
+      if (
+        this._workspaceRealPath === undefined ||
+        (this._workspaceRealPathRetryAt !== 0 && Date.now() >= this._workspaceRealPathRetryAt)
+      ) {
+        this._resolveWorkspaceRealPath();
+      }
+      if (this._workspaceRealPath === undefined) {
+        // The workspace's resolved path is not known yet. A reading outside
+        // `workingDir` could be the workspace itself seen through its symlink, so
+        // it waits for the next tick rather than mis-route links for one.
+        if (!isSameOrUnder(resolved, this._workspaceSpelling())) return false;
+      } else if (this._workspaceRealPath !== null) {
+        resolved = rebasePath(resolved, this._workspaceRealPath, this._workspaceSpelling());
+      }
+    }
+    if (resolved === this._cwd) return false;
+    this._cwd = resolved;
+    return true;
+  }
+
+  /** `workingDir` without a trailing separator (the root stays `/`). */
+  private _workspaceSpelling(): string {
+    return this.workingDir.length > 1 ? this.workingDir.replace(/\/+$/, '') : this.workingDir;
+  }
+
+  /**
+   * Resolve `workingDir`'s symlinks in the background for {@link setCwd}.
+   *
+   * Bounded: the folder can sit on a network mount that stopped answering, so it
+   * is probed with `probePathKind()` first and the `realpath()` is raced against
+   * the same timeout. An `unknown` probe, a failed or slow `realpath()` leave no
+   * translation and allow one more try after `WORKSPACE_REALPATH_RETRY_MS`; a
+   * folder that is absent or not a directory is settled for good.
+   */
+  private _resolveWorkspaceRealPath(): void {
+    if (this._workspaceRealPathPending) return;
+    this._workspaceRealPathPending = true;
+    const spelling = this._workspaceSpelling();
+    void (async () => {
+      let real: string | null = null;
+      let retry = false;
+      try {
+        const kind = await probePathKind(spelling);
+        if (kind === 'unknown') {
+          retry = true;
+        } else if (kind === 'directory') {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const answer = await Promise.race([
+            realpath(spelling).catch(() => undefined),
+            new Promise<undefined>((resolveTimeout) => {
+              timer = setTimeout(() => resolveTimeout(undefined), PATH_PROBE_TIMEOUT_MS);
+              timer.unref?.();
+            }),
+          ]).finally(() => clearTimeout(timer));
+          if (answer === undefined) retry = true;
+          else if (answer !== spelling && answer !== '/') real = answer;
+        }
+      } catch {
+        retry = true;
+      }
+      this._workspaceRealPath = real;
+      this._workspaceRealPathRetryAt = retry ? Date.now() + WORKSPACE_REALPATH_RETRY_MS : 0;
+      this._workspaceRealPathPending = false;
+    })();
+  }
+
   /**
    * Record what the mux layer observed of this pane's agent, and say whether
    * that changed the answer. The caller persists and broadcasts on a true.
@@ -2162,6 +2288,7 @@ export class Session extends EventEmitter {
       pid: this.pid,
       status: this._status,
       workingDir: this.workingDir,
+      cwd: this._cwd,
       remote: this._remote,
       docker: this._docker,
       owner: this._owner,
