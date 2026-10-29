@@ -171,7 +171,8 @@ export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDe
         host: deps.hostTitle(),
         file: upload,
       },
-      urgent === true
+      // deliberate: an agent's own message is never deduped, so a second, different post is not lost.
+      { urgent: urgent === true, deliberate: true }
     );
     if (result === null) {
       reply.code(409);

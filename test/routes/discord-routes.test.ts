@@ -109,6 +109,7 @@ describe('/api/discord', () => {
 });
 
 describe('POST /api/sessions/:id/discord-notify', () => {
+  const url = '/api/sessions/test-session-1/discord-notify';
   it('is refused while the bridge is off, and posts into the session thread once on', async () => {
     const { app, bridge } = await harness();
     const url = `/api/sessions/test-session-1/discord-notify`;
@@ -144,6 +145,19 @@ describe('POST /api/sessions/:id/discord-notify', () => {
       payload: { message: 'hi' },
     });
     expect(short.statusCode).toBe(404);
+    bridge.stop();
+  });
+
+  it('lets two different deliberate messages from one tab through within 3 s (neither is lost)', async () => {
+    const { app, bridge } = await harness();
+    await app.inject({ method: 'PUT', url: '/api/discord', payload: FULL });
+    const first = await app.inject({ method: 'POST', url, payload: { message: 'first thing' } });
+    const second = await app.inject({ method: 'POST', url, payload: { message: 'second thing' } });
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().data.deduped).toBeUndefined();
+    const sent = fetchImpl.mock.calls.map((c) => String(c[1].body));
+    expect(sent.filter((b) => b.includes('first thing') || b.includes('second thing'))).toHaveLength(2);
     bridge.stop();
   });
 

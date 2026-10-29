@@ -24,6 +24,7 @@ type Internals = {
   mux: { capturePaneText?: (name: string) => string | null };
   sendPushNotifications: (event: string, data: Record<string, unknown>) => Promise<void>;
   broadcast: (event: string, data: unknown) => void;
+  cleanupSession: (id: string, killMux?: boolean, reason?: string) => Promise<void>;
 };
 
 function server(): Internals {
@@ -35,6 +36,7 @@ function server(): Internals {
     sessionRenamed: vi.fn(async () => undefined),
     sessionDeleted: vi.fn(async () => undefined),
     sessionIdle: vi.fn(async () => undefined),
+    stop: vi.fn(),
   };
   return s;
 }
@@ -45,22 +47,28 @@ describe('sendPushNotifications -> Discord', () => {
   it('posts a permission prompt with zero push subscriptions, with the rendered screen as the tail', async () => {
     const s = server();
     s.sessions.set('s1', { muxName: 'codeman-s1', textOutput: '', mode: 'claude' });
-    s.mux = { capturePaneText: () => 'Which option?\n──────────\n  1. Cap GPUs\n\n  2. Cap CPU\n' };
+    const capture = vi.fn(() => 'Which option?\n──────────\n  1. Cap GPUs\n\n  2. Cap CPU\n');
+    s.mux = { capturePaneText: capture };
     await s.sendPushNotifications('hook:permission_prompt', {
       sessionId: 's1',
       sessionName: 'w1-app',
       tool_name: 'Bash',
     });
     expect(s.discordBridge.notify).toHaveBeenCalledTimes(1);
-    expect(s.discordBridge.notify.mock.calls[0][0]).toMatchObject({
+    const msg = s.discordBridge.notify.mock.calls[0][0];
+    expect(msg).toMatchObject({
       event: 'hook:permission_prompt',
       title: 'Permission Required',
       body: '[w1-app] Tool: Bash',
       urgency: 'critical',
       sessionId: 's1',
       sessionName: 'w1-app',
-      tail: 'Which option?\n  1. Cap GPUs\n  2. Cap CPU',
     });
+    // A function, so the screen is read (a synchronous tmux exec) only once the bridge will post.
+    expect(typeof msg.tail).toBe('function');
+    expect(capture).not.toHaveBeenCalled();
+    expect(msg.tail()).toBe('Which option?\n  1. Cap GPUs\n  2. Cap CPU');
+    expect(capture).toHaveBeenCalledTimes(1);
     expect(sendNotification).not.toHaveBeenCalled();
   });
 
@@ -68,7 +76,7 @@ describe('sendPushNotifications -> Discord', () => {
     const s = server();
     s.sessions.set('s2', { muxName: null, textOutput: 'plain answer\n', mode: 'claude' });
     await s.sendPushNotifications('hook:idle_prompt', { sessionId: 's2', sessionName: 'w2' });
-    expect(s.discordBridge.notify.mock.calls[0][0].tail).toBe('plain answer');
+    expect(s.discordBridge.notify.mock.calls[0][0].tail()).toBe('plain answer');
     await s.sendPushNotifications('hook:idle_prompt', { sessionId: 'gone', sessionName: 'w3' });
     expect(s.discordBridge.notify.mock.calls[1][0].tail).toBeUndefined();
   });
@@ -87,27 +95,57 @@ describe('broadcast -> Discord tab lifecycle', () => {
     expect(s.discordBridge.sessionCreated).toHaveBeenCalledWith('s1', 'w1', 123);
     s.broadcast(SseEvent.SessionUpdated, { id: 's1', name: 'renamed' });
     expect(s.discordBridge.sessionRenamed).toHaveBeenCalledWith('s1', 'renamed');
+  });
+
+  it('does not touch the thread on session:deleted, which a detach also fires', () => {
+    const s = server();
     s.broadcast(SseEvent.SessionDeleted, { id: 's1' });
-    expect(s.discordBridge.sessionDeleted).toHaveBeenCalledWith('s1');
+    expect(s.discordBridge.sessionDeleted).not.toHaveBeenCalled();
+  });
+
+  it('tells the bridge about a real delete (killMux true) but not a detach (killMux false)', async () => {
+    const s = server();
+    await s.cleanupSession('gone', false);
+    expect(s.discordBridge.sessionDeleted).not.toHaveBeenCalled();
+    await s.cleanupSession('gone', true);
+    expect(s.discordBridge.sessionDeleted).toHaveBeenCalledWith('gone');
+  });
+
+  it('marks a resumed tab as resumed, so it is never sent the typed hint', () => {
+    const s = server();
+    s.broadcast(SseEvent.SessionCreated, { session: { id: 's9', name: 'w9', createdAt: 5, resumeSessionId: 'abc' } });
+    expect(s.discordBridge.sessionCreated).toHaveBeenCalledWith('s9', 'w9', 5, true);
+    s.broadcast(SseEvent.SessionCreated, { session: { id: 's8', name: 'w8', createdAt: 6 } });
+    expect(s.discordBridge.sessionCreated).toHaveBeenLastCalledWith('s8', 'w8', 6, false);
   });
 
   it('ignores an event with no session id', () => {
     const s = server();
-    s.broadcast(SseEvent.SessionDeleted, {});
-    expect(s.discordBridge.sessionDeleted).not.toHaveBeenCalled();
+    s.broadcast(SseEvent.SessionUpdated, {});
+    expect(s.discordBridge.sessionRenamed).not.toHaveBeenCalled();
   });
 
-  it('tells the bridge whether an idle session is an external CLI: codex yes, claude and shell no', () => {
+  it('allows the typed hint only for a local external CLI: not Claude, a shell, a remote or a Docker tab', () => {
     const s = server();
     s.sessions.set('cx', { mode: 'codex' });
     s.sessions.set('cl', { mode: 'claude' });
     s.sessions.set('sh', { mode: 'shell' });
-    for (const id of ['cx', 'cl', 'sh', 'missing']) s.broadcast(SseEvent.SessionIdle, { id });
+    s.sessions.set('rm', { mode: 'codex', remote: { label: 'box' } });
+    s.sessions.set('dk', { mode: 'codex', docker: { image: 'x' } });
+    for (const id of ['cx', 'cl', 'sh', 'rm', 'dk', 'missing']) s.broadcast(SseEvent.SessionIdle, { id });
     expect(s.discordBridge.sessionIdle.mock.calls).toEqual([
       ['cx', true],
       ['cl', false],
       ['sh', false],
+      ['rm', false],
+      ['dk', false],
       ['missing', false],
     ]);
+  });
+
+  it('closes the bridge when the server stops', async () => {
+    const s = server();
+    await (s as unknown as { stop: () => Promise<void> }).stop();
+    expect(s.discordBridge.stop).toHaveBeenCalledTimes(1);
   });
 });

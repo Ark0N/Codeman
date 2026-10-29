@@ -101,14 +101,14 @@ In the Discord mobile app set the server to **All Messages**. Discord's own push
 A CLI only posts deliberately if it knows it can. While the bridge and `startupHint` are on:
 
 - **Claude** is launched with `--append-system-prompt`, so nothing shows in the conversation.
-- **Every other CLI** is sent the same text once, as a message, the first time a brand-new tab becomes idle. Tabs that are restored when Codeman starts, resumed tabs and shell tabs are never sent it.
+- **Every other CLI** is sent the same text once, as a message, the first time a brand-new tab becomes idle. Tabs that are restored when Codeman starts, resumed tabs, shell tabs, and remote (ssh) and Docker tabs (which have no `codeman` command) are never sent it.
 
 The text explains `codeman notify "message" --urgent`. `codeman` is already on the PATH of every session and reads `CODEMAN_SESSION_ID` and `CODEMAN_API_URL`, so no other setup is needed. Without a bridge it prints that the bridge is off and exits cleanly. Tabs started before the bridge was enabled are not told; use the skill or `CLAUDE.md` for those.
 
 ## Files
 
 - **Received:** files you attach to a reply from an allowed user are saved as `<working folder>/.codeman-discord/<message id>-<name>` (mode 0600) and the one-line reply the CLI sees ends with `[attached: <paths>]`. At most 5 files of 8 MB each; names are reduced to letters, digits, `.`, `_` and `-`; only Discord's own HTTPS addresses are fetched. Anything skipped is named in the thread. Add `.codeman-discord/` to your `.gitignore`. Remote (ssh) tabs have no local folder, so no file is saved for them.
-- **Sent:** `codeman notify "message" --file <path>` uploads a regular file of at most 8 MB. The real path (symlinks followed) must be inside the tab's working folder, so a CLI cannot post `~/.codeman/discord.json` or an ssh key. Remote tabs cannot send files.
+- **Sent:** `codeman notify "message" --file <path>` uploads a regular file of at most 8 MB. The real path (symlinks followed) must be inside the tab's working folder, which stops an upload of something outside it by mistake. The agent runs as your user, so this is a guard against accidents, not a sandbox. Remote tabs cannot send files.
 - A downloaded file is untrusted content: only allowed users can send one, but a CLI that opens it is exposed to anything written inside it.
 
 ## Security model

@@ -22,6 +22,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { join } from 'node:path';
+import { probePathKind } from './utils/bounded-path-probe.js';
 import WebSocket from 'ws';
 import { WEBHOOK_SCOPES, type WebhookScope, type WebhookUrgency } from './types/push.js';
 
@@ -85,7 +86,7 @@ export interface DiscordMessage {
   sessionId?: string;
   sessionName?: string;
   /** The tail of what the CLI last printed, so the reader can see what it is asking. */
-  tail?: string;
+  tail?: string | (() => string);
   host?: string;
   /** A file to upload with the post (already read and size-checked by the caller). */
   file?: DiscordFile;
@@ -98,6 +99,8 @@ export interface DiscordFile {
 
 export interface DiscordResult {
   ok: boolean;
+  /** True when the same event for the same tab was posted within the last few seconds, so nothing was sent. */
+  deduped?: boolean;
   status?: number;
   error?: string;
   at: number;
@@ -227,7 +230,14 @@ export function buildPost(msg: DiscordMessage, cfg: DiscordConfig, explicitUrgen
   const ping = shouldPing(cfg.pingMode, msg.urgency, explicitUrgent) ? cfg.allowedUserIds : [];
   const mentions = ping.map((id) => `<@${id}>`).join(' ');
   const head = `${mentions ? `${mentions} ` : ''}**${clip(msg.title, 120)}**`;
-  const fence = msg.tail?.trim() ? `\n\`\`\`\n${msg.tail.trim().replace(/```/g, "'''")}\n\`\`\`` : '';
+  // Built here, not by the caller, so the screen is only read for a post that is really going out.
+  let tailText: string | undefined;
+  try {
+    tailText = typeof msg.tail === 'function' ? msg.tail() : msg.tail;
+  } catch {
+    tailText = undefined;
+  }
+  const fence = tailText?.trim() ? `\n\`\`\`\n${tailText.trim().replace(/```/g, "'''")}\n\`\`\`` : '';
   const host = msg.host ? ` (${clip(msg.host, 60)})` : '';
   const content = clip(`${head}${host}${msg.body ? `\n${msg.body}` : ''}${fence}`, MAX_CONTENT);
   // Agent output and session names must not be able to @everyone the server; only the allowlisted ids ping.
@@ -579,11 +589,48 @@ export class DiscordGateway {
 // The bridge
 // ---------------------------------------------------------------------------
 
+/**
+ * Create or re-verify `<workingDir>/.codeman-discord`, or null when it is not safe to write there.
+ * Same safeguards as the prompt uploads folder: the workspace is probed with the bounded probe before
+ * the first disk touch (a dead mount must not hang the event loop), a symlink or a non-directory at
+ * the folder is refused (an agent could plant `.codeman-discord -> ~/.ssh`), and the folder ignores
+ * itself with a `.gitignore` of `*`, written once with O_EXCL so an `git add -A` never commits what was
+ * sent and a file already there stays the user's.
+ */
+export async function ensureReceivedDir(workingDir: string): Promise<string | null> {
+  if ((await probePathKind(workingDir, { pastCap: true })) !== 'directory') return null;
+  const dir = join(workingDir, RECEIVED_DIR);
+  try {
+    const st = await fs.lstat(dir);
+    if (st.isSymbolicLink() || !st.isDirectory()) return null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+    try {
+      await fs.mkdir(dir);
+    } catch (mkErr) {
+      if ((mkErr as NodeJS.ErrnoException).code !== 'EEXIST') return null;
+      const again = await fs.lstat(dir).catch(() => null);
+      if (!again || again.isSymbolicLink() || !again.isDirectory()) return null;
+    }
+  }
+  const ignore = join(dir, '.gitignore');
+  try {
+    await fs.writeFile(ignore, '*\n', { flag: 'wx' });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return dir;
+    // An empty ignore file would read as the user's next time, so take it back.
+    await fs.rm(ignore, { force: true }).catch(() => undefined);
+    return null;
+  }
+  return dir;
+}
+
 export interface DiscordBridgeDeps {
   configDir: string;
   fetchImpl: DiscordFetch;
   /** Types `text` (already ending in Enter) into the session. False when the session is gone. */
-  sendInput: (sessionId: string, text: string) => Promise<boolean>;
+  /** `fromUser` is true only for what a person typed (a Discord reply), false for text Codeman types itself. */
+  sendInput: (sessionId: string, text: string, fromUser: boolean) => Promise<boolean>;
   /** A session's working folder, where received files are saved. Undefined when it is gone or remote. */
   sessionDir?: (sessionId: string) => string | undefined;
   socketFactory?: SocketFactory;
@@ -604,6 +651,8 @@ export class DiscordBridge {
   /** Brand-new sessions that have not yet been sent the startup hint (non-Claude CLIs). */
   private fresh = new Set<string>();
   private pending = new Map<string, Promise<string | null>>();
+  /** Thread-map writes run one after another: concurrent creations must not interleave on the tmp file. */
+  private persistChain: Promise<void> = Promise.resolve();
   private last: DiscordResult | null = null;
   private readonly api: DiscordApi;
   private readonly now: () => number;
@@ -648,6 +697,10 @@ export class DiscordBridge {
     this.gateway?.stop();
     this.gateway = null;
     activeStartupHint = undefined;
+    this.lastSent.clear();
+    this.lastReply.clear();
+    this.names.clear();
+    this.fresh.clear();
   }
 
   private fail(err: unknown): DiscordResult {
@@ -668,6 +721,13 @@ export class DiscordBridge {
     return { ok: false, status, error, at: this.now() };
   }
 
+  private persistThreads(): Promise<void> {
+    this.persistChain = this.persistChain
+      .then(() => writeThreadMap(this.deps.configDir, { ...this.threads }))
+      .catch(() => undefined);
+    return this.persistChain;
+  }
+
   /** The thread for a session, creating it when absent. Concurrent callers share one creation. */
   private threadFor(sessionId: string, name: string | undefined): Promise<string | null> {
     const existing = this.threads[sessionId];
@@ -679,7 +739,7 @@ export class DiscordBridge {
         const t = await this.api.createThread(this.cfg.parentChannelId, threadNameFor(name, sessionId));
         if (!t?.id) return null;
         this.threads[sessionId] = t.id;
-        await writeThreadMap(this.deps.configDir, this.threads).catch(() => undefined);
+        await this.persistThreads();
         return t.id;
       } catch (err) {
         this.last = this.fail(err);
@@ -693,13 +753,21 @@ export class DiscordBridge {
   }
 
   /** Post an alert. Session-less messages go to the parent channel. Never throws. */
-  async notify(msg: DiscordMessage, explicitUrgent = false): Promise<DiscordResult | null> {
+  async notify(
+    msg: DiscordMessage,
+    opts: { urgent?: boolean; deliberate?: boolean } = {}
+  ): Promise<DiscordResult | null> {
+    const explicitUrgent = opts.urgent === true;
     if (!this.loaded) await this.reload();
     if (!shouldSendDiscord(this.cfg, msg.urgency)) return null;
     const key = `${msg.event}:${msg.sessionId ?? ''}`;
     const t = this.now();
     const prev = this.lastSent.get(key);
-    if (!explicitUrgent && prev !== undefined && t - prev < DEDUPE_WINDOW_MS) return null;
+    // A deliberate post (an agent's own `codeman notify`) is never deduped: a second, different message is real.
+    // Automatic events are, and say so, which is not the same answer as "the bridge is off" (null).
+    if (!opts.deliberate && prev !== undefined && t - prev < DEDUPE_WINDOW_MS) {
+      return { ok: true, deduped: true, at: t };
+    }
     this.lastSent.set(key, t);
     if (this.lastSent.size > 256) {
       for (const [k, v] of this.lastSent) if (t - v > DEDUPE_WINDOW_MS) this.lastSent.delete(k);
@@ -759,10 +827,16 @@ export class DiscordBridge {
   }
 
   /** Session tab created: make its thread now when `threadCreation` is `onSessionStart`. */
-  async sessionCreated(sessionId: string, name: string | undefined, createdAt?: number): Promise<void> {
+  async sessionCreated(
+    sessionId: string,
+    name: string | undefined,
+    createdAt?: number,
+    resumed = false
+  ): Promise<void> {
     if (!this.loaded) await this.reload();
     // Only a tab made just now: the same event also fires for sessions restored at server start.
-    if (createdAt !== undefined && this.now() - createdAt < 60_000) this.fresh.add(sessionId);
+    // A resumed tab is created now too, but its conversation is not new, so it is never hinted.
+    if (!resumed && createdAt !== undefined && this.now() - createdAt < 60_000) this.fresh.add(sessionId);
     if (!this.cfg.enabled || this.cfg.threadCreation !== 'onSessionStart') return;
     await this.threadFor(sessionId, name);
   }
@@ -771,11 +845,12 @@ export class DiscordBridge {
    * First idle of a brand-new non-Claude session means its prompt is up: type the startup hint once.
    * Claude gets the same text as a launch flag instead, and a shell must never receive it.
    */
-  async sessionIdle(sessionId: string, external: boolean): Promise<void> {
+  async sessionIdle(sessionId: string, hintable: boolean): Promise<void> {
     if (!this.fresh.delete(sessionId)) return;
-    if (!external || !this.cfg.enabled || !this.cfg.startupHint) return;
+    if (!hintable || !this.cfg.enabled || !this.cfg.startupHint) return;
     const text = sanitiseReply(`${DISCORD_STARTUP_HINT} Reply with just: ok`);
-    if (text) await this.deps.sendInput(sessionId, text).catch(() => false);
+    // fromUser false: this is Codeman talking, so it must not auto-name the tab or count as the person's input.
+    if (text) await this.deps.sendInput(sessionId, text, false).catch(() => false);
   }
 
   async sessionRenamed(sessionId: string, name: string | undefined): Promise<void> {
@@ -788,12 +863,14 @@ export class DiscordBridge {
 
   /** Session tab deleted: apply `onSessionDelete` and forget the mapping. */
   async sessionDeleted(sessionId: string): Promise<void> {
+    // Per-tab state goes whether or not the tab ever had a thread, so these maps cannot grow for the life of the server.
+    this.lastReply.delete(sessionId);
+    this.names.delete(sessionId);
+    this.fresh.delete(sessionId);
     const thread = this.threads[sessionId];
     if (!thread) return;
     delete this.threads[sessionId];
-    this.lastReply.delete(sessionId);
-    this.names.delete(sessionId);
-    await writeThreadMap(this.deps.configDir, this.threads).catch(() => undefined);
+    await this.persistThreads();
     if (!this.cfg.enabled) return;
     if (this.cfg.onSessionDelete === 'delete') await this.api.remove(thread).catch(() => undefined);
     else if (this.cfg.onSessionDelete === 'archive') await this.api.archive(thread).catch(() => undefined);
@@ -813,7 +890,10 @@ export class DiscordBridge {
     if (list.length === 0) return { paths: [] };
     const dir = this.deps.sessionDir?.(sessionId);
     if (!dir) return { paths: [], refused: 'That tab has no local folder to save files in, so no file was saved.' };
-    const target = join(dir, RECEIVED_DIR);
+    // The message id goes into a file name, so it must be a snowflake and nothing else.
+    if (!SNOWFLAKE.test(m.id)) return { paths: [], refused: 'That message could not be saved.' };
+    const target = await ensureReceivedDir(dir);
+    if (!target) return { paths: [], refused: 'The tab folder is not safe to write to, so no file was saved.' };
     const paths: string[] = [];
     const skipped: string[] = [];
     for (const [i, a] of list.entries()) {
@@ -832,9 +912,9 @@ export class DiscordBridge {
           skipped.push(name);
           continue;
         }
-        await fs.mkdir(target, { recursive: true });
         const dest = join(target, `${m.id}-${name}`);
-        await fs.writeFile(dest, buf, { mode: 0o600 });
+        // 'wx' (O_EXCL) also refuses a symlink planted at the name.
+        await fs.writeFile(dest, buf, { mode: 0o600, flag: 'wx' });
         paths.push(dest);
       } catch {
         skipped.push(name);
@@ -857,7 +937,11 @@ export class DiscordBridge {
     if (!sessionId) return;
     const t = this.now();
     const prev = this.lastReply.get(sessionId);
-    if (prev !== undefined && t - prev < REPLY_MIN_INTERVAL_MS) return;
+    if (prev !== undefined && t - prev < REPLY_MIN_INTERVAL_MS) {
+      // Too soon after the last reply: say it was not typed, instead of dropping it silently.
+      await this.api.react(m.channel_id, m.id, '⏳').catch(() => undefined);
+      return;
+    }
     this.lastReply.set(sessionId, t);
     const saved = await this.saveAttachments(sessionId, m);
     const text = sanitiseReply(m.content ?? '', saved.paths);
@@ -866,7 +950,7 @@ export class DiscordBridge {
       return;
     }
     if (saved.refused) await this.say(m.channel_id, saved.refused);
-    const ok = await this.deps.sendInput(sessionId, text).catch(() => false);
+    const ok = await this.deps.sendInput(sessionId, text, true).catch(() => false);
     const reply = ok
       ? this.api.react(m.channel_id, m.id, '✅')
       : this.api.post(m.channel_id, {

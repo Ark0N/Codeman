@@ -512,11 +512,13 @@ export class WebServer extends EventEmitter {
   private discordBridge = new DiscordBridge({
     configDir: getDataDir(),
     fetchImpl: webviewFetch,
-    sendInput: async (sessionId, text) => {
+    sendInput: async (sessionId, text, fromUser) => {
       const session = this.sessions.get(sessionId);
       if (!session) return false;
-      if (await session.writeViaMux(text, { fromUser: true }).catch(() => false)) return true;
-      return session.write(text, { fromUser: true });
+      // fromUser is true only for a Discord reply (a person typed it); the startup hint is Codeman's own
+      // text and must not auto-name the tab or count as the person's input.
+      if (await session.writeViaMux(text, { fromUser }).catch(() => false)) return true;
+      return session.write(text, { fromUser });
     },
     // Remote (ssh) sessions keep their folder on another host, so received files have nowhere local to go.
     sessionDir: (sessionId) => {
@@ -1342,7 +1344,7 @@ export class WebServer extends EventEmitter {
     registerWebviewRoutes(this.app, ctx, this.basePath);
     registerTabLayoutRoutes(this.app, ctx);
     registerMcpSyncRoutes(this.app);
-    registerConfigBackupRoutes(this.app);
+    registerConfigBackupRoutes(this.app, { reloadDiscord: () => this.discordBridge.reload() });
     registerWebhookRoutes(this.app, {
       notifier: this.webhookNotifier,
       configDir: getDataDir(),
@@ -1792,7 +1794,11 @@ export class WebServer extends EventEmitter {
     // detach: mail posted before that is still there when the session is re-attached
     // (while detached, the routes answer 404, so nothing new arrives). Before
     // cancelAll, so a reader released by it reads an empty inbox.
-    if (killMux) agentInbox.drop(sessionId);
+    if (killMux) {
+      agentInbox.drop(sessionId);
+      // A real delete only: a detach (killMux=false) leaves the session running and re-attachable.
+      void this.discordBridge.sessionDeleted(sessionId).catch(() => undefined);
+    }
     sessionWaits.notifySignal(sessionId, 'exit');
     sessionWaits.cancelAll(sessionId);
     approvalInbox.resolveForSession(sessionId, 'session_ended');
@@ -2727,41 +2733,42 @@ export class WebServer extends EventEmitter {
     this.bridgeSessionEvent(event, data);
   }
 
-  private isExternalSession(sessionId: string): boolean {
+  /**
+   * Whether the startup hint may be typed into this tab: an external CLI (never Claude, which has it as a
+   * launch flag, and never a shell), running locally. A remote (ssh) or Docker tab has no `codeman` on its
+   * PATH, so the hint would tell the agent to run a command it does not have.
+   */
+  private isHintableSession(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
-    return !!session && isExternalCliMode(session.mode);
+    return !!session && isExternalCliMode(session.mode) && !session.remote && !session.docker;
   }
 
   /** Keep the Discord thread in step with the tab: created, renamed, deleted. Never throws. */
   private bridgeSessionEvent(event: string, data: unknown): void {
-    if (
-      event !== SseEvent.SessionCreated &&
-      event !== SseEvent.SessionUpdated &&
-      event !== SseEvent.SessionDeleted &&
-      event !== SseEvent.SessionIdle
-    ) {
+    // Deletion is NOT handled here: `session:deleted` also fires for a detach (killMux=false), where the
+    // session keeps running and can be re-attached. The real delete calls the bridge from the cleanup path.
+    if (event !== SseEvent.SessionCreated && event !== SseEvent.SessionUpdated && event !== SseEvent.SessionIdle) {
       return;
     }
     const d = (data ?? {}) as {
       id?: string;
       name?: string;
       createdAt?: number;
-      session?: { id?: string; name?: string; createdAt?: number };
+      resumeSessionId?: string;
+      session?: { id?: string; name?: string; createdAt?: number; resumeSessionId?: string };
     };
     const s = d.session ?? d;
     if (!s.id) return;
     const id = s.id;
     const run =
-      event === SseEvent.SessionDeleted
-        ? this.discordBridge.sessionDeleted(id)
-        : event === SseEvent.SessionIdle
-          ? // Claude is told at launch; a shell must never be typed at.
-            this.discordBridge.sessionIdle(id, this.isExternalSession(id))
-          : event === SseEvent.SessionCreated
-            ? this.discordBridge
-                .sessionCreated(id, s.name, s.createdAt)
-                .then(() => this.discordBridge.sessionRenamed(id, s.name))
-            : this.discordBridge.sessionRenamed(id, s.name);
+      event === SseEvent.SessionIdle
+        ? // Claude is told at launch; a shell, a remote or a Docker tab must never be typed at.
+          this.discordBridge.sessionIdle(id, this.isHintableSession(id))
+        : event === SseEvent.SessionCreated
+          ? this.discordBridge
+              .sessionCreated(id, s.name, s.createdAt, !!s.resumeSessionId)
+              .then(() => this.discordBridge.sessionRenamed(id, s.name))
+          : this.discordBridge.sessionRenamed(id, s.name);
     void run.catch(() => undefined);
   }
 
@@ -3009,7 +3016,8 @@ export class WebServer extends EventEmitter {
         urgency: template.urgency as WebhookUrgency,
         sessionId: sessionId || undefined,
         sessionName: sessionName || undefined,
-        tail: dcSession ? this.discordTail(dcSession) : undefined,
+        // A function, so the screen is only read (a synchronous tmux exec) once the bridge has decided to post.
+        tail: dcSession ? () => this.discordTail(dcSession) : undefined,
         host: this.windowTitle,
       })
       .catch(() => undefined);
@@ -3830,6 +3838,8 @@ export class WebServer extends EventEmitter {
     } catch (err) {
       console.warn(`[Server] releasing the tab layout slot failed: ${getErrorMessage(err)}`);
     }
+    // A half-built session never had a thread, but its per-tab bridge state goes with it.
+    void this.discordBridge.sessionDeleted(sessionId).catch(() => undefined);
     // Any `session:updated` the half-built session emitted before it failed left a
     // tab on every other open board, and the client's handler is an upsert.
     this.broadcast(SseEvent.SessionDeleted, { id: sessionId });
@@ -4401,6 +4411,9 @@ export class WebServer extends EventEmitter {
     // Same teardown rule: the per-endpoint llama-swap log tails are otherwise closed
     // only by the periodic idle sweep, whose interval is disposed just below.
     closeAllLlamaSwapLogTails();
+
+    // Close the Discord gateway socket and its heartbeat, and clear the bridge's per-tab maps.
+    this.discordBridge.stop();
 
     // Dispose all managed timers (intervals + resettable timeouts)
     this.cleanup.dispose();

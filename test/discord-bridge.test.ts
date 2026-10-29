@@ -3,13 +3,14 @@
  * @fileoverview Discord bridge: pure rules, the 0600 store, the REST client, the gateway state
  * machine (fake socket) and the bridge's gates. No network, no real Discord.
  */
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildPost,
   DISCORD_STARTUP_HINT,
+  ensureReceivedDir,
   isDiscordCdnUrl,
   safeAttachmentName,
   screenTail,
@@ -261,7 +262,7 @@ describe('DiscordGateway', () => {
 
 describe('DiscordBridge', () => {
   let posts: Array<{ path: string; method: string; body: Record<string, unknown> | undefined }>;
-  let sendInput: ReturnType<typeof vi.fn<(id: string, text: string) => Promise<boolean>>>;
+  let sendInput: ReturnType<typeof vi.fn<(id: string, text: string, fromUser: boolean) => Promise<boolean>>>;
   let t: number;
 
   function bridge(overrides: Partial<DiscordConfig> = {}, fetchOverride?: DiscordFetch) {
@@ -308,13 +309,62 @@ describe('DiscordBridge', () => {
     b.stop();
   });
 
-  it('dedupes the same event within 3 s but lets an explicit urgent post through', async () => {
+  it('dedupes an automatic event within 3 s and says so, which is not the "bridge is off" answer', async () => {
     const b = bridge();
-    await b.notify(MSG);
-    await b.notify(MSG);
+    expect((await b.notify(MSG))?.ok).toBe(true);
+    const second = await b.notify(MSG);
+    expect(second).toMatchObject({ ok: true, deduped: true });
     expect(posts.filter((p) => p.path.endsWith('/messages'))).toHaveLength(1);
-    await b.notify(MSG, true);
+    b.stop();
+  });
+
+  it('never dedupes a deliberate post: two different messages from one tab within 3 s both go out', async () => {
+    const b = bridge();
+    const a = await b.notify({ ...MSG, event: 'session:discord-notify', body: 'first' }, { deliberate: true });
+    const c = await b.notify({ ...MSG, event: 'session:discord-notify', body: 'second' }, { deliberate: true });
+    expect(a?.deduped).toBeUndefined();
+    expect(c?.deduped).toBeUndefined();
     expect(posts.filter((p) => p.path.endsWith('/messages'))).toHaveLength(2);
+    b.stop();
+  });
+
+  it('builds the alert tail only for a post that goes out (not while off, not when deduped)', async () => {
+    const tail = vi.fn(() => 'screen text');
+    const b = bridge();
+    await b.notify({ ...MSG, tail });
+    expect(tail).toHaveBeenCalledTimes(1);
+    await b.notify({ ...MSG, tail }); // deduped
+    expect(tail).toHaveBeenCalledTimes(1);
+    expect(posts.at(-1)?.body?.content).toContain('screen text');
+    await writeDiscordConfig(dir, { ...CFG, enabled: false });
+    await b.reload();
+    await b.notify({ ...MSG, event: 'hook:idle_prompt', tail }); // off
+    expect(tail).toHaveBeenCalledTimes(1);
+    b.stop();
+  });
+
+  it('survives a tail that throws', async () => {
+    const b = bridge();
+    const r = await b.notify({
+      ...MSG,
+      tail: () => {
+        throw new Error('tmux gone');
+      },
+    });
+    expect(r?.ok).toBe(true);
+    b.stop();
+  });
+
+  it('writes the thread map one write at a time, so threads made at once all survive a restart', async () => {
+    let n = 0;
+    const b = bridge({}, async (url, init) => {
+      const path = new URL(String(url)).pathname.replace('/api/v10', '');
+      if (path.endsWith('/threads')) return jsonRes({ id: String(500000000000000000n + BigInt(++n)) });
+      return jsonRes({ id: 'msg' });
+    });
+    await Promise.all(['a1', 'a2', 'a3', 'a4'].map((id) => b.notify({ ...MSG, sessionId: id, event: `e-${id}` })));
+    const map = await readThreadMap(dir);
+    expect(Object.keys(map).sort()).toEqual(['a1', 'a2', 'a3', 'a4']);
     b.stop();
   });
 
@@ -377,7 +427,7 @@ describe('DiscordBridge', () => {
     it('types an allowed reply into the mapped session and ticks it', async () => {
       const b = await ready();
       await b.onGatewayMessage(reply());
-      expect(sendInput).toHaveBeenCalledWith('s1', 'press y\r');
+      expect(sendInput).toHaveBeenCalledWith('s1', 'press y\r', true); // a person typed it
       expect(posts[0].method).toBe('PUT');
       expect(posts[0].path).toContain('/reactions/');
       b.stop();
@@ -402,7 +452,9 @@ describe('DiscordBridge', () => {
       await b.onGatewayMessage(reply({ content: 'a\nb' }));
       await b.onGatewayMessage(reply({ content: 'again' }));
       expect(sendInput).toHaveBeenCalledTimes(1);
-      expect(sendInput).toHaveBeenCalledWith('s1', 'a b\r');
+      expect(sendInput).toHaveBeenCalledWith('s1', 'a b\r', true);
+      // The second reply was not typed, and the person is told so instead of it vanishing.
+      expect(posts.some((p) => p.method === 'PUT' && p.path.includes(encodeURIComponent('⏳')))).toBe(true);
       b.stop();
     });
 
@@ -413,6 +465,35 @@ describe('DiscordBridge', () => {
       expect(posts[0].method).toBe('POST');
       expect(String(posts[0].body?.content)).toMatch(/gone/);
       b.stop();
+    });
+  });
+
+  describe('per-tab state', () => {
+    const internals = (b: DiscordBridge) =>
+      b as unknown as { names: Map<string, string>; lastReply: Map<string, number>; fresh: Set<string> };
+
+    it('a deleted tab that never had a thread still frees its entries', async () => {
+      const b = bridge();
+      await b.reload();
+      await b.sessionCreated('nothread', 'w', t - 1000);
+      await b.sessionRenamed('nothread', 'w');
+      internals(b).lastReply.set('nothread', 1);
+      await b.sessionDeleted('nothread');
+      expect(internals(b).names.has('nothread')).toBe(false);
+      expect(internals(b).lastReply.has('nothread')).toBe(false);
+      expect(internals(b).fresh.has('nothread')).toBe(false);
+      b.stop();
+    });
+
+    it('stop() clears the maps and the gateway', async () => {
+      const b = bridge();
+      await b.reload();
+      await b.sessionCreated('x', 'w', t - 1000);
+      await b.sessionRenamed('x', 'w');
+      b.stop();
+      expect(internals(b).fresh.size).toBe(0);
+      expect(internals(b).names.size).toBe(0);
+      expect(b.gatewayState).toBe('off');
     });
   });
 
@@ -519,7 +600,7 @@ describe('files', () => {
 
 describe('DiscordBridge files and startup hint', () => {
   const reply = (over: Record<string, unknown> = {}) => ({
-    id: 'm1',
+    id: '555555555555555555',
     channel_id: THREAD,
     guild_id: GUILD,
     content: '',
@@ -530,7 +611,7 @@ describe('DiscordBridge files and startup hint', () => {
     ...over,
   });
   let work: string;
-  let sent: Array<[string, string]>;
+  let sent: Array<[string, string, boolean]>;
   let posted: Array<{ path: string; body?: Record<string, unknown> }>;
   let downloads: string[];
 
@@ -547,7 +628,7 @@ describe('DiscordBridge files and startup hint', () => {
         posted.push({ path, body: init.body ? JSON.parse(String(init.body)) : undefined });
         return path.endsWith('/threads') ? jsonRes({ id: THREAD }) : jsonRes({ id: 'msg' });
       },
-      sendInput: async (id, text) => (sent.push([id, text]), true),
+      sendInput: async (id, text, fromUser) => (sent.push([id, text, fromUser]), true),
       sessionDir: dirFor,
       socketFactory: () => new FakeSocket(),
       now: () => t,
@@ -573,10 +654,10 @@ describe('DiscordBridge files and startup hint', () => {
   it('saves an attachment under .codeman-discord and types its path, even with no text', async () => {
     const b = await make();
     await b.onGatewayMessage(reply());
-    const dest = join(work, '.codeman-discord', 'm1-shot_one.png');
+    const dest = join(work, '.codeman-discord', '555555555555555555-shot_one.png');
     expect(readFileSync(dest)).toEqual(Buffer.from([7, 8, 9]));
     expect(statSync(dest).mode & 0o777).toBe(0o600);
-    expect(sent).toEqual([['s1', `[attached: ${dest}]\r`]]);
+    expect(sent).toEqual([['s1', `[attached: ${dest}]\r`, true]]);
     b.stop();
   });
 
@@ -627,7 +708,25 @@ describe('DiscordBridge files and startup hint', () => {
     expect(sent[0][0]).toBe('s3');
     expect(sent[0][1]).toContain('codeman notify');
     expect(sent[0][1].endsWith('\r')).toBe(true);
+    expect(sent[0][2]).toBe(false); // Codeman's own text: not a person's input, so it cannot auto-name the tab
     expect(DISCORD_STARTUP_HINT).toContain('codeman notify');
+    b.stop();
+  });
+
+  it('does not hint a resumed tab, even though it was created just now', async () => {
+    const b = await make();
+    await b.sessionCreated('s6', 'resumed', t - 1000, true);
+    await b.sessionIdle('s6', true);
+    expect(sent).toHaveLength(0);
+    b.stop();
+  });
+
+  it('does not save a file for a message id that is not a snowflake, and says so', async () => {
+    const b = await make();
+    await b.onGatewayMessage(reply({ id: '../../x' }));
+    expect(downloads).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+    expect(String(posted.at(-1)?.body?.content)).toMatch(/could not be saved/);
     b.stop();
   });
 
@@ -682,5 +781,38 @@ describe('screenTail', () => {
   it('is empty for nothing', () => {
     expect(screenTail('')).toBe('');
     expect(screenTail('\n\n ───── \n')).toBe('');
+  });
+});
+
+describe('ensureReceivedDir', () => {
+  let work: string;
+  beforeEach(() => {
+    work = mkdtempSync(join(tmpdir(), 'discord-recv-'));
+  });
+  afterEach(() => rmSync(work, { recursive: true, force: true }));
+
+  it('makes the folder and ignores it with a .gitignore of *, once', async () => {
+    const dir = await ensureReceivedDir(work);
+    expect(dir).toBe(join(work, '.codeman-discord'));
+    expect(readFileSync(join(dir!, '.gitignore'), 'utf8')).toBe('*\n');
+  });
+
+  it('leaves a .gitignore that is already there alone', async () => {
+    mkdirSync(join(work, '.codeman-discord'));
+    writeFileSync(join(work, '.codeman-discord', '.gitignore'), 'mine\n');
+    expect(await ensureReceivedDir(work)).toBe(join(work, '.codeman-discord'));
+    expect(readFileSync(join(work, '.codeman-discord', '.gitignore'), 'utf8')).toBe('mine\n');
+  });
+
+  it('refuses a symlink or a plain file at the folder, and a workspace that is not a directory', async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'discord-elsewhere-'));
+    symlinkSync(elsewhere, join(work, '.codeman-discord'));
+    expect(await ensureReceivedDir(work)).toBeNull();
+    expect(existsSync(join(elsewhere, '.gitignore'))).toBe(false);
+    rmSync(elsewhere, { recursive: true, force: true });
+    rmSync(join(work, '.codeman-discord'));
+    writeFileSync(join(work, '.codeman-discord'), 'x');
+    expect(await ensureReceivedDir(work)).toBeNull();
+    expect(await ensureReceivedDir(join(work, 'missing'))).toBeNull();
   });
 });
