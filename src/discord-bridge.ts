@@ -306,20 +306,32 @@ export async function writeDiscordConfig(configDir: string, cfg: DiscordConfig):
   await writePrivate(discordConfigPath(configDir), coerce(cfg), 0o600);
 }
 
-export async function readThreadMap(configDir: string): Promise<Record<string, string>> {
+/** The thread map plus the parent channel it was built under (empty for an older flat file). */
+async function readThreadFile(configDir: string): Promise<{ parent: string; threads: Record<string, string> }> {
   try {
     const raw = JSON.parse(await fs.readFile(join(configDir, THREADS_FILE), 'utf-8')) as Record<string, unknown>;
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(raw)) if (typeof v === 'string' && SNOWFLAKE.test(v)) out[k] = v;
-    return out;
+    const nested = typeof raw.threads === 'object' && raw.threads !== null;
+    const entries = Object.entries(nested ? (raw.threads as Record<string, unknown>) : raw);
+    const threads: Record<string, string> = {};
+    for (const [k, v] of entries) if (typeof v === 'string' && SNOWFLAKE.test(v)) threads[k] = v;
+    const parent = nested && typeof raw.parentChannelId === 'string' ? raw.parentChannelId : '';
+    return { parent, threads };
   } catch {
-    return {};
+    return { parent: '', threads: {} };
   }
 }
 
-async function writeThreadMap(configDir: string, map: Record<string, string>): Promise<void> {
+export async function readThreadMap(configDir: string): Promise<Record<string, string>> {
+  return (await readThreadFile(configDir)).threads;
+}
+
+async function writeThreadMap(
+  configDir: string,
+  parentChannelId: string,
+  threads: Record<string, string>
+): Promise<void> {
   if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
-  await writePrivate(join(configDir, THREADS_FILE), map, 0o600);
+  await writePrivate(join(configDir, THREADS_FILE), { parentChannelId, threads }, 0o600);
 }
 
 // ---------------------------------------------------------------------------
@@ -657,7 +669,9 @@ export class DiscordBridge {
   private names = new Map<string, string>();
   /** Brand-new sessions that have not yet been sent the startup hint (non-Claude CLIs). */
   private fresh = new Set<string>();
-  private pending = new Map<string, Promise<string | null>>();
+  private pending = new Map<string, Promise<string | DiscordResult>>();
+  /** The parent channel the thread map was built under. */
+  private threadsParent = '';
   /** Thread-map writes run one after another: concurrent creations must not interleave on the tmp file. */
   private persistChain: Promise<void> = Promise.resolve();
   private mapLoad?: Promise<void>;
@@ -693,11 +707,23 @@ export class DiscordBridge {
     this.cfg = await readDiscordConfig(this.deps.configDir);
     // The thread map is read once, by whoever gets here first; everyone else waits for that read. A second
     // read finishing later would replace the map and drop threads made in between.
-    this.mapLoad ??= readThreadMap(this.deps.configDir).then((saved) => {
-      this.threads = { ...saved, ...this.threads };
+    this.mapLoad ??= readThreadFile(this.deps.configDir).then((saved) => {
+      this.threads = { ...saved.threads, ...this.threads };
+      this.threadsParent ||= saved.parent;
       this.loaded = true;
     });
     await this.mapLoad;
+    // Threads belong to the channel they were made under: a new parent channel (or guild) starts afresh,
+    // or every tab would keep posting into the old one.
+    const parent = this.cfg.parentChannelId;
+    if (parent && parent !== this.threadsParent) {
+      if (this.threadsParent !== '') {
+        this.threads = {};
+        this.pending.clear();
+      }
+      this.threadsParent = parent;
+      await this.persistThreads();
+    }
     this.gateway?.stop();
     this.gateway = null;
     activeStartupHint = this.cfg.enabled && this.cfg.token && this.cfg.startupHint ? DISCORD_STARTUP_HINT : undefined;
@@ -742,13 +768,13 @@ export class DiscordBridge {
 
   private persistThreads(): Promise<void> {
     this.persistChain = this.persistChain
-      .then(() => writeThreadMap(this.deps.configDir, { ...this.threads }))
+      .then(() => writeThreadMap(this.deps.configDir, this.threadsParent, { ...this.threads }))
       .catch(() => undefined);
     return this.persistChain;
   }
 
   /** The thread for a session, creating it when absent. Concurrent callers share one creation. */
-  private threadFor(sessionId: string, name: string | undefined): Promise<string | null> {
+  private threadFor(sessionId: string, name: string | undefined): Promise<string | DiscordResult> {
     const existing = this.threads[sessionId];
     if (existing) return Promise.resolve(existing);
     const inflight = this.pending.get(sessionId);
@@ -756,16 +782,12 @@ export class DiscordBridge {
     const p = (async () => {
       try {
         const t = await this.api.createThread(this.cfg.parentChannelId, threadNameFor(name, sessionId));
-        if (!t?.id) {
-          this.last = this.fail(new Error('Discord did not return a thread'));
-          return null;
-        }
+        if (!t?.id) return this.fail(new Error('Discord did not return a thread'));
         this.threads[sessionId] = t.id;
         await this.persistThreads();
         return t.id;
       } catch (err) {
-        this.last = this.fail(err);
-        return null;
+        return this.fail(err);
       } finally {
         this.pending.delete(sessionId);
       }
@@ -799,7 +821,7 @@ export class DiscordBridge {
       let target = this.cfg.parentChannelId;
       if (msg.sessionId) {
         const thread = await this.threadFor(msg.sessionId, msg.sessionName);
-        if (!thread) return this.last;
+        if (typeof thread !== 'string') return (this.last = thread);
         target = thread;
       }
       const send = (to: string) => (msg.file ? this.api.postWithFile(to, post, msg.file) : this.api.post(to, post));
@@ -810,7 +832,7 @@ export class DiscordBridge {
         if (msg.sessionId && err instanceof DiscordHttpError && err.status === 404) {
           delete this.threads[msg.sessionId];
           const fresh = await this.threadFor(msg.sessionId, msg.sessionName);
-          if (!fresh) return this.last;
+          if (typeof fresh !== 'string') return (this.last = fresh);
           await send(fresh);
         } else {
           throw err;
@@ -852,7 +874,8 @@ export class DiscordBridge {
     // Only a tab made just now: the same event also fires for sessions restored at server start.
     if (createdAt !== undefined && this.now() - createdAt < 60_000) this.fresh.add(sessionId);
     if (!this.cfg.enabled || this.cfg.threadCreation !== 'onSessionStart') return;
-    await this.threadFor(sessionId, name);
+    const made = await this.threadFor(sessionId, name);
+    if (typeof made !== 'string') this.last = made;
   }
 
   /**

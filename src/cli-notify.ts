@@ -14,6 +14,8 @@ import https from 'node:https';
 import { isAbsolute, join } from 'node:path';
 import { readCodemanCredentials } from './codeman-credentials.js';
 
+const REQUEST_TIMEOUT_MS = 30_000;
+
 export interface NotifyOptions {
   message: string;
   urgent?: boolean;
@@ -32,7 +34,7 @@ export type JsonPost = (
   apiUrl: string,
   apiPath: string,
   payload: unknown
-) => Promise<{ status: number; error?: string }>;
+) => Promise<{ status: number; error?: string; delivery?: { ok: boolean; error?: string } }>;
 
 /** POST JSON to the Codeman API with the same credentials `codeman attach` uses. Status 0 means no answer. */
 export const postJson: JsonPost = (apiUrl, apiPath, payload) => {
@@ -56,21 +58,28 @@ export const postJson: JsonPost = (apiUrl, apiPath, payload) => {
         path: `${url.pathname}${url.search}`,
         rejectUnauthorized: false,
         headers,
+        timeout: REQUEST_TIMEOUT_MS,
       },
       (res) => {
         let text = '';
         res.on('data', (c) => (text += c));
         res.on('end', () => {
           let error: string | undefined;
+          let delivery: { ok: boolean; error?: string } | undefined;
           try {
-            error = (JSON.parse(text) as { error?: string }).error;
+            const body = JSON.parse(text) as { error?: string; data?: { ok?: unknown; error?: string } };
+            error = body.error;
+            // A 200 only says Codeman took the request; `data.ok` says whether Discord took the post.
+            if (typeof body.data?.ok === 'boolean') delivery = { ok: body.data.ok, error: body.data.error };
           } catch {
             /* not JSON */
           }
-          resolve({ status: res.statusCode ?? 0, error });
+          resolve({ status: res.statusCode ?? 0, error, delivery });
         });
       }
     );
+    // A server that takes the connection and never answers must not hang the agent: status 0 is "no answer".
+    req.on('timeout', () => req.destroy());
     req.on('error', () => resolve({ status: 0 }));
     req.write(body);
     req.end();
@@ -91,12 +100,17 @@ export async function runNotify(
   const payload: { message: string; urgent?: boolean; file?: string } = { message: opts.message };
   if (opts.urgent) payload.urgent = true;
   if (opts.file) payload.file = isAbsolute(opts.file) ? opts.file : join(cwd, opts.file);
-  const { status, error } = await post(
+  const { status, error, delivery } = await post(
     apiUrl,
     `/api/sessions/${encodeURIComponent(sessionId)}/discord-notify`,
     payload
   );
-  if (status >= 200 && status < 300) return { code: 0, out: 'Posted to Discord' };
+  if (status >= 200 && status < 300) {
+    if (delivery?.ok === false) {
+      return { code: 1, err: `Could not post to Discord${delivery.error ? `: ${delivery.error}` : ''}` };
+    }
+    return { code: 0, out: 'Posted to Discord' };
+  }
   // The bridge being off is not a failure: the caller just says it in the terminal.
   if (status === 409) return { code: 0, out: 'The Discord bridge is off. Say it in the terminal instead.' };
   if (status === 429)

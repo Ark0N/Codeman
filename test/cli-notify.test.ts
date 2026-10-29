@@ -10,8 +10,8 @@ import { postJson, runNotify, type JsonPost } from '../src/cli-notify.js';
 
 const ENV = { CODEMAN_SESSION_ID: 'abc12345-full-id', CODEMAN_API_URL: 'http://127.0.0.1:3000' };
 
-function fake(status: number, error?: string) {
-  const post = vi.fn<JsonPost>(async () => ({ status, error }));
+function fake(status: number, error?: string, delivery?: { ok: boolean; error?: string }) {
+  const post = vi.fn<JsonPost>(async () => ({ status, error, delivery }));
   return post;
 }
 
@@ -45,6 +45,17 @@ describe('runNotify', () => {
     const post = fake(200);
     await runNotify({ message: 'x', session: 'other', url: 'http://h:1' }, ENV, '/work', post);
     expect(post.mock.calls[0].slice(0, 2)).toEqual(['http://h:1', '/api/sessions/other/discord-notify']);
+  });
+
+  it('exits 1 when Codeman answered 200 but Discord refused the post, so a blocked agent knows nobody was told', async () => {
+    const r = await runNotify(
+      { message: 'x' },
+      ENV,
+      '/w',
+      fake(200, undefined, { ok: false, error: 'The bot token was refused' })
+    );
+    expect(r).toEqual({ code: 1, err: 'Could not post to Discord: The bot token was refused' });
+    expect((await runNotify({ message: 'x' }, ENV, '/w', fake(200, undefined, { ok: true }))).code).toBe(0);
   });
 
   it('treats a disabled bridge (409) as success that says so', async () => {

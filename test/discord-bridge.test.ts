@@ -477,6 +477,50 @@ describe('DiscordBridge', () => {
     });
   });
 
+  it('starts afresh when the parent channel changes: tabs get a thread in the new channel', async () => {
+    const b = bridge();
+    await b.notify(MSG);
+    expect(await readThreadMap(dir)).toEqual({ s1: THREAD });
+    posts.length = 0;
+    await writeDiscordConfig(dir, { ...CFG, parentChannelId: '777777777777777777' });
+    await b.reload();
+    await b.notify({ ...MSG, event: 'hook:idle_prompt' });
+    expect(posts.find((p) => p.path.endsWith('/threads'))?.path).toBe('/channels/777777777777777777/threads');
+    b.stop();
+  });
+
+  it('keeps the threads across a restart under the same parent channel', async () => {
+    const first = bridge();
+    await first.notify(MSG);
+    first.stop();
+    posts.length = 0;
+    const second = bridge();
+    await second.reload();
+    await second.notify({ ...MSG, event: 'hook:idle_prompt' });
+    expect(posts.some((p) => p.path.endsWith('/threads'))).toBe(false);
+    second.stop();
+  });
+
+  it('a failed thread creation reports its own failure even if another post succeeds meanwhile', async () => {
+    let n = 0;
+    const b = bridge({}, async (url) => {
+      if (String(url).endsWith('/threads')) {
+        await new Promise((r) => setTimeout(r, 20));
+        return new Response('{}', { status: 403 });
+      }
+      n++;
+      return jsonRes({ id: 'msg' });
+    });
+    const [failed, ok] = await Promise.all([
+      b.notify(MSG),
+      b.notify({ ...MSG, sessionId: undefined, event: 'session:error' }),
+    ]);
+    expect(n).toBeGreaterThan(0);
+    expect(ok?.ok).toBe(true);
+    expect(failed).toMatchObject({ ok: false, status: 403 });
+    b.stop();
+  });
+
   describe('sendTest', () => {
     it('posts with the config it is given and leaves the live config alone', async () => {
       const auth: string[] = [];

@@ -96,6 +96,10 @@ async function fileProblem(
   if ((await probePathKind(workingDir, { pastCap: true })) !== 'directory') {
     return describeUnknownPath('The session folder', workingDir, { pastCap: true });
   }
+  // The agent chose this path: probe it bounded too, before realpath can hold a worker on a dead mount.
+  const kind = await probePathKind(file, { pastCap: true });
+  if (kind === 'unknown') return describeUnknownPath('The file', file, { pastCap: true });
+  if (kind !== 'file') return 'Not a regular file';
   try {
     const [root, real] = await Promise.all([realpath(workingDir), realpath(file)]);
     const rel = relative(root, real);

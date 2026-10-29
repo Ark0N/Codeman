@@ -175,6 +175,16 @@ describe('POST /api/sessions/:id/discord-notify', () => {
     bridge.stop();
   });
 
+  it('answers 200 with data.ok false when Discord refuses the post, which the CLI turns into exit 1', async () => {
+    const { app, bridge } = await harness();
+    await app.inject({ method: 'PUT', url: '/api/discord', payload: FULL });
+    fetchImpl.mockImplementation(async () => new Response(JSON.stringify({ code: 0 }), { status: 401 }));
+    const res = await app.inject({ method: 'POST', url, payload: { message: 'help' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toMatchObject({ ok: false, status: 401 });
+    bridge.stop();
+  });
+
   it('answers 429 RATE_LIMITED once a tab posts more than its share in a minute', async () => {
     const { app, bridge } = await harness();
     await app.inject({ method: 'PUT', url: '/api/discord', payload: FULL });
@@ -253,6 +263,13 @@ describe('discord-notify with a file', () => {
     const res = await post(app, join(work, 'run.log'));
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/session folder/);
+    bridge.stop();
+  });
+
+  it('probes the file before realpath: a path that is not a regular file is refused', async () => {
+    const { app, bridge } = await ready();
+    mkdirSync(join(work, 'dir'));
+    expect((await post(app, join(work, 'dir'))).json().error).toMatch(/Not a regular file/);
     bridge.stop();
   });
 
