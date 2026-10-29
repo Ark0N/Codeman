@@ -74,22 +74,22 @@ The single source of truth is `ErrorStatus` / `httpStatusForErrorCode()` in
 `src/types/api.ts`. Clients should branch on `errorCode` (stable) and may rely on
 the HTTP status.
 
-| `errorCode`                | HTTP | Meaning                                                                                      |
-| -------------------------- | ---- | -------------------------------------------------------------------------------------------- |
-| `INVALID_INPUT`            | 400  | Malformed request / failed validation                                                        |
-| `UNAUTHORIZED`             | 401  | Authentication required or failed                                                            |
-| `FORBIDDEN`                | 403  | Signed in, but not allowed (e.g. a non-admin calling an admin-only route in multi-user mode) |
-| `PASSWORD_CHANGE_REQUIRED` | 403  | Multi-user: the user must change their password before anything else                         |
-| `NOT_FOUND`                | 404  | Resource does not exist                                                                      |
-| `USER_NOT_FOUND`           | 404  | Multi-user: no user with that name                                                           |
-| `SESSION_BUSY`             | 409  | Session is busy                                                                              |
-| `CONFLICT`                 | 409  | Conflicts with current state (e.g. already running)                                          |
-| `ALREADY_EXISTS`           | 409  | Resource already exists                                                                      |
-| `USER_EXISTS`              | 409  | Multi-user: a user with that name already exists                                             |
-| `LAST_ADMIN`               | 409  | Multi-user: refusing to demote, disable or delete the last enabled admin                     |
-| `OPERATION_FAILED`         | 422  | Well-formed but could not be completed                                                       |
-| `RATE_LIMITED`             | 429  | Too many requests                                                                            |
-| `INTERNAL_ERROR`           | 500  | Unexpected server error                                                                      |
+| `errorCode` | HTTP | Meaning |
+|-------------|------|---------|
+| `INVALID_INPUT` | 400 | Malformed request / failed validation |
+| `UNAUTHORIZED` | 401 | Authentication required or failed |
+| `FORBIDDEN` | 403 | Signed in, but not allowed (e.g. a non-admin calling an admin-only route in multi-user mode) |
+| `PASSWORD_CHANGE_REQUIRED` | 403 | Multi-user: the user must change their password before anything else |
+| `NOT_FOUND` | 404 | Resource does not exist |
+| `USER_NOT_FOUND` | 404 | Multi-user: no user with that name |
+| `SESSION_BUSY` | 409 | Session is busy |
+| `CONFLICT` | 409 | Conflicts with current state (e.g. already running) |
+| `ALREADY_EXISTS` | 409 | Resource already exists |
+| `USER_EXISTS` | 409 | Multi-user: a user with that name already exists |
+| `LAST_ADMIN` | 409 | Multi-user: refusing to demote, disable or delete the last enabled admin |
+| `OPERATION_FAILED` | 422 | Well-formed but could not be completed |
+| `RATE_LIMITED` | 429 | Too many requests |
+| `INTERNAL_ERROR` | 500 | Unexpected server error |
 
 Adding a new error code is non-breaking; removing or renaming one is a major change.
 
@@ -100,17 +100,17 @@ duration-bounded loops. Use `/api/v1/cron/...` in external clients; `/api/cron/.
 is the unversioned alias. These routes use the response envelope above; the table
 lists the value inside `data` on success.
 
-| Method | Path                            | Request body              | Response `data`                             |
-| ------ | ------------------------------- | ------------------------- | ------------------------------------------- |
-| GET    | `/api/v1/cron/jobs`             | None                      | `CronJob[]`                                 |
-| POST   | `/api/v1/cron/jobs`             | Full job definition below | `{ job: CronJob }`                          |
-| GET    | `/api/v1/cron/jobs/:id`         | None                      | `CronJob`                                   |
-| PUT    | `/api/v1/cron/jobs/:id`         | Partial job definition    | `{ job: CronJob }`                          |
-| DELETE | `/api/v1/cron/jobs/:id`         | None                      | `{}`                                        |
-| PUT    | `/api/v1/cron/jobs/:id/enabled` | `{ enabled: boolean }`    | `{ job: CronJob }`                          |
-| POST   | `/api/v1/cron/jobs/:id/run`     | None                      | `{ run: CronJobRun, activeAgents: number }` |
-| GET    | `/api/v1/cron/jobs/:id/runs`    | None                      | `CronJobRun[]`                              |
-| GET    | `/api/v1/cron/runs`             | None                      | `CronJobRun[]`                              |
+| Method | Path | Request body | Response `data` |
+| --- | --- | --- | --- |
+| GET | `/api/v1/cron/jobs` | None | `CronJob[]` |
+| POST | `/api/v1/cron/jobs` | Full job definition below | `{ job: CronJob }` |
+| GET | `/api/v1/cron/jobs/:id` | None | `CronJob` |
+| PUT | `/api/v1/cron/jobs/:id` | Partial job definition | `{ job: CronJob }` |
+| DELETE | `/api/v1/cron/jobs/:id` | None | `{}` |
+| PUT | `/api/v1/cron/jobs/:id/enabled` | `{ enabled: boolean }` | `{ job: CronJob }` |
+| POST | `/api/v1/cron/jobs/:id/run` | None | `{ run: CronJobRun, activeAgents: number }` |
+| GET | `/api/v1/cron/jobs/:id/runs` | None | `CronJobRun[]` |
+| GET | `/api/v1/cron/runs` | None | `CronJobRun[]` |
 
 ### Job request fields
 
@@ -118,26 +118,26 @@ The create body requires `name`, `agentType`, `workingDir`, `promptMode`,
 `inputMode`, `scheduleType`, `enabled`, and `concurrencyPolicy`. Additional fields
 are required according to the selected prompt and schedule:
 
-| Field                      | Type / validation                                                                                                            |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `name`                     | String, 1–200 characters                                                                                                     |
-| `agentType`                | A supported session mode (including `shell`)                                                                                 |
-| `workingDir`               | Existing, allowed working-directory path                                                                                     |
-| `launchCommand`            | Optional single-line string, at most 2000 characters; for shell jobs                                                         |
-| `promptMode`               | `inline_text` or `prompt_file_path`                                                                                          |
-| `promptText`               | Required for `inline_text`; nonempty single-line string, at most 100000 characters                                           |
-| `promptFilePath`           | Required for `prompt_file_path`; absolute path inside `workingDir` to a regular file, at most 1 MiB, read when the job fires |
-| `inputMode`                | `paste` or `typed`                                                                                                           |
-| `scheduleType`             | `once`, `interval`, `daily`, or `weekly`                                                                                     |
-| `runAt`                    | Required for `once`; positive integer Unix timestamp in milliseconds                                                         |
-| `intervalMinutes`          | Required for `interval`; integer from 1 to 525600                                                                            |
-| `dailyTime`                | Required for `daily`; `HH:MM` in server-local time                                                                           |
-| `weeklyDays`               | Required for `weekly`; 1–7 weekday integers, 0 (Sunday) through 6 (Saturday)                                                 |
-| `weeklyTime`               | Required for `weekly`; `HH:MM` in server-local time                                                                          |
-| `enabled`                  | Boolean                                                                                                                      |
-| `concurrencyPolicy`        | `warn_only` or `skip_if_same_agent_running`; scheduled runs only                                                             |
-| `autoClosePreviousSession` | Optional boolean, default `true`; ignored for `once`                                                                         |
-| `notes`                    | Optional string, at most 2000 characters                                                                                     |
+| Field | Type / validation |
+| --- | --- |
+| `name` | String, 1–200 characters |
+| `agentType` | A supported session mode (including `shell`) |
+| `workingDir` | Existing, allowed working-directory path |
+| `launchCommand` | Optional single-line string, at most 2000 characters; for shell jobs |
+| `promptMode` | `inline_text` or `prompt_file_path` |
+| `promptText` | Required for `inline_text`; nonempty single-line string, at most 100000 characters |
+| `promptFilePath` | Required for `prompt_file_path`; absolute path inside `workingDir` to a regular file, at most 1 MiB, read when the job fires |
+| `inputMode` | `paste` or `typed` |
+| `scheduleType` | `once`, `interval`, `daily`, or `weekly` |
+| `runAt` | Required for `once`; positive integer Unix timestamp in milliseconds |
+| `intervalMinutes` | Required for `interval`; integer from 1 to 525600 |
+| `dailyTime` | Required for `daily`; `HH:MM` in server-local time |
+| `weeklyDays` | Required for `weekly`; 1–7 weekday integers, 0 (Sunday) through 6 (Saturday) |
+| `weeklyTime` | Required for `weekly`; `HH:MM` in server-local time |
+| `enabled` | Boolean |
+| `concurrencyPolicy` | `warn_only` or `skip_if_same_agent_running`; scheduled runs only |
+| `autoClosePreviousSession` | Optional boolean, default `true`; ignored for `once` |
+| `notes` | Optional string, at most 2000 characters |
 
 `PUT /jobs/:id` accepts any subset of these fields, then validates the merged job.
 When changing `promptMode` or `scheduleType`, supply the fields the new mode needs.
@@ -187,10 +187,10 @@ exist because SSE is Codeman's only other "tell me when" channel, and an agent
 driving the API from a shell tool cannot practically hold a stream and parse
 events inline.
 
-| Call                                          | Blocks until                                       |
-| --------------------------------------------- | -------------------------------------------------- |
-| `GET /api/v1/sessions/:id/wait`               | one of a set of lifecycle signals fires            |
-| `GET /api/v1/sessions/:id/wait-output`        | a literal string appears in the session's output   |
+| Call | Blocks until |
+|------|--------------|
+| `GET /api/v1/sessions/:id/wait` | one of a set of lifecycle signals fires |
+| `GET /api/v1/sessions/:id/wait-output` | a literal string appears in the session's output |
 | `POST /api/v1/sessions/:id/input` with `wait` | the input is delivered **and then** a signal fires |
 
 `POST .../input` with `wait` is not the same as a `POST` followed by a separate
@@ -244,13 +244,13 @@ contract is a **marker unique to each call** (`MARK="DONE_$RANDOM"`, send
 
 ### Signals
 
-| Signal    | Source                                                                                       | Actually fires for                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| --------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `idle`    | the session's own `idle` event                                                               | `claude`: yes, on ❯-prompt detection after activity. `codex`, `opencode`, `gemini`, `pi`, `omp`, `antigravity`: yes, the same screen check through the prompt marker and working line each declares (`capabilities.workDetect`); an `antigravity` session waiting on a shell-command approval stays `working` until it is answered. `shell`: **once only**, ~500 ms after start, and never again. Other external CLIs (`grok`, `deepseek`): not guaranteed (they render their own TUIs and readiness is output stabilization) |
-| `working` | the session's own `working` event                                                            | `claude`, plus `codex`, `opencode`, `gemini`, `pi`, `omp` and `antigravity` through the working line each declares. Elsewhere not guaranteed: it rests on generic output heuristics such as a braille spinner glyph                                                                                                                                                                                                                                                                                                           |
-| `stop`    | the Claude Code `stop` hook, the definitive end-of-turn signal                               | `claude` (and `deepseek`) only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `blocked` | a `permission_prompt` or `elicitation_dialog` hook; on `codex`, a dialog read off its screen | `claude`, `deepseek` and `codex`; on `claude` rarer than it looks: see below                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `exit`    | no process is behind the session                                                             | every mode                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Signal | Source | Actually fires for |
+|--------|--------|--------------------|
+| `idle` | the session's own `idle` event | `claude`: yes, on ❯-prompt detection after activity. `codex`, `opencode`, `gemini`, `pi`, `omp`, `antigravity`: yes, the same screen check through the prompt marker and working line each declares (`capabilities.workDetect`); an `antigravity` session waiting on a shell-command approval stays `working` until it is answered. `shell`: **once only**, ~500 ms after start, and never again. Other external CLIs (`grok`, `deepseek`): not guaranteed (they render their own TUIs and readiness is output stabilization) |
+| `working` | the session's own `working` event | `claude`, plus `codex`, `opencode`, `gemini`, `pi`, `omp` and `antigravity` through the working line each declares. Elsewhere not guaranteed: it rests on generic output heuristics such as a braille spinner glyph |
+| `stop` | the Claude Code `stop` hook, the definitive end-of-turn signal | `claude` (and `deepseek`) only |
+| `blocked` | a `permission_prompt` or `elicitation_dialog` hook; on `codex`, a dialog read off its screen | `claude`, `deepseek` and `codex`; on `claude` rarer than it looks: see below |
+| `exit` | no process is behind the session | every mode |
 
 `stop` is the signal to orchestrate on where it exists; `idle` is a heuristic
 fallback that can flap mid-turn when a spinner pauses. The default set when `until`
@@ -265,7 +265,7 @@ the 90 s startup window), because the dialog's own ❯ is not a composer.
 
 ⚠️ **`exit` means "nothing is running", which includes "not started yet".** The
 server answers from `pid === null` plus a mux-layer pane-death probe, and that
-covers a session that exited — including a worker that died _inside_ its tmux pane
+covers a session that exited — including a worker that died *inside* its tmux pane
 while the local attach client (and therefore `pid`) lives on — one that was
 detached, and one that was **created but never started**. So the first wait
 after `POST /api/v1/sessions` returns `{"signal":"exit","immediate":true}` in
@@ -299,7 +299,7 @@ turn ended.
 
 ⚠️ **On a `shell` session, only `exit` and marker-matching are dependable.** A shell
 session emits its one `idle` at startup and then stays `status: "idle"` forever,
-whatever the pane is doing, so it never emits a _transition_. Since send-and-wait
+whatever the pane is doing, so it never emits a *transition*. Since send-and-wait
 requires a transition (and so does `fresh=1`), both can only time out there:
 a documented default `wait` on a shell worker running `sleep 4` times out at the
 full 25 s. Synchronize hook-less sessions with `wait-output` and a unique marker
@@ -333,11 +333,11 @@ with `from=buffer` keeps matching long after the dialog is gone. A worked versio
 
 ### `GET /api/v1/sessions/:id/wait`
 
-| Param     | Type                                                     | Default          | Notes                                                                                                                                                                                          |
-| --------- | -------------------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `until`   | comma-separated list of `idle,working,stop,blocked,exit` | `stop,idle,exit` | resolves on the first to fire. An unknown token is a `400` naming it, never a silent fallback                                                                                                  |
-| `timeout` | positive integer ms                                      | `60000`          | **validated first, clamped second.** `0`, a negative value and a fractional value are all `400`s, not clamps; a valid value outside `[1000, 600000]` is clamped and echoed as `wait.timeoutMs` |
-| `fresh`   | `0` \| `1` \| `false` \| `true`                          | `0`              | `1` requires an actual transition, ignoring the state at call time                                                                                                                             |
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `until` | comma-separated list of `idle,working,stop,blocked,exit` | `stop,idle,exit` | resolves on the first to fire. An unknown token is a `400` naming it, never a silent fallback |
+| `timeout` | positive integer ms | `60000` | **validated first, clamped second.** `0`, a negative value and a fractional value are all `400`s, not clamps; a valid value outside `[1000, 600000]` is clamped and echoed as `wait.timeoutMs` |
+| `fresh` | `0` \| `1` \| `false` \| `true` | `0` | `1` requires an actual transition, ignoring the state at call time |
 
 ```bash
 curl -s "$API/api/v1/sessions/$SID/wait?until=stop,exit&timeout=60000"
@@ -354,12 +354,12 @@ a plain signal wait, so check the endpoint path before blaming the parameters.
 
 ### `GET /api/v1/sessions/:id/wait-output`
 
-| Param     | Type                            | Default  | Notes                                                                                                       |
-| --------- | ------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------- |
-| `match`   | literal string, 1 to 200 chars  | required | substring match against the PTY stream with ANSI escapes stripped. A match spanning two PTY chunks is found |
-| `nocase`  | `0` \| `1` \| `false` \| `true` | `0`      | case-insensitive compare. The returned snippet keeps the terminal's original casing                         |
-| `from`    | `now` \| `buffer`               | `now`    | `buffer` scans the tail of the existing terminal buffer (bounded, 256 KB by default) before blocking        |
-| `timeout` | positive integer ms             | `60000`  | same validation and clamp as `/wait`                                                                        |
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `match` | literal string, 1 to 200 chars | required | substring match against the PTY stream with ANSI escapes stripped. A match spanning two PTY chunks is found |
+| `nocase` | `0` \| `1` \| `false` \| `true` | `0` | case-insensitive compare. The returned snippet keeps the terminal's original casing |
+| `from` | `now` \| `buffer` | `now` | `buffer` scans the tail of the existing terminal buffer (bounded, 256 KB by default) before blocking |
+| `timeout` | positive integer ms | `60000` | same validation and clamp as `/wait` |
 
 **Matching is literal, never a pattern.** A `regex` parameter is rejected with a
 `400` rather than ignored, so a caller that assumed otherwise finds out immediately
@@ -411,10 +411,10 @@ hand-written query string decodes to a space.
 
 Two optional fields on the existing endpoint:
 
-| Field         | Type                                        | Notes                                                                                                                                                                                                                    |
-| ------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `wait`        | `true` or the same comma grammar as `until` | `true` means the default signal set. Omitted keeps the historical fire-and-forget behavior, unchanged. `null`, `false` and an empty string are all read as **absent**, not as an error and not as "wait for the default" |
-| `waitTimeout` | positive integer ms                         | same validation **and** clamp as `timeout`: `0`, a negative and a fractional value are `400`s, anything valid is clamped into `[1000, 600000]` and echoed as `wait.timeoutMs`                                            |
+| Field | Type | Notes |
+|-------|------|-------|
+| `wait` | `true` or the same comma grammar as `until` | `true` means the default signal set. Omitted keeps the historical fire-and-forget behavior, unchanged. `null`, `false` and an empty string are all read as **absent**, not as an error and not as "wait for the default" |
+| `waitTimeout` | positive integer ms | same validation **and** clamp as `timeout`: `0`, a negative and a fractional value are `400`s, anything valid is clamped into `[1000, 600000]` and echoed as `wait.timeoutMs` |
 
 Both are `nullish`, so an explicit `null` from `JSON.stringify` is accepted as
 "absent" rather than failing validation. That is deliberate: `.optional()` would
@@ -474,10 +474,10 @@ reporting `delivered:true` plus a timeout.
 Two endpoints back that flow directly, both scoped to one session's remote host and
 both refusing a session that is not remote (`400 INVALID_INPUT`):
 
-| Method | Path                             | Purpose                                                                                                                                                                                                                                                                                                    |
-| ------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/api/sessions/:id/reachability` | Whether the session's remote host answers SSH right now, plus whether a wake target is configured. Read-only: it never wakes. `{"reachable": true\|false\|null, "wakeConfigured": "mac"\|"command"\|"none"}`, where `null` means the answer is unknown (a proxied host, where a TCP probe proves nothing). |
-| `POST` | `/api/sessions/:id/wake`         | Wake the host and wait for it to accept SSH again, bounded by the request budget. `422 OPERATION_FAILED` when it does not come back; `400 INVALID_INPUT` with "No wake-on-LAN target configured for this host" when nothing is set.                                                                        |
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/sessions/:id/reachability` | Whether the session's remote host answers SSH right now, plus whether a wake target is configured. Read-only: it never wakes. `{"reachable": true\|false\|null, "wakeConfigured": "mac"\|"command"\|"none"}`, where `null` means the answer is unknown (a proxied host, where a TCP probe proves nothing). |
+| `POST` | `/api/sessions/:id/wake` | Wake the host and wait for it to accept SSH again, bounded by the request budget. `422 OPERATION_FAILED` when it does not come back; `400 INVALID_INPUT` with "No wake-on-LAN target configured for this host" when nothing is set. |
 
 ⚠️ Waking is deliberately reachable only from an explicit user action (this route, a
 session create/attach, or typing into a sleeping session). No watcher, dropped-session
@@ -491,24 +491,16 @@ All three nest the wait result under `data.wait`, so one client helper works aga
 any of them:
 
 ```json
-{
-  "success": true,
-  "data": {
-    "sessionId": "28325fd3-caa7-4178-82bf-87dfebf0f464",
-    "status": "idle",
-    "limitPaused": false,
-    "wait": {
-      "signal": "stop",
-      "until": ["stop", "idle", "exit"],
-      "timedOut": false,
-      "immediate": false,
-      "ended": false,
-      "aborted": false,
-      "waitedMs": 8421,
-      "timeoutMs": 60000
-    }
+{ "success": true, "data": {
+  "sessionId": "28325fd3-caa7-4178-82bf-87dfebf0f464",
+  "status": "idle",
+  "limitPaused": false,
+  "wait": {
+    "signal": "stop", "until": ["stop", "idle", "exit"],
+    "timedOut": false, "immediate": false, "ended": false, "aborted": false,
+    "waitedMs": 8421, "timeoutMs": 60000
   }
-}
+}}
 ```
 
 `POST .../input` returns the same `wait` object alongside `delivered`, `duplicate`,
@@ -522,21 +514,21 @@ redelivery (harmless, the turn it refers to may be long over), while with
 client that reads `delivered === false` as "duplicate" silently treats a failed send
 as a success.
 
-| Field            | Type             | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wait.signal`    | signal \| `null` | the signal that fired (`/wait` and `/input` only)                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `wait.until`     | array of signals | what the server actually waited on, after narrowing the default set for the session's mode (`/wait` and `/input` only)                                                                                                                                                                                                                                                                                                                                                                                          |
-| `wait.matched`   | boolean          | the string appeared (`/wait-output` only)                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `wait.match`     | string           | the literal that was searched for (`/wait-output` only)                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `wait.snippet`   | string \| `null` | bounded window of output around the match, blank runs collapsed for readability (`/wait-output` only)                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `wait.timedOut`  | boolean          | the wait hit its timeout. Still a `200`                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `wait.immediate` | boolean          | the condition already held at call time, so nothing was waited for (`waitedMs` is 0)                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `wait.ended`     | boolean          | the session went away (deleted or torn down) before the condition was met                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `wait.aborted`   | boolean          | the client hung up, so the waiter was released without resolving — and by that definition a client never reads `true`. When the **server** abandons a wait itself (send-and-wait against a session with no PTY), it answers in about a millisecond with `ended: true`, `delivered: false`, `duplicate: false` and `aborted: false`: `delivered`/`ended` carry that story, and `aborted` stays the transport flag. Present for completeness; treat a `true` as "this wait answered nothing", never as an outcome |
-| `wait.waitedMs`  | number           | wall-clock ms actually spent waiting                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `wait.timeoutMs` | number           | the timeout **after clamping**, which is what was applied                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `status`         | `SessionStatus`  | the session's status after the wait, so a caller that timed out still learns where things stand                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `limitPaused`    | boolean          | the session is paused on a usage limit and will emit nothing until its reset, so a timeout here is expected rather than a stall worth retrying hard                                                                                                                                                                                                                                                                                                                                                             |
+| Field | Type | Meaning |
+|-------|------|---------|
+| `wait.signal` | signal \| `null` | the signal that fired (`/wait` and `/input` only) |
+| `wait.until` | array of signals | what the server actually waited on, after narrowing the default set for the session's mode (`/wait` and `/input` only) |
+| `wait.matched` | boolean | the string appeared (`/wait-output` only) |
+| `wait.match` | string | the literal that was searched for (`/wait-output` only) |
+| `wait.snippet` | string \| `null` | bounded window of output around the match, blank runs collapsed for readability (`/wait-output` only) |
+| `wait.timedOut` | boolean | the wait hit its timeout. Still a `200` |
+| `wait.immediate` | boolean | the condition already held at call time, so nothing was waited for (`waitedMs` is 0) |
+| `wait.ended` | boolean | the session went away (deleted or torn down) before the condition was met |
+| `wait.aborted` | boolean | the client hung up, so the waiter was released without resolving — and by that definition a client never reads `true`. When the **server** abandons a wait itself (send-and-wait against a session with no PTY), it answers in about a millisecond with `ended: true`, `delivered: false`, `duplicate: false` and `aborted: false`: `delivered`/`ended` carry that story, and `aborted` stays the transport flag. Present for completeness; treat a `true` as "this wait answered nothing", never as an outcome |
+| `wait.waitedMs` | number | wall-clock ms actually spent waiting |
+| `wait.timeoutMs` | number | the timeout **after clamping**, which is what was applied |
+| `status` | `SessionStatus` | the session's status after the wait, so a caller that timed out still learns where things stand |
+| `limitPaused` | boolean | the session is paused on a usage limit and will emit nothing until its reset, so a timeout here is expected rather than a stall worth retrying hard |
 
 Read the outcome by discriminator, in this order:
 
@@ -559,12 +551,12 @@ read the timeout as "the worker is wedged" and kill a session that was working f
 
 ### Errors
 
-| `errorCode`     | HTTP | When                                                                                                                                                                                                                                                                                               |
-| --------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `INVALID_INPUT` | 400  | unknown `until` / `wait` token; `stop` or `blocked` requested explicitly on a mode that can never emit it (`stop` without hooks, `blocked` without hooks or a screen-read dialog; the message names the mode); `regex=` on `/wait-output`; `match` outside 1 to 200 chars; a non-numeric `timeout` |
-| `NOT_FOUND`     | 404  | no such session, or one this caller does not own                                                                                                                                                                                                                                                   |
-| `SESSION_BUSY`  | 409  | this session's waiter cap is full                                                                                                                                                                                                                                                                  |
-| `RATE_LIMITED`  | 429  | a per-owner or process-wide waiter cap is full. Retry later; the session you named is not the problem                                                                                                                                                                                              |
+| `errorCode` | HTTP | When |
+|-------------|------|------|
+| `INVALID_INPUT` | 400 | unknown `until` / `wait` token; `stop` or `blocked` requested explicitly on a mode that can never emit it (`stop` without hooks, `blocked` without hooks or a screen-read dialog; the message names the mode); `regex=` on `/wait-output`; `match` outside 1 to 200 chars; a non-numeric `timeout` |
+| `NOT_FOUND` | 404 | no such session, or one this caller does not own |
+| `SESSION_BUSY` | 409 | this session's waiter cap is full |
+| `RATE_LIMITED` | 429 | a per-owner or process-wide waiter cap is full. Retry later; the session you named is not the problem |
 
 The two capacity codes are deliberately different. A process-wide cap reported as
 `SESSION_BUSY` would tell the caller to switch sessions, which cannot help. The
@@ -597,12 +589,12 @@ the alternate screen) the bytes a `tail` cut dropped are earlier repaints that n
 request returns. The capture runs synchronous tmux calls on the server; the
 `Server-Timing` header reports `capture`, `prepare` and `total`.
 
-| Query           | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `full=1`        | tmux's scrollback, not only the visible frame (`source: 'mux-full-history'`), ending with a relative cursor move back to the pane's caret.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `tail=<bytes>`  | Keep the newest `<bytes>` of the result (`truncationReason: 'tail'` when it cut).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `lines=<n>`     | With `full=1` only: read at most `<n>` lines of tmux history above the visible frame. An integer of at least 1, clamped to the configured history limit; absent or malformed, the whole limit (100,000 lines by default), as before. When a bound below the configured limit left older lines in tmux (its `history_size` is deeper), `truncated` is true with `truncationReason: 'tail'`; a byte cap still reports `'capped'`. Without it a full capture reads all of that history before `tail` cuts it, so a client that keeps a fixed number of lines (the tile grid sends its xterm's scrollback plus its rows) should send it. |
-| `alt=recording` | With `full=1` only: if the pane is in the alternate screen (a nested tmux, where tmux keeps no history, or any full-screen app such as vim or less while it is open), answer with the visible frame over the byte recording instead (`source: 'mux-visible'`, `tail` applied as without `full=1`). Shells' automatic loads send it.                                                                                                                                                                                                                                                                                                  |
+| Query | Meaning |
+|---|---|
+| `full=1` | tmux's scrollback, not only the visible frame (`source: 'mux-full-history'`), ending with a relative cursor move back to the pane's caret. |
+| `tail=<bytes>` | Keep the newest `<bytes>` of the result (`truncationReason: 'tail'` when it cut). |
+| `lines=<n>` | With `full=1` only: read at most `<n>` lines of tmux history above the visible frame. An integer of at least 1, clamped to the configured history limit; absent or malformed, the whole limit (100,000 lines by default), as before. When a bound below the configured limit left older lines in tmux (its `history_size` is deeper), `truncated` is true with `truncationReason: 'tail'`; a byte cap still reports `'capped'`. Without it a full capture reads all of that history before `tail` cuts it, so a client that keeps a fixed number of lines (the tile grid sends its xterm's scrollback plus its rows) should send it. |
+| `alt=recording` | With `full=1` only: if the pane is in the alternate screen (a nested tmux, where tmux keeps no history, or any full-screen app such as vim or less while it is open), answer with the visible frame over the byte recording instead (`source: 'mux-visible'`, `tail` applied as without `full=1`). Shells' automatic loads send it. |
 
 ## Experimental bounded agent inspection and guarded input
 
@@ -626,11 +618,11 @@ These authenticated routes use the standard envelope and session ownership check
 `/api/v1` aliases `/api`; an inaccessible session returns `404 NOT_FOUND` before
 any transcript, pane or receipt lookup.
 
-| Endpoint                           | Parameters/body                                                      | Result                                                                                                                                                                                                           |
-| ---------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/v1/sessions/:id/inspect` | `maxBytes=8192` (integer 1–65536), optional opaque `since` UUID      | `source`, `identity`, observed `activity`, bounded UTF8 `evidence`, `truncated`, `incremental`, `cursor`, `maxBytes`; native results also include `omittedBeforeBytes`, `scannedBytes`, optional `blockedReason` |
-| `POST /api/v1/sessions/:id/stage`  | `{ "message": "printable single line" }`                             | `{ stageId, sha256, expiresAt, sessionId, submitted:false }`; types without Enter                                                                                                                                |
-| `POST /api/v1/sessions/:id/submit` | `{ "stageId": "UUID", "confirmSha": "64 lowercase hex characters" }` | `{ stageId, sessionId, submitted:true }`; sends one conditional Enter                                                                                                                                            |
+| Endpoint | Parameters/body | Result |
+| --- | --- | --- |
+| `GET /api/v1/sessions/:id/inspect` | `maxBytes=8192` (integer 1–65536), optional opaque `since` UUID | `source`, `identity`, observed `activity`, bounded UTF8 `evidence`, `truncated`, `incremental`, `cursor`, `maxBytes`; native results also include `omittedBeforeBytes`, `scannedBytes`, optional `blockedReason` |
+| `POST /api/v1/sessions/:id/stage` | `{ "message": "printable single line" }` | `{ stageId, sha256, expiresAt, sessionId, submitted:false }`; types without Enter |
+| `POST /api/v1/sessions/:id/submit` | `{ "stageId": "UUID", "confirmSha": "64 lowercase hex characters" }` | `{ stageId, sessionId, submitted:true }`; sends one conditional Enter |
 
 Inspection initially supports native local Codex JSONL with strict conversation
 attribution, using the session's effective `CODEX_HOME`, explicit resume identity
@@ -776,12 +768,12 @@ receiver's pane, which is the difference from `POST …/input`: a post does not
 start or interrupt a turn, and the text may span several lines. Design and the
 reasons behind each rule: [discussion #558](https://github.com/Ark0N/Codeman/discussions/558).
 
-| Method | Route                            | Body / query                   | Answer (`data`)                                                       |
-| ------ | -------------------------------- | ------------------------------ | --------------------------------------------------------------------- |
-| `POST` | `/api/v1/sessions/:id/inbox`     | `{ text }`                     | `{ sessionId, message, pending, unseen }`                             |
-| `GET`  | `/api/v1/sessions/:id/inbox`     | `?wait=<ms>` (optional)        | `{ sessionId, receiver, messages, pending, unseen, wait? }`           |
-| `POST` | `/api/v1/sessions/:id/inbox/ack` | `{ ids: string[] }` (1 to 200) | `{ sessionId, removed, pending, unseen }`                             |
-| `GET`  | `/api/v1/agent-inbox/summary`    |                                | `{ sessions: { [id]: { pending, unseen, oldestUnseenAt, parked } } }` |
+| Method | Route | Body / query | Answer (`data`) |
+|---|---|---|---|
+| `POST` | `/api/v1/sessions/:id/inbox` | `{ text }` | `{ sessionId, message, pending, unseen }` |
+| `GET` | `/api/v1/sessions/:id/inbox` | `?wait=<ms>` (optional) | `{ sessionId, receiver, messages, pending, unseen, wait? }` |
+| `POST` | `/api/v1/sessions/:id/inbox/ack` | `{ ids: string[] }` (1 to 200) | `{ sessionId, removed, pending, unseen }` |
+| `GET` | `/api/v1/agent-inbox/summary` | | `{ sessions: { [id]: { pending, unseen, oldestUnseenAt, parked } } }` |
 
 A message is `{ id, from, text, createdAt, seen }`. `from` is a session id or
 `null` (the user); `seen` says whether the receiver had read it before this read.
@@ -988,13 +980,13 @@ session runs as far as the server knows it, for the web UI's session headers:
 
 `source` is where it came from, strongest first:
 
-| `source`          | Meaning                                                                                                                                         |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `custom-endpoint` | The session is pointed at a Custom Model Endpoint Profile; its `modelId` answers, whatever the CLI prints.                                      |
-| `statusline`      | Claude's statusLine exporter reported it (`model.display_name`); follows an in-session `/model`.                                                |
-| `screen`          | Read off the CLI's own footer (`capabilities.modelDetect`, today dsh and codex); follows a switch.                                              |
+| `source`          | Meaning                                                                                               |
+| ----------------- | ----------------------------------------------------------------------------------------------------- |
+| `custom-endpoint` | The session is pointed at a Custom Model Endpoint Profile; its `modelId` answers, whatever the CLI prints. |
+| `statusline`      | Claude's statusLine exporter reported it (`model.display_name`); follows an in-session `/model`.          |
+| `screen`          | Read off the CLI's own footer (`capabilities.modelDetect`, today dsh and codex); follows a switch.      |
 | `config`          | What the CLI's own config pins for the session (`capabilities.modelDetect.configResolver`, today dsh-TUI's route), while its screen names none. |
-| `launch`          | What the session was launched with (`--model`, the app-wide default, `<cli>Config.model`); nothing has reported since.                          |
+| `launch`          | What the session was launched with (`--model`, the app-wide default, `<cli>Config.model`); nothing has reported since. |
 
 Between `statusline` and `screen` the newest report wins. The field is absent when no
 model is known (a shell, a CLI that reports none and was launched without one). `model`
@@ -1013,16 +1005,16 @@ change-only `session:promptCache` event (`{ sessionId, ...promptCache }`):
 "promptCache": { "warm": true, "ttl": "1h", "expiresAt": 1791653039000, "recacheTokensIfCold": 45000, "misses": 2, "expectedRebuilds": 1, "hitRatio": 0.91, "lastMissCauses": ["ttl_expired_1h"], "compactedAt": 1791649439872 }
 ```
 
-| Field                 | Meaning                                                                                                                                                                                                           |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `warm`                | Whether the cached prefix is still within its TTL. The only field always present.                                                                                                                                 |
-| `ttl`                 | `5m` or `1h`; absent when Claude reported neither.                                                                                                                                                                |
-| `expiresAt`           | Epoch MILLISECONDS when the prefix goes cold (the statusline reports seconds). Absent once cold.                                                                                                                  |
-| `recacheTokensIfCold` | Tokens the next request re-writes if the cache has gone cold. Absent right after a compaction.                                                                                                                    |
-| `misses`              | Requests that re-processed content the cache already held.                                                                                                                                                        |
-| `expectedRebuilds`    | Cache rebuilds that followed a compaction or a clearing of old tool results.                                                                                                                                      |
-| `hitRatio`            | Cache read tokens as a fraction of all input tokens this session, 0 to 1.                                                                                                                                         |
-| `lastMissCauses`      | Claude Code's diagnosis of the last miss (e.g. `ttl_expired_1h`, `tools_changed`); untrusted text.                                                                                                                |
+| Field                 | Meaning                                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------------------------- |
+| `warm`                | Whether the cached prefix is still within its TTL. The only field always present.                         |
+| `ttl`                 | `5m` or `1h`; absent when Claude reported neither.                                                         |
+| `expiresAt`           | Epoch MILLISECONDS when the prefix goes cold (the statusline reports seconds). Absent once cold.           |
+| `recacheTokensIfCold` | Tokens the next request re-writes if the cache has gone cold. Absent right after a compaction.             |
+| `misses`              | Requests that re-processed content the cache already held.                                                |
+| `expectedRebuilds`    | Cache rebuilds that followed a compaction or a clearing of old tool results.                               |
+| `hitRatio`            | Cache read tokens as a fraction of all input tokens this session, 0 to 1.                                  |
+| `lastMissCauses`      | Claude Code's diagnosis of the last miss (e.g. `ttl_expired_1h`, `tools_changed`); untrusted text.         |
 | `compactedAt`         | Epoch MILLISECONDS when the context was compacted or its old tool results cleared: the first warm report without `recacheTokensIfCold` after one that had it. Derived, not reported; dropped at the next request. |
 
 The whole object is absent until the first report, and restored after a server restart
@@ -1083,9 +1075,9 @@ Design: [`approvals-inbox-plan.md`](approvals-inbox-plan.md).
 
 - `GET /api/v1/approvals` → `{ approvals: ApprovalItem[] }`, oldest first,
   ownership-scoped in multi-user mode. `ApprovalItem`: `{ id, sessionId,
-sessionName, kind: 'permission'|'question'|'idle', createdAt, toolName?,
-toolSummary?, message?, cwd?, context?, options?: {n, label}[],
-acknowledgedAt?, answerInTerminal? }`. `context` is the ANSI-stripped visible pane frame;
+  sessionName, kind: 'permission'|'question'|'idle', createdAt, toolName?,
+  toolSummary?, message?, cwd?, context?, options?: {n, label}[],
+  acknowledgedAt?, answerInTerminal? }`. `context` is the ANSI-stripped visible pane frame;
   `options` is present only when the dialog's numbered choices parsed
   confidently; `acknowledgedAt` marks an item a human has already looked at
   (see `/viewed` below) and tells clients not to re-arm its tab alert. Listing
@@ -1100,11 +1092,11 @@ acknowledgedAt?, answerInTerminal? }`. `context` is the ANSI-stripped visible pa
   `options`), or `{ action: 'text', text }` (idle prompts only; submits the
   line as a prompt). `404 NOT_FOUND` when the item is no longer pending,
   `400 INVALID_INPUT` for an `answerInTerminal` item (`<CLI> approvals must be
-answered in the terminal`), `409 CONFLICT` when the dialog left the screen or
+  answered in the terminal`), `409 CONFLICT` when the dialog left the screen or
   another actor answered first, `422 OPERATION_FAILED` when the session refused input.
 - `POST /api/v1/approvals/:id/dismiss` removes the item without keystrokes.
 - `POST /api/v1/approvals/session/:sessionId/viewed` → `{ sessionId,
-acknowledged: itemId | null }`. Marks the session's pending **idle** item as
+  acknowledged: itemId | null }`. Marks the session's pending **idle** item as
   seen by a human (the web UI calls it when you open the session's tab): the
   item stays pending and answerable, but stops arming the yellow tab alert on
   every client, including after a reload. Permission/question items are never
@@ -1133,14 +1125,14 @@ since they live in the CLI's own transcript store and stay reachable from the
 Resume list. A plan nobody spends expires after 24 hours.
 
 - `GET /api/v1/reboot-restore` → `{ sessions: RestorableSession[],
-scrollbackRestored: false }`, ownership-scoped in multi-user mode.
+  scrollbackRestored: false }`, ownership-scoped in multi-user mode.
   `RestorableSession`: `{ id, name?, workingDir, mode, owner? }`. The persisted
   record itself is never sent. `scrollbackRestored` is always `false` and exists
   so a client states it: a restored session is a NEW pane, so the conversation
   continues and the terminal history does not.
 - `POST /api/v1/reboot-restore/restore` with `{ sessionIds?: string[] }` (omit
   to restore everything the caller can see) → `{ restored: RestorableSession[],
-skipped: { sessionId, reason }[] }`. `reason` is one of `workspace-missing`
+  skipped: { sessionId, reason }[] }`. `reason` is one of `workspace-missing`
   (the directory is gone), `workspace-forbidden` (in multi-user mode it is
   outside the workspace of the user the session belongs to, re-checked against
   that owner's current grant rather than the caller's), `already-live` (the conversation is already
@@ -1171,7 +1163,7 @@ user guide: [`readmymind.md`](readmymind.md).
 
 - `GET /api/v1/sessions/:id/intent` -> `{ intent: IntentProfile }` for the
   session's case. `IntentProfile`: `{ key, workingDir, updatedAt, goals,
-recentPrompts: { ts, sessionId, text }[] }` (prompts oldest first, FIFO cap
+  recentPrompts: { ts, sessionId, text }[] }` (prompts oldest first, FIFO cap
   50, each <= 500 chars). A case with nothing recorded answers an empty
   profile with `updatedAt: 0`; nothing is persisted by reads.
 - `PUT /api/v1/sessions/:id/intent` with `{ goals }` (<= 8192 chars, strict
@@ -1295,7 +1287,7 @@ minSafeContextTokens, slotCount?}` — `slotCount` is present whenever the model
     harness.
 - `POST /api/v1/quick-start`'s `customModel: { endpointId, modelId,
 confirmed?, confirmedContext?, confirmedSwap? }` field (alongside its
-  normal `caseName`/`mode`/etc. body)
+normal `caseName`/`mode`/etc. body)
   computes the same injection **before** the session exists and launches
   directly on the endpoint — no restart, because there was never a
   native-backend boot to restart away from. Runs the identical checks as
@@ -1329,11 +1321,11 @@ Admin only in multi-user mode (`403`), like `POST /api/cases/link`: it writes ou
 
 `GET /api/sessions/:id/git-diff?repo=<repoRoot>&path=<path>&kind=staged|unstaged|untracked|conflicted` returns the unified diff of one file the panel lists (`{ diff, truncated, binary }`; staged is index vs HEAD, unstaged is working tree vs index, untracked is the whole file as additions). It is what opens when you click a file in the Git panel. `repo` and `path` are matched against the current status rather than trusted, so anything the status does not list is `404`. Read-only: it passes `--no-ext-diff --no-textconv` (no external diff or textconv driver runs), but a repository's clean filters still run, as they do for any `git diff`, which is why a repository a container can write to is never inspected (below). Capped at 400 KB, and refused (`400`) for remote and Docker sessions; a repository at or inside a Docker case workspace is not in the status, so it is `404` here.
 
-**Which repositories.** git finds a repository by walking _up_ from the session's working directory, so:
+**Which repositories.** git finds a repository by walking *up* from the session's working directory, so:
 
 - Inside a repository (or at its root): that one repository, whole (a subfolder reports its enclosing repo, `path` says where it is, e.g. `../..`). A nested repo below it is just an untracked folder to the outer one and is not scanned; start the session inside it to see it.
 - **Not** inside one (a folder that holds several projects): every repository found up to **two levels down**, nearest and alphabetical first, at most `maxRepos` of them (default 12, 1 to 50; `reposTruncated` says when there were more and `repoLimit` is the limit that was applied). Dot-folders, `node_modules`, `dist`, `build`, `target`, `vendor`, `venv` and `__pycache__` are skipped, symlinks are never followed, and a repository's own contents are not searched. The list of repositories is re-scanned at most every 30 s; each repository's status is cached for 4 s.
-- A repository that merely sits **above** the workspace and is the home folder or higher (a dotfiles repo in `$HOME`, or `/`) is ignored: its dirty files are not this session's work. A workspace that _is_ that repository's root is not ignored.
+- A repository that merely sits **above** the workspace and is the home folder or higher (a dotfiles repo in `$HOME`, or `/`) is ignored: its dirty files are not this session's work. A workspace that *is* that repository's root is not ignored.
 - A worktree (whose `.git` is a file) counts as a repository. A submodule's own uncommitted files are not reported, only a changed submodule pointer.
 
 Both routes accept two optional query parameters, which the UI sends from its per-device settings and the server clamps again: `maxRepos` (1 to 50, default 12) and `timeout` (seconds one git command may run, 5 to 120, default 30). An empty or non-numeric value means the default. A repository whose `git status` fails (typically a timeout on a slow network share) is **kept in `repos[]`** with `status.state: 'error'` and the reason in `status.error`, not dropped, so it is visible that something is not being reported.
@@ -1341,7 +1333,7 @@ Both routes accept two optional query parameters, which the UI sends from its pe
 `data` is `{ state, repos, reposTruncated, repoLimit, checkedAt }` (`repoLimit` in the folder-of-projects case only):
 
 - `state: 'ok'`: `repos[]`, each `{ name, path, status }` where `name` is the repository folder's name, `path` its root relative to the working directory, and `status` is:
-  `branch` (null when `detached`), `upstream`, `ahead`, `behind`, `hasRemote`, `counts` (`staged`, `unstaged`, `untracked`, `conflicted`, `uncommitted` = distinct paths, `stashes`), `files[]` (`path` relative to `repoRoot`, `origPath` for a rename, `index` and `worktree` status letters, `kind`: `staged` \| `unstaged` \| `untracked` \| `conflicted`; a file that is staged _and_ modified again appears once per kind), `filesTruncated`, `unpushedCount` (exact) and `unpushed[]` (newest first: `hash`, `author`, `time` in epoch seconds, `subject`), `repoRoot`, `checkedAt`.
+  `branch` (null when `detached`), `upstream`, `ahead`, `behind`, `hasRemote`, `counts` (`staged`, `unstaged`, `untracked`, `conflicted`, `uncommitted` = distinct paths, `stashes`), `files[]` (`path` relative to `repoRoot`, `origPath` for a rename, `index` and `worktree` status letters, `kind`: `staged` \| `unstaged` \| `untracked` \| `conflicted`; a file that is staged *and* modified again appears once per kind), `filesTruncated`, `unpushedCount` (exact) and `unpushed[]` (newest first: `hash`, `author`, `time` in epoch seconds, `subject`), `repoRoot`, `checkedAt`.
 - `state: 'not-a-repo'`: no repository here, above (that counts) or within two levels below.
 - `state: 'unsupported'` with `reason: 'remote' | 'docker'`: those sessions are never inspected (a Docker workspace is writable from inside its sandbox, and git here would run on the host).
 - `state: 'error'` with a short `error` (git missing, timed out, or git's first stderr line with any `user:token@` credentials redacted).
@@ -1367,30 +1359,11 @@ A local case whose folder is the top of a git repository can keep **worktrees** 
   "worktreesDir": "/home/me/codeman-cases/myrepo/.claude/worktrees",
   "truncated": false,
   "worktrees": [
-    {
-      "path": "/home/me/codeman-cases/myrepo",
-      "head": "6910cb15…",
-      "branch": "main",
-      "detached": false,
-      "bare": false,
-      "locked": false,
-      "prunable": false,
-      "main": true,
-      "isCase": true,
-      "managed": false,
-      "sessionCount": 0,
-      "sessions": []
-    },
-    {
-      "path": "/home/me/codeman-cases/myrepo/.claude/worktrees/fix-login",
-      "branch": "worktree-fix-login",
-      "main": false,
-      "isCase": false,
-      "managed": true,
-      "name": "fix-login",
-      "sessionCount": 1,
-      "sessions": [{ "id": "2a568379-…", "name": "w1-fix-login" }]
-    }
+    { "path": "/home/me/codeman-cases/myrepo", "head": "6910cb15…", "branch": "main", "detached": false, "bare": false,
+      "locked": false, "prunable": false, "main": true, "isCase": true, "managed": false, "sessionCount": 0, "sessions": [] },
+    { "path": "/home/me/codeman-cases/myrepo/.claude/worktrees/fix-login", "branch": "worktree-fix-login",
+      "main": false, "isCase": false, "managed": true, "name": "fix-login",
+      "sessionCount": 1, "sessions": [{ "id": "2a568379-…", "name": "w1-fix-login" }] }
   ]
 }
 ```
@@ -1413,15 +1386,15 @@ A local case whose folder is the top of a git repository can keep **worktrees** 
 
 `~/.codeman/settings.json` is one file for the whole server: the synced App Settings (feature switches, the plan-usage collection switch `showPlanUsageLimits`, `runMode`, `respawnPresets`, `tunnelEnabled`, ...), plus `modelConfig`, `caseOrder` and `lastUsedCase`. Reads are open to every signed-in user; in multi-user mode a non-admin reads it without what is the admin's (`voiceSettings.apiKey`, the Deepgram key an admin saved, and the admin's case names in `caseOrder` and `lastUsedCase`). **In multi-user mode every write is admin only:** for a non-admin the routes below answer `403 FORBIDDEN` before the body is even validated, so nothing is written, no watcher is toggled and no tunnel is started. Single-user mode is unaffected. Every write to the file (these routes, and the `lastUsedCase` that `POST /api/quick-start` and `POST /api/ralph-loop/start` record before they answer) runs one at a time and replaces the file atomically (mode `0600`); the one write outside that queue is a config-backup restore, which must work on a file that does not parse. A write to a `settings.json` that exists but is not a JSON object is refused rather than starting from `{}`, which would erase every other setting: the routes below answer `409 CONFLICT` with a message naming the fix and leave the file untouched, the two starts skip their `lastUsedCase`, and an admin's `POST /api/cases/:name/rename` answers the same `409 CONFLICT`, checked before it ends any session or moves the folder. A missing or empty file still starts from `{}`.
 
-| Method | Path                          | Body                                                                                | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------ | ----------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/api/settings`               | none                                                                                | The stored settings object. Never writes. For a non-admin in multi-user mode, without `voiceSettings.apiKey`, `caseOrder` and `lastUsedCase`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `PUT`  | `/api/settings`               | partial settings (strict schema)                                                    | Merged into the stored file; services (watchers, tunnel, tmux history limit) reconcile to the merged result. `403 FORBIDDEN` for a non-admin in multi-user mode. A tunnel enable with no login (no `CODEMAN_PASSWORD`, not multi-user) is refused separately (`403 OPERATION_FAILED`, resend with `acknowledgeUnauthTunnel: true`) unless the server runs with `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1` or `--allow-unauthenticated-tunnel`. `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` does not count; when it is set, the refusal says so. An enable without that authorization is accepted only while the tunnel is already running and never stores `tunnelEnabled: true`; if the tunnel stops before the request would start it, it is not restarted and the answer is the same `403 OPERATION_FAILED` (the request's other settings are saved). |
-| `GET`  | `/api/tunnel/status`          | none                                                                                | `{ running, url, loginConfigured }`. `loginConfigured` is `true` when a login protects the server (`CODEMAN_PASSWORD` set or multi-user mode on), the same test the tunnel guard above applies; with `false` the browser asks before every tunnel enable. Neither opt-in variable makes it `true`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `GET`  | `/api/execution/model-config` | none                                                                                | `modelConfig` (cron's and the plan orchestrator's default model).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `PUT`  | `/api/execution/model-config` | `{ defaultModel?, agentTypeOverrides?, ... }`                                       | Replaces `modelConfig`. `403 FORBIDDEN` for a non-admin in multi-user mode.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `PUT`  | `/api/cases/order`            | `{ order: string[] }`                                                               | The one case order every user's `GET /api/cases` is sorted by. `403 FORBIDDEN` for a non-admin in multi-user mode.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `PUT`  | `/api/config`                 | `{ pollIntervalMs?, defaultTimeoutMs?, maxConcurrentSessions?, respawn? }` (strict) | The process-wide app config in `state.json`. `403 FORBIDDEN` for a non-admin in multi-user mode.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Method | Path                          | Body                                 | Notes |
+| ------ | ----------------------------- | ------------------------------------ | ----- |
+| `GET`  | `/api/settings`               | none                                 | The stored settings object. Never writes. For a non-admin in multi-user mode, without `voiceSettings.apiKey`, `caseOrder` and `lastUsedCase`. |
+| `PUT`  | `/api/settings`               | partial settings (strict schema)     | Merged into the stored file; services (watchers, tunnel, tmux history limit) reconcile to the merged result. `403 FORBIDDEN` for a non-admin in multi-user mode. A tunnel enable with no login (no `CODEMAN_PASSWORD`, not multi-user) is refused separately (`403 OPERATION_FAILED`, resend with `acknowledgeUnauthTunnel: true`) unless the server runs with `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1` or `--allow-unauthenticated-tunnel`. `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` does not count; when it is set, the refusal says so. An enable without that authorization is accepted only while the tunnel is already running and never stores `tunnelEnabled: true`; if the tunnel stops before the request would start it, it is not restarted and the answer is the same `403 OPERATION_FAILED` (the request's other settings are saved). |
+| `GET`  | `/api/tunnel/status`          | none                                 | `{ running, url, loginConfigured }`. `loginConfigured` is `true` when a login protects the server (`CODEMAN_PASSWORD` set or multi-user mode on), the same test the tunnel guard above applies; with `false` the browser asks before every tunnel enable. Neither opt-in variable makes it `true`. |
+| `GET`  | `/api/execution/model-config` | none                                 | `modelConfig` (cron's and the plan orchestrator's default model). |
+| `PUT`  | `/api/execution/model-config` | `{ defaultModel?, agentTypeOverrides?, ... }` | Replaces `modelConfig`. `403 FORBIDDEN` for a non-admin in multi-user mode. |
+| `PUT`  | `/api/cases/order`            | `{ order: string[] }`                | The one case order every user's `GET /api/cases` is sorted by. `403 FORBIDDEN` for a non-admin in multi-user mode. |
+| `PUT`  | `/api/config`                 | `{ pollIntervalMs?, defaultTimeoutMs?, maxConcurrentSessions?, respawn? }` (strict) | The process-wide app config in `state.json`. `403 FORBIDDEN` for a non-admin in multi-user mode. |
 
 A non-admin's `POST /api/quick-start` and `POST /api/ralph-loop/start` work as before but do not record their case as `lastUsedCase` (a server-wide key).
 
@@ -1431,35 +1404,35 @@ A non-admin's `POST /api/quick-start` and `POST /api/ralph-loop/start` work as b
 
 The same multi-user rule covers the operations that act on the whole server. For a non-admin:
 
-| Method | Path                        | Multi-user non-admin                                                                                                                                                                                                                         |
-| ------ | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST` | `/api/system/update`        | `403 FORBIDDEN` (the update restarts the server under every user)                                                                                                                                                                            |
-| `POST` | `/api/system/span-displays` | `403 FORBIDDEN` (opens a window on the server's desktop)                                                                                                                                                                                     |
-| `POST` | `/api/tunnel/qr/regenerate` | `403 FORBIDDEN` (it clears every user's outstanding QR login code)                                                                                                                                                                           |
-| `POST` | `/api/cleanup-state`        | `403 FORBIDDEN` (drops every user's stale session records)                                                                                                                                                                                   |
-| `POST` | `/api/auth/revoke`          | Revokes only the caller's own login sessions: the bare form (`{}`) signs them out everywhere, and a `sessionToken` is revoked only when it is theirs. For an admin, and in single-user mode, the bare form still revokes every login session |
-| `GET`  | `/api/tunnel/info`          | `authSessions` lists only the caller's own logins                                                                                                                                                                                            |
+| Method | Path                          | Multi-user non-admin |
+| ------ | ----------------------------- | -------------------- |
+| `POST` | `/api/system/update`          | `403 FORBIDDEN` (the update restarts the server under every user) |
+| `POST` | `/api/system/span-displays`   | `403 FORBIDDEN` (opens a window on the server's desktop) |
+| `POST` | `/api/tunnel/qr/regenerate`   | `403 FORBIDDEN` (it clears every user's outstanding QR login code) |
+| `POST` | `/api/cleanup-state`          | `403 FORBIDDEN` (drops every user's stale session records) |
+| `POST` | `/api/auth/revoke`            | Revokes only the caller's own login sessions: the bare form (`{}`) signs them out everywhere, and a `sessionToken` is revoked only when it is theirs. For an admin, and in single-user mode, the bare form still revokes every login session |
+| `GET`  | `/api/tunnel/info`            | `authSessions` lists only the caller's own logins |
 
 ## CLI management
 
 Read and write the CLI registry (`docs/cli-registry.md`). Every **write** route answers `403 FORBIDDEN` while `cliManagementEnabled` is off (the default), and for a non-admin in multi-user mode. A write that would overwrite a `clis.json` which does not parse, or which has group/world permission bits, is refused with `409 CONFLICT` and a message naming the fix; the file is left untouched.
 
-| Method   | Path                    | Body                                                  | Notes                                                                                                                                                                                                                |
-| -------- | ----------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`    | `/api/clis`             | none                                                  | Every entry, disabled ones included: `id`, `label`, `shortBadge`, `order`, `kind`, `enabled`, `stock`, `installed`, and `installCommand` for a stock entry. Not gated; a non-admin in multi-user mode gets `[]`.     |
-| `PUT`    | `/api/clis/:id`         | `{ enabled }`                                         | Toggle an existing entry, stock or custom. `404` for an unknown id; `400 INVALID_INPUT` when disabling a `kind: 'shell'` entry.                                                                                      |
-| `POST`   | `/api/clis/:id/install` | none                                                  | Run a **stock** entry's install command (never a custom one: `400`). `409 CONFLICT` while an install for the same id is running; `422 OPERATION_FAILED` with the output tail when it fails. Never enables the entry. |
-| `POST`   | `/api/clis`             | `{ id, label, shortBadge, binaries, argv, enabled? }` | Create a custom entry. `409 ALREADY_EXISTS` for a stock id or an existing custom id. `enabled` defaults to `true`.                                                                                                   |
-| `PUT`    | `/api/clis/custom/:id`  | `{ label, shortBadge, binaries, argv, enabled? }`     | Replace an existing custom entry. An absent `enabled` keeps the entry's current state. `400` for a stock id, `404` for an unknown one.                                                                               |
-| `DELETE` | `/api/clis/:id`         | none                                                  | Delete a custom entry. `400` for a stock id, `404` for an unknown one.                                                                                                                                               |
+| Method   | Path                          | Body                                                    | Notes                                                                                                   |
+| -------- | ----------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/clis`                   | none                                                    | Every entry, disabled ones included: `id`, `label`, `shortBadge`, `order`, `kind`, `enabled`, `stock`, `installed`, and `installCommand` for a stock entry. Not gated; a non-admin in multi-user mode gets `[]`. |
+| `PUT`    | `/api/clis/:id`               | `{ enabled }`                                           | Toggle an existing entry, stock or custom. `404` for an unknown id; `400 INVALID_INPUT` when disabling a `kind: 'shell'` entry. |
+| `POST`   | `/api/clis/:id/install`       | none                                                    | Run a **stock** entry's install command (never a custom one: `400`). `409 CONFLICT` while an install for the same id is running; `422 OPERATION_FAILED` with the output tail when it fails. Never enables the entry. |
+| `POST`   | `/api/clis`                   | `{ id, label, shortBadge, binaries, argv, enabled? }`   | Create a custom entry. `409 ALREADY_EXISTS` for a stock id or an existing custom id. `enabled` defaults to `true`. |
+| `PUT`    | `/api/clis/custom/:id`        | `{ label, shortBadge, binaries, argv, enabled? }`       | Replace an existing custom entry. An absent `enabled` keeps the entry's current state. `400` for a stock id, `404` for an unknown one. |
+| `DELETE` | `/api/clis/:id`               | none                                                    | Delete a custom entry. `400` for a stock id, `404` for an unknown one.                                  |
 
 ## MCP server sync
 
 Copies MCP servers between the agent CLIs' own user-level config files (`docs/cli-registry.md`, "MCP server sync"). **Opt-in:** both routes answer `403 FORBIDDEN` while the synced `mcpSyncEnabled` setting is off (the default), and for a non-admin in multi-user mode, because the routes write files in the server user's home. A second `POST` while one is running answers `409 CONFLICT`.
 
-| Method | Path            | Body | Notes                                                                                                                       |
-| ------ | --------------- | ---- | --------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/api/mcp-sync` | none | Dry run. Same result shape as `POST`, with `applied: false`; nothing is written.                                            |
+| Method | Path            | Body | Notes                                                                                                                   |
+| ------ | --------------- | ---- | ----------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/api/mcp-sync` | none | Dry run. Same result shape as `POST`, with `applied: false`; nothing is written.                                        |
 | `POST` | `/api/mcp-sync` | none | Adds each server a CLI is missing to that CLI's config file. Never edits or removes a server. `500` on an unexpected error. |
 
 Result (`data`):
@@ -1480,9 +1453,9 @@ The result carries server **names** only, never `env` values, `headers` or file 
 
 Claude Code reports the main conversation's prompt-cache state on its statusline (v2.1.251+); the exporter keeps it per session as `promptCache` on `GET /api/sessions` (`{ warm, ttl, expiresAt, recacheTokensIfCold, misses, lastMissCauses }`, epoch ms). The keep-warm sends one keep-alive turn shortly before an idle session's cache would expire; `keepWarmEnabled` (absent = the app-wide `promptCacheKeepWarm` setting applies, which a session spawned by another session does not inherit), the live `keepWarm` status and `lastRealPromptAt` (epoch ms of the last submit that was not a keep-alive, the cap's clock) ride the same session state. A keep-alive is a submit, so it moves `lastSubmitAt` like any prompt. A claude launch with keep-warm on also carries `"idleCompaction": false` in its `--settings` JSON (Claude Code 2.1.290 or newer).
 
-| Method | Path                             | Body                                   | Notes                                                                                                                                                                                                                                     |
-| ------ | -------------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST` | `/api/v1/sessions/:id/keep-warm` | `{ "enabled": true \| false \| null }` | Sets the session's choice; `null` clears it so the app-wide default applies. `200` with `{ keepWarm: { enabled, status } }`. `400 INVALID_INPUT` for a CLI that reports no cache telemetry on its statusline (anything but Claude today). |
+| Method | Path                               | Body                                 | Notes |
+| ------ | ---------------------------------- | ------------------------------------ | ----- |
+| `POST` | `/api/v1/sessions/:id/keep-warm`   | `{ "enabled": true \| false \| null }` | Sets the session's choice; `null` clears it so the app-wide default applies. `200` with `{ keepWarm: { enabled, status } }`. `400 INVALID_INPUT` for a CLI that reports no cache telemetry on its statusline (anything but Claude today). |
 
 `status` is `{ enabled, idleCompactionOff, state, nextCheckAt?, reason?, nudges, lastNudgeAt?, budgetEndsAt? }` (`idleCompactionOff`: whether the session's current launch carries that opt-out; `budgetEndsAt` only while `enabled`) with `state` one of `off`, `armed` (waiting for the due time), `waiting` (due, deferred by a guard named in `reason`), `nudged` (sent, waiting for the next cache report) or `stopped` (`reason` says why). Two SSE events carry changes: `session:promptCache` (`{ sessionId, ...promptCache }`) and `session:keepWarm` (`{ sessionId, ...status }`), both change-only. The keep-alive turn's `hook:stop` and `hook:idle_prompt` broadcasts carry `acknowledgedReason: "cache keep-alive"`, no push is sent for them and the run summary does not record them; an idle approval already pending stays as it was (only a person spends its alert). Its `session:working` and `session:idle` broadcasts carry `keepAlive: true`.
 
@@ -1494,22 +1467,22 @@ Tracked files (a fixed list, relative to the data dir): `settings.json`, `clis.j
 
 Settings (synced, in `settings.json`): `configBackupEnabled` (absent = on), `configBackupDir` (absolute path, `~` expanded; empty = `<data dir>/backups/config`), `configBackupKeepCount` (2–500, default 20), `configBackupKeepDays` (0–3650, default 30; `0` = no age limit). A key absent from `settings.json` means the retention the newest backup in the folder recorded, and the default only when none did. Retention only ever deletes snapshot folders Codeman made there, and never the newest one. Each snapshot is a `0700` folder named `cfg-YYYYMMDD-HHMMSS` (server local time; `-2`, `-3`… on a same-second collision) holding the tracked files under their own names plus a `manifest.json` (`id`, `createdAt`, `reason` of `startup`/`auto`/`manual`/`pre-restore`, `appVersion`, the change-check `hash`, an `origin` id, the `keepCount` and `keepDays` in force, and a SHA-256 and size per file), all `0600`. A snapshot is never dated earlier than the instance's newest one, so a clock that read ahead once does not make every later pass write a copy. All four routes answer `503 OPERATION_FAILED` when a custom folder does not respond, and diff and restore answer `409` for a symlinked or group/world-accessible backup as well as a checksum mismatch. Only folders with that name and a valid manifest are listed, restored or pruned. Full guide: `docs/wiki/Config-Backups.md`.
 
-| Method | Path                                 | Body | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ------ | ------------------------------------ | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/api/config-backups`                | none | `settings` in effect, `dir`, `defaultDir`, `tracked[]` and `backups[]` (`id`, `createdAt`, `reason`, `appVersion`, `files[]`, `bytes`), newest first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `POST` | `/api/config-backups`                | none | Snapshot now, even if nothing changed (`reason: manual`), then apply retention. `status` is `created` or `empty` (nothing tracked exists yet); `removed[]` lists the ids retention deleted. `503` when a custom folder does not answer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `GET`  | `/api/config-backups/diff?from=&to=` | none | What differs between two states: `from`/`to` are a backup id or `current` (the running config; the default for `to`). `files[]` (`name`, `status` `added`/`removed`/`changed`/`unchanged`, `changes[]` of `path`, `kind`, `before`/`after`, `truncated`, `detail`) and `changed`. Credential values are never returned (`redacted: true`). `400` without `from`; `404` unknown id; `409` if a file fails its checksum.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `POST` | `/api/config-backups/:id/restore`    | none | Put a snapshot's files back, atomically, after a `pre-restore` snapshot of the current ones (none when nothing changed since the newest backup). `404` unknown id; `409 CONFLICT` if a file fails its checksum (nothing changed). Returns `restored[]`, `untouched[]` (tracked files present now that the backup did not hold; left as they are), `safetySnapshot` (the `pre-restore` id, or the newest backup's when nothing had changed since it) and `restartRequired[]` (files the running server only reads at start: `.env`, `push-keys.json`, `settings.json`). A file that cannot be written (a full disk, a directory in its place) does not stop the others: the answer is then `500 OPERATION_FAILED` with the same fields in `data` plus `failed[]` (`name`, `error`); the files listed in `restored[]` are the backup's and are reloaded like a full restore. |
+| Method | Path                                 | Body | Notes                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------ | ------------------------------------ | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/api/config-backups`                | none | `settings` in effect, `dir`, `defaultDir`, `tracked[]` and `backups[]` (`id`, `createdAt`, `reason`, `appVersion`, `files[]`, `bytes`), newest first.                                                                                                                                                                                                                                                                  |
+| `POST` | `/api/config-backups`                | none | Snapshot now, even if nothing changed (`reason: manual`), then apply retention. `status` is `created` or `empty` (nothing tracked exists yet); `removed[]` lists the ids retention deleted. `503` when a custom folder does not answer.                                                                                                                                                                                                                                                                         |
+| `GET`  | `/api/config-backups/diff?from=&to=` | none | What differs between two states: `from`/`to` are a backup id or `current` (the running config; the default for `to`). `files[]` (`name`, `status` `added`/`removed`/`changed`/`unchanged`, `changes[]` of `path`, `kind`, `before`/`after`, `truncated`, `detail`) and `changed`. Credential values are never returned (`redacted: true`). `400` without `from`; `404` unknown id; `409` if a file fails its checksum. |
+| `POST` | `/api/config-backups/:id/restore`    | none | Put a snapshot's files back, atomically, after a `pre-restore` snapshot of the current ones (none when nothing changed since the newest backup). `404` unknown id; `409 CONFLICT` if a file fails its checksum (nothing changed). Returns `restored[]`, `untouched[]` (tracked files present now that the backup did not hold; left as they are), `safetySnapshot` (the `pre-restore` id, or the newest backup's when nothing had changed since it) and `restartRequired[]` (files the running server only reads at start: `.env`, `push-keys.json`, `settings.json`). A file that cannot be written (a full disk, a directory in its place) does not stop the others: the answer is then `500 OPERATION_FAILED` with the same fields in `data` plus `failed[]` (`name`, `error`); the files listed in `restored[]` are the backup's and are reloaded like a full restore.                                                                                                                                                              |
 
 ## Webhook notifications
 
 Posts the Web Push events to ntfy, Slack, Discord or a generic JSON URL (Settings → Notifications). Off by default. The webhook URL is a bearer secret (anyone holding a Slack/Discord URL can post as it), so it lives in `~/.codeman/webhook.json` (0600), is **never returned**, and is kept out of `settings.json`. All three routes answer `403` for a non-admin in multi-user mode.
 
-| Method | Path                | Body                                         | Notes                                                                                                                                                                                                                                                                          |
-| ------ | ------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GET`  | `/api/webhook`      | none                                         | `{ enabled, kind, scope, hasUrl, urlMasked, lastResult }`. `urlMasked` is scheme + host only. `lastResult` is the last delivery (`ok`, `status?`, `error?`, `at`) or `null`.                                                                                                   |
-| `PUT`  | `/api/webhook`      | `{ enabled?, kind?, scope?, url? }` (strict) | `kind`: `ntfy` \| `slack` \| `discord` \| `generic`. `scope`: `attention` (skip "response complete") \| `all`. An absent `url` keeps the saved one; `""` clears it. `400` for a non-http(s) URL, `user:pass@`, a link-local or cloud-metadata target, or enabling with no URL. |
-| `POST` | `/api/webhook/test` | none                                         | Sends one message with the saved config, even while disabled. `200` with `data.ok` telling whether the webhook accepted it; `400` if no URL is saved.                                                                                                                          |
+| Method | Path                 | Body                                         | Notes |
+| ------ | -------------------- | -------------------------------------------- | ----- |
+| `GET`  | `/api/webhook`       | none                                         | `{ enabled, kind, scope, hasUrl, urlMasked, lastResult }`. `urlMasked` is scheme + host only. `lastResult` is the last delivery (`ok`, `status?`, `error?`, `at`) or `null`. |
+| `PUT`  | `/api/webhook`       | `{ enabled?, kind?, scope?, url? }` (strict) | `kind`: `ntfy` \| `slack` \| `discord` \| `generic`. `scope`: `attention` (skip "response complete") \| `all`. An absent `url` keeps the saved one; `""` clears it. `400` for a non-http(s) URL, `user:pass@`, a link-local or cloud-metadata target, or enabling with no URL. |
+| `POST` | `/api/webhook/test`  | none                                         | Sends one message with the saved config, even while disabled. `200` with `data.ok` telling whether the webhook accepted it; `400` if no URL is saved. |
 
 Delivery goes through the same egress guard as web tabs (refused on the resolved address too), does not follow redirects, times out after 5 s, sends the same event for the same session at most once per 3 s, and has at most 5 requests in flight. Error text never contains the URL.
 
@@ -1517,12 +1490,12 @@ Delivery goes through the same egress guard as web tabs (refused on the resolved
 
 One thread per tab in a private Discord channel, alerts out and replies typed back in. Setup (bot, least-privilege permissions, IDs) is in [discord-bridge.md](discord-bridge.md). The bot token is a bearer secret: stored in `~/.codeman/discord.json` (0600), never returned, and the three settings routes are admin only in multi-user mode.
 
-| Method | Path                               | Body                                                                                                                                             | Notes                                                                                                                                                                                                                                                                                                                                                                |
-| ------ | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/api/discord`                     | none                                                                                                                                             | Config without the token, plus `hasToken`, `tokenMasked`, `gateway` (`off` \| `connecting` \| `connected` \| `error`), `gatewayError` and `lastResult`.                                                                                                                                                                                                              |
-| `PUT`  | `/api/discord`                     | `{ enabled?, token?, guildId?, parentChannelId?, allowedUserIds?, threadCreation?, onSessionDelete?, pingMode?, scope?, startupHint? }` (strict) | `threadCreation`: `lazy` \| `onSessionStart`. `onSessionDelete`: `keep` \| `archive` \| `delete`. `pingMode`: `off` \| `critical` \| `all`. `scope`: `attention` \| `all`. An absent `token` keeps the saved one; `""` clears it. `400` for a non-numeric id or enabling without a token, guild, channel and at least one allowed user.                              |
-| `POST` | `/api/discord/test`                | none                                                                                                                                             | Posts one message to the parent channel with the saved config, even while disabled. `200` with `data.ok`; `400` if no token or channel is saved.                                                                                                                                                                                                                     |
-| `POST` | `/api/sessions/:id/discord-notify` | `{ message, urgent?, file? }` (strict, message 1 to 1500 characters)                                                                             | A CLI asks for the user: posts into that tab's thread, pinging when `urgent`. `file` is an absolute path inside the tab's working folder (real path, regular file, at most 8 MB, local sessions only) uploaded with the post; `400` otherwise. `409` while the bridge is disabled. The `codeman notify "message" [--urgent] [--file path]` command wraps this route. |
+| Method | Path | Body | Notes |
+| ------ | ------ | ------ | ------ |
+| `GET` | `/api/discord` | none | Config without the token, plus `hasToken`, `tokenMasked`, `gateway` (`off` \| `connecting` \| `connected` \| `error`), `gatewayError` and `lastResult`. |
+| `PUT` | `/api/discord` | `{ enabled?, token?, guildId?, parentChannelId?, allowedUserIds?, threadCreation?, onSessionDelete?, pingMode?, scope?, startupHint? }` (strict) | `threadCreation`: `lazy` \| `onSessionStart`. `onSessionDelete`: `keep` \| `archive` \| `delete`. `pingMode`: `off` \| `critical` \| `all`. `scope`: `attention` \| `all`. An absent `token` keeps the saved one; `""` clears it. `400` for a non-numeric id or enabling without a token, guild, channel and at least one allowed user. |
+| `POST` | `/api/discord/test` | none | Posts one message to the parent channel with the saved config, even while disabled. `200` with `data.ok`; `400` if no token or channel is saved. |
+| `POST` | `/api/sessions/:id/discord-notify` | `{ message, urgent?, file? }` (strict, message 1 to 1500 characters) | A CLI asks for the user: posts into that tab's thread, pinging when `urgent`. `file` is an absolute path inside the tab's working folder (real path, regular file, at most 8 MB, local sessions only) uploaded with the post; `400` otherwise. `409` while the bridge is disabled. The `codeman notify "message" [--urgent] [--file path]` command wraps this route. |
 
 Only replies from `allowedUserIds`, in `guildId`, inside a thread the bridge created are typed into a session, as one printable line plus Enter, at most one per second per tab. Attached files are saved under `.codeman-discord/` in the tab's folder and their paths appended to that line (see [discord-bridge.md](discord-bridge.md)).
 
@@ -1538,7 +1511,7 @@ same speech-to-text service the CLI's own `/voice` mode uses. Gated on the synce
 [`claude-voice-plan.md`](claude-voice-plan.md).
 
 - `GET /api/v1/voice/status` -> `{ available, reason?, subscriptionType?,
-expiresAt? }`. `reason` is `disabled` (setting off), `no-credentials` (nobody
+  expiresAt? }`. `reason` is `disabled` (setting off), `no-credentials` (nobody
   signed in to Claude Code on the server), `expired` (the access token elapsed;
   running any Claude session refreshes it) or `malformed`. The OAuth token
   itself is never returned by this or any other endpoint.
