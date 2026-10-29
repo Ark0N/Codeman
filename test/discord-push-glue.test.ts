@@ -18,7 +18,7 @@ import { WebServer } from '../src/web/server.js';
 import { SseEvent } from '../src/web/sse-events.js';
 
 type Internals = {
-  pushStore: { getAll: () => never[] };
+  pushStore: { getAll: () => never[]; dispose: () => void };
   discordBridge: Record<string, ReturnType<typeof vi.fn>>;
   sessions: Map<string, unknown>;
   mux: { capturePaneText?: (name: string) => string | null };
@@ -29,7 +29,7 @@ type Internals = {
 
 function server(): Internals {
   const s = new WebServer(0, false, true, '127.0.0.1', 'box') as unknown as Internals;
-  s.pushStore = { getAll: () => [] };
+  s.pushStore = { getAll: () => [], dispose: () => undefined };
   s.discordBridge = {
     notify: vi.fn(async () => null),
     sessionCreated: vi.fn(async () => undefined),
@@ -92,7 +92,7 @@ describe('broadcast -> Discord tab lifecycle', () => {
   it('routes created, updated and deleted by kind, reading both payload shapes', () => {
     const s = server();
     s.broadcast(SseEvent.SessionCreated, { session: { id: 's1', name: 'w1', createdAt: 123 } });
-    expect(s.discordBridge.sessionCreated).toHaveBeenCalledWith('s1', 'w1', 123);
+    expect(s.discordBridge.sessionCreated).toHaveBeenCalledWith('s1', 'w1', 123, false);
     s.broadcast(SseEvent.SessionUpdated, { id: 's1', name: 'renamed' });
     expect(s.discordBridge.sessionRenamed).toHaveBeenCalledWith('s1', 'renamed');
   });

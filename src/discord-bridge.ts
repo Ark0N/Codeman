@@ -653,6 +653,9 @@ export class DiscordBridge {
   private pending = new Map<string, Promise<string | null>>();
   /** Thread-map writes run one after another: concurrent creations must not interleave on the tmp file. */
   private persistChain: Promise<void> = Promise.resolve();
+  private mapLoad?: Promise<void>;
+  /** The first full load (config, thread map, gateway), shared by every caller that arrives before it ends. */
+  private firstLoad?: Promise<void>;
   private last: DiscordResult | null = null;
   private readonly api: DiscordApi;
   private readonly now: () => number;
@@ -672,13 +675,22 @@ export class DiscordBridge {
     return this.gateway?.lastError ?? null;
   }
 
+  private async ensureLoaded(): Promise<void> {
+    if (this.loaded) return;
+    this.firstLoad ??= this.reload();
+    await this.firstLoad;
+  }
+
   /** (Re)read the config and start or stop the gateway to match. Call at boot and after a save. */
   async reload(): Promise<void> {
     this.cfg = await readDiscordConfig(this.deps.configDir);
-    if (!this.loaded) {
-      this.threads = await readThreadMap(this.deps.configDir);
+    // The thread map is read once, by whoever gets here first; everyone else waits for that read. A second
+    // read finishing later would replace the map and drop threads made in between.
+    this.mapLoad ??= readThreadMap(this.deps.configDir).then((saved) => {
+      this.threads = { ...saved, ...this.threads };
       this.loaded = true;
-    }
+    });
+    await this.mapLoad;
     this.gateway?.stop();
     this.gateway = null;
     activeStartupHint = this.cfg.enabled && this.cfg.token && this.cfg.startupHint ? DISCORD_STARTUP_HINT : undefined;
@@ -758,7 +770,7 @@ export class DiscordBridge {
     opts: { urgent?: boolean; deliberate?: boolean } = {}
   ): Promise<DiscordResult | null> {
     const explicitUrgent = opts.urgent === true;
-    if (!this.loaded) await this.reload();
+    await this.ensureLoaded();
     if (!shouldSendDiscord(this.cfg, msg.urgency)) return null;
     const key = `${msg.event}:${msg.sessionId ?? ''}`;
     const t = this.now();
@@ -833,7 +845,7 @@ export class DiscordBridge {
     createdAt?: number,
     resumed = false
   ): Promise<void> {
-    if (!this.loaded) await this.reload();
+    await this.ensureLoaded();
     // Only a tab made just now: the same event also fires for sessions restored at server start.
     // A resumed tab is created now too, but its conversation is not new, so it is never hinted.
     if (!resumed && createdAt !== undefined && this.now() - createdAt < 60_000) this.fresh.add(sessionId);
