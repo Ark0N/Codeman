@@ -49,6 +49,8 @@ function bareServer(live: string[] = [], persisted: string[] = []): CleanupServe
     stopTranscriptWatcher: () => {},
     persistDeb: { cancelKey: () => {} },
     sse: { cleanupSessionBatches: () => {} },
+    // A real delete also tells the Discord bridge, which frees its per-tab state and may archive the thread.
+    discordBridge: { sessionDeleted: async () => {} },
     broadcast: () => {},
   });
   return server;
