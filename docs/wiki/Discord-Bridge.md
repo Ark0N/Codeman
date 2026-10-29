@@ -56,7 +56,7 @@ An agent only posts deliberately if it knows it can:
 
 - **Claude** is launched with the instruction as part of its system prompt (**Tell Claude how to reach you**, on by default), so nothing shows in the chat.
 - **Every other CLI** is told only if you turn on **Also tell other CLIs, as a message** (off by default: it costs one model turn per tab, and for a spawned worker or a scheduled run it arrives with the first real prompt). Then the same text is sent once, as a message, the first time a brand-new tab goes idle.
-  Restored tabs, resumed tabs, shell tabs, and remote (ssh) and Docker tabs (which have no `codeman` command) are never sent it.
+  Restored tabs, shell tabs, and remote (ssh) and Docker tabs (which have no `codeman` command) are never sent it.
 
 Tabs that were already open when you turned the bridge on are not told. The alerts still reach
 Discord for them; only the agent-initiated `codeman notify` habit is missing.

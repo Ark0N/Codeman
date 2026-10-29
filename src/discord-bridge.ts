@@ -682,7 +682,7 @@ export class DiscordBridge {
     return this.gateway?.lastError ?? null;
   }
 
-  private async ensureLoaded(): Promise<void> {
+  async ensureLoaded(): Promise<void> {
     if (this.loaded) return;
     this.firstLoad ??= this.reload();
     await this.firstLoad;
@@ -756,7 +756,10 @@ export class DiscordBridge {
     const p = (async () => {
       try {
         const t = await this.api.createThread(this.cfg.parentChannelId, threadNameFor(name, sessionId));
-        if (!t?.id) return null;
+        if (!t?.id) {
+          this.last = this.fail(new Error('Discord did not return a thread'));
+          return null;
+        }
         this.threads[sessionId] = t.id;
         await this.persistThreads();
         return t.id;
@@ -821,10 +824,10 @@ export class DiscordBridge {
 
   /** A deliberate test send to the parent channel: bypasses `enabled`, scope and dedupe. */
   async sendTest(cfg: DiscordConfig, host?: string): Promise<DiscordResult> {
-    const saved = this.cfg;
-    this.cfg = cfg;
+    // Its own client: swapping this.cfg would undo a save that lands while the post is in flight.
+    const api = new DiscordApi(() => cfg.token, this.deps.fetchImpl, this.deps.sleep);
     try {
-      await this.api.post(
+      await api.post(
         cfg.parentChannelId,
         buildPost(
           {
@@ -840,22 +843,14 @@ export class DiscordBridge {
       return (this.last = { ok: true, at: this.now() });
     } catch (err) {
       return (this.last = this.fail(err));
-    } finally {
-      this.cfg = saved;
     }
   }
 
   /** Session tab created: make its thread now when `threadCreation` is `onSessionStart`. */
-  async sessionCreated(
-    sessionId: string,
-    name: string | undefined,
-    createdAt?: number,
-    resumed = false
-  ): Promise<void> {
+  async sessionCreated(sessionId: string, name: string | undefined, createdAt?: number): Promise<void> {
     await this.ensureLoaded();
     // Only a tab made just now: the same event also fires for sessions restored at server start.
-    // A resumed tab is created now too, but its conversation is not new, so it is never hinted.
-    if (!resumed && createdAt !== undefined && this.now() - createdAt < 60_000) this.fresh.add(sessionId);
+    if (createdAt !== undefined && this.now() - createdAt < 60_000) this.fresh.add(sessionId);
     if (!this.cfg.enabled || this.cfg.threadCreation !== 'onSessionStart') return;
     await this.threadFor(sessionId, name);
   }
@@ -873,8 +868,10 @@ export class DiscordBridge {
   }
 
   async sessionRenamed(sessionId: string, name: string | undefined): Promise<void> {
-    if (this.names.get(sessionId) === (name ?? '')) return;
+    const seen = this.names.get(sessionId);
     this.names.set(sessionId, name ?? '');
+    // First sight only records the name: the thread was made with it, so a PATCH would spend a rename for nothing.
+    if (seen === undefined || seen === (name ?? '')) return;
     const thread = this.threads[sessionId];
     if (!thread || !this.cfg.enabled) return;
     await this.api.rename(thread, threadNameFor(name, sessionId)).catch(() => undefined);

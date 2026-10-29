@@ -99,5 +99,7 @@ export async function runNotify(
   if (status >= 200 && status < 300) return { code: 0, out: 'Posted to Discord' };
   // The bridge being off is not a failure: the caller just says it in the terminal.
   if (status === 409) return { code: 0, out: 'The Discord bridge is off. Say it in the terminal instead.' };
+  if (status === 429)
+    return { code: 1, err: 'Too many messages to Discord from this tab. Wait a minute, then send one.' };
   return { code: 1, err: `Could not post to Discord${error ? `: ${error}` : status ? ` (HTTP ${status})` : ''}` };
 }

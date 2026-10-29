@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
-import { registerDiscordRoutes } from '../../src/web/routes/discord-routes.js';
+import { _resetNotifyBuckets, registerDiscordRoutes } from '../../src/web/routes/discord-routes.js';
 import { DiscordBridge, discordConfigPath, readDiscordConfig, type DiscordFetch } from '../../src/discord-bridge.js';
 
 const TOKEN = 'MTA1.secret.token-value-1234567890';
@@ -37,6 +37,7 @@ async function harness(authUser?: { username: string; role: 'admin' | 'user' }) 
 }
 
 beforeEach(() => {
+  _resetNotifyBuckets();
   dir = mkdtempSync(join(tmpdir(), 'discord-routes-'));
   fetchImpl = vi.fn<DiscordFetch>(
     async () => new Response(JSON.stringify({ id: '444444444444444444' }), { status: 200 })
@@ -174,6 +175,23 @@ describe('POST /api/sessions/:id/discord-notify', () => {
     bridge.stop();
   });
 
+  it('answers 429 RATE_LIMITED once a tab posts more than its share in a minute', async () => {
+    const { app, bridge } = await harness();
+    await app.inject({ method: 'PUT', url: '/api/discord', payload: FULL });
+    const codes: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      codes.push(
+        (await app.inject({ method: 'POST', url, payload: { message: `ping ${i}`, urgent: true } })).statusCode
+      );
+    }
+    expect(codes.slice(0, 6)).toEqual([200, 200, 200, 200, 200, 200]);
+    expect(codes.slice(6)).toEqual([429, 429]);
+    const limited = await app.inject({ method: 'POST', url, payload: { message: 'again' } });
+    expect(limited.json().errorCode).toBe('RATE_LIMITED');
+    expect(limited.headers['retry-after']).toBe('60');
+    bridge.stop();
+  });
+
   it('rejects an empty or oversized message', async () => {
     const { app } = await harness();
     const url = `/api/sessions/test-session-1/discord-notify`;
@@ -226,6 +244,15 @@ describe('discord-notify with a file', () => {
     const res = await post(app, path());
     expect(res.statusCode).toBe(400);
     expect(fetchImpl.mock.calls.some((c) => c[1].body instanceof FormData)).toBe(false);
+    bridge.stop();
+  });
+
+  it('refuses to send when the session folder is not a directory it can probe', async () => {
+    const { app, ctx, bridge } = await ready();
+    (ctx.sessions.get('test-session-1') as unknown as { workingDir: string }).workingDir = join(work, 'run.log');
+    const res = await post(app, join(work, 'run.log'));
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/session folder/);
     bridge.stop();
   });
 

@@ -18,6 +18,7 @@ import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } 
 import { findSessionOrFail, isAdmin, parseBody } from '../route-helpers.js';
 import type { SessionPort } from '../ports/session-port.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
+import { describeUnknownPath, probePathKind } from '../../utils/bounded-path-probe.js';
 import { DiscordNotifySchema, DiscordUpdateSchema } from '../schemas.js';
 import {
   discordConfigProblem,
@@ -56,6 +57,29 @@ function resolveSessionId(ctx: SessionPort, id: string): string {
   return hits.length === 1 ? hits[0] : id;
 }
 
+// A loop or a prompt-injected agent must not ping the phones until Discord answers 429, nor hold 8 MB
+// uploads in memory without bound. Per session, refilled continuously (the same shape as paste-image's).
+const NOTIFY_PER_MINUTE = 6;
+const notifyBuckets = new Map<string, { tokens: number; at: number }>();
+
+function consumeNotifyToken(sessionId: string, now: number = Date.now()): boolean {
+  if (notifyBuckets.size > 1000) {
+    for (const [k, b] of notifyBuckets) if (now - b.at > 3_600_000) notifyBuckets.delete(k);
+  }
+  const b = notifyBuckets.get(sessionId) ?? { tokens: NOTIFY_PER_MINUTE, at: now };
+  b.tokens = Math.min(NOTIFY_PER_MINUTE, b.tokens + ((now - b.at) * NOTIFY_PER_MINUTE) / 60_000);
+  b.at = now;
+  notifyBuckets.set(sessionId, b);
+  if (b.tokens < 1) return false;
+  b.tokens -= 1;
+  return true;
+}
+
+/** Test hook: forget every bucket between runs. */
+export function _resetNotifyBuckets(): void {
+  notifyBuckets.clear();
+}
+
 /**
  * A file a session may send: a regular file, at most MAX_FILE_BYTES, whose REAL path (symlinks
  * followed) lies inside the session's working folder. Anything else is refused, so a CLI cannot be
@@ -68,6 +92,10 @@ async function fileProblem(
 ): Promise<{ name: string; data: Uint8Array } | string> {
   if (remote) return 'Files can only be sent from a local session';
   if (!isAbsolute(file)) return 'The file path must be absolute';
+  // Bounded first: realpath on a dead mount would hang the request.
+  if ((await probePathKind(workingDir, { pastCap: true })) !== 'directory') {
+    return describeUnknownPath('The session folder', workingDir, { pastCap: true });
+  }
   try {
     const [root, real] = await Promise.all([realpath(workingDir), realpath(file)]);
     const rel = relative(root, real);
@@ -151,6 +179,14 @@ export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDe
     const id = resolveSessionId(deps.ctx, rawId);
     const { message, urgent, file } = parseBody(DiscordNotifySchema, req.body, 'Invalid Discord message');
     const session = findSessionOrFail(deps.ctx, id, req);
+    if (!consumeNotifyToken(session.id)) {
+      reply.code(429);
+      reply.header('Retry-After', '60');
+      return createErrorResponse(
+        ApiErrorCode.RATE_LIMITED,
+        `Too many messages (${NOTIFY_PER_MINUTE} per minute per session)`
+      );
+    }
     let upload: { name: string; data: Uint8Array } | undefined;
     if (file !== undefined) {
       const problem = await fileProblem(session.workingDir, !!session.remote, file);

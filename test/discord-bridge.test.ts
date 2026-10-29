@@ -477,6 +477,39 @@ describe('DiscordBridge', () => {
     });
   });
 
+  describe('sendTest', () => {
+    it('posts with the config it is given and leaves the live config alone', async () => {
+      const auth: string[] = [];
+      const b = bridge({}, async (_url, init) => {
+        auth.push(String((init.headers as Record<string, string>).Authorization));
+        return jsonRes({ id: 'msg' });
+      });
+      await b.reload();
+      expect((await b.sendTest({ ...CFG, token: 'test-token' }))?.ok).toBe(true);
+      // A save that landed during the test must not be undone: the live token is still the saved one.
+      await b.notify(MSG);
+      expect(auth[0]).toBe('Bot test-token');
+      expect(auth.slice(1).every((a) => a === `Bot ${CFG.token}`)).toBe(true);
+      b.stop();
+    });
+  });
+
+  it('names a thread that Discord answers without an id, instead of reporting an old result', async () => {
+    const b = bridge({}, async (url) => (String(url).endsWith('/threads') ? jsonRes({}) : jsonRes({ id: 'msg' })));
+    const r = await b.notify(MSG);
+    expect(r).toMatchObject({ ok: false });
+    b.stop();
+  });
+
+  it('does not rename a thread to the name it already has on first sight', async () => {
+    const b = bridge();
+    await b.notify(MSG);
+    posts.length = 0;
+    await b.sessionRenamed('s1', 'w1-app');
+    expect(posts).toHaveLength(0);
+    b.stop();
+  });
+
   describe('per-tab state', () => {
     const internals = (b: DiscordBridge) =>
       b as unknown as { names: Map<string, string>; lastReply: Map<string, number>; fresh: Set<string> };
@@ -719,14 +752,6 @@ describe('DiscordBridge files and startup hint', () => {
     expect(sent[0][1].endsWith('\r')).toBe(true);
     expect(sent[0][2]).toBe(false); // Codeman's own text: not a person's input, so it cannot auto-name the tab
     expect(DISCORD_STARTUP_HINT).toContain('codeman notify');
-    b.stop();
-  });
-
-  it('does not hint a resumed tab, even though it was created just now', async () => {
-    const b = await make();
-    await b.sessionCreated('s6', 'resumed', t - 1000, true);
-    await b.sessionIdle('s6', true);
-    expect(sent).toHaveLength(0);
     b.stop();
   });
 

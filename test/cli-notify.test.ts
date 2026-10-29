@@ -57,6 +57,7 @@ describe('runNotify', () => {
     expect(
       (await runNotify({ message: 'x' }, ENV, '/w', fake(400, 'The file must be inside the session folder'))).err
     ).toBe('Could not post to Discord: The file must be inside the session folder');
+    expect((await runNotify({ message: 'x' }, ENV, '/w', fake(429))).err).toMatch(/Too many messages/);
     expect((await runNotify({ message: 'x' }, ENV, '/w', fake(500))).err).toBe('Could not post to Discord (HTTP 500)');
     expect((await runNotify({ message: 'x' }, ENV, '/w', fake(0))).err).toBe('Could not post to Discord');
   });

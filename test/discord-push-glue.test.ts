@@ -92,7 +92,7 @@ describe('broadcast -> Discord tab lifecycle', () => {
   it('routes created, updated and deleted by kind, reading both payload shapes', () => {
     const s = server();
     s.broadcast(SseEvent.SessionCreated, { session: { id: 's1', name: 'w1', createdAt: 123 } });
-    expect(s.discordBridge.sessionCreated).toHaveBeenCalledWith('s1', 'w1', 123, false);
+    expect(s.discordBridge.sessionCreated).toHaveBeenCalledWith('s1', 'w1', 123);
     s.broadcast(SseEvent.SessionUpdated, { id: 's1', name: 'renamed' });
     expect(s.discordBridge.sessionRenamed).toHaveBeenCalledWith('s1', 'renamed');
   });
@@ -109,14 +109,6 @@ describe('broadcast -> Discord tab lifecycle', () => {
     expect(s.discordBridge.sessionDeleted).not.toHaveBeenCalled();
     await s.cleanupSession('gone', true);
     expect(s.discordBridge.sessionDeleted).toHaveBeenCalledWith('gone');
-  });
-
-  it('marks a resumed tab as resumed, so it is never sent the typed hint', () => {
-    const s = server();
-    s.broadcast(SseEvent.SessionCreated, { session: { id: 's9', name: 'w9', createdAt: 5, resumeSessionId: 'abc' } });
-    expect(s.discordBridge.sessionCreated).toHaveBeenCalledWith('s9', 'w9', 5, true);
-    s.broadcast(SseEvent.SessionCreated, { session: { id: 's8', name: 'w8', createdAt: 6 } });
-    expect(s.discordBridge.sessionCreated).toHaveBeenLastCalledWith('s8', 'w8', 6, false);
   });
 
   it('ignores an event with no session id', () => {

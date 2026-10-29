@@ -1356,7 +1356,7 @@ export class WebServer extends EventEmitter {
       ctx,
       hostTitle: () => this.windowTitle,
     });
-    if (!this.testMode) void this.discordBridge.reload().catch(() => undefined);
+    if (!this.testMode) void this.discordBridge.ensureLoaded().catch(() => undefined);
     registerDoctorRoutes(this.app);
     registerCustomModelRoutes(this.app);
     registerCliRegistryRoutes(this.app);
@@ -2754,8 +2754,7 @@ export class WebServer extends EventEmitter {
       id?: string;
       name?: string;
       createdAt?: number;
-      resumeSessionId?: string;
-      session?: { id?: string; name?: string; createdAt?: number; resumeSessionId?: string };
+      session?: { id?: string; name?: string; createdAt?: number };
     };
     const s = d.session ?? d;
     if (!s.id) return;
@@ -2766,7 +2765,7 @@ export class WebServer extends EventEmitter {
           this.discordBridge.sessionIdle(id, this.isHintableSession(id))
         : event === SseEvent.SessionCreated
           ? this.discordBridge
-              .sessionCreated(id, s.name, s.createdAt, !!s.resumeSessionId)
+              .sessionCreated(id, s.name, s.createdAt)
               .then(() => this.discordBridge.sessionRenamed(id, s.name))
           : this.discordBridge.sessionRenamed(id, s.name);
     void run.catch(() => undefined);

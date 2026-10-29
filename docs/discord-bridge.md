@@ -10,7 +10,7 @@ Codeman can post to a private Discord server when a session needs you, give ever
 - Posts when a session asks for permission, asks a question, goes idle, stops or errors.
 - Creates one thread per tab in a single parent channel, so a reply always reaches exactly one session.
 - Types your reply into that session as a single line followed by Enter.
-- Lets a CLI post a deliberate message (for example "press the reset button on the case") with the `codeman notify` command, which calls `POST /api/sessions/:id/discord-notify`.
+- Lets a CLI post a deliberate message (for example "press the reset button on the case") with the `codeman notify` command, which calls `POST /api/sessions/:id/discord-notify`. Each tab may post 6 a minute; past that the command says "too many messages", so a looping agent cannot ping your phone without end.
 - Saves files you attach in a thread into that tab's working folder and tells the CLI the path. A CLI can send a file back with `codeman notify "message" --file <path>`.
 - Tells each CLI about `codeman notify` (see [Telling the CLIs](#telling-the-clis)).
 
@@ -102,7 +102,7 @@ In the Discord mobile app set the server to **All Messages**. Discord's own push
 A CLI only posts deliberately if it knows it can. While the bridge is on:
 
 - **Claude** (`startupHint`, on by default) is launched with `--append-system-prompt`, so nothing shows in the conversation.
-- **Every other CLI** is sent nothing unless you turn on `typedHint` (off by default: it costs one model turn per tab, and for a spawned worker or a scheduled run it arrives together with the first real prompt). With it on, the same text is sent once, as a message, the first time a brand-new tab becomes idle. Tabs that are restored when Codeman starts, resumed tabs, shell tabs, and remote (ssh) and Docker tabs (which have no `codeman` command) are never sent it.
+- **Every other CLI** is sent nothing unless you turn on `typedHint` (off by default: it costs one model turn per tab, and for a spawned worker or a scheduled run it arrives together with the first real prompt). With it on, the same text is sent once, as a message, the first time a brand-new tab becomes idle. Tabs that are restored when Codeman starts, shell tabs, and remote (ssh) and Docker tabs (which have no `codeman` command) are never sent it.
 
 The text explains `codeman notify "message" --urgent`. `codeman` is already on the PATH of every session and reads `CODEMAN_SESSION_ID` and `CODEMAN_API_URL`, so no other setup is needed. Without a bridge it prints that the bridge is off and exits cleanly. Tabs started before the bridge was enabled are not told; use the skill or `CLAUDE.md` for those.
 
