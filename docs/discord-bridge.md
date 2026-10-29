@@ -10,7 +10,9 @@ Codeman can post to a private Discord server when a session needs you, give ever
 - Posts when a session asks for permission, asks a question, goes idle, stops or errors.
 - Creates one thread per tab in a single parent channel, so a reply always reaches exactly one session.
 - Types your reply into that session as a single line followed by Enter.
-- Lets a CLI post a deliberate message (for example "press the reset button on the case") with `POST /api/sessions/:id/discord-notify`.
+- Lets a CLI post a deliberate message (for example "press the reset button on the case") with the `codeman notify` command, which calls `POST /api/sessions/:id/discord-notify`.
+- Saves files you attach in a thread into that tab's working folder and tells the CLI the path. A CLI can send a file back with `codeman notify "message" --file <path>`.
+- Tells each CLI about `codeman notify` (see [Telling the CLIs](#telling-the-clis)).
 
 ## Setup
 
@@ -46,21 +48,23 @@ On the **Bot** tab:
 On **OAuth2**, **URL Generator**:
 
 1. Tick the scope `bot` only. Do not tick `applications.commands` or anything else.
-2. Tick only these permissions:
+2. Tick only these permissions (Attach Files and Embed Links are optional: without them, files cannot be sent from a CLI and links show no preview):
 
-   | Permission               | Why                                |
-   | ------------------------ | ---------------------------------- |
-   | View Channels            | See the parent channel             |
-   | Send Messages            | Post in the parent channel         |
-   | Send Messages in Threads | Post in each tab's thread          |
-   | Create Public Threads    | Make a thread per tab              |
-   | Read Message History     | Read your replies                  |
-   | Add Reactions            | Acknowledge a reply that was typed |
+   | Permission               | Why                                  |
+   | ------------------------ | ------------------------------------ |
+   | View Channels            | See the parent channel               |
+   | Send Messages            | Post in the parent channel           |
+   | Send Messages in Threads | Post in each tab's thread            |
+   | Create Public Threads    | Make a thread per tab                |
+   | Read Message History     | Read your replies                    |
+   | Add Reactions            | Acknowledge a reply that was typed   |
+   | Attach Files             | Send a file from a CLI to the thread |
+   | Embed Links              | Show previews for links in posts     |
 
 3. Open the generated URL, choose your private server and authorise.
 4. Check the **Installation** tab still shows **Install Link: None**, so there is no public way to add the bot.
 
-The ticked boxes are the source of truth. As a cross-check, these six permissions add up to the permissions integer `309237713984`.
+The ticked boxes are the source of truth. As a cross-check, these eight permissions add up to the permissions integer `309237763136`.
 
 ### 6. Optional: allow deleting threads
 
@@ -84,12 +88,28 @@ In the Discord mobile app set the server to **All Messages**. Discord's own push
 
 ## Options
 
-| Option            | Values                      | Default     | Effect                                                                                  |
-| ----------------- | --------------------------- | ----------- | --------------------------------------------------------------------------------------- |
-| `threadCreation`  | `lazy`, `onSessionStart`    | `lazy`      | `lazy` makes a thread on the first notification. `onSessionStart` makes one per new tab |
-| `onSessionDelete` | `keep`, `archive`, `delete` | `archive`   | What happens to the thread when its tab is deleted. `delete` needs Manage Threads       |
-| `pingMode`        | `off`, `critical`, `all`    | `critical`  | `critical` pings you for permission prompts, questions, errors and urgent posts         |
-| `scope`           | `attention`, `all`          | `attention` | `attention` skips the quiet "response complete" event. `all` sends it too               |
+| Option            | Values                      | Default     | Effect                                                                                   |
+| ----------------- | --------------------------- | ----------- | ---------------------------------------------------------------------------------------- |
+| `threadCreation`  | `lazy`, `onSessionStart`    | `lazy`      | `lazy` makes a thread on the first notification. `onSessionStart` makes one per new tab  |
+| `onSessionDelete` | `keep`, `archive`, `delete` | `archive`   | What happens to the thread when its tab is deleted. `delete` needs Manage Threads        |
+| `pingMode`        | `off`, `critical`, `all`    | `critical`  | `critical` pings you for permission prompts, questions, errors and urgent posts          |
+| `scope`           | `attention`, `all`          | `attention` | `attention` skips the quiet "response complete" event. `all` sends it too                |
+| `startupHint`     | on, off                     | on          | Tell each CLI about `codeman notify` (Claude at launch, others once on their first idle) |
+
+## Telling the CLIs
+
+A CLI only posts deliberately if it knows it can. While the bridge and `startupHint` are on:
+
+- **Claude** is launched with `--append-system-prompt`, so nothing shows in the conversation.
+- **Every other CLI** is sent the same text once, as a message, the first time a brand-new tab becomes idle. Tabs that are restored when Codeman starts, resumed tabs and shell tabs are never sent it.
+
+The text explains `codeman notify "message" --urgent`. `codeman` is already on the PATH of every session and reads `CODEMAN_SESSION_ID` and `CODEMAN_API_URL`, so no other setup is needed. Without a bridge it prints that the bridge is off and exits cleanly. Tabs started before the bridge was enabled are not told; use the skill or `CLAUDE.md` for those.
+
+## Files
+
+- **Received:** files you attach to a reply from an allowed user are saved as `<working folder>/.codeman-discord/<message id>-<name>` (mode 0600) and the one-line reply the CLI sees ends with `[attached: <paths>]`. At most 5 files of 8 MB each; names are reduced to letters, digits, `.`, `_` and `-`; only Discord's own HTTPS addresses are fetched. Anything skipped is named in the thread. Add `.codeman-discord/` to your `.gitignore`. Remote (ssh) tabs have no local folder, so no file is saved for them.
+- **Sent:** `codeman notify "message" --file <path>` uploads a regular file of at most 8 MB. The real path (symlinks followed) must be inside the tab's working folder, so a CLI cannot post `~/.codeman/discord.json` or an ssh key. Remote tabs cannot send files.
+- A downloaded file is untrusted content: only allowed users can send one, but a CLI that opens it is exposed to anything written inside it.
 
 ## Security model
 

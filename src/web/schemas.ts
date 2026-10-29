@@ -2231,6 +2231,7 @@ export const DiscordUpdateSchema = z
     onSessionDelete: z.enum(DISCORD_ON_DELETE).optional(),
     pingMode: z.enum(DISCORD_PING_MODES).optional(),
     scope: z.enum(WEBHOOK_SCOPES).optional(),
+    startupHint: z.boolean().optional(),
   })
   .strict();
 
@@ -2239,6 +2240,8 @@ export const DiscordNotifySchema = z
   .object({
     message: z.string().min(1).max(1500),
     urgent: z.boolean().optional(),
+    /** Absolute path of a file inside the session's working folder, uploaded with the post. */
+    file: z.string().min(1).max(1024).optional(),
   })
   .strict();
 

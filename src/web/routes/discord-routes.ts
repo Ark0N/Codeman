@@ -11,6 +11,8 @@
  * events. `discord-notify` follows the session's own ownership rules instead.
  */
 
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { basename, isAbsolute, relative, sep } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
 import { findSessionOrFail, isAdmin, parseBody } from '../route-helpers.js';
@@ -19,6 +21,7 @@ import { isMultiUserMode } from '../../config/multiuser.js';
 import { DiscordNotifySchema, DiscordUpdateSchema } from '../schemas.js';
 import {
   discordConfigProblem,
+  MAX_FILE_BYTES,
   maskToken,
   readDiscordConfig,
   writeDiscordConfig,
@@ -42,6 +45,32 @@ export type DiscordStatus = Omit<DiscordConfig, 'token'> & {
   gatewayError: string | null;
   lastResult: DiscordResult | null;
 };
+
+/**
+ * A file a session may send: a regular file, at most MAX_FILE_BYTES, whose REAL path (symlinks
+ * followed) lies inside the session's working folder. Anything else is refused, so a CLI cannot be
+ * talked into posting ~/.codeman/discord.json or an ssh key. Returns the bytes, or the reason.
+ */
+async function fileProblem(
+  workingDir: string,
+  remote: boolean,
+  file: string
+): Promise<{ name: string; data: Uint8Array } | string> {
+  if (remote) return 'Files can only be sent from a local session';
+  if (!isAbsolute(file)) return 'The file path must be absolute';
+  try {
+    const [root, real] = await Promise.all([realpath(workingDir), realpath(file)]);
+    const rel = relative(root, real);
+    if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+      return 'The file must be inside the session folder';
+    const info = await stat(real);
+    if (!info.isFile()) return 'Not a regular file';
+    if (info.size > MAX_FILE_BYTES) return `The file is over ${MAX_FILE_BYTES / 1024 / 1024} MB`;
+    return { name: basename(real), data: new Uint8Array(await readFile(real)) };
+  } catch {
+    return 'The file could not be read';
+  }
+}
 
 export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDeps): void {
   const denied = (req: FastifyRequest, reply: FastifyReply): ApiResponse<never> | null => {
@@ -109,8 +138,17 @@ export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDe
 
   app.post('/api/sessions/:id/discord-notify', async (req, reply): Promise<ApiResponse<DiscordResult | null>> => {
     const { id } = req.params as { id: string };
-    const { message, urgent } = parseBody(DiscordNotifySchema, req.body, 'Invalid Discord message');
+    const { message, urgent, file } = parseBody(DiscordNotifySchema, req.body, 'Invalid Discord message');
     const session = findSessionOrFail(deps.ctx, id, req);
+    let upload: { name: string; data: Uint8Array } | undefined;
+    if (file !== undefined) {
+      const problem = await fileProblem(session.workingDir, !!session.remote, file);
+      if (typeof problem === 'string') {
+        reply.code(400);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, problem);
+      }
+      upload = problem;
+    }
     const result = await deps.bridge.notify(
       {
         event: 'session:discord-notify',
@@ -120,6 +158,7 @@ export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDe
         sessionId: session.id,
         sessionName: session.name,
         host: deps.hostTitle(),
+        file: upload,
       },
       urgent === true
     );

@@ -519,6 +519,11 @@ export class WebServer extends EventEmitter {
       if (await session.writeViaMux(text, { fromUser: true }).catch(() => false)) return true;
       return session.write(text, { fromUser: true });
     },
+    // Remote (ssh) sessions keep their folder on another host, so received files have nowhere local to go.
+    sessionDir: (sessionId) => {
+      const session = this.sessions.get(sessionId);
+      return session && !session.remote ? session.workingDir : undefined;
+    },
   });
   private teamWatcher: TeamWatcher = new TeamWatcher();
   private _orchestratorLoop: import('../orchestrator-loop.js').OrchestratorLoop | null = null;
@@ -2723,20 +2728,41 @@ export class WebServer extends EventEmitter {
     this.bridgeSessionEvent(event, data);
   }
 
+  private isExternalSession(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    return !!session && isExternalCliMode(session.mode);
+  }
+
   /** Keep the Discord thread in step with the tab: created, renamed, deleted. Never throws. */
   private bridgeSessionEvent(event: string, data: unknown): void {
-    if (event !== SseEvent.SessionCreated && event !== SseEvent.SessionUpdated && event !== SseEvent.SessionDeleted) {
+    if (
+      event !== SseEvent.SessionCreated &&
+      event !== SseEvent.SessionUpdated &&
+      event !== SseEvent.SessionDeleted &&
+      event !== SseEvent.SessionIdle
+    ) {
       return;
     }
-    const d = (data ?? {}) as { id?: string; name?: string; session?: { id?: string; name?: string } };
+    const d = (data ?? {}) as {
+      id?: string;
+      name?: string;
+      createdAt?: number;
+      session?: { id?: string; name?: string; createdAt?: number };
+    };
     const s = d.session ?? d;
     if (!s.id) return;
+    const id = s.id;
     const run =
       event === SseEvent.SessionDeleted
-        ? this.discordBridge.sessionDeleted(s.id)
-        : event === SseEvent.SessionCreated
-          ? this.discordBridge.sessionCreated(s.id, s.name).then(() => this.discordBridge.sessionRenamed(s.id!, s.name))
-          : this.discordBridge.sessionRenamed(s.id, s.name);
+        ? this.discordBridge.sessionDeleted(id)
+        : event === SseEvent.SessionIdle
+          ? // Claude is told at launch; a shell must never be typed at.
+            this.discordBridge.sessionIdle(id, this.isExternalSession(id))
+          : event === SseEvent.SessionCreated
+            ? this.discordBridge
+                .sessionCreated(id, s.name, s.createdAt)
+                .then(() => this.discordBridge.sessionRenamed(id, s.name))
+            : this.discordBridge.sessionRenamed(id, s.name);
     void run.catch(() => undefined);
   }
 

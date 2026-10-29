@@ -3,7 +3,7 @@
  * settings routes are admin only in multi-user mode. Port: N/A (app.inject()).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
@@ -127,5 +127,77 @@ describe('POST /api/sessions/:id/discord-notify', () => {
     const url = `/api/sessions/test-session-1/discord-notify`;
     expect((await app.inject({ method: 'POST', url, payload: { message: '' } })).statusCode).toBe(400);
     expect((await app.inject({ method: 'POST', url, payload: { message: 'x'.repeat(2000) } })).statusCode).toBe(400);
+  });
+});
+
+describe('discord-notify with a file', () => {
+  let work: string;
+  let outside: string;
+  const url = '/api/sessions/test-session-1/discord-notify';
+
+  async function ready() {
+    const h = await harness();
+    (h.ctx.sessions.get('test-session-1') as unknown as { workingDir: string }).workingDir = work;
+    await h.app.inject({ method: 'PUT', url: '/api/discord', payload: FULL });
+    return h;
+  }
+  const post = (app: Awaited<ReturnType<typeof harness>>['app'], file: string) =>
+    app.inject({ method: 'POST', url, payload: { message: 'log attached', file } });
+
+  beforeEach(() => {
+    work = mkdtempSync(join(tmpdir(), 'discord-work-'));
+    outside = mkdtempSync(join(tmpdir(), 'discord-outside-'));
+    writeFileSync(join(work, 'run.log'), 'hello');
+    writeFileSync(join(outside, 'secret.txt'), 'nope');
+  });
+  afterEach(() => {
+    rmSync(work, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('uploads a file inside the session folder as multipart', async () => {
+    const { app, bridge } = await ready();
+    const res = await post(app, join(work, 'run.log'));
+    expect(res.json().data.ok).toBe(true);
+    const form = fetchImpl.mock.calls.map((c) => c[1].body).find((b) => b instanceof FormData) as FormData;
+    expect((form.get('files[0]') as File).name).toBe('run.log');
+    bridge.stop();
+  });
+
+  it.each([
+    ['a relative path', () => 'run.log'],
+    ['a file outside the folder', () => join(outside, 'secret.txt')],
+    ['the folder itself', () => work],
+    ['a missing file', () => join(work, 'nope.log')],
+  ])('refuses %s', async (_n, path) => {
+    const { app, bridge } = await ready();
+    const res = await post(app, path());
+    expect(res.statusCode).toBe(400);
+    expect(fetchImpl.mock.calls.some((c) => c[1].body instanceof FormData)).toBe(false);
+    bridge.stop();
+  });
+
+  it('refuses a symlink that points outside the folder', async () => {
+    const { app, bridge } = await ready();
+    mkdirSync(join(work, 'sub'));
+    symlinkSync(join(outside, 'secret.txt'), join(work, 'sub', 'link.txt'));
+    expect((await post(app, join(work, 'sub', 'link.txt'))).statusCode).toBe(400);
+    bridge.stop();
+  });
+
+  it('refuses a file over 8 MB', async () => {
+    const { app, bridge } = await ready();
+    writeFileSync(join(work, 'big.bin'), Buffer.alloc(8 * 1024 * 1024 + 1));
+    const res = await post(app, join(work, 'big.bin'));
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/8 MB/);
+    bridge.stop();
+  });
+
+  it('refuses a file for a remote session', async () => {
+    const { app, bridge, ctx } = await ready();
+    (ctx.sessions.get('test-session-1') as unknown as { remote: object }).remote = { label: 'box' };
+    expect((await post(app, join(work, 'run.log'))).statusCode).toBe(400);
+    bridge.stop();
   });
 });

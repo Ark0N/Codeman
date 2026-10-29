@@ -60,6 +60,8 @@ export interface DiscordConfig {
   pingMode: DiscordPingMode;
   /** `attention` skips info-level events (a finished response); `all` sends them too. */
   scope: WebhookScope;
+  /** Tell each session how to reach the user (see DISCORD_STARTUP_HINT). On by default while the bridge is on. */
+  startupHint: boolean;
 }
 
 export const DEFAULT_DISCORD_CONFIG: DiscordConfig = {
@@ -72,6 +74,7 @@ export const DEFAULT_DISCORD_CONFIG: DiscordConfig = {
   onSessionDelete: 'archive',
   pingMode: 'critical',
   scope: 'attention',
+  startupHint: true,
 };
 
 export interface DiscordMessage {
@@ -84,6 +87,13 @@ export interface DiscordMessage {
   /** The tail of what the CLI last printed, so the reader can see what it is asking. */
   tail?: string;
   host?: string;
+  /** A file to upload with the post (already read and size-checked by the caller). */
+  file?: DiscordFile;
+}
+
+export interface DiscordFile {
+  name: string;
+  data: Uint8Array;
 }
 
 export interface DiscordResult {
@@ -122,11 +132,15 @@ export function maskToken(token: string): string {
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** A Discord reply as one printable line plus Enter, or null when nothing printable is left. */
-export function sanitiseReply(raw: string): string | null {
+export function sanitiseReply(raw: string, files: string[] = []): string | null {
   // eslint-disable-next-line no-control-regex
   const line = raw.replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
   const trimmed = clip(line.trim(), MAX_REPLY_CHARS);
-  return trimmed ? `${trimmed}\r` : null;
+  // Paths are ours (a working folder plus a sanitised name), appended after the cap so they are never cut.
+  const attached = files.length ? `${trimmed ? ' ' : ''}[attached: ${files.join(', ')}]` : '';
+  // eslint-disable-next-line no-control-regex
+  const out = `${trimmed}${attached}`.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+  return out ? `${out}\r` : null;
 }
 
 export function threadNameFor(sessionName: string | undefined, sessionId: string): string {
@@ -143,6 +157,47 @@ export function shouldPing(mode: DiscordPingMode, urgency: WebhookUrgency, expli
 export function shouldSendDiscord(cfg: DiscordConfig, urgency: WebhookUrgency): boolean {
   if (!cfg.enabled || !cfg.token) return false;
   return cfg.scope === 'all' || urgency !== 'info';
+}
+
+/** Largest single file taken from Discord, or sent to it. Discord's own free limit is higher. */
+export const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_FILES_PER_REPLY = 5;
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+/** Where a session's received files go, relative to its working folder. */
+export const RECEIVED_DIR = '.codeman-discord';
+
+/**
+ * What a session is told about the bridge. Claude gets it as `--append-system-prompt`; every other
+ * CLI is sent it once as its first message (see DiscordBridge.sessionIdle). No apostrophes: it is
+ * rendered into a shell command.
+ */
+export const DISCORD_STARTUP_HINT =
+  'Codeman note: if you are blocked on something only the user can do (a physical step such as ' +
+  'pressing a button, an answer you cannot work out, or a wait that timed out), run: ' +
+  'codeman notify "message that leads with the action" --urgent . The user reads a Discord thread for ' +
+  'this tab and their reply is typed to you as one line; a file they attach is saved and its path is ' +
+  'given in that line. Add --file <path> to send a file from your working folder. Not for routine progress.';
+
+let activeStartupHint: string | undefined;
+/** The hint to launch Claude with, or undefined while the bridge or the setting is off. */
+export function getDiscordStartupHint(): string | undefined {
+  return activeStartupHint;
+}
+
+/** Final path segment only, `[A-Za-z0-9._-]`, no leading dot, at most 80 characters. */
+export function safeAttachmentName(name: string): string {
+  const base = (name.split(/[\\/]/).pop() ?? '').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._]+/, '');
+  return clip(base, 80) || 'file';
+}
+
+/** Discord's own CDN over https: the only place an attachment URL may point. */
+export function isDiscordCdnUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' && /(^|\.)(discordapp\.com|discordapp\.net|discord\.com)$/.test(u.hostname);
+  } catch {
+    return false;
+  }
 }
 
 export interface DiscordPost {
@@ -187,6 +242,7 @@ function coerce(raw: unknown): DiscordConfig {
     onSessionDelete: oneOf(DISCORD_ON_DELETE, r.onSessionDelete, d.onSessionDelete),
     pingMode: oneOf(DISCORD_PING_MODES, r.pingMode, d.pingMode),
     scope: oneOf(WEBHOOK_SCOPES, r.scope, d.scope),
+    startupHint: r.startupHint === undefined ? d.startupHint : r.startupHint === true,
   };
 }
 
@@ -256,14 +312,16 @@ export class DiscordApi {
   ) {}
 
   async request<T = unknown>(method: string, path: string, body?: unknown, retried = false): Promise<T | null> {
+    const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
     const res = await this.fetchImpl(new URL(`${API}${path}`), {
       method,
       headers: {
         Authorization: `Bot ${this.token()}`,
-        'Content-Type': 'application/json',
+        // A form body sets its own multipart Content-Type (with the boundary).
+        ...(isForm ? {} : { 'Content-Type': 'application/json' }),
         'User-Agent': 'DiscordBot (https://github.com/Ark0N/Codeman, 1)',
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
       redirect: 'manual',
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
@@ -286,6 +344,12 @@ export class DiscordApi {
   }
   post(channelId: string, p: DiscordPost): Promise<{ id: string } | null> {
     return this.request('POST', `/channels/${channelId}/messages`, p);
+  }
+  postWithFile(channelId: string, p: DiscordPost, file: DiscordFile): Promise<{ id: string } | null> {
+    const form = new FormData();
+    form.append('payload_json', JSON.stringify(p));
+    form.append('files[0]', new Blob([Buffer.from(file.data)]), safeAttachmentName(file.name));
+    return this.request('POST', `/channels/${channelId}/messages`, form);
   }
   rename(threadId: string, name: string): Promise<unknown> {
     return this.request('PATCH', `/channels/${threadId}`, { name });
@@ -314,6 +378,7 @@ export interface GatewayMessage {
   guild_id?: string;
   content: string;
   author: { id: string; bot?: boolean };
+  attachments?: Array<{ id: string; filename: string; size: number; url: string }>;
 }
 
 /** The subset of `ws` the gateway uses, so tests can drive it without a socket. */
@@ -501,6 +566,8 @@ export interface DiscordBridgeDeps {
   fetchImpl: DiscordFetch;
   /** Types `text` (already ending in Enter) into the session. False when the session is gone. */
   sendInput: (sessionId: string, text: string) => Promise<boolean>;
+  /** A session's working folder, where received files are saved. Undefined when it is gone or remote. */
+  sessionDir?: (sessionId: string) => string | undefined;
   socketFactory?: SocketFactory;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -516,6 +583,8 @@ export class DiscordBridge {
   private lastReply = new Map<string, number>();
   /** The last name seen per session, so only a real rename touches the thread. */
   private names = new Map<string, string>();
+  /** Brand-new sessions that have not yet been sent the startup hint (non-Claude CLIs). */
+  private fresh = new Set<string>();
   private pending = new Map<string, Promise<string | null>>();
   private last: DiscordResult | null = null;
   private readonly api: DiscordApi;
@@ -545,6 +614,7 @@ export class DiscordBridge {
     }
     this.gateway?.stop();
     this.gateway = null;
+    activeStartupHint = this.cfg.enabled && this.cfg.token && this.cfg.startupHint ? DISCORD_STARTUP_HINT : undefined;
     if (this.cfg.enabled && this.cfg.token) {
       this.gateway = new DiscordGateway(
         () => this.cfg.token,
@@ -559,6 +629,7 @@ export class DiscordBridge {
   stop(): void {
     this.gateway?.stop();
     this.gateway = null;
+    activeStartupHint = undefined;
   }
 
   private fail(err: unknown): DiscordResult {
@@ -623,15 +694,16 @@ export class DiscordBridge {
         if (!thread) return this.last;
         target = thread;
       }
+      const send = (to: string) => (msg.file ? this.api.postWithFile(to, post, msg.file) : this.api.post(to, post));
       try {
-        await this.api.post(target, post);
+        await send(target);
       } catch (err) {
         // The thread was deleted by hand: forget it, make a new one, once.
         if (msg.sessionId && err instanceof DiscordHttpError && err.status === 404) {
           delete this.threads[msg.sessionId];
           const fresh = await this.threadFor(msg.sessionId, msg.sessionName);
           if (!fresh) return this.last;
-          await this.api.post(fresh, post);
+          await send(fresh);
         } else {
           throw err;
         }
@@ -669,10 +741,23 @@ export class DiscordBridge {
   }
 
   /** Session tab created: make its thread now when `threadCreation` is `onSessionStart`. */
-  async sessionCreated(sessionId: string, name: string | undefined): Promise<void> {
+  async sessionCreated(sessionId: string, name: string | undefined, createdAt?: number): Promise<void> {
     if (!this.loaded) await this.reload();
+    // Only a tab made just now: the same event also fires for sessions restored at server start.
+    if (createdAt !== undefined && this.now() - createdAt < 60_000) this.fresh.add(sessionId);
     if (!this.cfg.enabled || this.cfg.threadCreation !== 'onSessionStart') return;
     await this.threadFor(sessionId, name);
+  }
+
+  /**
+   * First idle of a brand-new non-Claude session means its prompt is up: type the startup hint once.
+   * Claude gets the same text as a launch flag instead, and a shell must never receive it.
+   */
+  async sessionIdle(sessionId: string, external: boolean): Promise<void> {
+    if (!this.fresh.delete(sessionId)) return;
+    if (!external || !this.cfg.enabled || !this.cfg.startupHint) return;
+    const text = sanitiseReply(`${DISCORD_STARTUP_HINT} Reply with just: ok`);
+    if (text) await this.deps.sendInput(sessionId, text).catch(() => false);
   }
 
   async sessionRenamed(sessionId: string, name: string | undefined): Promise<void> {
@@ -696,6 +781,55 @@ export class DiscordBridge {
     else if (this.cfg.onSessionDelete === 'archive') await this.api.archive(thread).catch(() => undefined);
   }
 
+  private say(channelId: string, content: string): Promise<unknown> {
+    return this.api.post(channelId, { content, allowed_mentions: { parse: [], users: [] } }).catch(() => undefined);
+  }
+
+  /**
+   * Save a reply's attachments under the session's working folder and return the paths. Only Discord
+   * CDN URLs, at most 5 files of 8 MB each, names reduced to safe characters. Anything skipped is
+   * named in `refused`, so the person is not left guessing why a file did not arrive.
+   */
+  private async saveAttachments(sessionId: string, m: GatewayMessage): Promise<{ paths: string[]; refused?: string }> {
+    const list = m.attachments ?? [];
+    if (list.length === 0) return { paths: [] };
+    const dir = this.deps.sessionDir?.(sessionId);
+    if (!dir) return { paths: [], refused: 'That tab has no local folder to save files in, so no file was saved.' };
+    const target = join(dir, RECEIVED_DIR);
+    const paths: string[] = [];
+    const skipped: string[] = [];
+    for (const [i, a] of list.entries()) {
+      const name = safeAttachmentName(a.filename ?? 'file');
+      if (i >= MAX_FILES_PER_REPLY || !isDiscordCdnUrl(a.url) || !(a.size <= MAX_FILE_BYTES)) {
+        skipped.push(name);
+        continue;
+      }
+      try {
+        const res = await this.deps.fetchImpl(new URL(a.url), {
+          redirect: 'manual',
+          signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+        });
+        const buf = res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+        if (!buf || buf.byteLength > MAX_FILE_BYTES) {
+          skipped.push(name);
+          continue;
+        }
+        await fs.mkdir(target, { recursive: true });
+        const dest = join(target, `${m.id}-${name}`);
+        await fs.writeFile(dest, buf, { mode: 0o600 });
+        paths.push(dest);
+      } catch {
+        skipped.push(name);
+      }
+    }
+    return {
+      paths,
+      refused: skipped.length
+        ? `Not saved (over 8 MB, more than ${MAX_FILES_PER_REPLY} files, or not downloadable): ${skipped.join(', ')}`
+        : undefined,
+    };
+  }
+
   /** Inbound reply. Every gate here drops silently: a stranger learns nothing. */
   async onGatewayMessage(m: GatewayMessage): Promise<void> {
     if (!this.cfg.enabled || m.author?.bot) return;
@@ -707,8 +841,13 @@ export class DiscordBridge {
     const prev = this.lastReply.get(sessionId);
     if (prev !== undefined && t - prev < REPLY_MIN_INTERVAL_MS) return;
     this.lastReply.set(sessionId, t);
-    const text = sanitiseReply(m.content ?? '');
-    if (!text) return;
+    const saved = await this.saveAttachments(sessionId, m);
+    const text = sanitiseReply(m.content ?? '', saved.paths);
+    if (!text) {
+      if (saved.refused) await this.say(m.channel_id, saved.refused);
+      return;
+    }
+    if (saved.refused) await this.say(m.channel_id, saved.refused);
     const ok = await this.deps.sendInput(sessionId, text).catch(() => false);
     const reply = ok
       ? this.api.react(m.channel_id, m.id, '✅')

@@ -3,12 +3,15 @@
  * @fileoverview Discord bridge: pure rules, the 0600 store, the REST client, the gateway state
  * machine (fake socket) and the bridge's gates. No network, no real Discord.
  */
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildPost,
+  DISCORD_STARTUP_HINT,
+  isDiscordCdnUrl,
+  safeAttachmentName,
   DEFAULT_DISCORD_CONFIG,
   DiscordApi,
   DiscordBridge,
@@ -461,5 +464,182 @@ describe('DiscordBridge', () => {
       expect(posts).toEqual([{ path: `/channels/${THREAD}`, method: 'PATCH', body: { name: 'fix login' } }]);
       b.stop();
     });
+  });
+});
+
+describe('files', () => {
+  it('safeAttachmentName keeps one safe path segment', () => {
+    expect(safeAttachmentName('report final (1).pdf')).toBe('report_final_1_.pdf');
+    expect(safeAttachmentName('../../etc/passwd')).toBe('passwd');
+    expect(safeAttachmentName('.env')).toBe('env');
+    expect(safeAttachmentName('')).toBe('file');
+    expect(safeAttachmentName('x'.repeat(300))).toHaveLength(80);
+  });
+
+  it('isDiscordCdnUrl accepts only Discord https hosts', () => {
+    expect(isDiscordCdnUrl('https://cdn.discordapp.com/attachments/1/2/a.png')).toBe(true);
+    expect(isDiscordCdnUrl('https://media.discordapp.net/attachments/1/2/a.png')).toBe(true);
+    expect(isDiscordCdnUrl('http://cdn.discordapp.com/a.png')).toBe(false);
+    expect(isDiscordCdnUrl('https://evil.example/a.png')).toBe(false);
+    expect(isDiscordCdnUrl('https://discordapp.com.evil.example/a.png')).toBe(false);
+    expect(isDiscordCdnUrl('http://169.254.169.254/')).toBe(false);
+    expect(isDiscordCdnUrl('nonsense')).toBe(false);
+  });
+
+  it('sanitiseReply appends attached paths after the cap, and a file alone is enough', () => {
+    expect(sanitiseReply('see this', ['/w/.codeman-discord/1-a.png'])).toBe(
+      'see this [attached: /w/.codeman-discord/1-a.png]\r'
+    );
+    expect(sanitiseReply('', ['/w/a'])).toBe('[attached: /w/a]\r');
+    expect(sanitiseReply('x'.repeat(5000), ['/w/a'])!.endsWith('[attached: /w/a]\r')).toBe(true);
+  });
+
+  it('postWithFile sends multipart with a safe filename and no JSON content type', async () => {
+    let seen: { init: RequestInit } | null = null;
+    const api = new DiscordApi(
+      () => TOKEN,
+      async (_u, init) => {
+        seen = { init };
+        return jsonRes({ id: 'm' });
+      }
+    );
+    await api.postWithFile(
+      PARENT,
+      { content: 'hi', allowed_mentions: { parse: [], users: [] } },
+      { name: '../x y.log', data: new Uint8Array([1, 2, 3]) }
+    );
+    const body = seen!.init.body as FormData;
+    expect(body).toBeInstanceOf(FormData);
+    expect(JSON.parse(String(body.get('payload_json'))).content).toBe('hi');
+    expect((body.get('files[0]') as File).name).toBe('x_y.log');
+    expect((seen!.init.headers as Record<string, string>)['Content-Type']).toBeUndefined();
+  });
+});
+
+describe('DiscordBridge files and startup hint', () => {
+  const reply = (over: Record<string, unknown> = {}) => ({
+    id: 'm1',
+    channel_id: THREAD,
+    guild_id: GUILD,
+    content: '',
+    author: { id: ME },
+    attachments: [
+      { id: 'a1', filename: 'shot one.png', size: 3, url: 'https://cdn.discordapp.com/attachments/1/2/shot.png' },
+    ],
+    ...over,
+  });
+  let work: string;
+  let sent: Array<[string, string]>;
+  let posted: Array<{ path: string; body?: Record<string, unknown> }>;
+  let downloads: string[];
+
+  function make(cfg: Partial<DiscordConfig> = {}, dirFor: (id: string) => string | undefined = () => work) {
+    const b = new DiscordBridge({
+      configDir: dir,
+      fetchImpl: async (url, init) => {
+        const u = new URL(String(url));
+        if (u.hostname === 'cdn.discordapp.com') {
+          downloads.push(String(url));
+          return new Response(new Uint8Array([7, 8, 9]));
+        }
+        const path = u.pathname.replace('/api/v10', '');
+        posted.push({ path, body: init.body ? JSON.parse(String(init.body)) : undefined });
+        return path.endsWith('/threads') ? jsonRes({ id: THREAD }) : jsonRes({ id: 'msg' });
+      },
+      sendInput: async (id, text) => (sent.push([id, text]), true),
+      sessionDir: dirFor,
+      socketFactory: () => new FakeSocket(),
+      now: () => t,
+      sleep: async () => undefined,
+    });
+    return writeDiscordConfig(dir, { ...CFG, ...cfg }).then(async () => {
+      await b.reload();
+      await b.notify(MSG);
+      posted.length = 0;
+      return b;
+    });
+  }
+  let t = 5_000_000;
+
+  beforeEach(() => {
+    work = mkdtempSync(join(tmpdir(), 'discord-work-'));
+    sent = [];
+    posted = [];
+    downloads = [];
+  });
+  afterEach(() => rmSync(work, { recursive: true, force: true }));
+
+  it('saves an attachment under .codeman-discord and types its path, even with no text', async () => {
+    const b = await make();
+    await b.onGatewayMessage(reply());
+    const dest = join(work, '.codeman-discord', 'm1-shot_one.png');
+    expect(readFileSync(dest)).toEqual(Buffer.from([7, 8, 9]));
+    expect(statSync(dest).mode & 0o777).toBe(0o600);
+    expect(sent).toEqual([['s1', `[attached: ${dest}]\r`]]);
+    b.stop();
+  });
+
+  it('refuses a non-Discord URL, an oversize file and a sixth file, and says so in the thread', async () => {
+    const b = await make();
+    const many = Array.from({ length: 6 }, (_v, i) => ({
+      id: String(i),
+      filename: `f${i}.txt`,
+      size: 1,
+      url: 'https://cdn.discordapp.com/a/' + i,
+    }));
+    await b.onGatewayMessage(
+      reply({
+        content: 'look',
+        attachments: [
+          { id: 'x', filename: 'evil.png', size: 1, url: 'http://169.254.169.254/latest' },
+          { id: 'y', filename: 'huge.bin', size: 9 * 1024 * 1024, url: 'https://cdn.discordapp.com/a/huge' },
+          ...many,
+        ],
+      })
+    );
+    expect(downloads.some((u) => u.includes('169.254'))).toBe(false);
+    expect(downloads.some((u) => u.includes('huge'))).toBe(false);
+    expect(downloads).toHaveLength(3); // 5 allowed in total, two of which were the refused ones above
+    expect(posted.map((p) => String(p.body?.content)).find((c) => c.startsWith('Not saved'))).toMatch(
+      /evil\.png.*huge\.bin/
+    );
+    b.stop();
+  });
+
+  it('says there is no folder for a remote tab and types nothing for a file-only reply', async () => {
+    const b = await make({}, () => undefined);
+    await b.onGatewayMessage(reply());
+    expect(sent).toHaveLength(0);
+    expect(String(posted.at(-1)?.body?.content)).toMatch(/no local folder/);
+    b.stop();
+  });
+
+  it('sends the startup hint once, only to a fresh external session, and never to a shell', async () => {
+    const b = await make();
+    await b.sessionCreated('s2', 'w2', t - 1000);
+    await b.sessionIdle('s2', false); // shell or Claude: nothing
+    expect(sent).toHaveLength(0);
+    await b.sessionCreated('s3', 'w3', t - 1000);
+    await b.sessionIdle('s3', true);
+    await b.sessionIdle('s3', true); // second idle: nothing
+    expect(sent).toHaveLength(1);
+    expect(sent[0][0]).toBe('s3');
+    expect(sent[0][1]).toContain('codeman notify');
+    expect(sent[0][1].endsWith('\r')).toBe(true);
+    expect(DISCORD_STARTUP_HINT).toContain('codeman notify');
+    b.stop();
+  });
+
+  it('does not hint a restored (old) session, or when startupHint is off', async () => {
+    const b = await make();
+    await b.sessionCreated('s4', 'old', 1); // created long ago: restored at server start
+    await b.sessionIdle('s4', true);
+    expect(sent).toHaveLength(0);
+    b.stop();
+    const off = await make({ startupHint: false });
+    await off.sessionCreated('s5', 'new', t - 1000);
+    await off.sessionIdle('s5', true);
+    expect(sent).toHaveLength(0);
+    off.stop();
   });
 });
