@@ -570,6 +570,7 @@ Object.assign(CodemanApp.prototype, {
     this.loadConfigBackups();
     this._applyDoctorAdminGate();
     this.loadWebhook();
+    this.loadDiscord();
     // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
     document.getElementById('appSettingsReadMyMind').checked = settings.readMyMindEnabled === true;
     document.getElementById('appSettingsUltracodeFloatingWindows').checked =
@@ -1728,6 +1729,111 @@ Object.assign(CodemanApp.prototype, {
       }
       const r = body.data;
       this._webhookSay(r.ok ? 'Test sent. Check your phone or channel.' : `Delivery failed: ${r.error}`, !r.ok);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  },
+
+  /**
+   * Discord bridge (Settings → Notifications). Server-side config behind /api/discord, not a
+   * settings-payload field: the bot token is a secret, so it never round-trips through settings.json
+   * or this page. The token box is write-only. Unlike the webhook group it has its own Save button
+   * only (the modal's main Save does not touch it), so a half-typed token is never sent by accident.
+   */
+  _discordSay(text, bad = false) {
+    const out = document.getElementById('discordResult');
+    if (!out) return;
+    out.textContent = text;
+    out.style.display = text ? 'block' : 'none';
+    out.style.color = bad ? 'var(--danger, #e5534b)' : '';
+  },
+
+  async loadDiscord() {
+    const group = document.getElementById('discordGroup');
+    if (!group) return;
+    const res = await this._api('/api/discord');
+    let body = null;
+    try { body = res && res.ok ? await res.json() : null; } catch { /* leave hidden */ }
+    if (!body || body.success === false) { group.style.display = 'none'; return; } // not an admin, or an older server
+    const d = body.data;
+    group.style.display = '';
+    document.getElementById('discordEnabled').checked = d.enabled === true;
+    const token = document.getElementById('discordToken');
+    token.value = '';
+    token.placeholder = d.hasToken ? 'Saved. Paste a new token to replace it' : 'Bot token from the Developer Portal';
+    document.getElementById('discordTokenHint').textContent = d.hasToken ? `Saved: ${d.tokenMasked}` : 'Nothing saved yet.';
+    document.getElementById('discordGuildId').value = d.guildId || '';
+    document.getElementById('discordParentChannelId').value = d.parentChannelId || '';
+    document.getElementById('discordAllowedUserIds').value = (d.allowedUserIds || []).join(', ');
+    document.getElementById('discordThreadCreation').value = d.threadCreation;
+    document.getElementById('discordOnSessionDelete').value = d.onSessionDelete;
+    document.getElementById('discordPingMode').value = d.pingMode;
+    document.getElementById('discordScope').value = d.scope;
+    const clearBtn = document.getElementById('discordClearBtn');
+    if (clearBtn) clearBtn.style.display = d.hasToken ? '' : 'none';
+    const gw = { off: 'Not connected (disabled).', connecting: 'Connecting to Discord…', connected: 'Connected: replies are being read.', error: `Not connected: ${d.gatewayError || 'error'}` };
+    let line = gw[d.gateway] || '';
+    if (d.lastResult) {
+      const when = new Date(d.lastResult.at).toLocaleString();
+      line += d.lastResult.ok ? ` Last post succeeded (${when}).` : ` Last post failed (${when}): ${d.lastResult.error}`;
+    }
+    this._discordSay(line.trim(), d.gateway === 'error' || (d.lastResult && !d.lastResult.ok));
+  },
+
+  /** PUT the group's state. Resolves to '' on success, else the error (also shown in the group). */
+  async saveDiscord() {
+    const ids = document.getElementById('discordAllowedUserIds').value.split(/[\s,]+/).filter(Boolean);
+    const payload = {
+      enabled: document.getElementById('discordEnabled').checked,
+      guildId: document.getElementById('discordGuildId').value.trim(),
+      parentChannelId: document.getElementById('discordParentChannelId').value.trim(),
+      allowedUserIds: ids,
+      threadCreation: document.getElementById('discordThreadCreation').value,
+      onSessionDelete: document.getElementById('discordOnSessionDelete').value,
+      pingMode: document.getElementById('discordPingMode').value,
+      scope: document.getElementById('discordScope').value,
+    };
+    const token = document.getElementById('discordToken').value.trim();
+    if (token) payload.token = token; // blank = keep the saved one (Remove token is the way to clear it)
+    const res = await this._api('/api/discord', { method: 'PUT', body: payload });
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      const error = body?.error || 'Could not save the Discord settings.';
+      this._discordSay(error, true);
+      return error;
+    }
+    await this.loadDiscord();
+    return '';
+  },
+
+  async clearDiscord() {
+    if (!confirm('Remove the saved bot token from the server? The Discord bridge stops until you save a new one.')) return;
+    const res = await this._api('/api/discord', { method: 'PUT', body: { token: '', enabled: false } });
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      this._discordSay(body?.error || 'Could not remove the token.', true);
+      return;
+    }
+    await this.loadDiscord();
+  },
+
+  async testDiscord() {
+    const btn = document.getElementById('discordTestBtn');
+    if (btn) btn.disabled = true;
+    try {
+      if (await this.saveDiscord()) return; // saves first, so it never tests the old values; the error is shown
+      this._discordSay('Sending…');
+      const res = await this._apiPost('/api/discord/test', {});
+      let body = null;
+      try { body = res ? await res.json() : null; } catch { /* fall through */ }
+      if (!res || !res.ok || !body || body.success === false) {
+        this._discordSay(body?.error || 'Could not send the test.', true);
+        return;
+      }
+      const r = body.data;
+      this._discordSay(r.ok ? 'Test sent. Check the channel.' : `Delivery failed: ${r.error}`, !r.ok);
     } finally {
       if (btn) btn.disabled = false;
     }

@@ -45,6 +45,8 @@ import { looksLikeHostReboot, newestPersistedActivity, planRebootRestore } from 
 import { rebootRestoreRegistry } from './reboot-restore-registry.js';
 import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
 import { WebhookNotifier, readWebhookConfig } from '../webhook-notify.js';
+import { DiscordBridge } from '../discord-bridge.js';
+import { stripAnsi } from '../utils/regex-patterns.js';
 import { stopHostSensors } from '../host-sensors.js';
 import type { WebhookUrgency } from '../types/push.js';
 import { webviewFetch } from './webview-egress.js';
@@ -238,6 +240,7 @@ import {
   registerConfigBackupRoutes,
   runConfigBackup,
   registerWebhookRoutes,
+  registerDiscordRoutes,
   registerDoctorRoutes,
   registerCustomModelRoutes,
   refreshAllCustomModelHosts,
@@ -506,6 +509,17 @@ export class WebServer extends EventEmitter {
   private pushStore: PushSubscriptionStore = new PushSubscriptionStore();
   /** ntfy / Slack / Discord / generic webhook for the push events; config in webhook.json (0600). */
   private webhookNotifier = new WebhookNotifier(() => readWebhookConfig(getDataDir()), webviewFetch);
+  /** Two-way Discord bridge (thread per tab); config in discord.json (0600). Idle until enabled in Settings. */
+  private discordBridge = new DiscordBridge({
+    configDir: getDataDir(),
+    fetchImpl: webviewFetch,
+    sendInput: async (sessionId, text) => {
+      const session = this.sessions.get(sessionId);
+      if (!session) return false;
+      if (await session.writeViaMux(text, { fromUser: true }).catch(() => false)) return true;
+      return session.write(text, { fromUser: true });
+    },
+  });
   private teamWatcher: TeamWatcher = new TeamWatcher();
   private _orchestratorLoop: import('../orchestrator-loop.js').OrchestratorLoop | null = null;
   private readonly titleHostname: string;
@@ -1330,6 +1344,13 @@ export class WebServer extends EventEmitter {
       configDir: getDataDir(),
       hostTitle: () => this.windowTitle,
     });
+    registerDiscordRoutes(this.app, {
+      bridge: this.discordBridge,
+      configDir: getDataDir(),
+      ctx,
+      hostTitle: () => this.windowTitle,
+    });
+    if (!this.testMode) void this.discordBridge.reload().catch(() => undefined);
     registerDoctorRoutes(this.app);
     registerCustomModelRoutes(this.app);
     registerCliRegistryRoutes(this.app);
@@ -2699,6 +2720,24 @@ export class WebServer extends EventEmitter {
     // Multi-user: derive an ownership routing hint so an event only reaches the
     // clients entitled to it (no-op in single-user — hint stays undefined).
     this.sse.broadcast(event, data, isMultiUserMode() ? this.deriveSseHint(event, data) : undefined);
+    this.bridgeSessionEvent(event, data);
+  }
+
+  /** Keep the Discord thread in step with the tab: created, renamed, deleted. Never throws. */
+  private bridgeSessionEvent(event: string, data: unknown): void {
+    if (event !== SseEvent.SessionCreated && event !== SseEvent.SessionUpdated && event !== SseEvent.SessionDeleted) {
+      return;
+    }
+    const d = (data ?? {}) as { id?: string; name?: string; session?: { id?: string; name?: string } };
+    const s = d.session ?? d;
+    if (!s.id) return;
+    const run =
+      event === SseEvent.SessionDeleted
+        ? this.discordBridge.sessionDeleted(s.id)
+        : event === SseEvent.SessionCreated
+          ? this.discordBridge.sessionCreated(s.id, s.name).then(() => this.discordBridge.sessionRenamed(s.id!, s.name))
+          : this.discordBridge.sessionRenamed(s.id, s.name);
+    void run.catch(() => undefined);
   }
 
   /**
@@ -2934,6 +2973,22 @@ export class WebServer extends EventEmitter {
       })
       .catch(() => undefined);
 
+    // Discord: same event, same independence from Web Push. It adds the tail of what the CLI printed,
+    // so the person reading the thread can see what is being asked without opening the tab.
+    const dcSession = sessionId ? this.sessions.get(sessionId) : undefined;
+    void this.discordBridge
+      .notify({
+        event,
+        title: template.title,
+        body,
+        urgency: template.urgency as WebhookUrgency,
+        sessionId: sessionId || undefined,
+        sessionName: sessionName || undefined,
+        tail: dcSession ? WebServer.outputTail(dcSession) : undefined,
+        host: this.windowTitle,
+      })
+      .catch(() => undefined);
+
     const subscriptions = this.pushStore.getAll();
     if (subscriptions.length === 0) return;
 
@@ -3013,6 +3068,16 @@ export class WebServer extends EventEmitter {
         }
       });
     }
+  }
+
+  /** The last few lines the CLI printed, with colour codes removed, for a Discord alert. */
+  private static outputTail(session: { textOutput: string; terminalBuffer: string }): string {
+    const raw = session.textOutput || session.terminalBuffer.slice(-4000);
+    const lines = stripAnsi(raw)
+      .split(/\r?\n/)
+      .map((l) => l.trimEnd())
+      .filter((l) => l.trim() !== '');
+    return lines.slice(-12).join('\n').slice(-900);
   }
 
   /** The notification body for an event (shared by Web Push and the webhook channel). */

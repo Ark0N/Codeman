@@ -1,0 +1,115 @@
+# Discord bridge
+
+Codeman can post to a private Discord server when a session needs you, give every tab its own thread, and type your thread reply into that tab. It only makes outbound connections, so Codeman is not exposed to the internet and it works when you are away from your network.
+
+> [!WARNING]
+> A reply from an allowed Discord account is typed into agents that can run shell commands. Treat that Discord account like a login to the machine: turn on 2FA and use a strong, unique password.
+
+## What it does
+
+- Posts when a session asks for permission, asks a question, goes idle, stops or errors.
+- Creates one thread per tab in a single parent channel, so a reply always reaches exactly one session.
+- Types your reply into that session as a single line followed by Enter.
+- Lets a CLI post a deliberate message (for example "press the reset button on the case") with `POST /api/sessions/:id/discord-notify`.
+
+## Setup
+
+Do these once, in order. Never paste the bot token into a chat or a session.
+
+### 1. Create a private server
+
+1. In Discord choose **Add a Server**, **Create My Own**, **For me and my friends**.
+2. Invite nobody and create no invite links.
+3. Create one text channel, for example `#codeman-cli`.
+
+### 2. Copy the IDs
+
+1. Open **User Settings**, **Advanced** and turn on **Developer Mode**.
+2. Right-click the server, the channel and your own avatar, and choose **Copy ID** for each. You need the guild ID, the parent channel ID and your user ID.
+
+### 3. Create the application
+
+1. Go to <https://discord.com/developers/applications> and choose **New Application**.
+2. Name it `Codeman`.
+
+### 4. Configure the bot
+
+On the **Bot** tab:
+
+1. Choose **Reset Token** and copy it. It is shown once.
+2. Turn **Public Bot** off, so nobody else can add it. Discord refuses this while the app has a default install link, so first open the **Installation** tab, set **Install Link** to **None** (untick Guild Install and User Install if it will not save) and save, then come back here.
+3. Leave **Requires OAuth2 Code Grant** off.
+4. Under **Privileged Gateway Intents** turn **Message Content Intent** on. Leave **Server Members Intent** and **Presence Intent** off.
+
+### 5. Invite the bot with minimal permissions
+
+On **OAuth2**, **URL Generator**:
+
+1. Tick the scope `bot` only. Do not tick `applications.commands` or anything else.
+2. Tick only these permissions:
+
+   | Permission               | Why                                |
+   | ------------------------ | ---------------------------------- |
+   | View Channels            | See the parent channel             |
+   | Send Messages            | Post in the parent channel         |
+   | Send Messages in Threads | Post in each tab's thread          |
+   | Create Public Threads    | Make a thread per tab              |
+   | Read Message History     | Read your replies                  |
+   | Add Reactions            | Acknowledge a reply that was typed |
+
+3. Open the generated URL, choose your private server and authorise.
+4. Check the **Installation** tab still shows **Install Link: None**, so there is no public way to add the bot.
+
+The ticked boxes are the source of truth. As a cross-check, these six permissions add up to the permissions integer `309237713984`.
+
+### 6. Optional: allow deleting threads
+
+Only needed for `onSessionDelete: delete`. Give the bot role **Manage Threads** on the parent channel only, as a channel permission override and not server-wide. Skip this if you are happy to keep or archive threads.
+
+### 7. Never grant
+
+Administrator, Manage Channels, Manage Roles, Manage Messages, Mention Everyone, or any voice permission.
+
+### 8. Configure Codeman
+
+1. Open **Settings**, **Discord**.
+2. Enter the bot token, guild ID, parent channel ID and your user ID in the allowlist.
+3. Choose the options below and press **Test**. A test message should appear in the channel.
+
+The token is stored in `~/.codeman/discord.json` with mode 0600. It is never returned by the API, written to logs or sent over SSE.
+
+### 9. Phone alerts
+
+In the Discord mobile app set the server to **All Messages**. Discord's own push notification is what reaches you off-network.
+
+## Options
+
+| Option            | Values                      | Default     | Effect                                                                                  |
+| ----------------- | --------------------------- | ----------- | --------------------------------------------------------------------------------------- |
+| `threadCreation`  | `lazy`, `onSessionStart`    | `lazy`      | `lazy` makes a thread on the first notification. `onSessionStart` makes one per new tab |
+| `onSessionDelete` | `keep`, `archive`, `delete` | `archive`   | What happens to the thread when its tab is deleted. `delete` needs Manage Threads       |
+| `pingMode`        | `off`, `critical`, `all`    | `critical`  | `critical` pings you for permission prompts, questions, errors and urgent posts         |
+| `scope`           | `attention`, `all`          | `attention` | `attention` skips the quiet "response complete" event. `all` sends it too               |
+
+## Security model
+
+- Only messages from IDs in `allowedUserIds`, in the configured guild, inside a thread Codeman created, are acted on. Everything else is dropped.
+- A reply is reduced to one line, stripped of control characters and capped in length before it is typed.
+- Replies are rate limited per session.
+- A Discord outage or a bad token never affects sessions. The bridge logs once and backs off.
+
+## Rotating and revoking
+
+- **Rotate:** in the Developer Portal choose **Bot**, **Reset Token**, paste the new token into Codeman and press **Test**.
+- **Revoke:** kick the bot from the server or delete the application, then delete `~/.codeman/discord.json`.
+- If the token is ever pasted somewhere it should not be, reset it straight away.
+
+## Troubleshooting
+
+| Symptom                             | Check                                                                    |
+| ----------------------------------- | ------------------------------------------------------------------------ |
+| Test fails with 401                 | The token is wrong or was reset. Paste the current one                   |
+| Test fails with 403 or 50001        | The bot cannot see the parent channel. Check the role and the channel ID |
+| Posts arrive but replies do nothing | Message Content Intent is off, or your user ID is not in the allowlist   |
+| Thread is not deleted               | The bot lacks Manage Threads on the parent channel                       |
+| Nothing arrives on the phone        | Check the Discord app's notification setting for the server              |

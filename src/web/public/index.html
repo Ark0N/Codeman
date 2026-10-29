@@ -3234,6 +3234,82 @@
                   <div id="webhookResult" class="set-note" style="display:none" data-i18n-skip></div>
                 </div>
               </div>
+              <div class="set-group" id="discordGroup" style="display:none">
+                <div class="set-group-head"><h4>Discord (two-way, one thread per tab)</h4><span class="set-scope">server</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="discord bot thread reply phone notification blocked">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Talk to your sessions from Discord</span>
+                      <span class="set-row-desc">Posts alerts into a thread per tab and types your reply in that thread into the tab. Only the user IDs listed below can reply. Setup (bot, least-privilege permissions) is in docs/discord-bridge.md. This group has its own Save button.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="discordEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Bot token</span>
+                      <span class="set-row-desc" id="discordTokenHint">Nothing saved yet.</span>
+                    </div>
+                    <input type="password" id="discordToken" class="set-input" autocomplete="off" spellcheck="false" placeholder="Bot token from the Developer Portal">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Guild (server) ID</span></div>
+                    <input type="text" id="discordGuildId" class="set-input" autocomplete="off" spellcheck="false" inputmode="numeric">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Parent channel ID</span><span class="set-row-desc">Threads are created inside this channel.</span></div>
+                    <input type="text" id="discordParentChannelId" class="set-input" autocomplete="off" spellcheck="false" inputmode="numeric">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Allowed user IDs</span><span class="set-row-desc">Comma separated. Only these Discord users can reply into a session.</span></div>
+                    <input type="text" id="discordAllowedUserIds" class="set-input" autocomplete="off" spellcheck="false">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Create threads</span></div>
+                    <select id="discordThreadCreation" class="set-select">
+                      <option value="lazy">On the first alert</option>
+                      <option value="onSessionStart">For every new tab</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">When a tab is deleted</span><span class="set-row-desc">Deleting a thread needs the Manage Threads permission on the channel.</span></div>
+                    <select id="discordOnSessionDelete" class="set-select">
+                      <option value="keep">Keep the thread</option>
+                      <option value="archive">Archive the thread</option>
+                      <option value="delete">Delete the thread</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">@ ping</span></div>
+                    <select id="discordPingMode" class="set-select">
+                      <option value="off">Never</option>
+                      <option value="critical">Critical events only</option>
+                      <option value="all">Every post</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Which events</span>
+                      <span class="set-row-desc">"Needs attention" skips the routine "response complete" message.</span>
+                    </div>
+                    <select id="discordScope" class="set-select">
+                      <option value="attention">Needs attention</option>
+                      <option value="all">Everything</option>
+                    </select>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Save and test</span>
+                      <span class="set-row-desc">Send test saves first, then posts to the parent channel.</span>
+                    </div>
+                    <span>
+                      <button class="btn-toolbar btn-sm btn-primary" id="discordSaveBtn" onclick="app.saveDiscord()">Save</button>
+                      <button class="btn-toolbar btn-sm" id="discordTestBtn" onclick="app.testDiscord()">Send test</button>
+                      <button class="btn-toolbar btn-sm" id="discordClearBtn" onclick="app.clearDiscord()" style="display:none">Remove token</button>
+                    </span>
+                  </div>
+                  <div id="discordResult" class="set-note" style="display:none" data-i18n-skip></div>
+                </div>
+              </div>
             </section>
 
             <!-- ══ Voice ════════════════════════════════════════════════════ -->
