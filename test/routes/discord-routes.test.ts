@@ -162,6 +162,20 @@ describe('POST /api/sessions/:id/discord-notify', () => {
     bridge.stop();
   });
 
+  it("does not reveal another user's session through its id prefix (multi-user)", async () => {
+    process.env.CODEMAN_MULTIUSER = '1';
+    const { app, bridge, ctx } = await harness({ username: 'bob', role: 'user' });
+    (ctx.sessions.get('test-session-1') as unknown as { owner: string }).owner = 'alice';
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/test-ses/discord-notify',
+      payload: { message: 'hi' },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).not.toContain('test-session-1');
+    bridge.stop();
+  });
+
   it('lets two different deliberate messages from one tab through within 3 s (neither is lost)', async () => {
     const { app, bridge } = await harness();
     await app.inject({ method: 'PUT', url: '/api/discord', payload: FULL });

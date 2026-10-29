@@ -54,7 +54,7 @@ permission prompt, a question, an error, or a post an agent marked urgent.
 
 An agent only posts deliberately if it knows it can:
 
-- **Claude** is launched with the instruction as part of its system prompt (**Tell Claude how to reach you**, on by default), so nothing shows in the chat.
+- **Claude** is launched with the instruction as part of its system prompt (**Tell Claude how to reach you**, on by default), so nothing shows in the chat. This reaches local tabs only (remote and Docker tabs have no `codeman` command).
 - **Every other CLI** is told only if you turn on **Also tell other CLIs, as a message** (off by default: it costs one model turn per tab, and for a spawned worker or a scheduled run it arrives with the first real prompt). Then the same text is sent once, as a message, the first time a brand-new tab goes idle.
   Restored tabs, shell tabs, and remote (ssh) and Docker tabs (which have no `codeman` command) are never sent it.
 
@@ -65,7 +65,7 @@ Discord for them; only the agent-initiated `codeman notify` habit is missing.
 
 - **You to the agent:** attach a file to a reply. It is saved as
   `<tab folder>/.codeman-discord/<message id>-<name>` and the line the agent sees ends with
-  `[attached: <path>]`. At most 5 files of 8 MB each. Add `.codeman-discord/` to your `.gitignore`.
+  `[attached: <path>]`. At most 5 files of 8 MB each. The folder ignores itself, so nothing in it is committed.
 - **Agent to you:** `codeman notify "message" --file <path>` uploads a file of at most 8 MB that lies
   inside the tab's folder.
 - Remote (ssh) tabs have no local folder, so they neither send nor receive files.
@@ -77,7 +77,7 @@ Discord for them; only the agent-initiated `codeman notify` habit is missing.
   Everything else is dropped.
 - A reply is cut to one printable line (1000 characters) and limited to one per second per tab.
 - Posts can ping only the allowlisted users, so agent output cannot ping the whole server.
-- A Discord outage or a bad token never affects a session; it logs once and backs off.
+- A Discord outage or a bad token never affects a session; it backs off, and the last error shows in Settings.
 
 ## Troubleshooting
 

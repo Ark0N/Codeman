@@ -520,6 +520,7 @@ export class WebServer extends EventEmitter {
       if (await session.writeViaMux(text, { fromUser }).catch(() => false)) return true;
       return session.write(text, { fromUser });
     },
+    awaitingChoice: (id) => approvalInbox.listPending().some((item) => item.sessionId === id && item.kind !== 'idle'),
     // Remote (ssh) sessions keep their folder on another host, so received files have nowhere local to go.
     sessionDir: (sessionId) => {
       const session = this.sessions.get(sessionId);
@@ -1356,7 +1357,11 @@ export class WebServer extends EventEmitter {
       ctx,
       hostTitle: () => this.windowTitle,
     });
-    if (!this.testMode) void this.discordBridge.ensureLoaded().catch(() => undefined);
+    if (!this.testMode) {
+      // The gateway waits for restoreMuxSessions(): a reply during restore would be told the tab is gone.
+      this.discordBridge.hold();
+      void this.discordBridge.ensureLoaded().catch(() => undefined);
+    }
     registerDoctorRoutes(this.app);
     registerCustomModelRoutes(this.app);
     registerCliRegistryRoutes(this.app);
@@ -3253,6 +3258,7 @@ export class WebServer extends EventEmitter {
       if (restoredMail > 0) console.log(`[AgentInbox] restored ${restoredMail} pending message(s)`);
       const restored = await this.restoreMuxSessions();
       await this.finalizeRestoredState(restored);
+      void this.discordBridge.release().catch(() => undefined);
 
       // Instance-scoped reaper: after restore, `docker rm -f` managed containers of
       // THIS instance whose case is gone from docker-cases.json (best-effort, never

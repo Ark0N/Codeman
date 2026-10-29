@@ -15,7 +15,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, isAbsolute, relative, sep } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
-import { findSessionOrFail, isAdmin, parseBody } from '../route-helpers.js';
+import { canAccessOwned, findSessionOrFail, getAuthUser, isAdmin, parseBody } from '../route-helpers.js';
 import type { SessionPort } from '../ports/session-port.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { describeUnknownPath, probePathKind } from '../../utils/bounded-path-probe.js';
@@ -51,10 +51,12 @@ export type DiscordStatus = Omit<DiscordConfig, 'token'> & {
  * A Docker case exports CODEMAN_SESSION_ID cut to 8 characters, so accept a unique prefix of at
  * least that length. Anything ambiguous or shorter is left as given and 404s like any unknown id.
  */
-function resolveSessionId(ctx: SessionPort, id: string): string {
+function resolveSessionId(ctx: SessionPort, req: FastifyRequest, id: string): string {
   if (ctx.sessions.has(id) || id.length < 8) return id;
-  const hits = [...ctx.sessions.keys()].filter((k) => k.startsWith(id));
-  return hits.length === 1 ? hits[0] : id;
+  // Only sessions the caller may see count, so another user's session is never revealed by its prefix.
+  const user = getAuthUser(req);
+  const hits = [...ctx.sessions.values()].filter((s) => s.id.startsWith(id) && canAccessOwned(user, s.owner));
+  return hits.length === 1 ? hits[0].id : id;
 }
 
 // A loop or a prompt-injected agent must not ping the phones until Discord answers 429, nor hold 8 MB
@@ -180,7 +182,7 @@ export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDe
 
   app.post('/api/sessions/:id/discord-notify', async (req, reply): Promise<ApiResponse<DiscordResult | null>> => {
     const { id: rawId } = req.params as { id: string };
-    const id = resolveSessionId(deps.ctx, rawId);
+    const id = resolveSessionId(deps.ctx, req, rawId);
     const { message, urgent, file } = parseBody(DiscordNotifySchema, req.body, 'Invalid Discord message');
     const session = findSessionOrFail(deps.ctx, id, req);
     if (!consumeNotifyToken(session.id)) {

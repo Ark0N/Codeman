@@ -541,6 +541,16 @@ describe('DiscordBridge', () => {
     b.stop();
   });
 
+  it('keeps the gateway off while held (boot) and starts it on release', async () => {
+    const b = bridge();
+    b.hold();
+    await b.reload();
+    expect(b.gatewayState).toBe('off');
+    await b.release();
+    expect(b.gatewayState).not.toBe('off');
+    b.stop();
+  });
+
   describe('sendTest', () => {
     it('posts with the config it is given and leaves the live config alone', async () => {
       const auth: string[] = [];
@@ -721,7 +731,11 @@ describe('DiscordBridge files and startup hint', () => {
   let posted: Array<{ path: string; body?: Record<string, unknown> }>;
   let downloads: string[];
 
-  function make(cfg: Partial<DiscordConfig> = {}, dirFor: (id: string) => string | undefined = () => work) {
+  function make(
+    cfg: Partial<DiscordConfig> = {},
+    dirFor: (id: string) => string | undefined = () => work,
+    awaitingChoice?: (id: string) => boolean
+  ) {
     const b = new DiscordBridge({
       configDir: dir,
       fetchImpl: async (url, init) => {
@@ -736,6 +750,7 @@ describe('DiscordBridge files and startup hint', () => {
       },
       sendInput: async (id, text, fromUser) => (sent.push([id, text, fromUser]), true),
       sessionDir: dirFor,
+      awaitingChoice,
       socketFactory: () => new FakeSocket(),
       now: () => t,
       sleep: async () => undefined,
@@ -816,6 +831,21 @@ describe('DiscordBridge files and startup hint', () => {
     expect(sent[0][1].endsWith('\r')).toBe(true);
     expect(sent[0][2]).toBe(false); // Codeman's own text: not a person's input, so it cannot auto-name the tab
     expect(DISCORD_STARTUP_HINT).toContain('codeman notify');
+    b.stop();
+  });
+
+  it('types a lone digit without Enter while a dialog is waiting, and with Enter otherwise', async () => {
+    let waiting = true;
+    const b = await make({}, undefined, () => waiting);
+    await b.onGatewayMessage(reply({ content: '2', attachments: [] }));
+    expect(sent.at(-1)?.[1]).toBe('2');
+    t += 5_000;
+    await b.onGatewayMessage(reply({ content: 'yes', attachments: [] }));
+    expect(sent.at(-1)?.[1]).toBe('yes\r');
+    t += 5_000;
+    waiting = false;
+    await b.onGatewayMessage(reply({ content: '2', attachments: [] }));
+    expect(sent.at(-1)?.[1]).toBe('2\r');
     b.stop();
   });
 

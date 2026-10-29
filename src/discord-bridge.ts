@@ -648,6 +648,8 @@ export interface DiscordBridgeDeps {
   /** Types `text` (already ending in Enter) into the session. False when the session is gone. */
   /** `fromUser` is true only for what a person typed (a Discord reply), false for text Codeman types itself. */
   sendInput: (sessionId: string, text: string, fromUser: boolean) => Promise<boolean>;
+  /** True while the session shows a permission or question dialog, which acts on a bare keypress. */
+  awaitingChoice?: (sessionId: string) => boolean;
   /** A session's working folder, where received files are saved. Undefined when it is gone or remote. */
   sessionDir?: (sessionId: string) => string | undefined;
   socketFactory?: SocketFactory;
@@ -670,6 +672,8 @@ export class DiscordBridge {
   private pending = new Map<string, Promise<string | DiscordResult>>();
   /** The parent channel the thread map was built under. */
   private threadsParent = '';
+  /** True from boot until the restored tabs exist (see hold). */
+  private held = false;
   /** Thread-map writes run one after another: concurrent creations must not interleave on the tmp file. */
   private persistChain: Promise<void> = Promise.resolve();
   private mapLoad?: Promise<void>;
@@ -701,6 +705,18 @@ export class DiscordBridge {
   }
 
   /** (Re)read the config and start or stop the gateway to match. Call at boot and after a save. */
+  /** Hold the gateway back (boot): a reply must not arrive before the restored tabs exist. */
+  hold(): void {
+    this.held = true;
+  }
+
+  /** Boot is done: start the gateway if the bridge is on. */
+  async release(): Promise<void> {
+    if (!this.held) return;
+    this.held = false;
+    await this.reload();
+  }
+
   async reload(): Promise<void> {
     this.cfg = await readDiscordConfig(this.deps.configDir);
     // The thread map is read once, by whoever gets here first; everyone else waits for that read. A second
@@ -723,7 +739,7 @@ export class DiscordBridge {
     this.gateway?.stop();
     this.gateway = null;
     activeStartupHint = this.cfg.enabled && this.cfg.token && this.cfg.startupHint ? DISCORD_STARTUP_HINT : undefined;
-    if (this.cfg.enabled && this.cfg.token) {
+    if (this.cfg.enabled && this.cfg.token && !this.held) {
       this.gateway = new DiscordGateway(
         () => this.cfg.token,
         (m) => void this.onGatewayMessage(m).catch(() => undefined),
@@ -990,7 +1006,9 @@ export class DiscordBridge {
       return;
     }
     if (saved.refused) await this.say(m.channel_id, saved.refused);
-    const ok = await this.deps.sendInput(sessionId, text, true).catch(() => false);
+    // A lone digit answers a dialog by itself: an Enter after it would land on whatever comes next.
+    const keys = /^\d\r$/.test(text) && this.deps.awaitingChoice?.(sessionId) ? text.slice(0, -1) : text;
+    const ok = await this.deps.sendInput(sessionId, keys, true).catch(() => false);
     const reply = ok
       ? this.api.react(m.channel_id, m.id, '✅')
       : this.api.post(m.channel_id, {
