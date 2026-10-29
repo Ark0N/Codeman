@@ -16,6 +16,7 @@ import { isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import { dataPath } from './config/instance.js';
 import { readCodemanCredentials } from './codeman-credentials.js';
+import { runNotify } from './cli-notify.js';
 import { casePath } from './config/cases-dir.js';
 import { assertValidBasePath } from './config/base-path.js';
 import {
@@ -92,53 +93,6 @@ async function postAttachment(apiUrl: string, sessionId: string, filePath: strin
   });
 }
 
-/** POST JSON to the Codeman API with the same credentials `attach` uses. Resolves to the HTTP status, or 0. */
-async function postJson(
-  apiUrl: string,
-  apiPath: string,
-  payload: unknown
-): Promise<{ status: number; error?: string }> {
-  const { username, password } = readCodemanCredentials();
-  const url = new URL(apiPath, apiUrl);
-  const body = JSON.stringify(payload);
-  const transport = url.protocol === 'https:' ? https : http;
-  return new Promise((resolve) => {
-    const headers: Record<string, string | number> = {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(body),
-    };
-    if (password) headers.Authorization = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
-    const req = transport.request(
-      {
-        protocol: url.protocol,
-        hostname: url.hostname,
-        port: url.port,
-        method: 'POST',
-        path: `${url.pathname}${url.search}`,
-        rejectUnauthorized: false,
-        headers,
-      },
-      (res) => {
-        let text = '';
-        res.on('data', (c) => (text += c));
-        res.on('end', () => {
-          let error: string | undefined;
-          try {
-            error = (JSON.parse(text) as { error?: string }).error;
-          } catch {
-            /* not JSON */
-          }
-          resolve({ status: res.statusCode ?? 0, error });
-        });
-      }
-    );
-    req.on('error', () => resolve({ status: 0 }));
-    req.write(body);
-    req.end();
-  });
-}
-
 program
   .command('notify <message>')
   .description(
@@ -149,30 +103,10 @@ program
   .option('-s, --session <id>', 'Codeman session ID (defaults to CODEMAN_SESSION_ID)')
   .option('--url <url>', 'Codeman API URL (defaults to CODEMAN_API_URL)')
   .action(async (message: string, options) => {
-    const sessionId = options.session || process.env.CODEMAN_SESSION_ID;
-    const apiUrl = options.url || process.env.CODEMAN_API_URL;
-    if (!sessionId || !apiUrl) {
-      console.error(palette.err('✗ notify must run inside a Codeman session (CODEMAN_SESSION_ID and CODEMAN_API_URL)'));
-      process.exit(1);
-    }
-    const payload: { message: string; urgent?: boolean; file?: string } = { message };
-    if (options.urgent) payload.urgent = true;
-    if (options.file) payload.file = isAbsolute(options.file) ? options.file : join(process.cwd(), options.file);
-    const { status, error } = await postJson(
-      apiUrl,
-      `/api/sessions/${encodeURIComponent(sessionId)}/discord-notify`,
-      payload
-    );
-    if (status >= 200 && status < 300) {
-      console.log(palette.ok('✓ Posted to Discord'));
-    } else if (status === 409) {
-      console.log('The Discord bridge is off. Say it in the terminal instead.');
-    } else {
-      console.error(
-        palette.err(`✗ Could not post to Discord${error ? `: ${error}` : status ? ` (HTTP ${status})` : ''}`)
-      );
-      process.exit(1);
-    }
+    const { code, out, err } = await runNotify({ message, ...options }, process.env, process.cwd());
+    if (out) console.log(code === 0 && out.startsWith('Posted') ? palette.ok(`✓ ${out}`) : out);
+    if (err) console.error(palette.err(`✗ ${err}`));
+    process.exit(code);
   });
 
 program

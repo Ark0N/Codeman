@@ -1,0 +1,92 @@
+# Discord Bridge
+
+Answer a blocked agent from your phone, from anywhere. Codeman posts to a private Discord
+server when a session needs you, gives every tab its own thread, and types your reply in that
+thread into that tab. It only makes outbound connections, so nothing is exposed to the internet
+and it works when you are away from your network.
+
+**Opt-in, off by default. One server, one channel, threads per tab.**
+
+> **Treat the Discord account like a login to the machine.** A reply from an allowed account is
+> typed into agents that can run shell commands. Turn on 2FA and use a strong, unique password.
+
+## What it does
+
+- **Alerts** for permission prompts, questions, idle sessions, errors and a stopped crash loop,
+  each with what is on the tab's screen right now, so you can see what is being asked.
+- **One thread per tab** in a parent channel, so a reply always reaches exactly one session.
+- **Replies** from an allowed user are typed into that tab as one line plus Enter.
+- **Files** you attach are saved in the tab's folder and the agent is given the path. An agent can
+  send a file back.
+- **Agents can ask for you.** `codeman notify "Press the reset button on the case" --urgent`
+  posts to the tab's thread. Every session has the command; see [below](#telling-the-agents).
+
+## Set it up
+
+The full least-privilege walkthrough (private server, bot, the exact permissions, IDs, token
+handling) is in [docs/discord-bridge.md](https://github.com/Ark0N/Codeman/blob/master/docs/discord-bridge.md).
+In short:
+
+1. Make a private Discord server with one text channel, and copy the server, channel and your user IDs.
+2. Create an application with a bot. Turn **Public Bot** off, turn **Message Content Intent** on, and
+   invite it with the `bot` scope and only the permissions the guide lists (no Administrator).
+3. In **App Settings → Notifications → Discord**, paste the bot token and the three IDs, press **Save**,
+   then **Send test**, then turn **Talk to your sessions from Discord** on and **Save** again.
+
+The token is a secret: it is kept in its own file (`~/.codeman/discord.json`, readable by its owner
+only), never in the shared settings, and never shown again once saved.
+
+## Options
+
+| Option                         | Choices                                  | Default         |
+| ------------------------------ | ---------------------------------------- | --------------- |
+| Create threads                 | On the first alert, or for every new tab | First alert     |
+| When a tab is deleted          | Keep, archive or delete the thread       | Archive         |
+| @ ping                         | Never, critical events only, every post  | Critical only   |
+| Which events                   | Needs attention, or everything           | Needs attention |
+| Tell each CLI how to reach you | On or off                                | On              |
+
+Deleting a thread needs the **Manage Threads** permission on the channel. "Critical" means a
+permission prompt, a question, an error, or a post an agent marked urgent.
+
+## Telling the agents
+
+An agent only posts deliberately if it knows it can. With **Tell each CLI how to reach you** on:
+
+- **Claude** is launched with the instruction as part of its system prompt, so nothing shows in the chat.
+- **Every other CLI** is sent the same text once, as a message, the first time a brand-new tab goes idle.
+  Restored tabs, resumed tabs and shell tabs are never sent it.
+
+Tabs that were already open when you turned the bridge on are not told. The alerts still reach
+Discord for them; only the agent-initiated `codeman notify` habit is missing.
+
+## Files
+
+- **You to the agent:** attach a file to a reply. It is saved as
+  `<tab folder>/.codeman-discord/<message id>-<name>` and the line the agent sees ends with
+  `[attached: <path>]`. At most 5 files of 8 MB each. Add `.codeman-discord/` to your `.gitignore`.
+- **Agent to you:** `codeman notify "message" --file <path>` uploads a file of at most 8 MB that lies
+  inside the tab's folder.
+- Remote (ssh) tabs have no local folder, so they neither send nor receive files.
+- A file you send is untrusted content to the agent that opens it.
+
+## Safety
+
+- Only user IDs on the allowlist, in your server, inside a thread Codeman made, are acted on.
+  Everything else is dropped.
+- A reply is cut to one printable line (1000 characters) and limited to one per second per tab.
+- Posts can ping only the allowlisted users, so agent output cannot ping the whole server.
+- A Discord outage or a bad token never affects a session; it logs once and backs off.
+
+## Troubleshooting
+
+| Symptom                                          | Check                                                          |
+| ------------------------------------------------ | -------------------------------------------------------------- |
+| Send test says 401                               | The token is wrong or was reset. Paste the current one.        |
+| Send test says the bot cannot see it             | Check the bot's role and the channel ID.                       |
+| Posts arrive but replies do nothing              | Message Content Intent is off, or your user ID is not allowed. |
+| Status line says "Message Content Intent is off" | Turn it on in the Developer Portal, Bot tab.                   |
+| A thread is not deleted                          | The bot lacks Manage Threads on the channel.                   |
+
+See also: [Notifications And Approvals](Notifications-And-Approvals) for the other ways to hear
+from an agent, and [Security](Security) for how secrets are handled.

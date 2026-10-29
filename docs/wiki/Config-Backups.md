@@ -15,6 +15,7 @@ A fixed list of files from the data directory (`~/.codeman/`, or the directory o
 | `clis.json` | CLI enable/disable and custom CLI entries. |
 | `custom-model-hosts.json` | Saved custom model endpoints. **Holds API keys.** |
 | `webhook.json` | Webhook notification target. |
+| `discord.json` | Discord bridge settings. **Holds a bot token.** |
 | `intents.json` | Read My Mind per-case profiles. |
 | `linked-cases.json` | Registered cases. |
 | `remote-hosts.json`, `remote-cases.json`, `docker-hosts.json`, `docker-cases.json` | Remote SSH and Docker overlay configuration. |
@@ -188,7 +189,7 @@ that are the same are listed on one line. A file that is not JSON shows only tha
 a file with more than 200 changes is cut short, so use the files themselves for a full diff. The
 self-rewritten fields listed under "When a backup is made" are not counted as changes.
 
-**Credential values are never shown.** `.env`, `users.json`, `push-keys.json`, `webhook.json` (the
+**Credential values are never shown.** `.env`, `users.json`, `push-keys.json`, `webhook.json`, `discord.json` (the
 URL is a bearer secret) and `intents.json` (captured prompts) list only the names that changed, and in every other file a key that looks like a token, secret, password,
 credential or key is shown as "changed" without its value. URL values lose any `user:password@`,
 query and fragment.
@@ -196,7 +197,7 @@ query and fragment.
 ## Security
 
 - Some tracked files carry credentials (`.env`, `users.json`, `custom-model-hosts.json`,
-  `push-keys.json`, `webhook.json`). Each backup folder is mode `0700` and its files `0600`, so the default
+  `push-keys.json`, `webhook.json`, `discord.json`). Each backup folder is mode `0700` and its files `0600`, so the default
   location exposes nothing the data directory does not already.
 - **A custom folder is your decision.** Putting it on a shared drive, a synced folder or a
   network share copies those credentials there, with whatever permissions that location has.

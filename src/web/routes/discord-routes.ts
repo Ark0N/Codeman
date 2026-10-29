@@ -47,6 +47,16 @@ export type DiscordStatus = Omit<DiscordConfig, 'token'> & {
 };
 
 /**
+ * A Docker case exports CODEMAN_SESSION_ID cut to 8 characters, so accept a unique prefix of at
+ * least that length. Anything ambiguous or shorter is left as given and 404s like any unknown id.
+ */
+function resolveSessionId(ctx: SessionPort, id: string): string {
+  if (ctx.sessions.has(id) || id.length < 8) return id;
+  const hits = [...ctx.sessions.keys()].filter((k) => k.startsWith(id));
+  return hits.length === 1 ? hits[0] : id;
+}
+
+/**
  * A file a session may send: a regular file, at most MAX_FILE_BYTES, whose REAL path (symlinks
  * followed) lies inside the session's working folder. Anything else is refused, so a CLI cannot be
  * talked into posting ~/.codeman/discord.json or an ssh key. Returns the bytes, or the reason.
@@ -137,7 +147,8 @@ export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDe
   });
 
   app.post('/api/sessions/:id/discord-notify', async (req, reply): Promise<ApiResponse<DiscordResult | null>> => {
-    const { id } = req.params as { id: string };
+    const { id: rawId } = req.params as { id: string };
+    const id = resolveSessionId(deps.ctx, rawId);
     const { message, urgent, file } = parseBody(DiscordNotifySchema, req.body, 'Invalid Discord message');
     const session = findSessionOrFail(deps.ctx, id, req);
     let upload: { name: string; data: Uint8Array } | undefined;

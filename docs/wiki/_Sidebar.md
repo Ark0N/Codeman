@@ -25,6 +25,7 @@
 
 - [Unattended Runs](Keeping-Agents-Running)
 - [Notifications & Approvals](Notifications-And-Approvals)
+- [Discord Bridge](Discord-Bridge)
 - [Cron Jobs](Cron-Jobs)
 - [Autonomous Loops](Autonomous-Loops)
 - [Watching Agents Work](Watching-Agents-Work)

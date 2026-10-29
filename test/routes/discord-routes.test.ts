@@ -122,6 +122,31 @@ describe('POST /api/sessions/:id/discord-notify', () => {
     bridge.stop();
   });
 
+  it('accepts a unique 8-character session id prefix (Docker exports it cut), not an ambiguous or short one', async () => {
+    const { app, bridge, ctx } = await harness();
+    await app.inject({ method: 'PUT', url: '/api/discord', payload: FULL });
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/test-ses/discord-notify',
+      payload: { message: 'hi' },
+    });
+    expect(ok.statusCode).toBe(200);
+    ctx.sessions.set('test-session-2', ctx.sessions.get('test-session-1')!);
+    const ambiguous = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/test-ses/discord-notify',
+      payload: { message: 'hi' },
+    });
+    expect(ambiguous.statusCode).toBe(404);
+    const short = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/test/discord-notify',
+      payload: { message: 'hi' },
+    });
+    expect(short.statusCode).toBe(404);
+    bridge.stop();
+  });
+
   it('rejects an empty or oversized message', async () => {
     const { app } = await harness();
     const url = `/api/sessions/test-session-1/discord-notify`;
