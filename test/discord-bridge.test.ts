@@ -521,6 +521,26 @@ describe('DiscordBridge', () => {
     b.stop();
   });
 
+  it('drops a thread whose creation finished after the parent channel changed', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const b = bridge({}, async (url) => {
+      if (String(url).endsWith(`/channels/${PARENT}/threads`)) {
+        await gate;
+        return jsonRes({ id: THREAD });
+      }
+      return jsonRes({ id: 'msg' });
+    });
+    const first = b.notify(MSG);
+    await new Promise((r) => setTimeout(r, 10));
+    await writeDiscordConfig(dir, { ...CFG, parentChannelId: '777777777777777777' });
+    await b.reload();
+    release();
+    expect(await first).toMatchObject({ ok: false });
+    expect(await readThreadMap(dir)).toEqual({});
+    b.stop();
+  });
+
   describe('sendTest', () => {
     it('posts with the config it is given and leaves the live config alone', async () => {
       const auth: string[] = [];

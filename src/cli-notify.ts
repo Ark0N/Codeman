@@ -33,11 +33,12 @@ export interface NotifyResult {
 export type JsonPost = (
   apiUrl: string,
   apiPath: string,
-  payload: unknown
+  payload: unknown,
+  timeoutMs?: number
 ) => Promise<{ status: number; error?: string; delivery?: { ok: boolean; error?: string } }>;
 
 /** POST JSON to the Codeman API with the same credentials `codeman attach` uses. Status 0 means no answer. */
-export const postJson: JsonPost = (apiUrl, apiPath, payload) => {
+export const postJson: JsonPost = (apiUrl, apiPath, payload, timeoutMs = REQUEST_TIMEOUT_MS) => {
   const { username, password } = readCodemanCredentials();
   const url = new URL(apiPath, apiUrl);
   const body = JSON.stringify(payload);
@@ -58,7 +59,7 @@ export const postJson: JsonPost = (apiUrl, apiPath, payload) => {
         path: `${url.pathname}${url.search}`,
         rejectUnauthorized: false,
         headers,
-        timeout: REQUEST_TIMEOUT_MS,
+        timeout: timeoutMs,
       },
       (res) => {
         let text = '';

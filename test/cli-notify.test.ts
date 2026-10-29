@@ -58,6 +58,19 @@ describe('runNotify', () => {
     expect((await runNotify({ message: 'x' }, ENV, '/w', fake(200, undefined, { ok: true }))).code).toBe(0);
   });
 
+  it('postJson gives up on a server that never answers, with status 0', async () => {
+    const server = createServer(() => undefined);
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const r = await postJson(`http://127.0.0.1:${port}`, '/x', {}, 100);
+      expect(r.status).toBe(0);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+
   it('treats a disabled bridge (409) as success that says so', async () => {
     const r = await runNotify({ message: 'x' }, ENV, '/work', fake(409));
     expect(r.code).toBe(0);

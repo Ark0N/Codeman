@@ -306,16 +306,14 @@ export async function writeDiscordConfig(configDir: string, cfg: DiscordConfig):
   await writePrivate(discordConfigPath(configDir), coerce(cfg), 0o600);
 }
 
-/** The thread map plus the parent channel it was built under (empty for an older flat file). */
+/** The thread map plus the parent channel it was built under. */
 async function readThreadFile(configDir: string): Promise<{ parent: string; threads: Record<string, string> }> {
   try {
     const raw = JSON.parse(await fs.readFile(join(configDir, THREADS_FILE), 'utf-8')) as Record<string, unknown>;
-    const nested = typeof raw.threads === 'object' && raw.threads !== null;
-    const entries = Object.entries(nested ? (raw.threads as Record<string, unknown>) : raw);
     const threads: Record<string, string> = {};
-    for (const [k, v] of entries) if (typeof v === 'string' && SNOWFLAKE.test(v)) threads[k] = v;
-    const parent = nested && typeof raw.parentChannelId === 'string' ? raw.parentChannelId : '';
-    return { parent, threads };
+    const saved = typeof raw.threads === 'object' && raw.threads !== null ? raw.threads : {};
+    for (const [k, v] of Object.entries(saved)) if (typeof v === 'string' && SNOWFLAKE.test(v)) threads[k] = v;
+    return { parent: typeof raw.parentChannelId === 'string' ? raw.parentChannelId : '', threads };
   } catch {
     return { parent: '', threads: {} };
   }
@@ -717,10 +715,8 @@ export class DiscordBridge {
     // or every tab would keep posting into the old one.
     const parent = this.cfg.parentChannelId;
     if (parent && parent !== this.threadsParent) {
-      if (this.threadsParent !== '') {
-        this.threads = {};
-        this.pending.clear();
-      }
+      this.threads = {};
+      this.pending.clear();
       this.threadsParent = parent;
       await this.persistThreads();
     }
@@ -779,19 +775,24 @@ export class DiscordBridge {
     if (existing) return Promise.resolve(existing);
     const inflight = this.pending.get(sessionId);
     if (inflight) return inflight;
-    const p = (async () => {
+    const parent = this.cfg.parentChannelId;
+    const mine: { p?: Promise<string | DiscordResult> } = {};
+    const p = (mine.p = (async () => {
       try {
-        const t = await this.api.createThread(this.cfg.parentChannelId, threadNameFor(name, sessionId));
+        const t = await this.api.createThread(parent, threadNameFor(name, sessionId));
         if (!t?.id) return this.fail(new Error('Discord did not return a thread'));
+        // A save moved the bridge to another channel meanwhile: this thread belongs to the old one.
+        if (parent !== this.cfg.parentChannelId) return this.fail(new Error('The parent channel changed'));
         this.threads[sessionId] = t.id;
         await this.persistThreads();
         return t.id;
       } catch (err) {
         return this.fail(err);
       } finally {
-        this.pending.delete(sessionId);
+        // Only this creation's own entry: a newer one for the same tab may have replaced it.
+        if (this.pending.get(sessionId) === mine.p) this.pending.delete(sessionId);
       }
-    })();
+    })());
     this.pending.set(sessionId, p);
     return p;
   }
