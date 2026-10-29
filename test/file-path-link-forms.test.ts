@@ -205,6 +205,29 @@ describe('terminalPathLine', () => {
   // A parenthesised filename word-wrapped between its words (#733). The space
   // the wrap consumed has to come back, and the clickable cells stay on the
   // characters that are actually on each row.
+  it('joins a tool-call path and a URL cut mid-word without inserting a space', () => {
+    // An earlier `(` (`Bash(`) and a `://` token keep master's join: no space.
+    const bash = ['Bash(cp /home/me/proj/builds/captures/2026-10-10/ghost1b_gamepl', '  ay.png /tmp/)'];
+    const bashLine = terminalPathLine(buffer(bash), 0, 80)!;
+    expect(bashLine.text).toBe('Bash(cp /home/me/proj/builds/captures/2026-10-10/ghost1b_gameplay.png /tmp/)');
+    expect(paths(bashLine.text)).toEqual(['/home/me/proj/builds/captures/2026-10-10/ghost1b_gameplay.png']);
+
+    const url = ['Details (see https://example.com/reports/2026/ghost1b_game', '  play.png).'];
+    const urlLine = terminalPathLine(buffer(url), 0, 80)!;
+    expect(urlLine.text).toBe('Details (see https://example.com/reports/2026/ghost1b_gameplay.png).');
+    expect(paths(urlLine.text)).toEqual([]);
+  });
+
+  // The path's own `(` plus a letter/letter cut is the same shape as `Kobo` +
+  // `eReader.conf`. The wrap wins: the space stays, and the link is that name.
+  it('keeps the space when a parenthesised path is cut mid-letter, the Kobo-wrap trade-off', () => {
+    const rows = ['See (/mnt/data/captures/2026-10-10/ghost1b_gamepl', '  ay.png).'];
+    const spaced = '/mnt/data/captures/2026-10-10/ghost1b_gamepl ay.png';
+    const line = terminalPathLine(buffer(rows), 0, 80)!;
+    expect(line.text).toBe(`See (${spaced}).`);
+    expect(paths(line.text)).toEqual([spaced]);
+  });
+
   it('keeps the space in a hard-wrapped parenthesised filename and maps both rows', () => {
     const rows = ['Prepared a corrected configuration (/mnt/data/Kobo/Kobo', '  eReader.conf).'];
     const path = '/mnt/data/Kobo/Kobo eReader.conf';

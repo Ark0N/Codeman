@@ -2372,14 +2372,13 @@ function parenthesisedSpacedPaths(line) {
 }
 
 /**
- * A spaced path that fills the inside of one parenthesis pair, or null.
+ * A spaced absolute path that fills the inside of one parenthesis pair, or null.
  *
- * An absolute path is judged as its own line. A relative or `~/` path is judged
- * as if a path label introduced it, and only when it starts like a path (so
- * `(see docs/My File.conf)` stays prose). A bare spaced filename
- * (`Kobo eReader.conf`) has no slash; it is linked only when every word is a
- * name. `link: false` reserves an unlinkable span (`/etc/…`) the same way the
- * own-line detector does.
+ * The inside is judged as its own line ({@link spacedFilePathOnLine}), so only an
+ * absolute path qualifies. A relative or `~/` path still needs an explicit path
+ * label, and a bare `word word file.ext` is prose the ordinary detectors keep.
+ * `link: false` reserves an unlinkable span (`/etc/…`) the same way the own-line
+ * detector does.
  *
  * @param {string} inner Text between the parentheses.
  * @returns {{path: string, index: number, link: boolean} | null}
@@ -2389,33 +2388,12 @@ function spacedPathBoundedByParens(inner) {
   const raw = String(inner || '');
   const lead = raw.length - raw.trimStart().length;
   const trimmed = raw.trim();
-  if (!trimmed.includes(' ') || trimmed.length > 1000) return null;
+  // Length before the space scan: each nesting level calls this, and a long
+  // parenthesis nest with no spaces must not be scanned once per level.
+  if (trimmed.length > 1000 || !trimmed.includes(' ')) return null;
   const direct = spacedFilePathOnLine(trimmed);
-  if (direct) return { path: direct.path, index: lead + direct.index, link: direct.link };
-  if (/^(?:~\/|\.{1,2}\/|[^\s/]+\/)/.test(trimmed)) {
-    const labelled = spacedFilePathOnLine(`Path: ${trimmed}`);
-    if (labelled) {
-      const at = trimmed.indexOf(labelled.path);
-      if (at >= 0) return { path: labelled.path, index: lead + at, link: labelled.link };
-    }
-  }
-  const bare = trimmed.replace(/[.,;:!?]$/, '');
-  if (
-    bare.includes('/') ||
-    bare.includes('  ') ||
-    /[\t"'`<>|;&\x00-\x1f\\]/.test(bare) ||
-    !PATH_TOKEN_ENDS_WITH_EXTENSION.test(bare)
-  ) {
-    return null;
-  }
-  const words = bare.split(' ');
-  if (words.length < 2) return null;
-  for (const word of words) {
-    if (SPACED_PATH_PROSE_WORD.test(word)) return null;
-    if (word !== '-' && !/[\p{L}\p{N}]/u.test(word)) return null;
-    if (word !== words[words.length - 1] && PATH_TOKEN_HAS_EXTENSION.test(word)) return null;
-  }
-  return { path: bare, index: lead + trimmed.indexOf(bare), link: true };
+  if (!direct) return null;
+  return { path: direct.path, index: lead + direct.index, link: direct.link };
 }
 
 /**
@@ -2632,7 +2610,8 @@ const pathFirstSegment = (path) => path.replace(/^(?:\.?\/)+/, '').split('/')[0]
  *
  * Answers `'join'` when the path ends (reaches a known extension) on the next
  * line, `'join-space'` for that same join when the break is between filename
- * words inside parentheses (the separating space the wrap consumed is kept),
+ * words inside the parenthesis that opens the broken-off path (the separating
+ * space the wrap consumed is kept; an earlier `(` and a `://` token do not),
  * `'chain'` when the next line is nothing but more of the path (a path
  * spanning three or more lines; only worth keeping once a later line ends it),
  * and `null` otherwise. The broken-off token must already look like a path in
@@ -2656,28 +2635,41 @@ function pathContinuation(prevText, nextText) {
 }
 
 /**
- * Whether a hard wrap between `prevText` and `head` fell on a space inside a
- * parenthesised filename (`Kobo` + `eReader.conf`), so the join must keep that
- * space. A column cut (`captures/2` + `026-10-10/…`) is not one: its head
- * continues the token (a slash, or a non-letter) and it is not inside an
- * unclosed `(`.
+ * Whether a hard wrap between `prevText` and `head` fell on a space inside the
+ * parenthesis that opens the broken-off path (`(/mnt/…/Kobo` + `eReader.conf`),
+ * so the join must keep that space.
+ *
+ * Only that path's own `(` counts: the broken-off token starts with it, or
+ * whitespace alone separates them. An earlier `(` (`Bash(cp /home/…`) does not.
+ * A token containing `://` never keeps a space. A column cut (`captures/2` +
+ * `026-10-10/…`) is not one: its head continues the token (a slash, or a
+ * non-letter). A parenthesised path cut mid-letter between two letters is
+ * ambiguous with the Kobo wrap and keeps the space.
  *
  * @param {string} prevText
  * @param {string} head The next line's first path token.
  * @returns {boolean}
  */
 function continuationKeepsWordSpace(prevText, head) {
-  const prev = String(prevText || '');
+  const prev = String(prevText || '').replace(/\s+$/, '');
+  const headText = String(head || '');
+  const tail = /[^\s"'<>|;&]+$/.exec(prev)?.[0] || '';
+  if (!tail || tail.includes('://') || headText.includes('://')) return false;
+  const before = prev.slice(0, prev.length - tail.length);
+  // The `(` that opens this path, not `Bash(` or any earlier one in the stitch.
+  let openAt = -1;
+  if (tail.startsWith('(')) openAt = prev.length - tail.length;
+  else if (/\(\s*$/.test(before)) openAt = before.lastIndexOf('(');
+  if (openAt < 0) return false;
   let depth = 0;
-  for (let i = 0; i < prev.length; i++) {
+  for (let i = openAt; i < prev.length; i++) {
     const ch = prev[i];
     if (ch === '(') depth++;
     else if (ch === ')') depth = Math.max(0, depth - 1);
   }
   if (depth === 0) return false;
-  const bare = String(head || '').replace(/[)\].,;:!?]+$/, '');
+  const bare = headText.replace(/[)\].,;:!?]+$/, '');
   if (!bare || bare.includes('/') || !/^[A-Za-z]/.test(bare)) return false;
-  const tail = /[^\s"'<>|;&]+$/.exec(prev.replace(/\s+$/, ''))?.[0] || '';
   return /[A-Za-z0-9]$/.test(tail);
 }
 

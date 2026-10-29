@@ -437,10 +437,23 @@ describe('parenthesised paths with spaces (#733)', () => {
     expect(line.slice(line.indexOf(KOBO), line.indexOf(KOBO) + KOBO.length)).toBe(KOBO);
   });
 
-  it('links a parenthesised relative path and a bare spaced filename whole', () => {
-    expect(paths('wrote (docs/Kobo eReader.conf) today')).toEqual(['docs/Kobo eReader.conf']);
-    expect(paths('edited (Kobo eReader.conf) in place')).toEqual(['Kobo eReader.conf']);
-    expect(paths('kept (~/Kobo/Kobo eReader.conf) aside')).toEqual(['~/Kobo/Kobo eReader.conf']);
+  it.each([
+    ['(node server.js)', 'server.js'],
+    ['(updated package.json)', 'package.json'],
+    ['(e.g. eslint.config.js)', 'eslint.config.js'],
+    ['(default: settings.json)', 'settings.json'],
+    ['(cat notes.md)', 'notes.md'],
+    ['(CI/CD pipeline config.yml)', 'config.yml'],
+  ])('links the file only inside %s, not the surrounding prose', (line, file) => {
+    expect(paths(line)).toEqual([file]);
+    expect(paths(line)).not.toContain(line.slice(1, -1));
+  });
+
+  it('does not take a relative or bare spaced name inside parentheses as one path', () => {
+    // Those still need an explicit path label. The ordinary detectors link the file.
+    expect(paths('wrote (docs/Kobo eReader.conf) today')).toEqual(['eReader.conf']);
+    expect(paths('edited (Kobo eReader.conf) in place')).toEqual(['eReader.conf']);
+    expect(paths('kept (~/Kobo/Kobo eReader.conf) aside')).toEqual(['~/Kobo/Kobo', 'eReader.conf']);
   });
 
   it('links .conf the way other text extensions are linked', () => {
