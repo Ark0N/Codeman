@@ -1770,6 +1770,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('discordPingMode').value = d.pingMode;
     document.getElementById('discordScope').value = d.scope;
     document.getElementById('discordStartupHint').checked = d.startupHint !== false;
+    document.getElementById('discordTypedHint').checked = d.typedHint === true;
     const clearBtn = document.getElementById('discordClearBtn');
     if (clearBtn) clearBtn.style.display = d.hasToken ? '' : 'none';
     const gw = { off: 'Not connected (disabled).', connecting: 'Connecting to Discord…', connected: 'Connected: replies are being read.', error: `Not connected: ${d.gatewayError || 'error'}` };
@@ -1794,6 +1795,7 @@ Object.assign(CodemanApp.prototype, {
       pingMode: document.getElementById('discordPingMode').value,
       scope: document.getElementById('discordScope').value,
       startupHint: document.getElementById('discordStartupHint').checked,
+      typedHint: document.getElementById('discordTypedHint').checked,
     };
     const token = document.getElementById('discordToken').value.trim();
     if (token) payload.token = token; // blank = keep the saved one (Remove token is the way to clear it)

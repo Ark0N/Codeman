@@ -2232,6 +2232,7 @@ export const DiscordUpdateSchema = z
     pingMode: z.enum(DISCORD_PING_MODES).optional(),
     scope: z.enum(WEBHOOK_SCOPES).optional(),
     startupHint: z.boolean().optional(),
+    typedHint: z.boolean().optional(),
   })
   .strict();
 

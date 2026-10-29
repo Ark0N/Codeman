@@ -3,7 +3,16 @@
  * @fileoverview Discord bridge: pure rules, the 0600 store, the REST client, the gateway state
  * machine (fake socket) and the bridge's gates. No network, no real Discord.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -634,7 +643,7 @@ describe('DiscordBridge files and startup hint', () => {
       now: () => t,
       sleep: async () => undefined,
     });
-    return writeDiscordConfig(dir, { ...CFG, ...cfg }).then(async () => {
+    return writeDiscordConfig(dir, { ...CFG, typedHint: true, ...cfg }).then(async () => {
       await b.reload();
       await b.notify(MSG);
       posted.length = 0;
@@ -728,6 +737,15 @@ describe('DiscordBridge files and startup hint', () => {
     expect(sent).toHaveLength(0);
     expect(String(posted.at(-1)?.body?.content)).toMatch(/could not be saved/);
     b.stop();
+  });
+
+  it('sends the typed hint only when typedHint is on (the default is off)', async () => {
+    const off = await make({ typedHint: false });
+    await off.sessionCreated('s7', 'new', t - 1000);
+    await off.sessionIdle('s7', true);
+    expect(sent).toHaveLength(0);
+    off.stop();
+    expect(DEFAULT_DISCORD_CONFIG.typedHint).toBe(false);
   });
 
   it('does not hint a restored (old) session, or when startupHint is off', async () => {

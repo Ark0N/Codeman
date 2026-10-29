@@ -79,6 +79,19 @@ describe('/api/discord', () => {
     bridge.stop();
   });
 
+  it('stores startupHint (default on) and typedHint (default off) and returns them', async () => {
+    const { app, bridge } = await harness();
+    const first = (await app.inject({ method: 'GET', url: '/api/discord' })).json().data;
+    expect(first).toMatchObject({ startupHint: true, typedHint: false });
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/discord',
+      payload: { typedHint: true, startupHint: false },
+    });
+    expect(put.json().data).toMatchObject({ startupHint: false, typedHint: true });
+    bridge.stop();
+  });
+
   it('refuses a bad id, an incomplete enable, and unknown fields', async () => {
     const { app } = await harness();
     const bad = await app.inject({ method: 'PUT', url: '/api/discord', payload: { guildId: 'not-a-number' } });

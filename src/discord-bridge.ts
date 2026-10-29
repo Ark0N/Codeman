@@ -63,6 +63,11 @@ export interface DiscordConfig {
   scope: WebhookScope;
   /** Tell each session how to reach the user (see DISCORD_STARTUP_HINT). On by default while the bridge is on. */
   startupHint: boolean;
+  /**
+   * Also type the hint, once, as the first message to a brand-new non-Claude CLI tab. Off by default: it spends a
+   * model turn per tab, and for a spawned worker or a cron session it lands on the same first idle as the real prompt.
+   */
+  typedHint: boolean;
 }
 
 export const DEFAULT_DISCORD_CONFIG: DiscordConfig = {
@@ -76,6 +81,7 @@ export const DEFAULT_DISCORD_CONFIG: DiscordConfig = {
   pingMode: 'critical',
   scope: 'attention',
   startupHint: true,
+  typedHint: false,
 };
 
 export interface DiscordMessage {
@@ -271,6 +277,7 @@ function coerce(raw: unknown): DiscordConfig {
     pingMode: oneOf(DISCORD_PING_MODES, r.pingMode, d.pingMode),
     scope: oneOf(WEBHOOK_SCOPES, r.scope, d.scope),
     startupHint: r.startupHint === undefined ? d.startupHint : r.startupHint === true,
+    typedHint: r.typedHint === true,
   };
 }
 
@@ -859,7 +866,7 @@ export class DiscordBridge {
    */
   async sessionIdle(sessionId: string, hintable: boolean): Promise<void> {
     if (!this.fresh.delete(sessionId)) return;
-    if (!hintable || !this.cfg.enabled || !this.cfg.startupHint) return;
+    if (!hintable || !this.cfg.enabled || !this.cfg.startupHint || !this.cfg.typedHint) return;
     const text = sanitiseReply(`${DISCORD_STARTUP_HINT} Reply with just: ok`);
     // fromUser false: this is Codeman talking, so it must not auto-name the tab or count as the person's input.
     if (text) await this.deps.sendInput(sessionId, text, false).catch(() => false);

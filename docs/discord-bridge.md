@@ -88,20 +88,21 @@ In the Discord mobile app set the server to **All Messages**. Discord's own push
 
 ## Options
 
-| Option            | Values                      | Default     | Effect                                                                                   |
-| ----------------- | --------------------------- | ----------- | ---------------------------------------------------------------------------------------- |
-| `threadCreation`  | `lazy`, `onSessionStart`    | `lazy`      | `lazy` makes a thread on the first notification. `onSessionStart` makes one per new tab  |
-| `onSessionDelete` | `keep`, `archive`, `delete` | `archive`   | What happens to the thread when its tab is deleted. `delete` needs Manage Threads        |
-| `pingMode`        | `off`, `critical`, `all`    | `critical`  | `critical` pings you for permission prompts, questions, errors and urgent posts          |
-| `scope`           | `attention`, `all`          | `attention` | `attention` skips the quiet "response complete" event. `all` sends it too                |
-| `startupHint`     | on, off                     | on          | Tell each CLI about `codeman notify` (Claude at launch, others once on their first idle) |
+| Option            | Values                      | Default     | Effect                                                                                  |
+| ----------------- | --------------------------- | ----------- | --------------------------------------------------------------------------------------- |
+| `threadCreation`  | `lazy`, `onSessionStart`    | `lazy`      | `lazy` makes a thread on the first notification. `onSessionStart` makes one per new tab |
+| `onSessionDelete` | `keep`, `archive`, `delete` | `archive`   | What happens to the thread when its tab is deleted. `delete` needs Manage Threads       |
+| `pingMode`        | `off`, `critical`, `all`    | `critical`  | `critical` pings you for permission prompts, questions, errors and urgent posts         |
+| `scope`           | `attention`, `all`          | `attention` | `attention` skips the quiet "response complete" event. `all` sends it too               |
+| `startupHint`     | on, off                     | on          | Tell Claude about `codeman notify` in its system prompt at launch                       |
+| `typedHint`       | on, off                     | off         | Also send the note once, as a first message, to brand-new non-Claude CLI tabs           |
 
 ## Telling the CLIs
 
-A CLI only posts deliberately if it knows it can. While the bridge and `startupHint` are on:
+A CLI only posts deliberately if it knows it can. While the bridge is on:
 
-- **Claude** is launched with `--append-system-prompt`, so nothing shows in the conversation.
-- **Every other CLI** is sent the same text once, as a message, the first time a brand-new tab becomes idle. Tabs that are restored when Codeman starts, resumed tabs, shell tabs, and remote (ssh) and Docker tabs (which have no `codeman` command) are never sent it.
+- **Claude** (`startupHint`, on by default) is launched with `--append-system-prompt`, so nothing shows in the conversation.
+- **Every other CLI** is sent nothing unless you turn on `typedHint` (off by default: it costs one model turn per tab, and for a spawned worker or a scheduled run it arrives together with the first real prompt). With it on, the same text is sent once, as a message, the first time a brand-new tab becomes idle. Tabs that are restored when Codeman starts, resumed tabs, shell tabs, and remote (ssh) and Docker tabs (which have no `codeman` command) are never sent it.
 
 The text explains `codeman notify "message" --urgent`. `codeman` is already on the PATH of every session and reads `CODEMAN_SESSION_ID` and `CODEMAN_API_URL`, so no other setup is needed. Without a bridge it prints that the bridge is off and exits cleanly. Tabs started before the bridge was enabled are not told; use the skill or `CLAUDE.md` for those.
 

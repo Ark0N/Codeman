@@ -3288,10 +3288,17 @@
                   </div>
                   <div class="set-row">
                     <div class="set-row-text">
-                      <span class="set-row-label">Tell each CLI how to reach you</span>
-                      <span class="set-row-desc">Claude is told at launch. Other CLIs are sent one short message when a new tab first becomes idle. It explains the codeman notify command, for when a CLI is blocked on something only you can do. Never sent to shell tabs.</span>
+                      <span class="set-row-label">Tell Claude how to reach you</span>
+                      <span class="set-row-desc">Adds a short note about the codeman notify command to Claude's system prompt at launch, for when it is blocked on something only you can do. Nothing appears in the conversation.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="discordStartupHint"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Also tell other CLIs, as a first message</span>
+                      <span class="set-row-desc">Sends the same note once as a message to a brand-new Codex, OpenCode or similar tab when it first becomes idle. Costs one model turn per tab, and for a spawned worker or a scheduled run it arrives with the first real prompt. Never sent to shell, restored, resumed, remote or Docker tabs. Off by default.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="discordTypedHint"><span class="slider"></span></label>
                   </div>
                   <div class="set-row has-field">
                     <div class="set-row-text">
