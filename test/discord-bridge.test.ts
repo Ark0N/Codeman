@@ -12,6 +12,7 @@ import {
   DISCORD_STARTUP_HINT,
   isDiscordCdnUrl,
   safeAttachmentName,
+  screenTail,
   DEFAULT_DISCORD_CONFIG,
   DiscordApi,
   DiscordBridge,
@@ -641,5 +642,45 @@ describe('DiscordBridge files and startup hint', () => {
     await off.sessionIdle('s5', true);
     expect(sent).toHaveLength(0);
     off.stop();
+  });
+});
+
+describe('screenTail', () => {
+  it('keeps the last lines of a rendered screen and drops rules, blanks and escape codes', () => {
+    const screen = [
+      'old line',
+      '',
+      '\u001b[1mWhich option?\u001b[0m',
+      '─────────────────────────',
+      '  1. Cap GPUs',
+      '  2. Cap CPU',
+      '\u001b(B',
+      '  4. Type something.',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━',
+      'Enter to select · Esc to cancel\u001b(B',
+    ].join('\n');
+    expect(screenTail(screen)).toBe(
+      [
+        'old line',
+        'Which option?',
+        '  1. Cap GPUs',
+        '  2. Cap CPU',
+        '  4. Type something.',
+        'Enter to select · Esc to cancel',
+      ].join('\n')
+    );
+  });
+
+  it('caps lines and characters, cutting on a line', () => {
+    const many = Array.from({ length: 40 }, (_v, i) => `line ${i}`).join('\n');
+    expect(screenTail(many).split('\n')).toHaveLength(14);
+    expect(screenTail(many).endsWith('line 39')).toBe(true);
+    const wide = Array.from({ length: 5 }, () => 'x'.repeat(400)).join('\n');
+    expect(screenTail(wide).length).toBeLessThanOrEqual(900);
+  });
+
+  it('is empty for nothing', () => {
+    expect(screenTail('')).toBe('');
+    expect(screenTail('\n\n ───── \n')).toBe('');
   });
 });

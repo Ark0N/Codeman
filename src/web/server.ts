@@ -45,8 +45,7 @@ import { looksLikeHostReboot, newestPersistedActivity, planRebootRestore } from 
 import { rebootRestoreRegistry } from './reboot-restore-registry.js';
 import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
 import { WebhookNotifier, readWebhookConfig } from '../webhook-notify.js';
-import { DiscordBridge } from '../discord-bridge.js';
-import { stripAnsi } from '../utils/regex-patterns.js';
+import { DiscordBridge, screenTail } from '../discord-bridge.js';
 import { stopHostSensors } from '../host-sensors.js';
 import type { WebhookUrgency } from '../types/push.js';
 import { webviewFetch } from './webview-egress.js';
@@ -3010,7 +3009,7 @@ export class WebServer extends EventEmitter {
         urgency: template.urgency as WebhookUrgency,
         sessionId: sessionId || undefined,
         sessionName: sessionName || undefined,
-        tail: dcSession ? WebServer.outputTail(dcSession) : undefined,
+        tail: dcSession ? this.discordTail(dcSession) : undefined,
         host: this.windowTitle,
       })
       .catch(() => undefined);
@@ -3096,14 +3095,14 @@ export class WebServer extends EventEmitter {
     }
   }
 
-  /** The last few lines the CLI printed, with colour codes removed, for a Discord alert. */
-  private static outputTail(session: { textOutput: string; terminalBuffer: string }): string {
-    const raw = session.textOutput || session.terminalBuffer.slice(-4000);
-    const lines = stripAnsi(raw)
-      .split(/\r?\n/)
-      .map((l) => l.trimEnd())
-      .filter((l) => l.trim() !== '');
-    return lines.slice(-12).join('\n').slice(-900);
+  /**
+   * What the person would see on the tab right now, for a Discord alert: the rendered tmux screen
+   * (`capture-pane -p`), never the raw output stream, which a full-screen UI repaints in place and
+   * reads as garbage. A session with no pane falls back to its plain text output, else nothing.
+   */
+  private discordTail(session: { muxName?: string | null; textOutput: string }): string {
+    const pane = session.muxName ? (this.mux.capturePaneText?.(session.muxName) ?? null) : null;
+    return screenTail(pane ?? session.textOutput ?? '');
   }
 
   /** The notification body for an event (shared by Web Push and the webhook channel). */

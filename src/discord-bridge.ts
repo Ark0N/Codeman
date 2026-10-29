@@ -184,6 +184,24 @@ export function getDiscordStartupHint(): string | undefined {
   return activeStartupHint;
 }
 
+/**
+ * The last lines of a rendered screen for a post: colour and charset codes removed, blank lines and
+ * pure rule lines (box drawing, dashes) dropped, the last 14 lines, at most 900 characters, cut on a line.
+ */
+export function screenTail(screen: string, maxLines = 14, maxChars = 900): string {
+  const lines = screen
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b[()][A-Za-z0-9]|\u001b[@-Z\\-_]/g, '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
+    .split(/\r?\n/)
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim() !== '' && !/^[\s\-_=\u2500-\u257f]+$/.test(l));
+  let out = lines.slice(-maxLines);
+  while (out.length > 1 && out.join('\n').length > maxChars) out = out.slice(1);
+  return out.join('\n').slice(-maxChars);
+}
+
 /** Final path segment only, `[A-Za-z0-9._-]`, no leading dot, at most 80 characters. */
 export function safeAttachmentName(name: string): string {
   const base = (name.split(/[\\/]/).pop() ?? '').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._]+/, '');
