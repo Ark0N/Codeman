@@ -2610,8 +2610,10 @@ const pathFirstSegment = (path) => path.replace(/^(?:\.?\/)+/, '').split('/')[0]
  *
  * Answers `'join'` when the path ends (reaches a known extension) on the next
  * line, `'join-space'` for that same join when the break is between filename
- * words inside the parenthesis that opens the broken-off path (the separating
- * space the wrap consumed is kept; an earlier `(` and a `://` token do not),
+ * words inside the parenthesis that opens the broken-off path, and only when
+ * that continuation token closes the parenthesis right after the extension
+ * (the separating space the wrap consumed is kept; an earlier `(`, a `://`
+ * token, and a `)` that is not in the continuation token do not),
  * `'chain'` when the next line is nothing but more of the path (a path
  * spanning three or more lines; only worth keeping once a later line ends it),
  * and `null` otherwise. The broken-off token must already look like a path in
@@ -2640,11 +2642,15 @@ function pathContinuation(prevText, nextText) {
  * so the join must keep that space.
  *
  * Only that path's own `(` counts: the broken-off token starts with it, or
- * whitespace alone separates them. An earlier `(` (`Bash(cp /home/…`) does not.
- * A token containing `://` never keeps a space. A column cut (`captures/2` +
- * `026-10-10/…`) is not one: its head continues the token (a slash, or a
- * non-letter). A parenthesised path cut mid-letter between two letters is
- * ambiguous with the Kobo wrap and keeps the space.
+ * whitespace alone separates them (`(/mnt/data/My Photos/Kobo` + `eReader.conf)`
+ * does not, and joins as `KoboeReader.conf`). An earlier `(` (`Bash(cp /home/…`)
+ * does not. A token containing `://` never keeps a space. The continuation
+ * token itself must close the parenthesis right after the extension
+ * (`eReader.conf).`, `ay.png).`); prose after the name (`ay.png, 2.1 MB).`)
+ * does not. A column cut (`captures/2` + `026-10-10/…`) is not one: its head
+ * continues the token (a slash, or a non-letter). A parenthesised path cut
+ * mid-letter between two letters is ambiguous with the Kobo wrap and keeps the
+ * space when that token closes the parenthesis.
  *
  * @param {string} prevText
  * @param {string} head The next line's first path token.
@@ -2669,6 +2675,8 @@ function continuationKeepsWordSpace(prevText, head) {
   }
   if (depth === 0) return false;
   const bare = headText.replace(/[)\].,;:!?]+$/, '');
+  // The continuation token itself closes the parenthesis right after the extension.
+  if (!/^[^()]*\)[\].,;:!?]*$/.test(headText)) return false;
   if (!bare || bare.includes('/') || !/^[A-Za-z]/.test(bare)) return false;
   return /[A-Za-z0-9]$/.test(tail);
 }

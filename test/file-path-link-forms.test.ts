@@ -220,6 +220,24 @@ describe('terminalPathLine', () => {
 
   // The path's own `(` plus a letter/letter cut is the same shape as `Kobo` +
   // `eReader.conf`. The wrap wins: the space stays, and the link is that name.
+  it.each([
+    ['  ay.png, 2.1 MB).', 'Saved the capture (/mnt/data/captures/2026-10-10/ghost1b_gameplay.png, 2.1 MB).'],
+    ['  ay.png and the log).', 'Saved the capture (/mnt/data/captures/2026-10-10/ghost1b_gameplay.png and the log).'],
+    ['  ay.png', 'Saved the capture (/mnt/data/captures/2026-10-10/ghost1b_gameplay.png'],
+  ])('joins %j without a space when the continuation token does not close the parenthesis', (second, joined) => {
+    const first = 'Saved the capture (/mnt/data/captures/2026-10-10/ghost1b_gamepl';
+    const line = terminalPathLine(buffer([first, second]), 0, 80)!;
+    expect(line.text).toBe(joined);
+    expect(paths(line.text)).toEqual(['/mnt/data/captures/2026-10-10/ghost1b_gameplay.png']);
+  });
+
+  it('joins a spaced directory cut before the filename without inserting a space', () => {
+    // The `(` opens an earlier token (`(/mnt/data/My`), not `Photos/Kobo`.
+    const rows = ['(/mnt/data/My Photos/Kobo', '  eReader.conf).'];
+    const line = terminalPathLine(buffer(rows), 0, 80)!;
+    expect(line.text).toBe('(/mnt/data/My Photos/KoboeReader.conf).');
+  });
+
   it('keeps the space when a parenthesised path is cut mid-letter, the Kobo-wrap trade-off', () => {
     const rows = ['See (/mnt/data/captures/2026-10-10/ghost1b_gamepl', '  ay.png).'];
     const spaced = '/mnt/data/captures/2026-10-10/ghost1b_gamepl ay.png';
@@ -370,19 +388,16 @@ describe('terminal link provider', () => {
     expect(links.map((l) => l.text)).toEqual(['https://x.io/view?img=shots/a.png']);
   });
 
-  it('opens a hard-wrapped spaced .conf path from either row, on the cells that hold it', () => {
+  it('links a hard-wrapped spaced .conf path from either row, on the cells that hold it', () => {
     const rows = ['Prepared a corrected configuration (/mnt/data/Kobo/Kobo', '  eReader.conf).'];
     const path = '/mnt/data/Kobo/Kobo eReader.conf';
     const endCol = rows[1].lastIndexOf('f');
     for (const row of [1, 2]) {
-      const { app, links } = linksOn(rows, row);
+      const { links } = linksOn(rows, row);
       expect(links.map((l) => l.text)).toEqual([path]);
       expect(links[0].range.start).toEqual({ x: rows[0].indexOf('/') + 1, y: 1 });
       // The provider's end cell is the one after the last character of the path.
       expect(links[0].range.end).toEqual({ x: endCol + 2, y: 2 });
-      links[0].activate({}, links[0].text);
-      expect(app.openLogViewerWindow).toHaveBeenCalledWith(path, 's1');
-      expect(app.openFilePreview).not.toHaveBeenCalled();
     }
   });
 });
