@@ -15,11 +15,11 @@ and it works when you are away from your network.
 - **Alerts** for permission prompts, questions, idle sessions, errors and a stopped crash loop,
   each with what is on the tab's screen right now, so you can see what is being asked.
 - **One thread per tab** in a parent channel, so a reply always reaches exactly one session.
-- **Replies** from an allowed user are typed into that tab as one line plus Enter.
+- **Replies** from an allowed user are typed into that tab as one line plus Enter (a single digit answering a waiting permission or question goes as the key alone, without Enter).
 - **Files** you attach are saved in the tab's folder and the agent is given the path. An agent can
   send a file back.
 - **Agents can ask for you.** `codeman notify "Press the reset button on the case" --urgent`
-  posts to the tab's thread. Every session has the command; see [below](#telling-the-agents).
+  posts to the tab's thread. Sessions from the installer or an npm install have the command (a git checkout run without the installer does not); see [below](#telling-the-agents).
 
 ## Set it up
 

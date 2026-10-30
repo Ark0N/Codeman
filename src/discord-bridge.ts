@@ -12,7 +12,8 @@
  *   - The bot token lives only in `discord.json`; it is never returned, logged, or put in an error.
  *   - Only messages from `allowedUserIds`, in `guildId`, inside a thread this bridge created, are
  *     acted on. Everything else is dropped without being read further.
- *   - A reply becomes one printable line plus Enter. Embedded newlines would submit early.
+ *   - A reply becomes one printable line plus Enter. Embedded newlines would submit early. A lone digit
+ *     while a permission or question is pending goes as the key alone (see onGatewayMessage).
  *   - Posts never ping unless `pingMode` says so, and then only the allowlisted user ids.
  *   - A Discord outage or a bad token never reaches a session: every IO path catches and backs off.
  *
@@ -140,7 +141,10 @@ export function maskToken(token: string): string {
 
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-/** A Discord reply as one printable line plus Enter, or null when nothing printable is left. */
+/**
+ * A Discord reply as one printable line plus Enter, or null when nothing printable is left. The caller
+ * drops the Enter for a lone digit answering a pending dialog.
+ */
 export function sanitiseReply(raw: string, files: string[] = []): string | null {
   // eslint-disable-next-line no-control-regex
   const line = raw.replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
@@ -177,13 +181,13 @@ export const RECEIVED_DIR = '.codeman-discord';
 
 /**
  * What a session is told about the bridge. Claude gets it as `--append-system-prompt`; every other
- * CLI is sent it once as its first message (see DiscordBridge.sessionIdle). No apostrophes: it is
+ * CLI is sent it once as its first message, only when `typedHint` is on (see DiscordBridge.sessionIdle). No apostrophes: it is
  * rendered into a shell command.
  */
 export const DISCORD_STARTUP_HINT =
   'Codeman note: if you are blocked on something only the user can do (a physical step such as ' +
   'pressing a button, an answer you cannot work out, or a wait that timed out), run: ' +
-  'codeman notify "message that leads with the action" --urgent . The user reads a Discord thread for ' +
+  'codeman notify "message that leads with the action" --urgent (lead with the action). The user reads a Discord thread for ' +
   'this tab and their reply is typed to you as one line; a file they attach is saved and its path is ' +
   'given in that line. Add --file <path> to send a file from your working folder. Not for routine progress.';
 
@@ -645,8 +649,11 @@ export async function ensureReceivedDir(workingDir: string): Promise<string | nu
 export interface DiscordBridgeDeps {
   configDir: string;
   fetchImpl: DiscordFetch;
-  /** Types `text` (already ending in Enter) into the session. False when the session is gone. */
-  /** `fromUser` is true only for what a person typed (a Discord reply), false for text Codeman types itself. */
+  /**
+   * Types `text` into the session (a line ending in Enter, or a lone digit for a dialog). False when the
+   * session is gone. `fromUser` is true only for what a person typed (a Discord reply), false for text
+   * Codeman types itself.
+   */
   sendInput: (sessionId: string, text: string, fromUser: boolean) => Promise<boolean>;
   /** True while the session shows a permission or question dialog, which acts on a bare keypress. */
   awaitingChoice?: (sessionId: string) => boolean;
@@ -704,7 +711,6 @@ export class DiscordBridge {
     await this.firstLoad;
   }
 
-  /** (Re)read the config and start or stop the gateway to match. Call at boot and after a save. */
   /** Hold the gateway back (boot): a reply must not arrive before the restored tabs exist. */
   hold(): void {
     this.held = true;
@@ -717,6 +723,7 @@ export class DiscordBridge {
     await this.reload();
   }
 
+  /** (Re)read the config and start or stop the gateway to match. Call at boot and after a save. */
   async reload(): Promise<void> {
     this.cfg = await readDiscordConfig(this.deps.configDir);
     // The thread map is read once, by whoever gets here first; everyone else waits for that read. A second

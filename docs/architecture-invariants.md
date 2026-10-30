@@ -1369,7 +1369,7 @@ updates `lastSubmitAt` just like any other Enter.
 
 `src/discord-bridge.ts`, `src/web/routes/discord-routes.ts`, `src/cli-notify.ts`. Opt-in, two-way, one thread per tab. User docs: [discord-bridge](discord-bridge.md).
 
-- **Who can type into a tab.** Only `allowedUserIds`, in `guildId`, inside a thread the bridge created. Everything else is dropped unread. A reply is one printable line plus Enter, capped and rate limited, and typed with `fromUser: true`. The bridge's own startup hint is typed with `fromUser: false`.
+- **Who can type into a tab.** Only `allowedUserIds`, in `guildId`, inside a thread the bridge created. Everything else is dropped unread. A reply is one printable line plus Enter (a lone digit while a permission or question is pending goes as the key alone, since the dialog acts on it), capped and rate limited, and typed with `fromUser: true`. The bridge's own startup hint is typed with `fromUser: false`.
 - **A Discord failure never reaches a session.** `notify()` never throws; a failed thread creation is returned by `threadFor` as a `DiscordResult`, not read back from shared state.
 - **`null` means the bridge is off.** A deduped automatic event answers `{ ok: true, deduped: true }`; a deliberate `codeman notify` is never deduped. A 200 from `discord-notify` carries the delivery result in `data.ok`, and `codeman notify` exits 1 when it is false.
 - **Threads belong to a parent channel.** `discord-bridge.json` is `{ parentChannelId, threads }`; `reload()` drops the map when the channel changes, and a creation that finishes after the change is discarded.

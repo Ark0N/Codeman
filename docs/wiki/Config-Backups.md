@@ -189,8 +189,8 @@ that are the same are listed on one line. A file that is not JSON shows only tha
 a file with more than 200 changes is cut short, so use the files themselves for a full diff. The
 self-rewritten fields listed under "When a backup is made" are not counted as changes.
 
-**Credential values are never shown.** `.env`, `users.json`, `push-keys.json`, `webhook.json`, `discord.json` (the
-URL is a bearer secret) and `intents.json` (captured prompts) list only the names that changed, and in every other file a key that looks like a token, secret, password,
+**Credential values are never shown.** `.env`, `users.json`, `push-keys.json`, `webhook.json` (the URL is a bearer secret), `discord.json` (the
+bot token) and `intents.json` (captured prompts) list only the names that changed, and in every other file a key that looks like a token, secret, password,
 credential or key is shown as "changed" without its value. URL values lose any `user:password@`,
 query and fragment.
 
