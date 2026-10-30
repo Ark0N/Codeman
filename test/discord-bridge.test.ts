@@ -16,6 +16,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DiscordConfig } from '../src/types/discord.js';
 import {
   buildPost,
   DISCORD_STARTUP_HINT,
@@ -23,6 +24,7 @@ import {
   isDiscordCdnUrl,
   safeAttachmentName,
   screenTail,
+  splitForDiscord,
   DEFAULT_DISCORD_CONFIG,
   DiscordApi,
   DiscordBridge,
@@ -36,7 +38,6 @@ import {
   shouldPing,
   threadNameFor,
   writeDiscordConfig,
-  type DiscordConfig,
   type DiscordFetch,
   type DiscordMessage,
   type GatewaySocket,
@@ -557,6 +558,129 @@ describe('DiscordBridge', () => {
     b.stop();
   });
 
+  describe('full last message', () => {
+    const LONG = Array.from({ length: 60 }, (_, i) => `**Point ${i}**: ${'detail '.repeat(10)}\nIs this right?`).join(
+      '\n\n'
+    );
+
+    it('posts the whole message as markdown: head and first part together, the rest without a ping', async () => {
+      const b = bridge();
+      await b.notify({ ...MSG, tail: 'screen chrome', fullText: async () => LONG });
+      const sent = posts.filter((p) => p.path.endsWith('/messages'));
+      expect(sent.length).toBeGreaterThan(1);
+      const first = String(sent[0].body?.content);
+      expect(first).toContain(MSG.title);
+      expect(first).toContain('**Point 0**');
+      expect(first).not.toContain('screen chrome');
+      expect(first).not.toContain('```'); // markdown, not a code box
+      expect(sent[1].body?.allowed_mentions).toEqual({ parse: [], users: [] });
+      const all = sent.map((p) => String(p.body?.content)).join('\n');
+      expect(all.match(/Is this right\?/g)).toHaveLength(60);
+      b.stop();
+    });
+
+    it('does not post the same message twice (idle, then stop), and falls back to the tail without a transcript', async () => {
+      const b = bridge();
+      await b.notify({ ...MSG, fullText: async () => 'Short answer.' });
+      t += 10_000;
+      posts.length = 0;
+      await b.notify({ ...MSG, event: 'hook:stop', tail: 'chrome', fullText: async () => 'Short answer.' });
+      const again = posts.filter((p) => p.path.endsWith('/messages')).map((p) => String(p.body?.content));
+      expect(again).toHaveLength(1);
+      expect(again[0]).not.toContain('Short answer.');
+      expect(again[0]).not.toContain('chrome');
+      t += 10_000;
+      posts.length = 0;
+      await b.notify({ ...MSG, event: 'hook:idle_prompt', tail: 'the screen', fullText: async () => undefined });
+      expect(String(posts.find((p) => p.path.endsWith('/messages'))?.body?.content)).toContain('the screen');
+      b.stop();
+    });
+
+    it('falls back to the tail when reading the transcript throws or hangs', async () => {
+      const b = bridge();
+      await b.notify({
+        ...MSG,
+        tail: 'the screen',
+        fullText: async () => {
+          throw new Error('no transcript');
+        },
+      });
+      expect(String(posts.find((p) => p.path.endsWith('/messages'))?.body?.content)).toContain('the screen');
+      b.stop();
+    });
+  });
+
+  describe('sweepStaleThreads', () => {
+    const ME = '555555555555555555';
+    const OTHER = '666666666666666666';
+    const OLD = (n: number) => `30000000000000000${n}`; // a snowflake from 2015, long before `now`
+    let young: string;
+    let calls: Array<{ method: string; path: string; body?: unknown }>;
+
+    async function swept(staleThreads: 'keep' | 'archive' | 'delete') {
+      await writeDiscordConfig(dir, { ...CFG, staleThreads });
+      t = Date.now();
+      young = String((BigInt(t - 60_000 - 1420070400000) << 22n) + 5n);
+      calls = [];
+      const th = (id: string, owner = ME, parent = PARENT) => ({ id, owner_id: owner, parent_id: parent });
+      const b = bridge({}, async (url, init) => {
+        const path = new URL(String(url)).pathname.replace('/api/v10', '');
+        const method = String(init.method);
+        calls.push({ method, path, body: init.body ? JSON.parse(String(init.body)) : undefined });
+        if (path === '/users/@me') return jsonRes({ id: ME });
+        if (path.endsWith('/threads/active'))
+          return jsonRes({
+            threads: [
+              th(THREAD), // mapped
+              th(OLD(1)), // stale
+              th(OLD(2), OTHER), // someone else's thread
+              th(OLD(3), ME, '999999999999999999'), // another channel
+              th(young), // too new to judge
+            ],
+          });
+        if (path.includes('/threads/archived')) return jsonRes({ threads: [th(OLD(4))] });
+        if (path.endsWith('/threads')) return jsonRes({ id: THREAD });
+        return method === 'PUT' ? new Response(null, { status: 204 }) : jsonRes({ id: 'msg' });
+      });
+      return b.notify(MSG).then(() => {
+        calls.length = 0;
+        return b;
+      });
+    }
+    const touched = () => calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path.split('/').pop()}`);
+
+    it('does nothing while set to keep', async () => {
+      const b = await swept('keep');
+      expect(await b.sweepStaleThreads()).toBe(0);
+      expect(calls).toHaveLength(0);
+      b.stop();
+    });
+
+    it("archives only this bot's old, unmapped threads in the parent channel, and skips archived ones", async () => {
+      const b = await swept('archive');
+      expect(await b.sweepStaleThreads()).toBe(1);
+      expect(touched()).toEqual([`PATCH ${OLD(1)}`]);
+      expect(calls.some((c) => c.path.includes('/threads/archived'))).toBe(false);
+      b.stop();
+    });
+
+    it('deletes stale active and archived threads, and still spares the rest', async () => {
+      const b = await swept('delete');
+      expect(await b.sweepStaleThreads()).toBe(2);
+      expect(touched()).toEqual([`DELETE ${OLD(1)}`, `DELETE ${OLD(4)}`]);
+      b.stop();
+    });
+
+    it('does nothing when the map is empty, since a lost map would make every thread look stale', async () => {
+      const b = await swept('delete');
+      await b.sessionDeleted('s1'); // empties the map
+      calls.length = 0;
+      expect(await b.sweepStaleThreads()).toBe(0);
+      expect(calls).toHaveLength(0);
+      b.stop();
+    });
+  });
+
   it('keeps the gateway off while held (boot) and starts it on release', async () => {
     const b = bridge();
     b.hold();
@@ -1028,7 +1152,61 @@ describe('DiscordBridge files and startup hint', () => {
   });
 });
 
+describe('splitForDiscord', () => {
+  it('keeps a short message whole', () => {
+    expect(splitForDiscord('Line one\n\n**Two**\n- a\n- b')).toEqual(['Line one\n\n**Two**\n- a\n- b']);
+  });
+
+  it('splits a long message into posts under the limit and loses no line', () => {
+    const lines = Array.from({ length: 120 }, (_, i) => `- item ${i} ${'x'.repeat(40)}`);
+    const posts = splitForDiscord(lines.join('\n'));
+    expect(posts.length).toBeGreaterThan(1);
+    expect(posts.every((p) => p.length <= 1900)).toBe(true);
+    expect(
+      posts
+        .join('\n')
+        .split('\n')
+        .filter((l) => l.startsWith('- item'))
+    ).toEqual(lines);
+  });
+
+  it('closes a code fence the cut lands inside and reopens it in the next post', () => {
+    const body = ['```', ...Array.from({ length: 100 }, (_, i) => `row ${i} ${'y'.repeat(40)}`), '```'].join('\n');
+    const posts = splitForDiscord(body);
+    expect(posts.length).toBeGreaterThan(1);
+    for (const p of posts) expect((p.match(/^```/gm) ?? []).length % 2).toBe(0);
+  });
+
+  it('cuts one enormous line by length, and caps the number of posts with a note', () => {
+    const posts = splitForDiscord('z'.repeat(50_000), 1900, 3);
+    expect(posts).toHaveLength(3);
+    expect(posts.every((p) => p.length <= 2000)).toBe(true); // Discord's own limit, with the note included
+    expect(posts[2]).toMatch(/continues in the tab/);
+  });
+});
+
 describe('screenTail', () => {
+  it("cuts the composer row and the status lines under it, but keeps a dialog's selected option", () => {
+    const idle = [
+      "  I'll sync the results and update the docs when the run finishes.",
+      '✻ Crunched for 7m 55s · done 4:22 PM',
+      '✔ Update installed · /restart to apply',
+      '❯',
+      '  Sonnet 5.5  in:169,629 out:751  ctx:17%  cache:until 17:22',
+      '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+    ].join('\n');
+    expect(screenTail(idle, 14, 900, '❯')).toBe(
+      [
+        "  I'll sync the results and update the docs when the run finishes.",
+        '✻ Crunched for 7m 55s · done 4:22 PM',
+        '✔ Update installed · /restart to apply',
+      ].join('\n')
+    );
+    const dialog = ['Do you want to proceed?', '❯ 1. Yes', '  2. No', 'Esc to cancel'].join('\n');
+    expect(screenTail(dialog, 14, 900, '❯')).toBe(dialog);
+    expect(screenTail(idle)).toContain('❯'); // no glyph given: nothing is cut
+  });
+
   it('keeps the last lines of a rendered screen and drops rules, blanks and escape codes', () => {
     const screen = [
       'old line',

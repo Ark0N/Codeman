@@ -7,7 +7,8 @@ Codeman can post to a private Discord server when a session needs you, give ever
 
 ## What it does
 
-- Posts when a session asks for permission, asks a question, goes idle, stops or errors.
+- Posts when a session asks for permission, asks a question, goes idle or errors. A finished turn ("stops") is an `info` event, so it posts only when **Which events** is set to Everything.
+- Posts a finished turn as the CLI's whole last message, with its bold, lists and numbered questions kept, split over several posts if it is long. This reads the CLI's transcript where it keeps one (Claude Code, Codex, DeepSeek Harness, OMP) and otherwise splits the screen into turns (OpenCode, Gemini, Antigravity, Pi, Grok, Copilot), which can start mid-message when a long answer has scrolled off. A shell, and a permission or question dialog, show the last lines of the screen instead, without the prompt row and status lines under them.
 - Creates one thread per tab in a single parent channel, so a reply always reaches exactly one session.
 - Types your reply into that session as a single line followed by Enter. A single digit sent while a permission or question is waiting goes as the key alone, without Enter, because the dialog acts on the keypress.
 - Lets a CLI post a deliberate message (for example "press the reset button on the case") with the `codeman notify` command, which calls `POST /api/sessions/:id/discord-notify`. Each tab may post 6 a minute; past that the command says "too many messages", so a looping agent cannot ping your phone without end.
@@ -88,14 +89,15 @@ In the Discord mobile app set the server to **All Messages**. Discord's own push
 
 ## Options
 
-| Option            | Values                      | Default     | Effect                                                                                  |
-| ----------------- | --------------------------- | ----------- | --------------------------------------------------------------------------------------- |
-| `threadCreation`  | `lazy`, `onSessionStart`    | `lazy`      | `lazy` makes a thread on the first notification. `onSessionStart` makes one per new tab |
-| `onSessionDelete` | `keep`, `archive`, `delete` | `archive`   | What happens to the thread when its tab is deleted. `delete` needs Manage Threads       |
-| `pingMode`        | `off`, `critical`, `all`    | `critical`  | `critical` pings you for permission prompts, questions, errors and urgent posts         |
-| `scope`           | `attention`, `all`          | `attention` | `attention` skips the quiet "response complete" event. `all` sends it too               |
-| `startupHint`     | on, off                     | on          | Tell Claude about `codeman notify` in its system prompt at launch                       |
-| `typedHint`       | on, off                     | off         | Also send the note once, as a first message, to brand-new non-Claude CLI tabs           |
+| Option            | Values                      | Default     | Effect                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | --------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `threadCreation`  | `lazy`, `onSessionStart`    | `lazy`      | `lazy` makes a thread on the first notification. `onSessionStart` makes one per new tab                                                                                                                                                                                                                                  |
+| `onSessionDelete` | `keep`, `archive`, `delete` | `archive`   | What happens to the thread when its tab is deleted. `delete` needs Manage Threads                                                                                                                                                                                                                                        |
+| `staleThreads`    | `keep`, `archive`, `delete` | `keep`      | What happens to threads this bot made that no tab uses any more, checked after startup and then daily. Skips threads under an hour old, other people's threads and other channels, does nothing while the thread map is empty, and closes at most 25 per run. `delete` needs Manage Threads. Use one channel per Codeman |
+| `pingMode`        | `off`, `critical`, `all`    | `critical`  | `critical` pings you for permission prompts, questions, errors and urgent posts                                                                                                                                                                                                                                          |
+| `scope`           | `attention`, `all`          | `attention` | `attention` skips the quiet "response complete" event. `all` sends it too                                                                                                                                                                                                                                                |
+| `startupHint`     | on, off                     | on          | Tell Claude about `codeman notify` in its system prompt at launch                                                                                                                                                                                                                                                        |
+| `typedHint`       | on, off                     | off         | Also send the note once, as a first message, to brand-new non-Claude CLI tabs                                                                                                                                                                                                                                            |
 
 ## Telling the CLIs
 

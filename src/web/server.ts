@@ -46,6 +46,7 @@ import { rebootRestoreRegistry } from './reboot-restore-registry.js';
 import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
 import { WebhookNotifier, readWebhookConfig } from '../webhook-notify.js';
 import { DiscordBridge, screenTail } from '../discord-bridge.js';
+import { isExternalCliTranscriptMode } from './response-viewer-transcript.js';
 import { stopHostSensors } from '../host-sensors.js';
 import type { WebhookUrgency } from '../types/push.js';
 import { webviewFetch } from './webview-egress.js';
@@ -509,6 +510,8 @@ export class WebServer extends EventEmitter {
   /** ntfy / Slack / Discord / generic webhook for the push events; config in webhook.json (0600). */
   private webhookNotifier = new WebhookNotifier(() => readWebhookConfig(getDataDir()), webviewFetch);
   /** Two-way Discord bridge (thread per tab); config in discord.json (0600). Idle until enabled in Settings. */
+  /** Set by the session routes when they register (see SessionPort). */
+  lastResponseFor?: (session: Session, context?: string) => Promise<{ text: string; timestamp?: string }>;
   private discordBridge = new DiscordBridge({
     configDir: getDataDir(),
     fetchImpl: webviewFetch,
@@ -1334,6 +1337,8 @@ export class WebServer extends EventEmitter {
     // The registry's lifetime is the server's: it drops per-session wake state on every
     // cleanup path and resolves in-flight wakes on shutdown.
     this.remoteWake = registerSessionRoutes(this.app, ctx);
+    // The routes' ctx is a separate object: take the last-response reader they registered on it (Discord alerts).
+    this.lastResponseFor = (ctx as { lastResponseFor?: WebServer['lastResponseFor'] }).lastResponseFor;
     registerAgentSessionRoutes(this.app, ctx);
     registerRespawnRoutes(this.app, ctx);
     registerRalphRoutes(this.app, ctx);
@@ -3013,6 +3018,9 @@ export class WebServer extends EventEmitter {
     // Discord: same event, same independence from Web Push. It adds the tail of what the CLI printed,
     // so the person reading the thread can see what is being asked without opening the tab.
     const dcSession = sessionId ? this.sessions.get(sessionId) : undefined;
+    // A question or permission dialog lives on the screen, so it keeps the screen tail (its options are
+    // there); a finished turn posts the CLI's whole last message instead, from its transcript.
+    const dialogEvent = event === SseEvent.HookPermissionPrompt || event === SseEvent.HookElicitationDialog;
     void this.discordBridge
       .notify({
         event,
@@ -3022,7 +3030,8 @@ export class WebServer extends EventEmitter {
         sessionId: sessionId || undefined,
         sessionName: sessionName || undefined,
         // A function, so the screen is only read (a synchronous tmux exec) once the bridge has decided to post.
-        tail: dcSession ? () => this.discordTail(dcSession) : undefined,
+        tail: dcSession ? () => this.discordTail(dcSession, !dialogEvent) : undefined,
+        fullText: dcSession && !dialogEvent ? () => this.discordFullText(dcSession) : undefined,
         host: this.windowTitle,
       })
       .catch(() => undefined);
@@ -3113,9 +3122,25 @@ export class WebServer extends EventEmitter {
    * (`capture-pane -p`), never the raw output stream, which a full-screen UI repaints in place and
    * reads as garbage. A session with no pane falls back to its plain text output, else nothing.
    */
-  private discordTail(session: { muxName?: string | null; textOutput: string }): string {
+  private discordTail(session: Session, cutComposer: boolean): string {
     const pane = session.muxName ? (this.mux.capturePaneText?.(session.muxName) ?? null) : null;
-    return screenTail(pane ?? session.textOutput ?? '');
+    // The composer row and the status lines under it are screen chrome, not what the CLI said.
+    const glyph = cutComposer ? getCli(session.mode)?.capabilities.workDetect?.promptGlyph : undefined;
+    return screenTail(pane ?? session.textOutput ?? '', 14, 900, glyph);
+  }
+
+  /**
+   * The CLI's whole last message from the response viewer's reader (the CLI's own transcript, or the pane
+   * segmented into turns for the CLIs that keep none); undefined for a shell, which has no turns, and the
+   * screen tail stands in whenever the reader finds nothing.
+   */
+  private async discordFullText(session: Session): Promise<string | undefined> {
+    if (!this.lastResponseFor) return undefined;
+    // A CLI with a transcript reader, or whose pane the viewer segments into turns; a shell has neither.
+    if (getCli(session.mode)?.capabilities.transcript === 'none' && !isExternalCliTranscriptMode(session.mode)) {
+      return undefined;
+    }
+    return (await this.lastResponseFor(session)).text;
   }
 
   /** The notification body for an event (shared by Web Push and the webhook channel). */
@@ -3261,14 +3286,17 @@ export class WebServer extends EventEmitter {
       await this.finalizeRestoredState(restored);
       void this.discordBridge
         .release()
-        .then(() =>
-          // Same keep set as the agent inbox prune: a reboot-restore rebuild reuses the old id.
-          this.discordBridge.prune([
+        .then(async () => {
+          // Only after a successful restore, like the agent inbox prune and the tab layout reconciliation, and
+          // with the same keep set: a reboot-restore rebuild reuses the old id.
+          if (!restored) return;
+          await this.discordBridge.prune([
             ...this.sessions.keys(),
             ...Object.keys(this.store.getSessions()),
             ...rebootRestoreRegistry.list(() => true).map((entry) => entry.sessionId),
-          ])
-        )
+          ]);
+        })
+        .then(() => this.discordBridge.startStaleSweep())
         .catch(() => undefined);
 
       // Instance-scoped reaper: after restore, `docker rm -f` managed containers of

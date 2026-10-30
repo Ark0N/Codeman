@@ -27,10 +27,8 @@ import {
   readDiscordConfig,
   writeDiscordConfig,
   type DiscordBridge,
-  type DiscordConfig,
-  type DiscordGatewayState,
-  type DiscordResult,
 } from '../../discord-bridge.js';
+import type { DiscordConfig, DiscordResult, DiscordStatus } from '../../types/discord.js';
 
 export interface DiscordRouteDeps {
   bridge: DiscordBridge;
@@ -38,14 +36,6 @@ export interface DiscordRouteDeps {
   ctx: SessionPort;
   hostTitle: () => string;
 }
-
-export type DiscordStatus = Omit<DiscordConfig, 'token'> & {
-  hasToken: boolean;
-  tokenMasked: string;
-  gateway: DiscordGatewayState;
-  gatewayError: string | null;
-  lastResult: DiscordResult | null;
-};
 
 /**
  * A Docker case exports CODEMAN_SESSION_ID cut to 8 characters, so accept a unique prefix of at

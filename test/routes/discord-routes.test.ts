@@ -72,9 +72,13 @@ describe('/api/discord', () => {
   it('keeps the token when only an option changes, and clears it on an empty string', async () => {
     const { app, bridge } = await harness();
     await app.inject({ method: 'PUT', url: '/api/discord', payload: FULL });
-    await app.inject({ method: 'PUT', url: '/api/discord', payload: { pingMode: 'all', onSessionDelete: 'delete' } });
+    await app.inject({
+      method: 'PUT',
+      url: '/api/discord',
+      payload: { pingMode: 'all', onSessionDelete: 'delete', staleThreads: 'archive' },
+    });
     const cfg = await readDiscordConfig(dir);
-    expect(cfg).toMatchObject({ token: TOKEN, pingMode: 'all', onSessionDelete: 'delete' });
+    expect(cfg).toMatchObject({ token: TOKEN, pingMode: 'all', onSessionDelete: 'delete', staleThreads: 'archive' });
     const cleared = await app.inject({ method: 'PUT', url: '/api/discord', payload: { enabled: false, token: '' } });
     expect(cleared.json().data.hasToken).toBe(false);
     bridge.stop();

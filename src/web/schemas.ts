@@ -20,7 +20,7 @@ import {
 import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
 import { CODEX_REASONING_EFFORTS } from '../types/session.js';
 import { WEBHOOK_KINDS, WEBHOOK_SCOPES } from '../types/push.js';
-import { DISCORD_ON_DELETE, DISCORD_PING_MODES, DISCORD_THREAD_CREATION } from '../discord-bridge.js';
+import { DISCORD_ON_DELETE, DISCORD_PING_MODES, DISCORD_THREAD_CREATION } from '../types/discord.js';
 import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
 import { MAX_WAKE_MACS } from '../config/remote-wake-limits.js';
 import { MAX_INPUT_LENGTH } from '../config/terminal-limits.js';
@@ -2229,6 +2229,7 @@ export const DiscordUpdateSchema = z
     allowedUserIds: z.array(z.string().max(25)).max(20).optional(),
     threadCreation: z.enum(DISCORD_THREAD_CREATION).optional(),
     onSessionDelete: z.enum(DISCORD_ON_DELETE).optional(),
+    staleThreads: z.enum(DISCORD_ON_DELETE).optional(),
     pingMode: z.enum(DISCORD_PING_MODES).optional(),
     scope: z.enum(WEBHOOK_SCOPES).optional(),
     startupHint: z.boolean().optional(),

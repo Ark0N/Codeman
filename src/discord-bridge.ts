@@ -26,7 +26,16 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { probePathKind } from './utils/bounded-path-probe.js';
 import WebSocket from 'ws';
-import { WEBHOOK_SCOPES, type WebhookScope, type WebhookUrgency } from './types/push.js';
+import { WEBHOOK_SCOPES, type WebhookUrgency } from './types/push.js';
+import {
+  DISCORD_ON_DELETE,
+  DISCORD_PING_MODES,
+  DISCORD_THREAD_CREATION,
+  type DiscordConfig,
+  type DiscordGatewayState,
+  type DiscordPingMode,
+  type DiscordResult,
+} from './types/discord.js';
 
 const CONFIG_FILE = 'discord.json';
 const THREADS_FILE = 'discord-bridge.json';
@@ -44,33 +53,14 @@ const GATEWAY_INTENTS = (1 << 0) | (1 << 9) | (1 << 15);
 /** Gateway close codes that retrying cannot fix: bad token, bad intents, bad shard. */
 const FATAL_CLOSE_CODES = new Set([4004, 4010, 4011, 4012, 4013, 4014]);
 const SNOWFLAKE = /^\d{15,25}$/;
-
-export const DISCORD_THREAD_CREATION = ['lazy', 'onSessionStart'] as const;
-export type DiscordThreadCreation = (typeof DISCORD_THREAD_CREATION)[number];
-export const DISCORD_ON_DELETE = ['keep', 'archive', 'delete'] as const;
-export type DiscordOnDelete = (typeof DISCORD_ON_DELETE)[number];
-export const DISCORD_PING_MODES = ['off', 'critical', 'all'] as const;
-export type DiscordPingMode = (typeof DISCORD_PING_MODES)[number];
-
-export interface DiscordConfig {
-  enabled: boolean;
-  token: string;
-  guildId: string;
-  parentChannelId: string;
-  allowedUserIds: string[];
-  threadCreation: DiscordThreadCreation;
-  onSessionDelete: DiscordOnDelete;
-  pingMode: DiscordPingMode;
-  /** `attention` skips info-level events (a finished response); `all` sends them too. */
-  scope: WebhookScope;
-  /** Tell each session how to reach the user (see DISCORD_STARTUP_HINT). On by default while the bridge is on. */
-  startupHint: boolean;
-  /**
-   * Also type the hint, once, as the first message to a brand-new non-Claude CLI tab. Off by default: it spends a
-   * model turn per tab, and for a spawned worker or a cron session it lands on the same first idle as the real prompt.
-   */
-  typedHint: boolean;
-}
+/** Stale-thread sweep: a thread younger than this may still be between creation and its map entry. */
+const STALE_MIN_AGE_MS = 60 * 60 * 1000;
+const STALE_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/** At most this many threads closed in one sweep, so a damaged map cannot empty the channel in one go. */
+const STALE_MAX_PER_SWEEP = 25;
+const DISCORD_EPOCH_MS = 1420070400000;
+/** Reading a CLI's transcript must not hold an alert back for long. */
+const FULL_TEXT_TIMEOUT_MS = 4000;
 
 export const DEFAULT_DISCORD_CONFIG: DiscordConfig = {
   enabled: false,
@@ -80,6 +70,7 @@ export const DEFAULT_DISCORD_CONFIG: DiscordConfig = {
   allowedUserIds: [],
   threadCreation: 'lazy',
   onSessionDelete: 'archive',
+  staleThreads: 'keep',
   pingMode: 'critical',
   scope: 'attention',
   startupHint: true,
@@ -95,6 +86,11 @@ export interface DiscordMessage {
   sessionName?: string;
   /** The tail of what the CLI last printed, so the reader can see what it is asking. */
   tail?: string | (() => string);
+  /**
+   * The CLI's whole last message, read from its transcript. When it yields text the post carries that
+   * (split over as many posts as it needs, markdown kept) instead of the screen tail.
+   */
+  fullText?: () => Promise<string | undefined>;
   host?: string;
   /** A file to upload with the post (already read and size-checked by the caller). */
   file?: DiscordFile;
@@ -104,17 +100,6 @@ export interface DiscordFile {
   name: string;
   data: Uint8Array;
 }
-
-export interface DiscordResult {
-  ok: boolean;
-  /** True when the same event for the same tab was posted within the last few seconds, so nothing was sent. */
-  deduped?: boolean;
-  status?: number;
-  error?: string;
-  at: number;
-}
-
-export type DiscordGatewayState = 'off' | 'connecting' | 'connected' | 'error';
 
 // ---------------------------------------------------------------------------
 // Pure
@@ -201,9 +186,12 @@ export function getDiscordStartupHint(): string | undefined {
 /**
  * The last lines of a rendered screen for a post: colour and charset codes removed, blank lines and
  * pure rule lines (box drawing, dashes) dropped, the last 14 lines, at most 900 characters, cut on a line.
+ * With `composerGlyph` (the CLI's own prompt mark), the composer row and everything under it (the status
+ * and mode hints) is cut first, but only within the last 8 rows and never a dialog's selected option
+ * (`❯ 1. Yes`), so a question's choices stay.
  */
-export function screenTail(screen: string, maxLines = 14, maxChars = 900): string {
-  const lines = screen
+export function screenTail(screen: string, maxLines = 14, maxChars = 900, composerGlyph?: string): string {
+  let lines = screen
     // eslint-disable-next-line no-control-regex
     .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b[()][A-Za-z0-9]|\u001b[@-Z\\-_]/g, '')
     // eslint-disable-next-line no-control-regex
@@ -211,9 +199,58 @@ export function screenTail(screen: string, maxLines = 14, maxChars = 900): strin
     .split(/\r?\n/)
     .map((l) => l.trimEnd())
     .filter((l) => l.trim() !== '' && !/^[\s\-_=\u2500-\u257f]+$/.test(l));
+  if (composerGlyph) {
+    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 8); i--) {
+      const row = lines[i].trimStart();
+      if (row.startsWith(composerGlyph) && !/^\S+\s+\d+[.)]/.test(row)) {
+        lines = lines.slice(0, i);
+        break;
+      }
+    }
+  }
   let out = lines.slice(-maxLines);
   while (out.length > 1 && out.join('\n').length > maxChars) out = out.slice(1);
   return out.join('\n').slice(-maxChars);
+}
+
+/**
+ * Split a long message into posts of at most `max` characters, on blank lines first, then lines, then
+ * (for one huge line) by length. A code fence the cut lands inside is closed and reopened, so each post
+ * renders on its own. At most `maxPosts`; the last carries a note when text is left over.
+ */
+export function splitForDiscord(text: string, max = 1900, maxPosts = 8): string[] {
+  const posts: string[] = [];
+  let cur = '';
+  let fence = false;
+  let cut = false;
+  const flush = () => {
+    if (cur.trim()) posts.push(fence ? `${cur.trimEnd()}\n\`\`\`` : cur.trimEnd());
+    cur = fence ? '```\n' : '';
+  };
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  for (let line of lines) {
+    if (posts.length >= maxPosts) {
+      cut = true;
+      break;
+    }
+    while (line.length > max - 8) {
+      if (cur.trim()) flush();
+      cur += line.slice(0, max - 8) + '\n';
+      line = line.slice(max - 8);
+      flush();
+      if (posts.length >= maxPosts) {
+        cut = true;
+        break;
+      }
+    }
+    if (cut) break;
+    if (cur.length + line.length + 1 > max - 8) flush();
+    cur += `${line}\n`;
+    if (/^\s*```/.test(line)) fence = !fence;
+  }
+  if (!cut && cur.trim()) posts.push(cur.trimEnd());
+  if (cut && posts.length > 0) posts[posts.length - 1] += '\n*(The message continues in the tab.)*';
+  return posts.slice(0, maxPosts);
 }
 
 /** Final path segment only, `[A-Za-z0-9._-]`, no leading dot, at most 80 characters. */
@@ -279,11 +316,23 @@ function coerce(raw: unknown): DiscordConfig {
       : [],
     threadCreation: oneOf(DISCORD_THREAD_CREATION, r.threadCreation, d.threadCreation),
     onSessionDelete: oneOf(DISCORD_ON_DELETE, r.onSessionDelete, d.onSessionDelete),
+    staleThreads: oneOf(DISCORD_ON_DELETE, r.staleThreads, d.staleThreads),
     pingMode: oneOf(DISCORD_PING_MODES, r.pingMode, d.pingMode),
     scope: oneOf(WEBHOOK_SCOPES, r.scope, d.scope),
     startupHint: r.startupHint === undefined ? d.startupHint : r.startupHint === true,
     typedHint: r.typedHint === true,
   };
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('timed out')), ms);
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 /** A failure with a reason worth showing as it is (unlike a network error, whose text is not). */
@@ -344,6 +393,13 @@ async function writeThreadMap(
 // ---------------------------------------------------------------------------
 // IO: REST
 // ---------------------------------------------------------------------------
+
+export interface DiscordThreadInfo {
+  id: string;
+  parent_id?: string;
+  owner_id?: string;
+  thread_metadata?: { archived?: boolean };
+}
 
 export type DiscordFetch = (target: URL, init: RequestInit) => Promise<Response>;
 
@@ -413,6 +469,17 @@ export class DiscordApi {
   }
   remove(threadId: string): Promise<unknown> {
     return this.request('DELETE', `/channels/${threadId}`);
+  }
+  botUserId(): Promise<{ id: string } | null> {
+    return this.request('GET', '/users/@me');
+  }
+  /** Active threads of the guild (all channels: the caller filters by parent). */
+  activeThreads(guildId: string): Promise<{ threads: DiscordThreadInfo[] } | null> {
+    return this.request('GET', `/guilds/${guildId}/threads/active`);
+  }
+  /** The most recent archived public threads of a channel (one page). */
+  archivedThreads(parentId: string): Promise<{ threads: DiscordThreadInfo[] } | null> {
+    return this.request('GET', `/channels/${parentId}/threads/archived/public?limit=100`);
   }
   react(channelId: string, messageId: string, emoji: string): Promise<unknown> {
     return this.request(
@@ -690,6 +757,8 @@ export class DiscordBridge {
   private pending = new Map<string, Promise<string | DiscordResult>>();
   /** Tabs closed while their thread was still being created: the creation applies `onSessionDelete` to it. */
   private closedWhilePending = new Set<string>();
+  /** The last whole message posted per tab, so the same text is not posted twice (idle, then stop). */
+  private lastFull = new Map<string, string>();
   /** The parent channel the thread map was built under. */
   private threadsParent = '';
   /** True from boot until the restored tabs exist (see hold). */
@@ -699,6 +768,7 @@ export class DiscordBridge {
   /** Per-thread chain of inbound messages (see onGatewayMessage). */
   private inbound = new Map<string, Promise<void>>();
   private mapLoad?: Promise<void>;
+  private sweepTimer?: ReturnType<typeof setInterval>;
   /** The first full load (config, thread map, gateway), shared by every caller that arrives before it ends. */
   private firstLoad?: Promise<void>;
   private last: DiscordResult | null = null;
@@ -735,6 +805,63 @@ export class DiscordBridge {
     if (stale.length === 0) return;
     for (const id of stale) delete this.threads[id];
     await this.persistThreads();
+  }
+
+  /**
+   * Close threads in the parent channel that this bot made and no tab maps to (`staleThreads`). Runs after
+   * the boot prune, then daily. Never touches a thread someone else made (owner is the bot), a young one
+   * (its map entry may not be written yet), or anything while the map is empty (a lost map would make
+   * every thread look stale). Returns how many it archived or deleted. Never throws.
+   */
+  async sweepStaleThreads(): Promise<number> {
+    try {
+      await this.ensureLoaded();
+      const c = this.cfg;
+      if (c.staleThreads === 'keep' || !c.enabled || !c.token || !c.guildId || !c.parentChannelId) return 0;
+      if (Object.keys(this.threads).length === 0 || this.pending.size > 0) return 0;
+      const me = (await this.api.botUserId())?.id;
+      if (!me) return 0;
+      const known = new Set(Object.values(this.threads));
+      const cutoff = this.now() - STALE_MIN_AGE_MS;
+      const stale = (list: DiscordThreadInfo[] | undefined, archived: boolean) =>
+        (list ?? [])
+          .filter(
+            (t) =>
+              t.parent_id === c.parentChannelId &&
+              t.owner_id === me &&
+              SNOWFLAKE.test(t.id) &&
+              !known.has(t.id) &&
+              Number((BigInt(t.id) >> 22n) + BigInt(DISCORD_EPOCH_MS)) < cutoff &&
+              // An archived thread has nothing left to archive.
+              !(archived && c.staleThreads === 'archive')
+          )
+          .map((t) => t.id);
+      const ids = [
+        ...stale((await this.api.activeThreads(c.guildId))?.threads, false),
+        ...(c.staleThreads === 'delete'
+          ? stale((await this.api.archivedThreads(c.parentChannelId))?.threads, true)
+          : []),
+      ].slice(0, STALE_MAX_PER_SWEEP);
+      let done = 0;
+      for (const id of ids) {
+        const ok = await (c.staleThreads === 'delete' ? this.api.remove(id) : this.api.archive(id)).then(
+          () => true,
+          () => false
+        );
+        if (ok) done++;
+      }
+      return done;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Sweep now, then daily. The timer does not keep the process alive and `stop()` clears it. */
+  startStaleSweep(): void {
+    clearInterval(this.sweepTimer);
+    void this.sweepStaleThreads();
+    this.sweepTimer = setInterval(() => void this.sweepStaleThreads(), STALE_SWEEP_INTERVAL_MS);
+    this.sweepTimer.unref?.();
   }
 
   /** Hold the gateway back (boot): a reply must not arrive before the restored tabs exist. */
@@ -790,6 +917,8 @@ export class DiscordBridge {
   }
 
   stop(): void {
+    clearInterval(this.sweepTimer);
+    this.sweepTimer = undefined;
     this.gateway?.stop();
     this.gateway = null;
     this.gatewayToken = '';
@@ -798,6 +927,7 @@ export class DiscordBridge {
     this.lastReply.clear();
     this.names.clear();
     this.fresh.clear();
+    this.lastFull.clear();
     this.inbound.clear();
   }
 
@@ -886,7 +1016,29 @@ export class DiscordBridge {
     if (this.lastSent.size > 256) {
       for (const [k, v] of this.lastSent) if (t - v > DEDUPE_WINDOW_MS) this.lastSent.delete(k);
     }
+    let full: string | undefined;
+    if (msg.fullText) {
+      try {
+        full = (await withTimeout(msg.fullText(), FULL_TEXT_TIMEOUT_MS))?.trim() || undefined;
+      } catch {
+        full = undefined; // no transcript to read: the screen tail below stands in
+      }
+    }
+    let chunks: string[] = [];
+    if (full && msg.sessionId) {
+      if (this.lastFull.get(msg.sessionId) === full)
+        msg = { ...msg, tail: undefined }; // said already
+      else {
+        this.lastFull.set(msg.sessionId, full);
+        chunks = splitForDiscord(full);
+        msg = { ...msg, tail: undefined };
+      }
+    }
     const post = buildPost(msg, this.cfg, explicitUrgent);
+    // One post when the head and the first part fit together, the rest follow without a ping.
+    if (chunks.length > 0 && post.content.length + 1 + chunks[0].length <= MAX_CONTENT) {
+      post.content += `\n${chunks.shift()}`;
+    }
     try {
       let target = this.cfg.parentChannelId;
       if (msg.sessionId) {
@@ -908,6 +1060,7 @@ export class DiscordBridge {
           throw err;
         }
       }
+      for (const part of chunks) await this.say(this.threads[msg.sessionId ?? ''] ?? target, part);
       return (this.last = { ok: true, at: this.now() });
     } catch (err) {
       return (this.last = this.fail(err));
@@ -985,6 +1138,7 @@ export class DiscordBridge {
     this.lastReply.delete(sessionId);
     this.names.delete(sessionId);
     this.fresh.delete(sessionId);
+    this.lastFull.delete(sessionId);
   }
 
   /** Session tab deleted: apply `onSessionDelete` and forget the mapping. */

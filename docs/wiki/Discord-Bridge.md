@@ -38,14 +38,18 @@ only), never in the shared settings, and never shown again once saved.
 
 ## Options
 
-| Option                             | Choices                                  | Default         |
-| ---------------------------------- | ---------------------------------------- | --------------- |
-| Create threads                     | On the first alert, or for every new tab | First alert     |
-| When a tab is deleted              | Keep, archive or delete the thread       | Archive         |
-| @ ping                             | Never, critical events only, every post  | Critical only   |
-| Which events                       | Needs attention, or everything           | Needs attention |
-| Tell Claude how to reach you       | On or off                                | On              |
-| Also tell other CLIs, as a message | On or off                                | Off             |
+| Option                                   | Choices                                     | Default         |
+| ---------------------------------------- | ------------------------------------------- | --------------- |
+| Create threads                           | On the first alert, or for every new tab    | First alert     |
+| When a tab is deleted                    | Keep, archive or delete the thread          | Archive         |
+| Stale threads                            | Keep, archive or delete threads no tab uses | Keep            |
+| @ ping                                   | Never, critical events only, every post     | Critical only   |
+| Which events                             | Needs attention, or everything              | Needs attention |
+| Tell Claude how to reach you             | On or off                                   | On              |
+| Also tell other CLIs, as a first message | On or off                                   | Off             |
+
+A finished turn is posted as the CLI's whole last message, with its formatting and questions kept, split over
+several posts if it is long. A shell, and permission or question dialogs, show the last lines of the screen instead.
 
 Deleting a thread needs the **Manage Threads** permission on the channel. "Critical" means a
 permission prompt, a question, an error, or a post an agent marked urgent.
@@ -55,7 +59,7 @@ permission prompt, a question, an error, or a post an agent marked urgent.
 An agent only posts deliberately if it knows it can:
 
 - **Claude** is launched with the instruction as part of its system prompt (**Tell Claude how to reach you**, on by default), so nothing shows in the chat. This reaches local tabs only (remote and Docker tabs have no `codeman` command).
-- **Every other CLI** is told only if you turn on **Also tell other CLIs, as a message** (off by default: it costs one model turn per tab, and for a spawned worker or a scheduled run it arrives with the first real prompt). Then the same text is sent once, as a message, the first time a brand-new tab goes idle.
+- **Every other CLI** is told only if you turn on **Also tell other CLIs, as a first message** (off by default: it costs one model turn per tab, and for a spawned worker or a scheduled run it arrives with the first real prompt). Then the same text is sent once, as a message, the first time a brand-new tab goes idle.
   Restored tabs, shell tabs, and remote (ssh) and Docker tabs (which have no `codeman` command) are never sent it.
 
 Tabs that were already open when you turned the bridge on are not told. The alerts still reach

@@ -1767,6 +1767,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('discordAllowedUserIds').value = (d.allowedUserIds || []).join(', ');
     document.getElementById('discordThreadCreation').value = d.threadCreation;
     document.getElementById('discordOnSessionDelete').value = d.onSessionDelete;
+    document.getElementById('discordStaleThreads').value = d.staleThreads || 'keep';
     document.getElementById('discordPingMode').value = d.pingMode;
     document.getElementById('discordScope').value = d.scope;
     document.getElementById('discordStartupHint').checked = d.startupHint !== false;
@@ -1792,6 +1793,7 @@ Object.assign(CodemanApp.prototype, {
       allowedUserIds: ids,
       threadCreation: document.getElementById('discordThreadCreation').value,
       onSessionDelete: document.getElementById('discordOnSessionDelete').value,
+      staleThreads: document.getElementById('discordStaleThreads').value,
       pingMode: document.getElementById('discordPingMode').value,
       scope: document.getElementById('discordScope').value,
       startupHint: document.getElementById('discordStartupHint').checked,

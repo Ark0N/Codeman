@@ -22,6 +22,7 @@ type Internals = {
   discordBridge: Record<string, ReturnType<typeof vi.fn>>;
   sessions: Map<string, unknown>;
   mux: { capturePaneText?: (name: string) => string | null };
+  lastResponseFor?: (session: unknown, context?: string) => Promise<{ text: string }>;
   sendPushNotifications: (event: string, data: Record<string, unknown>) => Promise<void>;
   broadcast: (event: string, data: unknown) => void;
   cleanupSession: (id: string, killMux?: boolean, reason?: string) => Promise<void>;
@@ -86,6 +87,46 @@ describe('sendPushNotifications -> Discord', () => {
     expect(msg.tail()).toBe('Which option?\n  1. Cap GPUs\n  2. Cap CPU');
     expect(capture).toHaveBeenCalledTimes(1);
     expect(sendNotification).not.toHaveBeenCalled();
+  });
+
+  it('reads the whole last message from the transcript on a finished turn, and keeps the screen for a dialog', async () => {
+    const s = server();
+    s.sessions.set('s5', { muxName: 'codeman-s5', textOutput: '', mode: 'claude' });
+    const reader = vi.fn(async () => ({ text: 'The full answer.\n\n- one\n- two' }));
+    s.lastResponseFor = reader;
+    s.mux = { capturePaneText: () => 'screen\n❯\n  status' };
+    await s.sendPushNotifications('hook:idle_prompt', { sessionId: 's5', sessionName: 'w5' });
+    const idle = s.discordBridge.notify.mock.calls[0][0];
+    expect(await idle.fullText()).toBe('The full answer.\n\n- one\n- two');
+    expect(idle.tail()).toBe('screen'); // the composer row and the status under it are cut
+    await s.sendPushNotifications('hook:permission_prompt', { sessionId: 's5', sessionName: 'w5' });
+    const dialog = s.discordBridge.notify.mock.calls[1][0];
+    expect(dialog.fullText).toBeUndefined();
+    expect(dialog.tail()).toBe('screen\n❯\n  status');
+  });
+
+  it.each(['claude', 'codex', 'opencode', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek', 'omp', 'copilot'])(
+    'a finished turn in a %s tab posts the whole last message',
+    async (mode) => {
+      const s = server();
+      s.sessions.set('s6', { muxName: 'codeman-s6', textOutput: '', mode });
+      s.lastResponseFor = vi.fn(async () => ({ text: '1. First?\n2. Second?\n3. Third?' }));
+      s.mux = { capturePaneText: () => 'screen' };
+      await s.sendPushNotifications('hook:idle_prompt', { sessionId: 's6', sessionName: 'w6' });
+      const msg = s.discordBridge.notify.mock.calls[0][0];
+      expect(await msg.fullText()).toBe('1. First?\n2. Second?\n3. Third?');
+    }
+  );
+
+  it('a shell tab has no turns, so it keeps the screen tail', async () => {
+    const s = server();
+    s.sessions.set('s7', { muxName: 'codeman-s7', textOutput: '', mode: 'shell' });
+    s.lastResponseFor = vi.fn(async () => ({ text: 'x' }));
+    s.mux = { capturePaneText: () => 'prompt$' };
+    await s.sendPushNotifications('hook:idle_prompt', { sessionId: 's7', sessionName: 'w7' });
+    const msg = s.discordBridge.notify.mock.calls[0][0];
+    expect(await msg.fullText()).toBeUndefined();
+    expect(msg.tail()).toBe('prompt$');
   });
 
   it('falls back to plain text output when there is no tmux pane, and to no tail for an unknown session', async () => {
