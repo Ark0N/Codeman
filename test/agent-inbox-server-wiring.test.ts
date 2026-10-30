@@ -50,7 +50,7 @@ function bareServer(live: string[] = [], persisted: string[] = []): CleanupServe
     persistDeb: { cancelKey: () => {} },
     sse: { cleanupSessionBatches: () => {} },
     // A real delete also tells the Discord bridge, which frees its per-tab state and may archive the thread.
-    discordBridge: { sessionDeleted: async () => {} },
+    discordBridge: { sessionDeleted: async () => {}, forgetTab: () => {} },
     broadcast: () => {},
   });
   return server;

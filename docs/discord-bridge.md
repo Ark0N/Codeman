@@ -122,7 +122,7 @@ The text explains `codeman notify "message" --urgent`. `codeman` is on the PATH 
 ## Rotating and revoking
 
 - **Rotate:** in the Developer Portal choose **Bot**, **Reset Token**, paste the new token into Codeman and press **Send test**.
-- **Revoke:** kick the bot from the server or delete the application, then delete `~/.codeman/discord.json`.
+- **Revoke:** kick the bot from the server or delete the application, then choose **Remove token** in Settings. Deleting `~/.codeman/discord.json` alone does not reach a running bridge, which keeps the token it loaded until Codeman restarts.
 - If the token is ever pasted somewhere it should not be, reset it straight away.
 
 ## Troubleshooting

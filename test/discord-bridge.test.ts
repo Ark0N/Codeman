@@ -663,6 +663,41 @@ describe('DiscordBridge', () => {
       b.stop();
     });
 
+    it('forgetTab drops the per-tab state but keeps the thread and its map entry', async () => {
+      await writeDiscordConfig(dir, { ...CFG, onSessionDelete: 'delete' });
+      const b = bridge();
+      await b.notify(MSG);
+      posts.length = 0;
+      b.forgetTab('s1');
+      await b.sessionRenamed('s1', 'other'); // first sight again: recorded, no PATCH
+      expect(posts).toHaveLength(0);
+      expect(await readThreadMap(dir)).toEqual({ s1: THREAD });
+      b.stop();
+    });
+
+    it('a tab closed while its thread is being created has that thread closed and no entry kept', async () => {
+      await writeDiscordConfig(dir, { ...CFG, onSessionDelete: 'archive' });
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const b = bridge({}, async (url, init) => {
+        const path = new URL(String(url)).pathname.replace('/api/v10', '');
+        posts.push({ path, method: String(init.method), body: init.body ? JSON.parse(String(init.body)) : undefined });
+        if (path.endsWith('/threads')) {
+          await gate;
+          return jsonRes({ id: THREAD });
+        }
+        return jsonRes({ id: 'msg' });
+      });
+      const first = b.notify(MSG);
+      await vi.waitFor(() => expect(posts.some((p) => p.path.endsWith('/threads'))).toBe(true));
+      await b.sessionDeleted('s1');
+      release();
+      await first;
+      expect(posts).toContainEqual({ path: `/channels/${THREAD}`, method: 'PATCH', body: { archived: true } });
+      expect(await readThreadMap(dir)).toEqual({});
+      b.stop();
+    });
+
     it('renames the thread only when the name really changed', async () => {
       const b = bridge();
       await b.notify(MSG);

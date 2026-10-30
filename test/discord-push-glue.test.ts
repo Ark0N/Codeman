@@ -25,6 +25,7 @@ type Internals = {
   sendPushNotifications: (event: string, data: Record<string, unknown>) => Promise<void>;
   broadcast: (event: string, data: unknown) => void;
   cleanupSession: (id: string, killMux?: boolean, reason?: string) => Promise<void>;
+  discardPartiallyBuiltSession: (id: string) => Promise<void>;
 };
 
 function server(): Internals {
@@ -35,6 +36,7 @@ function server(): Internals {
     sessionCreated: vi.fn(async () => undefined),
     sessionRenamed: vi.fn(async () => undefined),
     sessionDeleted: vi.fn(async () => undefined),
+    forgetTab: vi.fn(),
     sessionIdle: vi.fn(async () => undefined),
     stop: vi.fn(),
   };
@@ -123,6 +125,19 @@ describe('broadcast -> Discord tab lifecycle', () => {
     expect(s.discordBridge.sessionDeleted).not.toHaveBeenCalled();
     await s.cleanupSession('gone', true);
     expect(s.discordBridge.sessionDeleted).toHaveBeenCalledWith('gone');
+  });
+
+  it('a discarded half-built session clears the per-tab state but keeps its thread', async () => {
+    const s = server();
+    s.sessions.set('rebuild', {
+      owner: 'u',
+      ralphTracker: { stopWatchingFixPlan: () => undefined, fullReset: () => undefined },
+      removeAllListeners: () => undefined,
+      stop: async () => undefined,
+    });
+    await s.discardPartiallyBuiltSession('rebuild');
+    expect(s.discordBridge.forgetTab).toHaveBeenCalledWith('rebuild');
+    expect(s.discordBridge.sessionDeleted).not.toHaveBeenCalled();
   });
 
   it('ignores an event with no session id', () => {

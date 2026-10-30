@@ -3261,7 +3261,14 @@ export class WebServer extends EventEmitter {
       await this.finalizeRestoredState(restored);
       void this.discordBridge
         .release()
-        .then(() => this.discordBridge.prune(this.sessions.keys()))
+        .then(() =>
+          // Same keep set as the agent inbox prune: a reboot-restore rebuild reuses the old id.
+          this.discordBridge.prune([
+            ...this.sessions.keys(),
+            ...Object.keys(this.store.getSessions()),
+            ...rebootRestoreRegistry.list(() => true).map((entry) => entry.sessionId),
+          ])
+        )
         .catch(() => undefined);
 
       // Instance-scoped reaper: after restore, `docker rm -f` managed containers of
@@ -3847,8 +3854,9 @@ export class WebServer extends EventEmitter {
     } catch (err) {
       console.warn(`[Server] releasing the tab layout slot failed: ${getErrorMessage(err)}`);
     }
-    // A half-built session never had a thread, but its per-tab bridge state goes with it.
-    void this.discordBridge.sessionDeleted(sessionId).catch(() => undefined);
+    // Per-tab bridge state only: a reboot-restore rebuild reuses the old id and stays on offer for a
+    // retry, so its thread must survive the discard.
+    this.discordBridge.forgetTab(sessionId);
     // Any `session:updated` the half-built session emitted before it failed left a
     // tab on every other open board, and the client's handler is an upsert.
     this.broadcast(SseEvent.SessionDeleted, { id: sessionId });

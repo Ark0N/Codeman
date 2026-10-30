@@ -22,6 +22,7 @@
 
 import { existsSync, mkdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { probePathKind } from './utils/bounded-path-probe.js';
 import WebSocket from 'ws';
@@ -294,7 +295,8 @@ export async function readDiscordConfig(configDir: string): Promise<DiscordConfi
 }
 
 async function writePrivate(target: string, data: unknown, mode: number): Promise<void> {
-  const tmp = `${target}.${process.pid}.tmp`;
+  // A unique name: two writes at once (two admin tabs) must not share one tmp file.
+  const tmp = `${target}.${randomUUID()}.tmp`;
   try {
     await fs.writeFile(tmp, JSON.stringify(data, null, 2), { mode });
     await fs.rename(tmp, target);
@@ -679,6 +681,8 @@ export class DiscordBridge {
   /** Brand-new sessions that have not yet been sent the startup hint (non-Claude CLIs). */
   private fresh = new Set<string>();
   private pending = new Map<string, Promise<string | DiscordResult>>();
+  /** Tabs closed while their thread was still being created: the creation applies `onSessionDelete` to it. */
+  private closedWhilePending = new Set<string>();
   /** The parent channel the thread map was built under. */
   private threadsParent = '';
   /** True from boot until the restored tabs exist (see hold). */
@@ -822,6 +826,10 @@ export class DiscordBridge {
         if (!t?.id) return this.fail(new Error('Discord did not return a thread'));
         // A save moved the bridge to another channel meanwhile: this thread belongs to the old one.
         if (parent !== this.cfg.parentChannelId) return this.fail(new Error('The parent channel changed'));
+        if (this.closedWhilePending.has(sessionId)) {
+          await this.closeThread(t.id);
+          return this.fail(new Error('The tab was closed'));
+        }
         this.threads[sessionId] = t.id;
         await this.persistThreads();
         return t.id;
@@ -829,7 +837,10 @@ export class DiscordBridge {
         return this.fail(err);
       } finally {
         // Only this creation's own entry: a newer one for the same tab may have replaced it.
-        if (this.pending.get(sessionId) === mine.p) this.pending.delete(sessionId);
+        if (this.pending.get(sessionId) === mine.p) {
+          this.pending.delete(sessionId);
+          this.closedWhilePending.delete(sessionId);
+        }
       }
     })());
     this.pending.set(sessionId, p);
@@ -940,16 +951,31 @@ export class DiscordBridge {
     await this.api.rename(thread, threadNameFor(name, sessionId)).catch(() => undefined);
   }
 
-  /** Session tab deleted: apply `onSessionDelete` and forget the mapping. */
-  async sessionDeleted(sessionId: string): Promise<void> {
-    // Per-tab state goes whether or not the tab ever had a thread, so these maps cannot grow for the life of the server.
+  /**
+   * Drop the per-tab state only, keeping the thread and its map entry. For a session that is discarded
+   * but can come back under the same id (a failed reboot-restore rebuild stays on offer for a retry).
+   * Per-tab state goes whether or not the tab ever had a thread, so these maps cannot grow for the life of the server.
+   */
+  forgetTab(sessionId: string): void {
     this.lastReply.delete(sessionId);
     this.names.delete(sessionId);
     this.fresh.delete(sessionId);
+  }
+
+  /** Session tab deleted: apply `onSessionDelete` and forget the mapping. */
+  async sessionDeleted(sessionId: string): Promise<void> {
+    this.forgetTab(sessionId);
+    // A thread still being created is closed by its creation, which finds no entry to remove here.
+    if (this.pending.has(sessionId)) this.closedWhilePending.add(sessionId);
     const thread = this.threads[sessionId];
     if (!thread) return;
     delete this.threads[sessionId];
     await this.persistThreads();
+    await this.closeThread(thread);
+  }
+
+  /** Apply `onSessionDelete` to a thread. */
+  private async closeThread(thread: string): Promise<void> {
     if (!this.cfg.enabled) return;
     if (this.cfg.onSessionDelete === 'delete') await this.api.remove(thread).catch(() => undefined);
     else if (this.cfg.onSessionDelete === 'archive') await this.api.archive(thread).catch(() => undefined);
