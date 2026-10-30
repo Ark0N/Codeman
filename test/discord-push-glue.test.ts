@@ -43,6 +43,20 @@ function server(): Internals {
 
 beforeEach(() => sendNotification.mockClear());
 
+describe('bridge deps', () => {
+  it('agentExited is true only for a session whose pane exit was observed', () => {
+    const s = new WebServer(0, false, true, '127.0.0.1', 'box') as unknown as Internals & {
+      discordBridge: { deps: { agentExited: (id: string) => boolean } };
+    };
+    s.sessions.set('dead', { paneExit: { observedAt: 1 } });
+    s.sessions.set('alive', {});
+    const { agentExited } = s.discordBridge.deps;
+    expect(agentExited('dead')).toBe(true);
+    expect(agentExited('alive')).toBe(false);
+    expect(agentExited('missing')).toBe(false);
+  });
+});
+
 describe('sendPushNotifications -> Discord', () => {
   it('posts a permission prompt with zero push subscriptions, with the rendered screen as the tail', async () => {
     const s = server();

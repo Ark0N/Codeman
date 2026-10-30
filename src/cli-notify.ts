@@ -43,7 +43,14 @@ export const postJson: JsonPost = (apiUrl, apiPath, payload, timeoutMs = REQUEST
   const url = new URL(apiPath, apiUrl);
   const body = JSON.stringify(payload);
   const transport = url.protocol === 'https:' ? https : http;
-  return new Promise((resolve) => {
+  return new Promise((resolveOnce) => {
+    // Settle once: a response that stalls after its headers ends in 'close' without 'end'.
+    let settled = false;
+    const resolve: typeof resolveOnce = (v) => {
+      if (settled) return;
+      settled = true;
+      resolveOnce(v);
+    };
     const headers: Record<string, string | number> = {
       Accept: 'application/json',
       'Content-Type': 'application/json',
@@ -64,6 +71,8 @@ export const postJson: JsonPost = (apiUrl, apiPath, payload, timeoutMs = REQUEST
       (res) => {
         let text = '';
         res.on('data', (c) => (text += c));
+        res.on('error', () => resolve({ status: 0 }));
+        res.on('close', () => resolve({ status: 0 }));
         res.on('end', () => {
           let error: string | undefined;
           let delivery: { ok: boolean; error?: string } | undefined;

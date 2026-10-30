@@ -520,6 +520,7 @@ export class WebServer extends EventEmitter {
       if (await session.writeViaMux(text, { fromUser }).catch(() => false)) return true;
       return session.write(text, { fromUser });
     },
+    agentExited: (id) => !!this.sessions.get(id)?.paneExit,
     awaitingChoice: (id) => approvalInbox.listPending().some((item) => item.sessionId === id && item.kind !== 'idle'),
     // Remote (ssh) sessions keep their folder on another host, so received files have nowhere local to go.
     sessionDir: (sessionId) => {
@@ -3258,7 +3259,10 @@ export class WebServer extends EventEmitter {
       if (restoredMail > 0) console.log(`[AgentInbox] restored ${restoredMail} pending message(s)`);
       const restored = await this.restoreMuxSessions();
       await this.finalizeRestoredState(restored);
-      void this.discordBridge.release().catch(() => undefined);
+      void this.discordBridge
+        .release()
+        .then(() => this.discordBridge.prune(this.sessions.keys()))
+        .catch(() => undefined);
 
       // Instance-scoped reaper: after restore, `docker rm -f` managed containers of
       // THIS instance whose case is gone from docker-cases.json (best-effort, never

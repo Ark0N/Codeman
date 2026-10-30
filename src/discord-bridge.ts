@@ -655,6 +655,8 @@ export interface DiscordBridgeDeps {
    * Codeman types itself.
    */
   sendInput: (sessionId: string, text: string, fromUser: boolean) => Promise<boolean>;
+  /** True once the tab's agent has exited: tmux still accepts keys for a dead pane, so a tick would lie. */
+  agentExited?: (sessionId: string) => boolean;
   /** True while the session shows a permission or question dialog, which acts on a bare keypress. */
   awaitingChoice?: (sessionId: string) => boolean;
   /** A session's working folder, where received files are saved. Undefined when it is gone or remote. */
@@ -683,6 +685,8 @@ export class DiscordBridge {
   private held = false;
   /** Thread-map writes run one after another: concurrent creations must not interleave on the tmp file. */
   private persistChain: Promise<void> = Promise.resolve();
+  /** Per-thread chain of inbound messages (see onGatewayMessage). */
+  private inbound = new Map<string, Promise<void>>();
   private mapLoad?: Promise<void>;
   /** The first full load (config, thread map, gateway), shared by every caller that arrives before it ends. */
   private firstLoad?: Promise<void>;
@@ -709,6 +713,17 @@ export class DiscordBridge {
     if (this.loaded) return;
     this.firstLoad ??= this.reload();
     await this.firstLoad;
+  }
+
+  /** Forget thread entries for tabs that no longer exist (dropped without a delete, for example). Once, at boot. */
+  async prune(liveIds: Iterable<string>): Promise<void> {
+    await this.ensureLoaded();
+    const live = new Set(liveIds);
+    if (live.size === 0) return; // nothing restored: more likely a failed restore than an empty server
+    const stale = Object.keys(this.threads).filter((id) => !live.has(id));
+    if (stale.length === 0) return;
+    for (const id of stale) delete this.threads[id];
+    await this.persistThreads();
   }
 
   /** Hold the gateway back (boot): a reply must not arrive before the restored tabs exist. */
@@ -765,6 +780,7 @@ export class DiscordBridge {
     this.lastReply.clear();
     this.names.clear();
     this.fresh.clear();
+    this.inbound.clear();
   }
 
   private fail(err: unknown): DiscordResult {
@@ -991,8 +1007,17 @@ export class DiscordBridge {
     };
   }
 
-  /** Inbound reply. Every gate here drops silently: a stranger learns nothing. */
+  /** Inbound reply. One chain per thread, so a reply that waits on a file download cannot be overtaken by a later one. */
   async onGatewayMessage(m: GatewayMessage): Promise<void> {
+    const key = String(m.channel_id);
+    const run = (this.inbound.get(key) ?? Promise.resolve()).then(() => this.handleMessage(m)).catch(() => undefined);
+    this.inbound.set(key, run);
+    await run;
+    if (this.inbound.get(key) === run) this.inbound.delete(key);
+  }
+
+  /** Every gate here drops silently: a stranger learns nothing. */
+  private async handleMessage(m: GatewayMessage): Promise<void> {
     if (!this.cfg.enabled || m.author?.bot) return;
     if (m.guild_id !== this.cfg.guildId) return;
     if (!this.cfg.allowedUserIds.includes(m.author?.id)) return;
@@ -1003,6 +1028,10 @@ export class DiscordBridge {
     if (prev !== undefined && t - prev < REPLY_MIN_INTERVAL_MS) {
       // Too soon after the last reply: say it was not typed, instead of dropping it silently.
       await this.api.react(m.channel_id, m.id, '⏳').catch(() => undefined);
+      return;
+    }
+    if (this.deps.agentExited?.(sessionId)) {
+      await this.say(m.channel_id, 'The agent in that tab has exited, so nothing was typed.');
       return;
     }
     this.lastReply.set(sessionId, t);

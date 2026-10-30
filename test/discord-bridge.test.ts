@@ -551,6 +551,17 @@ describe('DiscordBridge', () => {
     b.stop();
   });
 
+  it('prune drops thread entries for tabs that no longer exist, and keeps the live ones', async () => {
+    const b = bridge();
+    await b.notify(MSG);
+    await b.notify({ ...MSG, sessionId: 's2', sessionName: 'w2' });
+    await b.prune(['s2']);
+    expect(Object.keys(await readThreadMap(dir))).toEqual(['s2']);
+    await b.prune([]); // nothing restored: leave the map alone
+    expect(Object.keys(await readThreadMap(dir))).toEqual(['s2']);
+    b.stop();
+  });
+
   describe('sendTest', () => {
     it('posts with the config it is given and leaves the live config alone', async () => {
       const auth: string[] = [];
@@ -734,7 +745,8 @@ describe('DiscordBridge files and startup hint', () => {
   function make(
     cfg: Partial<DiscordConfig> = {},
     dirFor: (id: string) => string | undefined = () => work,
-    awaitingChoice?: (id: string) => boolean
+    awaitingChoice?: (id: string) => boolean,
+    agentExited?: (id: string) => boolean
   ) {
     const b = new DiscordBridge({
       configDir: dir,
@@ -751,6 +763,7 @@ describe('DiscordBridge files and startup hint', () => {
       sendInput: async (id, text, fromUser) => (sent.push([id, text, fromUser]), true),
       sessionDir: dirFor,
       awaitingChoice,
+      agentExited,
       socketFactory: () => new FakeSocket(),
       now: () => t,
       sleep: async () => undefined,
@@ -831,6 +844,26 @@ describe('DiscordBridge files and startup hint', () => {
     expect(sent[0][1].endsWith('\r')).toBe(true);
     expect(sent[0][2]).toBe(false); // Codeman's own text: not a person's input, so it cannot auto-name the tab
     expect(DISCORD_STARTUP_HINT).toContain('codeman notify');
+    b.stop();
+  });
+
+  it('says the agent has exited and types nothing when the tab reports it', async () => {
+    const b = await make({}, undefined, undefined, () => true);
+    await b.onGatewayMessage(reply({ content: 'hello', attachments: [] }));
+    expect(sent).toHaveLength(0);
+    expect(String(posted.at(-1)?.body?.content)).toMatch(/exited/);
+    expect(posted.some((p) => p.path.includes('reactions'))).toBe(false);
+    b.stop();
+  });
+
+  it('types a reply that waits on a download before a later text reply', async () => {
+    const b = await make();
+    const slow = b.onGatewayMessage(reply({ content: 'first' }));
+    await new Promise((r) => setTimeout(r, 0)); // the first reply is under way (gate passed) before the clock moves
+    t += 5_000;
+    const fast = b.onGatewayMessage(reply({ id: '555555555555555556', content: 'second', attachments: [] }));
+    await Promise.all([slow, fast]);
+    expect(sent.map((s) => s[1].split(' ')[0])).toEqual(['first', 'second\r']);
     b.stop();
   });
 

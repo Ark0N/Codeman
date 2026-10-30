@@ -71,6 +71,21 @@ describe('runNotify', () => {
     }
   });
 
+  it('postJson settles when the server sends headers and then stalls the body', async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '500' });
+      res.write('{"success":');
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const { port } = server.address() as AddressInfo;
+      expect((await postJson(`http://127.0.0.1:${port}`, '/x', {}, 100)).status).toBe(0);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+
   it('treats a disabled bridge (409) as success that says so', async () => {
     const r = await runNotify({ message: 'x' }, ENV, '/work', fake(409));
     expect(r.code).toBe(0);
