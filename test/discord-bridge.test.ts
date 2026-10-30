@@ -247,6 +247,15 @@ describe('DiscordGateway', () => {
     gw.stop();
   });
 
+  it('ignores a frame that arrives after stop(): no heartbeat timer, nothing sent', () => {
+    const { gw, sockets } = setup();
+    gw.start();
+    gw.stop();
+    sockets[0].recv({ op: 10, d: { heartbeat_interval: 1000 } });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(sockets[0].sent).toHaveLength(0);
+  });
+
   it('stops for good on a close code that retrying cannot fix', () => {
     const { gw, sockets } = setup();
     gw.start();
@@ -917,6 +926,20 @@ describe('DiscordBridge files and startup hint', () => {
     expect(sent[0][1].endsWith('\r')).toBe(true);
     expect(sent[0][2]).toBe(false); // Codeman's own text: not a person's input, so it cannot auto-name the tab
     expect(DISCORD_STARTUP_HINT).toContain('codeman notify');
+    b.stop();
+  });
+
+  it('holds the startup hint while a choice is pending and sends it at the next idle', async () => {
+    let choice = true;
+    const b = await make({}, undefined, () => choice);
+    await b.sessionCreated('s6', 'w6', t - 1000);
+    await b.sessionIdle('s6', true);
+    expect(sent).toHaveLength(0);
+    choice = false;
+    await b.sessionIdle('s6', true);
+    expect(sent).toHaveLength(1);
+    await b.sessionIdle('s6', true);
+    expect(sent).toHaveLength(1);
     b.stop();
   });
 

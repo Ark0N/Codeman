@@ -535,6 +535,8 @@ export class DiscordGateway {
   }
 
   private handle(sock: GatewaySocket, raw: string): void {
+    // `ws` keeps emitting while a socket closes: a frame after stop() or from a replaced socket must start nothing.
+    if (this.stopped || sock !== this.sock) return;
     let p: { op: number; d?: unknown; s?: number | null; t?: string | null };
     try {
       p = JSON.parse(raw);
@@ -947,7 +949,10 @@ export class DiscordBridge {
    * Claude gets the same text as a launch flag instead, and a shell must never receive it.
    */
   async sessionIdle(sessionId: string, hintable: boolean): Promise<void> {
-    if (!this.fresh.delete(sessionId)) return;
+    if (!this.fresh.has(sessionId)) return;
+    // A dialog is up (codex's trust prompt reads as idle): Enter would pick its highlighted option, so wait for the next idle.
+    if (this.deps.awaitingChoice?.(sessionId)) return;
+    this.fresh.delete(sessionId);
     if (!hintable || !this.cfg.enabled || !this.cfg.startupHint || !this.cfg.typedHint) return;
     const text = sanitiseReply(`${DISCORD_STARTUP_HINT} Reply with just: ok`);
     // fromUser false: this is Codeman talking, so it must not auto-name the tab or count as the person's input.
