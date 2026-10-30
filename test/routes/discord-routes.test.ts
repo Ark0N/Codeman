@@ -216,6 +216,17 @@ describe('POST /api/sessions/:id/discord-notify', () => {
     bridge.stop();
   });
 
+  it('does not spend rate-limit tokens on a request refused for its file', async () => {
+    const { app, bridge } = await harness();
+    await app.inject({ method: 'PUT', url: '/api/discord', payload: FULL });
+    for (let i = 0; i < 8; i++) {
+      const bad = await app.inject({ method: 'POST', url, payload: { message: 'x', file: 'no-such-file.txt' } });
+      expect(bad.statusCode).toBe(400);
+    }
+    expect((await app.inject({ method: 'POST', url, payload: { message: 'still allowed' } })).statusCode).toBe(200);
+    bridge.stop();
+  });
+
   it('rejects an empty or oversized message', async () => {
     const { app } = await harness();
     const url = `/api/sessions/test-session-1/discord-notify`;

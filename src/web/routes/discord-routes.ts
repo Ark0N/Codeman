@@ -77,6 +77,12 @@ function consumeNotifyToken(sessionId: string, now: number = Date.now()): boolea
   return true;
 }
 
+/** Give back a token spent on a request that was refused before anything was posted. */
+function refundNotifyToken(sessionId: string): void {
+  const b = notifyBuckets.get(sessionId);
+  if (b) b.tokens = Math.min(NOTIFY_PER_MINUTE, b.tokens + 1);
+}
+
 /** Test hook: forget every bucket between runs. */
 export function _resetNotifyBuckets(): void {
   notifyBuckets.clear();
@@ -197,6 +203,7 @@ export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDe
     if (file !== undefined) {
       const problem = await fileProblem(session.workingDir, !!session.remote, file);
       if (typeof problem === 'string') {
+        refundNotifyToken(session.id);
         reply.code(400);
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, problem);
       }

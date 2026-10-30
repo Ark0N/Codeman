@@ -582,7 +582,20 @@ describe('DiscordBridge', () => {
   it('names a thread that Discord answers without an id, instead of reporting an old result', async () => {
     const b = bridge({}, async (url) => (String(url).endsWith('/threads') ? jsonRes({}) : jsonRes({ id: 'msg' })));
     const r = await b.notify(MSG);
-    expect(r).toMatchObject({ ok: false });
+    expect(r).toMatchObject({ ok: false, error: 'Discord did not return a thread' });
+    b.stop();
+  });
+
+  it('keeps the gateway session across a save that changes neither the switch nor the token', async () => {
+    const b = bridge();
+    await b.reload();
+    const first = (b as unknown as { gateway: unknown }).gateway;
+    expect(first).not.toBeNull();
+    await b.reload();
+    expect((b as unknown as { gateway: unknown }).gateway).toBe(first);
+    await writeDiscordConfig(dir, { ...CFG, token: 'another-token' });
+    await b.reload();
+    expect((b as unknown as { gateway: unknown }).gateway).not.toBe(first);
     b.stop();
   });
 
@@ -692,8 +705,9 @@ describe('DiscordBridge', () => {
       await vi.waitFor(() => expect(posts.some((p) => p.path.endsWith('/threads'))).toBe(true));
       await b.sessionDeleted('s1');
       release();
-      await first;
+      const out = await first;
       expect(posts).toContainEqual({ path: `/channels/${THREAD}`, method: 'PATCH', body: { archived: true } });
+      expect(out).toMatchObject({ ok: false, error: 'The tab was closed' });
       expect(await readThreadMap(dir)).toEqual({});
       b.stop();
     });

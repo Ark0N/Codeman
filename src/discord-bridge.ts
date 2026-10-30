@@ -286,6 +286,9 @@ function coerce(raw: unknown): DiscordConfig {
   };
 }
 
+/** A failure with a reason worth showing as it is (unlike a network error, whose text is not). */
+class BridgeProblem extends Error {}
+
 export async function readDiscordConfig(configDir: string): Promise<DiscordConfig> {
   try {
     return coerce(JSON.parse(await fs.readFile(discordConfigPath(configDir), 'utf-8')));
@@ -674,6 +677,8 @@ export class DiscordBridge {
   private threads: Record<string, string> = {};
   private loaded = false;
   private gateway: DiscordGateway | null = null;
+  /** The token the running gateway was started with ('' when none). */
+  private gatewayToken = '';
   private lastSent = new Map<string, number>();
   private lastReply = new Map<string, number>();
   /** The last name seen per session, so only a real rename touches the thread. */
@@ -762,10 +767,14 @@ export class DiscordBridge {
       this.threadsParent = parent;
       await this.persistThreads();
     }
+    activeStartupHint = this.cfg.enabled && this.cfg.token && this.cfg.startupHint ? DISCORD_STARTUP_HINT : undefined;
+    // A save that changed neither the switch nor the token keeps the gateway session, so it can resume.
+    const want = this.cfg.enabled && this.cfg.token && !this.held ? this.cfg.token : '';
+    if (this.gateway && want && want === this.gatewayToken) return;
     this.gateway?.stop();
     this.gateway = null;
-    activeStartupHint = this.cfg.enabled && this.cfg.token && this.cfg.startupHint ? DISCORD_STARTUP_HINT : undefined;
-    if (this.cfg.enabled && this.cfg.token && !this.held) {
+    this.gatewayToken = want;
+    if (want) {
       this.gateway = new DiscordGateway(
         () => this.cfg.token,
         (m) => void this.onGatewayMessage(m).catch(() => undefined),
@@ -779,6 +788,7 @@ export class DiscordBridge {
   stop(): void {
     this.gateway?.stop();
     this.gateway = null;
+    this.gatewayToken = '';
     activeStartupHint = undefined;
     this.lastSent.clear();
     this.lastReply.clear();
@@ -799,9 +809,11 @@ export class DiscordBridge {
             ? 'Channel not found (check the IDs)'
             : status
               ? `HTTP ${status}`
-              : (err as { name?: string })?.name === 'TimeoutError'
-                ? 'Timed out'
-                : 'Network error';
+              : err instanceof BridgeProblem
+                ? err.message
+                : (err as { name?: string })?.name === 'TimeoutError'
+                  ? 'Timed out'
+                  : 'Network error';
     return { ok: false, status, error, at: this.now() };
   }
 
@@ -823,12 +835,12 @@ export class DiscordBridge {
     const p = (mine.p = (async () => {
       try {
         const t = await this.api.createThread(parent, threadNameFor(name, sessionId));
-        if (!t?.id) return this.fail(new Error('Discord did not return a thread'));
+        if (!t?.id) return this.fail(new BridgeProblem('Discord did not return a thread'));
         // A save moved the bridge to another channel meanwhile: this thread belongs to the old one.
-        if (parent !== this.cfg.parentChannelId) return this.fail(new Error('The parent channel changed'));
+        if (parent !== this.cfg.parentChannelId) return this.fail(new BridgeProblem('The parent channel changed'));
         if (this.closedWhilePending.has(sessionId)) {
           await this.closeThread(t.id);
-          return this.fail(new Error('The tab was closed'));
+          return this.fail(new BridgeProblem('The tab was closed'));
         }
         this.threads[sessionId] = t.id;
         await this.persistThreads();
