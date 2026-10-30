@@ -427,3 +427,48 @@ describe('terminal link provider with spaced paths', () => {
     expect(linksFor('/etc/secret files/passwords.txt').links).toEqual([]);
   });
 });
+
+describe('parenthesised paths with spaces (#733)', () => {
+  const KOBO = '/mnt/data/Kobo/Kobo eReader.conf';
+
+  it('links a parenthesised absolute path whole, not as a folder prefix plus a tail', () => {
+    const line = `Prepared a corrected configuration (${KOBO}).`;
+    expect(findFilePathLinks(line)).toEqual([{ path: KOBO, index: line.indexOf(KOBO) }]);
+    expect(line.slice(line.indexOf(KOBO), line.indexOf(KOBO) + KOBO.length)).toBe(KOBO);
+  });
+
+  it.each([
+    ['(node server.js)', 'server.js'],
+    ['(updated package.json)', 'package.json'],
+    ['(e.g. eslint.config.js)', 'eslint.config.js'],
+    ['(default: settings.json)', 'settings.json'],
+    ['(cat notes.md)', 'notes.md'],
+    ['(CI/CD pipeline config.yml)', 'config.yml'],
+  ])('links the file only inside %s, not the surrounding prose', (line, file) => {
+    expect(paths(line)).toEqual([file]);
+    expect(paths(line)).not.toContain(line.slice(1, -1));
+  });
+
+  it('does not take a relative or bare spaced name inside parentheses as one path', () => {
+    // Those still need an explicit path label. The ordinary detectors link the file.
+    expect(paths('wrote (docs/Kobo eReader.conf) today')).toEqual(['eReader.conf']);
+    expect(paths('edited (Kobo eReader.conf) in place')).toEqual(['eReader.conf']);
+    expect(paths('kept (~/Kobo/Kobo eReader.conf) aside')).toEqual(['~/Kobo/Kobo', 'eReader.conf']);
+  });
+
+  it('links .conf the way other text extensions are linked', () => {
+    expect(paths('see /mnt/data/Kobo/reader.conf please')).toEqual(['/mnt/data/Kobo/reader.conf']);
+    expect(paths('see config/reader.conf')).toEqual(['config/reader.conf']);
+  });
+
+  it('does not take prose or an /etc path inside parentheses', () => {
+    expect(paths('(see the notes.conf)')).toEqual(['notes.conf']);
+    expect(paths('(/etc/secret files/passwords.txt)')).toEqual([]);
+  });
+
+  it('still links Program Files (x86) as one path', () => {
+    const line = '/mnt/c/Program Files (x86)/app/readme.txt';
+    expect(paths(line)).toEqual([line]);
+    expect(paths(`(${line})`)).toEqual([line]);
+  });
+});

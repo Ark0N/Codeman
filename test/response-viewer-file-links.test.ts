@@ -318,6 +318,18 @@ describe('response viewer file-path linkifier', () => {
     }
   });
 
+  it('links a parenthesised .conf path with spaces as one file, not a folder prefix (#733)', () => {
+    const path = '/mnt/data/Kobo/Kobo eReader.conf';
+    const root = linkify(`<p>Prepared a corrected configuration (${path}).</p>`);
+    const links = paths(root);
+
+    expect(links).toHaveLength(1);
+    expect(links[0].getAttribute('data-path')).toBe(path);
+    expect(links[0].hasAttribute('data-folder')).toBe(false);
+    expect(links[0].textContent).toBe(path);
+    expect(root.textContent).toBe(`Prepared a corrected configuration (${path}).`);
+  });
+
   it('is wired into message rendering and the click delegate', () => {
     // The linkifier is only reachable through these two call sites; losing
     // either leaves inert paths (no linkify) or dead links (no handler).

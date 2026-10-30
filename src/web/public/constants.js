@@ -2106,7 +2106,7 @@ function computeRewriteScrollLine(input) {
  * a `/g` regex, so {@link absoluteFilePathPattern} mints a fresh one per call.
  */
 const FILE_PATH_LINK_PATTERN =
-  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
+  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|conf|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
 
 /** A fresh, zero-state instance of {@link FILE_PATH_LINK_PATTERN}. */
 function absoluteFilePathPattern() {
@@ -2159,7 +2159,7 @@ function previewsInFileViewer(filePath) {
  * {@link findFilePathLinks}.
  */
 const RELATIVE_FILE_PATH_LINK_PATTERN =
-  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
+  /(^|[\s"'`(\[{<>=,])((?![^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*:\/\/)(?:~\/|[^\s"'`<>|;&()[\]{}=,\/~\n\x00-\x1f])[^\s"'`<>|;&()[\]{}=,\n\x00-\x1f]*\.(?:log|txt|json|markdown|md|ya?ml|csv|tsv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html?|toml|ini|conf|sql|diff|patch|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|zip|mp4|webm|mov|m4v|ogv|mp3|wav))\b/g;
 
 /** The `(?:log|txt|…)` extension group, read off the rooted pattern so it cannot drift. */
 const FILE_LINK_EXTENSION_GROUP = /\\\.(\(\?:[^()]*\))\)\\b$/.exec(FILE_PATH_LINK_PATTERN.source)[1];
@@ -2197,12 +2197,18 @@ function findFilePathLinks(text) {
   const reserved = [];
   let lineStart = 0;
   for (const line of value.split('\n')) {
-    const spaced = spacedFilePathOnLine(line);
-    if (spaced && !inUrl(lineStart + spaced.index, spaced.path.length)) {
-      const index = lineStart + spaced.index;
-      reserved.push({ index, path: spaced.path });
-      if (spaced.link) found.push({ path: spaced.path, index });
-    }
+    const consider = (hit) => {
+      if (!hit || inUrl(lineStart + hit.index, hit.path.length)) return;
+      const index = lineStart + hit.index;
+      if (reserved.some((r) => index < r.index + r.path.length && r.index < index + hit.path.length)) return;
+      reserved.push({ index, path: hit.path });
+      if (hit.link) found.push({ path: hit.path, index });
+    };
+    consider(spacedFilePathOnLine(line));
+    // A parenthesised path is bounded by the parentheses, not by the line:
+    // `(/mnt/data/Kobo/Kobo eReader.conf)` is not an own-line path, and without
+    // this the folder detector links `/mnt/data/Kobo/Kobo`.
+    for (const hit of parenthesisedSpacedPaths(line)) consider(hit);
     lineStart += line.length + 1;
   }
   const isReserved = (index, length) =>
@@ -2246,6 +2252,7 @@ const SPACED_FILE_PATH_LABEL_PATTERN =
  *   /mnt/c/My Docs/report.docx              the whole line is the path
  *   - /mnt/c/My Docs/report.docx            after a list marker (`-`, `*`, `•`, `1.`, `2)`)
  *   Saved to: 03 Attachments/Build SIPOC Design/plan.pptx      after a path label (SPACED_FILE_PATH_LABEL_PATTERN)
+ *   (/mnt/data/Kobo/Kobo eReader.conf)      inside parentheses, prose may precede them
  *
  * An absolute path may stand alone or follow a marker. Any label, before an
  * absolute, relative or `~/` path, must be an explicit path label
@@ -2333,6 +2340,60 @@ function spacedFilePathOnLine(line) {
   // otherwise leave the line to the ordinary detectors.
   if (!link && !words[words.length - 1].includes('/')) return null;
   return { path, index, link };
+}
+
+/**
+ * Spaced paths inside one pair of parentheses on `line`.
+ *
+ * The own-line detector never sees `(/mnt/data/Kobo/Kobo eReader.conf)`: prose
+ * precedes the path, and the closing paren means the line does not end on an
+ * extension, so the folder detector linked the directory prefix. The inside of
+ * each pair is judged on its own ({@link spacedPathBoundedByParens}). Inner
+ * pairs are reported first, and the caller drops a later hit that overlaps one.
+ *
+ * @param {string} line
+ * @returns {Array<{path: string, index: number, link: boolean}>}
+ */
+function parenthesisedSpacedPaths(line) {
+  const text = String(line || '');
+  const hits = [];
+  const stack = [];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '(') stack.push(i);
+    else if (ch === ')' && stack.length) {
+      const open = stack.pop();
+      const inner = text.slice(open + 1, i);
+      const hit = spacedPathBoundedByParens(inner);
+      if (hit) hits.push({ path: hit.path, index: open + 1 + hit.index, link: hit.link });
+    }
+  }
+  return hits;
+}
+
+/**
+ * A spaced absolute path that fills the inside of one parenthesis pair, or null.
+ *
+ * The inside is judged as its own line ({@link spacedFilePathOnLine}), so only an
+ * absolute path qualifies. A relative or `~/` path still needs an explicit path
+ * label, and a bare `word word file.ext` is prose the ordinary detectors keep.
+ * `link: false` reserves an unlinkable span (`/etc/…`) the same way the own-line
+ * detector does.
+ *
+ * @param {string} inner Text between the parentheses.
+ * @returns {{path: string, index: number, link: boolean} | null}
+ *          `index` is where `path` starts in `inner`.
+ */
+function spacedPathBoundedByParens(inner) {
+  const raw = String(inner || '');
+  const lead = raw.length - raw.trimStart().length;
+  const trimmed = raw.trim();
+  // Length before the space scan: each nesting level calls this, and a long
+  // parenthesis nest with no spaces must not be scanned once per level.
+  if (trimmed.length > 1000 || !trimmed.includes(' ')) return null;
+  const direct = spacedFilePathOnLine(trimmed);
+  if (!direct) return null;
+  return { path: direct.path, index: lead + direct.index, link: direct.link };
 }
 
 /**
@@ -2548,7 +2609,14 @@ const pathFirstSegment = (path) => path.replace(/^(?:\.?\/)+/, '').split('/')[0]
  * Whether the line `nextText` carries on a file path `prevText` broke off.
  *
  * Answers `'join'` when the path ends (reaches a known extension) on the next
- * line, `'chain'` when the next line is nothing but more of the path (a path
+ * line, `'join-space'` for that same join when the break is between filename
+ * words inside the parenthesis that opens the broken-off path, and only when
+ * that continuation token closes the parenthesis right after the extension
+ * and the spaced name is an absolute path {@link spacedFilePathOnLine} takes
+ * whole (the separating space the wrap consumed is kept; an earlier `(`, a
+ * `://` token, a `)` that is not in the continuation token, and a relative,
+ * `~/` or `scripts/`/`bin/`/`tools/` name do not),
+ * `'chain'` when the next line is nothing but more of the path (a path
  * spanning three or more lines; only worth keeping once a later line ends it),
  * and `null` otherwise. The broken-off token must already look like a path in
  * progress: it contains a `/`, ends on a path character and does not yet end
@@ -2566,8 +2634,60 @@ function pathContinuation(prevText, nextText) {
   // followed by `src/index.ts` is two entries, not one path broken after `src/components`.
   // A wrapped path continues INSIDE a name: its next row does not open on the same top directory.
   if (head.includes('/') && pathFirstSegment(head) === pathFirstSegment(tail)) return null;
-  if (PATH_TOKEN_HAS_EXTENSION.test(head)) return 'join';
+  if (PATH_TOKEN_HAS_EXTENSION.test(head)) return continuationKeepsWordSpace(prevText, head) ? 'join-space' : 'join';
   return head === next.replace(/\s+$/, '') ? 'chain' : null;
+}
+
+/**
+ * Whether a hard wrap between `prevText` and `head` fell on a space inside the
+ * parenthesis that opens the broken-off path (`(/mnt/…/Kobo` + `eReader.conf`),
+ * so the join must keep that space.
+ *
+ * Only that path's own `(` counts: the broken-off token starts with it, or
+ * whitespace alone separates them (`(/mnt/data/My Photos/Kobo` + `eReader.conf)`
+ * does not, and joins as `KoboeReader.conf`). An earlier `(` (`Bash(cp /home/…`)
+ * does not. A token containing `://` never keeps a space. The continuation
+ * token itself must close the parenthesis right after the extension
+ * (`eReader.conf).`, `ay.png).`); prose after the name (`ay.png, 2.1 MB).`)
+ * does not. A column cut (`captures/2` + `026-10-10/…`) is not one: its head
+ * continues the token (a slash, or a non-letter). The spaced name must be an
+ * absolute path {@link spacedFilePathOnLine} takes whole, the same gate
+ * {@link parenthesisedSpacedPaths} uses, so a relative path, a `~/` path or
+ * one under `scripts/`, `bin/` or `tools/` joins with no space. A parenthesised
+ * absolute path cut mid-letter between two letters is ambiguous with the Kobo
+ * wrap and keeps the space when that token closes the parenthesis and the
+ * detector takes the spaced name whole.
+ *
+ * @param {string} prevText
+ * @param {string} head The next line's first path token.
+ * @returns {boolean}
+ */
+function continuationKeepsWordSpace(prevText, head) {
+  const prev = String(prevText || '').replace(/\s+$/, '');
+  const headText = String(head || '');
+  const tail = /[^\s"'<>|;&]+$/.exec(prev)?.[0] || '';
+  if (!tail || tail.includes('://') || headText.includes('://')) return false;
+  const before = prev.slice(0, prev.length - tail.length);
+  // The `(` that opens this path, not `Bash(` or any earlier one in the stitch.
+  let openAt = -1;
+  if (tail.startsWith('(')) openAt = prev.length - tail.length;
+  else if (/\(\s*$/.test(before)) openAt = before.lastIndexOf('(');
+  if (openAt < 0) return false;
+  let depth = 0;
+  for (let i = openAt; i < prev.length; i++) {
+    const ch = prev[i];
+    if (ch === '(') depth++;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+  }
+  if (depth === 0) return false;
+  const bare = headText.replace(/[)\].,;:!?]+$/, '');
+  // The continuation token itself closes the parenthesis right after the extension.
+  if (!/^[^()]*\)[\].,;:!?]*$/.test(headText)) return false;
+  if (!bare || bare.includes('/') || !/^[A-Za-z]/.test(bare)) return false;
+  if (!/[A-Za-z0-9]$/.test(tail)) return false;
+  // Only where parenthesisedSpacedPaths will take the spaced name whole.
+  const candidate = `${tail.replace(/^\(/, '')} ${bare}`;
+  return spacedFilePathOnLine(candidate)?.path === candidate;
 }
 
 /**
@@ -2585,8 +2705,12 @@ function pathContinuation(prevText, nextText) {
  *
  * A following logical line is glued on (its indent dropped, cell mapping kept
  * exact) when {@link pathContinuation} says it carries the path on and the row it
- * broke off is at least as long as the row it continues on. Bounded by the same
- * `maxRows` as the logical line.
+ * broke off is at least as long as the row it continues on. A `'join-space'`
+ * keeps one space between the filename words when that spaced name is an
+ * absolute path the parenthesised detector takes whole, so `Kobo` +
+ * `eReader.conf` stays `Kobo eReader.conf` and the cells after that space
+ * still map to the continuation row. Bounded by the same `maxRows` as the
+ * logical line.
  *
  * @returns Same shape as {@link terminalLogicalLine}; null when the row does not exist.
  */
@@ -2607,6 +2731,7 @@ function terminalPathLine(buffer, row, cols, maxRows) {
   /** `first` and the lines a path carries on into, stopping at the last confirmed join. */
   const extend = (first) => {
     const parts = [first];
+    const wordSpace = [false];
     let text = first.text;
     let rows = rowsOf(first);
     let confirmed = 1;
@@ -2616,11 +2741,15 @@ function terminalPathLine(buffer, row, cols, maxRows) {
       const kind = continues(parts[parts.length - 1], next, text);
       if (!kind) break;
       parts.push(next);
+      // The continuation check keeps the rows glued with no space, so a later
+      // row still sees the `/` in the tail. The space is inserted only when the
+      // stitched text is built, which is what findFilePathLinks reads.
+      wordSpace.push(kind === 'join-space');
       text += next.text.replace(/^\s+/, '');
       rows += rowsOf(next);
-      if (kind === 'join') confirmed = parts.length;
+      if (kind === 'join' || kind === 'join-space') confirmed = parts.length;
     }
-    return parts.slice(0, confirmed);
+    return { parts: parts.slice(0, confirmed), wordSpace: wordSpace.slice(0, confirmed) };
   };
 
   // The hovered row may be the second or third line of a broken path: walk back
@@ -2633,14 +2762,16 @@ function terminalPathLine(buffer, row, cols, maxRows) {
     first = prev;
     rows += rowsOf(prev);
   }
-  let parts = extend(first);
-  if (parts[parts.length - 1].endRow < base.startRow) parts = extend(base);
+  let extended = extend(first);
+  if (extended.parts[extended.parts.length - 1].endRow < base.startRow) extended = extend(base);
+  const { parts, wordSpace } = extended;
   if (parts.length === 1) return parts[0];
 
   const segments = [];
   let text = '';
   for (const [i, part] of parts.entries()) {
     const skip = i === 0 ? 0 : part.text.length - part.text.replace(/^\s+/, '').length;
+    if (wordSpace[i]) text += ' ';
     segments.push({ part, textStart: text.length, skip });
     text += part.text.slice(skip);
   }

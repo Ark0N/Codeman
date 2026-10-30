@@ -201,6 +201,104 @@ describe('terminalPathLine', () => {
       expect(paths(line.text)).toEqual([BROKEN_PATH]);
     });
   });
+
+  // A parenthesised filename word-wrapped between its words (#733). The space
+  // the wrap consumed has to come back, and the clickable cells stay on the
+  // characters that are actually on each row.
+  it('joins a tool-call path and a URL cut mid-word without inserting a space', () => {
+    // An earlier `(` (`Bash(`) and a `://` token keep master's join: no space.
+    const bash = ['Bash(cp /home/me/proj/builds/captures/2026-10-10/ghost1b_gamepl', '  ay.png /tmp/)'];
+    const bashLine = terminalPathLine(buffer(bash), 0, 80)!;
+    expect(bashLine.text).toBe('Bash(cp /home/me/proj/builds/captures/2026-10-10/ghost1b_gameplay.png /tmp/)');
+    expect(paths(bashLine.text)).toEqual(['/home/me/proj/builds/captures/2026-10-10/ghost1b_gameplay.png']);
+
+    const url = ['Details (see https://example.com/reports/2026/ghost1b_game', '  play.png).'];
+    const urlLine = terminalPathLine(buffer(url), 0, 80)!;
+    expect(urlLine.text).toBe('Details (see https://example.com/reports/2026/ghost1b_gameplay.png).');
+    expect(paths(urlLine.text)).toEqual([]);
+  });
+
+  // The path's own `(` plus a letter/letter cut is the same shape as `Kobo` +
+  // `eReader.conf`. The wrap wins: the space stays, and the link is that name.
+  it.each([
+    ['  ay.png, 2.1 MB).', 'Saved the capture (/mnt/data/captures/2026-10-10/ghost1b_gameplay.png, 2.1 MB).'],
+    ['  ay.png and the log).', 'Saved the capture (/mnt/data/captures/2026-10-10/ghost1b_gameplay.png and the log).'],
+    ['  ay.png', 'Saved the capture (/mnt/data/captures/2026-10-10/ghost1b_gameplay.png'],
+  ])('joins %j without a space when the continuation token does not close the parenthesis', (second, joined) => {
+    const first = 'Saved the capture (/mnt/data/captures/2026-10-10/ghost1b_gamepl';
+    const line = terminalPathLine(buffer([first, second]), 0, 80)!;
+    expect(line.text).toBe(joined);
+    expect(paths(line.text)).toEqual(['/mnt/data/captures/2026-10-10/ghost1b_gameplay.png']);
+  });
+
+  // A relative, ~/ or scripts/ name is the same letter/letter cut, but the
+  // parenthesised detector will not take the spaced result, so the wrap joins
+  // with no space and the ordinary detectors keep the working link.
+  it.each([
+    [
+      'Saved the capture (builds/captures/2026-10-10/ghost1b_gamepl',
+      '  ay.png).',
+      'Saved the capture (builds/captures/2026-10-10/ghost1b_gameplay.png).',
+      'builds/captures/2026-10-10/ghost1b_gameplay.png',
+    ],
+    [
+      '  ⎿  BILD (builds/captures/2026-10-10/neon_getaway/ghost1b_game',
+      '     play.png) err=0',
+      '  ⎿  BILD (builds/captures/2026-10-10/neon_getaway/ghost1b_gameplay.png) err=0',
+      'builds/captures/2026-10-10/neon_getaway/ghost1b_gameplay.png',
+    ],
+    [
+      'Saved the capture (~/proj/builds/captures/2026-10-10/ghost1b_gamepl',
+      '  ay.png).',
+      'Saved the capture (~/proj/builds/captures/2026-10-10/ghost1b_gameplay.png).',
+      '~/proj/builds/captures/2026-10-10/ghost1b_gameplay.png',
+    ],
+    [
+      'Ran the helper (/home/me/proj/scripts/capture_gameplay_overv',
+      '  iew.sh).',
+      'Ran the helper (/home/me/proj/scripts/capture_gameplay_overview.sh).',
+      '/home/me/proj/scripts/capture_gameplay_overview.sh',
+    ],
+  ])(
+    'joins %j without a space when the spaced name is not an absolute path the detector takes whole',
+    (first, second, joined, path) => {
+      const line = terminalPathLine(buffer([first, second]), 0, 80)!;
+      expect(line.text).toBe(joined);
+      expect(paths(line.text)).toEqual([path]);
+    }
+  );
+
+  it('joins a spaced directory cut before the filename without inserting a space', () => {
+    // The `(` opens an earlier token (`(/mnt/data/My`), not `Photos/Kobo`.
+    const rows = ['(/mnt/data/My Photos/Kobo', '  eReader.conf).'];
+    const line = terminalPathLine(buffer(rows), 0, 80)!;
+    expect(line.text).toBe('(/mnt/data/My Photos/KoboeReader.conf).');
+  });
+
+  it('keeps the space when a parenthesised path is cut mid-letter, the Kobo-wrap trade-off', () => {
+    const rows = ['See (/mnt/data/captures/2026-10-10/ghost1b_gamepl', '  ay.png).'];
+    const spaced = '/mnt/data/captures/2026-10-10/ghost1b_gamepl ay.png';
+    const line = terminalPathLine(buffer(rows), 0, 80)!;
+    expect(line.text).toBe(`See (${spaced}).`);
+    expect(paths(line.text)).toEqual([spaced]);
+  });
+
+  it('keeps the space in a hard-wrapped parenthesised filename and maps both rows', () => {
+    const rows = ['Prepared a corrected configuration (/mnt/data/Kobo/Kobo', '  eReader.conf).'];
+    const path = '/mnt/data/Kobo/Kobo eReader.conf';
+    for (const row of [0, 1]) {
+      const line = terminalPathLine(buffer(rows), row, 80)!;
+      expect([line.startRow, line.endRow]).toEqual([0, 1]);
+      expect(line.text).toBe(`Prepared a corrected configuration (${path}).`);
+      const [found] = findFilePathLinks(line.text);
+      expect(found).toEqual({ path, index: line.text.indexOf(path) });
+      expect(line.offsetToCell(found.index)).toEqual({ row: 0, col: rows[0].indexOf('/') });
+      expect(line.offsetToCell(found.index + found.path.length - 1)).toEqual({
+        row: 1,
+        col: rows[1].lastIndexOf('f'),
+      });
+    }
+  });
 });
 
 type Link = {
@@ -325,6 +423,19 @@ describe('terminal link provider', () => {
   it('never adds a path link overlapping a URL link', () => {
     const { links } = linksOn(['see https://x.io/view?img=shots/a.png now'], 1);
     expect(links.map((l) => l.text)).toEqual(['https://x.io/view?img=shots/a.png']);
+  });
+
+  it('links a hard-wrapped spaced .conf path from either row, on the cells that hold it', () => {
+    const rows = ['Prepared a corrected configuration (/mnt/data/Kobo/Kobo', '  eReader.conf).'];
+    const path = '/mnt/data/Kobo/Kobo eReader.conf';
+    const endCol = rows[1].lastIndexOf('f');
+    for (const row of [1, 2]) {
+      const { links } = linksOn(rows, row);
+      expect(links.map((l) => l.text)).toEqual([path]);
+      expect(links[0].range.start).toEqual({ x: rows[0].indexOf('/') + 1, y: 1 });
+      // The provider's end cell is the one after the last character of the path.
+      expect(links[0].range.end).toEqual({ x: endCol + 2, y: 2 });
+    }
   });
 });
 
