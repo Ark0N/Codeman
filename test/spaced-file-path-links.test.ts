@@ -462,7 +462,7 @@ describe('parenthesised paths with spaces (#733)', () => {
   });
 
   it('does not take prose or an /etc path inside parentheses', () => {
-    expect(paths('(see the notes.conf)')).not.toContain('see the notes.conf');
+    expect(paths('(see the notes.conf)')).toEqual(['notes.conf']);
     expect(paths('(/etc/secret files/passwords.txt)')).toEqual([]);
   });
 

@@ -2612,8 +2612,10 @@ const pathFirstSegment = (path) => path.replace(/^(?:\.?\/)+/, '').split('/')[0]
  * line, `'join-space'` for that same join when the break is between filename
  * words inside the parenthesis that opens the broken-off path, and only when
  * that continuation token closes the parenthesis right after the extension
- * (the separating space the wrap consumed is kept; an earlier `(`, a `://`
- * token, and a `)` that is not in the continuation token do not),
+ * and the spaced name is an absolute path {@link spacedFilePathOnLine} takes
+ * whole (the separating space the wrap consumed is kept; an earlier `(`, a
+ * `://` token, a `)` that is not in the continuation token, and a relative,
+ * `~/` or `scripts/`/`bin/`/`tools/` name do not),
  * `'chain'` when the next line is nothing but more of the path (a path
  * spanning three or more lines; only worth keeping once a later line ends it),
  * and `null` otherwise. The broken-off token must already look like a path in
@@ -2648,9 +2650,13 @@ function pathContinuation(prevText, nextText) {
  * token itself must close the parenthesis right after the extension
  * (`eReader.conf).`, `ay.png).`); prose after the name (`ay.png, 2.1 MB).`)
  * does not. A column cut (`captures/2` + `026-10-10/…`) is not one: its head
- * continues the token (a slash, or a non-letter). A parenthesised path cut
- * mid-letter between two letters is ambiguous with the Kobo wrap and keeps the
- * space when that token closes the parenthesis.
+ * continues the token (a slash, or a non-letter). The spaced name must be an
+ * absolute path {@link spacedFilePathOnLine} takes whole, the same gate
+ * {@link parenthesisedSpacedPaths} uses, so a relative path, a `~/` path or
+ * one under `scripts/`, `bin/` or `tools/` joins with no space. A parenthesised
+ * absolute path cut mid-letter between two letters is ambiguous with the Kobo
+ * wrap and keeps the space when that token closes the parenthesis and the
+ * detector takes the spaced name whole.
  *
  * @param {string} prevText
  * @param {string} head The next line's first path token.
@@ -2678,7 +2684,10 @@ function continuationKeepsWordSpace(prevText, head) {
   // The continuation token itself closes the parenthesis right after the extension.
   if (!/^[^()]*\)[\].,;:!?]*$/.test(headText)) return false;
   if (!bare || bare.includes('/') || !/^[A-Za-z]/.test(bare)) return false;
-  return /[A-Za-z0-9]$/.test(tail);
+  if (!/[A-Za-z0-9]$/.test(tail)) return false;
+  // Only where parenthesisedSpacedPaths will take the spaced name whole.
+  const candidate = `${tail.replace(/^\(/, '')} ${bare}`;
+  return spacedFilePathOnLine(candidate)?.path === candidate;
 }
 
 /**
@@ -2697,9 +2706,11 @@ function continuationKeepsWordSpace(prevText, head) {
  * A following logical line is glued on (its indent dropped, cell mapping kept
  * exact) when {@link pathContinuation} says it carries the path on and the row it
  * broke off is at least as long as the row it continues on. A `'join-space'`
- * keeps one space between the filename words, so `Kobo` + `eReader.conf` stays
- * `Kobo eReader.conf` and the cells after that space still map to the
- * continuation row. Bounded by the same `maxRows` as the logical line.
+ * keeps one space between the filename words when that spaced name is an
+ * absolute path the parenthesised detector takes whole, so `Kobo` +
+ * `eReader.conf` stays `Kobo eReader.conf` and the cells after that space
+ * still map to the continuation row. Bounded by the same `maxRows` as the
+ * logical line.
  *
  * @returns Same shape as {@link terminalLogicalLine}; null when the row does not exist.
  */

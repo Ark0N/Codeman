@@ -231,6 +231,43 @@ describe('terminalPathLine', () => {
     expect(paths(line.text)).toEqual(['/mnt/data/captures/2026-10-10/ghost1b_gameplay.png']);
   });
 
+  // A relative, ~/ or scripts/ name is the same letter/letter cut, but the
+  // parenthesised detector will not take the spaced result, so the wrap joins
+  // with no space and the ordinary detectors keep the working link.
+  it.each([
+    [
+      'Saved the capture (builds/captures/2026-10-10/ghost1b_gamepl',
+      '  ay.png).',
+      'Saved the capture (builds/captures/2026-10-10/ghost1b_gameplay.png).',
+      'builds/captures/2026-10-10/ghost1b_gameplay.png',
+    ],
+    [
+      '  ⎿  BILD (builds/captures/2026-10-10/neon_getaway/ghost1b_game',
+      '     play.png) err=0',
+      '  ⎿  BILD (builds/captures/2026-10-10/neon_getaway/ghost1b_gameplay.png) err=0',
+      'builds/captures/2026-10-10/neon_getaway/ghost1b_gameplay.png',
+    ],
+    [
+      'Saved the capture (~/proj/builds/captures/2026-10-10/ghost1b_gamepl',
+      '  ay.png).',
+      'Saved the capture (~/proj/builds/captures/2026-10-10/ghost1b_gameplay.png).',
+      '~/proj/builds/captures/2026-10-10/ghost1b_gameplay.png',
+    ],
+    [
+      'Ran the helper (/home/me/proj/scripts/capture_gameplay_overv',
+      '  iew.sh).',
+      'Ran the helper (/home/me/proj/scripts/capture_gameplay_overview.sh).',
+      '/home/me/proj/scripts/capture_gameplay_overview.sh',
+    ],
+  ])(
+    'joins %j without a space when the spaced name is not an absolute path the detector takes whole',
+    (first, second, joined, path) => {
+      const line = terminalPathLine(buffer([first, second]), 0, 80)!;
+      expect(line.text).toBe(joined);
+      expect(paths(line.text)).toEqual([path]);
+    }
+  );
+
   it('joins a spaced directory cut before the filename without inserting a space', () => {
     // The `(` opens an earlier token (`(/mnt/data/My`), not `Photos/Kobo`.
     const rows = ['(/mnt/data/My Photos/Kobo', '  eReader.conf).'];
