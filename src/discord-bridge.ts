@@ -90,7 +90,7 @@ export interface DiscordMessage {
    * The CLI's whole last message, read from its transcript. When it yields text the post carries that
    * (split over as many posts as it needs, markdown kept) instead of the screen tail.
    */
-  fullText?: () => Promise<string | undefined>;
+  fullText?: () => Promise<{ text: string; version?: string } | undefined>;
   host?: string;
   /** A file to upload with the post (already read and size-checked by the caller). */
   file?: DiscordFile;
@@ -231,7 +231,11 @@ export function tablesToCodeBlocks(text: string): string {
         .trim()
     );
   };
-  const isSeparator = (row: string) => row.includes('|') && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(row);
+  // Whitespace stripped first, so the pattern has none to backtrack over (a run of spaces made the old one quadratic).
+  const isSeparator = (row: string) => {
+    const r = row.replace(/\s+/g, '');
+    return r.includes('|') && /^\|?:?-+:?(\|:?-+:?)*\|?$/.test(r);
+  };
   const lines = text.split('\n');
   const out: string[] = [];
   let fence = false;
@@ -1063,22 +1067,25 @@ export class DiscordBridge {
     if (this.lastSent.size > 256) {
       for (const [k, v] of this.lastSent) if (t - v > DEDUPE_WINDOW_MS) this.lastSent.delete(k);
     }
-    let full: string | undefined;
+    let chunks: string[] = [];
+    // Remembered only once the first post is out: a failed post must leave the message to be sent again.
+    let posted: string | undefined;
     if (msg.fullText) {
       try {
-        full = (await withTimeout(msg.fullText(), FULL_TEXT_TIMEOUT_MS))?.trim() || undefined;
+        const got = await withTimeout(msg.fullText(), FULL_TEXT_TIMEOUT_MS);
+        const text = got?.text.trim();
+        const sid = msg.sessionId;
+        if (text && sid) {
+          // Keyed on the text and the turn it came from, so a later turn that ends on the same words is posted.
+          const key = `${got?.version ?? ''}\u0000${text}`;
+          msg = { ...msg, tail: undefined };
+          if (this.lastFull.get(sid) !== key) {
+            chunks = splitForDiscord(tablesToCodeBlocks(text));
+            posted = key;
+          } // else: said already, so only the header goes
+        }
       } catch {
-        full = undefined; // no transcript to read: the screen tail below stands in
-      }
-    }
-    let chunks: string[] = [];
-    if (full && msg.sessionId) {
-      if (this.lastFull.get(msg.sessionId) === full)
-        msg = { ...msg, tail: undefined }; // said already
-      else {
-        this.lastFull.set(msg.sessionId, full);
-        chunks = splitForDiscord(tablesToCodeBlocks(full));
-        msg = { ...msg, tail: undefined };
+        // no transcript to read: the screen tail stands in
       }
     }
     const post = buildPost(msg, this.cfg, explicitUrgent);
@@ -1107,6 +1114,7 @@ export class DiscordBridge {
           throw err;
         }
       }
+      if (posted && msg.sessionId) this.lastFull.set(msg.sessionId, posted);
       for (const part of chunks) await this.say(this.threads[msg.sessionId ?? ''] ?? target, part);
       return (this.last = { ok: true, at: this.now() });
     } catch (err) {

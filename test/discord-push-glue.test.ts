@@ -92,12 +92,15 @@ describe('sendPushNotifications -> Discord', () => {
   it('reads the whole last message from the transcript on a finished turn, and keeps the screen for a dialog', async () => {
     const s = server();
     s.sessions.set('s5', { muxName: 'codeman-s5', textOutput: '', mode: 'claude' });
-    const reader = vi.fn(async () => ({ text: 'The full answer.\n\n- one\n- two' }));
+    const reader = vi.fn(async () => ({ text: 'The full answer.\n\n- one\n- two', timestamp: '2026-10-30T00:00:00Z' }));
     s.lastResponseFor = reader;
     s.mux = { capturePaneText: () => 'screen\n❯\n  status' };
     await s.sendPushNotifications('hook:idle_prompt', { sessionId: 's5', sessionName: 'w5' });
     const idle = s.discordBridge.notify.mock.calls[0][0];
-    expect(await idle.fullText()).toBe('The full answer.\n\n- one\n- two');
+    expect(await idle.fullText()).toEqual({
+      text: 'The full answer.\n\n- one\n- two',
+      version: '2026-10-30T00:00:00Z',
+    });
     expect(idle.tail()).toBe('screen'); // the composer row and the status under it are cut
     await s.sendPushNotifications('hook:permission_prompt', { sessionId: 's5', sessionName: 'w5' });
     const dialog = s.discordBridge.notify.mock.calls[1][0];
@@ -114,7 +117,7 @@ describe('sendPushNotifications -> Discord', () => {
       s.mux = { capturePaneText: () => 'screen' };
       await s.sendPushNotifications('hook:idle_prompt', { sessionId: 's6', sessionName: 'w6' });
       const msg = s.discordBridge.notify.mock.calls[0][0];
-      expect(await msg.fullText()).toBe('1. First?\n2. Second?\n3. Third?');
+      expect((await msg.fullText()).text).toBe('1. First?\n2. Second?\n3. Third?');
     }
   );
 

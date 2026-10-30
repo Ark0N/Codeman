@@ -566,7 +566,7 @@ describe('DiscordBridge', () => {
 
     it('posts the whole message as markdown: head and first part together, the rest without a ping', async () => {
       const b = bridge();
-      await b.notify({ ...MSG, tail: 'screen chrome', fullText: async () => LONG });
+      await b.notify({ ...MSG, tail: 'screen chrome', fullText: async () => ({ text: LONG }) });
       const sent = posts.filter((p) => p.path.endsWith('/messages'));
       expect(sent.length).toBeGreaterThan(1);
       const first = String(sent[0].body?.content);
@@ -588,7 +588,7 @@ describe('DiscordBridge', () => {
         '| kv-f16 | 557.0 |',
         '| n-gram mod | 550.2 |',
       ].join('\n');
-      await b.notify({ ...MSG, fullText: async () => `Results:\n\n${table}` });
+      await b.notify({ ...MSG, fullText: async () => ({ text: `Results:\n\n${table}` }) });
       const posted = posts
         .filter((p) => p.path.endsWith('/messages'))
         .map((p) => String(p.body?.content))
@@ -600,10 +600,10 @@ describe('DiscordBridge', () => {
 
     it('does not post the same message twice (idle, then stop), and falls back to the tail without a transcript', async () => {
       const b = bridge();
-      await b.notify({ ...MSG, fullText: async () => 'Short answer.' });
+      await b.notify({ ...MSG, fullText: async () => ({ text: 'Short answer.' }) });
       t += 10_000;
       posts.length = 0;
-      await b.notify({ ...MSG, event: 'hook:stop', tail: 'chrome', fullText: async () => 'Short answer.' });
+      await b.notify({ ...MSG, event: 'hook:stop', tail: 'chrome', fullText: async () => ({ text: 'Short answer.' }) });
       const again = posts.filter((p) => p.path.endsWith('/messages')).map((p) => String(p.body?.content));
       expect(again).toHaveLength(1);
       expect(again[0]).not.toContain('Short answer.');
@@ -612,6 +612,39 @@ describe('DiscordBridge', () => {
       posts.length = 0;
       await b.notify({ ...MSG, event: 'hook:idle_prompt', tail: 'the screen', fullText: async () => undefined });
       expect(String(posts.find((p) => p.path.endsWith('/messages'))?.body?.content)).toContain('the screen');
+      b.stop();
+    });
+
+    it('leaves a message to be posted again when its first post failed', async () => {
+      let fail = true;
+      const b = bridge({}, async (url, init) => {
+        const path = new URL(String(url)).pathname.replace('/api/v10', '');
+        posts.push({ path, method: String(init.method), body: init.body ? JSON.parse(String(init.body)) : undefined });
+        if (path.endsWith('/threads')) return jsonRes({ id: THREAD });
+        if (fail && path.endsWith('/messages')) return new Response('{}', { status: 500 });
+        return jsonRes({ id: 'msg' });
+      });
+      const first = await b.notify({ ...MSG, event: 'hook:stop', fullText: async () => ({ text: 'The answer.' }) });
+      expect(first).toMatchObject({ ok: false });
+      fail = false;
+      t += 10_000;
+      posts.length = 0;
+      await b.notify({ ...MSG, event: 'hook:idle_prompt', fullText: async () => ({ text: 'The answer.' }) });
+      expect(posts.map((p) => String(p.body?.content)).join('\n')).toContain('The answer.');
+      b.stop();
+    });
+
+    it('posts a later turn that ends on the same words, but not the same turn twice', async () => {
+      const b = bridge();
+      await b.notify({ ...MSG, fullText: async () => ({ text: 'Done.', version: 'turn-1' }) });
+      t += 10_000;
+      posts.length = 0;
+      await b.notify({ ...MSG, event: 'hook:stop', fullText: async () => ({ text: 'Done.', version: 'turn-1' }) });
+      expect(posts.map((p) => String(p.body?.content)).join('\n')).not.toContain('Done.');
+      t += 10_000;
+      posts.length = 0;
+      await b.notify({ ...MSG, fullText: async () => ({ text: 'Done.', version: 'turn-2' }) });
+      expect(posts.map((p) => String(p.body?.content)).join('\n')).toContain('Done.');
       b.stop();
     });
 
@@ -1206,6 +1239,17 @@ describe('tablesToCodeBlocks', () => {
     expect(tablesToCodeBlocks(fenced)).toBe(fenced);
     const prose = 'Use a | b to pipe.\nThen c | d.';
     expect(tablesToCodeBlocks(prose)).toBe(prose);
+  });
+
+  it('converts a hostile separator row of 100,000 spaces in well under a second', () => {
+    const rows = ['| a | b |', `|---${' '.repeat(100_000)}x`, '| 1 | 2 |'].join('\n');
+    const t0 = Date.now();
+    expect(tablesToCodeBlocks(rows)).toBe(rows);
+    expect(Date.now() - t0).toBeLessThan(500);
+    const real = ['| a | b |', `| --- ${' '.repeat(50_000)}| --- |`, '| 1 | 2 |'].join('\n');
+    const t1 = Date.now();
+    expect(tablesToCodeBlocks(real)).toContain('```');
+    expect(Date.now() - t1).toBeLessThan(500);
   });
 
   it('pads a short row and keeps an escaped pipe in a cell', () => {

@@ -12,8 +12,9 @@ and it works when you are away from your network.
 
 ## What it does
 
-- **Alerts** for permission prompts, questions, idle sessions, errors and a stopped crash loop,
-  each with what is on the tab's screen right now, so you can see what is being asked.
+- **Alerts** for permission prompts, questions, idle sessions, errors and a stopped crash loop. A
+  question or permission prompt shows what is on the tab's screen right now, so you can see what is
+  being asked; a finished turn or an error carries the CLI's whole last message.
 - **One thread per tab** in a parent channel, so a reply always reaches exactly one session.
 - **Replies** from an allowed user are typed into that tab as one line plus Enter (a single digit answering a waiting permission or question goes as the key alone, without Enter).
 - **Files** you attach are saved in the tab's folder and the agent is given the path. An agent can
@@ -48,8 +49,14 @@ only), never in the shared settings, and never shown again once saved.
 | Tell Claude how to reach you             | On or off                                   | On              |
 | Also tell other CLIs, as a first message | On or off                                   | Off             |
 
-A finished turn is posted as the CLI's whole last message, with its formatting and questions kept, split over
-several posts if it is long. A shell, and permission or question dialogs, show the last lines of the screen instead.
+A finished turn, and an error, is posted as the CLI's whole last message, with its formatting and questions
+kept, split over several posts if it is long. A shell, and permission or question dialogs, show the last lines
+of the screen instead.
+
+Only some CLIs raise a turn end. Claude Code does (an idle alert by default, and a stop alert when **Which
+events** is Everything), and DeepSeek Harness sends a stop. The others (OpenCode, Gemini, Antigravity, Pi,
+Grok, Copilot) send none, so their messages reach Discord with an error or `codeman notify`; Codex's dialogs
+are read off its screen.
 
 Deleting a thread needs the **Manage Threads** permission on the channel. "Critical" means a
 permission prompt, a question, an error, or a post an agent marked urgent.

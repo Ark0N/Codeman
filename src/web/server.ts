@@ -3134,13 +3134,15 @@ export class WebServer extends EventEmitter {
    * segmented into turns for the CLIs that keep none); undefined for a shell, which has no turns, and the
    * screen tail stands in whenever the reader finds nothing.
    */
-  private async discordFullText(session: Session): Promise<string | undefined> {
+  private async discordFullText(session: Session): Promise<{ text: string; version?: string } | undefined> {
     if (!this.lastResponseFor) return undefined;
     // A CLI with a transcript reader, or whose pane the viewer segments into turns; a shell has neither.
     if (getCli(session.mode)?.capabilities.transcript === 'none' && !isExternalCliTranscriptMode(session.mode)) {
       return undefined;
     }
-    return (await this.lastResponseFor(session)).text;
+    const r = await this.lastResponseFor(session);
+    // The turn it came from: the transcript's stamp, else when the person last submitted (a pane has no stamp).
+    return { text: r.text, version: r.timestamp || String(session.lastSubmitAt ?? '') };
   }
 
   /** The notification body for an event (shared by Web Push and the webhook channel). */
