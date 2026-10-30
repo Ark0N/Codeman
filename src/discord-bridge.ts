@@ -214,6 +214,53 @@ export function screenTail(screen: string, maxLines = 14, maxChars = 900, compos
 }
 
 /**
+ * Discord does not render Markdown tables: a `| a | b |` block shows as raw pipes. Each table outside a
+ * code fence becomes a code block with the columns padded to their widest cell (right-aligned where the
+ * separator row says `---:`), which a monospace font lines up. Bold and code marks inside a cell are
+ * dropped, since a code block would show them literally.
+ */
+export function tablesToCodeBlocks(text: string): string {
+  const cells = (row: string): string[] => {
+    let r = row.trim();
+    if (r.startsWith('|')) r = r.slice(1);
+    if (r.endsWith('|') && !r.endsWith('\\|')) r = r.slice(0, -1);
+    return r.split(/(?<!\\)\|/).map((c) =>
+      c
+        .replace(/\\\|/g, '|')
+        .replace(/\*\*|`/g, '')
+        .trim()
+    );
+  };
+  const isSeparator = (row: string) => row.includes('|') && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(row);
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let fence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) fence = !fence;
+    if (fence || !line.includes('|') || i + 1 >= lines.length || !isSeparator(lines[i + 1])) {
+      out.push(line);
+      continue;
+    }
+    const header = cells(line);
+    const align = cells(lines[i + 1]).map((c) => (c.endsWith(':') ? 'right' : 'left'));
+    const rows = [header];
+    let j = i + 2;
+    for (; j < lines.length && lines[j].includes('|') && lines[j].trim() !== ''; j++) rows.push(cells(lines[j]));
+    const cols = Math.max(...rows.map((r) => r.length));
+    const width = Array.from({ length: cols }, (_, c) => Math.max(1, ...rows.map((r) => [...(r[c] ?? '')].length)));
+    const pad = (v: string, c: number) => (align[c] === 'right' ? v.padStart(width[c]) : v.padEnd(width[c]));
+    const fmt = (r: string[]) =>
+      Array.from({ length: cols }, (_, c) => pad((r[c] ?? '').replace(/```/g, '\u2019\u2019\u2019'), c))
+        .join('  ')
+        .trimEnd();
+    out.push('```', fmt(header), width.map((w) => '-'.repeat(w)).join('  '), ...rows.slice(1).map(fmt), '```');
+    i = j - 1;
+  }
+  return out.join('\n');
+}
+
+/**
  * Split a long message into posts of at most `max` characters, on blank lines first, then lines, then
  * (for one huge line) by length. A code fence the cut lands inside is closed and reopened, so each post
  * renders on its own. At most `maxPosts`; the last carries a note when text is left over.
@@ -1030,7 +1077,7 @@ export class DiscordBridge {
         msg = { ...msg, tail: undefined }; // said already
       else {
         this.lastFull.set(msg.sessionId, full);
-        chunks = splitForDiscord(full);
+        chunks = splitForDiscord(tablesToCodeBlocks(full));
         msg = { ...msg, tail: undefined };
       }
     }

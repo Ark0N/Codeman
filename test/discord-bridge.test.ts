@@ -25,6 +25,7 @@ import {
   safeAttachmentName,
   screenTail,
   splitForDiscord,
+  tablesToCodeBlocks,
   DEFAULT_DISCORD_CONFIG,
   DiscordApi,
   DiscordBridge,
@@ -576,6 +577,24 @@ describe('DiscordBridge', () => {
       expect(sent[1].body?.allowed_mentions).toEqual({ parse: [], users: [] });
       const all = sent.map((p) => String(p.body?.content)).join('\n');
       expect(all.match(/Is this right\?/g)).toHaveLength(60);
+      b.stop();
+    });
+
+    it('posts a Markdown table as an aligned code block, since Discord does not render tables', async () => {
+      const b = bridge();
+      const table = [
+        '| Variant | Decode (tokens/s) |',
+        '|---|---:|',
+        '| kv-f16 | 557.0 |',
+        '| n-gram mod | 550.2 |',
+      ].join('\n');
+      await b.notify({ ...MSG, fullText: async () => `Results:\n\n${table}` });
+      const posted = posts
+        .filter((p) => p.path.endsWith('/messages'))
+        .map((p) => String(p.body?.content))
+        .join('\n');
+      expect(posted).toContain('```\nVariant     Decode (tokens/s)\n');
+      expect(posted).not.toContain('|---');
       b.stop();
     });
 
@@ -1149,6 +1168,50 @@ describe('DiscordBridge files and startup hint', () => {
     await off.sessionIdle('s5', true);
     expect(sent).toHaveLength(0);
     off.stop();
+  });
+});
+
+describe('tablesToCodeBlocks', () => {
+  it('turns a Markdown table into an aligned code block, dropping bold and code marks', () => {
+    const md = [
+      'Results:',
+      '',
+      '| Variant | Decode (tokens/s) |',
+      '|---|---:|',
+      '| `kv-f16` | 557.0 |',
+      '| **n-gram simple** | 554.5 |',
+      '| n-gram mod | 550.2 |',
+      '',
+      'Done.',
+    ].join('\n');
+    expect(tablesToCodeBlocks(md)).toBe(
+      [
+        'Results:',
+        '',
+        '```',
+        'Variant        Decode (tokens/s)',
+        '-------------  -----------------',
+        'kv-f16                     557.0',
+        'n-gram simple              554.5',
+        'n-gram mod                 550.2',
+        '```',
+        '',
+        'Done.',
+      ].join('\n')
+    );
+  });
+
+  it('leaves a table inside a code fence, prose with pipes and a table-less message alone', () => {
+    const fenced = ['```', '| a | b |', '|---|---|', '| 1 | 2 |', '```'].join('\n');
+    expect(tablesToCodeBlocks(fenced)).toBe(fenced);
+    const prose = 'Use a | b to pipe.\nThen c | d.';
+    expect(tablesToCodeBlocks(prose)).toBe(prose);
+  });
+
+  it('pads a short row and keeps an escaped pipe in a cell', () => {
+    const out = tablesToCodeBlocks(['| a | b |', '|---|---|', '| x \\| y |', '| p | q |'].join('\n'));
+    expect(out).toContain('x | y');
+    expect(out.split('\n').every((l) => !/\s$/.test(l))).toBe(true);
   });
 });
 
