@@ -533,11 +533,16 @@ describe('DiscordBridge', () => {
   it('drops a thread whose creation finished after the parent channel changed', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const b = bridge({}, async (url) => {
+    const b = bridge({}, async (url, init) => {
       if (String(url).endsWith(`/channels/${PARENT}/threads`)) {
         await gate;
         return jsonRes({ id: THREAD });
       }
+      posts.push({
+        path: new URL(String(url)).pathname.replace('/api/v10', ''),
+        method: String(init.method),
+        body: init.body ? JSON.parse(String(init.body)) : undefined,
+      });
       return jsonRes({ id: 'msg' });
     });
     const first = b.notify(MSG);
@@ -546,6 +551,8 @@ describe('DiscordBridge', () => {
     await b.reload();
     release();
     expect(await first).toMatchObject({ ok: false });
+    // The thread made in the old channel is tidied, not left open there.
+    expect(posts).toContainEqual({ path: `/channels/${THREAD}`, method: 'PATCH', body: { archived: true } });
     expect(await readThreadMap(dir)).toEqual({});
     b.stop();
   });
@@ -941,6 +948,17 @@ describe('DiscordBridge files and startup hint', () => {
     await b.sessionIdle('s6', true);
     expect(sent).toHaveLength(1);
     b.stop();
+  });
+
+  it('does not hint a tab that was already past its first idle while the hint was off', async () => {
+    const off = await make({ typedHint: false });
+    await off.sessionCreated('s8', 'w8', t - 1000);
+    await off.sessionIdle('s8', true); // first idle with the hint off: no longer new
+    await writeDiscordConfig(dir, { ...CFG, typedHint: true });
+    await off.reload();
+    await off.sessionIdle('s8', true);
+    expect(sent).toHaveLength(0);
+    off.stop();
   });
 
   it('says the agent has exited and types nothing when the tab reports it', async () => {

@@ -766,6 +766,7 @@ export class DiscordBridge {
     if (parent && parent !== this.threadsParent) {
       this.threads = {};
       this.pending.clear();
+      this.closedWhilePending.clear();
       this.threadsParent = parent;
       await this.persistThreads();
     }
@@ -840,7 +841,10 @@ export class DiscordBridge {
         const t = await this.api.createThread(parent, threadNameFor(name, sessionId));
         if (!t?.id) return this.fail(new BridgeProblem('Discord did not return a thread'));
         // A save moved the bridge to another channel meanwhile: this thread belongs to the old one.
-        if (parent !== this.cfg.parentChannelId) return this.fail(new BridgeProblem('The parent channel changed'));
+        if (parent !== this.cfg.parentChannelId) {
+          await this.closeThread(t.id); // made in the old channel: tidy it
+          return this.fail(new BridgeProblem('The parent channel changed'));
+        }
         if (this.closedWhilePending.has(sessionId)) {
           await this.closeThread(t.id);
           return this.fail(new BridgeProblem('The tab was closed'));
@@ -950,10 +954,13 @@ export class DiscordBridge {
    */
   async sessionIdle(sessionId: string, hintable: boolean): Promise<void> {
     if (!this.fresh.has(sessionId)) return;
+    if (!hintable || !this.cfg.enabled || !this.cfg.startupHint || !this.cfg.typedHint) {
+      this.fresh.delete(sessionId); // no longer new: turning the hint on later must not reach this tab
+      return;
+    }
     // A dialog is up (codex's trust prompt reads as idle): Enter would pick its highlighted option, so wait for the next idle.
     if (this.deps.awaitingChoice?.(sessionId)) return;
     this.fresh.delete(sessionId);
-    if (!hintable || !this.cfg.enabled || !this.cfg.startupHint || !this.cfg.typedHint) return;
     const text = sanitiseReply(`${DISCORD_STARTUP_HINT} Reply with just: ok`);
     // fromUser false: this is Codeman talking, so it must not auto-name the tab or count as the person's input.
     if (text) await this.deps.sendInput(sessionId, text, false).catch(() => false);
