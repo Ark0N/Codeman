@@ -586,6 +586,30 @@ describe('DiscordBridge', () => {
     b.stop();
   });
 
+  it('replaces a gateway that gave up on a fatal close when the same config is saved again', async () => {
+    const sockets: FakeSocket[] = [];
+    const b = new DiscordBridge({
+      configDir: dir,
+      fetchImpl: async () => jsonRes({ id: 'msg' }),
+      sendInput,
+      socketFactory: () => {
+        const s = new FakeSocket();
+        sockets.push(s);
+        return s;
+      },
+      now: () => t,
+      sleep: async () => undefined,
+    });
+    await b.reload();
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    sockets[0].drop(4014); // Message Content Intent off: fatal, no reconnect
+    expect(b.gatewayState).toBe('error');
+    await b.reload();
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    expect(b.gatewayState).not.toBe('error');
+    b.stop();
+  });
+
   it('keeps the gateway session across a save that changes neither the switch nor the token', async () => {
     const b = bridge();
     await b.reload();

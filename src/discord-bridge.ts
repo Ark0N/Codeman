@@ -769,8 +769,9 @@ export class DiscordBridge {
     }
     activeStartupHint = this.cfg.enabled && this.cfg.token && this.cfg.startupHint ? DISCORD_STARTUP_HINT : undefined;
     // A save that changed neither the switch nor the token keeps the gateway session, so it can resume.
+    // A gateway that gave up (a fatal close, such as a missing intent) is replaced, or a fix could never take.
     const want = this.cfg.enabled && this.cfg.token && !this.held ? this.cfg.token : '';
-    if (this.gateway && want && want === this.gatewayToken) return;
+    if (this.gateway && this.gateway.state !== 'error' && want && want === this.gatewayToken) return;
     this.gateway?.stop();
     this.gateway = null;
     this.gatewayToken = want;
