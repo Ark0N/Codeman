@@ -45,6 +45,8 @@ import { looksLikeHostReboot, newestPersistedActivity, planRebootRestore } from 
 import { rebootRestoreRegistry } from './reboot-restore-registry.js';
 import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
 import { WebhookNotifier, readWebhookConfig } from '../webhook-notify.js';
+import { DiscordBridge, screenTail } from '../discord-bridge.js';
+import { isExternalCliTranscriptMode } from './response-viewer-transcript.js';
 import { stopHostSensors } from '../host-sensors.js';
 import type { WebhookUrgency } from '../types/push.js';
 import { webviewFetch } from './webview-egress.js';
@@ -238,6 +240,7 @@ import {
   registerConfigBackupRoutes,
   runConfigBackup,
   registerWebhookRoutes,
+  registerDiscordRoutes,
   registerDoctorRoutes,
   registerCustomModelRoutes,
   refreshAllCustomModelHosts,
@@ -506,6 +509,28 @@ export class WebServer extends EventEmitter {
   private pushStore: PushSubscriptionStore = new PushSubscriptionStore();
   /** ntfy / Slack / Discord / generic webhook for the push events; config in webhook.json (0600). */
   private webhookNotifier = new WebhookNotifier(() => readWebhookConfig(getDataDir()), webviewFetch);
+  /** Two-way Discord bridge (thread per tab); config in discord.json (0600). Idle until enabled in Settings. */
+  /** Set by the session routes when they register (see SessionPort). */
+  lastResponseFor?: (session: Session, context?: string) => Promise<{ text: string; timestamp?: string }>;
+  private discordBridge = new DiscordBridge({
+    configDir: getDataDir(),
+    fetchImpl: webviewFetch,
+    sendInput: async (sessionId, text, fromUser) => {
+      const session = this.sessions.get(sessionId);
+      if (!session) return false;
+      // fromUser is true only for a Discord reply (a person typed it); the startup hint is Codeman's own
+      // text and must not auto-name the tab or count as the person's input.
+      if (await session.writeViaMux(text, { fromUser }).catch(() => false)) return true;
+      return session.write(text, { fromUser });
+    },
+    agentExited: (id) => !!this.sessions.get(id)?.paneExit,
+    awaitingChoice: (id) => approvalInbox.listPending().some((item) => item.sessionId === id && item.kind !== 'idle'),
+    // Remote (ssh) sessions keep their folder on another host, so received files have nowhere local to go.
+    sessionDir: (sessionId) => {
+      const session = this.sessions.get(sessionId);
+      return session && !session.remote ? session.workingDir : undefined;
+    },
+  });
   private teamWatcher: TeamWatcher = new TeamWatcher();
   private _orchestratorLoop: import('../orchestrator-loop.js').OrchestratorLoop | null = null;
   private readonly titleHostname: string;
@@ -1312,6 +1337,8 @@ export class WebServer extends EventEmitter {
     // The registry's lifetime is the server's: it drops per-session wake state on every
     // cleanup path and resolves in-flight wakes on shutdown.
     this.remoteWake = registerSessionRoutes(this.app, ctx);
+    // The routes' ctx is a separate object: take the last-response reader they registered on it (Discord alerts).
+    this.lastResponseFor = (ctx as { lastResponseFor?: WebServer['lastResponseFor'] }).lastResponseFor;
     registerAgentSessionRoutes(this.app, ctx);
     registerRespawnRoutes(this.app, ctx);
     registerRalphRoutes(this.app, ctx);
@@ -1324,12 +1351,23 @@ export class WebServer extends EventEmitter {
     registerWebviewRoutes(this.app, ctx, this.basePath);
     registerTabLayoutRoutes(this.app, ctx);
     registerMcpSyncRoutes(this.app);
-    registerConfigBackupRoutes(this.app);
+    registerConfigBackupRoutes(this.app, { reloadDiscord: () => this.discordBridge.reload() });
     registerWebhookRoutes(this.app, {
       notifier: this.webhookNotifier,
       configDir: getDataDir(),
       hostTitle: () => this.windowTitle,
     });
+    registerDiscordRoutes(this.app, {
+      bridge: this.discordBridge,
+      configDir: getDataDir(),
+      ctx,
+      hostTitle: () => this.windowTitle,
+    });
+    if (!this.testMode) {
+      // The gateway waits for restoreMuxSessions(): a reply during restore would be told the tab is gone.
+      this.discordBridge.hold();
+      void this.discordBridge.ensureLoaded().catch(() => undefined);
+    }
     registerDoctorRoutes(this.app);
     registerCustomModelRoutes(this.app);
     registerCliRegistryRoutes(this.app);
@@ -1767,7 +1805,11 @@ export class WebServer extends EventEmitter {
     // detach: mail posted before that is still there when the session is re-attached
     // (while detached, the routes answer 404, so nothing new arrives). Before
     // cancelAll, so a reader released by it reads an empty inbox.
-    if (killMux) agentInbox.drop(sessionId);
+    if (killMux) {
+      agentInbox.drop(sessionId);
+      // A real delete only: a detach (killMux=false) leaves the session running and re-attachable.
+      void this.discordBridge.sessionDeleted(sessionId).catch(() => undefined);
+    }
     sessionWaits.notifySignal(sessionId, 'exit');
     sessionWaits.cancelAll(sessionId);
     approvalInbox.resolveForSession(sessionId, 'session_ended');
@@ -2699,6 +2741,45 @@ export class WebServer extends EventEmitter {
     // Multi-user: derive an ownership routing hint so an event only reaches the
     // clients entitled to it (no-op in single-user — hint stays undefined).
     this.sse.broadcast(event, data, isMultiUserMode() ? this.deriveSseHint(event, data) : undefined);
+    this.bridgeSessionEvent(event, data);
+  }
+
+  /**
+   * Whether the startup hint may be typed into this tab: an external CLI (never Claude, which has it as a
+   * launch flag, and never a shell), running locally. A remote (ssh) or Docker tab has no `codeman` on its
+   * PATH, so the hint would tell the agent to run a command it does not have.
+   */
+  private isHintableSession(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    return !!session && isExternalCliMode(session.mode) && !session.remote && !session.docker;
+  }
+
+  /** Keep the Discord thread in step with the tab: created, renamed, deleted. Never throws. */
+  private bridgeSessionEvent(event: string, data: unknown): void {
+    // Deletion is NOT handled here: `session:deleted` also fires for a detach (killMux=false), where the
+    // session keeps running and can be re-attached. The real delete calls the bridge from the cleanup path.
+    if (event !== SseEvent.SessionCreated && event !== SseEvent.SessionUpdated && event !== SseEvent.SessionIdle) {
+      return;
+    }
+    const d = (data ?? {}) as {
+      id?: string;
+      name?: string;
+      createdAt?: number;
+      session?: { id?: string; name?: string; createdAt?: number };
+    };
+    const s = d.session ?? d;
+    if (!s.id) return;
+    const id = s.id;
+    const run =
+      event === SseEvent.SessionIdle
+        ? // Claude is told at launch; a shell, a remote or a Docker tab must never be typed at.
+          this.discordBridge.sessionIdle(id, this.isHintableSession(id))
+        : event === SseEvent.SessionCreated
+          ? this.discordBridge
+              .sessionCreated(id, s.name, s.createdAt)
+              .then(() => this.discordBridge.sessionRenamed(id, s.name))
+          : this.discordBridge.sessionRenamed(id, s.name);
+    void run.catch(() => undefined);
   }
 
   /**
@@ -2934,6 +3015,27 @@ export class WebServer extends EventEmitter {
       })
       .catch(() => undefined);
 
+    // Discord: same event, same independence from Web Push. It adds the tail of what the CLI printed,
+    // so the person reading the thread can see what is being asked without opening the tab.
+    const dcSession = sessionId ? this.sessions.get(sessionId) : undefined;
+    // A question or permission dialog lives on the screen, so it keeps the screen tail (its options are
+    // there); a finished turn posts the CLI's whole last message instead, from its transcript.
+    const dialogEvent = event === SseEvent.HookPermissionPrompt || event === SseEvent.HookElicitationDialog;
+    void this.discordBridge
+      .notify({
+        event,
+        title: template.title,
+        body,
+        urgency: template.urgency as WebhookUrgency,
+        sessionId: sessionId || undefined,
+        sessionName: sessionName || undefined,
+        // A function, so the screen is only read (a synchronous tmux exec) once the bridge has decided to post.
+        tail: dcSession ? () => this.discordTail(dcSession, !dialogEvent) : undefined,
+        fullText: dcSession && !dialogEvent ? () => this.discordFullText(dcSession) : undefined,
+        host: this.windowTitle,
+      })
+      .catch(() => undefined);
+
     const subscriptions = this.pushStore.getAll();
     if (subscriptions.length === 0) return;
 
@@ -3013,6 +3115,34 @@ export class WebServer extends EventEmitter {
         }
       });
     }
+  }
+
+  /**
+   * What the person would see on the tab right now, for a Discord alert: the rendered tmux screen
+   * (`capture-pane -p`), never the raw output stream, which a full-screen UI repaints in place and
+   * reads as garbage. A session with no pane falls back to its plain text output, else nothing.
+   */
+  private discordTail(session: Session, cutComposer: boolean): string {
+    const pane = session.muxName ? (this.mux.capturePaneText?.(session.muxName) ?? null) : null;
+    // The composer row and the status lines under it are screen chrome, not what the CLI said.
+    const glyph = cutComposer ? getCli(session.mode)?.capabilities.workDetect?.promptGlyph : undefined;
+    return screenTail(pane ?? session.textOutput ?? '', 14, 900, glyph);
+  }
+
+  /**
+   * The CLI's whole last message from the response viewer's reader (the CLI's own transcript, or the pane
+   * segmented into turns for the CLIs that keep none); undefined for a shell, which has no turns, and the
+   * screen tail stands in whenever the reader finds nothing.
+   */
+  private async discordFullText(session: Session): Promise<{ text: string; version?: string } | undefined> {
+    if (!this.lastResponseFor) return undefined;
+    // A CLI with a transcript reader, or whose pane the viewer segments into turns; a shell has neither.
+    if (getCli(session.mode)?.capabilities.transcript === 'none' && !isExternalCliTranscriptMode(session.mode)) {
+      return undefined;
+    }
+    const r = await this.lastResponseFor(session);
+    // The turn it came from: the transcript's stamp, else when the person last submitted (a pane has no stamp).
+    return { text: r.text, version: r.timestamp || String(session.lastSubmitAt ?? '') };
   }
 
   /** The notification body for an event (shared by Web Push and the webhook channel). */
@@ -3156,6 +3286,20 @@ export class WebServer extends EventEmitter {
       if (restoredMail > 0) console.log(`[AgentInbox] restored ${restoredMail} pending message(s)`);
       const restored = await this.restoreMuxSessions();
       await this.finalizeRestoredState(restored);
+      void this.discordBridge
+        .release()
+        .then(async () => {
+          // Only after a successful restore, like the agent inbox prune and the tab layout reconciliation, and
+          // with the same keep set: a reboot-restore rebuild reuses the old id.
+          if (!restored) return;
+          await this.discordBridge.prune([
+            ...this.sessions.keys(),
+            ...Object.keys(this.store.getSessions()),
+            ...rebootRestoreRegistry.list(() => true).map((entry) => entry.sessionId),
+          ]);
+        })
+        .then(() => this.discordBridge.startStaleSweep())
+        .catch(() => undefined);
 
       // Instance-scoped reaper: after restore, `docker rm -f` managed containers of
       // THIS instance whose case is gone from docker-cases.json (best-effort, never
@@ -3740,6 +3884,9 @@ export class WebServer extends EventEmitter {
     } catch (err) {
       console.warn(`[Server] releasing the tab layout slot failed: ${getErrorMessage(err)}`);
     }
+    // Per-tab bridge state only: a reboot-restore rebuild reuses the old id and stays on offer for a
+    // retry, so its thread must survive the discard.
+    this.discordBridge.forgetTab(sessionId);
     // Any `session:updated` the half-built session emitted before it failed left a
     // tab on every other open board, and the client's handler is an upsert.
     this.broadcast(SseEvent.SessionDeleted, { id: sessionId });
@@ -4311,6 +4458,9 @@ export class WebServer extends EventEmitter {
     // Same teardown rule: the per-endpoint llama-swap log tails are otherwise closed
     // only by the periodic idle sweep, whose interval is disposed just below.
     closeAllLlamaSwapLogTails();
+
+    // Close the Discord gateway socket and its heartbeat, and clear the bridge's per-tab maps.
+    this.discordBridge.stop();
 
     // Dispose all managed timers (intervals + resettable timeouts)
     this.cleanup.dispose();

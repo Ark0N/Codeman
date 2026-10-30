@@ -53,6 +53,7 @@ export const CONFIG_BACKUP_FILES = [
   'clis.json',
   'custom-model-hosts.json',
   'webhook.json',
+  'discord.json',
   'intents.json',
   'linked-cases.json',
   'remote-hosts.json',
@@ -794,6 +795,7 @@ const REDACT_ALL_FILES: ReadonlySet<string> = new Set([
   'users.json',
   'push-keys.json',
   'webhook.json',
+  'discord.json',
   'intents.json',
 ]);
 /** Elsewhere a value is hidden when its own key looks like a credential. */

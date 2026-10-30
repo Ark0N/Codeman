@@ -1486,6 +1486,19 @@ Posts the Web Push events to ntfy, Slack, Discord or a generic JSON URL (Setting
 
 Delivery goes through the same egress guard as web tabs (refused on the resolved address too), does not follow redirects, times out after 5 s, sends the same event for the same session at most once per 3 s, and has at most 5 requests in flight. Error text never contains the URL.
 
+## Discord bridge
+
+One thread per tab in a private Discord channel, alerts out and replies typed back in. Setup (bot, least-privilege permissions, IDs) is in [discord-bridge.md](discord-bridge.md). The bot token is a bearer secret: stored in `~/.codeman/discord.json` (0600), never returned, and the three settings routes are admin only in multi-user mode.
+
+| Method | Path | Body | Notes |
+| ------ | ------ | ------ | ------ |
+| `GET` | `/api/discord` | none | Config without the token, plus `hasToken`, `tokenMasked`, `gateway` (`off` \| `connecting` \| `connected` \| `error`), `gatewayError` and `lastResult`. |
+| `PUT` | `/api/discord` | `{ enabled?, token?, guildId?, parentChannelId?, allowedUserIds?, threadCreation?, onSessionDelete?, staleThreads?, pingMode?, scope?, startupHint?, typedHint? }` (strict) | `threadCreation`: `lazy` \| `onSessionStart`. `onSessionDelete`: `keep` \| `archive` \| `delete`. `pingMode`: `off` \| `critical` \| `all`. `scope`: `attention` \| `all`. An absent `token` keeps the saved one; `""` clears it. `400` for a non-numeric id or enabling without a token, guild, channel and at least one allowed user. |
+| `POST` | `/api/discord/test` | none | Posts one message to the parent channel with the saved config, even while disabled. `200` with `data.ok`; `400` if no token or channel is saved. |
+| `POST` | `/api/sessions/:id/discord-notify` | `{ message, urgent?, file? }` (strict, message 1 to 1500 characters) | A CLI asks for the user: posts into that tab's thread, pinging when `urgent`. `file` is an absolute path inside the tab's working folder (real path, regular file, at most 8 MB, local sessions only) uploaded with the post; `400` otherwise. A `200` carries the delivery result: `data.ok` is `false` (with `data.error`) when Discord refused or failed the post. `409` while the bridge is disabled, `429` past 6 posts a minute per tab. The `codeman notify "message" [--urgent] [--file path]` command wraps this route. |
+
+Only replies from `allowedUserIds`, in `guildId`, inside a thread the bridge created are typed into a session, as one printable line plus Enter (a lone digit while a permission or question is pending goes as the key alone), at most one per second per tab. Attached files are saved under `.codeman-discord/` in the tab's folder and their paths appended to that line (see [discord-bridge.md](discord-bridge.md)).
+
 ## Diagnostics
 
 `GET /api/doctor[?category=core|office|other]` returns the `codeman doctor --json` report (`platform`, `summary`, `tools[]` with `status` `ok` \| `missing` \| `outdated` \| `skipped` \| `error`, `version`, `path`, `installHint`). The probe engine is synchronous, so it runs in a child process of the same entry script, never on the server's event loop (30 s timeout). It names install paths and versions, so it is admin only in multi-user mode (`403`). `400` for an unknown category, `500` if the child produces no report.

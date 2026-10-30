@@ -152,6 +152,7 @@ const CLAUDE: CliEntry = {
       // from the EFFORT_LEVELS allowlist upstream, same as every other engine value).
       effortLevel: { type: 'engine', source: 'effortLevel' },
       effortJson: { type: 'engine', source: 'effortSettingsJson' },
+      discordHint: { type: 'engine', source: 'appendSystemPrompt' },
       sessionId: { type: 'engine', source: 'sessionId' },
       sessionName: { type: 'engine', source: 'sessionName' },
     },
@@ -179,6 +180,12 @@ const CLAUDE: CliEntry = {
           { flag: '--effort', valueFrom: 'effortLevel', quote: 'single', when: { param: 'effortLevel', state: 'set' } },
           { flag: '--settings', valueFrom: 'effortJson', quote: 'single', when: { param: 'effortJson', state: 'set' } },
           { flag: '--name', valueFrom: 'sessionName', quote: 'double', when: { capabilityGate: 'nameFlag' } },
+          {
+            flag: '--append-system-prompt',
+            valueFrom: 'discordHint',
+            quote: 'single',
+            when: { param: 'discordHint', state: 'set' },
+          },
         ],
       },
       {
@@ -203,6 +210,12 @@ const CLAUDE: CliEntry = {
           { flag: '--effort', valueFrom: 'effortLevel', quote: 'single', when: { param: 'effortLevel', state: 'set' } },
           { flag: '--settings', valueFrom: 'effortJson', quote: 'single', when: { param: 'effortJson', state: 'set' } },
           { flag: '--name', valueFrom: 'sessionName', quote: 'double', when: { capabilityGate: 'nameFlag' } },
+          {
+            flag: '--append-system-prompt',
+            valueFrom: 'discordHint',
+            quote: 'single',
+            when: { param: 'discordHint', state: 'set' },
+          },
         ],
       },
     ],

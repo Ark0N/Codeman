@@ -16,6 +16,7 @@ import { isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import { dataPath } from './config/instance.js';
 import { readCodemanCredentials } from './codeman-credentials.js';
+import { runNotify } from './cli-notify.js';
 import { casePath } from './config/cases-dir.js';
 import { assertValidBasePath } from './config/base-path.js';
 import {
@@ -91,6 +92,22 @@ async function postAttachment(apiUrl: string, sessionId: string, filePath: strin
     req.end();
   });
 }
+
+program
+  .command('notify <message>')
+  .description(
+    "Post a message to this tab's Discord thread (needs the user: a physical step, a blocker, a timed-out wait)"
+  )
+  .option('--urgent', 'Ping the user')
+  .option('--file <path>', 'Send a file from the session folder with the message')
+  .option('-s, --session <id>', 'Codeman session ID (defaults to CODEMAN_SESSION_ID)')
+  .option('--url <url>', 'Codeman API URL (defaults to CODEMAN_API_URL)')
+  .action(async (message: string, options) => {
+    const { code, out, err } = await runNotify({ message, ...options }, process.env, process.cwd());
+    if (out) console.log(code === 0 && out.startsWith('Posted') ? palette.ok(`✓ ${out}`) : out);
+    if (err) console.error(palette.err(`✗ ${err}`));
+    process.exit(code);
+  });
 
 program
   .command('attach <path>')

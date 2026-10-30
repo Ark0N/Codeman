@@ -2874,16 +2874,14 @@ export function registerSessionRoutes(
     return candidates[0] ?? null;
   }
 
-  app.get('/api/sessions/:id/last-response', async (req) => {
-    const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id, req);
-
+  // The body of GET /api/sessions/:id/last-response, so the Discord bridge reads the same transcript
+  // the response viewer does (per-CLI reader, pane fallback) without a second copy of this logic.
+  const lastResponseFor = async (session: Session, context?: string) => {
     // Codex sessions don't write to ~/.claude/projects — their transcripts
     // live in ~/.codex/sessions/**. Branch to a Codex-specific reader so the
     // response-viewer works for Codex panes too.
     if (getCli(session.mode)?.capabilities.transcript === 'codex-rollout') {
-      const codexQuery = req.query as { context?: string };
-      return await readCodexLastResponse(session, codexQuery.context === 'full');
+      return await readCodexLastResponse(session, context === 'full');
     }
 
     // DeepSeek Harness writes a real structured transcript under
@@ -2902,8 +2900,7 @@ export function registerSessionRoutes(
     // would starve on an answer that exists. Those configurations keep the
     // pane segmenter below: coarse, but the real conversation.
     if (getCli(session.mode)?.capabilities.transcript === 'deepseek-zstd' && !session.docker && !session.remote) {
-      const deepSeekQuery = req.query as { context?: string };
-      const full = deepSeekQuery.context === 'full';
+      const full = context === 'full';
       const transcript = await readDeepSeekLastResponse(session, { blocks: full });
       if (transcript) {
         return {
@@ -2921,7 +2918,6 @@ export function registerSessionRoutes(
     // the pane IS the transcript for these CLIs. Codex is already handled above,
     // where a real rollout file is the better source.
     if (isExternalCliTranscriptMode(session.mode)) {
-      const externalQuery = req.query as { context?: string };
       // A repainting full-screen TUI (copilot) streams absolute cursor moves, not lines, so the
       // buffer cannot be segmented; read the pane's visible screen instead, and fall back to the
       // buffer when there is no tmux pane to ask (direct PTY, tests).
@@ -2934,7 +2930,7 @@ export function registerSessionRoutes(
         text: getLastTranscriptResponse(blocks),
         timestamp: '',
         hasContext: blocks.length > 0,
-        messages: externalQuery.context === 'full' ? blocks : undefined,
+        messages: context === 'full' ? blocks : undefined,
       };
     }
 
@@ -2960,11 +2956,10 @@ export function registerSessionRoutes(
       }
     }
 
-    const query = req.query as { context?: string };
     // `turn` is the brief view's context: the last ANSWERED turn's assistant
     // messages, so a multi-row answer is not reduced to its final row. `text`
     // stays the last assistant row in every mode (agent pollers hash it).
-    const wantsMessages = query.context === 'full' || query.context === 'turn';
+    const wantsMessages = context === 'full' || context === 'turn';
     const claudeSessionId = session.claudeSessionId || session.id;
     const transcript = await findClaudeTranscript(projectsDir, claudeSessionId, session.id);
     if (!transcript) {
@@ -2985,7 +2980,7 @@ export function registerSessionRoutes(
     try {
       const content = await fs.readFile(transcript.path, 'utf8');
       const parsed = parseClaudeResponseTranscript(content, wantsMessages);
-      if (query.context === 'turn') {
+      if (context === 'turn') {
         return {
           text: parsed.text,
           timestamp: parsed.timestamp,
@@ -2996,6 +2991,13 @@ export function registerSessionRoutes(
     } catch {
       return wantsMessages ? { text: '', timestamp: '', messages: [] } : { text: '', timestamp: '' };
     }
+  };
+  ctx.lastResponseFor = lastResponseFor;
+
+  app.get('/api/sessions/:id/last-response', async (req) => {
+    const { id } = req.params as { id: string };
+    const session = findSessionOrFail(ctx, id, req);
+    return lastResponseFor(session, (req.query as { context?: string }).context);
   });
 
   function isCodexInjectedContext(text: string): boolean {

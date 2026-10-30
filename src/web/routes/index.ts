@@ -35,6 +35,7 @@ export { registerTabLayoutRoutes } from './tab-layout-routes.js';
 export { registerMcpSyncRoutes } from './mcp-sync-routes.js';
 export { registerConfigBackupRoutes, runConfigBackup } from './config-backup-routes.js';
 export { registerWebhookRoutes } from './webhook-routes.js';
+export { registerDiscordRoutes } from './discord-routes.js';
 export { registerDoctorRoutes } from './doctor-routes.js';
 export {
   registerCustomModelRoutes,

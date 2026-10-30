@@ -20,6 +20,7 @@ import {
 import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
 import { CODEX_REASONING_EFFORTS } from '../types/session.js';
 import { WEBHOOK_KINDS, WEBHOOK_SCOPES } from '../types/push.js';
+import { DISCORD_ON_DELETE, DISCORD_PING_MODES, DISCORD_THREAD_CREATION } from '../types/discord.js';
 import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
 import { MAX_WAKE_MACS } from '../config/remote-wake-limits.js';
 import { MAX_INPUT_LENGTH } from '../config/terminal-limits.js';
@@ -2211,6 +2212,38 @@ export const WebhookUpdateSchema = z
     kind: z.enum(WEBHOOK_KINDS).optional(),
     scope: z.enum(WEBHOOK_SCOPES).optional(),
     url: z.string().max(2048).optional(),
+  })
+  .strict();
+
+/**
+ * PUT /api/discord. `.strict()` and every field optional, so a change of one option never needs the
+ * token re-sent; an empty `token` clears it. Option lists are the bridge's own, so the schema cannot
+ * accept a value the store would coerce away. Ids are checked again (as snowflakes) by the route.
+ */
+export const DiscordUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    token: z.string().max(200).optional(),
+    guildId: z.string().max(25).optional(),
+    parentChannelId: z.string().max(25).optional(),
+    allowedUserIds: z.array(z.string().max(25)).max(20).optional(),
+    threadCreation: z.enum(DISCORD_THREAD_CREATION).optional(),
+    onSessionDelete: z.enum(DISCORD_ON_DELETE).optional(),
+    staleThreads: z.enum(DISCORD_ON_DELETE).optional(),
+    pingMode: z.enum(DISCORD_PING_MODES).optional(),
+    scope: z.enum(WEBHOOK_SCOPES).optional(),
+    startupHint: z.boolean().optional(),
+    typedHint: z.boolean().optional(),
+  })
+  .strict();
+
+/** POST /api/sessions/:id/discord-notify */
+export const DiscordNotifySchema = z
+  .object({
+    message: z.string().min(1).max(1500),
+    urgent: z.boolean().optional(),
+    /** Absolute path of a file inside the session's working folder, uploaded with the post. */
+    file: z.string().min(1).max(1024).optional(),
   })
   .strict();
 

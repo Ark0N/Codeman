@@ -150,7 +150,12 @@ export async function runConfigBackup(
   });
 }
 
-export function registerConfigBackupRoutes(app: FastifyInstance): void {
+export interface ConfigBackupRouteDeps {
+  /** Re-read discord.json into the running bridge (it caches its config and would keep the pre-restore token). */
+  reloadDiscord?: () => Promise<void>;
+}
+
+export function registerConfigBackupRoutes(app: FastifyInstance, deps: ConfigBackupRouteDeps = {}): void {
   const deny = (req: FastifyRequest, reply: FastifyReply): ApiResponse<never> | null => {
     if (isMultiUserMode() && !isAdmin(req)) {
       reply.code(403);
@@ -236,6 +241,8 @@ export function registerConfigBackupRoutes(app: FastifyInstance): void {
     if (restored.includes('intents.json')) intentStore.reload();
     // restoreConfigBackup writes clis.json directly (the one writer besides mutateRegistryFile).
     if (restored.includes('clis.json')) reloadCliRegistry();
+    // The Discord bridge caches discord.json and rewrites nothing from it, so a restore must reach the running bridge.
+    if (restored.includes('discord.json')) void deps.reloadDiscord?.().catch(() => undefined);
     // A restore of users.json replaces accounts, password hashes, roles and bypass grants.
     if (isMultiUserMode()) {
       void appendAdminAudit({
