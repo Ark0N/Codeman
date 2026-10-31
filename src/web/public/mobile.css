@@ -1776,6 +1776,27 @@ html.mobile-init .file-browser-panel {
     max-height: 92dvh;
   }
 
+  .response-viewer-header {
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .response-viewer-header > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .response-viewer-actions {
+    flex-shrink: 0;
+    gap: 4px;
+  }
+
+  .response-viewer-more {
+    padding: 3px 7px;
+  }
+
   .response-viewer-body {
     font-size: 14.5px;
     line-height: 1.65;

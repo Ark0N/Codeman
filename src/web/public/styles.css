@@ -14924,6 +14924,20 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   background: var(--control-bg-hover);
 }
 
+.response-viewer-copy-markdown {
+  white-space: nowrap;
+}
+
+.response-viewer-copy-markdown.rv-copied {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.response-viewer-copy-markdown.rv-copy-failed {
+  color: var(--red);
+  border-color: var(--red);
+}
+
 .response-viewer-close {
   background: none;
   border: none;
