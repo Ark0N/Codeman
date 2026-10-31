@@ -25,7 +25,7 @@ Three ways to get one, all under **New or link a case…** at the bottom of the 
 | How               | Result                                                                                                                                                                                                              |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Create New**    | A fresh `~/codeman-cases/<name>` with a scaffolded `CLAUDE.md`, or with **Create in a custom folder**, a new folder inside a parent you choose, scaffolded the same way and registered in place like a linked case. |
-| **Clone Repo**    | A repo cloned into `~/codeman-cases/<name>` (or into a folder you choose) and registered as a case. Private repos need this machine's own git credentials (see below).                                              |
+| **Clone Repo**    | A repo cloned into `~/codeman-cases/<name>` (or straight into an empty folder you choose) and registered as a case. Private repos need this machine's own git credentials (see below).                              |
 | **Link Existing** | An existing folder anywhere on disk, registered in place. Nothing is copied or moved.                                                                                                                               |
 
 Linked cases keep living where they are. Deleting a case in Codeman removes the

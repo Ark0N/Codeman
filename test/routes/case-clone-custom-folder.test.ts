@@ -1,14 +1,24 @@
 /**
- * @fileoverview POST /api/cases/clone with a `path`: clone into a custom folder and register it as a
- * linked case. Real filesystem under test/setup.ts's temp HOME and a REAL `git` cloning a local bare
- * repo (the path policy itself is in test/case-path.test.ts). Port: N/A (app.inject()).
+ * @fileoverview POST /api/cases/clone with a `path`: clone INTO that folder (an empty or not yet existing one,
+ * with no subfolder added) and register it as a linked case. Real filesystem under test/setup.ts's temp
+ * HOME and a REAL `git` cloning a local bare repo (the path policy itself is in test/case-path.test.ts).
+ * Port: N/A (app.inject()).
  *
  * Like case-custom-path-routes.test.ts this suite rewrites the linked-cases registry, so it refuses to
  * start outside the sandboxed HOME (a raw `npx vitest` would reach the real ~/.codeman).
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
@@ -103,18 +113,33 @@ describe.skipIf(!isGitAvailable())('POST /api/cases/clone with a custom folder',
     writeFileSync(join(target, 'mine.txt'), 'keep me');
     const res = await clone(app, { name: 'busy', repository: origin, path: target });
     expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/already has files/);
     expect(readFileSync(join(target, 'mine.txt'), 'utf8')).toBe('keep me');
     expect(linked()).toEqual({});
   });
 
-  it('refuses an existing EMPTY folder rather than removing and re-making it', async () => {
+  it('clones straight INTO the chosen empty folder, with no subfolder named after the case', async () => {
     const { app } = await createRouteTestHarness(registerCaseRoutes);
-    const target = join(workDir, 'empty');
+    const target = join(workDir, 'picked');
     mkdirSync(target);
-    const res = await clone(app, { name: 'empty', repository: origin, path: target });
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error).toMatch(/already exists/);
-    expect(existsSync(join(target, '.git'))).toBe(false);
+    const res = await clone(app, { name: 'a-different-name', repository: origin, path: target });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.case).toEqual({ name: 'a-different-name', path: target });
+    expect(existsSync(join(target, 'README.md'))).toBe(true);
+    expect(existsSync(join(target, '.git'))).toBe(true);
+    expect(existsSync(join(target, 'a-different-name'))).toBe(false);
+    expect(linked()).toEqual({ 'a-different-name': target });
+  });
+
+  it('leaves the empty folder in place, and empty, when the clone fails', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    const target = join(workDir, 'stays');
+    mkdirSync(target);
+    const res = await clone(app, { name: 'stays', repository: join(root, 'no-such-repo.git'), path: target });
+    expect(res.json().success).toBe(false);
+    expect(existsSync(target)).toBe(true);
+    expect(readdirSync(target)).toEqual([]);
+    expect(linked()).toEqual({});
   });
 
   it('refuses a blocked tree such as ~/.ssh', async () => {

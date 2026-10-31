@@ -50,7 +50,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { rename, rm } from 'node:fs/promises';
+import { lstat, readdir, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 
@@ -188,8 +188,13 @@ export interface GitFailure {
 export interface CloneOptions {
   /** Pre-validated operand from `parseGitRepositoryUrl`. */
   repository: string;
-  /** Absolute destination directory. Must NOT exist; created by git. */
+  /** Absolute destination directory. Must NOT exist (created by git), unless `intoEmptyDir` is set. */
   destination: string;
+  /**
+   * Clone straight into `destination` when it already exists as an EMPTY directory (the folder a user
+   * picked), instead of refusing it. A folder with anything in it, or a symlink, is still refused.
+   */
+  intoEmptyDir?: boolean;
   /** Optional branch or tag (`--branch <ref> --single-branch`). */
   ref?: string;
   /** `--depth 1`: history-less but much faster on large repos. */
@@ -847,6 +852,25 @@ export async function probeGitRemote(
   };
 }
 
+/** True for a real (not symlinked) directory with nothing in it. Any read error counts as not empty. */
+async function isEmptyDirectory(path: string): Promise<boolean> {
+  try {
+    const st = await lstat(path);
+    return st.isDirectory() && (await readdir(path)).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove everything inside `path`, keeping `path` itself. Best effort. */
+async function emptyDirectory(path: string): Promise<void> {
+  try {
+    for (const entry of await readdir(path)) await rm(join(path, entry), { recursive: true, force: true });
+  } catch {
+    /* nothing to clean, or it vanished */
+  }
+}
+
 /**
  * Clone `repository` into `destination`.
  *
@@ -872,10 +896,19 @@ export async function cloneRepository(opts: CloneOptions): Promise<CloneResult> 
     };
   }
   if (existsSync(opts.destination)) {
-    return {
-      ok: false,
-      failure: { code: 'DESTINATION_EXISTS', message: 'The destination directory already exists.', stderr: '' },
-    };
+    if (!opts.intoEmptyDir || !(await isEmptyDirectory(opts.destination))) {
+      return {
+        ok: false,
+        failure: { code: 'DESTINATION_EXISTS', message: 'The destination directory already exists.', stderr: '' },
+      };
+    }
+    // The folder is the user's own, so there is no temporary sibling to rename into place: git fills it.
+    const direct = await runGit(buildCloneArgs(opts), opts.timeoutMs ?? GIT_CLONE_TIMEOUT_MS, MAX_STDERR_BYTES);
+    if (direct.code === 0 && !direct.spawnError) return { ok: true, stderr: sanitizeGitOutput(direct.stderr) };
+    // It was empty when the clone began, so whatever is in it now is this attempt's partial tree. The
+    // folder itself stays.
+    await emptyDirectory(opts.destination);
+    return { ok: false, failure: classifyGitFailure(direct.stderr, direct.timedOut, direct.spawnError) };
   }
 
   // Sibling of the destination (same filesystem), so the rename is atomic.

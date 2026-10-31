@@ -714,6 +714,7 @@ export function registerCaseRoutes(
 
       const casesDir = resolveCasesDir(user);
       let casePath: string | null;
+      let intoEmptyDir = false;
       if (customPath !== undefined) {
         const prepared = await prepareNewCasePath(customPath, {
           home: homedir(),
@@ -738,18 +739,12 @@ export function registerCaseRoutes(
                 : prepared.code === 'EXISTS'
                   ? ApiErrorCode.ALREADY_EXISTS
                   : ApiErrorCode.INVALID_INPUT,
-            prepared.reason
+            prepared.code === 'EXISTS'
+              ? `${customPath} already has files in it. Pick an empty folder, or a folder that does not exist yet.`
+              : prepared.reason
           );
         }
-        // git clones into a fresh folder it creates itself; an empty existing one is refused rather than
-        // removed and re-made (the removal could race another writer).
-        if (prepared.existedEmpty) {
-          reply.code(409);
-          return createErrorResponse(
-            ApiErrorCode.ALREADY_EXISTS,
-            `${prepared.path} already exists. Pick a parent folder where the case folder does not exist yet.`
-          );
-        }
+        intoEmptyDir = prepared.existedEmpty;
         casePath = prepared.path;
         // The same folder listed as a local case in the cases dir would make deleting it remove files.
         if (existsSync(join(casesDir, name))) {
@@ -776,7 +771,8 @@ export function registerCaseRoutes(
         return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `That folder is already the case "${linkedAs}"`);
       }
       if (
-        existsSync(casePath) ||
+        // A custom folder was judged by prepareNewCasePath (an existing empty one is fine).
+        (customPath === undefined && existsSync(casePath)) ||
         linkedCases[name] ||
         dockerCases.some((item) => item.name === name) ||
         remoteCases.some((item) => item.name === name)
@@ -797,6 +793,7 @@ export function registerCaseRoutes(
       const clone = await cloneRepository({
         repository: parsed.repository,
         destination: casePath,
+        ...(intoEmptyDir ? { intoEmptyDir: true } : {}),
         withoutCredentialHelpers: cloneWithoutCredentialHelpers(req),
         ...(ref ? { ref } : {}),
         ...(shallow ? { shallow: true } : {}),
