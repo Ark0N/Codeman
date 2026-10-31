@@ -166,13 +166,20 @@ describe('PathPicker New folder', () => {
     expect(doc.querySelector('.path-picker-overlay')).not.toBeNull();
   });
 
+  it("is on for Create New's custom folder picker too", () => {
+    const start = sessionUiJs.indexOf('openNewCasePathPicker() {');
+    expect(sessionUiJs.slice(start, sessionUiJs.indexOf('PathPicker.open', start) + 400)).toContain(
+      'allowNewFolder: true'
+    );
+  });
+
   it('is on for Link Existing and off for the other session-ui pickers', () => {
     const block = (name: string) => {
       const start = sessionUiJs.indexOf(`${name}() {`);
       return sessionUiJs.slice(start, sessionUiJs.indexOf('PathPicker.open', start) + 400);
     };
     expect(block('openLinkCasePathPicker')).toContain('allowNewFolder: true');
-    for (const other of ['openDockerWorkspacePathPicker', 'openDockerWorkdirPicker', 'openNewCasePathPicker']) {
+    for (const other of ['openDockerWorkspacePathPicker', 'openDockerWorkdirPicker']) {
       expect(block(other), other).not.toContain('allowNewFolder');
     }
   });
