@@ -651,6 +651,13 @@ body {
   margin: 0 2px var(--lineage-row-gap, 4px) 0;
 }
 
+/* A first tab wider than the room beside the toolbar (a selected one shows its
+   gear and close) has its name trimmed to fit, so the layout never depends on
+   which tab is selected. */
+.session-tabs-host > .session-tabs.tabs-corner > .session-tab.tab-corner-fit {
+  max-width: var(--tab-corner-first-max, none);
+}
+
 .session-tabs-host > .session-tabs.lineage-tree.tabs-corner {
   padding-bottom: calc(var(--lineage-bottom-room) - var(--lineage-row-gap));
 }
