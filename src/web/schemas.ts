@@ -85,8 +85,8 @@ const showHiddenQuerySchema = z.enum(['true', 'false']).optional();
 /**
  * Body for the path picker's "New folder": one folder name created directly inside `path`. The name is held
  * to the character set `safePathSchema` accepts (letters, digits, `_ - . ~` and space, no `..`), so every
- * folder this makes is one Link Existing and a session working directory will accept, and never a control
- * character. It is also one path segment and not dot-prefixed (the picker hides those by default), and at
+ * name it accepts is one Link Existing and a session working directory accept (the parent's own path is
+ * judged there separately), and never a control character. It is also one path segment, not dot-prefixed (the picker hides those by default) and not tilde-prefixed (a folder named `~` is an `rm -rf ~` accident), and at
  * most 255 BYTES, the usual filesystem limit.
  */
 export const FilesystemMkdirSchema = z.object({
@@ -99,8 +99,8 @@ export const FilesystemMkdirSchema = z.object({
     .refine((n) => /^[\p{L}\p{N}_\-. ~]+$/u.test(n), {
       message: 'Folder name can only use letters, numbers, spaces and _ - . ~',
     })
-    .refine((n) => !n.includes('..') && !n.startsWith('.'), {
-      message: 'Folder name cannot contain ".." or start with a dot',
+    .refine((n) => !n.includes('..') && !n.startsWith('.') && !n.startsWith('~'), {
+      message: 'Folder name cannot contain "..", or start with a dot or a tilde',
     }),
   sessionId: z
     .string()

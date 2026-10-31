@@ -36,7 +36,7 @@ describe('POST /api/filesystem/mkdir', () => {
     expect(readdirSync(workDir)).toEqual(['fresh']);
   });
 
-  it.each(['Kay app', 'project_v2', 'v1.2', 'my-folder', '~tilde', 'Café 2026'])(
+  it.each(['Kay app', 'project_v2', 'v1.2', 'my-folder', 'Café 2026'])(
     'accepts %s, and Link Existing then accepts the folder it made',
     async (name) => {
       const res = await mkdir({ path: workDir, name });
@@ -44,6 +44,27 @@ describe('POST /api/filesystem/mkdir', () => {
       expect(LinkCaseSchema.safeParse({ name: 'x', path: res.json().data.path }).success).toBe(true);
     }
   );
+
+  it('refuses the cases directory as the parent (400): a folder there is already a case', async () => {
+    const casesDir = join(homedir(), 'codeman-cases');
+    mkdirSync(casesDir, { recursive: true });
+    try {
+      const res = await mkdir({ path: casesDir, name: 'myproj' });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toContain('Add Case > New Case');
+      expect(existsSync(join(casesDir, 'myproj'))).toBe(false);
+      // A folder inside a case is fine.
+      mkdirSync(join(casesDir, 'real-case'));
+      expect((await mkdir({ path: join(casesDir, 'real-case'), name: 'sub' })).statusCode).toBe(200);
+    } finally {
+      safeRmHomeTree(casesDir);
+    }
+  });
+
+  it('answers 404 for a parent that is gone, the same answer browse gives', async () => {
+    const res = await mkdir({ path: join(workDir, 'gone'), name: 'x' });
+    expect(res.statusCode).toBe(404);
+  });
 
   it('refuses a parent that is a file (400), like browse', async () => {
     writeFileSync(join(workDir, 'afile'), 'x');
@@ -83,6 +104,8 @@ describe('POST /api/filesystem/mkdir', () => {
     ['a traversal', '..'],
     ['a dot name', '.'],
     ['a hidden name', '.secret'],
+    ['a lone tilde', '~'],
+    ['a leading tilde', '~tilde'],
     ['an empty name', '   '],
     ['an apostrophe', "Kay's app"],
     ['parentheses', 'project (v2)'],
@@ -149,6 +172,19 @@ describe('POST /api/filesystem/mkdir', () => {
       });
       expect(res.statusCode).toBe(403);
       expect(readdirSync(join(spaces, 'alice'))).toEqual([]);
+    });
+
+    it("refuses a non-admin's own cases folder (400) but not the top of their space", async () => {
+      const { app } = await createRouteTestHarness(registerFileRoutes, { authUser: { username: 'bob', role: 'user' } });
+      const own = join(spaces, 'bob', 'cases');
+      mkdirSync(own, { recursive: true });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/filesystem/mkdir',
+        payload: { path: own, name: 'myproj' },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(existsSync(join(own, 'myproj'))).toBe(false);
     });
 
     it('lets a non-admin create inside their own space', async () => {

@@ -57,6 +57,7 @@ import {
   findSessionOrFail,
   getAuthUser,
   parseBody,
+  resolveCasesDir,
   validateSessionFilePath,
   validateSessionFilePathLexical,
 } from '../route-helpers.js';
@@ -1468,6 +1469,21 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       reply.code(403);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Folders cannot be created here');
     }
+    // The cases directories (shared, and the caller's own in multi-user mode) are what GET /api/cases lists as
+    // local cases: a folder made there is a case with no scaffold, which Link then refuses by name and which
+    // deleting would take the linked folder with. A case there is made through Add Case > New Case.
+    const casesDirs = await Promise.all(
+      [...new Set([CASES_DIR, resolveCasesDir(getAuthUser(req))])].map((dir) =>
+        fs.realpath(dir).catch(() => resolve(dir))
+      )
+    );
+    if (casesDirs.includes(resolvedPath)) {
+      reply.code(400);
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'This is a cases folder: every folder in it is a case. Use Add Case > New Case to make one there.'
+      );
+    }
     // Like browse, a file is not a place to create in.
     try {
       if (!(await fs.stat(resolvedPath)).isDirectory()) throw new Error('not a directory');
@@ -1487,6 +1503,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') {
         reply.code(403);
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'This folder is not writable');
+      }
+      if (code === 'ENOENT') {
+        reply.code(404);
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, `Folder not found: ${candidatePath}`);
       }
       if (code === 'ENAMETOOLONG') {
         reply.code(400);
