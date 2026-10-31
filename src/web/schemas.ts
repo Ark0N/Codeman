@@ -785,6 +785,12 @@ export const CloneCaseSchema = z.object({
   /** `--depth 1`. */
   shallow: z.boolean().optional(),
   description: z.string().max(1000).optional(),
+  /**
+   * Clone into this exact folder (parent + case name) instead of under the cases directory, and
+   * register it as a linked case. Absolute or starting with `~`; only length-bounded here, since
+   * `prepareNewCasePath()` (web/case-path.ts) judges it and produces the user-facing reason.
+   */
+  path: z.string().min(1).max(1000).optional(),
 });
 
 /** Schema for POST /api/cases/clone-preflight — ask the remote what it has, clone nothing. */

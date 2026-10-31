@@ -686,7 +686,7 @@ export function registerCaseRoutes(
         warnings: string[];
       }>
     > => {
-      const { name, repository, ref, shallow, description } = parseBody(CloneCaseSchema, req.body);
+      const { name, repository, ref, shallow, description, path: customPath } = parseBody(CloneCaseSchema, req.body);
       const user = getAuthUser(req);
 
       const parsed = parseGitRepositoryUrl(repository);
@@ -705,8 +705,63 @@ export function registerCaseRoutes(
         );
       }
 
+      // A custom folder writes outside the cases directory and registers the path in the shared,
+      // ownerless linked-cases registry, so it carries the same bar as POST /api/cases/link.
+      if (customPath !== undefined) {
+        const denied = adminOnly(req, reply);
+        if (denied) return denied;
+      }
+
       const casesDir = resolveCasesDir(user);
-      const casePath = validatePathWithinBase(name, casesDir);
+      let casePath: string | null;
+      if (customPath !== undefined) {
+        const prepared = await prepareNewCasePath(customPath, {
+          home: homedir(),
+          dataDir: getDataDir(),
+          casesDirs: [...new Set([casesDir, resolveCasesDir()])],
+        });
+        if (!prepared.ok) {
+          reply.code(
+            prepared.code === 'UNREACHABLE'
+              ? 422
+              : prepared.code === 'NOT_FOUND'
+                ? 404
+                : prepared.code === 'EXISTS'
+                  ? 409
+                  : 400
+          );
+          return createErrorResponse(
+            prepared.code === 'UNREACHABLE'
+              ? ApiErrorCode.OPERATION_FAILED
+              : prepared.code === 'NOT_FOUND'
+                ? ApiErrorCode.NOT_FOUND
+                : prepared.code === 'EXISTS'
+                  ? ApiErrorCode.ALREADY_EXISTS
+                  : ApiErrorCode.INVALID_INPUT,
+            prepared.reason
+          );
+        }
+        // git clones into a fresh folder it creates itself; an empty existing one is refused rather than
+        // removed and re-made (the removal could race another writer).
+        if (prepared.existedEmpty) {
+          reply.code(409);
+          return createErrorResponse(
+            ApiErrorCode.ALREADY_EXISTS,
+            `${prepared.path} already exists. Pick a parent folder where the case folder does not exist yet.`
+          );
+        }
+        casePath = prepared.path;
+        // The same folder listed as a local case in the cases dir would make deleting it remove files.
+        if (existsSync(join(casesDir, name))) {
+          reply.code(409);
+          return createErrorResponse(
+            ApiErrorCode.ALREADY_EXISTS,
+            'A case with this name already exists in codeman-cases.'
+          );
+        }
+      } else {
+        casePath = validatePathWithinBase(name, casesDir);
+      }
       if (!casePath) return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
 
       // Reject a duplicate name across EVERY case kind before invoking git, so a
@@ -715,6 +770,11 @@ export function registerCaseRoutes(
       const linkedCases = await readLinkedCases();
       const dockerCases = await readDockerCases(CODEMAN_CONFIG_DIR);
       const remoteCases = await readRemoteCases(CODEMAN_CONFIG_DIR);
+      const linkedAs = Object.entries(linkedCases).find(([, p]) => p === casePath)?.[0];
+      if (linkedAs && customPath !== undefined) {
+        reply.code(409);
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `That folder is already the case "${linkedAs}"`);
+      }
       if (
         existsSync(casePath) ||
         linkedCases[name] ||
@@ -724,11 +784,14 @@ export function registerCaseRoutes(
         return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Case already exists');
       }
 
-      // git creates the leaf, not necessarily the case space above it.
-      try {
-        mkdirSync(casesDir, { recursive: true });
-      } catch (err) {
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      // git creates the leaf, not necessarily the case space above it (a custom folder's parent
+      // already exists: prepareNewCasePath refused a missing one).
+      if (customPath === undefined) {
+        try {
+          mkdirSync(casesDir, { recursive: true });
+        } catch (err) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+        }
       }
 
       const clone = await cloneRepository({
@@ -792,6 +855,24 @@ export function registerCaseRoutes(
         // The clone itself succeeded: keep the case and report the scaffolding
         // problem, rather than deleting a tree the user just waited for.
         warnings.push(`Case scaffolding was incomplete: ${getErrorMessage(err)}`);
+      }
+
+      if (customPath !== undefined) {
+        // Re-read right before writing so a case linked while git ran is not dropped. Like
+        // POST /api/cases/link the write is not serialized, so this only narrows the window.
+        try {
+          const fresh = await readLinkedCases();
+          if (fresh[name]) throw new Error(`Case "${name}" was linked while the clone ran`);
+          fresh[name] = casePath;
+          await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(fresh, null, 2));
+        } catch (err) {
+          // The clone itself succeeded: keep the folder (the user waited for it) and say where it is.
+          reply.code(500);
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            `Cloned into ${casePath} but could not register the case (${getErrorMessage(err)}). Use Link Existing to add it.`
+          );
+        }
       }
 
       ctx.broadcast(SseEvent.CaseCreated, { name, path: casePath });

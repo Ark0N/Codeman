@@ -3654,7 +3654,19 @@
             <div class="form-row">
               <label>Case Name</label>
               <input type="text" id="cloneCaseName" placeholder="repo" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="app.onCloneNameEdited()">
-              <span class="form-hint">Filled in from the URL. Cloned into ~/codeman-cases/&lt;name&gt;, so deleting the case deletes this working tree.</span>
+              <span class="form-hint" id="cloneCaseNameHint">Filled in from the URL. Cloned into ~/codeman-cases/&lt;name&gt;, so deleting the case deletes this working tree.</span>
+            </div>
+            <div class="form-row" id="cloneCustomPathToggleRow">
+              <label class="checkbox-row"><input type="checkbox" id="cloneCustomPathToggle" onchange="app.toggleCloneCustomPath()"> 📁 Clone into a custom folder</label>
+              <span class="form-hint">By default the clone goes under ~/codeman-cases. Choose another folder and it is cloned there instead; it is listed like any other case, and deleting the case only unlinks it (your files stay).</span>
+            </div>
+            <div class="form-row" id="cloneCustomPathRow" style="display:none">
+              <label>Parent Folder</label>
+              <div class="path-input-group">
+                <input type="text" id="cloneCasePath" placeholder="~/projects" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" oninput="app.updateCloneCasePathPreview()">
+                <button type="button" class="btn path-input-browse" onclick="app.openCloneCasePathPicker()">Browse&hellip;</button>
+              </div>
+              <span class="form-hint" id="cloneCasePathPreview">Pick the folder the clone should be created inside.</span>
             </div>
             <div class="form-row">
               <label>Branch or Tag (optional)</label>
