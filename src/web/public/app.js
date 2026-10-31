@@ -7035,6 +7035,8 @@ class CodemanApp {
       container.classList.remove('tabs-corner');
       container.style.removeProperty('--tab-corner-width');
       container.style.removeProperty('--tab-corner-height');
+      container.style.removeProperty('--tab-corner-first-max');
+      for (const tab of container.querySelectorAll(':scope > .tab-corner-fit')) tab.classList.remove('tab-corner-fit');
     };
     // A strip past its max-height scrolls, and the float would scroll its tabs
     // under the toolbar, which stays put: keep the plain wrap. The plain strip
@@ -7073,12 +7075,36 @@ class CodemanApp {
     const contentRight = strip.left + container.clientLeft + container.clientWidth - parseFloat(style.paddingRight);
     // A first tab that cannot fit beside the toolbar would drop the whole first
     // line below it and leave an empty band: keep the plain strip instead.
-    const firstTab = container.querySelector(':scope > .session-tab');
-    if (firstTab && box.left - 8 - contentLeft < firstTab.offsetWidth + 2) {
+    // The first tab must fit beside the toolbar, or the whole first line drops
+    // below it and leaves an empty band. A selected tab is wider (gear and
+    // close show), so falling back to the plain strip here made the layout
+    // follow the selection; the first tab's name is trimmed to the room
+    // instead. Only a toolbar that leaves no usable room keeps the plain strip.
+    // The room is what the float (rounded up below) leaves, less the tab's 2px
+    // right margin and a pixel for subpixel layout; a tab at the exact width
+    // still wrapped under the float.
+    const floatWidth = Math.max(0, Math.ceil(contentRight - box.left + 8));
+    const room = Math.floor(contentRight - floatWidth - contentLeft) - 3;
+    if (room < TAB_CORNER_MIN_FIRST_TAB) {
       off();
       return;
     }
-    const width = `${Math.max(0, Math.ceil(contentRight - box.left + 8))}px`;
+    const firstTab = container.querySelector(':scope > .session-tab');
+    // Cleared first, the first tab's included: the last pass's trim would
+    // otherwise be measured as its width, and a room that grew would untrim a
+    // tab still too wide for it.
+    for (const tab of container.querySelectorAll(':scope > .tab-corner-fit')) tab.classList.remove('tab-corner-fit');
+    // A selection change slides the gear and close open or shut (a width
+    // transition), and this runs in the same render: finish the first tab's
+    // slide, or it is judged by the width it is leaving.
+    for (const anim of firstTab?.getAnimations?.({ subtree: true }) ?? []) {
+      if (/^(width|padding)/.test(anim.transitionProperty ?? '')) anim.finish();
+    }
+    if (firstTab && firstTab.offsetWidth > room) firstTab.classList.add('tab-corner-fit');
+    if (container.style.getPropertyValue('--tab-corner-first-max') !== `${room}px`) {
+      container.style.setProperty('--tab-corner-first-max', `${room}px`);
+    }
+    const width = `${floatWidth}px`;
     const height = `${Math.max(0, Math.ceil(box.bottom - contentTop))}px`;
     if (container.style.getPropertyValue('--tab-corner-width') !== width) {
       container.style.setProperty('--tab-corner-width', width);
