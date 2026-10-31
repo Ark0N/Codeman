@@ -4097,6 +4097,15 @@ Object.assign(CodemanApp.prototype, {
     set('cloneRepoUrl', '');
     set('cloneCaseName', '');
     set('cloneRepoRef', '');
+    set('cloneCasePath', '');
+    // Custom folder starts off each time, and is not offered to a non-admin in multi-user mode: the
+    // server refuses it (it writes outside the cases directory and into the shared registry).
+    const customToggle = document.getElementById('cloneCustomPathToggle');
+    if (customToggle) customToggle.checked = false;
+    const customRow = document.getElementById('cloneCustomPathToggleRow');
+    const me = window.__codemanUser || {};
+    if (customRow) customRow.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+    this.toggleCloneCustomPath();
     const shallow = document.getElementById('cloneShallow');
     if (shallow) shallow.checked = false;
     const start = document.getElementById('cloneStartSession');
@@ -4122,6 +4131,50 @@ Object.assign(CodemanApp.prototype, {
       const current = this.runMode || 'claude';
       brain.value = [...brain.options].some((o) => o.value === current && !o.hidden) ? current : '';
     }
+  },
+
+  /** Custom-folder row for Clone Repo: shows or hides the parent-folder field and rewords the name hint. */
+  toggleCloneCustomPath() {
+    const custom = document.getElementById('cloneCustomPathToggle');
+    const row = document.getElementById('cloneCustomPathRow');
+    if (!custom || !row) return;
+    row.style.display = custom.checked ? '' : 'none';
+    const hint = document.getElementById('cloneCaseNameHint');
+    if (hint) {
+      hint.textContent = custom.checked
+        ? 'Filled in from the URL. Names the case only: the repository is cloned into the folder chosen below.'
+        : 'Filled in from the URL. Cloned into ~/codeman-cases/<name>, so deleting the case deletes this working tree.';
+    }
+    this.updateCloneCasePathPreview();
+  },
+
+  /** The folder the repository is cloned into: exactly what the field holds (no case name is added). */
+  _cloneTargetPath() {
+    const raw = (document.getElementById('cloneCasePath')?.value || '').trim();
+    // Trailing slashes off, but `/` stays the root rather than becoming an empty path.
+    return raw.length > 1 ? raw.replace(/\/+$/, '') || '/' : raw;
+  },
+
+  updateCloneCasePathPreview() {
+    const hint = document.getElementById('cloneCasePathPreview');
+    if (!hint) return;
+    const target = this._cloneTargetPath();
+    hint.textContent = target ? `Will clone into: ${target}` : 'Pick an empty folder, or one that does not exist yet, to clone into.';
+  },
+
+  openCloneCasePathPicker() {
+    const input = document.getElementById('cloneCasePath');
+    PathPicker.open({
+      title: 'Choose the folder to clone into',
+      initialPath: input.value.trim(),
+      directoriesOnly: true,
+      onSelect: (path) => {
+        input.value = path;
+        this.updateCloneCasePathPreview();
+        input.focus();
+        input.setSelectionRange(path.length, path.length);
+      },
+    });
   },
 
   _setCloneStatus(message, kind) {
@@ -4272,6 +4325,12 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
 
+    const customFolder = !!document.getElementById('cloneCustomPathToggle')?.checked;
+    if (customFolder && !(document.getElementById('cloneCasePath')?.value || '').trim()) {
+      this.showToast('Choose the folder to clone into', 'error');
+      return;
+    }
+
     this._setCloneStatus(`Cloning ${url}… this can take a while for a large repository.`, '');
     try {
       const res = await fetch('/api/cases/clone', {
@@ -4279,7 +4338,13 @@ Object.assign(CodemanApp.prototype, {
         headers: { 'Content-Type': 'application/json' },
         // Zod `.optional()` rejects an explicit null, and JSON.stringify keeps one
         // on the wire — omit the empty fields instead of sending null.
-        body: JSON.stringify({ name, repository: url, ...(ref ? { ref } : {}), ...(shallow ? { shallow: true } : {}) }),
+        body: JSON.stringify({
+          name,
+          repository: url,
+          ...(ref ? { ref } : {}),
+          ...(shallow ? { shallow: true } : {}),
+          ...(customFolder ? { path: this._cloneTargetPath() } : {}),
+        }),
       });
       const data = await res.json();
       if (!data.success) {
