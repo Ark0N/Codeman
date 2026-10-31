@@ -707,6 +707,8 @@ interface GitRun {
   stderr: string;
   code: number | null;
   timedOut: boolean;
+  /** False when git never ran (queue full, slot wait timed out, spawn failed): nothing was written. */
+  started: boolean;
   spawnError?: string;
 }
 
@@ -726,10 +728,17 @@ async function runGit(args: string[], timeoutMs: number, maxStdoutBytes: number)
   const queuedAt = Date.now();
   const slot = await acquireGitSlot(timeoutMs);
   if (slot === 'queue-full') {
-    return { stdout: '', stderr: '', code: null, timedOut: false, spawnError: 'EBUSY: git operation queue is full' };
+    return {
+      stdout: '',
+      stderr: '',
+      code: null,
+      timedOut: false,
+      spawnError: 'EBUSY: git operation queue is full',
+      started: false,
+    };
   }
   if (slot === 'timed-out') {
-    return { stdout: '', stderr: '', code: null, timedOut: true };
+    return { stdout: '', stderr: '', code: null, timedOut: true, started: false };
   }
   const remainingMs = Math.max(1, timeoutMs - (Date.now() - queuedAt));
   try {
@@ -742,7 +751,7 @@ async function runGit(args: string[], timeoutMs: number, maxStdoutBytes: number)
           detached: true,
         });
       } catch (err) {
-        resolve({ stdout: '', stderr: '', code: null, timedOut: false, spawnError: String(err) });
+        resolve({ stdout: '', stderr: '', code: null, timedOut: false, started: false, spawnError: String(err) });
         return;
       }
 
@@ -789,8 +798,10 @@ async function runGit(args: string[], timeoutMs: number, maxStdoutBytes: number)
         resolve(result);
       };
 
-      child.on('error', (err) => finish({ stdout, stderr, code: null, timedOut, spawnError: String(err) }));
-      child.on('close', (code) => finish({ stdout, stderr, code, timedOut }));
+      child.on('error', (err) =>
+        finish({ stdout, stderr, code: null, timedOut, started: false, spawnError: String(err) })
+      );
+      child.on('close', (code) => finish({ stdout, stderr, code, timedOut, started: true }));
     });
   } finally {
     releaseGitSlot();
@@ -918,10 +929,11 @@ export async function cloneRepository(opts: CloneOptions): Promise<CloneResult> 
       const direct = await runGit(buildCloneArgs(opts), opts.timeoutMs ?? GIT_CLONE_TIMEOUT_MS, MAX_STDERR_BYTES);
       if (direct.code === 0 && !direct.spawnError) return { ok: true, stderr: sanitizeGitOutput(direct.stderr) };
       const failure = classifyGitFailure(direct.stderr, direct.timedOut, direct.spawnError);
-      // The folder was empty and is ours alone, so what is in it is this attempt's partial tree, but only
-      // if git wrote anything: not when it refused the folder or never ran (slot timeout, full queue).
+      // The folder was empty when this attempt took it, so what is in it is this attempt's partial tree, but
+      // only if git actually ran: a refused folder, a full queue or a slot wait that timed out wrote nothing,
+      // and anything in the folder by then (files the user copied in, another case created there) is not ours.
       // A mount that stopped answering is left alone too, so a libuv worker is not held on it.
-      if (failure.code !== 'DESTINATION_EXISTS' && !direct.spawnError) {
+      if (direct.started && failure.code !== 'DESTINATION_EXISTS') {
         if ((await probePathKind(opts.destination, { pastCap: true })) === 'directory') {
           await emptyDirectory(opts.destination);
         }

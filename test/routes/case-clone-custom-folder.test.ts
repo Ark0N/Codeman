@@ -7,7 +7,7 @@
  * Like case-custom-path-routes.test.ts this suite rewrites the linked-cases registry, so it refuses to
  * start outside the sandboxed HOME (a raw `npx vitest` would reach the real ~/.codeman).
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import {
   existsSync,
@@ -24,7 +24,12 @@ import { join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerCaseRoutes } from '../../src/web/routes/case-routes.js';
 import { dataPath } from '../../src/config/instance.js';
-import { cloneRepository, isGitAvailable } from '../../src/git-clone.js';
+import {
+  cloneRepository,
+  getActiveGitOperationCount,
+  getQueuedGitOperationCount,
+  isGitAvailable,
+} from '../../src/git-clone.js';
 import { isSandboxedHome, safeRmHomeTree } from '../mocks/index.js';
 
 const LINKED = () => dataPath('linked-cases.json');
@@ -170,6 +175,78 @@ describe.skipIf(!isGitAvailable())('POST /api/cases/clone with a custom folder',
     expect(loser.json().error).toContain(loserDir);
     expect(existsSync(join(loserDir, 'README.md'))).toBe(true);
     expect(Object.keys(linked())).toEqual(['twin']);
+  });
+
+  it('a direct clone whose git-slot wait times out leaves what was written into the folder meanwhile', async () => {
+    const target = join(workDir, 'queued');
+    mkdirSync(target);
+    // Two slow ssh clones hold both git slots (no network needed: the ssh command just sleeps).
+    const prior = process.env.GIT_SSH_COMMAND;
+    process.env.GIT_SSH_COMMAND = 'sleep 4; true';
+    try {
+      const holders = [0, 1].map((i) =>
+        cloneRepository({
+          repository: 'ssh://localhost/x.git',
+          destination: join(workDir, `hold-${i}`),
+          timeoutMs: 10_000,
+        })
+      );
+      await vi.waitFor(() => expect(getActiveGitOperationCount()).toBe(2));
+      const queued = cloneRepository({
+        repository: origin,
+        destination: target,
+        intoEmptyDir: true,
+        timeoutMs: 1_000,
+      });
+      await vi.waitFor(() => expect(getQueuedGitOperationCount()).toBe(1));
+      // Written during the wait, so not this attempt's: a user copying files in, or another case created there.
+      writeFileSync(join(target, 'mine.txt'), 'keep me');
+      mkdirSync(join(target, 'src'));
+      const result = await queued;
+      expect(!result.ok && result.failure.code).toBe('TIMEOUT');
+      expect(readFileSync(join(target, 'mine.txt'), 'utf8')).toBe('keep me');
+      expect(existsSync(join(target, 'src'))).toBe(true);
+      await Promise.all(holders);
+    } finally {
+      if (prior === undefined) delete process.env.GIT_SSH_COMMAND;
+      else process.env.GIT_SSH_COMMAND = prior;
+    }
+  }, 30_000);
+
+  it('refuses a folder at or inside a Docker case workspace, and creates nothing', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    const workspace = join(workDir, 'dockerws');
+    mkdirSync(workspace);
+    writeFileSync(
+      join(dataPath('docker-cases.json')),
+      JSON.stringify([{ name: 'box', type: 'docker', hostId: 'h', hostWorkspacePath: workspace, container: 'c' }])
+    );
+    try {
+      for (const path of [workspace, join(workspace, 'repo')]) {
+        const res = await clone(app, { name: 'inside', repository: origin, path });
+        expect(res.json().errorCode, path).toBe('INVALID_INPUT');
+        expect(res.json().error, path).toMatch(/Docker case workspace/);
+      }
+      expect(readdirSync(workspace)).toEqual([]);
+      expect(linked()).toEqual({});
+      // A sibling of the workspace is fine.
+      const ok = await clone(app, { name: 'beside', repository: origin, path: join(workDir, 'beside') });
+      expect(ok.statusCode).toBe(200);
+    } finally {
+      safeRmHomeTree(dataPath('docker-cases.json'));
+    }
+  });
+
+  it('fails closed when the Docker case list cannot be read', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    writeFileSync(dataPath('docker-cases.json'), '{not json');
+    try {
+      const res = await clone(app, { name: 'blind', repository: origin, path: join(workDir, 'blind') });
+      expect(res.statusCode).toBe(503);
+      expect(existsSync(join(workDir, 'blind'))).toBe(false);
+    } finally {
+      safeRmHomeTree(dataPath('docker-cases.json'));
+    }
   });
 
   it('refuses a blocked tree such as ~/.ssh', async () => {

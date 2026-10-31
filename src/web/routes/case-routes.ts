@@ -51,6 +51,8 @@ import {
   probeGitRemote,
 } from '../../git-clone.js';
 import type { GitRemoteProbe, GitUrlParse } from '../../git-clone.js';
+import { isPathWithin } from '../../git-worktrees.js';
+import { defaultDockerWorkspaces } from './git-status-routes.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { prepareNewCasePath } from '../case-path.js';
 import {
@@ -147,6 +149,9 @@ const APP_VERSION = (() => {
  * would copy another user's workspace into the caller's own (the same escape
  * `/api/cases/link` is admin-only for).
  */
+const DOCKER_CLONE_REFUSAL =
+  'Cloning is not available into a folder inside a Docker case workspace: a container can write there, and git would run the new repository’s hooks and filters on this machine. Clone outside the workspace and link it, or clone from inside the container.';
+
 const LOCAL_CLONE_ADMIN_ONLY =
   'Cloning from a local path is admin-only in multi-user mode. Use a repository URL instead.';
 
@@ -788,6 +793,27 @@ export function registerCaseRoutes(
         } catch (err) {
           return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
         }
+      }
+
+      // git runs the new repository's hooks and filters on THIS machine once the clone finishes, and a container
+      // with the workspace bind-mounted can write both while it fetches. Like git status, fetch and worktrees,
+      // never clone at or inside a Docker case workspace. Fails closed when the Docker case list cannot be read.
+      try {
+        const roots = await Promise.all(
+          (await defaultDockerWorkspaces()).map((root) => fs.realpath(root).catch(() => resolve(root)))
+        );
+        // A custom folder is already symlink-resolved; the default one is judged through its real cases dir.
+        const dest =
+          customPath !== undefined ? casePath : join(await fs.realpath(casesDir).catch(() => casesDir), name);
+        if (roots.some((root) => isPathWithin(dest, root))) {
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, DOCKER_CLONE_REFUSAL);
+        }
+      } catch {
+        reply.code(503);
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          'Could not read the Docker case list, so Codeman cannot tell whether that folder is a Docker case workspace. Try again.'
+        );
       }
 
       const clone = await cloneRepository({
