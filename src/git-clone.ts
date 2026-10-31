@@ -53,6 +53,7 @@ import { existsSync } from 'node:fs';
 import { lstat, readdir, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
+import { probePathKind } from './utils/bounded-path-probe.js';
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
 
@@ -852,6 +853,16 @@ export async function probeGitRemote(
   };
 }
 
+/** Destinations with a direct (`intoEmptyDir`) clone in flight. */
+const directClones = new Set<string>();
+
+function destinationExists(): CloneResult {
+  return {
+    ok: false,
+    failure: { code: 'DESTINATION_EXISTS', message: 'The destination directory already exists.', stderr: '' },
+  };
+}
+
 /** True for a real (not symlinked) directory with nothing in it. Any read error counts as not empty. */
 async function isEmptyDirectory(path: string): Promise<boolean> {
   try {
@@ -896,19 +907,29 @@ export async function cloneRepository(opts: CloneOptions): Promise<CloneResult> 
     };
   }
   if (existsSync(opts.destination)) {
-    if (!opts.intoEmptyDir || !(await isEmptyDirectory(opts.destination))) {
-      return {
-        ok: false,
-        failure: { code: 'DESTINATION_EXISTS', message: 'The destination directory already exists.', stderr: '' },
-      };
+    // One direct clone per folder at a time: once two gits have written into the same folder their
+    // files cannot be told apart, so the second caller is refused before it spawns anything. Taken
+    // before the emptiness check (which can precede a long wait for a git slot).
+    if (!opts.intoEmptyDir || directClones.has(opts.destination)) return destinationExists();
+    directClones.add(opts.destination);
+    try {
+      if (!(await isEmptyDirectory(opts.destination))) return destinationExists();
+      // The folder is the user's own, so there is no temporary sibling to rename into place: git fills it.
+      const direct = await runGit(buildCloneArgs(opts), opts.timeoutMs ?? GIT_CLONE_TIMEOUT_MS, MAX_STDERR_BYTES);
+      if (direct.code === 0 && !direct.spawnError) return { ok: true, stderr: sanitizeGitOutput(direct.stderr) };
+      const failure = classifyGitFailure(direct.stderr, direct.timedOut, direct.spawnError);
+      // The folder was empty and is ours alone, so what is in it is this attempt's partial tree, but only
+      // if git wrote anything: not when it refused the folder or never ran (slot timeout, full queue).
+      // A mount that stopped answering is left alone too, so a libuv worker is not held on it.
+      if (failure.code !== 'DESTINATION_EXISTS' && !direct.spawnError) {
+        if ((await probePathKind(opts.destination, { pastCap: true })) === 'directory') {
+          await emptyDirectory(opts.destination);
+        }
+      }
+      return { ok: false, failure };
+    } finally {
+      directClones.delete(opts.destination);
     }
-    // The folder is the user's own, so there is no temporary sibling to rename into place: git fills it.
-    const direct = await runGit(buildCloneArgs(opts), opts.timeoutMs ?? GIT_CLONE_TIMEOUT_MS, MAX_STDERR_BYTES);
-    if (direct.code === 0 && !direct.spawnError) return { ok: true, stderr: sanitizeGitOutput(direct.stderr) };
-    // It was empty when the clone began, so whatever is in it now is this attempt's partial tree. The
-    // folder itself stays.
-    await emptyDirectory(opts.destination);
-    return { ok: false, failure: classifyGitFailure(direct.stderr, direct.timedOut, direct.spawnError) };
   }
 
   // Sibling of the destination (same filesystem), so the rename is atomic.

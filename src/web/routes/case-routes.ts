@@ -859,14 +859,16 @@ export function registerCaseRoutes(
         // POST /api/cases/link the write is not serialized, so this only narrows the window.
         try {
           const fresh = await readLinkedCases();
-          if (fresh[name]) throw new Error(`Case "${name}" was linked while the clone ran`);
+          if (fresh[name])
+            throw Object.assign(new Error(`Case "${name}" was linked while the clone ran`), { conflict: true });
           fresh[name] = casePath;
           await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(fresh, null, 2));
         } catch (err) {
           // The clone itself succeeded: keep the folder (the user waited for it) and say where it is.
-          reply.code(500);
+          const conflict = (err as { conflict?: boolean }).conflict;
+          reply.code(conflict ? 409 : 500);
           return createErrorResponse(
-            ApiErrorCode.OPERATION_FAILED,
+            conflict ? ApiErrorCode.ALREADY_EXISTS : ApiErrorCode.OPERATION_FAILED,
             `Cloned into ${casePath} but could not register the case (${getErrorMessage(err)}). Use Link Existing to add it.`
           );
         }

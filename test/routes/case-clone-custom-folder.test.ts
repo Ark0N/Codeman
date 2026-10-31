@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerCaseRoutes } from '../../src/web/routes/case-routes.js';
 import { dataPath } from '../../src/config/instance.js';
-import { isGitAvailable } from '../../src/git-clone.js';
+import { cloneRepository, isGitAvailable } from '../../src/git-clone.js';
 import { isSandboxedHome, safeRmHomeTree } from '../mocks/index.js';
 
 const LINKED = () => dataPath('linked-cases.json');
@@ -140,6 +140,36 @@ describe.skipIf(!isGitAvailable())('POST /api/cases/clone with a custom folder',
     expect(existsSync(target)).toBe(true);
     expect(readdirSync(target)).toEqual([]);
     expect(linked()).toEqual({});
+  });
+
+  it('two clones into one empty folder at once: exactly one wins and its files survive', async () => {
+    const target = join(workDir, 'raced');
+    mkdirSync(target);
+    const results = await Promise.all([
+      cloneRepository({ repository: origin, destination: target, intoEmptyDir: true }),
+      cloneRepository({ repository: origin, destination: target, intoEmptyDir: true }),
+    ]);
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    const loser = results.find((r) => !r.ok);
+    expect(loser && !loser.ok && loser.failure.code).toBe('DESTINATION_EXISTS');
+    expect(existsSync(join(target, 'README.md'))).toBe(true);
+    expect(existsSync(join(target, '.git'))).toBe(true);
+  });
+
+  it('a name linked while the clone ran is a 409 that keeps the folder and names it', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    const [a, b] = await Promise.all([
+      clone(app, { name: 'twin', repository: origin, path: join(workDir, 'twin-a') }),
+      clone(app, { name: 'twin', repository: origin, path: join(workDir, 'twin-b') }),
+    ]);
+    const loserDir = a.json().success ? join(workDir, 'twin-b') : join(workDir, 'twin-a');
+    const loser = a.json().success ? b : a;
+    expect([a.json().success, b.json().success].filter(Boolean)).toHaveLength(1);
+    expect(loser.statusCode).toBe(409);
+    expect(loser.json().errorCode).toBe('ALREADY_EXISTS');
+    expect(loser.json().error).toContain(loserDir);
+    expect(existsSync(join(loserDir, 'README.md'))).toBe(true);
+    expect(Object.keys(linked())).toEqual(['twin']);
   });
 
   it('refuses a blocked tree such as ~/.ssh', async () => {

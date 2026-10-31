@@ -786,7 +786,7 @@ export const CloneCaseSchema = z.object({
   shallow: z.boolean().optional(),
   description: z.string().max(1000).optional(),
   /**
-   * Clone into this exact folder (parent + case name) instead of under the cases directory, and
+   * Clone into this exact folder (the folder itself, no case-name subfolder is added) instead of under the cases directory, and
    * register it as a linked case. Absolute or starting with `~`; only length-bounded here, since
    * `prepareNewCasePath()` (web/case-path.ts) judges it and produces the user-facing reason.
    */
