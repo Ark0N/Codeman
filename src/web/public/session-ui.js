@@ -4315,6 +4315,7 @@ Object.assign(CodemanApp.prototype, {
       title: 'Select Existing Project Folder',
       initialPath: pathInput.value.trim(),
       directoriesOnly: true,
+      allowNewFolder: true,
       onSelect: (path) => {
         pathInput.value = path;
         const nameInput = document.getElementById('linkCaseName');

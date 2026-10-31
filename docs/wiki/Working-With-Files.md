@@ -159,6 +159,8 @@ For choosing a path rather than typing one. It appears in two places:
 - **Browse** in **Add Case → Link Existing**.
 - The **📁 Path** key on the mobile keyboard bar.
 
+In **Link Existing**'s picker, **+📁** (New folder) makes a folder inside the folder you are viewing and selects it. Names use letters, numbers, spaces and `_ - . ~` (not starting with a dot or `~`), and it is not offered inside the cases folder, where every folder is already a case.
+
 It browses one directory at a time and can show hidden entries on request. The current
 folder is an editable field: type or paste a path and press Enter (or **Go**) to jump
 straight there, and a full file path lands in its folder with that file selected. The

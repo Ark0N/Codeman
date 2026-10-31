@@ -15764,6 +15764,7 @@ body.touch-device.cjk-input-visible .main {
 
 .path-picker-up,
 .path-picker-refresh,
+.path-picker-newfolder,
 .path-picker-hidden {
   flex: 0 0 38px;
   height: 38px;
@@ -15786,6 +15787,45 @@ body.touch-device.cjk-input-visible .main {
 .path-picker-hidden.active {
   color: var(--accent);
   border-color: var(--accent);
+}
+
+.path-picker-newfolder {
+  flex: 0 0 auto;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.path-picker-newfolder[hidden],
+.path-picker-newfolder-form[hidden] {
+  display: none;
+}
+
+.path-picker-newfolder-form {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 10px;
+}
+
+.path-picker-newfolder-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.path-picker-newfolder-create,
+.path-picker-newfolder-cancel {
+  height: 38px;
+  padding: 0 12px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
 }
 
 .path-picker-up:disabled {
