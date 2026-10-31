@@ -25,6 +25,7 @@ import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerCaseRoutes } from '../../src/web/routes/case-routes.js';
 import { dataPath } from '../../src/config/instance.js';
 import {
+  classifyGitFailure,
   cloneRepository,
   getActiveGitOperationCount,
   getQueuedGitOperationCount,
@@ -244,6 +245,74 @@ describe.skipIf(!isGitAvailable())('POST /api/cases/clone with a custom folder',
       const res = await clone(app, { name: 'blind', repository: origin, path: join(workDir, 'blind') });
       expect(res.statusCode).toBe(503);
       expect(existsSync(join(workDir, 'blind'))).toBe(false);
+    } finally {
+      safeRmHomeTree(dataPath('docker-cases.json'));
+    }
+  });
+
+  it.each(['plain', 'openssl', 'rustls', 'does not exist'])(
+    'a refused folder named %s keeps what was written meanwhile and reports DESTINATION_EXISTS',
+    async (folder) => {
+      const target = join(workDir, folder);
+      mkdirSync(target);
+      const prior = process.env.GIT_SSH_COMMAND;
+      process.env.GIT_SSH_COMMAND = 'sleep 2; true';
+      try {
+        const holders = [0, 1].map((i) =>
+          cloneRepository({
+            repository: 'ssh://localhost/x.git',
+            destination: join(workDir, `hold-${i}`),
+            timeoutMs: 10_000,
+          })
+        );
+        await vi.waitFor(() => expect(getActiveGitOperationCount()).toBe(2));
+        // Queues behind the holders but has time to get a slot, so git runs and refuses the folder.
+        const queued = cloneRepository({
+          repository: origin,
+          destination: target,
+          intoEmptyDir: true,
+          timeoutMs: 15_000,
+        });
+        await vi.waitFor(() => expect(getQueuedGitOperationCount()).toBe(1));
+        writeFileSync(join(target, 'mine.txt'), 'keep me');
+        const result = await queued;
+        expect(!result.ok && result.failure.code).toBe('DESTINATION_EXISTS');
+        expect(readFileSync(join(target, 'mine.txt'), 'utf8')).toBe('keep me');
+        await Promise.all(holders);
+      } finally {
+        if (prior === undefined) delete process.env.GIT_SSH_COMMAND;
+        else process.env.GIT_SSH_COMMAND = prior;
+      }
+    },
+    30_000
+  );
+
+  it('classifies git stderr by what it says, not by words in a path it quotes', () => {
+    const refusal = (dir: string) => `fatal: destination path '${dir}' already exists and is not an empty directory.`;
+    for (const dir of ['/home/u/src/openssl', '/home/u/rustls', '/x/tls-test', '/x/repository not found']) {
+      expect(classifyGitFailure(refusal(dir), false).code, dir).toBe('DESTINATION_EXISTS');
+    }
+    expect(classifyGitFailure('fatal: unable to access: SSL certificate problem: self signed', false).code).toBe(
+      'HOST_UNREACHABLE'
+    );
+    expect(classifyGitFailure('fatal: TLS handshake failure', false).code).toBe('HOST_UNREACHABLE');
+    expect(classifyGitFailure('fatal: could not resolve host: example.invalid', false).code).toBe('HOST_UNREACHABLE');
+    expect(classifyGitFailure("fatal: repository 'https://x/y.git/' not found", false).code).toBe('NOT_FOUND');
+  });
+
+  it('refuses a clone without a path into the cases folder when it is a Docker case workspace', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    const casesDir = join(homedir(), 'codeman-cases');
+    mkdirSync(casesDir, { recursive: true });
+    writeFileSync(
+      dataPath('docker-cases.json'),
+      JSON.stringify([{ name: 'box', type: 'docker', hostId: 'h', hostWorkspacePath: casesDir, container: 'c' }])
+    );
+    try {
+      const res = await clone(app, { name: 'default-inside', repository: origin });
+      expect(res.json().errorCode).toBe('INVALID_INPUT');
+      expect(res.json().error).toMatch(/Docker case workspace/);
+      expect(existsSync(join(casesDir, 'default-inside'))).toBe(false);
     } finally {
       safeRmHomeTree(dataPath('docker-cases.json'));
     }

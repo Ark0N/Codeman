@@ -3658,7 +3658,7 @@
             </div>
             <div class="form-row" id="cloneCustomPathToggleRow">
               <label class="checkbox-row"><input type="checkbox" id="cloneCustomPathToggle" onchange="app.toggleCloneCustomPath()"> 📁 Clone into a custom folder</label>
-              <span class="form-hint">By default the clone goes under ~/codeman-cases. Choose a folder and the repository is cloned into that folder itself (it must be empty); it is listed like any other case, and deleting the case only unlinks it (your files stay).</span>
+              <span class="form-hint">By default the clone goes under ~/codeman-cases. Choose a folder and the repository is cloned into that folder itself (an empty folder, or one that does not exist yet); it is listed like any other case, and deleting the case only unlinks it (your files stay).</span>
             </div>
             <div class="form-row" id="cloneCustomPathRow" style="display:none">
               <label>Folder</label>
@@ -3666,7 +3666,7 @@
                 <input type="text" id="cloneCasePath" placeholder="~/projects" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" oninput="app.updateCloneCasePathPreview()">
                 <button type="button" class="btn path-input-browse" onclick="app.openCloneCasePathPicker()">Browse&hellip;</button>
               </div>
-              <span class="form-hint" id="cloneCasePathPreview">Pick the empty folder to clone into.</span>
+              <span class="form-hint" id="cloneCasePathPreview">Pick an empty folder, or one that does not exist yet, to clone into.</span>
             </div>
             <div class="form-row">
               <label>Branch or Tag (optional)</label>

@@ -149,11 +149,12 @@ const APP_VERSION = (() => {
  * would copy another user's workspace into the caller's own (the same escape
  * `/api/cases/link` is admin-only for).
  */
-const DOCKER_CLONE_REFUSAL =
-  'Cloning is not available into a folder inside a Docker case workspace: a container can write there, and git would run the new repository’s hooks and filters on this machine. Clone outside the workspace and link it, or clone from inside the container.';
-
 const LOCAL_CLONE_ADMIN_ONLY =
   'Cloning from a local path is admin-only in multi-user mode. Use a repository URL instead.';
+
+/** Refusal text for a clone at or inside a Docker case workspace (git would run its hooks on the host). */
+const DOCKER_CLONE_REFUSAL =
+  'Cloning is not available into a folder inside a Docker case workspace: a container can write there, and git would run the new repository’s hooks and filters on this machine. Clone outside the workspace and link it, or clone from inside the container.';
 
 /**
  * Whether a clone or preflight must run with git's credential helpers cleared:
@@ -666,7 +667,8 @@ export function registerCaseRoutes(
    * request died mid-clone still sees the case appear over SSE when git finishes.
    *
    * Deliberately NOT admin-gated in multi-user mode: unlike `/api/cases/link`,
-   * this writes only inside the caller's own `resolveCasesDir`. Two things would
+   * this writes only inside the caller's own `resolveCasesDir`, EXCEPT with a `path` (a custom folder,
+   * registered as a linked case in the shared registry), which is admin-only like Link Existing. Two things would
    * otherwise read through that boundary: a `local`-transport source (refused for
    * non-admins) and the server account's git credential helpers, which every user
    * shares (cleared for non-admins, see `cloneWithoutCredentialHelpers`).

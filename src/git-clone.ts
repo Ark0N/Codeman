@@ -596,6 +596,11 @@ export function classifyGitFailure(stderr: string, timedOut: boolean, spawnError
       stderr: clean,
     };
   }
+  // First: git's refusal quotes the destination path, so a folder named openssl, rustls or "not found" would
+  // otherwise match the host and repository patterns below, and a wrong code here decides a deletion.
+  if (/already exists and is not an empty directory|destination path .* already exists/.test(lower)) {
+    return { code: 'DESTINATION_EXISTS', message: 'The destination directory already exists.', stderr: clean };
+  }
   if (timedOut) {
     return {
       code: 'TIMEOUT',
@@ -631,11 +636,12 @@ export function classifyGitFailure(stderr: string, timedOut: boolean, spawnError
       stderr: clean,
     };
   }
-  if (/could not resolve host|connection refused|connection timed out|network is unreachable|ssl|tls/.test(lower)) {
+  if (
+    /could not resolve host|connection refused|connection timed out|network is unreachable|\bssl\b|\btls\b|certificate|handshake/.test(
+      lower
+    )
+  ) {
     return { code: 'HOST_UNREACHABLE', message: 'Could not reach that host from this machine.', stderr: clean };
-  }
-  if (/already exists and is not an empty directory|destination path .* already exists/.test(lower)) {
-    return { code: 'DESTINATION_EXISTS', message: 'The destination directory already exists.', stderr: clean };
   }
   return { code: 'FAILED', message: clean ? `git failed: ${firstLine(clean)}` : 'git failed.', stderr: clean };
 }
@@ -933,7 +939,10 @@ export async function cloneRepository(opts: CloneOptions): Promise<CloneResult> 
       // only if git actually ran: a refused folder, a full queue or a slot wait that timed out wrote nothing,
       // and anything in the folder by then (files the user copied in, another case created there) is not ours.
       // A mount that stopped answering is left alone too, so a libuv worker is not held on it.
-      if (direct.started && failure.code !== 'DESTINATION_EXISTS') {
+      // git's own refusal is tested on its text, not on the classifier's code, so the deletion never depends on
+      // which pattern matched first.
+      const refused = /already exists and is not an empty directory/i.test(direct.stderr);
+      if (direct.started && !refused && failure.code !== 'DESTINATION_EXISTS') {
         if ((await probePathKind(opts.destination, { pastCap: true })) === 'directory') {
           await emptyDirectory(opts.destination);
         }

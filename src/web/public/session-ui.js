@@ -4159,7 +4159,7 @@ Object.assign(CodemanApp.prototype, {
     const hint = document.getElementById('cloneCasePathPreview');
     if (!hint) return;
     const target = this._cloneTargetPath();
-    hint.textContent = target ? `Will clone into: ${target}` : 'Pick the empty folder to clone into.';
+    hint.textContent = target ? `Will clone into: ${target}` : 'Pick an empty folder, or one that does not exist yet, to clone into.';
   },
 
   openCloneCasePathPicker() {
