@@ -1945,7 +1945,7 @@ Object.assign(CodemanApp.prototype, {
       const empty = document.getElementById('lifecycleEmpty');
 
       if (!data.entries || data.entries.length === 0) {
-        tbody.innerHTML = '';
+        tbody.replaceChildren();
         empty.style.display = '';
         return;
       }
@@ -1957,21 +1957,34 @@ Object.assign(CodemanApp.prototype, {
         server_started: '#666', server_stopped: '#666',
       };
 
-      tbody.innerHTML = data.entries.map(e => {
+      const makeCell = (text, style) => {
+        const cell = document.createElement('td');
+        cell.style.cssText = style;
+        cell.textContent = String(text ?? '');
+        return cell;
+      };
+
+      tbody.replaceChildren(...data.entries.map(e => {
         const time = new Date(e.ts).toLocaleString();
         const color = eventColors[e.event] || '#888';
         const name = e.name || (e.sessionId === '*' ? '—' : this.getShortId(e.sessionId));
         const extra = [];
         if (e.exitCode !== undefined && e.exitCode !== null) extra.push(`code=${e.exitCode}`);
         if (e.mode) extra.push(e.mode);
-        return `<tr style="border-bottom:1px solid #1a1a2e">
-          <td style="padding:3px 8px;color:#888;white-space:nowrap">${time}</td>
-          <td style="padding:3px 8px;color:${color};font-weight:600">${e.event}</td>
-          <td style="padding:3px 8px;color:#e0e0e0" title="${e.sessionId}">${name}</td>
-          <td style="padding:3px 8px;color:#aaa">${e.reason || ''}</td>
-          <td style="padding:3px 8px;color:#666">${extra.join(', ')}</td>
-        </tr>`;
-      }).join('');
+
+        const row = document.createElement('tr');
+        row.style.borderBottom = '1px solid #1a1a2e';
+        const sessionCell = makeCell(name, 'padding:3px 8px;color:#e0e0e0');
+        sessionCell.title = String(e.sessionId);
+        row.append(
+          makeCell(time, 'padding:3px 8px;color:#888;white-space:nowrap'),
+          makeCell(e.event, `padding:3px 8px;color:${color};font-weight:600`),
+          sessionCell,
+          makeCell(e.reason, 'padding:3px 8px;color:#aaa'),
+          makeCell(extra.join(', '), 'padding:3px 8px;color:#666')
+        );
+        return row;
+      }));
     } catch (err) {
       console.error('Failed to load lifecycle log:', err);
     }
