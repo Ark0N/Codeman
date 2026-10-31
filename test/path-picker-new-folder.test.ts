@@ -128,6 +128,29 @@ describe('PathPicker New folder', () => {
     expect(form().hidden).toBe(false);
   });
 
+  it('forwards showHidden while the picker is showing hidden entries', async () => {
+    jsdomWindow.localStorage.setItem('codeman:pathPickerShowHidden', '1');
+    await open({ allowNewFolder: true });
+    submit('fresh');
+    await vi.waitFor(() => expect(calls.some((c) => c.url === '/api/filesystem/mkdir')).toBe(true));
+    const post = calls.find((c) => c.url === '/api/filesystem/mkdir');
+    expect(JSON.parse(post?.init?.body ?? '{}').showHidden).toBe('true');
+  });
+
+  it('disables Create while the request runs, so a double tap sends one', async () => {
+    let finish: (v: unknown) => void = () => {};
+    mkdirReply = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    await open({ allowNewFolder: true });
+    const create = doc.querySelector('.path-picker-newfolder-create') as HTMLButtonElement;
+    submit('fresh');
+    await vi.waitFor(() => expect(create.disabled).toBe(true));
+    finish({ json: async () => ({ success: true, data: { path: '/home/dev/project/fresh' } }) });
+    await vi.waitFor(() => expect(create.disabled).toBe(false));
+  });
+
   it('sends nothing for a blank name', async () => {
     await open({ allowNewFolder: true });
     submit('   ');

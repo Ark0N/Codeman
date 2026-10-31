@@ -83,8 +83,11 @@ const filesystemPickerPathSchema = z
 const showHiddenQuerySchema = z.enum(['true', 'false']).optional();
 
 /**
- * Body for the path picker's "New folder": one folder name created directly inside `path`. The name is a
- * single path segment (no separator, no `.`/`..`, not dot-prefixed, which the picker hides by default).
+ * Body for the path picker's "New folder": one folder name created directly inside `path`. The name is held
+ * to the character set `safePathSchema` accepts (letters, digits, `_ - . ~` and space, no `..`), so every
+ * folder this makes is one Link Existing and a session working directory will accept, and never a control
+ * character. It is also one path segment and not dot-prefixed (the picker hides those by default), and at
+ * most 255 BYTES, the usual filesystem limit.
  */
 export const FilesystemMkdirSchema = z.object({
   path: filesystemPickerPathSchema,
@@ -92,16 +95,20 @@ export const FilesystemMkdirSchema = z.object({
     .string()
     .trim()
     .min(1, 'Folder name is required')
-    .max(255)
-    .refine((n) => !/[/\\\0\n\r]/.test(n), { message: 'Folder name cannot contain slashes or control characters' })
-    .refine((n) => n !== '.' && n !== '..' && !n.startsWith('.'), {
-      message: 'Folder name cannot start with a dot',
+    .refine((n) => Buffer.byteLength(n) <= 255, { message: 'Folder name is too long' })
+    .refine((n) => /^[\p{L}\p{N}_\-. ~]+$/u.test(n), {
+      message: 'Folder name can only use letters, numbers, spaces and _ - . ~',
+    })
+    .refine((n) => !n.includes('..') && !n.startsWith('.'), {
+      message: 'Folder name cannot contain ".." or start with a dot',
     }),
   sessionId: z
     .string()
     .max(100)
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
     .optional(),
+  /** Same opt-in flag as browse: lets the picker create inside a hidden folder it is showing. */
+  showHidden: showHiddenQuerySchema,
 });
 
 /** Query validation for the lazy, allowlisted filesystem path picker. */

@@ -9,6 +9,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerFileRoutes } from '../../src/web/routes/file-routes.js';
+import { LinkCaseSchema } from '../../src/web/schemas.js';
 import { isSandboxedHome, safeRmHomeTree } from '../mocks/index.js';
 
 describe('POST /api/filesystem/mkdir', () => {
@@ -35,6 +36,33 @@ describe('POST /api/filesystem/mkdir', () => {
     expect(readdirSync(workDir)).toEqual(['fresh']);
   });
 
+  it.each(['Kay app', 'project_v2', 'v1.2', 'my-folder', '~tilde', 'Café 2026'])(
+    'accepts %s, and Link Existing then accepts the folder it made',
+    async (name) => {
+      const res = await mkdir({ path: workDir, name });
+      expect(res.statusCode).toBe(200);
+      expect(LinkCaseSchema.safeParse({ name: 'x', path: res.json().data.path }).success).toBe(true);
+    }
+  );
+
+  it('refuses a parent that is a file (400), like browse', async () => {
+    writeFileSync(join(workDir, 'afile'), 'x');
+    const res = await mkdir({ path: join(workDir, 'afile'), name: 'x' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('The folder to create in must be a directory');
+  });
+
+  it('creates inside a hidden folder only when the picker is showing hidden entries', async () => {
+    mkdirSync(join(workDir, '.hid'));
+    const denied = await mkdir({ path: join(workDir, '.hid'), name: 'x' });
+    expect(denied.statusCode).toBe(403);
+    const ok = await mkdir({ path: join(workDir, '.hid'), name: 'x', showHidden: 'true' });
+    expect(ok.statusCode).toBe(200);
+    expect(existsSync(join(workDir, '.hid', 'x'))).toBe(true);
+    // A dot name is still refused there.
+    expect((await mkdir({ path: join(workDir, '.hid'), name: '.y', showHidden: 'true' })).statusCode).toBe(400);
+  });
+
   it('trims the name', async () => {
     const res = await mkdir({ path: workDir, name: '  spaced  ' });
     expect(res.json().data.path).toBe(join(workDir, 'spaced'));
@@ -56,6 +84,18 @@ describe('POST /api/filesystem/mkdir', () => {
     ['a dot name', '.'],
     ['a hidden name', '.secret'],
     ['an empty name', '   '],
+    ['an apostrophe', "Kay's app"],
+    ['parentheses', 'project (v2)'],
+    ['a plus', 'a+b'],
+    ['a comma', 'notes, 2026'],
+    ['a hash', 'c#'],
+    ['brackets', '[draft]'],
+    ['a double dot inside', 'v1..2'],
+    ['a tab', 'a\tb'],
+    ['an escape', 'a\x1b[31mb'],
+    ['a bell', 'a\x07b'],
+    ['a delete char', 'a\x7fb'],
+    ['a name over 255 bytes', 'é'.repeat(200)],
   ])('refuses %s in the name (400) and creates nothing', async (_label, name) => {
     const res = await mkdir({ path: workDir, name });
     expect(res.statusCode).toBe(400);
@@ -77,5 +117,61 @@ describe('POST /api/filesystem/mkdir', () => {
   it('refuses a relative or traversing parent (400)', async () => {
     expect((await mkdir({ path: 'relative', name: 'x' })).statusCode).toBe(400);
     expect((await mkdir({ path: `${workDir}/../x`, name: 'x' })).statusCode).toBe(400);
+  });
+
+  describe('multi-user scoping', () => {
+    let prevMultiUser: string | undefined;
+    let prevSpaces: string | undefined;
+    let spaces = '';
+
+    beforeEach(() => {
+      prevMultiUser = process.env.CODEMAN_MULTIUSER;
+      prevSpaces = process.env.CODEMAN_USER_SPACES_DIR;
+      spaces = join(workDir, 'spaces');
+      mkdirSync(join(spaces, 'alice'), { recursive: true });
+      mkdirSync(join(spaces, 'bob'));
+      process.env.CODEMAN_MULTIUSER = '1';
+      process.env.CODEMAN_USER_SPACES_DIR = spaces;
+    });
+    afterEach(() => {
+      if (prevMultiUser === undefined) delete process.env.CODEMAN_MULTIUSER;
+      else process.env.CODEMAN_MULTIUSER = prevMultiUser;
+      if (prevSpaces === undefined) delete process.env.CODEMAN_USER_SPACES_DIR;
+      else process.env.CODEMAN_USER_SPACES_DIR = prevSpaces;
+    });
+
+    it("refuses a non-admin creating inside another user's space (403) and creates nothing", async () => {
+      const { app } = await createRouteTestHarness(registerFileRoutes, { authUser: { username: 'bob', role: 'user' } });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/filesystem/mkdir',
+        payload: { path: join(spaces, 'alice'), name: 'x' },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(readdirSync(join(spaces, 'alice'))).toEqual([]);
+    });
+
+    it('lets a non-admin create inside their own space', async () => {
+      const { app } = await createRouteTestHarness(registerFileRoutes, { authUser: { username: 'bob', role: 'user' } });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/filesystem/mkdir',
+        payload: { path: join(spaces, 'bob'), name: 'mine' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(existsSync(join(spaces, 'bob', 'mine'))).toBe(true);
+    });
+
+    it('404s a sessionId owned by another user, and adopts none of its folder', async () => {
+      const scoped = await createRouteTestHarness(registerFileRoutes, { authUser: { username: 'bob', role: 'user' } });
+      scoped.ctx._session.owner = 'alice';
+      const res = await scoped.app.inject({
+        method: 'POST',
+        url: '/api/filesystem/mkdir',
+        payload: { path: join(spaces, 'bob'), name: 'x', sessionId: scoped.ctx._sessionId },
+      });
+      expect(res.statusCode).toBe(404);
+      expect(existsSync(join(spaces, 'bob', 'x'))).toBe(false);
+    });
   });
 });

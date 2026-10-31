@@ -222,12 +222,20 @@ const PathPicker = {
       const name = input.value.trim();
       if (!name || !this._currentPath) return;
       const status = overlay.querySelector('.path-picker-status');
+      const create = overlay.querySelector('.path-picker-newfolder-create');
       const parent = this._currentPath;
+      // One request at a time: a double tap would send a second one whose 409 shows after the first succeeded.
+      create.disabled = true;
       try {
         const res = await fetch('/api/filesystem/mkdir', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: parent, name, sessionId: this._options?.sessionId || undefined }),
+          body: JSON.stringify({
+            path: parent,
+            name,
+            sessionId: this._options?.sessionId || undefined,
+            showHidden: this._showHidden ? 'true' : undefined,
+          }),
         });
         const result = await res.json();
         if (!result?.success) throw new Error(result?.error || 'Could not create the folder');
@@ -240,6 +248,8 @@ const PathPicker = {
         if (!this.overlay) return;
         status.textContent = error.message || 'Could not create the folder';
         status.classList.add('error');
+      } finally {
+        create.disabled = false;
       }
     });
   },

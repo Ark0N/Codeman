@@ -1453,20 +1453,27 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     };
   });
 
-  // Inline preview for files selected through the root-confined filesystem picker.
   // "New folder" in the path picker: creates ONE folder directly inside a folder the picker may browse.
   app.post('/api/filesystem/mkdir', async (req, reply): Promise<ApiResponse<{ path: string }>> => {
-    const { path: parentPath, name, sessionId } = parseBody(FilesystemMkdirSchema, req.body);
+    const { path: parentPath, name, sessionId, showHidden } = parseBody(FilesystemMkdirSchema, req.body);
     const { candidatePath, resolvedPath, blockedTrees } = await resolveFilesystemPickerPath(
       ctx,
       req,
       parentPath,
-      sessionId
+      sessionId,
+      wantsHiddenPickerEntries(showHidden)
     );
     const target = join(resolvedPath, name);
     if (isBlockedPickerPath(resolvedPath, blockedTrees, true) || isBlockedPickerPath(target, blockedTrees, true)) {
       reply.code(403);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Folders cannot be created here');
+    }
+    // Like browse, a file is not a place to create in.
+    try {
+      if (!(await fs.stat(resolvedPath)).isDirectory()) throw new Error('not a directory');
+    } catch {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'The folder to create in must be a directory');
     }
     try {
       // Not recursive: the parent was just resolved inside an allowed root, and an existing folder must be a 409.
@@ -1481,12 +1488,21 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         reply.code(403);
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'This folder is not writable');
       }
+      if (code === 'ENAMETOOLONG') {
+        reply.code(400);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Folder name is too long');
+      }
+      // Never the errno text: it names the resolved, symlink-followed path, not the one the picker shows.
       reply.code(500);
-      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Could not create the folder: ${getErrorMessage(err)}`);
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        `Could not create the folder${code ? ` (${code})` : ''}`
+      );
     }
     return { success: true, data: { path: join(candidatePath, name) } };
   });
 
+  // Inline preview for files selected through the root-confined filesystem picker.
   app.get('/api/filesystem/preview', { compress: false }, async (req, reply): Promise<void> => {
     const { path: requestedPath, sessionId, showHidden } = parseBody(FilesystemPreviewQuerySchema, req.query);
     const { candidatePath, resolvedPath, blockedTrees } = await resolveFilesystemPickerPath(
