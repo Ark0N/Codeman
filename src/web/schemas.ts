@@ -82,6 +82,28 @@ const filesystemPickerPathSchema = z
  */
 const showHiddenQuerySchema = z.enum(['true', 'false']).optional();
 
+/**
+ * Body for the path picker's "New folder": one folder name created directly inside `path`. The name is a
+ * single path segment (no separator, no `.`/`..`, not dot-prefixed, which the picker hides by default).
+ */
+export const FilesystemMkdirSchema = z.object({
+  path: filesystemPickerPathSchema,
+  name: z
+    .string()
+    .trim()
+    .min(1, 'Folder name is required')
+    .max(255)
+    .refine((n) => !/[/\\\0\n\r]/.test(n), { message: 'Folder name cannot contain slashes or control characters' })
+    .refine((n) => n !== '.' && n !== '..' && !n.startsWith('.'), {
+      message: 'Folder name cannot start with a dot',
+    }),
+  sessionId: z
+    .string()
+    .max(100)
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
+    .optional(),
+});
+
 /** Query validation for the lazy, allowlisted filesystem path picker. */
 export const FilesystemBrowseQuerySchema = z.object({
   path: filesystemPickerPathSchema.optional(),

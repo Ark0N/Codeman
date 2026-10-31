@@ -74,7 +74,12 @@ import { parseByteRange } from '../http-range.js';
 import { isSensitivePath } from '../sensitive-path.js';
 import { SseEvent } from '../sse-events.js';
 import type { ConfigPort, EventPort, SessionPort } from '../ports/index.js';
-import { FilesystemBrowseQuerySchema, FilesystemPreviewQuerySchema, FileWriteSchema } from '../schemas.js';
+import {
+  FilesystemBrowseQuerySchema,
+  FilesystemMkdirSchema,
+  FilesystemPreviewQuerySchema,
+  FileWriteSchema,
+} from '../schemas.js';
 import {
   MAX_EDITABLE_BYTES,
   applyEol,
@@ -1449,6 +1454,39 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   });
 
   // Inline preview for files selected through the root-confined filesystem picker.
+  // "New folder" in the path picker: creates ONE folder directly inside a folder the picker may browse.
+  app.post('/api/filesystem/mkdir', async (req, reply): Promise<ApiResponse<{ path: string }>> => {
+    const { path: parentPath, name, sessionId } = parseBody(FilesystemMkdirSchema, req.body);
+    const { candidatePath, resolvedPath, blockedTrees } = await resolveFilesystemPickerPath(
+      ctx,
+      req,
+      parentPath,
+      sessionId
+    );
+    const target = join(resolvedPath, name);
+    if (isBlockedPickerPath(resolvedPath, blockedTrees, true) || isBlockedPickerPath(target, blockedTrees, true)) {
+      reply.code(403);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Folders cannot be created here');
+    }
+    try {
+      // Not recursive: the parent was just resolved inside an allowed root, and an existing folder must be a 409.
+      await fs.mkdir(target);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') {
+        reply.code(409);
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `"${name}" already exists in this folder`);
+      }
+      if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') {
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'This folder is not writable');
+      }
+      reply.code(500);
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Could not create the folder: ${getErrorMessage(err)}`);
+    }
+    return { success: true, data: { path: join(candidatePath, name) } };
+  });
+
   app.get('/api/filesystem/preview', { compress: false }, async (req, reply): Promise<void> => {
     const { path: requestedPath, sessionId, showHidden } = parseBody(FilesystemPreviewQuerySchema, req.query);
     const { candidatePath, resolvedPath, blockedTrees } = await resolveFilesystemPickerPath(
