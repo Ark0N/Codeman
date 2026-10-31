@@ -7782,9 +7782,8 @@ class CodemanApp {
     // instead of switching to it; on a window too narrow for the grid it is an
     // ordinary click.
     if ((event?.ctrlKey || event?.metaKey) && this.addSessionToTiles?.(sessionId)) return;
-    // On touch with the keyboard hidden, blur the tapped tab so switching
-    // sessions doesn't pop the on-screen keyboard. Focus policy itself lives
-    // in selectSession via _shouldFocusTerminalForTabSwitch().
+    // Retire stale textarea focus so an explicit mobile tap can reopen the
+    // keyboard synchronously. Automatic selection keeps its passive policy.
     const keyboardOpen = typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible === true;
     if (!keyboardOpen && MobileDetection.isTouchDevice()) {
       document.activeElement?.blur?.();
@@ -9839,11 +9838,12 @@ class CodemanApp {
     bar.hidden = false;
   }
 
-  _shouldFocusTerminalForTabSwitch() {
+  _shouldFocusTerminalForTabSwitch(options = {}) {
     if (typeof MobileDetection === 'undefined' || !MobileDetection.isTouchDevice()) {
       return true;
     }
-    return typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible;
+    return options.auto !== true ||
+      (typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible);
   }
 
   async selectSession(sessionId, options = {}) {
@@ -9876,7 +9876,10 @@ class CodemanApp {
       // which tab is showing, and so does the reload seed), and every other
       // clear path runs on the switch this early return skips, leaving a
       // yellow tab that no tap could clear.
-      if (userInitiated) this.markIdleAlertSeen(sessionId);
+      if (userInitiated) {
+        this.markIdleAlertSeen(sessionId);
+        if (this.terminal && this._shouldFocusTerminalForTabSwitch(options)) this.terminal.focus();
+      }
       return;
     }
     // Tile grid open (tile-grid.js): a tiled session is FOCUSED in its tile and
@@ -9919,9 +9922,9 @@ class CodemanApp {
     // programmatic focus() within the user-gesture call stack (e.g. tab click).
     // After the first await the gesture context is lost and focus() is silently
     // ignored, leaving the keyboard unable to send input to the terminal.
-    // Desktop always focuses; touch focuses only while the on-screen keyboard
-    // is already open (so a tab switch doesn't pop the keyboard).
-    const shouldFocusTerminal = this._shouldFocusTerminalForTabSwitch();
+    // Explicit mobile selection opens the keyboard. App-driven selection only
+    // preserves an already-visible keyboard; boot/replay must not pop it open.
+    const shouldFocusTerminal = this._shouldFocusTerminalForTabSwitch(options);
     if (shouldFocusTerminal && this.terminal) this.terminal.focus();
 
     const _selStart = performance.now();

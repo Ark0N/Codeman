@@ -710,7 +710,7 @@ describe('Tab Navigation', () => {
   });
 
   describe('Tab Touch Focus', () => {
-    it('switching tabs with the keyboard closed does not leave the terminal textarea focused', async () => {
+    it('a closed-keyboard tab click retires stale textarea focus before explicit selection', async () => {
       const { context, page } = await createDevicePage(standardPhone, baseUrl, 'chromium');
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
@@ -746,7 +746,7 @@ describe('Tab Navigation', () => {
 
         expect(result.hasHandler).toBe(true);
         expect(result.selected).toBe('mock-session-2');
-        expect(result.preserveKeyboard).toBe(false);
+        expect(result.preserveKeyboard).toBeUndefined();
         expect(result.activeIsTextarea).toBe(false);
       } finally {
         await context.close();

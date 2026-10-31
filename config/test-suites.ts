@@ -19,6 +19,7 @@
  * why these are a runnable suite (`npm run test:browser`) rather than skipped.
  */
 export const BROWSER_TEST_GLOBS = [
+  'test/mobile-tab-keyboard-focus.browser.test.ts',
   'test/command-palette-agent-arrows.browser.test.ts',
   'test/tmux-capture-sgr.browser.test.ts',
   'test/tab-rail-resize.browser.test.ts',
