@@ -3809,6 +3809,9 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('customModelHostApiKey').value = ''; // the server never returns the real value (apiKeySet is a bool)
     document.getElementById('customModelHostApiKey').placeholder = host?.apiKeySet ? '•••••••• (unchanged if left blank)' : '';
     document.getElementById('customModelHostAuthStyle').value = host?.authStyle || 'bearer';
+    // User-set fallback, round-tripped verbatim (discovery never touches it, so the
+    // cached copy is authoritative); blank means "no default", cleared on save.
+    document.getElementById('customModelHostDefaultContextLength').value = host?.defaultContextLength ?? '';
     this._populateCustomModelDefaultSelect(host);
     document.getElementById('customModelHostEditor').style.display = '';
   },
@@ -3834,6 +3837,18 @@ Object.assign(CodemanApp.prototype, {
     const baseUrl = document.getElementById('customModelHostBaseUrl').value.trim();
     const apiKeyInput = document.getElementById('customModelHostApiKey').value;
     const authStyle = document.getElementById('customModelHostAuthStyle').value;
+    // Blank means "no default" (key omitted, so PUT clears it); a value must satisfy
+    // the same bound the server schema enforces, caught here for a friendlier message.
+    const defaultContextLengthInput = document.getElementById('customModelHostDefaultContextLength').value.trim();
+    let defaultContextLength;
+    if (defaultContextLengthInput !== '') {
+      const parsed = Number(defaultContextLengthInput);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100000000) {
+        this.showToast('Default context length must be a whole number of tokens between 1 and 100,000,000', 'warning');
+        return;
+      }
+      defaultContextLength = parsed;
+    }
     const defaultModelId = document.getElementById('customModelHostDefaultModel').value || undefined;
     if (!id || !label || !baseUrl) {
       this.showToast('Id, label and base URL are all required', 'warning');
@@ -3854,6 +3869,7 @@ Object.assign(CodemanApp.prototype, {
       baseUrl,
       authStyle,
       defaultModelId,
+      defaultContextLength,
       apiKey: apiKeyInput || undefined,
       models: existing?.models,
       lastDiscoveredAt: existing?.lastDiscoveredAt,

@@ -52,13 +52,16 @@ export interface CustomModelHost {
   defaultModelId?: string;
   /**
    * Discovered context-window size (tokens) per model id, keyed by the same strings as
-   * `models`. Populated opportunistically during discovery (`custom-model-routes.ts`) from
-   * llama.cpp/llama-swap's `GET /props?model=<id>` — the plain OpenAI-shaped `/v1/models`
-   * response has no such field. Only ever probed for a model the server already reports as
-   * loaded (llama-swap's `status.value === 'loaded'`); an unloaded one is deliberately never
-   * probed, since llama-swap treats `/props?model=` as a routing hint that can trigger an
-   * actual (slow, GPU-swapping) model load as a side effect of merely asking. A model this
-   * has no entry for simply gets no context-length env override applied — never a guess.
+   * `models`. Populated only by discovery (`custom-model-routes.ts`), from the strongest
+   * source the server offers: the llama-swap launch command reported by `GET /running`
+   * (the source of truth for a loaded model), then llama.cpp's `GET /props?model=<id>`
+   * `n_ctx` (only ever probed for a model the server already reports as loaded, since
+   * llama-swap treats `/props?model=` as a routing hint that can trigger an actual
+   * (slow, GPU-swapping) model load as a side effect of merely asking), then the model's
+   * own `GET /v1/models` entry (`context_length`, else `context_window`, which current
+   * llama-swap, Bifrost and OpenRouter-style servers each state to varying degrees). A
+   * model with no entry here falls back to the endpoint's `defaultContextLength`; with
+   * neither, it simply gets no context-length env override applied, never a guess.
    */
   modelContextLengths?: Record<string, number>;
   /**
@@ -88,6 +91,15 @@ export interface CustomModelHost {
    * server-side check relies on.
    */
   modelSizesGB?: Record<string, number>;
+  /**
+   * User-set fallback context length (tokens), applied by the read sites in
+   * `session-routes.ts` only when `modelContextLengths` has no entry for the selected
+   * model (a gateway that states no per-model figure, a model never loaded yet). Never
+   * written by discovery, so a value set in the endpoint editor survives every
+   * re-discovery sweep; unset keeps the long-standing behaviour of letting each CLI
+   * assume its own default.
+   */
+  defaultContextLength?: number;
 }
 
 export function customModelHostsPath(configDir: string): string {

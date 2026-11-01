@@ -158,7 +158,12 @@ function authHeaders(host: Pick<CustomModelHost, 'apiKey' | 'authStyle'>): Recor
 
 export interface DiscoveryResult {
   models: string[];
-  /** See `CustomModelHost.modelContextLengths` — only ever populated for models already loaded. */
+  /**
+   * See `CustomModelHost.modelContextLengths`: populated from a model's own `/v1/models`
+   * entry (`context_length`, else `context_window`) whenever the server states one, and
+   * from the launch command or `/props` for loaded models, which overwrite (and so win
+   * over) any listed figure for the same model.
+   */
   contextLengths: Record<string, number>;
   /** See `CustomModelHost.modelSlotCounts`; populated on the same loaded-models-only basis as `contextLengths`. */
   slotCounts: Record<string, number>;
@@ -180,6 +185,27 @@ function parseSizeGB(description: unknown): number | undefined {
   if (!match) return undefined;
   const size = Number(match[1]);
   return Number.isFinite(size) && size > 0 ? size : undefined;
+}
+
+/**
+ * Ceiling shared with `schemas.ts`'s `CustomModelHostSchema` bound on context lengths:
+ * anything above it reads as nonsense and is ignored, because a bogus figure here
+ * overflows the smaller server, which is the exact failure this field exists to prevent.
+ */
+const MAX_DISCOVERED_CONTEXT_TOKENS = 100_000_000;
+
+/**
+ * Best-effort: reads a context length (tokens) stated by a model's OWN entry in
+ * `GET /v1/models`. OpenRouter-style servers call the field `context_length`; current
+ * llama-swap sends both `context_length` and `context_window` per model, and current
+ * Bifrost (a gateway in front of llama-swap) passes `context_window` through. Older
+ * servers send neither, and a server that states nothing gets no entry, never a guess.
+ * Non-numeric, zero, negative, fractional or over-the-ceiling values are ignored, the
+ * same rule the stored field's schema enforces: a wrong figure here is worse than none.
+ */
+function parseListedContextLength(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) return undefined;
+  return value <= MAX_DISCOVERED_CONTEXT_TOKENS ? value : undefined;
 }
 
 /**
@@ -312,24 +338,38 @@ async function discoverModels(
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = (await res.json()) as {
-    data?: Array<{ id?: unknown; status?: { value?: unknown }; description?: unknown }>;
+    data?: Array<{
+      id?: unknown;
+      status?: { value?: unknown };
+      description?: unknown;
+      context_length?: unknown;
+      context_window?: unknown;
+    }>;
   };
   const entries = body.data ?? [];
   const models = entries.map((m) => m.id).filter((id): id is string => typeof id === 'string' && id.length > 0);
 
   const sizesGB: Record<string, number> = {};
+  // The lowest-precedence context source, and the only one a gateway without /running or
+  // /props of its own (e.g. Bifrost) can offer: the figure a model's own listing states
+  // (`context_length`, else `context_window`). The loaded-model pass below OVERWRITES
+  // these for whatever it reads from the launch command or /props, so precedence per
+  // model stays: `/running` cmd, then `/props`, then this listed figure.
+  const contextLengths: Record<string, number> = {};
   for (const entry of entries) {
     if (typeof entry.id !== 'string' || !entry.id) continue;
     const size = parseSizeGB(entry.description);
     if (size !== undefined) sizesGB[entry.id] = size;
+    const listed = parseListedContextLength(entry.context_length) ?? parseListedContextLength(entry.context_window);
+    if (listed !== undefined) contextLengths[entry.id] = listed;
   }
 
   // llama-swap-specific, feature-detected: a server that never mentions `status` on ANY
-  // entry gets no context-length enrichment at all, rather than treating "no status field"
-  // as "assume unloaded" — either reading is a guess, and skipping is the safe one, since
-  // fetchContextLength must only ever run against a model this server itself calls loaded.
+  // entry gets no launch-command/props context enrichment at all, rather than treating
+  // "no status field" as "assume unloaded"; either reading is a guess, and skipping is
+  // the safe one, since fetchContextLength must only ever run against a model this server
+  // itself calls loaded. Listed figures above are unaffected: reading them triggers nothing.
   const hasStatusField = entries.some((m) => m && typeof m === 'object' && 'status' in m);
-  const contextLengths: Record<string, number> = {};
   const slotCounts: Record<string, number> = {};
   if (hasStatusField) {
     const loadedIds = entries
@@ -364,6 +404,9 @@ async function discoverModels(
           // merges onto what was learned before).
           if (cmdSlots !== undefined && ctxFromProps) slots = 1;
         }
+        // Assigning only when a probe answered keeps the listed figure (if any) when
+        // neither the launch command nor /props stated one, and replaces it with the
+        // stronger source whenever they did: cmd > /props > listed, never the reverse.
         if (ctx !== undefined) contextLengths[id] = ctx;
         if (slots !== undefined) slotCounts[id] = slots;
       }

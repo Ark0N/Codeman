@@ -615,6 +615,9 @@
     'API key': 'API 密钥',
     'Optional. Left blank on edit keeps the existing key.': '可选。编辑时留空将保留现有密钥。',
     'Auth header': '认证请求头',
+    'Default context length (tokens)': '默认上下文长度（token 数）',
+    'Used for models whose size cannot be discovered. Leave empty to let each CLI assume its own default.':
+      '用于无法自动发现上下文大小的模型。留空则让各个 CLI 使用其自身的默认值。',
     'Never send both — some servers hang indefinitely.': '切勿同时发送两者 — 部分服务器会因此无限期挂起。',
     'Authorization: Bearer (default)': 'Authorization: Bearer（默认）',
     'api-key header (Azure)': 'api-key 请求头（Azure）',

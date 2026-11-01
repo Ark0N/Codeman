@@ -449,6 +449,58 @@ describe('POST /api/sessions/:id/custom-model', () => {
       expect(session.restartCli).not.toHaveBeenCalled();
     });
 
+    it('the endpoint defaultContextLength stands in when discovery recorded no per-model figure', async () => {
+      const { app, ctx } = await setup();
+      // A gateway that states nothing per model: only the user's default is known.
+      const endpoint: CustomModelHost = {
+        id: 'ep-default',
+        label: 'silent gateway',
+        baseUrl: 'http://192.168.1.53:8080',
+        apiKey: 'k',
+        defaultContextLength: 16384,
+      };
+      await writeCustomModelHosts(getDataDir(), [CLAUDE_ENDPOINT, endpoint]);
+      const session = ctx.sessions.get('test-session-1')!;
+      session.mode = 'claude';
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/sessions/test-session-1/custom-model',
+        payload: { endpointId: 'ep-default', modelId: 'some-unknown-model' },
+      });
+
+      const body = res.json();
+      expect(body.requiresContextWarning).toBe(true);
+      expect(body.contextLength).toBe(16384);
+      expect(session.setCustomModel).not.toHaveBeenCalled();
+    });
+
+    it('a discovered per-model figure wins over the endpoint defaultContextLength', async () => {
+      const { app, ctx } = await setup();
+      // The default is small enough to warn on; the discovered figure for THIS model is
+      // not, so the fallback must not leak into the per-model path.
+      const endpoint: CustomModelHost = {
+        id: 'ep-precedence',
+        label: 'mixed box',
+        baseUrl: 'http://192.168.1.54:8080',
+        apiKey: 'k',
+        modelContextLengths: { 'qwen3.8-27b-ud-q4_k_xl': 131072 },
+        defaultContextLength: 16384,
+      };
+      await writeCustomModelHosts(getDataDir(), [CLAUDE_ENDPOINT, endpoint]);
+      const session = ctx.sessions.get('test-session-1')!;
+      session.mode = 'claude';
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/sessions/test-session-1/custom-model',
+        payload: { endpointId: 'ep-precedence', modelId: 'qwen3.8-27b-ud-q4_k_xl' },
+      });
+
+      expect(res.json().requiresContextWarning).toBeUndefined();
+      expect(session.setCustomModel).toHaveBeenCalledTimes(1);
+    });
+
     // llama-server splits its context across --parallel slots, and Claude Code sends several
     // requests at once, so a context that clears the floor as a whole can still fail per slot.
     describe('parallel slots share the context', () => {

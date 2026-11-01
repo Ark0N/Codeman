@@ -1541,7 +1541,10 @@ export function registerSessionRoutes(
     if (!endpoint) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
     }
-    const contextLength = endpoint.modelContextLengths?.[body.modelId];
+    // Discovery's per-model figure wins; the endpoint's user-set default covers models
+    // whose size discovery could not determine (a gateway that states none, say). With
+    // neither, the existing "no override, CLI assumes its own default" behaviour stands.
+    const contextLength = endpoint.modelContextLengths?.[body.modelId] ?? endpoint.defaultContextLength;
     const slotCount = endpoint.modelSlotCounts?.[body.modelId];
 
     // Some CLIs (today: only claude) carry enough of their own fixed system-prompt/tool-
@@ -4447,7 +4450,9 @@ export function registerSessionRoutes(
       const cmHosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
       const cmEndpoint = cmHosts.find((h) => h.id === customModel.endpointId);
       if (!cmEndpoint) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
-      const cmContextLength = cmEndpoint.modelContextLengths?.[customModel.modelId];
+      // Per-model discovery figure first, user-set endpoint default second, nothing third
+      // (see the dedicated route's own comment above).
+      const cmContextLength = cmEndpoint.modelContextLengths?.[customModel.modelId] ?? cmEndpoint.defaultContextLength;
       const cmSlotCount = cmEndpoint.modelSlotCounts?.[customModel.modelId];
 
       // See the dedicated route's own comment for the full reasoning: some CLIs' own fixed

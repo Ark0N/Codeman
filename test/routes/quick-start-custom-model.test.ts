@@ -367,6 +367,50 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
       expect(res.statusCode).toBe(200);
       expect(res.json().requiresContextWarning).toBeUndefined();
     });
+
+    it('warns using the endpoint defaultContextLength when discovery recorded no per-model figure', async () => {
+      const endpoint: CustomModelHost = {
+        id: 'ep-default',
+        label: 'silent gateway',
+        baseUrl: 'http://192.168.1.53:8080',
+        apiKey: 'k',
+        defaultContextLength: 16384,
+      };
+      await writeCustomModelHosts(getDataDir(), [ENDPOINT, endpoint]);
+
+      const res = await quickStart({
+        caseName: 'cm-default-ctx',
+        mode: 'claude',
+        customModel: { endpointId: 'ep-default', modelId: 'some-unknown-model' },
+      });
+
+      const body = res.json();
+      expect(body.requiresContextWarning).toBe(true);
+      expect(body.contextLength).toBe(16384);
+      expect(ctx.sessions.size).toBe(1); // nothing was created
+    });
+
+    it('a discovered per-model figure wins over the endpoint defaultContextLength', async () => {
+      const endpoint: CustomModelHost = {
+        id: 'ep-precedence',
+        label: 'mixed box',
+        baseUrl: 'http://192.168.1.54:8080',
+        apiKey: 'k',
+        modelContextLengths: { m: 131072 },
+        defaultContextLength: 16384,
+      };
+      await writeCustomModelHosts(getDataDir(), [ENDPOINT, endpoint]);
+
+      const res = await quickStart({
+        caseName: 'cm-precedence',
+        mode: 'claude',
+        customModel: { endpointId: 'ep-precedence', modelId: 'm' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().requiresContextWarning).toBeUndefined();
+      expect(ctx.sessions.size).toBe(2);
+    });
   });
 
   describe('triggering the actual llama-swap load (not just watching for it)', () => {

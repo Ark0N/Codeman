@@ -2380,6 +2380,9 @@ export const CustomModelHostSchema = z.object({
   modelSlotCounts: z.record(z.string().max(200), z.number().int().positive().max(4096)).optional(),
   // Same reasoning as modelContextLengths above.
   modelSizesGB: z.record(z.string().max(200), z.number().positive().max(100_000)).optional(),
+  // User-set fallback for models discovery has no context length for (session-routes.ts);
+  // discovery never writes it. Same bound as the modelContextLengths values above.
+  defaultContextLength: z.number().int().positive().max(100_000_000).optional(),
 });
 
 /**
