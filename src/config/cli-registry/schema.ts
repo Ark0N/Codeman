@@ -286,6 +286,14 @@ const launchModelTemplate = z
   .regex(/^[a-zA-Z0-9._\-/:{}]+$/)
   .optional();
 
+/** One entry name under a CLI's real home, for `linkFromRealHome`: single path segment,
+ * leading alphanumeric, no traversal or hidden-dot escape. */
+const homeSegmentName = z
+  .string()
+  .min(1)
+  .max(40)
+  .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
+
 const capabilitiesSchema = z
   .object({
     external: z.boolean(),
@@ -582,6 +590,12 @@ const capabilitiesSchema = z
           fileName: z.string().min(1).max(80),
           template: z.enum(['codex-toml', 'pi-models-json', 'omp-models-yml', 'grok-toml', 'deepseek-patch-json']),
           launchModel: launchModelTemplate,
+          // State that must survive the isolated-directory redirect, symlinked by name from
+          // the CLI's real home (deepseek: profiles/sessions/settings.yaml). Single path
+          // segments only — the consumer joins them, so a traversal here would escape the
+          // real home. See the field's comment in cli-registry/types.ts.
+          linkFromRealHome: z.array(homeSegmentName).max(8).optional(),
+          realHomeFallback: z.string().min(1).max(80).optional(),
         })
         .strict(),
       z.object({ kind: z.literal('unsupported') }).strict(),

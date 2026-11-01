@@ -1470,7 +1470,13 @@ export class WebServer extends EventEmitter {
         endpoint,
         saved.modelId,
         session.id,
-        endpoint.modelContextLengths?.[saved.modelId]
+        endpoint.modelContextLengths?.[saved.modelId],
+        // Boot recovery deliberately omits `workingDir` (no reason to re-answer a trust
+        // dialog that already fired once), so the session-env lookup rides in after it:
+        // a session with its own DSH_HOME override must link its config dir back to
+        // THAT home, not the server's, exactly like the routes do.
+        undefined,
+        (envVar) => session.envOverrideValue(envVar)
       )?.envOverrides;
     } catch (err) {
       console.warn('[WebServer] Failed to rebuild custom-model env on recovery:', err);

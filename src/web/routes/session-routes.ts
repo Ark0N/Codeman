@@ -1618,7 +1618,8 @@ export function registerSessionRoutes(
       body.modelId,
       session.id,
       contextLength,
-      session.workingDir
+      session.workingDir,
+      (envVar) => session.envOverrideValue(envVar)
     );
     if (!applied) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${session.mode} has no known custom-model mechanism`);
@@ -4514,7 +4515,8 @@ export function registerSessionRoutes(
         customModel.modelId,
         qsCustomModelSessionId,
         cmContextLength,
-        workspacePath
+        workspacePath,
+        (envVar) => qsGatedEnvOverrides?.[envVar]
       );
       if (!cmApplied) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${mode} has no known custom-model mechanism`);

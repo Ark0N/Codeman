@@ -10,7 +10,7 @@
  * cli-registry changes" requirement it was written against.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join, dirname } from 'node:path';
 import { dataPath } from './config/instance.js';
@@ -39,22 +39,68 @@ export function customModelConfigDir(sessionId: string): string {
  * covers a re-apply onto a file that already exists (`mode` only applies at
  * creation).
  */
-export function applyConfigDirInjection(baseDir: string, injection: ConfigDirInjection): Record<string, string> {
+export function applyConfigDirInjection(
+  baseDir: string,
+  injection: ConfigDirInjection,
+  /**
+   * The value this SESSION's own env overrides set for `injection.dirEnvVar`, when it
+   * set one — a user who relocated the CLI's real home (an allowlisted key like
+   * DSH_HOME) must have their state linked from THAT directory, not the server's.
+   */
+  sessionHomeOverride?: string
+): Record<string, string> {
   for (const file of injection.files) {
     const filePath = join(baseDir, file.relPath);
     mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
     writeFileSync(filePath, file.content, { encoding: 'utf8', mode: 0o600 });
     chmodSync(filePath, 0o600);
   }
-  if (injection.dirEnvVar === 'DSH_HOME') {
-    // Reuse installed profile bundles without changing the user's profile or credentials.
-    const profiles = join(baseDir, 'profiles');
-    if (!existsSync(profiles)) {
-      const realHome = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh');
-      symlinkSync(join(realHome, 'profiles'), profiles, platform() === 'win32' ? 'junction' : 'dir');
-    }
-  }
+  linkRealHomeEntries(baseDir, injection, sessionHomeOverride);
   return { [injection.dirEnvVar]: baseDir, ...injection.extraEnv };
+}
+
+/**
+ * Symlinks the registry recipe's `linkFromRealHome` entries out of the CLI's real home
+ * into the otherwise-isolated `baseDir`, so redirecting `dirEnvVar` moves only the
+ * generated config file and not the state that has to survive the session (deepseek:
+ * the `sessions` transcript root `removeConfigDir` would otherwise delete, the `profiles`
+ * bundles the patch composes over, and `settings.yaml`). Declared per entry in stock.ts —
+ * this consumer is recipe-driven and names no CLI itself.
+ *
+ * Home resolution: the session's own override first (unless it IS `baseDir` — a re-apply
+ * onto a session already holding a previous injection's value must not self-link), then
+ * the server's environment, then the recipe's `realHomeFallback`. No home resolvable =
+ * no links, same best-effort posture as `linkSharedProjectsDir()`.
+ */
+function linkRealHomeEntries(baseDir: string, injection: ConfigDirInjection, sessionHomeOverride?: string): void {
+  const names = injection.linkFromRealHome;
+  if (!names || names.length === 0) return;
+  const fromSession = sessionHomeOverride?.trim();
+  const realHome =
+    (fromSession && fromSession !== baseDir ? fromSession : undefined) ||
+    process.env[injection.dirEnvVar]?.trim() ||
+    (injection.realHomeFallback ? join(homedir(), injection.realHomeFallback) : undefined);
+  if (!realHome) return;
+  for (const name of names) {
+    linkRealHomeEntry(join(realHome, name), join(baseDir, name));
+  }
+}
+
+function linkRealHomeEntry(target: string, link: string): void {
+  // lstat, never existsSync: existsSync is false for a DANGLING link, and recovery
+  // re-applies on every restart, so the second pass would try to recreate the link and
+  // throw EEXIST. lstat answers for real entries, good links and dangling links alike.
+  try {
+    if (lstatSync(link)) return; // already linked (idempotent re-apply) or a real dir wrote one
+  } catch {
+    // ENOENT — nothing is here yet, the only state in which a link gets created
+  }
+  try {
+    symlinkSync(target, link, platform() === 'win32' ? 'junction' : 'dir');
+  } catch {
+    // best-effort only — a platform that refuses symlinks keeps the documented
+    // side effect for this session rather than failing the whole apply over it
+  }
 }
 
 /**
@@ -258,7 +304,13 @@ export function applyCustomModelInjection(
    * trust-dialog seed, and only when provided (boot recovery, which has no reason to
    * re-answer a dialog that already fired once, omits it rather than re-deriving it).
    */
-  workingDir?: string
+  workingDir?: string,
+  /**
+   * Reads one env var from the SESSION's own env overrides (single-key on purpose: the
+   * map carries credentials). Only the `configDir` kind uses it, to resolve the CLI's real
+   * home for `linkFromRealHome` from the session's value before the server's.
+   */
+  sessionEnvLookup?: (envVar: string) => string | undefined
 ): AppliedCustomModel | undefined {
   const injection = buildCustomModelInjection(entry, endpoint, modelId, contextLength);
   if (injection.kind === 'unsupported') return undefined;
@@ -291,6 +343,6 @@ export function applyCustomModelInjection(
     };
   }
   const configDir = customModelConfigDir(sessionId);
-  const envOverrides = applyConfigDirInjection(configDir, injection);
+  const envOverrides = applyConfigDirInjection(configDir, injection, sessionEnvLookup?.(injection.dirEnvVar));
   return { envOverrides, envKeys: Object.keys(envOverrides), configDir, launchModel: injection.launchModel };
 }

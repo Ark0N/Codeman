@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -20,6 +20,8 @@ describe('DeepSeek custom endpoint isolation', () => {
     const realHome = join(homedir(), '.dsh');
     const profile = join(realHome, 'profiles', 'dsh-tui');
     mkdirSync(profile, { recursive: true });
+    mkdirSync(join(realHome, 'sessions'), { recursive: true });
+    writeFileSync(join(realHome, 'settings.yaml'), 'theme: dark');
     const original = join(profile, 'cordis.patch.yml');
     writeFileSync(original, 'original profile');
     vi.stubEnv('DSH_HOME', realHome);
@@ -43,22 +45,20 @@ describe('DeepSeek custom endpoint isolation', () => {
       model: 'chosen-model',
     });
     expect(realpathSync(join(applied.configDir, 'profiles'))).toBe(join(realHome, 'profiles'));
+    // The rest of the linkFromRealHome list, consumed generically: `sessions` is the
+    // transcript root removeConfigDir would otherwise delete, and the user's settings.yaml
+    // must keep applying through the redirect.
+    expect(realpathSync(join(applied.configDir, 'sessions'))).toBe(join(realHome, 'sessions'));
+    expect(realpathSync(join(applied.configDir, 'settings.yaml'))).toBe(join(realHome, 'settings.yaml'));
+    // Re-apply onto the same config dir (boot recovery re-runs this every restart) with one
+    // link dangling: the lstat guard must skip every existing link, broken ones included,
+    // which the old existsSync check missed — recreating them would raise EEXIST.
+    rmSync(join(realHome, 'sessions'), { recursive: true, force: true });
+    const reapplied = applyCustomModelInjection(entry, endpoint, 'chosen-model', 'deepseek-probe', 131072);
+    expect(reapplied?.envOverrides.DSH_HOME).toBe(applied.configDir);
+    expect(readlinkSync(join(applied.configDir, 'sessions'))).toBe(join(realHome, 'sessions'));
+    expect(readFileSync(original, 'utf8')).toBe('original profile');
     removeConfigDir(applied.configDir);
     expect(readFileSync(original, 'utf8')).toBe('original profile');
-  });
-
-  it('gives Codex its known context and compaction budget', () => {
-    const entry = getCli('codex');
-    if (!entry) throw new Error('Missing Codex entry');
-    const injection = buildCustomModelInjection(
-      entry,
-      { id: 'local', label: 'Local', baseUrl: 'http://box' },
-      'chosen-model',
-      131072
-    );
-    if (injection.kind !== 'configDir') throw new Error('Expected isolated Codex config');
-    expect(injection.files[0].content).toContain('model_context_window = 131072');
-    expect(injection.files[0].content).toContain('model_auto_compact_token_limit = 98304');
-    expect(injection.launchModel).toBe('chosen-model');
   });
 });

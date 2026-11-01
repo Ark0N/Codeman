@@ -1553,6 +1553,13 @@ const DEEPSEEK: CliEntry = {
       dirEnvVar: 'DSH_HOME',
       fileName: 'cordis.patch.yml',
       template: 'deepseek-patch-json',
+      // dsh keeps state in its home that the redirect must NOT swallow: `sessions` is the
+      // session-log root (deleting it would take the user's transcripts with it on clear/
+      // close), `profiles` are the installed bundles the patch composes over, and
+      // `settings.yaml` must keep applying. The generated home-level `cordis.patch.yml`
+      // deliberately replaces the user's own for the session rather than linking it.
+      linkFromRealHome: ['profiles', 'sessions', 'settings.yaml'],
+      realHomeFallback: '.dsh',
     },
   },
   overlays: {
@@ -1905,8 +1912,8 @@ const COPILOT: CliEntry = {
     // custom provider and drops the GitHub sign-in requirement; COPILOT_PROVIDER_TYPE defaults to
     // "openai", which is what a Codeman custom endpoint is (llama.cpp, vLLM, Ollama).
     // COPILOT_MODEL names the model and COPILOT_PROVIDER_MODEL_ID / _WIRE_MODEL default to it.
-    // The OpenAI-style route is `<base>/v1/chat/completions`, so the base gets the `/v1` suffix
-    // the same way deepseek's does. All four already match the COPILOT_ prefix allowlist, so
+    // The OpenAI-style route is `<base>/v1/chat/completions`, so the base gets the `/v1`
+    // suffix via appendV1Suffix below. All four already match the COPILOT_ prefix allowlist, so
     // they are privileged env keys below: a non-granted multi-user owner must not be able to
     // redirect the session's endpoint or credentials through plain envOverrides.
     customModelInjection: {

@@ -856,19 +856,13 @@ export interface CliCapabilities {
    * reuses that file.
    *
    * `appendV1Suffix` (env kind only): the raw `endpoint.baseUrl` gets `withV1Suffix()`
-   * applied before being written to `baseUrlVar`, instead of being used verbatim.
-   * DeepSeek needs this and claude/gemini must NOT get it — a per-CLI asymmetry confirmed
-   * by reading each SDK's own request-building source, not assumed: DeepSeek Harness's
-   * bundled `@deepseek-ai/dsh-llm-deepseek` concatenates `${connection.baseURL}/chat/
-   * completions` with no `/v1` insertion of its own (its real public API base,
-   * `https://api.deepseek.com`, expects the caller's base URL to already carry any
-   * needed prefix), while llama-swap/llama.cpp only ever serves the OpenAI-conventional
-   * `/v1/chat/completions` — confirmed live: a bare `POST <baseUrl>/chat/completions`
-   * 404s, `POST <baseUrl>/v1/chat/completions` succeeds, and the harness's own error
-   * message template (`DeepSeek API error (HTTP ${status})`) reproduces the exact
-   * `HTTP_404` this feature originally shipped with unexplained. Claude Code's own SDK,
-   * by contrast, was already confirmed working end-to-end against the RAW `baseUrl` with
-   * no suffix — appending one there would be wrong, not just redundant.
+   * applied before being written to `baseUrlVar`, instead of being used verbatim. Only
+   * copilot declares it — its OpenAI-style route is `<base>/v1/chat/completions`, and a
+   * gateway saves the bare root. claude/gemini must NOT get it: Claude Code's own SDK was
+   * confirmed working end-to-end against the RAW `baseUrl`, so appending a suffix there
+   * would be wrong, not just redundant. The per-session config-file recipes do not need
+   * this flag at all — `renderConfigFile()` applies the suffix inside every template
+   * (deepseek's patch included), so no configDir entry carries a raw base URL.
    */
   customModelInjection:
     | {
@@ -890,6 +884,25 @@ export interface CliCapabilities {
         fileName: string;
         template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml' | 'deepseek-patch-json';
         launchModel?: string;
+        /**
+         * Names of entries under this CLI's REAL home that must be symlinked into the
+         * isolated directory after the generated file is written — the same trick
+         * `linkSharedProjectsDir()` plays for claude's `projects`. Declared for CLIs whose
+         * home carries state that must survive the redirect (deepseek's `sessions` transcript
+         * root and `profiles` bundles, plus `settings.yaml`, which would otherwise stop
+         * applying and — for `sessions` — get deleted by `removeConfigDir` on clear/close).
+         * Never include `fileName` itself: the generated file owns that name in the isolated
+         * directory, and a link there would write THROUGH into the user's real file.
+         * Consumed generically by custom-model-injection-apply.ts.
+         */
+        linkFromRealHome?: string[];
+        /**
+         * Fallback location of the CLI's real home, relative to the user's home directory
+         * (deepseek's `.dsh`), used only when neither the session's own `dirEnvVar` override
+         * nor the server's environment sets it. Required whenever `linkFromRealHome` is
+         * declared, so no consumer has to hardcode a per-CLI default of its own.
+         */
+        realHomeFallback?: string;
       }
     | { kind: 'unsupported' };
 }

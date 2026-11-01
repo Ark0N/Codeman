@@ -541,11 +541,16 @@ for '<id>' not found. Defaulting to fallback metadata...` on launch —
   `POST <baseUrl>/chat/completions` 404s against llama-swap while
   `POST <baseUrl>/v1/chat/completions` succeeds; the harness's own error
   template (`DeepSeek API error (HTTP ${status})`) matches the originally
-  reported symptom exactly. `customModelInjection`'s new `appendV1Suffix`
-  (deepseek's entry only — claude/gemini must NOT get it, since claude was
-  already confirmed working against the raw `baseUrl`) fixes it by writing
-  `DEEPSEEK_BASE_URL` with `/v1` appended. Not yet re-run end-to-end with a
-  real `dsh` binary (no install available in this environment) — the fix
+  reported symptom exactly. The fix is no longer the original env redirect:
+  deepseek's `customModelInjection` is a `configDir` recipe — a per-session
+  `DSH_HOME` holding only a generated `cordis.patch.yml` that declares a
+  `codeman-custom` `openai-completions` provider (the base URL gets the `/v1`
+  suffix from the shared `renderConfigFile` step every file template goes
+  through), so the installed profile keeps supplying the transport; the
+  recipe's `linkFromRealHome` field symlinks `profiles`, `sessions` and
+  `settings.yaml` back out of the real dsh home so installed bundles,
+  transcripts and user settings all survive the redirect. Not yet re-run
+  end-to-end with a real `dsh` binary — the fix
   is source-confirmed and live-verified at the HTTP level, but a real
   "hello world" reply through `dsh` itself is still outstanding before
   calling this fully verified like the harnesses above.

@@ -87,6 +87,10 @@ export interface ConfigDirInjection {
    * `customModelInjection.launchModel` template, never hand-built per CLI.
    */
   launchModel?: string;
+  /** Carried from the registry recipe — see `cli-registry/types.ts` `linkFromRealHome`. */
+  linkFromRealHome?: string[];
+  /** Carried from the registry recipe — see `cli-registry/types.ts` `realHomeFallback`. */
+  realHomeFallback?: string;
 }
 
 export interface UnsupportedInjection {
@@ -143,7 +147,14 @@ export function buildCustomModelInjection(
     case 'configDir': {
       const { content, extraEnv } = renderConfigFile(cap.template, endpoint, modelId, apiKey, contextLength);
       return withLaunchModel(
-        { kind: 'configDir', dirEnvVar: cap.dirEnvVar, files: [{ relPath: cap.fileName, content }], extraEnv },
+        {
+          kind: 'configDir',
+          dirEnvVar: cap.dirEnvVar,
+          files: [{ relPath: cap.fileName, content }],
+          extraEnv,
+          ...(cap.linkFromRealHome ? { linkFromRealHome: cap.linkFromRealHome } : {}),
+          ...(cap.realHomeFallback ? { realHomeFallback: cap.realHomeFallback } : {}),
+        },
         cap.launchModel,
         modelId
       );
