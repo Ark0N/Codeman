@@ -888,7 +888,7 @@ export interface CliCapabilities {
         kind: 'configDir';
         dirEnvVar: string;
         fileName: string;
-        template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml';
+        template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml' | 'deepseek-patch-json';
         launchModel?: string;
       }
     | { kind: 'unsupported' };

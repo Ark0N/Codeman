@@ -179,29 +179,25 @@ describe('buildCustomModelInjection', () => {
     expect(result.extraEnv).toEqual({ XAI_API_KEY: 'my-key' });
   });
 
-  it('deepseek: env kind sets base URL (with a /v1 suffix appended) and key, no model var', () => {
-    // appendV1Suffix is REQUIRED here, not cosmetic: confirmed by reading dsh's own
-    // bundled source (@deepseek-ai/dsh-llm-deepseek) that it builds the request URL as
-    // `${DEEPSEEK_BASE_URL}/chat/completions` with no "/v1" of its own, while
-    // llama-swap/llama.cpp only serves "/v1/chat/completions" — without this, every
-    // request 404s (confirmed live; this is the fix for the originally-reported
-    // "dsh: HTTP_404: DeepSeek API error (HTTP 404)").
+  it('deepseek: isolates the selected model route and passes its key by reference', () => {
     const result = buildCustomModelInjection(entryOrThrow('deepseek'), endpoint, 'qwen3');
-    if (result.kind !== 'env') throw new Error('unreachable');
-    expect(result.envOverrides).toEqual({
-      DEEPSEEK_BASE_URL: 'http://192.168.1.50:8080/v1',
-      DEEPSEEK_API_KEY: 'my-key',
-    });
+    if (result.kind !== 'configDir') throw new Error('Expected isolated DeepSeek config');
+    expect(result.dirEnvVar).toBe('DSH_HOME');
+    expect(result.extraEnv).toEqual({ DEEPSEEK_API_KEY: 'my-key' });
+    expect(result.files[0].content).not.toContain('my-key');
+    const patch = JSON.parse(result.files[0].content);
+    expect(patch.find((row: { id: string }) => row.id === 'dsh-tui').config.model).toBe('qwen3');
   });
 
-  it('deepseek: appending the /v1 suffix is idempotent against a baseUrl that already ends in /v1', () => {
+  it('deepseek: preserves an existing version suffix', () => {
     const result = buildCustomModelInjection(
       entryOrThrow('deepseek'),
-      { ...endpoint, baseUrl: 'http://192.168.1.50:8080/v1' },
+      { ...endpoint, baseUrl: endpoint.baseUrl + '/v1' },
       'qwen3'
     );
-    if (result.kind !== 'env') throw new Error('unreachable');
-    expect(result.envOverrides.DEEPSEEK_BASE_URL).toBe('http://192.168.1.50:8080/v1');
+    if (result.kind !== 'configDir') throw new Error('Expected isolated DeepSeek config');
+    expect(result.files[0].content).toContain('http://192.168.1.50:8080/v1');
+    expect(result.files[0].content).not.toContain('/v1/v1');
   });
 
   it('antigravity: unsupported', () => {
