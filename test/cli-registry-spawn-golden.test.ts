@@ -182,6 +182,30 @@ describe('codex', () => {
       'codex --model gpt-5 --config model_reasoning_effort=high resume roll_42'
     );
   });
+
+  it('emits the sandbox network-access config only when asked', () => {
+    expect(cx({ networkAccess: true })).toBe('codex --config sandbox_workspace_write.network_access=true');
+    expect(cx({ networkAccess: false })).toBe('codex');
+  });
+
+  // The `claudeCliVersion` option is the version every gate of THIS entry is measured
+  // against (the name predates a second gated CLI); undefined probes codex itself.
+  const cxv = (version: string | null, codexConfig?: SpawnBridgeOptions['codexConfig']) =>
+    render({ mode: 'codex', sessionId: SID, codexConfig, claudeCliVersion: version });
+
+  it('runs without the shared app-server daemon from 0.162.0, and fails closed below or unknown', () => {
+    expect(cxv('0.162.0')).toBe('codex --no-daemon');
+    expect(cxv('0.166.0')).toBe('codex --no-daemon');
+    expect(cxv('0.161.9')).toBe('codex');
+    expect(cxv(null)).toBe('codex');
+  });
+
+  it('keeps every flag ahead of the resume subcommand with the daemon flag on', () => {
+    expect(cxv('0.162.0', { dangerouslyBypassApprovals: true, networkAccess: true, resumeSessionId: 'roll_42' })).toBe(
+      'codex --no-daemon --dangerously-bypass-approvals-and-sandbox ' +
+        '--config sandbox_workspace_write.network_access=true resume roll_42'
+    );
+  });
 });
 
 describe('gemini', () => {

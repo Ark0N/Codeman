@@ -627,6 +627,7 @@ const CODEX: CliEntry = {
   launch: {
     params: {
       bypassApprovals: { type: 'bool' },
+      networkAccess: { type: 'bool' },
       animations: { type: 'bool' },
       model: { type: 'token', pattern: 'model' },
       reasoningEffort: { type: 'enum', values: [...CODEX_REASONING_EFFORTS] },
@@ -637,7 +638,33 @@ const CODEX: CliEntry = {
         id: 'default',
         args: [
           { lit: 'codex' },
+          // Codex 0.162 hands every client's tool commands to ONE shared background
+          // app-server (`codex app-server --managed-daemon`), started by whichever client
+          // came first. Two things break inside a Codeman pane, both measured 2026-11-01 on
+          // 0.162.0: the commands run with the STARTER's environment, so
+          // `$CODEMAN_SESSION_ID`/`$CODEMAN_API_URL` belong to another session (the codeman
+          // skill's self-check 404s and its delete guard protects the wrong id), and a daemon
+          // of another version (a 0.166 one left by a later install) stops every launch on an
+          // "incompatible feature settings" dialog before the composer appears. `--no-daemon`
+          // runs this session's own in-process server, which is what a pane per session
+          // means anyway. Gated at the version it was measured on; an older or unknown
+          // codex gets nothing (fail-closed), since an unknown flag makes codex exit.
+          { flag: '--no-daemon', when: { capabilityGate: 'noDaemonFlag' } },
           { flag: '--dangerously-bypass-approvals-and-sandbox', when: { param: 'bypassApprovals', is: true } },
+          // Lets commands in codex's workspace-write sandbox open network connections,
+          // Codeman's own API on loopback included (the codeman skill's curl calls fail
+          // with "couldn't connect" without it). Narrower than the bypass above: the
+          // sandbox and the approval prompts stay. Measured on 0.162.0 (`codex sandbox` and
+          // a live pane): loopback stays blocked under workspace-write until this is set.
+          // ⚠️ Workspace-write ONLY: a folder codex runs read-only (one it does not trust,
+          // such as a fresh non-git case) keeps the network closed and asks per command.
+          // Deliberately not paired with `--sandbox workspace-write`, which would also
+          // grant write access to a folder codex itself chose not to trust.
+          {
+            flag: '--config',
+            value: 'sandbox_workspace_write.network_access=true',
+            when: { param: 'networkAccess', is: true },
+          },
           { flag: '--config', value: 'tui.animations=true', when: { param: 'animations', is: true } },
           { flag: '--config', value: 'tui.animations=false', when: { param: 'animations', is: false } },
           { flag: '--model', valueFrom: 'model', when: { param: 'model', state: 'set' } },
@@ -803,7 +830,14 @@ const CODEX: CliEntry = {
     // App Settings → Codex model / reasoning effort (synced), filled into a LOCAL launch's
     // codexConfig wherever the caller left the field unset. Launch-only: nothing writes
     // codex's own config.toml. Read by applyLaunchDefaults() in src/web/launch-defaults.ts.
-    launchDefaults: { model: 'codexModel', reasoningEffort: 'codexReasoningEffort' },
+    // `networkAccess` (App Settings → Codex → Allow network access) rides the same path, so
+    // a codex session started by the codeman skill, `codeman agent spawn` or the MCP server
+    // gets it as well as one started from the browser. Off (the default) fills nothing.
+    launchDefaults: {
+      model: 'codexModel',
+      reasoningEffort: 'codexReasoningEffort',
+      networkAccess: 'codexNetworkAccess',
+    },
     // Two columns, like claude's, measured on a live 0.154.0 answer: the `•`/`›`/`⚠`
     // markers sit in the gutter, prose continuations sit at 2, and a nested YAML block
     // the model wrote rendered at 2/4/6/8 for its own 0/2/4/6. Replayed at 100, 120,
@@ -828,7 +862,19 @@ const CODEX: CliEntry = {
     // does. codex is the entry where the two names differ (`bypassApprovals` here,
     // `dangerouslyBypassApprovals` on the wire), so it is the one that would have caught a
     // regression; `schema.ts` now rejects a name that is not a declared param.
-    privilegedParams: [{ param: 'bypassApprovals', clampTo: false }],
+    //
+    // `networkAccess` widens the sandbox too (any host, not just Codeman's loopback API), so
+    // a non-granted owner gets it forced off like the bypass. Only-if-sent is enough here as
+    // well: an absent value leaves codex's own no-network default, and the launch default
+    // above is filled BEFORE the clamp runs, so a filled `true` is still clamped.
+    privilegedParams: [
+      { param: 'bypassApprovals', clampTo: false },
+      { param: 'networkAccess', clampTo: false },
+    ],
+    // `--no-daemon` above. Evaluated against codex's OWN version (resolveSessionCliVersion).
+    gates: {
+      noDaemonFlag: { minVersion: '0.162.0', failClosed: true },
+    },
     mcpConfig: {
       path: '.codex/config.toml',
       format: 'codex-toml',

@@ -60,6 +60,10 @@ land in `~/.claude`; pass `--working-dir ~` to mean it). Directory launches keep
 mark the project as agent scratch. If startup fails or is ambiguous, the CLI
 reports the exact created ID: inspect it before retrying or cleaning up.
 
+**`codeman: command not found` is not a dead end.** Some installs (a server run from a
+source checkout, for one) put no `codeman` on PATH. Do not stop there: §0 and §1 below
+are the same verbs over `curl`, and need nothing but `curl` and `jq`.
+
 ## 0. Guard and bootstrap
 
 For live API operations, if `CODEMAN_MUX` is not `1`, **stop and say so**.
@@ -68,13 +72,21 @@ Do not guess an API URL; a server you are not part of is not yours to drive.
 Two failures come from your CLI, not from Codeman: name them to the user instead of
 retrying.
 
-- **Every call fails at once with "couldn't connect" or "connection refused".** Your
-  CLI's sandbox blocks network access, even to this machine. Codex's default sandbox
-  does; it needs **Bypass approvals and sandbox** (Codeman App Settings, Codex).
+- **Every call fails at once with "couldn't connect", "connection refused" or `connect
+  EPERM`.** Your CLI's sandbox blocks network access, even to this machine. If your CLI
+  can ask the user to run a command outside its sandbox (Codex can), re-run **the same
+  command** once that way, never a different one; if the user declines, stop. For lasting
+  access in Codex, the user turns on **Allow network access** (Codeman App Settings,
+  Codex) and starts a new Codex session: it opens the network wherever Codex runs the
+  folder workspace-write, and keeps the sandbox and approvals. A folder Codex runs
+  read-only still needs the per-command approval (or `/permissions`). **Bypass approvals
+  and sandbox** works everywhere but drops the sandbox and approvals.
 - **`"${CURL[@]}" -o /dev/null -w '%{http_code}' "$API/api/v1/sessions/$SELF"` prints
   `404`.** The commands you run do not carry this session's environment: Codex can run them in a shared background
   process another session started, so `$CODEMAN_SESSION_ID` (and with it `$SELF` and
-  the delete guard) is that session's. Delete nothing; tell the user.
+  the delete guard) is that session's. Delete nothing; tell the user. Codeman starts
+  Codex 0.162 and later with `--no-daemon` to prevent this, so seeing it means an older
+  Codex or a server that predates that.
 
 ⚠️ **Your shell state does not survive between tool calls.** Each Bash call starts a
 fresh shell, so `$API`, `$SELF`, the `CURL` array and `delete_session` are all gone by

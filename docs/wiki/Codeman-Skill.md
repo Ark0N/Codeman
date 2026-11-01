@@ -140,12 +140,22 @@ message a worker directly instead of typing into its terminal.
 
 Two things to know:
 
-- Codex's default sandbox blocks network access, even to this machine, so the skill needs
-  **Bypass approvals and sandbox** (App Settings, Codex).
+- Codex's default sandbox blocks network access, even to this machine, so turn on
+  **Allow network access** (App Settings, Codex) for a Codex session that should start and
+  drive others. It applies to Codex sessions started after you switch it on, and it keeps
+  Codex's sandbox and approval prompts. It opens the network only where Codex runs the
+  folder in its workspace-write sandbox, which is what Codex does for a project you
+  trusted. In a folder Codex runs read-only (a new case that is not a git repository, for
+  one), Codex asks you to approve each call to Codeman instead; `/permissions` in Codex
+  switches that session to workspace-write. **Bypass approvals and sandbox** works
+  everywhere, but removes the sandbox and the approval prompts.
 - Codex 0.162 runs its commands in a shared background process, whose Codeman variables can
-  belong to the session that started it.
+  belong to the session that started it. Codeman starts Codex 0.162 and later with
+  `--no-daemon`, so each session runs its own; with an older Codex the skill notices and
+  says so instead of acting.
 
-The skill checks for both and says so instead of acting.
+OpenCode and DeepSeek Harness need nothing extra: in their default setup neither keeps its
+shell commands off the network, so the skill works there as soon as it is injected.
 
 ## What is in the skill
 

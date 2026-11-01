@@ -697,6 +697,7 @@ Object.assign(CodemanApp.prototype, {
     // that does have it.
     document.getElementById('appSettingsCodexDangerouslyBypassApprovals').checked =
       settings.codexDangerouslyBypassApprovals ?? false;
+    document.getElementById('appSettingsCodexNetworkAccess').checked = settings.codexNetworkAccess ?? false;
     document.getElementById('appSettingsCodexAnimations').checked =
       settings.codexAnimationsEnabled ?? false;
     document.getElementById('appSettingsCodexModel').value = settings.codexModel ?? '';
@@ -3072,6 +3073,7 @@ Object.assign(CodemanApp.prototype, {
       codexModel: document.getElementById('appSettingsCodexModel').value.trim(),
       codexReasoningEffort: document.getElementById('appSettingsCodexReasoningEffort').value,
       codexDangerouslyBypassApprovals: document.getElementById('appSettingsCodexDangerouslyBypassApprovals').checked,
+      codexNetworkAccess: document.getElementById('appSettingsCodexNetworkAccess').checked,
       codexAnimationsEnabled: document.getElementById('appSettingsCodexAnimations').checked,
       // Claude Permissions settings
       agentTeamsEnabled: document.getElementById('appSettingsAgentTeams').checked,
