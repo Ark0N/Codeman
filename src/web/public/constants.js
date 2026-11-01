@@ -2348,8 +2348,9 @@ function spacedFilePathOnLine(line) {
  * The own-line detector never sees `(/mnt/data/Kobo/Kobo eReader.conf)`: prose
  * precedes the path, and the closing paren means the line does not end on an
  * extension, so the folder detector linked the directory prefix. The inside of
- * each pair is judged on its own ({@link spacedPathBoundedByParens}). Inner
- * pairs are reported first, and the caller drops a later hit that overlaps one.
+ * each pair is judged on its own ({@link spacedPathBoundedByParens}). A
+ * call-shaped `Name(` takes that path only when the space sits in a directory.
+ * Inner pairs are reported first, and the caller drops a later hit that overlaps one.
  *
  * @param {string} line
  * @returns {Array<{path: string, index: number, link: boolean}>}
@@ -2365,6 +2366,10 @@ function parenthesisedSpacedPaths(line) {
       const open = stack.pop();
       const inner = text.slice(open + 1, i);
       const hit = spacedPathBoundedByParens(inner);
+      // A call-shaped `Name(` wraps a command as often as a path: there, take the
+      // spaced path only when the space sits in a directory.
+      const called = open > 0 && /\w/.test(text[open - 1]);
+      if (hit && called && !hit.path.split(' ').slice(1).some((word) => word.includes('/'))) continue;
       if (hit) hits.push({ path: hit.path, index: open + 1 + hit.index, link: hit.link });
     }
   }

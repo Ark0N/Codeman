@@ -471,4 +471,27 @@ describe('parenthesised paths with spaces (#733)', () => {
     expect(paths(line)).toEqual([line]);
     expect(paths(`(${line})`)).toEqual([line]);
   });
+
+  // A call-shaped `Name(` wraps a command as often as a path. Master links the
+  // file (and the folder the executable sits in), never the whole command.
+  it.each([
+    ['Bash(/tmp/a.out input.txt)', [{ path: 'input.txt' }]],
+    [
+      'Bash(/home/me/proj/build/mytool convert input.json)',
+      [{ path: '/home/me/proj/build/mytool', folder: true }, { path: 'input.json' }],
+    ],
+    [
+      'Bash(/home/me/proj/target/release/app config.toml)',
+      [{ path: '/home/me/proj/target/release/app', folder: true }, { path: 'config.toml' }],
+    ],
+  ])('links %s the way master does, not as the whole command', (line, linked) => {
+    const found = findFilePathLinks(line).map(({ path, folder }) => (folder ? { path, folder } : { path }));
+    expect(found).toEqual(linked);
+    expect(found.map((hit) => hit.path)).not.toContain(line.slice(line.indexOf('(') + 1, -1));
+  });
+
+  it('keeps a call-shaped path whose space sits in a directory', () => {
+    const path = '/home/me/proj/My Docs/notes.md';
+    expect(paths(`Update(${path})`)).toEqual([path]);
+  });
 });
