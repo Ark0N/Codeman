@@ -67,15 +67,23 @@ configured, `PUT`/`DELETE /api/model-endpoints/:id` update or remove one.
 Endpoint management is admin-only in multi-user mode, same as remote/docker
 hosts — these are machine-level infra, not per-user settings.
 
-**Context length is discovered too, opportunistically and safely.** The plain
-`GET /v1/models` response has no context-window field. Discovery only ever
-looks for one for a model llama-swap's own response already reports
+**Context length is discovered too, opportunistically and safely.** Older
+servers state no context-window field in the plain `GET /v1/models`
+response at all; current llama-swap states one per model (both
+`context_length` and `context_window`) and gateways like Bifrost pass
+`context_window` through — that listed figure is the *lowest*-precedence
+source, used only when neither probe below answers, and because llama-swap
+documents it as the PER-SLOT window, a model whose figure comes from the
+listing is recorded with a slot count of 1 so the slot check never divides a
+per-slot figure a second time. The probes are only ever looked for on a model
+llama-swap's own response already reports
 `status.value === "loaded"` for — never for an unloaded one, because
 llama-swap treats `?model=` as a routing hint and asking about a model that
 isn't loaded risks triggering an actual (slow, GPU-swapping) load as a side
 effect of what should be read-only discovery. A server with no `status` field
-on any entry at all (not llama-swap) gets no context-length enrichment,
-rather than guessing. A model's previously-learned context length survives a
+on any entry at all (not llama-swap) gets no launch-command/`/props`
+enrichment, only whatever its listings state — rather than guessing. A
+model's previously-learned context length survives a
 later cycle where it wasn't the loaded one; it's dropped only once the model
 disappears from the endpoint's list entirely. Stored per model in
 `modelContextLengths` and applied automatically (see "Applying a model to a
@@ -293,14 +301,16 @@ agent, so the selection would report success and change nothing.
 **Claude gets two more env vars when known/applicable, both declared on its
 registry entry (`contextLengthVar`/`configDirVar`), not hardcoded here:**
 
-- `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is set to `modelId`'s discovered context
-  length (see the discovery section above) whenever one is known. Without
+- `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is set to `modelId`'s context length —
+  the discovered figure (see the discovery section above), falling back to
+  the endpoint's user-set `defaultContextLength` — whenever one is known.
+  Without
   it, Claude Code assumes a large (200k) window for any unrecognized custom
   model id and never compacts, which reliably overflows a much smaller real
   local context — confirmed live: a stock ~33.7K-token system prompt against
   a 16384-token llama-swap model failed with `exceeds the available context
-size`. No entry for the model in `modelContextLengths` means the var is
-  simply omitted, never a guess. ⚠️ **This var only affects when Claude
+size`. Neither a `modelContextLengths` entry nor a `defaultContextLength`
+  for the model means the var is simply omitted, never a guess. ⚠️ **This var only affects when Claude
   Code compacts conversation _history_ — it cannot fix a model whose real
   context is smaller than Claude Code's own fixed per-turn overhead**
   (system prompt + tool schemas, empirically ~36.4K tokens, confirmed live

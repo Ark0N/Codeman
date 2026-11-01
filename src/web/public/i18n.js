@@ -630,6 +630,9 @@
     'Last used': '上次使用',
     'That endpoint no longer exists': '该端点已不存在',
     'No models discovered for this endpoint yet': '此端点尚未发现任何模型',
+    // Model picker search box (index.html placeholder/aria-label and the no-matches line)
+    'Search models': '搜索模型',
+    'No models match': '没有匹配的模型',
     'Subagent Options': '子智能体选项',
     'Enable Tracking': '启用跟踪',
     'Active Tab Only': '仅活动标签页',

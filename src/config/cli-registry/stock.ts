@@ -628,7 +628,10 @@ const CODEX: CliEntry = {
     params: {
       bypassApprovals: { type: 'bool' },
       animations: { type: 'bool' },
-      model: { type: 'token', pattern: 'model' },
+      // `model-plain-colon`, not `model`: the custom-model feature forces the selected id
+      // onto this param (`launchModel: '{modelId}'` below), and Ollama-style ids carry a
+      // `:` (`qwen3:32b`). A leading alphanumeric still keeps `--yolo` from riding a flag.
+      model: { type: 'token', pattern: 'model-plain-colon' },
       reasoningEffort: { type: 'enum', values: [...CODEX_REASONING_EFFORTS] },
       resumeId: { type: 'token', pattern: 'id' },
     },
@@ -1922,8 +1925,8 @@ const COPILOT: CliEntry = {
     // custom provider and drops the GitHub sign-in requirement; COPILOT_PROVIDER_TYPE defaults to
     // "openai", which is what a Codeman custom endpoint is (llama.cpp, vLLM, Ollama).
     // COPILOT_MODEL names the model and COPILOT_PROVIDER_MODEL_ID / _WIRE_MODEL default to it.
-    // The OpenAI-style route is `<base>/v1/chat/completions`, so the base gets the `/v1` suffix
-    // the same way deepseek's does. All four already match the COPILOT_ prefix allowlist, so
+    // The OpenAI-style route is `<base>/v1/chat/completions`, so the base gets the `/v1`
+    // suffix via appendV1Suffix below. All four already match the COPILOT_ prefix allowlist, so
     // they are privileged env keys below: a non-granted multi-user owner must not be able to
     // redirect the session's endpoint or credentials through plain envOverrides.
     customModelInjection: {

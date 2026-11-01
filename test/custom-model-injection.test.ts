@@ -112,20 +112,20 @@ describe('buildCustomModelInjection', () => {
     expect(parsed.provider.custom.models.qwen3).toEqual({});
   });
 
-  it('opencode: threads a discovered context length into the model limit with response headroom (issue #749)', () => {
+  it('opencode: threads a discovered context length into the model limit as the full window (issue #749)', () => {
     const result = buildCustomModelInjection(entryOrThrow('opencode'), endpoint, 'qwen3', 16384);
     if (result.kind !== 'env') throw new Error('unreachable');
     const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
-    // One quarter held back for the reply: context 16384-4096, output 4096 — the sum is the
-    // real window, so a full-size prompt plus a max-length reply never exceeds the server.
-    expect(parsed.provider.custom.models.qwen3).toEqual({ limit: { context: 12288, output: 4096 } });
+    // `limit.context` IS the full window to opencode — it reserves for the reply itself —
+    // so the discovered total passes through; `output` only caps the reply at a quarter.
+    expect(parsed.provider.custom.models.qwen3).toEqual({ limit: { context: 16384, output: 4096 } });
   });
 
   it('opencode: caps the response headroom reservation at 8192 for big windows', () => {
     const result = buildCustomModelInjection(entryOrThrow('opencode'), endpoint, 'qwen3', 262144);
     if (result.kind !== 'env') throw new Error('unreachable');
     const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
-    expect(parsed.provider.custom.models.qwen3).toEqual({ limit: { context: 253952, output: 8192 } });
+    expect(parsed.provider.custom.models.qwen3).toEqual({ limit: { context: 262144, output: 8192 } });
   });
 
   it('opencode: never invents a limit for an unknown or non-finite context length (issue #749 regression)', () => {

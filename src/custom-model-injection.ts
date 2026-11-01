@@ -175,7 +175,9 @@ function opencodeModelLimit(contextLength: number | undefined): { context: numbe
   const total = Math.trunc(contextLength);
   if (total <= 0) return undefined;
   const output = Math.max(1, Math.min(8192, Math.floor(total / 4)));
-  return { context: total - output, output };
+  // `limit.context` is the FULL window as far as opencode is concerned — it reserves for
+  // the reply itself — so the discovered total is passed through, never a shrunk figure.
+  return { context: total, output };
 }
 
 function renderConfigContent(
@@ -189,10 +191,9 @@ function renderConfigContent(
     case 'opencode-json': {
       // `limit` carries the discovered context window (issue #749): without it opencode assumes
       // a large default window for an unrecognized model id and eventually overflows a much
-      // smaller local server. `context` is what opencode caps the PROMPT at, so the response
-      // headroom from `opencodeModelLimit` is subtracted up front — `output` is opencode's own
-      // cap on the reply, so setting them from the same discovered total keeps a single turn
-      // inside the real window.
+      // smaller local server. `context` is the FULL window and opencode reserves for the reply
+      // inside it itself, so `opencodeModelLimit` passes the real total through and only
+      // `output` gets the capped reservation.
       const limit = opencodeModelLimit(contextLength);
       return JSON.stringify({
         $schema: 'https://opencode.ai/config.json',
