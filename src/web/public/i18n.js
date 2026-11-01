@@ -651,6 +651,11 @@
     'Default context length (tokens)': '默认上下文长度（token 数）',
     "Used for models whose size cannot be discovered. The model's whole window; the Claude floor check divides it by any stored slot count. Leave empty to let each CLI assume its own default.":
       '用于无法自动发现上下文大小的模型。这是模型的完整窗口；Claude 下限检查会将其除以已存储的槽位数。留空则让各个 CLI 使用其自身的默认值。',
+    'Endpoint type': '端点类型',
+    'OpenAI uses /v1, Anthropic uses /anthropic/v1. Model discovery always uses the gateway\'s OpenAI /v1/models.':
+      'OpenAI 使用 /v1，Anthropic 使用 /anthropic/v1。模型发现始终使用网关的 OpenAI /v1/models。',
+    'OpenAI (default)': 'OpenAI（默认）',
+    Anthropic: 'Anthropic',
     'Never send both — some servers hang indefinitely.': '切勿同时发送两者 — 部分服务器会因此无限期挂起。',
     'Authorization: Bearer (default)': 'Authorization: Bearer（默认）',
     'api-key header (Azure)': 'api-key 请求头（Azure）',

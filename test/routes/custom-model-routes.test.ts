@@ -96,6 +96,62 @@ describe('custom model endpoint CRUD', () => {
     expect(res.json().errorCode).toBe('INVALID_INPUT');
   });
 
+  it('stores and returns endpointType, and rejects a value outside the enum', async () => {
+    const { app } = await setup();
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'ep-anth', label: 'A', baseUrl: 'http://localhost:8080', endpointType: 'anthropic' },
+    });
+    expect(create.statusCode).toBe(200);
+    expect(create.json().data.host.endpointType).toBe('anthropic');
+
+    const list = await app.inject({ method: 'GET', url: '/api/model-endpoints' });
+    const stored = (list.json() as Array<{ id: string; endpointType?: string }>).find((h) => h.id === 'ep-anth');
+    expect(stored?.endpointType).toBe('anthropic');
+
+    const bad = await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'ep-bad', label: 'A', baseUrl: 'http://localhost:8080', endpointType: 'grpc' },
+    });
+    expect(bad.json().success).toBe(false);
+    expect(bad.json().errorCode).toBe('INVALID_INPUT');
+  });
+
+  it('updates endpointType on PUT', async () => {
+    const { app } = await setup();
+    await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'ep-sw', label: 'A', baseUrl: 'http://localhost:8080' },
+    });
+    const update = await app.inject({
+      method: 'PUT',
+      url: '/api/model-endpoints/ep-sw',
+      payload: { label: 'A', baseUrl: 'http://localhost:8080', endpointType: 'anthropic' },
+    });
+    expect(update.statusCode).toBe(200);
+    expect(update.json().data.host.endpointType).toBe('anthropic');
+  });
+
+  it('an Anthropic-type endpoint is still discovered through the gateway OpenAI /v1/models route', async () => {
+    const { app } = await setup();
+    await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'ep-disc', label: 'A', baseUrl: 'http://localhost:8080', apiKey: 'k', endpointType: 'anthropic' },
+    });
+
+    fetchMock.mockImplementation(async (url: URL) => {
+      expect(url.href).toBe('http://localhost:8080/v1/models');
+      return new Response(JSON.stringify({ data: [{ id: 'claude-alias' }] }), { status: 200 });
+    });
+
+    const res = await app.inject({ method: 'POST', url: '/api/model-endpoints/ep-disc/discover-models' });
+    expect(res.json().data.models).toEqual(['claude-alias']);
+  });
+
   it('discovers models via GET /v1/models and stores the result', async () => {
     const { app } = await setup();
     await app.inject({

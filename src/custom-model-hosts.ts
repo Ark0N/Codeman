@@ -16,11 +16,25 @@ const CUSTOM_MODEL_HOSTS_FILE = 'custom-model-hosts.json';
 
 export type CustomModelAuthStyle = 'bearer' | 'api-key';
 
+/**
+ * Which wire protocol the injected harness should speak against `baseUrl`. Omitted
+ * means 'openai' — every endpoint saved before this field existed is OpenAI-compat,
+ * and the default must not silently re-point them at a different route family.
+ * 'anthropic' points gateways that expose the Anthropic Messages protocol (e.g.
+ * Bifrost's `/anthropic/v1` route) at CLIs that speak it natively (Claude Code via
+ * ANTHROPIC_BASE_URL, OpenCode via the @ai-sdk/anthropic provider, pi/omp via
+ * `anthropic-messages`). Model DISCOVERY stays on the gateway's OpenAI `/v1/models`
+ * regardless of this field — the gateway's catalog is protocol-agnostic.
+ */
+export type CustomModelEndpointType = 'openai' | 'anthropic';
+
 export interface CustomModelHost {
   id: string;
   label: string;
   /** Root URL, local or cloud — e.g. "http://192.168.1.50:8080" or an Azure AI Foundry URL. */
   baseUrl: string;
+  /** Which protocol to inject for this endpoint; see `CustomModelEndpointType`. Omitted = 'openai'. */
+  endpointType?: CustomModelEndpointType;
   apiKey?: string;
   /**
    * Defaults to 'bearer' (the common `Authorization: Bearer` convention — matches

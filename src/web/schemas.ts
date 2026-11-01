@@ -2440,6 +2440,10 @@ export const CustomModelHostSchema = z.object({
   // No 'both': live-tested against a real server, sending both auth header
   // conventions on one request reliably HANGS it — see custom-model-hosts.ts.
   authStyle: z.enum(['bearer', 'api-key']).optional(),
+  // Wire protocol to inject: 'anthropic' points Anthropic-native harnesses at the
+  // gateway's Anthropic route; omitted keeps the long-standing OpenAI behaviour.
+  // Model discovery ignores it (always the gateway's OpenAI /v1/models) — custom-model-hosts.ts.
+  endpointType: z.enum(['openai', 'anthropic']).optional(),
   models: z.array(z.string().max(200)).max(200).optional(),
   lastDiscoveredAt: z.string().max(64).optional(),
   // The Run-menu picker's per-endpoint default; validated against `models` at the

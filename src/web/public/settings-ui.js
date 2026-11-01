@@ -3992,6 +3992,7 @@ Object.assign(CodemanApp.prototype, {
     // User-set fallback, round-tripped verbatim (discovery never touches it, so the
     // cached copy is authoritative); blank means "no default", cleared on save.
     document.getElementById('customModelHostDefaultContextLength').value = host?.defaultContextLength ?? '';
+    document.getElementById('customModelHostEndpointType').value = host?.endpointType || 'openai';
     this._populateCustomModelDefaultSelect(host);
     document.getElementById('customModelHostEditor').style.display = '';
   },
@@ -4029,6 +4030,7 @@ Object.assign(CodemanApp.prototype, {
       }
       defaultContextLength = parsed;
     }
+    const endpointType = document.getElementById('customModelHostEndpointType').value || 'openai';
     const defaultModelId = document.getElementById('customModelHostDefaultModel').value || undefined;
     if (!id || !label || !baseUrl) {
       this.showToast('Id, label and base URL are all required', 'warning');
@@ -4047,6 +4049,7 @@ Object.assign(CodemanApp.prototype, {
       id,
       label,
       baseUrl,
+      endpointType,
       authStyle,
       defaultModelId,
       defaultContextLength,

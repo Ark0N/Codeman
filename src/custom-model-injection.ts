@@ -35,6 +35,7 @@
  */
 
 import type { CliEntry } from './config/cli-registry/types.js';
+import type { CustomModelEndpointType } from './custom-model-hosts.js';
 
 export interface CustomModelEndpoint {
   id: string;
@@ -43,6 +44,14 @@ export interface CustomModelEndpoint {
   baseUrl: string;
   /** Falls back to a harmless placeholder for endpoints (llama.cpp) that don't check it. */
   apiKey?: string;
+  /**
+   * Which wire protocol to inject; omitted means 'openai' (every endpoint saved
+   * before the field existed). Only some injection recipes can honour
+   * 'anthropic' — the rest return `{ kind: 'unsupported' }` rather than point an
+   * OpenAI-only CLI at an Anthropic route. See `withAnthropicV1Suffix` /
+   * `withAnthropicRootSuffix` and the `supportsAnthropic` registry flag.
+   */
+  endpointType?: CustomModelEndpointType;
 }
 
 export interface EnvInjection {
@@ -103,10 +112,40 @@ export type CustomModelInjectionResult = EnvInjection | ConfigDirInjection | Uns
 
 const DEFAULT_API_KEY = 'local-dummy-key';
 
+/** `configDir` templates whose file format has an `anthropic-messages` api value (pi and omp, both pi-ai lineage). */
+const ANTHROPIC_CAPABLE_CONFIG_TEMPLATES: ReadonlySet<string> = new Set(['pi-models-json', 'omp-models-yml']);
+
 /** Normalizes a base URL to end in exactly one trailing `/v1`, for CLIs whose config expects the OpenAI-style suffix. */
 export function withV1Suffix(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '');
   return /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
+}
+
+/**
+ * Normalizes a gateway root to the complete Anthropic Messages API base a CLI appends
+ * `…/messages` to itself: exactly one trailing `/anthropic/v1` (what Bifrost-style
+ * gateways serve — they add `/messages`, not `/v1/messages`). Idempotent on a root that
+ * already carries the full prefix, completes a bare `/anthropic`, and trades a saved
+ * OpenAI-style trailing `/v1` for the Anthropic one rather than stacking it.
+ */
+export function withAnthropicV1Suffix(baseUrl: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  if (/\/anthropic\/v1$/.test(trimmed)) return trimmed;
+  if (/\/anthropic$/.test(trimmed)) return `${trimmed}/v1`;
+  return `${trimmed.replace(/\/v1$/, '')}/anthropic/v1`;
+}
+
+/**
+ * Same idea for Claude Code, whose own SDK appends `/v1/messages` to `ANTHROPIC_BASE_URL`:
+ * the injected root must end in exactly `/anthropic` with NO `/v1` (the SDK supplies it),
+ * so a saved `/anthropic/v1` root gets its `/v1` traded away rather than duplicated into
+ * `/anthropic/v1/v1/messages`.
+ */
+export function withAnthropicRootSuffix(baseUrl: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  if (/\/anthropic\/v1$/.test(trimmed)) return trimmed.replace(/\/v1$/, '');
+  if (/\/anthropic$/.test(trimmed)) return trimmed;
+  return `${trimmed.replace(/\/v1$/, '')}/anthropic`;
 }
 
 /** JSON-escapes a string for embedding in a TOML/YAML double-quoted scalar — a safe superset of both grammars' basic escapes. */
@@ -126,8 +165,18 @@ export function buildCustomModelInjection(
 
   switch (cap.kind) {
     case 'env': {
+      const anthropic = endpoint.endpointType === 'anthropic';
+      // An Anthropic-type endpoint only injects into env recipes that natively speak
+      // the Anthropic Messages protocol (claude's ANTHROPIC_BASE_URL) — pointing a
+      // Gemini/OpenAI-convention env var at the gateway's /anthropic route would just
+      // 404 or worse, answer a protocol the CLI cannot parse.
+      if (anthropic && !cap.supportsAnthropic) return { kind: 'unsupported' };
       const envOverrides: Record<string, string> = {
-        [cap.baseUrlVar]: cap.appendV1Suffix ? withV1Suffix(endpoint.baseUrl) : endpoint.baseUrl,
+        [cap.baseUrlVar]: anthropic
+          ? withAnthropicRootSuffix(endpoint.baseUrl)
+          : cap.appendV1Suffix
+            ? withV1Suffix(endpoint.baseUrl)
+            : endpoint.baseUrl,
         [cap.apiKeyVar]: apiKey,
       };
       for (const modelVar of cap.modelVars) envOverrides[modelVar] = modelId;
@@ -147,6 +196,13 @@ export function buildCustomModelInjection(
     }
 
     case 'configDir': {
+      // pi and omp share pi-ai's `anthropic-messages` api value; codex (wire_api is
+      // "responses"-only) and grok (chat_completions-only backend) have no Anthropic
+      // route to write, so an Anthropic-type endpoint there is refused here, loudly
+      // unsupported, never silently injected as OpenAI.
+      if (endpoint.endpointType === 'anthropic' && !ANTHROPIC_CAPABLE_CONFIG_TEMPLATES.has(cap.template)) {
+        return { kind: 'unsupported' };
+      }
       const { content, extraEnv } = renderConfigFile(cap.template, endpoint, modelId, apiKey, contextLength);
       return withLaunchModel(
         {
@@ -209,11 +265,20 @@ function renderConfigContent(
       // inside it itself, so `opencodeModelLimit` passes the real total through and only
       // `output` gets the capped reservation.
       const limit = opencodeModelLimit(contextLength);
+      // Anthropic-type endpoint: opencode ships the Anthropic protocol in its `npm`
+      // provider packages, and the default (no `npm` = the OpenAI chat-completions
+      // client) would speak the wrong protocol against the gateway's /anthropic route.
+      // `@ai-sdk/anthropic` appends `/messages` to a baseURL ending `/anthropic/v1`.
+      const anthropic = endpoint.endpointType === 'anthropic';
       return JSON.stringify({
         $schema: 'https://opencode.ai/config.json',
         provider: {
           custom: {
-            options: { baseURL: withV1Suffix(endpoint.baseUrl), apiKey },
+            ...(anthropic ? { npm: '@ai-sdk/anthropic' } : {}),
+            options: {
+              baseURL: anthropic ? withAnthropicV1Suffix(endpoint.baseUrl) : withV1Suffix(endpoint.baseUrl),
+              apiKey,
+            },
             models: { [modelId]: limit ? { limit } : {} },
           },
         },
@@ -243,7 +308,10 @@ function renderConfigFile(
   apiKey: string,
   contextLength?: number
 ): { content: string; extraEnv?: Record<string, string> } {
-  const baseUrl = withV1Suffix(endpoint.baseUrl);
+  // Only the two pi-ai-lineage templates below can reach this with an Anthropic-type
+  // endpoint — the builder refuses codex/grok before calling in.
+  const anthropic = endpoint.endpointType === 'anthropic';
+  const baseUrl = anthropic ? withAnthropicV1Suffix(endpoint.baseUrl) : withV1Suffix(endpoint.baseUrl);
   switch (template) {
     case 'deepseek-patch-json': {
       const route = { provider: 'codeman-custom', model: modelId };
@@ -334,7 +402,7 @@ function renderConfigFile(
               custom: {
                 baseUrl,
                 apiKey,
-                api: 'openai-completions',
+                api: anthropic ? 'anthropic-messages' : 'openai-completions',
                 authHeader: true,
                 models: [{ id: modelId }],
               },
@@ -352,7 +420,7 @@ function renderConfigFile(
       // shape and adds `authHeader: true` on the same reasoning, but has not itself
       // been live-tested the way pi's fix was. Verify before raising its confidence.
       return {
-        content: `providers:\n  custom:\n    baseUrl: ${quoted(baseUrl)}\n    apiKey: ${quoted(apiKey)}\n    api: openai-completions\n    authHeader: true\n    models:\n      - id: ${quoted(modelId)}\n`,
+        content: `providers:\n  custom:\n    baseUrl: ${quoted(baseUrl)}\n    apiKey: ${quoted(apiKey)}\n    api: ${anthropic ? 'anthropic-messages' : 'openai-completions'}\n    authHeader: true\n    models:\n      - id: ${quoted(modelId)}\n`,
       };
     case 'grok-toml': {
       // Verified against xAI's own docs (docs.x.ai/build/settings/reference): a

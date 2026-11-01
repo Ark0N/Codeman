@@ -13,6 +13,8 @@ import { getCli } from '../src/config/cli-registry/index.js';
 import {
   buildCustomModelInjection,
   withV1Suffix,
+  withAnthropicV1Suffix,
+  withAnthropicRootSuffix,
   GROK_CUSTOM_MODEL_NAME,
   type CustomModelEndpoint,
 } from '../src/custom-model-injection.js';
@@ -42,6 +44,42 @@ describe('withV1Suffix', () => {
 
   it('strips a trailing slash with no /v1', () => {
     expect(withV1Suffix('http://host:8080/')).toBe('http://host:8080/v1');
+  });
+});
+
+describe('withAnthropicV1Suffix', () => {
+  it('appends /anthropic/v1 to a bare gateway root', () => {
+    expect(withAnthropicV1Suffix('http://host:8080')).toBe('http://host:8080/anthropic/v1');
+    expect(withAnthropicV1Suffix('http://host:8080/')).toBe('http://host:8080/anthropic/v1');
+  });
+
+  it('is idempotent when the full prefix is already present', () => {
+    expect(withAnthropicV1Suffix('http://host:8080/anthropic/v1')).toBe('http://host:8080/anthropic/v1');
+    expect(withAnthropicV1Suffix('http://host:8080/anthropic/v1/')).toBe('http://host:8080/anthropic/v1');
+  });
+
+  it('completes a bare /anthropic without duplicating it', () => {
+    expect(withAnthropicV1Suffix('http://host:8080/anthropic')).toBe('http://host:8080/anthropic/v1');
+  });
+
+  it('trades a saved OpenAI-style trailing /v1 rather than stacking it', () => {
+    expect(withAnthropicV1Suffix('http://host:8080/v1')).toBe('http://host:8080/anthropic/v1');
+  });
+});
+
+describe('withAnthropicRootSuffix', () => {
+  it('appends /anthropic to a bare gateway root (Claude Code SDK supplies the /v1 itself)', () => {
+    expect(withAnthropicRootSuffix('http://host:8080')).toBe('http://host:8080/anthropic');
+    expect(withAnthropicRootSuffix('http://host:8080/')).toBe('http://host:8080/anthropic');
+  });
+
+  it('is idempotent when /anthropic is already present', () => {
+    expect(withAnthropicRootSuffix('http://host:8080/anthropic')).toBe('http://host:8080/anthropic');
+  });
+
+  it('drops a trailing /v1 rather than producing /anthropic/v1/v1/messages', () => {
+    expect(withAnthropicRootSuffix('http://host:8080/anthropic/v1')).toBe('http://host:8080/anthropic');
+    expect(withAnthropicRootSuffix('http://host:8080/v1')).toBe('http://host:8080/anthropic');
   });
 });
 
@@ -265,6 +303,80 @@ describe('buildCustomModelInjection', () => {
   it('shell: unsupported', () => {
     const result = buildCustomModelInjection(entryOrThrow('shell'), endpoint, 'qwen3');
     expect(result).toEqual({ kind: 'unsupported' });
+  });
+});
+
+describe('buildCustomModelInjection with endpointType: anthropic', () => {
+  const anthropicEndpoint: CustomModelEndpoint = { ...endpoint, endpointType: 'anthropic' };
+
+  it('claude: ANTHROPIC_BASE_URL gets the /anthropic root, no /v1 (its SDK appends /v1/messages)', () => {
+    const result = buildCustomModelInjection(entryOrThrow('claude'), anthropicEndpoint, 'qwen3');
+    if (result.kind !== 'env') throw new Error('unreachable');
+    expect(result.envOverrides.ANTHROPIC_BASE_URL).toBe('http://192.168.1.50:8080/anthropic');
+    expect(result.envOverrides.ANTHROPIC_API_KEY).toBe('my-key');
+  });
+
+  it('claude: a saved /anthropic/v1 root is traded to /anthropic, never stacked', () => {
+    const result = buildCustomModelInjection(
+      entryOrThrow('claude'),
+      { ...anthropicEndpoint, baseUrl: 'http://192.168.1.50:8080/anthropic/v1' },
+      'qwen3'
+    );
+    if (result.kind !== 'env') throw new Error('unreachable');
+    expect(result.envOverrides.ANTHROPIC_BASE_URL).toBe('http://192.168.1.50:8080/anthropic');
+  });
+
+  it('claude: endpointType openai keeps the raw baseUrl exactly as before', () => {
+    const result = buildCustomModelInjection(entryOrThrow('claude'), { ...endpoint, endpointType: 'openai' }, 'qwen3');
+    if (result.kind !== 'env') throw new Error('unreachable');
+    expect(result.envOverrides.ANTHROPIC_BASE_URL).toBe('http://192.168.1.50:8080');
+  });
+
+  it('gemini: refused — its env recipe speaks the Google protocol, not Anthropic Messages', () => {
+    const result = buildCustomModelInjection(entryOrThrow('gemini'), anthropicEndpoint, 'qwen3');
+    expect(result).toEqual({ kind: 'unsupported' });
+  });
+
+  it('opencode: switches to the @ai-sdk/anthropic provider package and the /anthropic/v1 base', () => {
+    const result = buildCustomModelInjection(entryOrThrow('opencode'), anthropicEndpoint, 'qwen3');
+    if (result.kind !== 'env') throw new Error('unreachable');
+    const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
+    expect(parsed.provider.custom.npm).toBe('@ai-sdk/anthropic');
+    expect(parsed.provider.custom.options.baseURL).toBe('http://192.168.1.50:8080/anthropic/v1');
+  });
+
+  it('opencode: the OpenAI route carries no npm override at all (existing installs unchanged)', () => {
+    const result = buildCustomModelInjection(
+      entryOrThrow('opencode'),
+      { ...endpoint, endpointType: 'openai' },
+      'qwen3'
+    );
+    if (result.kind !== 'env') throw new Error('unreachable');
+    const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
+    expect(parsed.provider.custom.npm).toBeUndefined();
+    expect(parsed.provider.custom.options.baseURL).toBe('http://192.168.1.50:8080/v1');
+  });
+
+  it('pi: models.json switches to api anthropic-messages on the /anthropic/v1 base', () => {
+    const result = buildCustomModelInjection(entryOrThrow('pi'), anthropicEndpoint, 'qwen3');
+    if (result.kind !== 'configDir') throw new Error('unreachable');
+    const parsed = JSON.parse(result.files[0].content);
+    expect(parsed.providers.custom.api).toBe('anthropic-messages');
+    expect(parsed.providers.custom.baseUrl).toBe('http://192.168.1.50:8080/anthropic/v1');
+  });
+
+  it('omp: models.yml switches to api anthropic-messages on the /anthropic/v1 base', () => {
+    const result = buildCustomModelInjection(entryOrThrow('omp'), anthropicEndpoint, 'qwen3');
+    if (result.kind !== 'configDir') throw new Error('unreachable');
+    expect(result.files[0].content).toContain('api: anthropic-messages');
+    expect(result.files[0].content).toContain('baseUrl: "http://192.168.1.50:8080/anthropic/v1"');
+  });
+
+  it('codex, grok and deepseek: refused — their formats have no Anthropic route to write', () => {
+    for (const id of ['codex', 'grok', 'deepseek']) {
+      const result = buildCustomModelInjection(entryOrThrow(id), anthropicEndpoint, 'qwen3');
+      expect(result, id).toEqual({ kind: 'unsupported' });
+    }
   });
 });
 

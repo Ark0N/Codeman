@@ -1678,7 +1678,14 @@ export function registerSessionRoutes(
       await guardSessionConfigDirHome(entry, (envVar) => session.envOverrideValue(envVar))
     );
     if (!applied) {
-      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${session.mode} has no known custom-model mechanism`);
+      // A mechanism-less CLI and an Anthropic-type endpoint the CLI cannot speak are the
+      // same undefined here, but the fix the user needs differs, so name the protocol.
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        endpoint.endpointType === 'anthropic'
+          ? `${session.mode} cannot use an Anthropic-type endpoint (its custom-model mechanism only speaks the OpenAI-compatible protocol)`
+          : `${session.mode} has no known custom-model mechanism`
+      );
     }
 
     const { previousConfigDir } = session.setCustomModel(
@@ -4586,7 +4593,14 @@ export function registerSessionRoutes(
         await guardSessionConfigDirHome(cmEntry, (envVar) => qsGatedEnvOverrides?.[envVar])
       );
       if (!cmApplied) {
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${mode} has no known custom-model mechanism`);
+        // See the swap route above: an Anthropic-type endpoint against an OpenAI-only
+        // mechanism is refused as unsupported by the builder, and needs its own message.
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          cmEndpoint.endpointType === 'anthropic'
+            ? `${mode} cannot use an Anthropic-type endpoint (its custom-model mechanism only speaks the OpenAI-compatible protocol)`
+            : `${mode} has no known custom-model mechanism`
+        );
       }
       qsCustomModelEnvOverrides = { ...qsGatedEnvOverrides, ...cmApplied.envOverrides };
       qsCustomModelAppliedEnvOverrides = cmApplied.envOverrides;

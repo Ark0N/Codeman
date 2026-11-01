@@ -400,6 +400,10 @@ const CLAUDE: CliEntry = {
       // which a real, already-onboarded profile shows again. Pre-seeds that same
       // already-onboarded state instead of leaving a human to click through it.
       skipFirstRunPrompts: true,
+      // ANTHROPIC_BASE_URL is the Anthropic Messages protocol's own base (the SDK appends
+      // /v1/messages itself), so an endpoint saved as Anthropic-type injects here natively —
+      // the gateway's /anthropic root, never the OpenAI /v1 route.
+      supportsAnthropic: true,
     },
   },
   overlays: {
