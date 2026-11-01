@@ -580,7 +580,7 @@ const capabilitiesSchema = z
           kind: z.literal('configDir'),
           dirEnvVar: envName,
           fileName: z.string().min(1).max(80),
-          template: z.enum(['codex-toml', 'pi-models-json', 'omp-models-yml', 'grok-toml', 'deepseek-patch-json']),
+          template: z.enum(['codex-toml', 'pi-models-json', 'omp-models-yml', 'grok-toml']),
           launchModel: launchModelTemplate,
         })
         .strict(),

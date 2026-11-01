@@ -215,7 +215,7 @@ const CODEX_API_KEY_ENV_VAR = 'CODEMAN_CUSTOM_MODEL_API_KEY';
 export const GROK_CUSTOM_MODEL_NAME = 'codeman-custom';
 
 function renderConfigFile(
-  template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml' | 'deepseek-patch-json',
+  template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml',
   endpoint: CustomModelEndpoint,
   modelId: string,
   apiKey: string,
@@ -223,45 +223,6 @@ function renderConfigFile(
 ): { content: string; extraEnv?: Record<string, string> } {
   const baseUrl = withV1Suffix(endpoint.baseUrl);
   switch (template) {
-    case 'deepseek-patch-json': {
-      const route = { provider: 'codeman-custom', model: modelId };
-      return {
-        content: JSON.stringify(
-          [
-            {
-              id: 'llm-pi-ai',
-              name: '@deepseek-ai/dsh-llm-pi-ai',
-              config: {
-                providers: {
-                  'codeman-custom': {
-                    apiKeyEnv: 'DEEPSEEK_API_KEY',
-                    api: 'openai-completions',
-                    baseURL: baseUrl,
-                    models: [
-                      {
-                        id: modelId,
-                        name: modelId,
-                        ...(contextLength !== undefined && Number.isFinite(contextLength) && contextLength > 0
-                          ? {
-                              contextWindow: Math.trunc(contextLength),
-                              maxTokens: Math.max(1, Math.min(8192, Math.floor(contextLength / 4))),
-                            }
-                          : {}),
-                      },
-                    ],
-                  },
-                },
-              },
-            },
-            { id: 'dsh-tui', name: '@deepseek-harness-tui/dsh-tui', config: route },
-            { id: 'agent-default-model', name: '@deepseek-ai/dsh-agent-default-model', config: route },
-          ],
-          null,
-          2
-        ),
-        extraEnv: { DEEPSEEK_API_KEY: apiKey },
-      };
-    }
     case 'codex-toml': {
       // Verified against real codex (>= Feb 2026): `model` is a top-level STRING, never
       // a `[model].default` table — codex rejects that with "invalid type: map, expected
