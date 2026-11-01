@@ -7809,14 +7809,28 @@ html[data-skin="og"] .welcome-primary:hover {
 
 /* The picker's search box reuses .session-sidebar-filter-input's theme-token
    styling (same reasoning as the .set-scope pill above) — only its own spacing
-   and the no-matches line are added here. */
+   and the no-matches line are added here. 0.35rem is the standard gap the
+   modal's neighbouring form fields already use (`.form-hint`'s own margin-top):
+   the global `* { margin: 0 }` reset left the box sitting flush under the CLI
+   hint line above it, and the old 0.5rem read as too big a gap above the list
+   (compounded by the always-visible no-matches line the rule below fixes). */
 #customModelPickModal .custom-model-pick-search {
-  margin-bottom: 0.5rem;
+  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
 }
 
 #customModelPickModal .custom-model-pick-no-matches {
   text-align: center;
   padding: 1rem 0;
+}
+
+/* Same class of bug as the row rule below: the no-matches line carries
+   `.form-hint`, whose `display: block` outranks the UA `[hidden]` rule, so
+   `filterCustomModelPick()` toggling `hidden` changed nothing on screen and
+   "No models match" showed while every model was listed with an empty search
+   box. The `[hidden]` re-assertion makes the attribute hide the line again. */
+#customModelPickModal .custom-model-pick-no-matches[hidden] {
+  display: none !important;
 }
 
 /* A filtered-out row's `hidden` must actually hide it: `.run-mode-option` sets

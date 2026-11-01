@@ -654,6 +654,36 @@ describe('Custom Model Endpoint Profiles: the "which model" picker', () => {
     expect(rule, 'picker rows need a [hidden] rule scoped to #customModelPickModal').toBeTruthy();
     expect(rule![0]).toMatch(/display:\s*none\s*!important/);
   });
+
+  it('pins "No models match" hidden with an empty query and shown only when a query hides every row, in CSS too', async () => {
+    // The visible symptom: the line carries `.form-hint`, whose `display: block`
+    // outranks the UA `[hidden]` rule, so `hidden` alone showed "No models match"
+    // while every model was listed with an empty search box. The attribute half
+    // was always right (session-ui.js's `filterCustomModelPick`); the CSS half
+    // needed the same `[hidden] { display: none !important }` re-assertion the
+    // rows above carry. This test pins both states AND the CSS that makes them
+    // actually render.
+    const rule = STYLES_CSS.match(/#customModelPickModal \.custom-model-pick-no-matches\[hidden\]\s*\{[^}]*\}/);
+    expect(rule, 'the no-matches line needs a [hidden] rule scoped to #customModelPickModal').toBeTruthy();
+    expect(rule![0]).toMatch(/display:\s*none\s*!important/);
+
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3'] }],
+    });
+    win.app = app;
+    await app.selectCustomModelEntry('claude', 'llama-box');
+    const noMatches = win.document.getElementById('customModelPickNoMatches')!;
+
+    // Empty query, models listed: the attribute must be set, and the CSS rule
+    // above is what makes that attribute actually hide the line.
+    expect(noMatches.hasAttribute('hidden')).toBe(true);
+
+    // A non-empty query that hides every row: shown again.
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    search.value = 'ghost';
+    search.dispatchEvent(new win.Event('input'));
+    expect(noMatches.hasAttribute('hidden')).toBe(false);
+  });
 });
 
 describe('Custom Model Endpoint Profiles: _getCustomModelCurrentlyLoaded is client-side bounded', () => {
