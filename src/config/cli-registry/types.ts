@@ -560,8 +560,8 @@ export interface CliCapabilities {
    *   own mouse support must work in the pane (htop/vim in a shell).
    *
    * Stock CLIs: `strip-full` = claude, codex, gemini (Ink TUIs); `strip-mux-and-mouse` =
-   * opencode and copilot (full-screen TUIs that enable tracking themselves); `strip-mux-only` =
-   * antigravity, grok, deepseek, omp; `preserve` = shell, pi.
+   * opencode, copilot and pi (full-screen TUIs that enable tracking themselves); `strip-mux-only` =
+   * antigravity, grok, deepseek, omp; `preserve` = shell.
    *
    * A fourth combination is the point to split this into flags; three is still cheaper
    * as an enum.

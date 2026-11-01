@@ -304,23 +304,21 @@ function cliExportsTruecolor(mode: SessionMode): boolean {
  * Codex, Claude Code, and Gemini are known, controlled (Ink/React) TUIs that
  * repaint via cursor positioning, so dropping the alt-screen switch is safe —
  * content stays in the normal buffer. Excluded: `shell` (arbitrary programs like
- * vim/less/htop legitimately need the alt screen), `opencode` (its own MIDDLE strip,
- * isMuxMouseStripMode), `pi` (below) and `grok` (a fullscreen alt-screen TUI with
+ * vim/less/htop legitimately need the alt screen), `opencode` and `pi` (their own MIDDLE strip,
+ * isMuxMouseStripMode; pi since 1.4.0) and `grok` (a fullscreen alt-screen TUI with
  * mouse support). Keep parity with the replay-side strip (`stripReplayBuffer` in
  * session-routes.ts); the table in `CliCapabilities.altScreen` is pinned for every
  * stock CLI in test/claude-scrollback-strip.test.ts.
  *
  * ⚠️ Being excluded here does NOT preserve the alt screen. Every excluded mode
- * falls through to isMuxAltScreenOnlyStripMode(), which strips the alt-screen
- * toggles too whenever the session is tmux-backed, and pi/opencode ALWAYS are
- * (both refuse the direct-PTY fallback). What exclusion actually buys is the rest
- * of the full strip: `\x1b[3J` and the mouse-tracking DECSETs survive. That is the
- * real reason pi is out: its default TUI renders into the MAIN screen with
- * terminal-owned scrollback and is mouse-aware, so it is a `3J`/mouse consumer in
- * a way an Ink TUI repainting in place is not. Consequence to know before
- * debugging it: pi's runtime-switchable fullscreen TUI (`/settings`, 0.84.0+)
- * still gets its `?1049h` stripped and paints into the main buffer, exactly like
- * vim inside a tmux `shell` session.
+ * falls through to isMuxMouseStripMode() or isMuxAltScreenOnlyStripMode(), which
+ * strip the alt-screen toggles too whenever the session is tmux-backed, and
+ * pi/opencode ALWAYS are (both refuse the direct-PTY fallback). What exclusion
+ * actually buys is the rest of the full strip: `\x1b[3J` survives, and for the
+ * narrow strip the mouse-tracking DECSETs too. pi (1.4.0, measured) is a
+ * mouse-aware fullscreen TUI like opencode and copilot, so it takes the mouse
+ * strip (isMuxMouseStripMode): a drag selects locally and `cliMouseTracking`
+ * keeps the wheel working across a buffer replay.
  */
 export function isAltScreenStripMode(mode: SessionMode): boolean {
   return getCli(mode)?.capabilities.altScreen === 'strip-full';

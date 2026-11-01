@@ -898,6 +898,26 @@ describe('GitHub Copilot wheel forwarding', () => {
   });
 });
 
+describe('pi wheel forwarding (1.4.0: alt-screen TUI with mouse tracking)', () => {
+  // pi enables mouse tracking once at start. Codeman's replay (tab switch, reload) drops that
+  // mode in xterm (`mouseTrackingMode` none, baseY 0), so the wheel hit an empty local buffer
+  // and went dead until a redraw. Like Copilot, the server strips the DECSETs and publishes
+  // `cliMouseTracking`; the gate forwards from that flag, which survives the replay.
+  it('forwards the wheel while pi tracks the mouse', () => {
+    const { app } = hollowApp({ mode: 'pi', cliMouseTracking: true });
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
+  });
+
+  it('keeps Shift+wheel local and falls back to paging when the flag is stale', () => {
+    expect(hollowApp({ mode: 'pi', cliMouseTracking: true }).app._shouldForwardWheelToApp({ shiftKey: true })).toBe(
+      false
+    );
+    const { app } = hollowApp({ mode: 'pi', cliMouseTracking: false });
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+    expect(app._localScrollbackIsHollow()).toBe(true);
+  });
+});
+
 describe('the paging gates asked for another pane (a TerminalTile)', () => {
   it('exports the paging math, and the primary pane runs on it', () => {
     const { app, sent, windowRef } = hollowApp();
