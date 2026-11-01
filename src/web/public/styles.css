@@ -7807,6 +7807,27 @@ html[data-skin="og"] .welcome-primary:hover {
   opacity: 0.8;
 }
 
+/* The picker's search box reuses .session-sidebar-filter-input's theme-token
+   styling (same reasoning as the .set-scope pill above) — only its own spacing
+   and the no-matches line are added here. */
+#customModelPickModal .custom-model-pick-search {
+  margin-bottom: 0.5rem;
+}
+
+#customModelPickModal .custom-model-pick-no-matches {
+  text-align: center;
+  padding: 1rem 0;
+}
+
+/* A filtered-out row's `hidden` must actually hide it: `.run-mode-option` sets
+   `display: flex` (and mobile.css restates the class in a media query), which
+   outranks the UA `[hidden] { display: none }` rule, so the filter would
+   silently do nothing without this re-assertion. Scoped to this modal's rows;
+   the Run menu's own .run-mode-option entries never take `hidden`. */
+#customModelPickModal .run-mode-option[hidden] {
+  display: none !important;
+}
+
 /* Custom Model Endpoint Profiles: llama-swap model-swap confirmation — replaces a native
    confirm() popup (docs/custom-model-endpoints-plan.md) so it looks and feels like the
    rest of the app instead of a browser chrome dialog. Shares the context-window-too-small

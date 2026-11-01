@@ -46,6 +46,14 @@ export function applyConfigDirInjection(baseDir: string, injection: ConfigDirInj
     writeFileSync(filePath, file.content, { encoding: 'utf8', mode: 0o600 });
     chmodSync(filePath, 0o600);
   }
+  if (injection.dirEnvVar === 'DSH_HOME') {
+    // Reuse installed profile bundles without changing the user's profile or credentials.
+    const profiles = join(baseDir, 'profiles');
+    if (!existsSync(profiles)) {
+      const realHome = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh');
+      symlinkSync(join(realHome, 'profiles'), profiles, platform() === 'win32' ? 'junction' : 'dir');
+    }
+  }
   return { [injection.dirEnvVar]: baseDir, ...injection.extraEnv };
 }
 
@@ -284,5 +292,6 @@ export function applyCustomModelInjection(
   }
   const configDir = customModelConfigDir(sessionId);
   const envOverrides = applyConfigDirInjection(configDir, injection);
+
   return { envOverrides, envKeys: Object.keys(envOverrides), configDir, launchModel: injection.launchModel };
 }

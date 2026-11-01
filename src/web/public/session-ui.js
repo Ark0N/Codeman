@@ -1088,13 +1088,53 @@ Object.assign(CodemanApp.prototype, {
         const promotion = m === currentlyLoaded ? 'Currently loaded' : m === lastUsed ? 'Last used' : null;
         const tags = [promotion, m === host.defaultModelId ? 'Default' : null].filter(Boolean);
         const arg = escapeHtml(JSON.stringify(m));
+        // data-model-id is the filter's haystack (escapeHtml covers `"` as well as
+        // `<>&`, so a hostile model id cannot break out of the attribute); the
+        // filter reads it back through dataset, which decodes it.
         return `
-          <button class="run-mode-option" onclick="app.chooseCustomModelAndRun(${arg})">
+          <button class="run-mode-option" data-model-id="${escapeHtml(m)}" onclick="app.chooseCustomModelAndRun(${arg})">
             <span class="run-mode-dot ${escapeHtml(mode)}"></span>${escapeHtml(m)}${tags.map((t) => ` <span class="set-scope">${escapeHtml(t)}</span>`).join('')}
           </button>`;
       })
       .join('');
     modal.classList.add('active');
+    // A fresh open always starts unfiltered with the caret in the search box — the
+    // list was just rebuilt, so clearing the input is the whole reset; focus is the
+    // user's next keystroke away. Inside the generation guard above, so a
+    // superseded probe can neither focus nor clear a modal that now shows another
+    // endpoint's models.
+    const search = document.getElementById('customModelPickSearch');
+    if (search) {
+      search.value = '';
+      search.focus();
+    }
+    this.filterCustomModelPick('');
+  },
+
+  /**
+   * View filter for the open "Choose a model" picker: case-insensitive substring
+   * over each row's model id, driven from the search input's own `oninput`.
+   * Deliberately toggles `hidden` on the already-rendered buttons rather than
+   * re-rendering from a second copy of the model list: the loaded/last-used
+   * promotion, the Default pill, the escaped inline click argument and the async
+   * generation guard all then stay exactly where they are, and clearing the
+   * query restores the list byte for byte. ⚠️ `.run-mode-option` carries its own
+   * `display: flex` (styles.css, restated in mobile.css), which outranks the UA
+   * `[hidden]` rule, so styles.css re-asserts `display: none !important` for
+   * these rows — without it the filter would silently do nothing.
+   */
+  filterCustomModelPick(value) {
+    const list = document.getElementById('customModelPickList');
+    if (!list) return;
+    const query = String(value || '').trim().toLowerCase();
+    let visible = 0;
+    for (const btn of list.querySelectorAll('button[data-model-id]')) {
+      const match = !query || btn.dataset.modelId.toLowerCase().includes(query);
+      btn.hidden = !match;
+      if (match) visible += 1;
+    }
+    const noMatches = document.getElementById('customModelPickNoMatches');
+    if (noMatches) noMatches.hidden = visible > 0;
   },
 
   closeCustomModelPickModal() {

@@ -112,6 +112,31 @@ describe('buildCustomModelInjection', () => {
     expect(parsed.provider.custom.models.qwen3).toEqual({});
   });
 
+  it('opencode: threads a discovered context length into the model limit with response headroom (issue #749)', () => {
+    const result = buildCustomModelInjection(entryOrThrow('opencode'), endpoint, 'qwen3', 16384);
+    if (result.kind !== 'env') throw new Error('unreachable');
+    const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
+    // One quarter held back for the reply: context 16384-4096, output 4096 — the sum is the
+    // real window, so a full-size prompt plus a max-length reply never exceeds the server.
+    expect(parsed.provider.custom.models.qwen3).toEqual({ limit: { context: 12288, output: 4096 } });
+  });
+
+  it('opencode: caps the response headroom reservation at 8192 for big windows', () => {
+    const result = buildCustomModelInjection(entryOrThrow('opencode'), endpoint, 'qwen3', 262144);
+    if (result.kind !== 'env') throw new Error('unreachable');
+    const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
+    expect(parsed.provider.custom.models.qwen3).toEqual({ limit: { context: 253952, output: 8192 } });
+  });
+
+  it('opencode: never invents a limit for an unknown or non-finite context length (issue #749 regression)', () => {
+    for (const contextLength of [undefined, NaN]) {
+      const result = buildCustomModelInjection(entryOrThrow('opencode'), endpoint, 'qwen3', contextLength);
+      if (result.kind !== 'env') throw new Error('unreachable');
+      const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
+      expect(parsed.provider.custom.models.qwen3).toEqual({});
+    }
+  });
+
   it('codex: configDir writes an isolated config.toml with model/base_url, and the key rides as extraEnv (never a literal TOML field)', () => {
     const result = buildCustomModelInjection(entryOrThrow('codex'), endpoint, 'qwen3');
     expect(result.kind).toBe('configDir');
@@ -179,29 +204,25 @@ describe('buildCustomModelInjection', () => {
     expect(result.extraEnv).toEqual({ XAI_API_KEY: 'my-key' });
   });
 
-  it('deepseek: env kind sets base URL (with a /v1 suffix appended) and key, no model var', () => {
-    // appendV1Suffix is REQUIRED here, not cosmetic: confirmed by reading dsh's own
-    // bundled source (@deepseek-ai/dsh-llm-deepseek) that it builds the request URL as
-    // `${DEEPSEEK_BASE_URL}/chat/completions` with no "/v1" of its own, while
-    // llama-swap/llama.cpp only serves "/v1/chat/completions" — without this, every
-    // request 404s (confirmed live; this is the fix for the originally-reported
-    // "dsh: HTTP_404: DeepSeek API error (HTTP 404)").
+  it('deepseek: isolates the selected model route and passes its key by reference', () => {
     const result = buildCustomModelInjection(entryOrThrow('deepseek'), endpoint, 'qwen3');
-    if (result.kind !== 'env') throw new Error('unreachable');
-    expect(result.envOverrides).toEqual({
-      DEEPSEEK_BASE_URL: 'http://192.168.1.50:8080/v1',
-      DEEPSEEK_API_KEY: 'my-key',
-    });
+    if (result.kind !== 'configDir') throw new Error('Expected isolated DeepSeek config');
+    expect(result.dirEnvVar).toBe('DSH_HOME');
+    expect(result.extraEnv).toEqual({ DEEPSEEK_API_KEY: 'my-key' });
+    expect(result.files[0].content).not.toContain('my-key');
+    const patch = JSON.parse(result.files[0].content);
+    expect(patch.find((row: { id: string }) => row.id === 'dsh-tui').config.model).toBe('qwen3');
   });
 
-  it('deepseek: appending the /v1 suffix is idempotent against a baseUrl that already ends in /v1', () => {
+  it('deepseek: preserves an existing version suffix', () => {
     const result = buildCustomModelInjection(
       entryOrThrow('deepseek'),
-      { ...endpoint, baseUrl: 'http://192.168.1.50:8080/v1' },
+      { ...endpoint, baseUrl: endpoint.baseUrl + '/v1' },
       'qwen3'
     );
-    if (result.kind !== 'env') throw new Error('unreachable');
-    expect(result.envOverrides.DEEPSEEK_BASE_URL).toBe('http://192.168.1.50:8080/v1');
+    if (result.kind !== 'configDir') throw new Error('Expected isolated DeepSeek config');
+    expect(result.files[0].content).toContain('http://192.168.1.50:8080/v1');
+    expect(result.files[0].content).not.toContain('/v1/v1');
   });
 
   it('antigravity: unsupported', () => {
@@ -232,7 +253,9 @@ describe('launchModel (the model launch param that selects the injected provider
   });
 
   it('CLIs whose config selects the model on its own declare none', () => {
-    for (const id of ['claude', 'opencode', 'codex', 'gemini', 'deepseek']) {
+    // codex now declares launchModel (selected-model launch override) and is covered by
+    // its own restart coverage, not here.
+    for (const id of ['claude', 'opencode', 'gemini', 'deepseek']) {
       const result = buildCustomModelInjection(entryOrThrow(id), endpoint, 'qwen3');
       if (result.kind === 'unsupported') throw new Error('unreachable');
       expect(result.launchModel, id).toBeUndefined();
