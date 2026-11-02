@@ -549,11 +549,25 @@ for '<id>' not found. Defaulting to fallback metadata...` on launch —
   through), so the installed profile keeps supplying the transport; the
   recipe's `linkFromRealHome` field symlinks `profiles`, `sessions` and
   `settings.yaml` back out of the real dsh home so installed bundles,
-  transcripts and user settings all survive the redirect. Not yet re-run
-  end-to-end with a real `dsh` binary — the fix
-  is source-confirmed and live-verified at the HTTP level, but a real
-  "hello world" reply through `dsh` itself is still outstanding before
-  calling this fully verified like the harnesses above.
+  transcripts and user settings all survive the redirect (missing
+  directory entries are created first — a home that has never run a
+  turn would otherwise get a dangling link whose every write through
+  it failed with ENOENT). **Verified end-to-end against a real dsh
+  install by the maintainer** (dsh 0.1.1-rc.2, dsh-TUI 0.10.0-beta.1):
+  `--dump-config` shows the three patched rows, the TUI boots on the
+  chosen model, and a prompt reaches the endpoint as
+  `POST /v1/chat/completions` with the right model, the bearer key and
+  `max_tokens: 8192`; the reply renders and the context window shows in
+  the footer. What such a session SHARES with the real home is exactly
+  the linked entries — `profiles/`, `sessions/`, `settings.yaml`.
+  Everything else in the generated `DSH_HOME` stays isolated:
+  `storages/` (dsh-TUI's persisted `/model` choice and workspace
+  state), `.agent-presets` and `.env`. Whether those dotted ones should
+  be shared too is an open design question left to the maintainer —
+  linking them additionally needs `homeSegmentName` to allow a leading
+  dot. Note too that the generated home-level patch row REPLACES the
+  `dsh-tui` row's whole `config` for the session, so a profile-level
+  `effort`/`preset` does not apply.
 - **Antigravity** — no known custom-endpoint mechanism at all; unsupported.
 
 See the confidence table in `custom-model-endpoints-plan.md` for the full detail behind

@@ -89,6 +89,8 @@ export interface ConfigDirInjection {
   launchModel?: string;
   /** Carried from the registry recipe — see `cli-registry/types.ts` `linkFromRealHome`. */
   linkFromRealHome?: string[];
+  /** Carried from the registry recipe — see `cli-registry/types.ts` `linkFromRealHomeDirs`. */
+  linkFromRealHomeDirs?: string[];
   /** Carried from the registry recipe — see `cli-registry/types.ts` `realHomeFallback`. */
   realHomeFallback?: string;
 }
@@ -153,6 +155,7 @@ export function buildCustomModelInjection(
           files: [{ relPath: cap.fileName, content }],
           extraEnv,
           ...(cap.linkFromRealHome ? { linkFromRealHome: cap.linkFromRealHome } : {}),
+          ...(cap.linkFromRealHomeDirs ? { linkFromRealHomeDirs: cap.linkFromRealHomeDirs } : {}),
           ...(cap.realHomeFallback ? { realHomeFallback: cap.realHomeFallback } : {}),
         },
         cap.launchModel,
@@ -196,7 +199,14 @@ function renderConfigContent(
   }
 }
 
-const CODEX_API_KEY_ENV_VAR = 'CODEMAN_CUSTOM_MODEL_API_KEY';
+/** The DEDICATED env var carrying a custom endpoint's API key for config-file recipes that
+ *  reference keys by name (codex's `env_key`, deepseek's `apiKeyEnv`). Never a CLI-native
+ *  name: dsh's own `llm-deepseek`/`web-search-deepseek` rows read `DEEPSEEK_API_KEY` too,
+ *  so an in-session `/model` switch back to `deepseek-official` (or a profile with web
+ *  search on) would otherwise send the custom endpoint's key to api.deepseek.com. Both
+ *  entries list it in `privilegedEnvKeys` (stock.ts) like each other's redirect vars.
+ */
+const CUSTOM_MODEL_API_KEY_ENV_VAR = 'CODEMAN_CUSTOM_MODEL_API_KEY';
 
 /** The `[model.<name>]` block name grok's config.toml uses for the injected model — also
  *  what `-m <name>` in the standalone script's ONE_SHOT argv must reference to select it. */
@@ -222,7 +232,8 @@ function renderConfigFile(
               config: {
                 providers: {
                   'codeman-custom': {
-                    apiKeyEnv: 'DEEPSEEK_API_KEY',
+                    // By NAME only (never the literal key — see CUSTOM_MODEL_API_KEY_ENV_VAR).
+                    apiKeyEnv: CUSTOM_MODEL_API_KEY_ENV_VAR,
                     api: 'openai-completions',
                     baseURL: baseUrl,
                     models: [
@@ -247,7 +258,7 @@ function renderConfigFile(
           null,
           2
         ),
-        extraEnv: { DEEPSEEK_API_KEY: apiKey },
+        extraEnv: { [CUSTOM_MODEL_API_KEY_ENV_VAR]: apiKey },
       };
     }
     case 'codex-toml': {
@@ -272,11 +283,11 @@ function renderConfigFile(
         '[model_providers.custom]',
         `name = "Custom Endpoint"`,
         `base_url = ${quoted(baseUrl)}`,
-        `env_key = ${quoted(CODEX_API_KEY_ENV_VAR)}`,
+        `env_key = ${quoted(CUSTOM_MODEL_API_KEY_ENV_VAR)}`,
         `wire_api = "responses"`,
         '',
       ].join('\n');
-      return { content, extraEnv: { [CODEX_API_KEY_ENV_VAR]: apiKey } };
+      return { content, extraEnv: { [CUSTOM_MODEL_API_KEY_ENV_VAR]: apiKey } };
     }
     case 'pi-models-json':
       // Verified against pi's OWN bundled docs (models.md): `models` is an ARRAY of

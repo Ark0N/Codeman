@@ -194,12 +194,12 @@ describe('custom-model-injection contract (mock server)', () => {
     const injection = buildCustomModelInjection(entryOrThrow('deepseek'), endpointFor(mock), 'qwen3');
     if (injection.kind !== 'configDir') throw new Error('unreachable');
     expect(injection.dirEnvVar).toBe('DSH_HOME');
-    expect(Object.keys(injection.extraEnv ?? {})).toEqual(['DEEPSEEK_API_KEY']);
+    expect(Object.keys(injection.extraEnv ?? {})).toEqual(['CODEMAN_CUSTOM_MODEL_API_KEY']);
     const provider = JSON.parse(injection.files[0].content)[0].config.providers['codeman-custom'];
     expect(provider.baseURL).toBe(`${mock.baseUrl}/v1`);
     expect(provider.models[0].id).toBe('qwen3');
 
-    await callOpenAiCompat(provider.baseURL, injection.extraEnv!.DEEPSEEK_API_KEY, 'qwen3');
+    await callOpenAiCompat(provider.baseURL, injection.extraEnv!.CODEMAN_CUSTOM_MODEL_API_KEY, 'qwen3');
 
     expect(mock.requests[0].path).toBe('/v1/chat/completions');
     expect(mock.requests[0].headers.authorization).toBe('Bearer contract-test-key');

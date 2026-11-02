@@ -57,7 +57,7 @@ describe('applyCustomModelInjection: context length', () => {
     const sessionId = 'sess-deepseek-context';
     sessionsToClean.push(sessionId);
     const applied = applyCustomModelInjection(entryOrThrow('deepseek'), endpoint, 'qwen3', sessionId, 32768);
-    expect(Object.keys(applied?.envOverrides ?? {}).sort()).toEqual(['DEEPSEEK_API_KEY', 'DSH_HOME']);
+    expect(Object.keys(applied?.envOverrides ?? {}).sort()).toEqual(['CODEMAN_CUSTOM_MODEL_API_KEY', 'DSH_HOME']);
     expect(readFileSync(join(applied!.configDir!, 'cordis.patch.yml'), 'utf8')).toContain('"contextWindow": 32768');
   });
 });

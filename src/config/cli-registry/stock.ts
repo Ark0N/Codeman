@@ -1545,8 +1545,10 @@ const DEEPSEEK: CliEntry = {
     // SERVER's own key into every dsh pane, so DEEPSEEK_BASE_URL is the exfiltration
     // vector, not the key itself — a non-granted owner supplying THEIR OWN key removes
     // privilege rather than granting it, and clamping it here was a real regression
-    // (test/deepseek-mode.test.ts) fixed before this shipped.
-    privilegedEnvKeys: ['DSH_PERMISSION_MODE', 'DSH_HOME', 'DEEPSEEK_BASE_URL'],
+    // (test/deepseek-mode.test.ts) fixed before this shipped. CODEMAN_CUSTOM_MODEL_API_KEY
+    // joins it (like codex's entry): the dedicated custom-endpoint key rides the same
+    // allowlisted-envOverrides path as the redirect itself.
+    privilegedEnvKeys: ['DSH_PERMISSION_MODE', 'DSH_HOME', 'DEEPSEEK_BASE_URL', 'CODEMAN_CUSTOM_MODEL_API_KEY'],
     // The installed profile supplies the transport; a per-session patch selects its exact model.
     customModelInjection: {
       kind: 'configDir',
@@ -1558,7 +1560,12 @@ const DEEPSEEK: CliEntry = {
       // close), `profiles` are the installed bundles the patch composes over, and
       // `settings.yaml` must keep applying. The generated home-level `cordis.patch.yml`
       // deliberately replaces the user's own for the session rather than linking it.
+      // `sessions` and `profiles` are directories: dsh creates them itself on a first
+      // turn, and a fresh/relocated $DSH_HOME that never ran one would otherwise get a
+      // dangling link whose every write fails ENOENT — the consumer creates missing
+      // directory targets and skips missing file targets like `settings.yaml`.
       linkFromRealHome: ['profiles', 'sessions', 'settings.yaml'],
+      linkFromRealHomeDirs: ['profiles', 'sessions'],
       realHomeFallback: '.dsh',
     },
   },

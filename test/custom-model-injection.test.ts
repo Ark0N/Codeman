@@ -183,9 +183,16 @@ describe('buildCustomModelInjection', () => {
     const result = buildCustomModelInjection(entryOrThrow('deepseek'), endpoint, 'qwen3');
     if (result.kind !== 'configDir') throw new Error('Expected isolated DeepSeek config');
     expect(result.dirEnvVar).toBe('DSH_HOME');
-    expect(result.extraEnv).toEqual({ DEEPSEEK_API_KEY: 'my-key' });
+    expect(result.extraEnv).toEqual({ CODEMAN_CUSTOM_MODEL_API_KEY: 'my-key' });
     expect(result.files[0].content).not.toContain('my-key');
     const patch = JSON.parse(result.files[0].content);
+    // The patch references the DEDICATED var by name, never dsh's own DEEPSEEK_API_KEY —
+    // dsh's llm-deepseek/web-search rows read that too and would leak this key to
+    // api.deepseek.com on an in-session /model switch back to the official route.
+    expect(patch.find((row: { id: string }) => row.id === 'llm-pi-ai').config.providers['codeman-custom'].apiKeyEnv).toBe(
+      'CODEMAN_CUSTOM_MODEL_API_KEY'
+    );
+    expect(result.files[0].content).not.toContain('DEEPSEEK_API_KEY');
     expect(patch.find((row: { id: string }) => row.id === 'dsh-tui').config.model).toBe('qwen3');
   });
 

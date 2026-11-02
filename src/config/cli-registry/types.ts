@@ -897,6 +897,17 @@ export interface CliCapabilities {
          */
         linkFromRealHome?: string[];
         /**
+         * Which of `linkFromRealHome` are DIRECTORIES (`sessions`, `profiles`) rather than
+         * files (`settings.yaml`). A missing directory target is created (mode 0700, what
+         * dsh does itself on a first turn) before linking — linking a nonexistent directory
+         * leaves a dangling symlink the CLI's own `mkdir` under it fails on with ENOENT on
+         * EVERY turn. A missing FILE target is skipped instead of linked (dangling-file
+         * links serve no purpose the CLI could not do itself). Must be a subset of
+         * `linkFromRealHome`; entries absent from it are treated as files.
+         * Consumed generically by custom-model-injection-apply.ts.
+         */
+        linkFromRealHomeDirs?: string[];
+        /**
          * Fallback location of the CLI's real home, relative to the user's home directory
          * (deepseek's `.dsh`), used only when neither the session's own `dirEnvVar` override
          * nor the server's environment sets it. Required whenever `linkFromRealHome` is

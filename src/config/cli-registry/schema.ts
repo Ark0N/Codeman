@@ -595,9 +595,41 @@ const capabilitiesSchema = z
           // segments only — the consumer joins them, so a traversal here would escape the
           // real home. See the field's comment in cli-registry/types.ts.
           linkFromRealHome: z.array(homeSegmentName).max(8).optional(),
-          realHomeFallback: z.string().min(1).max(80).optional(),
+          // Which of `linkFromRealHome` are directories (missing ones are created before
+          // linking; missing files are skipped). Same segment pattern, see types.ts.
+          linkFromRealHomeDirs: z.array(homeSegmentName).max(8).optional(),
+          // The real home's fallback location, relative to the user's home: ONE segment —
+          // a leading dot is legitimate (`.dsh` is what ships) but separators and `..`
+          // are not; the consumer joins it under the user's home, and a traversal here
+          // escapes that home.
+          realHomeFallback: z
+            .string()
+            .min(1)
+            .max(80)
+            .regex(/^(?!\.\.\/?$)[^/\\]+$/)
+            .optional(),
         })
-        .strict(),
+        .strict()
+        .superRefine((recipe, ctx) => {
+          // Both rules were comments before; the schema is the security boundary, so
+          // enforce them at load time (see the header of this file).
+          if (recipe.linkFromRealHome?.length && !recipe.realHomeFallback) {
+            ctx.addIssue({
+              code: 'custom',
+              message: 'realHomeFallback is required whenever linkFromRealHome is declared',
+              path: ['realHomeFallback'],
+            });
+          }
+          for (const name of recipe.linkFromRealHome ?? []) {
+            if (name === recipe.fileName) {
+              ctx.addIssue({
+                code: 'custom',
+                message: `linkFromRealHome must never include fileName (${JSON.stringify(name)}): the generated file owns that name in the isolated directory, a link there would write THROUGH into the user's real file`,
+                path: ['linkFromRealHome'],
+              });
+            }
+          }
+        }),
       z.object({ kind: z.literal('unsupported') }).strict(),
     ]),
   })

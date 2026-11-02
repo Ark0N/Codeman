@@ -81,12 +81,13 @@ function linkRealHomeEntries(baseDir: string, injection: ConfigDirInjection, ses
     process.env[injection.dirEnvVar]?.trim() ||
     (injection.realHomeFallback ? join(homedir(), injection.realHomeFallback) : undefined);
   if (!realHome) return;
+  const dirs = new Set(injection.linkFromRealHomeDirs ?? []);
   for (const name of names) {
-    linkRealHomeEntry(join(realHome, name), join(baseDir, name));
+    linkRealHomeEntry(join(realHome, name), join(baseDir, name), dirs.has(name));
   }
 }
 
-function linkRealHomeEntry(target: string, link: string): void {
+function linkRealHomeEntry(target: string, link: string, isDir: boolean): void {
   // lstat, never existsSync: existsSync is false for a DANGLING link, and recovery
   // re-applies on every restart, so the second pass would try to recreate the link and
   // throw EEXIST. lstat answers for real entries, good links and dangling links alike.
@@ -94,6 +95,18 @@ function linkRealHomeEntry(target: string, link: string): void {
     if (lstatSync(link)) return; // already linked (idempotent re-apply) or a real dir wrote one
   } catch {
     // ENOENT — nothing is here yet, the only state in which a link gets created
+  }
+  if (!existsSync(target)) {
+    if (!isDir) return; // missing FILE target: skip, never plant a dangling file link
+    // Missing DIRECTORY target: a dangling directory link is not inert — the CLI's own
+    // recursive mkdir THROUGH it fails ENOENT on every turn (dsh writing under
+    // `$DSH_HOME/sessions` on a fresh/relocated home). Create it first, 0700, exactly
+    // what dsh itself does on a first turn.
+    try {
+      mkdirSync(target, { recursive: true, mode: 0o700 });
+    } catch {
+      return; // e.g. the target's parent refuses writes — no link rather than a dangling one
+    }
   }
   try {
     symlinkSync(target, link, platform() === 'win32' ? 'junction' : 'dir');

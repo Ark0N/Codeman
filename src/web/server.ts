@@ -81,7 +81,12 @@ import { folderGrants } from '../folder-listing.js';
 import { getCli, enabledClis, listClis } from '../config/cli-registry/registry.js';
 import { isCliEntryInstalled, probeStockCliAvailability } from '../utils/cli-installed-probes.js';
 import { readCustomModelHosts } from '../custom-model-hosts.js';
-import { applyCustomModelInjection, customModelConfigDir, removeConfigDir } from '../custom-model-injection-apply.js';
+import {
+  applyCustomModelInjection,
+  customModelConfigDir,
+  removeConfigDir,
+  type AppliedCustomModel,
+} from '../custom-model-injection-apply.js';
 import type { CustomModelBookkeeping } from '../types/session.js';
 import { registerGeneratedArtifactAttachment } from '../generated-artifact-attachments.js';
 import {
@@ -1454,7 +1459,7 @@ export class WebServer extends EventEmitter {
   private async _rebuildCustomModelEnv(
     session: Session,
     saved: CustomModelBookkeeping
-  ): Promise<Record<string, string> | undefined> {
+  ): Promise<AppliedCustomModel | undefined> {
     const entry = getCli(session.mode);
     if (!entry) return undefined;
     const endpoint = (await readCustomModelHosts(getDataDir())).find((h) => h.id === saved.endpointId);
@@ -1465,23 +1470,54 @@ export class WebServer extends EventEmitter {
       return undefined;
     }
     try {
+      // Boot recovery omits both `workingDir` (no reason to re-answer a trust dialog that
+      // already fired once) and the session-env real-home lookup: the injected VALUES are
+      // never persisted, so after a real restart the session can no longer carry its
+      // allowlisted `DSH_HOME` either (`getEnvOverridesForPersist()` keeps only
+      // `CLAUDE_CODE_*`/`CLAUDE_CONFIG_DIR`) — the lookup could only ever hit on the first
+      // apply in-process. Real-home resolution therefore falls back to the SERVER's
+      // `DSH_HOME` or the recipe's `realHomeFallback` (~/.dsh).
       return applyCustomModelInjection(
         entry,
         endpoint,
         saved.modelId,
         session.id,
-        endpoint.modelContextLengths?.[saved.modelId],
-        // Boot recovery deliberately omits `workingDir` (no reason to re-answer a trust
-        // dialog that already fired once), so the session-env lookup rides in after it:
-        // a session with its own DSH_HOME override must link its config dir back to
-        // THAT home, not the server's, exactly like the routes do.
-        undefined,
-        (envVar) => session.envOverrideValue(envVar)
-      )?.envOverrides;
+        endpoint.modelContextLengths?.[saved.modelId]
+      );
     } catch (err) {
       console.warn('[WebServer] Failed to rebuild custom-model env on recovery:', err);
       return undefined;
     }
+  }
+
+  /**
+   * Restore one persisted custom-model selection (both boot-recovery paths). The rebuilt
+   * bookkeeping must come from the CURRENT recipe, not from the saved record: this is the
+   * first feature where a shipped recipe changed KIND (deepseek: env redirect -> per-session
+   * patch home), so a selection saved by an old build restores with e.g. no `configDir`
+   * while the new recipe writes one — and clearing it later could then never delete the
+   * generated dir. `envKeys` is the UNION of saved and applied keys: the tmux session may
+   * still carry `setenv`s from both, and a clear has to unset every one.
+   */
+  private async _restoreCustomModel(session: Session, saved: CustomModelBookkeeping): Promise<void> {
+    const applied = await this._rebuildCustomModelEnv(session, saved);
+    if (!applied) {
+      // Endpoint gone or CLI unregistered: restore the bookkeeping exactly as saved, which
+      // is what a later clear needs.
+      session.setCustomModel(saved);
+      return;
+    }
+    session.setCustomModel(
+      {
+        ...saved,
+        // Prefer the current recipe's dir; keep the saved one when the recipe writes none,
+        // so a clear can still delete a directory an older recipe created.
+        configDir: applied.configDir ?? saved.configDir,
+        launchModel: applied.launchModel,
+        envKeys: [...new Set([...saved.envKeys, ...applied.envKeys])],
+      },
+      applied.envOverrides
+    );
   }
 
   /** Persists full session state including respawn config to state.json */
@@ -3610,7 +3646,7 @@ export class WebServer extends EventEmitter {
       // bookkeeping survives a restart and the values are re-derived here.
       const savedCustomModel = (saved as { __customModel?: CustomModelBookkeeping }).__customModel;
       if (savedCustomModel) {
-        session.setCustomModel(savedCustomModel, await this._rebuildCustomModelEnv(session, savedCustomModel));
+        await this._restoreCustomModel(session, savedCustomModel);
       }
       if (saved.niceEnabled !== undefined || saved.niceValue !== undefined) {
         session.setNice({ enabled: saved.niceEnabled, niceValue: saved.niceValue });
@@ -3912,7 +3948,7 @@ export class WebServer extends EventEmitter {
             // the isolated config dir; an endpoint that has since been deleted still gets
             // the bookkeeping restored, which is what a later clear needs to unset.
             if (savedCustomModel) {
-              session.setCustomModel(savedCustomModel, await this._rebuildCustomModelEnv(session, savedCustomModel));
+              await this._restoreCustomModel(session, savedCustomModel);
             }
 
             // Update session name if it was a "Restored:" placeholder or doesn't match saved name
