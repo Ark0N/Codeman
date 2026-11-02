@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { parse as parseToml } from 'smol-toml';
 import { getCli } from '../src/config/cli-registry/index.js';
 import {
   buildCustomModelInjection,
@@ -156,6 +157,30 @@ describe('buildCustomModelInjection', () => {
     const result = buildCustomModelInjection(entryOrThrow('codex'), endpoint, 'weird"model');
     if (result.kind !== 'configDir') throw new Error('unreachable');
     expect(result.files[0].content).toContain('model = "weird\\"model"');
+  });
+
+  it('codex: writes the discovered window as TOP-LEVEL model_context_window with a 75% compact limit (issue #750)', () => {
+    const result = buildCustomModelInjection(entryOrThrow('codex'), endpoint, 'qwen3', 16384);
+    if (result.kind !== 'configDir') throw new Error('unreachable');
+    const doc = parseToml(result.files[0].content) as Record<string, unknown>;
+    // Top-level is the shape codex reads: parked under [model_providers.custom] (its
+    // provider table) the same keys would be silently ignored by codex itself.
+    expect(doc.model_context_window).toBe(16384);
+    expect(doc.model_auto_compact_token_limit).toBe(12288); // 75% of the window, floored
+    const provider = (doc.model_providers as Record<string, Record<string, unknown>>).custom;
+    expect(provider.model_context_window).toBeUndefined();
+    expect(provider.model_auto_compact_token_limit).toBeUndefined();
+  });
+
+  it('codex: writes neither context line for an unknown, non-finite or zero context length', () => {
+    for (const contextLength of [undefined, NaN, 0]) {
+      const result = buildCustomModelInjection(entryOrThrow('codex'), endpoint, 'qwen3', contextLength);
+      if (result.kind !== 'configDir') throw new Error('unreachable');
+      const doc = parseToml(result.files[0].content) as Record<string, unknown>;
+      expect(doc.model_context_window, String(contextLength)).toBeUndefined();
+      expect(doc.model_auto_compact_token_limit, String(contextLength)).toBeUndefined();
+      expect(doc.model).toBe('qwen3'); // the rest of the file is still written
+    }
   });
 
   it('pi: configDir writes .pi/agent/models.json, redirected via HOME (verified live — PI_CONFIG_DIR does nothing for pi)', () => {
