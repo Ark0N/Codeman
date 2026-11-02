@@ -33,10 +33,11 @@ which current llama.cpp, llama-swap and gateway-style servers state to varying d
 against a llama-swap server the stronger figures from its launch command and from llama.cpp's
 `/props` probe win where they exist, and those probes only ever run for a model the server
 already reports loaded, since asking about an unloaded model can trigger an actual, slow model
-swap as a side effect. A model that states no figure and was never loaded falls back to the
-endpoint's **Default context length** field (that number is the model's whole window, never a
-per-slot figure), and a model neither covers keeps whatever an earlier cycle learned or simply
-gets no override, never a guess. The window is applied to the launched session by the harnesses
+swap as a side effect. A model that states no figure keeps whatever an earlier cycle learned:
+the stored figure always beats the endpoint's **Default context length** field
+(`modelContextLengths[id] ?? defaultContextLength`), which only applies where no figure was
+ever learned (that number is the model's whole window, never a per-slot figure). A model
+neither covers simply gets no override, never a guess. The window is applied to the launched session by the harnesses
 that can take it: Claude Code today (see below), OpenCode as the model's context limit, and
 Codex as a `model_context_window` entry in its generated config file, which also sets Codex's
 own auto-compact point via `model_auto_compact_token_limit` at 75% of the window.

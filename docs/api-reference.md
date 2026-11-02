@@ -1220,7 +1220,9 @@ authStyle?, defaultModelId?, defaultContextLength? }` creates one. `id`
   keeps the stored one rather than clearing it — the client never receives
   the real value to resend deliberately unchanged, so omission is the only
   way to say "leave it alone"; there is no way to clear a key back to unset
-  this way. `defaultModelId`, when set, must be one of that endpoint's own
+  this way. `defaultContextLength` behaves the opposite way: a PUT without
+  it clears the stored value, so send the field back to keep it.
+  `defaultModelId`, when set, must be one of that endpoint's own
   `models` (`400 INVALID_INPUT` otherwise).
 - `DELETE /api/v1/model-endpoints/:id` removes one.
 - `POST /api/v1/model-endpoints/:id/discover-models` fetches the endpoint's
