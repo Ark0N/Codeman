@@ -122,6 +122,9 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
     const { sessionId } = res.json();
     const session = ctx.sessions.get(sessionId) as unknown as Session;
     expect(session.customModel?.endpointId).toBe('ep1');
+    // #750, pinned the same way as the pi/grok/omp one-shot paths below: the FIRST
+    // launch already carries the selected id, not just the file on disk.
+    expect(session.getCustomModelForPersist()?.launchModel).toBe('qwen3');
     expect(restartSpy).not.toHaveBeenCalled();
 
     const configDir = customModelConfigDir(sessionId);
