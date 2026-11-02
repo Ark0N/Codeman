@@ -564,6 +564,27 @@ describe('Custom Model Endpoint Profiles: the "which model" picker', () => {
     expect(visible).toHaveLength(2);
   });
 
+  it('leaves the search box unfocused on touch devices so the OS keyboard stays off the list', async () => {
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3'] }],
+    });
+    win.app = app;
+    // The guard reads the global the browser defines (mobile-detection.js).
+    (win as unknown as { MobileDetection: { isTouchDevice: () => boolean } }).MobileDetection = {
+      isTouchDevice: () => true,
+    };
+
+    await app.selectCustomModelEntry('claude', 'llama-box');
+
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    expect(win.document.activeElement).not.toBe(search);
+    // Only the focus is skipped: the rows still render, unfiltered and functional.
+    const visible = [...win.document.getElementById('customModelPickList')!.querySelectorAll('button')].filter(
+      (b) => !b.hasAttribute('hidden')
+    );
+    expect(visible).toHaveLength(2);
+  });
+
   it('filters rows case-insensitively on the model id, keeping the surviving row fully functional', async () => {
     const { win, app } = bootApp({
       hosts: [

@@ -1106,7 +1106,12 @@ Object.assign(CodemanApp.prototype, {
     const search = document.getElementById('customModelPickSearch');
     if (search) {
       search.value = '';
-      search.focus();
+      // readmymind-ui.js's rule: on touch devices never focus an input unprompted, or
+      // the OS keyboard pops over the very list the picker just opened to show. Desktop
+      // keeps the caret in the box, one keystroke from filtering.
+      if (!(typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice())) {
+        search.focus();
+      }
     }
     this.filterCustomModelPick('');
   },
