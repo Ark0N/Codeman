@@ -28,6 +28,10 @@ const STYLES_CSS = readFileSync(new URL('../src/web/public/styles.css', import.m
 // every other test in this file stubs _showCenterStatus itself and has no need of it.
 const PANELS_UI_JS = readFileSync(new URL('../src/web/public/panels-ui.js', import.meta.url), 'utf-8');
 
+// The warning formats counts with the runtime's own locale (a German user reads 131.072), so the
+// expectations ask the same runtime instead of hard-coding the en-US grouping.
+const num = (n: number) => n.toLocaleString();
+
 function resp(body: unknown, ok = true) {
   return { ok, json: async () => body };
 }
@@ -1770,8 +1774,8 @@ describe('Custom Model Endpoint Profiles: _confirmContextWarning (in-app modal, 
     const message = win.document.getElementById('customModelContextWarningMessage')!.textContent!;
     expect(message).toContain('qwen3.8-27b-ud-q4_k_xl');
     expect(message).toContain('4 parallel');
-    expect(message).toContain('131,072');
-    expect(message).toContain('32,768'); // per slot
+    expect(message).toContain(num(131072));
+    expect(message).toContain(num(32768)); // per slot
     expect(message).toContain('--parallel 1');
     expect(message).toContain('Context size has been exceeded');
     // this is not the "first message fails outright" case, so it must not claim that
@@ -1784,7 +1788,9 @@ describe('Custom Model Endpoint Profiles: _confirmContextWarning (in-app modal, 
     const { win, app } = bootApp({});
     void app._confirmContextWarning('qwen3', 65536, 40000, 4);
     const message = win.document.getElementById('customModelContextWarningMessage')!.textContent!;
-    expect(message).toContain('65,536 tokens of context are split across 4 parallel server slots, about 16,384 each');
+    expect(message).toContain(
+      `${num(65536)} tokens of context are split across 4 parallel server slots, about ${num(16384)} each`
+    );
     app._resolveContextWarningConfirm(false);
   });
 
@@ -1792,7 +1798,7 @@ describe('Custom Model Endpoint Profiles: _confirmContextWarning (in-app modal, 
     const { win, app } = bootApp({});
     void app._confirmContextWarning('qwen3', 16384, 40000, 4);
     const message = win.document.getElementById('customModelContextWarningMessage')!.textContent!;
-    expect(message).toContain('16,384');
+    expect(message).toContain(num(16384));
     expect(message).toMatch(/first message will fail/i);
     expect(message).toContain('4 parallel slots');
     expect(message).toContain('--parallel 1');
