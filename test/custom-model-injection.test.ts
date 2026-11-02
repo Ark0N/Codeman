@@ -317,10 +317,9 @@ describe('buildCustomModelInjection with endpointType: anthropic', () => {
   });
 
   it('every other CLI is refused — the Anthropic type is Claude Code only', () => {
-    // The endpoints this tool configures serve local models, which never speak a
-    // Claude-specific protocol, so OpenCode, pi and omp (which briefly had
-    // anthropic-capable recipe branches) are refused again, next to the always-refused
-    // config formats and OpenAI/Gemini-convention env vars.
+    // Only claude's recipe declares `supportsAnthropic`, so every other CLI is
+    // refused here: opencode, pi, omp, codex and grok write OpenAI config forms,
+    // and gemini, copilot and deepseek carry OpenAI/Gemini-convention env vars.
     for (const id of ['opencode', 'pi', 'omp', 'codex', 'grok', 'deepseek', 'gemini', 'copilot']) {
       const result = buildCustomModelInjection(entryOrThrow(id), anthropicEndpoint, 'qwen3');
       expect(result, id).toEqual({ kind: 'unsupported' });

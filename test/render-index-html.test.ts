@@ -315,6 +315,7 @@ describe('WebServer.renderIndexHtml', () => {
     const clis = JSON.parse(html.match(/window\.__codemanCustomModelClis=(\[.*?\]);/)![1]) as Array<{
       id: string;
       label: string;
+      supportsAnthropic: boolean;
     }>;
     const ids = clis.map((c) => c.id);
     expect(ids).toContain('claude');
@@ -323,6 +324,12 @@ describe('WebServer.renderIndexHtml', () => {
     for (const cli of clis) {
       expect(typeof cli.id).toBe('string');
       expect(typeof cli.label).toBe('string');
+    }
+    // The server-side probe behind the flag must answer true for claude's recipe
+    // and false for every other, or the Run menu would offer Anthropic rows the
+    // routes refuse.
+    for (const cli of clis) {
+      expect(cli.supportsAnthropic, cli.id).toBe(cli.id === 'claude');
     }
   });
 

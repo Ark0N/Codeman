@@ -153,11 +153,10 @@ export function buildCustomModelInjection(
   switch (cap.kind) {
     case 'env': {
       const anthropic = endpoint.endpointType === 'anthropic';
-      // An Anthropic-type endpoint applies to Claude Code ONLY: the endpoints this tool
-      // configures serve local models, which never speak a Claude-specific protocol, so
-      // claude's `supportsAnthropic` is the sole declarer of the flag, and every other
-      // env recipe — pointing a Gemini/OpenAI-convention var at the gateway's
-      // /anthropic route would 404 or worse, answer a protocol the CLI cannot parse.
+      // The Anthropic type applies to Claude Code only: claude's `supportsAnthropic`
+      // is the sole declarer of the flag, and every other env recipe (gemini, copilot,
+      // deepseek) refuses an Anthropic-type endpoint here, rather than pointing its
+      // OpenAI/Gemini-convention var at an Anthropic route.
       if (anthropic && !cap.supportsAnthropic) return { kind: 'unsupported' };
       const envOverrides: Record<string, string> = {
         [cap.baseUrlVar]: anthropic
@@ -187,9 +186,9 @@ export function buildCustomModelInjection(
     }
 
     case 'configDir': {
-      // Claude Code only — every config-file recipe (pi, omp, codex, grok, deepseek)
-      // writes its OpenAI form; an Anthropic-type endpoint is refused here, loudly
-      // unsupported, never silently injected as OpenAI.
+      // Claude Code only — every config-file recipe (pi, omp, codex, grok) writes its
+      // OpenAI form; an Anthropic-type endpoint is refused here, loudly unsupported,
+      // never silently injected as OpenAI.
       if (endpoint.endpointType === 'anthropic') return { kind: 'unsupported' };
       const { content, extraEnv } = renderConfigFile(cap.template, endpoint, modelId, apiKey, contextLength);
       return withLaunchModel(

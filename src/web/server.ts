@@ -1515,7 +1515,8 @@ export class WebServer extends EventEmitter {
    * Recovery half of Custom Model Endpoint Profiles: the env values a selection injects
    * are never persisted (they carry the API key), so they are computed again from the
    * endpoint store, through the SAME apply path the route uses. Undefined when the
-   * endpoint is gone or the CLI is unregistered: the bookkeeping is still restored so
+   * endpoint is gone, the CLI is unregistered, or the endpoint's type no longer fits
+   * the CLI: the bookkeeping is still restored so
    * the selection can be cleared, and the pane keeps running on tmux's retained env.
    */
   private async _rebuildCustomModelEnv(
@@ -1539,13 +1540,20 @@ export class WebServer extends EventEmitter {
       // `CLAUDE_CODE_*`/`CLAUDE_CONFIG_DIR`): the lookup could only ever hit on the first
       // apply in-process. Real-home resolution therefore falls back to the SERVER's
       // `DSH_HOME` or the recipe's `realHomeFallback` (~/.dsh).
-      return applyCustomModelInjection(
+      const applied = applyCustomModelInjection(
         entry,
         endpoint,
         saved.modelId,
         session.id,
         resolveCustomModelContextLength(endpoint, saved.modelId)
       );
+      if (!applied) {
+        console.warn(
+          `[WebServer] custom-model endpoint ${saved.endpointId} is Anthropic-type, which ${session.mode} cannot use; selection kept for clearing`
+        );
+        return undefined;
+      }
+      return applied;
     } catch (err) {
       console.warn('[WebServer] Failed to rebuild custom-model env on recovery:', err);
       return undefined;
