@@ -71,6 +71,7 @@ import {
   CustomModelSelectionSchema,
 } from '../schemas.js';
 import { readCustomModelHosts, resolveCustomModelContextLength } from '../../custom-model-hosts.js';
+import type { CustomModelEndpointType } from '../../custom-model-hosts.js';
 import { applyCustomModelInjection, removeConfigDir } from '../../custom-model-injection-apply.js';
 import { buildCustomModelInjection } from '../../custom-model-injection.js';
 import {
@@ -825,6 +826,20 @@ function currentSignalForWait(
   const signal = currentSignalFor(session, dead);
   if (signal !== 'exit' && session.screenBlocked && until.includes('blocked')) return 'blocked';
   return signal;
+}
+
+/**
+ * One shared wording of the custom-model apply refusal, used by both the swap route
+ * and the quick-start path — `applyCustomModelInjection()` returns undefined for a
+ * CLI with no injection mechanism AND for an Anthropic-type endpoint whose recipe
+ * cannot speak the Anthropic protocol, and the user-facing fix differs, so the
+ * endpoint type picks the sentence. The Anthropic wording names no protocol the CLI
+ * "only speaks" (not accurate for Gemini, and true for every refused CLI as phrased).
+ */
+function customModelApplyErrorMessage(mode: string, endpointType: CustomModelEndpointType | undefined): string {
+  return endpointType === 'anthropic'
+    ? `${mode} cannot use an Anthropic-type endpoint; pick an OpenAI-type endpoint for it`
+    : `${mode} has no known custom-model mechanism`;
 }
 
 // ── Worker liveness for tmux-backed sessions ────────────────────────────────
@@ -1679,12 +1694,10 @@ export function registerSessionRoutes(
     );
     if (!applied) {
       // A mechanism-less CLI and an Anthropic-type endpoint the CLI cannot speak are the
-      // same undefined here, but the fix the user needs differs, so name the protocol.
+      // same undefined here, but the fix the user needs differs — shared helper.
       return createErrorResponse(
         ApiErrorCode.OPERATION_FAILED,
-        endpoint.endpointType === 'anthropic'
-          ? `${session.mode} cannot use an Anthropic-type endpoint (its custom-model mechanism only speaks the OpenAI-compatible protocol)`
-          : `${session.mode} has no known custom-model mechanism`
+        customModelApplyErrorMessage(session.mode, endpoint.endpointType)
       );
     }
 
@@ -4593,13 +4606,10 @@ export function registerSessionRoutes(
         await guardSessionConfigDirHome(cmEntry, (envVar) => qsGatedEnvOverrides?.[envVar])
       );
       if (!cmApplied) {
-        // See the swap route above: an Anthropic-type endpoint against an OpenAI-only
-        // mechanism is refused as unsupported by the builder, and needs its own message.
+        // See the swap route above — same shared refusal wording.
         return createErrorResponse(
           ApiErrorCode.OPERATION_FAILED,
-          cmEndpoint.endpointType === 'anthropic'
-            ? `${mode} cannot use an Anthropic-type endpoint (its custom-model mechanism only speaks the OpenAI-compatible protocol)`
-            : `${mode} has no known custom-model mechanism`
+          customModelApplyErrorMessage(mode, cmEndpoint.endpointType)
         );
       }
       qsCustomModelEnvOverrides = { ...qsGatedEnvOverrides, ...cmApplied.envOverrides };

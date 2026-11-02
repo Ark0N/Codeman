@@ -1227,11 +1227,15 @@ data}` envelope on the wire — unwrap it the same way). Answers `[]` for a
 boolean` reports whether one is stored, so a client can render "unchanged
   if left blank" without ever holding the real value.
 - `POST /api/v1/model-endpoints` with `{ id, label, baseUrl, apiKey?,
-authStyle?, defaultModelId?, defaultContextLength? }` creates one. `id`
+authStyle?, endpointType?, defaultModelId?, defaultContextLength? }` creates one. `id`
   must match
   `^[a-zA-Z0-9_-]+$`; `authStyle` is `bearer` (default) or `api-key`, never
   both (a real server hung indefinitely when sent both headers on one
-  request); `defaultContextLength` is a user-set fallback used when
+  request); `endpointType` is `openai` (default when omitted) or `anthropic`
+  — which wire protocol gets injected (an `anthropic` endpoint is refused
+  at apply time by every harness whose recipe cannot speak the Anthropic
+  Messages route; model discovery always uses the gateway's OpenAI
+  `/v1/models`); `defaultContextLength` is a user-set fallback used when
   assigning a model that discovery has no context length for (discovery
   itself never writes it); `baseUrl` must be `http(s)`, carry no embedded
   credentials, and
@@ -1244,7 +1248,8 @@ authStyle?, defaultModelId?, defaultContextLength? }` creates one. `id`
   way to say "leave it alone"; there is no way to clear a key back to unset
   this way. `defaultContextLength` behaves the opposite way: a PUT without
   it clears the stored value, so send the field back to keep it.
-  `defaultModelId`, when set, must be one of that endpoint's own
+  `endpointType` follows the POST semantics and may be switched in
+  place. `defaultModelId`, when set, must be one of that endpoint's own
   `models` (`400 INVALID_INPUT` otherwise).
 - `DELETE /api/v1/model-endpoints/:id` removes one.
 - `POST /api/v1/model-endpoints/:id/discover-models` fetches the endpoint's

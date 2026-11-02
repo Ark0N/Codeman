@@ -357,19 +357,19 @@ describe('buildCustomModelInjection with endpointType: anthropic', () => {
     expect(parsed.provider.custom.options.baseURL).toBe('http://192.168.1.50:8080/v1');
   });
 
-  it('pi: models.json switches to api anthropic-messages on the /anthropic/v1 base', () => {
+  it('pi: models.json switches to api anthropic-messages on the /anthropic root (SDK adds /v1/messages)', () => {
     const result = buildCustomModelInjection(entryOrThrow('pi'), anthropicEndpoint, 'qwen3');
     if (result.kind !== 'configDir') throw new Error('unreachable');
     const parsed = JSON.parse(result.files[0].content);
     expect(parsed.providers.custom.api).toBe('anthropic-messages');
-    expect(parsed.providers.custom.baseUrl).toBe('http://192.168.1.50:8080/anthropic/v1');
+    expect(parsed.providers.custom.baseUrl).toBe('http://192.168.1.50:8080/anthropic');
   });
 
-  it('omp: models.yml switches to api anthropic-messages on the /anthropic/v1 base', () => {
+  it('omp: models.yml switches to api anthropic-messages on the /anthropic root (SDK adds /v1/messages)', () => {
     const result = buildCustomModelInjection(entryOrThrow('omp'), anthropicEndpoint, 'qwen3');
     if (result.kind !== 'configDir') throw new Error('unreachable');
     expect(result.files[0].content).toContain('api: anthropic-messages');
-    expect(result.files[0].content).toContain('baseUrl: "http://192.168.1.50:8080/anthropic/v1"');
+    expect(result.files[0].content).toContain('baseUrl: "http://192.168.1.50:8080/anthropic"');
   });
 
   it('codex, grok and deepseek: refused — their formats have no Anthropic route to write', () => {

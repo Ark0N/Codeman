@@ -195,6 +195,24 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
     expect(res.json().errorCode).toBe('OPERATION_FAILED');
   });
 
+  it('refuses an Anthropic-type endpoint for a mode that cannot speak it, with the shared refusal wording', async () => {
+    // The quick-start mirror of the swap route's refusal: codex's recipe cannot carry an
+    // Anthropic-type endpoint, and the launch must die on the shared message before any
+    // session is created.
+    await writeCustomModelHosts(getDataDir(), [{ ...ENDPOINT, id: 'gw', endpointType: 'anthropic' }]);
+    const res = await quickStart({
+      caseName: 'cm-gw-codex',
+      mode: 'codex',
+      customModel: { endpointId: 'gw', modelId: 'qwen3' },
+    });
+    expect(res.json().success).toBe(false);
+    expect(res.json().errorCode).toBe('OPERATION_FAILED');
+    expect(res.json().error).toContain(
+      'codex cannot use an Anthropic-type endpoint; pick an OpenAI-type endpoint for it'
+    );
+    expect(restartSpy).not.toHaveBeenCalled();
+  });
+
   it('refuses a model id the CLI cannot carry on its command line, before writing anything', async () => {
     const dirs = join(getDataDir(), 'custom-model-configs');
     const before = existsSync(dirs) ? readdirSync(dirs).length : 0;

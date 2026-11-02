@@ -122,11 +122,14 @@ export function withV1Suffix(baseUrl: string): string {
 }
 
 /**
- * Normalizes a gateway root to the complete Anthropic Messages API base a CLI appends
- * `…/messages` to itself: exactly one trailing `/anthropic/v1` (what Bifrost-style
- * gateways serve — they add `/messages`, not `/v1/messages`). Idempotent on a root that
- * already carries the full prefix, completes a bare `/anthropic`, and trades a saved
- * OpenAI-style trailing `/v1` for the Anthropic one rather than stacking it.
+ * Normalizes a gateway root to the complete Anthropic Messages API base ending in exactly
+ * one trailing `/anthropic/v1` (what Bifrost-style gateways serve). Only OpenCode uses this
+ * form today: its `@ai-sdk/anthropic` provider package appends `/messages` to the configured
+ * baseURL, so the `/v1` must be part of the saved value. CLIs on the official Anthropic SDK
+ * (Claude Code, and the pi-ai lineage pi and omp) append `/v1/messages` themselves and get
+ * `withAnthropicRootSuffix` instead — handing them this form doubles the `/v1`. Idempotent
+ * on a root that already carries the full prefix, completes a bare `/anthropic`, and trades
+ * a saved OpenAI-style trailing `/v1` for the Anthropic one rather than stacking it.
  */
 export function withAnthropicV1Suffix(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '');
@@ -136,10 +139,10 @@ export function withAnthropicV1Suffix(baseUrl: string): string {
 }
 
 /**
- * Same idea for Claude Code, whose own SDK appends `/v1/messages` to `ANTHROPIC_BASE_URL`:
- * the injected root must end in exactly `/anthropic` with NO `/v1` (the SDK supplies it),
- * so a saved `/anthropic/v1` root gets its `/v1` traded away rather than duplicated into
- * `/anthropic/v1/v1/messages`.
+ * The root form for CLIs whose Anthropic SDK appends `/v1/messages` itself: Claude Code
+ * (`ANTHROPIC_BASE_URL`) and the pi-ai lineage (pi, omp). The injected root must end in
+ * exactly `/anthropic` with NO `/v1` (the SDK supplies it), so a saved `/anthropic/v1` root
+ * gets its `/v1` traded away rather than duplicated into `/anthropic/v1/v1/messages`.
  */
 export function withAnthropicRootSuffix(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '');
@@ -309,9 +312,12 @@ function renderConfigFile(
   contextLength?: number
 ): { content: string; extraEnv?: Record<string, string> } {
   // Only the two pi-ai-lineage templates below can reach this with an Anthropic-type
-  // endpoint — the builder refuses codex/grok before calling in.
+  // endpoint — the builder refuses codex/grok before calling in. pi-ai hands `baseUrl`
+  // straight to the official Anthropic SDK, which appends `/v1/messages` itself exactly
+  // like Claude Code's, so they get the SAME root form (`<root>/anthropic`, no `/v1`) —
+  // the `/anthropic/v1` form is only for OpenCode, whose client appends `/messages` alone.
   const anthropic = endpoint.endpointType === 'anthropic';
-  const baseUrl = anthropic ? withAnthropicV1Suffix(endpoint.baseUrl) : withV1Suffix(endpoint.baseUrl);
+  const baseUrl = anthropic ? withAnthropicRootSuffix(endpoint.baseUrl) : withV1Suffix(endpoint.baseUrl);
   switch (template) {
     case 'deepseek-patch-json': {
       const route = { provider: 'codeman-custom', model: modelId };

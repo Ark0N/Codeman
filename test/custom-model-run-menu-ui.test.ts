@@ -39,7 +39,7 @@ function resp(body: unknown, ok = true) {
  */
 function bootApp(
   options: {
-    customModelClis?: Array<{ id: string; label: string }>;
+    customModelClis?: Array<{ id: string; label: string; supportsAnthropic?: boolean }>;
     hosts?: unknown;
     cliAvailable?: (id: string) => boolean;
     activeCase?: { location?: string } | null;
@@ -79,7 +79,7 @@ function bootApp(
   const win = dom.window as unknown as Window &
     typeof globalThis & {
       CodemanApp: new () => any;
-      __codemanCustomModelClis?: Array<{ id: string; label: string }>;
+      __codemanCustomModelClis?: Array<{ id: string; label: string; supportsAnthropic?: boolean }>;
     };
   (win as unknown as { eval: (s: string) => void }).eval('window.CodemanApp = function CodemanApp() {};');
   (win as unknown as { eval: (s: string) => void }).eval(CONSTANTS_JS);
@@ -228,6 +228,36 @@ describe('Custom Model Endpoint Profiles: Run-menu picker generation', () => {
     expect(container.querySelectorAll('button').length).toBe(1);
     expect(container.textContent).toContain('Claude Code');
     expect(container.textContent).not.toContain('Codex');
+  });
+
+  it('skips Anthropic-incapable rows for an Anthropic-type endpoint but not for an OpenAI-type one', async () => {
+    // `supportsAnthropic` ships on __codemanCustomModelClis from the server, where the
+    // injection builder itself answers the question (never an id list) — this pins the
+    // frontend half: the menu must not offer Codex a gateway it will only refuse.
+    const { win, app } = bootApp({
+      customModelClis: [
+        { id: 'claude', label: 'Claude Code', supportsAnthropic: true },
+        { id: 'codex', label: 'Codex', supportsAnthropic: false },
+        { id: 'opencode', label: 'OpenCode', supportsAnthropic: true },
+      ],
+      hosts: [
+        { id: 'gw', label: 'Gateway', baseUrl: 'http://gw', endpointType: 'anthropic', models: ['qwen3'] },
+        { id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://llama', models: ['qwen3'] },
+      ],
+    });
+    const menu = win.document.getElementById('runModeMenu')!;
+    await app._refreshCustomModelRunOptions(menu);
+    const container = win.document.getElementById('runModeCustomModels')!;
+    const byEndpoint = (endpoint: string) =>
+      [...container.querySelectorAll(`button[data-endpoint="${endpoint}"]`)].map((b) => b.textContent);
+    // Anthropic-type gateway: the two capable harnesses only.
+    expect(byEndpoint('gw')).toHaveLength(2);
+    expect(byEndpoint('gw').join()).toContain('Claude Code');
+    expect(byEndpoint('gw').join()).toContain('OpenCode');
+    expect(byEndpoint('gw').join()).not.toContain('Codex');
+    // OpenAI-type endpoint (endpointType omitted): nothing is skipped.
+    expect(byEndpoint('llama-box')).toHaveLength(3);
+    expect(byEndpoint('llama-box').join()).toContain('Codex');
   });
 });
 

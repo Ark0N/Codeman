@@ -924,7 +924,14 @@ Object.assign(CodemanApp.prototype, {
       const models = host.models || [];
       if (models.length === 0) continue; // nothing discovered yet — the settings panel explains why
       const modelId = host.defaultModelId || models[0];
+      // An Anthropic-type endpoint only pairs with harnesses whose injection recipe
+      // can speak it — `supportsAnthropic` comes from the server-side projection
+      // (built by asking the injection builder itself, never an id list here), and
+      // omitting it reads as OpenAI like the stored field. Without this skip the
+      // menu offered rows that only failed on click with the routes' refusal.
+      const anthropic = host.endpointType === 'anthropic';
       for (const cli of capableClis) {
+        if (anthropic && !cli.supportsAnthropic) continue;
         // escapeHtml(JSON.stringify(...)) on EVERY arg, not just the untrusted
         // one: JSON.stringify's own double quotes would otherwise terminate this
         // double-quoted attribute at the first one, and everything after parses

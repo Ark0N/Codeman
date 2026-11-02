@@ -142,6 +142,30 @@ describe('POST /api/sessions/:id/custom-model', () => {
     expect(res.json().errorCode).toBe('OPERATION_FAILED');
   });
 
+  it('refuses an Anthropic-type endpoint for a CLI that cannot speak it, with the shared refusal wording', async () => {
+    // codex's recipe has no Anthropic route, so the builder refuses and the swap route
+    // must name the endpoint-type mismatch (one message for every refused CLI) rather
+    // than the generic "no known mechanism" — and must touch nothing.
+    const { app, ctx } = await setup();
+    await writeCustomModelHosts(getDataDir(), [{ ...CLAUDE_ENDPOINT, id: 'gw', endpointType: 'anthropic' }]);
+    const session = ctx.sessions.get('test-session-1')!;
+    session.mode = 'codex';
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/test-session-1/custom-model',
+      payload: { endpointId: 'gw', modelId: 'qwen3' },
+    });
+
+    expect(res.json().success).toBe(false);
+    expect(res.json().errorCode).toBe('OPERATION_FAILED');
+    expect(res.json().error).toContain(
+      'codex cannot use an Anthropic-type endpoint; pick an OpenAI-type endpoint for it'
+    );
+    expect(session.setCustomModel).not.toHaveBeenCalled();
+    expect(session.restartCli).not.toHaveBeenCalled();
+  });
+
   it('refuses a remote (SSH) session before touching it: restartCli would only reattach the remote tmux', async () => {
     const { app, ctx } = await setup();
     const session = ctx.sessions.get('test-session-1')!;

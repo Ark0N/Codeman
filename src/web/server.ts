@@ -89,6 +89,7 @@ import {
   removeConfigDir,
   type AppliedCustomModel,
 } from '../custom-model-injection-apply.js';
+import { buildCustomModelInjection } from '../custom-model-injection.js';
 import type { CustomModelBookkeeping } from '../types/session.js';
 import { registerGeneratedArtifactAttachment } from '../generated-artifact-attachments.js';
 import {
@@ -2042,9 +2043,25 @@ export class WebServer extends EventEmitter {
       // (never an id list here) so a CLI whose customModelInjection lands later shows
       // up in the picker with no frontend change, and one that ships `unsupported`
       // (antigravity, and `shell`'s `kind !== 'agent'`) never does.
+      // `supportsAnthropic` is answered the same way the routes answer it — by asking
+      // the injection builder itself whether a saved Anthropic-type endpoint injects,
+      // through a synthetic probe endpoint that is never saved and never contacted.
+      // The menu uses the flag to hide rows whose CLI cannot speak the Anthropic
+      // protocol, so a refused click can never happen (CLAUDE.md: never branch on a
+      // CLI id in UI code).
+      const anthropicProbe = {
+        id: 'menu-probe',
+        label: 'menu-probe',
+        baseUrl: 'http://127.0.0.1',
+        endpointType: 'anthropic' as const,
+      };
       const customModelClis = enabledClis()
         .filter((entry) => entry.kind === 'agent' && entry.capabilities.customModelInjection.kind !== 'unsupported')
-        .map((entry) => ({ id: entry.id, label: entry.label }));
+        .map((entry) => ({
+          id: entry.id as string,
+          label: entry.label,
+          supportsAnthropic: buildCustomModelInjection(entry, anthropicProbe, 'probe-model').kind !== 'unsupported',
+        }));
       // Unlike the boolean-only __codemanCliAvailable above, this payload carries
       // `label`, a string a user's own clis.json can set (CliEntry.label, up to 60
       // chars) — see escapeScriptJson's own doc comment for why that needs escaping
