@@ -186,7 +186,7 @@ read is treated as one slot, never guessed.
 | **Claude Code, opencode, Pi, Grok, OMP** | Verified end-to-end against a real local server.                                                                                                                                                                     |
 | **Codex**                                | Config is correct, and plain chat can work against a server that speaks the Responses API — but a real tool-call attempt comes back as inert text instead of running, so it's still not usable for real coding work. |
 | **Gemini**                               | Fails with an auth error gemini-cli raises once redirected. Unresolved; don't rely on it yet.                                                                                                                        |
-| **DeepSeek**                             | The original 404 is root-caused and fixed (DeepSeek Harness's own code was missing a `/v1` most local servers require) — not yet re-run against a real `dsh` install to confirm end-to-end.                          |
+| **DeepSeek**                             | Verified end-to-end against a real `dsh` install (dsh 0.1.1-rc.2, dsh-TUI 0.10.0-beta.1): the original 404 is root-caused and fixed, and the redirect is now a generated per-session patch file whose prompt reaches the endpoint as `POST /v1/chat/completions`.                          |
 | **Antigravity**                          | No known custom-endpoint mechanism at all. Not offered.                                                                                                                                                              |
 
 Which harnesses show up in the Run-menu picker is read live off Codeman's own CLI registry,

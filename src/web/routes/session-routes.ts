@@ -7,7 +7,7 @@
 import { claudeProjectDirName } from '../../case-rename.js';
 import { FastifyInstance, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { join, dirname, extname, basename, resolve as resolvePath } from 'node:path';
+import { join, dirname, extname, basename, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
@@ -126,7 +126,7 @@ import { agentInbox } from '../agent-inbox.js';
 import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
 import { clampEnvOverridesForOwner } from '../../session-env-clamp.js';
 import { enabledClis, getCli } from '../../config/cli-registry/registry.js';
-import type { AgentSkillDir, NewlineSequence } from '../../config/cli-registry/types.js';
+import type { AgentSkillDir, CliEntry, NewlineSequence } from '../../config/cli-registry/types.js';
 import { resolveCliLaunchError } from '../../utils/cli-launcher.js';
 import { applyLaunchDefaults } from '../launch-defaults.js';
 import { legacyConfigForMode } from '../../session-cli-registry-bridge.js';
@@ -228,6 +228,36 @@ const CLAUDE_WORKTREE_PATH = /^(.*)\/\.claude\/worktrees\/([^/]+)\/?$/;
 /** Did the committed layout put this session in a named group (not Ungrouped)? */
 function landedInGroup(layout: TabLayout | undefined, sessionId: string): boolean {
   return !!layout?.groups.some((group) => group.refs.some((ref) => ref.kind === 'session' && ref.id === sessionId));
+}
+
+/**
+ * Guard a session-supplied configDir home BEFORE `applyCustomModelInjection` runs.
+ *
+ * The apply resolves the CLI's real home from this session's env override and then runs
+ * synchronous `existsSync`/`mkdirSync` on it (deepseek `DSH_HOME`, and any future
+ * `linkFromRealHome` recipe). A path on an unreachable network mount makes a synchronous
+ * stat wait forever, and this runs INSIDE a request handler, so it would freeze the whole
+ * web server (CLAUDE.md, the #516 rule on user-chosen paths). A relative home is left to
+ * the apply, which already refuses to join non-absolute values.
+ *
+ * Probe the session's own home with `probePathKind(..., { pastCap: true })` first: on
+ * `'unknown'` (a dead mount that never answered) hand the apply a lookup that hides that
+ * one env var, so linking falls through to the server's own environment and the unresponsive
+ * path is never touched. Any other entry's lookup passes through untouched.
+ */
+async function guardSessionConfigDirHome(
+  entry: Pick<CliEntry, 'capabilities'>,
+  baseLookup: (envVar: string) => string | undefined
+): Promise<(envVar: string) => string | undefined> {
+  const recipe = entry.capabilities.customModelInjection;
+  if (recipe?.kind !== 'configDir' || !recipe.linkFromRealHome?.length) return baseLookup;
+  const dirEnvVar = recipe.dirEnvVar;
+  const supplied = baseLookup(dirEnvVar)?.trim();
+  if (!supplied || !isAbsolute(supplied)) return baseLookup;
+  if ((await probePathKind(supplied, { pastCap: true })) === 'unknown') {
+    return (envVar: string) => (envVar === dirEnvVar ? undefined : baseLookup(envVar));
+  }
+  return baseLookup;
 }
 
 /**
@@ -1619,7 +1649,7 @@ export function registerSessionRoutes(
       session.id,
       contextLength,
       session.workingDir,
-      (envVar) => session.envOverrideValue(envVar)
+      await guardSessionConfigDirHome(entry, (envVar) => session.envOverrideValue(envVar))
     );
     if (!applied) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${session.mode} has no known custom-model mechanism`);
@@ -4516,7 +4546,7 @@ export function registerSessionRoutes(
         qsCustomModelSessionId,
         cmContextLength,
         workspacePath,
-        (envVar) => qsGatedEnvOverrides?.[envVar]
+        await guardSessionConfigDirHome(cmEntry, (envVar) => qsGatedEnvOverrides?.[envVar])
       );
       if (!cmApplied) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${mode} has no known custom-model mechanism`);

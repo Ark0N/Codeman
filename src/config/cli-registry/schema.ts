@@ -599,14 +599,14 @@ const capabilitiesSchema = z
           // linking; missing files are skipped). Same segment pattern, see types.ts.
           linkFromRealHomeDirs: z.array(homeSegmentName).max(8).optional(),
           // The real home's fallback location, relative to the user's home: ONE segment —
-          // a leading dot is legitimate (`.dsh` is what ships) but separators and `..`
-          // are not; the consumer joins it under the user's home, and a traversal here
-          // escapes that home.
+          // a leading dot is legitimate (`.dsh` is what ships) but separators, `..` and
+          // bare `.` are not; the consumer joins it under the user's home, a traversal
+          // here escapes that home and `.` IS that home (linking THROUGH it unshielded).
           realHomeFallback: z
             .string()
             .min(1)
             .max(80)
-            .regex(/^(?!\.\.\/?$)[^/\\]+$/)
+            .regex(/^(?!\.\.?$)[^/\\]+$/)
             .optional(),
         })
         .strict()
@@ -626,6 +626,19 @@ const capabilitiesSchema = z
                 code: 'custom',
                 message: `linkFromRealHome must never include fileName (${JSON.stringify(name)}): the generated file owns that name in the isolated directory, a link there would write THROUGH into the user's real file`,
                 path: ['linkFromRealHome'],
+              });
+            }
+          }
+          // types.ts documents the dirs list as "must be a subset of linkFromRealHome";
+          // a name absent from it names nothing (missing-file entries are skipped as
+          // files), so the recipe would silently stop creating a directory it declares.
+          const linkedNames = new Set(recipe.linkFromRealHome ?? []);
+          for (const dir of recipe.linkFromRealHomeDirs ?? []) {
+            if (!linkedNames.has(dir)) {
+              ctx.addIssue({
+                code: 'custom',
+                message: `linkFromRealHomeDirs must be a subset of linkFromRealHome: ${JSON.stringify(dir)} is not linked, so the directory rule for it can never apply`,
+                path: ['linkFromRealHomeDirs'],
               });
             }
           }

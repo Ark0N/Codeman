@@ -106,6 +106,95 @@ describe('DeepSeek custom endpoint isolation', () => {
       rmSync(sandbox, { recursive: true, force: true });
     }
   });
+
+  it('links from the SESSION-supplied DSH_HOME, not the server environment one', () => {
+    // Both web routes pass the session's own env-override lookup as the seventh
+    // argument; a user who relocated the dsh home via an allowlisted DSH_HOME
+    // override must get their state linked from THAT directory, not the server's.
+    const sandbox = mkdtempSync(join(tmpdir(), 'dsh-session-home-'));
+    const serverHome = join(sandbox, 'server-home');
+    const sessionHome = join(sandbox, 'session-home');
+    mkdirSync(join(sessionHome, 'sessions'), { recursive: true });
+    mkdirSync(join(sessionHome, 'profiles'), { recursive: true });
+    writeFileSync(join(sessionHome, 'settings.yaml'), 'theme: light');
+    vi.stubEnv('CODEMAN_DATA_DIR', join(sandbox, 'data'));
+    vi.stubEnv('DSH_HOME', serverHome);
+    try {
+      const entry = getCli('deepseek');
+      if (!entry) throw new Error('Missing DeepSeek entry');
+      const endpoint = { id: 'local', label: 'Local', baseUrl: 'http://box:8080', apiKey: 'private-probe-key' };
+      const applied = applyCustomModelInjection(
+        entry,
+        endpoint,
+        'chosen-model',
+        'deepseek-probe',
+        131072,
+        undefined,
+        (k) => (k === 'DSH_HOME' ? sessionHome : undefined)
+      );
+      if (!applied?.configDir) throw new Error('Missing isolated profile');
+      expect(realpathSync(join(applied.configDir, 'sessions'))).toBe(join(sessionHome, 'sessions'));
+      expect(realpathSync(join(applied.configDir, 'profiles'))).toBe(join(sessionHome, 'profiles'));
+      expect(realpathSync(join(applied.configDir, 'settings.yaml'))).toBe(join(sessionHome, 'settings.yaml'));
+      // The server-environment home was never consulted, let alone created.
+      expect(existsSync(serverHome)).toBe(false);
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it('never self-links when the session override IS its own config dir; falls through to the server home', () => {
+    // Boot recovery re-applies onto a session already holding a previous injection's
+    // DSH_HOME value; linking that value would point the isolated directory at itself.
+    const sandbox = mkdtempSync(join(tmpdir(), 'dsh-self-home-'));
+    const serverHome = join(sandbox, 'server-home');
+    mkdirSync(join(serverHome, 'sessions'), { recursive: true });
+    vi.stubEnv('CODEMAN_DATA_DIR', join(sandbox, 'data'));
+    vi.stubEnv('DSH_HOME', serverHome);
+    try {
+      const entry = getCli('deepseek');
+      if (!entry) throw new Error('Missing DeepSeek entry');
+      const endpoint = { id: 'local', label: 'Local', baseUrl: 'http://box:8080', apiKey: 'private-probe-key' };
+      const applied = applyCustomModelInjection(
+        entry,
+        endpoint,
+        'chosen-model',
+        'deepseek-probe',
+        131072,
+        undefined,
+        (k) => (k === 'DSH_HOME' ? customModelConfigDir('deepseek-probe') : undefined)
+      );
+      if (!applied?.configDir) throw new Error('Missing isolated profile');
+      expect(realpathSync(join(applied.configDir, 'sessions'))).toBe(join(serverHome, 'sessions'));
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it('skips a relative DSH_HOME rather than creating it under the server cwd', () => {
+    // A session may supply DSH_HOME; `work` would otherwise mkdir `work/sessions` in
+    // the SERVER's working directory and leave relative links that dangle (a relative
+    // home resolves against the CLI's cwd, which the server cannot know). Skipping it
+    // falls through to the recipe's `realHomeFallback`, and nothing is created under cwd.
+    const sandbox = mkdtempSync(join(tmpdir(), 'dsh-relative-home-'));
+    const fallbackHome = join(sandbox, '.dsh');
+    mkdirSync(fallbackHome, { recursive: true });
+    const relativeHome = `dsh-relative-probe-${process.pid}-${Date.now()}`;
+    vi.stubEnv('HOME', sandbox); // the fallback resolves under homedir()
+    vi.stubEnv('CODEMAN_DATA_DIR', join(sandbox, 'data'));
+    vi.stubEnv('DSH_HOME', relativeHome);
+    try {
+      const entry = getCli('deepseek');
+      if (!entry) throw new Error('Missing DeepSeek entry');
+      const endpoint = { id: 'local', label: 'Local', baseUrl: 'http://box:8080', apiKey: 'private-probe-key' };
+      const applied = applyCustomModelInjection(entry, endpoint, 'chosen-model', 'deepseek-probe', 131072);
+      if (!applied?.configDir) throw new Error('Missing isolated profile');
+      expect(existsSync(join(process.cwd(), relativeHome))).toBe(false);
+      expect(realpathSync(join(applied.configDir, 'sessions'))).toBe(join(fallbackHome, 'sessions'));
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
 });
 
 /** readlinkSync without the throw an absent link causes (ENOENT -> undefined). */

@@ -558,16 +558,18 @@ for '<id>' not found. Defaulting to fallback metadata...` on launch —
   chosen model, and a prompt reaches the endpoint as
   `POST /v1/chat/completions` with the right model, the bearer key and
   `max_tokens: 8192`; the reply renders and the context window shows in
-  the footer. What such a session SHARES with the real home is exactly
-  the linked entries — `profiles/`, `sessions/`, `settings.yaml`.
-  Everything else in the generated `DSH_HOME` stays isolated:
-  `storages/` (dsh-TUI's persisted `/model` choice and workspace
-  state), `.agent-presets` and `.env`. Whether those dotted ones should
-  be shared too is an open design question left to the maintainer —
-  linking them additionally needs `homeSegmentName` to allow a leading
-  dot. Note too that the generated home-level patch row REPLACES the
-  `dsh-tui` row's whole `config` for the session, so a profile-level
-  `effort`/`preset` does not apply.
+  the footer. What such a session SHARES with the real home is
+  exactly the linked entries — `profiles/`, `sessions/`,
+  `settings.yaml`. Everything else in the generated `DSH_HOME` is
+  isolated: `storages/` (dsh-TUI's persisted `/model` choice and
+  workspace state), `.agent-presets` and `.env`. Two consequences of
+  the generated home-level file follow: the user's own home-level
+  `cordis.patch.yml` does NOT apply in such a session (the generated
+  file replaces it; profile-level patch files reached through the
+  linked `profiles/` still compose), and the generated patch REPLACES
+  the `llm-pi-ai` provider row's whole `config` for the session. Note
+  too that it likewise REPLACES the `dsh-tui` row's whole `config`, so
+  a profile-level `effort`/`preset` does not apply.
 - **Antigravity** — no known custom-endpoint mechanism at all; unsupported.
 
 See the confidence table in `custom-model-endpoints-plan.md` for the full detail behind

@@ -12,7 +12,7 @@
 
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, isAbsolute } from 'node:path';
 import { dataPath } from './config/instance.js';
 import type { CliEntry } from './config/cli-registry/types.js';
 import {
@@ -30,9 +30,11 @@ export function customModelConfigDir(sessionId: string): string {
  * Writes a `ConfigDirInjection`'s files under `baseDir` and returns the full
  * envOverrides object a caller should merge into the session/process env
  * (the dir-redirect var plus any `extraEnv` the config file references by
- * name). Never touches anything outside `baseDir` — the caller is
- * responsible for choosing an isolated directory (never the user's real
- * `~/.codex`, `~/.pi`, etc.).
+ * name). The generated files stay under `baseDir`, but a recipe that declares
+ * `linkFromRealHome` additionally links (and, for missing directory targets,
+ * creates) entries in the CLI's REAL home — the caller is still responsible
+ * for choosing an isolated `baseDir` (never the user's real `~/.codex`,
+ * `~/.pi`, etc.), it is just no longer the only directory touched.
  *
  * pi and omp embed the API key literally in the file, so the tree is written
  * 0700/0600 like every other secret-bearing file under `~/.codeman`; the chmod
@@ -69,16 +71,21 @@ export function applyConfigDirInjection(
  *
  * Home resolution: the session's own override first (unless it IS `baseDir` — a re-apply
  * onto a session already holding a previous injection's value must not self-link), then
- * the server's environment, then the recipe's `realHomeFallback`. No home resolvable =
+ * the server's environment, then the recipe's `realHomeFallback`. Only ABSOLUTE values
+ * are considered: a set-but-relative `DSH_HOME`-style home resolves against the CLI's
+ * cwd, and joining it here would mkdir/symlink under the SERVER's working directory and
+ * leave relative links that dangle. No home resolvable =
  * no links, same best-effort posture as `linkSharedProjectsDir()`.
  */
 function linkRealHomeEntries(baseDir: string, injection: ConfigDirInjection, sessionHomeOverride?: string): void {
   const names = injection.linkFromRealHome;
   if (!names || names.length === 0) return;
+  const absoluteOnly = (value: string | undefined): string | undefined =>
+    value && isAbsolute(value) ? value : undefined;
   const fromSession = sessionHomeOverride?.trim();
   const realHome =
-    (fromSession && fromSession !== baseDir ? fromSession : undefined) ||
-    process.env[injection.dirEnvVar]?.trim() ||
+    absoluteOnly(fromSession && fromSession !== baseDir ? fromSession : undefined) ||
+    absoluteOnly(process.env[injection.dirEnvVar]?.trim()) ||
     (injection.realHomeFallback ? join(homedir(), injection.realHomeFallback) : undefined);
   if (!realHome) return;
   const dirs = new Set(injection.linkFromRealHomeDirs ?? []);

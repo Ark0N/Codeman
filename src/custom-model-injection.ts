@@ -243,6 +243,7 @@ function renderConfigFile(
                         ...(contextLength !== undefined && Number.isFinite(contextLength) && contextLength > 0
                           ? {
                               contextWindow: Math.trunc(contextLength),
+                              // A quarter of the window keeps the reply inside the prompt's share; 8192 caps it on a large window.
                               maxTokens: Math.max(1, Math.min(8192, Math.floor(contextLength / 4))),
                             }
                           : {}),

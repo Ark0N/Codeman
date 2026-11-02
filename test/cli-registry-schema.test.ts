@@ -66,8 +66,10 @@ function expectRejectedOnDeepSeek(mutate: (recipe: Record<string, unknown>) => v
 
 describe('configDir real-home linking (linkFromRealHome / realHomeFallback)', () => {
   it('rejects a realHomeFallback that is not a single relative path segment', () => {
-    // The consumer joins it under the user's home, so any of these escapes that home.
-    for (const bad of ['../x', '.dsh/evil', '/.dsh', '..']) {
+    // The consumer joins it under the user's home, so any of these escapes that home —
+    // and bare `.` IS that home: linking through it would expose the whole tree
+    // unshielded instead of just the declared segments.
+    for (const bad of ['../x', '.dsh/evil', '/.dsh', '..', '.']) {
       expectRejectedOnDeepSeek((r) => {
         r.realHomeFallback = bad;
       }, `realHomeFallback ${JSON.stringify(bad)}`);
@@ -93,6 +95,22 @@ describe('configDir real-home linking (linkFromRealHome / realHomeFallback)', ()
     expectRejectedOnDeepSeek((r) => {
       r.linkFromRealHome = ['cordis.patch.yml', 'profiles'];
     }, 'linkFromRealHome containing fileName');
+  });
+
+  it('requires linkFromRealHomeDirs to be a subset of linkFromRealHome', () => {
+    // types.ts documents the rule; a name absent from the linked list names nothing,
+    // so the create-missing-directory behaviour would silently never apply to it.
+    expectRejectedOnDeepSeek((r) => {
+      r.linkFromRealHome = ['profiles', 'settings.yaml'];
+      r.linkFromRealHomeDirs = ['profiles', 'sessions'];
+    }, 'linkFromRealHomeDirs naming an unlinked entry');
+    // The shipped recipe is a valid subset (deepseek: profiles and sessions are dirs
+    // of the three linked entries) and keeps loading.
+    const entry = baseEntry('deepseek');
+    const recipe = (entry.capabilities as Record<string, unknown>).customModelInjection as Record<string, unknown>;
+    expect(recipe.linkFromRealHome).toEqual(['profiles', 'sessions', 'settings.yaml']);
+    expect(recipe.linkFromRealHomeDirs).toEqual(['profiles', 'sessions']);
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true);
   });
 });
 
