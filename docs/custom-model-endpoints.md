@@ -213,16 +213,17 @@ evidence first, and the first one that answers wins:
   cannot report its own loaded model, which is every server except
   llama-swap: a bare llama.cpp, Ollama, vLLM, and a gateway such as
   Bifrost fronting a whole fleet all answer `isLlamaSwap: false`.
-  `_getCustomModelInUseBySession` walks `this.sessions` for a session of
-  this very instance whose `customModel.endpointId` is this host, newest
+  `_getCustomModelInUseBySession` walks `this.sessions` for one of your own
+  sessions whose `customModel.endpointId` is this host, newest
   `createdAt` wins, and promotes its model. A live session is first-hand
   evidence of a model in use on the endpoint, because Codeman put it
   there, so it earns the promotion and the tag says where the knowledge
   came from. Two fences keep it honest: it reads only `customModel`,
   never `displayModel` (display text scraped off a CLI footer, so a
   terminal that merely printed a similar string must not mark a row),
-  and a session with `status: 'stopped'` or a recorded `paneExit` does
-  not count, since nothing is on the endpoint any more. Sessions on other
+  and a session with `status: 'stopped'`, a null `pid` (its PTY exited,
+  the same live-pane test keep-warm applies) or a recorded `paneExit`
+  does not count, since nothing is on the endpoint any more. Sessions on other
   endpoints, and models the host no longer discovers, are skipped.
 - **"Last used"** appears only when neither of the above answers: the
   model actually launched last for this exact (harness, endpoint) pair,
@@ -248,11 +249,14 @@ with neither promotion nor default shows no tag at all.
 
 When nothing is known about any row, `#customModelPickUnknown` says so
 out loud instead of leaving an alphabetical wall that reads as the app
-ignoring the question. It asserts only what the probe actually answered:
-`isLlamaSwap: false` is a real "I cannot tell you", whereas a probe that
-timed out or failed (`_getCustomModelRunningStatus` resolving `null`) is
-not, so an unreachable endpoint stays silent rather than claiming
-something it does not know. Like its sibling no-matches line it needs an
+ignoring the question. It shows when the probe answered
+`isLlamaSwap: false`, which the route gives for every failure it
+catches, so one answer covers a server that cannot report and an
+endpoint that is down or refused alike; the line's wording therefore
+claims only that nothing was reported. A probe that never got any
+answer (`_getCustomModelRunningStatus` resolving `null`, Codeman's own
+request failed or the client-side bound won) keeps the line hidden.
+Like its sibling no-matches line it needs an
 explicit `[hidden]` rule scoped to `#customModelPickModal`, because
 `.form-hint`'s `display: block` outranks the UA `[hidden]` rule.
 

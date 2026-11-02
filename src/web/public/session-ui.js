@@ -1011,10 +1011,13 @@ Object.assign(CodemanApp.prototype, {
    * `_watchLlamaSwapLoading`'s own check.
    *
    * Resolves the raw route payload rather than a model id so the caller can tell the
-   * three answers apart: llama-swap naming a model, an endpoint that positively cannot
-   * say (safe to explain in the UI), and no answer at all (timeout/unreachable, which
-   * resolves `null` and must NEVER be described as "cannot report", since the endpoint
-   * may well have been asleep rather than mute). Never throws: a failed probe should
+   * three answers apart: llama-swap naming a model; `isLlamaSwap: false`, which is what
+   * the route answers for EVERY failure it catches (a server without a `/running`
+   * route, a refused or unresolvable endpoint, a 401 from a wrong key) — safe to
+   * explain in the UI as long as the wording also fits an endpoint that is down; and
+   * `null`, only when Codeman's own request to the route failed or the client-side
+   * bound below won the race, which stays silent, since the endpoint may merely have
+   * been asleep. Never throws: a failed probe should
    * just skip promotion, not break the picker.
    *
    * ⚠️ Client-side bounded to ~800ms via Promise.race, on top of (never instead of) the
@@ -1061,10 +1064,12 @@ Object.assign(CodemanApp.prototype, {
    * is display text scraped off a CLI's footer or statusline for a session header (pane
    * derived, `source: 'screen'`), and promoting a row because a terminal printed a
    * similar string is worse than showing nothing.
-   * ⚠️ Requires a live pane: `status: 'stopped'` or a recorded `paneExit` means nothing
-   * is on the endpoint any more, and a dead session's stale pin is exactly what an "in
-   * use" claim must not resurrect. `session:updated` keeps it current, so a session
-   * cleared back to the CLI's own backend or moved to another endpoint stops counting.
+   * ⚠️ Requires a live pane: `status: 'stopped'`, a null `pid` (the PTY exited; the
+   * same live-pane test keep-warm applies, `src/prompt-cache-keepwarm.ts`) or a recorded
+   * `paneExit` means nothing is on the endpoint any more, and a dead session's stale pin
+   * is exactly what an "in use" claim must not resurrect. `session:updated` keeps it
+   * current, so a session cleared back to the CLI's own backend or moved to another
+   * endpoint stops counting.
    * ⚠️ A since-deleted endpoint simply matches no host, so no extra liveness check is
    * needed here.
    */
@@ -1073,7 +1078,7 @@ Object.assign(CodemanApp.prototype, {
     if (models.length === 0) return null;
     let newest = null;
     for (const [, session] of this.sessions || []) {
-      if (!session || session.status === 'stopped' || session.paneExit) continue;
+      if (!session || session.status === 'stopped' || session.pid === null || session.paneExit) continue;
       const pinned = session.customModel;
       if (!pinned || pinned.endpointId !== host.id) continue;
       if (!models.includes(pinned.modelId)) continue; // undiscovered since: no row to promote
@@ -1129,10 +1134,13 @@ Object.assign(CodemanApp.prototype, {
       `${cliLabel} → ${host.label} — ${(host.models || []).length} models discovered.`;
     // A plain static line (its markup lives in index.html), shown when NOTHING is known
     // about any row: 40 alphabetical rows with no mark on any of them otherwise read as
-    // the app ignoring the question. It only asserts what the probe actually answered:
-    // `isLlamaSwap: false` is a real "I cannot tell you", where a probe that timed out or
-    // failed (`runningStatus === null`) is not, the box may merely be asleep, so an
-    // unreachable endpoint stays silent instead of explaining something it does not know.
+    // the app ignoring the question. `isLlamaSwap: false` is what the route answers for
+    // every failure it catches: a server that cannot report AND a down or refused one
+    // alike (`getLlamaSwapStatus`, custom-model-routes.ts), so the line's wording
+    // promises only that nothing was reported, which stays true either way. A probe
+    // that never got an answer at all (`runningStatus === null`: Codeman's own request
+    // failed or the 800ms bound won) keeps the line hidden, the box may merely be
+    // asleep.
     // A remembered id that has since vanished from host.models is no promotion: count
     // only a promoted id that is actually a row, or a stale "last used" would both skip
     // tagging any row and hide this line, leaving 40 unmarked rows with no explanation.

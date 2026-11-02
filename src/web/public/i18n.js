@@ -629,8 +629,8 @@
     'Currently loaded': '当前已加载',
     'In use by a session': '会话正在使用',
     'Last used': '上次使用',
-    'Nothing is marked: this endpoint cannot report which model it has loaded, and no running session uses one. Pick the model to launch, or start a session on this endpoint first.':
-      '未标记任何模型：此端点无法报告它当前加载了哪个模型，并且没有运行中的会话正在使用它。请选择要启动的模型，或先在该端点上启动一个会话。',
+    'Nothing is marked: this endpoint did not report which model it has loaded, and none of your running sessions uses one. Pick the model to launch.':
+      '未标记任何模型：此端点没有报告它已加载了哪个模型，你运行中的会话也没有在使用它。请选择要启动的模型。',
     'That endpoint no longer exists': '该端点已不存在',
     'No models discovered for this endpoint yet': '此端点尚未发现任何模型',
     // Model picker search box (index.html placeholder/aria-label and the no-matches line)

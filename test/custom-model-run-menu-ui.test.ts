@@ -64,7 +64,7 @@ function bootApp(
         <input type="search" id="customModelPickSearch" aria-label="Search models"
           oninput="app.filterCustomModelPick(this.value)">
         <p id="customModelPickNoMatches" role="status" hidden>No models match</p>
-        <p id="customModelPickUnknown" role="status" hidden>Nothing is marked: this endpoint cannot report which model it has loaded, and no running session uses one. Pick the model to launch, or start a session on this endpoint first.</p>
+        <p id="customModelPickUnknown" role="status" hidden>Nothing is marked: this endpoint did not report which model it has loaded, and none of your running sessions uses one. Pick the model to launch.</p>
         <div id="customModelPickList"></div>
       </div>
       <div class="modal" id="customModelSwapConfirmModal">
@@ -766,6 +766,7 @@ describe('Custom Model Endpoint Profiles: gateways without /running fall back to
   const live = (modelId: string, overrides: Record<string, unknown> = {}) => ({
     name: 'w9-Gateway',
     status: 'busy',
+    pid: 4242,
     createdAt: 1_700_000_000_000,
     customModel: { endpointId: 'bifrost', modelId, label: 'bifrost' },
     ...overrides,
@@ -804,10 +805,11 @@ describe('Custom Model Endpoint Profiles: gateways without /running fall back to
     expect(buttons[1].querySelectorAll('.set-scope')).toHaveLength(0);
   });
 
-  it('a stopped session, an exited pane, another endpoint or an undiscovered model mark nothing', async () => {
+  it('a stopped session, an exited process, an exited pane, another endpoint or an undiscovered model mark nothing', async () => {
     const inUse = 'llama-swap/qwen3.8-flash-next-unsloth-ud-iq4_xs';
     const cases: Array<[string, Record<string, unknown>]> = [
       ['stopped', { status: 'stopped' }],
+      ['process exited (pid null)', { pid: null }],
       ['pane exited', { paneExit: { at: 1, status: 0 } }],
       ['other endpoint', { customModel: { endpointId: 'other', modelId: inUse } }],
       ['no custom model', { customModel: undefined }],
@@ -837,14 +839,19 @@ describe('Custom Model Endpoint Profiles: gateways without /running fall back to
     expect(buttons.filter((b) => b.textContent!.includes('In use by a session'))).toHaveLength(1);
   });
 
-  it('says so plainly when the endpoint cannot report a loaded model and nothing is known', async () => {
+  it('says so plainly when nothing is known (a down endpoint answers the very same shape)', async () => {
     const { win, app } = gatewayApp([]);
 
     await app._openCustomModelPickModal('opencode', GATEWAY);
 
     const unknown = win.document.getElementById('customModelPickUnknown')!;
     expect(unknown.hasAttribute('hidden')).toBe(false);
-    expect(unknown.textContent).toContain('cannot report which model it has loaded');
+    expect(unknown.textContent).toContain('did not report which model it has loaded');
+    // What REALLY arrives here, not a fiction: `getLlamaSwapStatus` (custom-model-routes.ts)
+    // turns EVERY upstream failure into `isLlamaSwap: false` — a gateway with no
+    // `/running` route, a closed port, an unresolvable host, a 401 — so this stub is
+    // also exactly what a DOWN endpoint produces, which is why the line's wording says
+    // only "did not report" and never why.
     // The same class-of-bug trap as the no-matches line: `.form-hint`'s `display: block`
     // outranks the UA `[hidden]` rule, so the attribute needs the CSS re-assertion.
     const rule = STYLES_CSS.match(/#customModelPickModal \.custom-model-pick-unknown\[hidden\]\s*\{[^}]*\}/);
@@ -852,14 +859,16 @@ describe('Custom Model Endpoint Profiles: gateways without /running fall back to
     expect(rule![0]).toMatch(/display:\s*none\s*!important/);
   });
 
-  it('hides that line whenever a row IS marked, and stays silent for an endpoint that never answered', async () => {
+  it('hides that line whenever a row IS marked, and for a probe that never got any answer', async () => {
     // Marked by a live session: nothing to explain.
     const marked = gatewayApp([live('llama-swap/alpha-3b')]);
     await marked.app._openCustomModelPickModal('opencode', GATEWAY);
     expect(marked.win.document.getElementById('customModelPickUnknown')!.hasAttribute('hidden')).toBe(true);
 
-    // Probe timed out (`null`) rather than answered "not llama-swap": the endpoint may
-    // merely be asleep, so claiming it cannot report would be a guess.
+    // `null` (no answer at all) only happens when Codeman's OWN request to the route
+    // failed or the client-side bound won the race. The route itself never answers this
+    // way for an unreachable endpoint: every fetch failure arrives as `isLlamaSwap:
+    // false`, pinned by the test above. The box may merely be asleep, so stay silent.
     const asleep = bootApp({ hosts: [GATEWAY] });
     asleep.app._apiJson = async (path: string) => (path.includes('running-status') ? null : []);
     await asleep.app._openCustomModelPickModal('opencode', GATEWAY);
@@ -917,9 +926,10 @@ describe('Custom Model Endpoint Profiles: _getCustomModelRunningStatus is client
 
     const status = await app._getCustomModelRunningStatus({ id: 'llama-box', models: ['qwen3'] }, 5);
 
-    // `null` means "no answer", which is NOT the same as an endpoint that answered that
-    // it cannot report: the picker keeps its "this endpoint cannot report" line hidden
-    // for exactly this case (pinned below).
+    // `null` means "no answer at all" (Codeman's own request failed or the client-side
+    // bound won): the picker keeps its "Nothing is marked" line hidden for exactly this
+    // case (pinned in the gateway describe above). An endpoint that is merely down is
+    // NOT here: the route turns every fetch failure into `isLlamaSwap: false`.
     expect(status).toBeNull();
     expect(app._pickReadyRunningModel(status, { id: 'llama-box', models: ['qwen3'] })).toBeNull();
   });

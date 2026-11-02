@@ -7824,9 +7824,9 @@ html[data-skin="og"] .welcome-primary:hover {
   padding: 1rem 0;
 }
 
-/* "This endpoint cannot report which model it has loaded": the same `.form-hint`
-   `display: block` beats `[hidden]` trap the two rules below fix for the no-matches
-   line and the filtered rows, so the attribute needs the same re-assertion. */
+/* "Nothing is marked: this endpoint did not report which model it has loaded": the same
+   `.form-hint` `display: block` beats `[hidden]` trap the two rules below fix for the
+   no-matches line and the filtered rows, so the attribute needs the same re-assertion. */
 #customModelPickModal .custom-model-pick-unknown {
   padding-bottom: 0.15rem;
 }
