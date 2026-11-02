@@ -13,7 +13,6 @@ import { getCli } from '../src/config/cli-registry/index.js';
 import {
   buildCustomModelInjection,
   withV1Suffix,
-  withAnthropicV1Suffix,
   withAnthropicRootSuffix,
   GROK_CUSTOM_MODEL_NAME,
   type CustomModelEndpoint,
@@ -44,26 +43,6 @@ describe('withV1Suffix', () => {
 
   it('strips a trailing slash with no /v1', () => {
     expect(withV1Suffix('http://host:8080/')).toBe('http://host:8080/v1');
-  });
-});
-
-describe('withAnthropicV1Suffix', () => {
-  it('appends /anthropic/v1 to a bare gateway root', () => {
-    expect(withAnthropicV1Suffix('http://host:8080')).toBe('http://host:8080/anthropic/v1');
-    expect(withAnthropicV1Suffix('http://host:8080/')).toBe('http://host:8080/anthropic/v1');
-  });
-
-  it('is idempotent when the full prefix is already present', () => {
-    expect(withAnthropicV1Suffix('http://host:8080/anthropic/v1')).toBe('http://host:8080/anthropic/v1');
-    expect(withAnthropicV1Suffix('http://host:8080/anthropic/v1/')).toBe('http://host:8080/anthropic/v1');
-  });
-
-  it('completes a bare /anthropic without duplicating it', () => {
-    expect(withAnthropicV1Suffix('http://host:8080/anthropic')).toBe('http://host:8080/anthropic/v1');
-  });
-
-  it('trades a saved OpenAI-style trailing /v1 rather than stacking it', () => {
-    expect(withAnthropicV1Suffix('http://host:8080/v1')).toBe('http://host:8080/anthropic/v1');
   });
 });
 
@@ -337,12 +316,14 @@ describe('buildCustomModelInjection with endpointType: anthropic', () => {
     expect(result).toEqual({ kind: 'unsupported' });
   });
 
-  it('opencode: switches to the @ai-sdk/anthropic provider package and the /anthropic/v1 base', () => {
-    const result = buildCustomModelInjection(entryOrThrow('opencode'), anthropicEndpoint, 'qwen3');
-    if (result.kind !== 'env') throw new Error('unreachable');
-    const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
-    expect(parsed.provider.custom.npm).toBe('@ai-sdk/anthropic');
-    expect(parsed.provider.custom.options.baseURL).toBe('http://192.168.1.50:8080/anthropic/v1');
+  it('every other CLI is refused — the Anthropic type is Claude Code only', () => {
+    // Owner decision: local models are never Claude models, so OpenCode, pi and omp
+    // (which briefly had anthropic-capable recipe branches) are refused again, next to
+    // the always-refused config formats and OpenAI/Gemini-convention env vars.
+    for (const id of ['opencode', 'pi', 'omp', 'codex', 'grok', 'deepseek', 'gemini', 'copilot']) {
+      const result = buildCustomModelInjection(entryOrThrow(id), anthropicEndpoint, 'qwen3');
+      expect(result, id).toEqual({ kind: 'unsupported' });
+    }
   });
 
   it('opencode: the OpenAI route carries no npm override at all (existing installs unchanged)', () => {
@@ -355,28 +336,6 @@ describe('buildCustomModelInjection with endpointType: anthropic', () => {
     const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
     expect(parsed.provider.custom.npm).toBeUndefined();
     expect(parsed.provider.custom.options.baseURL).toBe('http://192.168.1.50:8080/v1');
-  });
-
-  it('pi: models.json switches to api anthropic-messages on the /anthropic root (SDK adds /v1/messages)', () => {
-    const result = buildCustomModelInjection(entryOrThrow('pi'), anthropicEndpoint, 'qwen3');
-    if (result.kind !== 'configDir') throw new Error('unreachable');
-    const parsed = JSON.parse(result.files[0].content);
-    expect(parsed.providers.custom.api).toBe('anthropic-messages');
-    expect(parsed.providers.custom.baseUrl).toBe('http://192.168.1.50:8080/anthropic');
-  });
-
-  it('omp: models.yml switches to api anthropic-messages on the /anthropic root (SDK adds /v1/messages)', () => {
-    const result = buildCustomModelInjection(entryOrThrow('omp'), anthropicEndpoint, 'qwen3');
-    if (result.kind !== 'configDir') throw new Error('unreachable');
-    expect(result.files[0].content).toContain('api: anthropic-messages');
-    expect(result.files[0].content).toContain('baseUrl: "http://192.168.1.50:8080/anthropic"');
-  });
-
-  it('codex, grok and deepseek: refused — their formats have no Anthropic route to write', () => {
-    for (const id of ['codex', 'grok', 'deepseek']) {
-      const result = buildCustomModelInjection(entryOrThrow(id), anthropicEndpoint, 'qwen3');
-      expect(result, id).toEqual({ kind: 'unsupported' });
-    }
   });
 });
 

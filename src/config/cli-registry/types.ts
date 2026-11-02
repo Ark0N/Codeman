@@ -884,12 +884,12 @@ export interface CliCapabilities {
          * This env recipe's `baseUrlVar` speaks the Anthropic Messages protocol natively,
          * so an endpoint saved with `endpointType: 'anthropic'` may be injected into it
          * (Claude Code: ANTHROPIC_BASE_URL gets the gateway's `/anthropic` root and the
-         * SDK appends `/v1/messages` itself). Declared ONLY where that is true — every
-         * other env recipe (gemini, copilot) speaks an OpenAI/Gemini-family convention
-         * and an Anthropic-type endpoint against it must fail as unsupported, never be
-         * pointed at a route that answers a different protocol. configDir templates opt
-         * in by name in custom-model-injection.ts instead (pi/omp have an
-         * `anthropic-messages` api); configContentEnv opts in via its provider rewrite.
+         * SDK appends `/v1/messages` itself). Claude Code is the ONLY CLI that declares
+         * this (owner decision: local models are never Claude models) — every other
+         * recipe, env (gemini, copilot), configContentEnv (opencode) or configDir
+         * (pi, omp, codex, grok, deepseek), writes OpenAI forms only, and an
+         * Anthropic-type endpoint against one of them must fail as unsupported, never be
+         * pointed at a route that answers a different protocol.
          */
         supportsAnthropic?: boolean;
       }

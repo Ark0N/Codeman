@@ -21,10 +21,11 @@ export type CustomModelAuthStyle = 'bearer' | 'api-key';
  * means 'openai' — every endpoint saved before this field existed is OpenAI-compat,
  * and the default must not silently re-point them at a different route family.
  * 'anthropic' points gateways that expose the Anthropic Messages protocol (e.g.
- * Bifrost's `/anthropic/v1` route) at CLIs that speak it natively (Claude Code via
- * ANTHROPIC_BASE_URL, OpenCode via the @ai-sdk/anthropic provider, pi/omp via
- * `anthropic-messages`). Model DISCOVERY stays on the gateway's OpenAI `/v1/models`
- * regardless of this field — the gateway's catalog is protocol-agnostic.
+ * Bifrost's `/anthropic/v1` route) at Claude Code ONLY, via ANTHROPIC_BASE_URL
+ * (owner decision: local models are never Claude models) — every other CLI speaks
+ * OpenAI conventions here and refuses an Anthropic-type endpoint as unsupported.
+ * Model DISCOVERY stays on the gateway's OpenAI `/v1/models` regardless of this
+ * field — the gateway's catalog is protocol-agnostic.
  */
 export type CustomModelEndpointType = 'openai' | 'anthropic';
 

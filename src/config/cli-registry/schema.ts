@@ -576,9 +576,10 @@ const capabilitiesSchema = z
           // get this. See the customModelInjection doc comment in cli-registry/types.ts.
           appendV1Suffix: z.boolean().optional(),
           // Declared ONLY on env recipes whose baseUrlVar speaks the Anthropic Messages
-          // protocol natively (claude) — an Anthropic-type endpoint against any other
-          // env recipe is unsupported, never a silent cross-protocol pointer. See the
-          // field's comment in cli-registry/types.ts.
+          // protocol natively — Claude Code alone (Anthropic endpoints are Claude Code
+          // only); an Anthropic-type endpoint against any other recipe is unsupported,
+          // never a silent cross-protocol pointer. See the field's comment in
+          // cli-registry/types.ts.
           supportsAnthropic: z.boolean().optional(),
         })
         .strict(),

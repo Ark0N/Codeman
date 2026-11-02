@@ -46,10 +46,11 @@ export interface CustomModelEndpoint {
   apiKey?: string;
   /**
    * Which wire protocol to inject; omitted means 'openai' (every endpoint saved
-   * before the field existed). Only some injection recipes can honour
-   * 'anthropic' — the rest return `{ kind: 'unsupported' }` rather than point an
-   * OpenAI-only CLI at an Anthropic route. See `withAnthropicV1Suffix` /
-   * `withAnthropicRootSuffix` and the `supportsAnthropic` registry flag.
+   * before the field existed). 'anthropic' applies to Claude Code ONLY — local
+   * models are never Claude models, so no other CLI is pointed at an Anthropic
+   * route; everything else returns `{ kind: 'unsupported' }`. See
+   * `withAnthropicRootSuffix` and the `supportsAnthropic` registry flag (claude's
+   * alone).
    */
   endpointType?: CustomModelEndpointType;
 }
@@ -112,9 +113,6 @@ export type CustomModelInjectionResult = EnvInjection | ConfigDirInjection | Uns
 
 const DEFAULT_API_KEY = 'local-dummy-key';
 
-/** `configDir` templates whose file format has an `anthropic-messages` api value (pi and omp, both pi-ai lineage). */
-const ANTHROPIC_CAPABLE_CONFIG_TEMPLATES: ReadonlySet<string> = new Set(['pi-models-json', 'omp-models-yml']);
-
 /** Normalizes a base URL to end in exactly one trailing `/v1`, for CLIs whose config expects the OpenAI-style suffix. */
 export function withV1Suffix(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '');
@@ -122,27 +120,13 @@ export function withV1Suffix(baseUrl: string): string {
 }
 
 /**
- * Normalizes a gateway root to the complete Anthropic Messages API base ending in exactly
- * one trailing `/anthropic/v1` (what Bifrost-style gateways serve). Only OpenCode uses this
- * form today: its `@ai-sdk/anthropic` provider package appends `/messages` to the configured
- * baseURL, so the `/v1` must be part of the saved value. CLIs on the official Anthropic SDK
- * (Claude Code, and the pi-ai lineage pi and omp) append `/v1/messages` themselves and get
- * `withAnthropicRootSuffix` instead — handing them this form doubles the `/v1`. Idempotent
- * on a root that already carries the full prefix, completes a bare `/anthropic`, and trades
- * a saved OpenAI-style trailing `/v1` for the Anthropic one rather than stacking it.
- */
-export function withAnthropicV1Suffix(baseUrl: string): string {
-  const trimmed = baseUrl.replace(/\/+$/, '');
-  if (/\/anthropic\/v1$/.test(trimmed)) return trimmed;
-  if (/\/anthropic$/.test(trimmed)) return `${trimmed}/v1`;
-  return `${trimmed.replace(/\/v1$/, '')}/anthropic/v1`;
-}
-
-/**
- * The root form for CLIs whose Anthropic SDK appends `/v1/messages` itself: Claude Code
- * (`ANTHROPIC_BASE_URL`) and the pi-ai lineage (pi, omp). The injected root must end in
- * exactly `/anthropic` with NO `/v1` (the SDK supplies it), so a saved `/anthropic/v1` root
- * gets its `/v1` traded away rather than duplicated into `/anthropic/v1/v1/messages`.
+ * The root form for Claude Code's Anthropic SDK, the only CLI that gets an
+ * Anthropic-type endpoint: the SDK appends `/v1/messages` itself, so the injected
+ * root must end in exactly `/anthropic` with NO `/v1` — a saved `/anthropic/v1`
+ * root gets its `/v1` traded away rather than duplicated into
+ * `/anthropic/v1/v1/messages`. Idempotent on a root that already ends `/anthropic`,
+ * and trades a saved OpenAI-style trailing `/v1` for the Anthropic one rather than
+ * stacking it.
  */
 export function withAnthropicRootSuffix(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '');
@@ -169,10 +153,11 @@ export function buildCustomModelInjection(
   switch (cap.kind) {
     case 'env': {
       const anthropic = endpoint.endpointType === 'anthropic';
-      // An Anthropic-type endpoint only injects into env recipes that natively speak
-      // the Anthropic Messages protocol (claude's ANTHROPIC_BASE_URL) — pointing a
-      // Gemini/OpenAI-convention env var at the gateway's /anthropic route would just
-      // 404 or worse, answer a protocol the CLI cannot parse.
+      // An Anthropic-type endpoint applies to Claude Code ONLY (owner decision: local
+      // models are never Claude models): claude's `supportsAnthropic` is the sole
+      // declarer of the flag, and every other env recipe — pointing a Gemini/OpenAI-
+      // convention var at the gateway's /anthropic route would 404 or worse, answer a
+      // protocol the CLI cannot parse.
       if (anthropic && !cap.supportsAnthropic) return { kind: 'unsupported' };
       const envOverrides: Record<string, string> = {
         [cap.baseUrlVar]: anthropic
@@ -194,18 +179,18 @@ export function buildCustomModelInjection(
     }
 
     case 'configContentEnv': {
+      // Claude Code only — the Anthropic endpoint type never reaches a config-content
+      // recipe (opencode's OpenAI client is the only thing this writes).
+      if (endpoint.endpointType === 'anthropic') return { kind: 'unsupported' };
       const content = renderConfigContent(cap.template, endpoint, modelId, apiKey, contextLength);
       return withLaunchModel({ kind: 'env', envOverrides: { [cap.envVar]: content } }, cap.launchModel, modelId);
     }
 
     case 'configDir': {
-      // pi and omp share pi-ai's `anthropic-messages` api value; codex (wire_api is
-      // "responses"-only) and grok (chat_completions-only backend) have no Anthropic
-      // route to write, so an Anthropic-type endpoint there is refused here, loudly
+      // Claude Code only — every config-file recipe (pi, omp, codex, grok, deepseek)
+      // writes its OpenAI form; an Anthropic-type endpoint is refused here, loudly
       // unsupported, never silently injected as OpenAI.
-      if (endpoint.endpointType === 'anthropic' && !ANTHROPIC_CAPABLE_CONFIG_TEMPLATES.has(cap.template)) {
-        return { kind: 'unsupported' };
-      }
+      if (endpoint.endpointType === 'anthropic') return { kind: 'unsupported' };
       const { content, extraEnv } = renderConfigFile(cap.template, endpoint, modelId, apiKey, contextLength);
       return withLaunchModel(
         {
@@ -268,18 +253,14 @@ function renderConfigContent(
       // inside it itself, so `opencodeModelLimit` passes the real total through and only
       // `output` gets the capped reservation.
       const limit = opencodeModelLimit(contextLength);
-      // Anthropic-type endpoint: opencode ships the Anthropic protocol in its `npm`
-      // provider packages, and the default (no `npm` = the OpenAI chat-completions
-      // client) would speak the wrong protocol against the gateway's /anthropic route.
-      // `@ai-sdk/anthropic` appends `/messages` to a baseURL ending `/anthropic/v1`.
-      const anthropic = endpoint.endpointType === 'anthropic';
+      // OpenAI form only: an Anthropic-type endpoint is refused for every
+      // configContentEnv recipe in the builder (Claude Code is the sole Anthropic CLI).
       return JSON.stringify({
         $schema: 'https://opencode.ai/config.json',
         provider: {
           custom: {
-            ...(anthropic ? { npm: '@ai-sdk/anthropic' } : {}),
             options: {
-              baseURL: anthropic ? withAnthropicV1Suffix(endpoint.baseUrl) : withV1Suffix(endpoint.baseUrl),
+              baseURL: withV1Suffix(endpoint.baseUrl),
               apiKey,
             },
             models: { [modelId]: limit ? { limit } : {} },
@@ -311,13 +292,9 @@ function renderConfigFile(
   apiKey: string,
   contextLength?: number
 ): { content: string; extraEnv?: Record<string, string> } {
-  // Only the two pi-ai-lineage templates below can reach this with an Anthropic-type
-  // endpoint — the builder refuses codex/grok before calling in. pi-ai hands `baseUrl`
-  // straight to the official Anthropic SDK, which appends `/v1/messages` itself exactly
-  // like Claude Code's, so they get the SAME root form (`<root>/anthropic`, no `/v1`) —
-  // the `/anthropic/v1` form is only for OpenCode, whose client appends `/messages` alone.
-  const anthropic = endpoint.endpointType === 'anthropic';
-  const baseUrl = anthropic ? withAnthropicRootSuffix(endpoint.baseUrl) : withV1Suffix(endpoint.baseUrl);
+  // OpenAI form only: an Anthropic-type endpoint is refused for every configDir recipe
+  // in the builder (Claude Code is the sole Anthropic CLI, via its env recipe).
+  const baseUrl = withV1Suffix(endpoint.baseUrl);
   switch (template) {
     case 'deepseek-patch-json': {
       const route = { provider: 'codeman-custom', model: modelId };
@@ -408,7 +385,7 @@ function renderConfigFile(
               custom: {
                 baseUrl,
                 apiKey,
-                api: anthropic ? 'anthropic-messages' : 'openai-completions',
+                api: 'openai-completions',
                 authHeader: true,
                 models: [{ id: modelId }],
               },
@@ -426,7 +403,7 @@ function renderConfigFile(
       // shape and adds `authHeader: true` on the same reasoning, but has not itself
       // been live-tested the way pi's fix was. Verify before raising its confidence.
       return {
-        content: `providers:\n  custom:\n    baseUrl: ${quoted(baseUrl)}\n    apiKey: ${quoted(apiKey)}\n    api: ${anthropic ? 'anthropic-messages' : 'openai-completions'}\n    authHeader: true\n    models:\n      - id: ${quoted(modelId)}\n`,
+        content: `providers:\n  custom:\n    baseUrl: ${quoted(baseUrl)}\n    apiKey: ${quoted(apiKey)}\n    api: openai-completions\n    authHeader: true\n    models:\n      - id: ${quoted(modelId)}\n`,
       };
     case 'grok-toml': {
       // Verified against xAI's own docs (docs.x.ai/build/settings/reference): a

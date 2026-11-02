@@ -1232,10 +1232,10 @@ authStyle?, endpointType?, defaultModelId?, defaultContextLength? }` creates one
   `^[a-zA-Z0-9_-]+$`; `authStyle` is `bearer` (default) or `api-key`, never
   both (a real server hung indefinitely when sent both headers on one
   request); `endpointType` is `openai` (default when omitted) or `anthropic`
-  — which wire protocol gets injected (an `anthropic` endpoint is refused
-  at apply time by every harness whose recipe cannot speak the Anthropic
-  Messages route; model discovery always uses the gateway's OpenAI
-  `/v1/models`); `defaultContextLength` is a user-set fallback used when
+  — which wire protocol gets injected (an `anthropic` endpoint applies to
+  **Claude Code only** — the `supportsAnthropic` registry flag is claude's
+  alone, and every other harness refuses it at apply time; model discovery
+  always uses the gateway's OpenAI `/v1/models`); `defaultContextLength` is a user-set fallback used when
   assigning a model that discovery has no context length for (discovery
   itself never writes it); `baseUrl` must be `http(s)`, carry no embedded
   credentials, and

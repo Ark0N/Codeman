@@ -232,13 +232,15 @@ describe('Custom Model Endpoint Profiles: Run-menu picker generation', () => {
 
   it('skips Anthropic-incapable rows for an Anthropic-type endpoint but not for an OpenAI-type one', async () => {
     // `supportsAnthropic` ships on __codemanCustomModelClis from the server, where the
-    // injection builder itself answers the question (never an id list) — this pins the
-    // frontend half: the menu must not offer Codex a gateway it will only refuse.
+    // injection builder itself answers the question (never an id list) — and since the
+    // Anthropic endpoint type was narrowed to Claude Code only, Claude is the only
+    // harness that ever carries the flag as true. This pins the frontend half: the menu
+    // must not offer a CLI a gateway it will only refuse.
     const { win, app } = bootApp({
       customModelClis: [
         { id: 'claude', label: 'Claude Code', supportsAnthropic: true },
         { id: 'codex', label: 'Codex', supportsAnthropic: false },
-        { id: 'opencode', label: 'OpenCode', supportsAnthropic: true },
+        { id: 'opencode', label: 'OpenCode', supportsAnthropic: false },
       ],
       hosts: [
         { id: 'gw', label: 'Gateway', baseUrl: 'http://gw', endpointType: 'anthropic', models: ['qwen3'] },
@@ -250,10 +252,10 @@ describe('Custom Model Endpoint Profiles: Run-menu picker generation', () => {
     const container = win.document.getElementById('runModeCustomModels')!;
     const byEndpoint = (endpoint: string) =>
       [...container.querySelectorAll(`button[data-endpoint="${endpoint}"]`)].map((b) => b.textContent);
-    // Anthropic-type gateway: the two capable harnesses only.
-    expect(byEndpoint('gw')).toHaveLength(2);
+    // Anthropic-type gateway: Claude Code only.
+    expect(byEndpoint('gw')).toHaveLength(1);
     expect(byEndpoint('gw').join()).toContain('Claude Code');
-    expect(byEndpoint('gw').join()).toContain('OpenCode');
+    expect(byEndpoint('gw').join()).not.toContain('OpenCode');
     expect(byEndpoint('gw').join()).not.toContain('Codex');
     // OpenAI-type endpoint (endpointType omitted): nothing is skipped.
     expect(byEndpoint('llama-box')).toHaveLength(3);

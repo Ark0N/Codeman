@@ -57,9 +57,10 @@ address; discovery re-checks the address the name actually resolves to.
 
 `endpointType` (`openai` | `anthropic`, default `openai` when omitted — every
 endpoint saved before the field existed stays OpenAI) says which wire protocol
-to inject. An `anthropic` endpoint points the harnesses that natively speak
-the Anthropic Messages protocol at the gateway's Anthropic route; every
-harness whose recipe cannot speak it is refused with a clear message at launch
+to inject. An `anthropic` endpoint applies to **Claude Code only** (owner
+decision: local models are never Claude models) — it points only claude's
+`ANTHROPIC_BASE_URL` at the gateway's Anthropic route; every other harness is
+refused with a clear message at launch
 or switch time — and hidden from the Run menu for that endpoint — rather than
 silently pointed at a route it cannot parse. Model discovery ignores the type
 and always calls the gateway's OpenAI `GET /v1/models`.
