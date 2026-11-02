@@ -71,7 +71,6 @@ import {
   CustomModelSelectionSchema,
 } from '../schemas.js';
 import { readCustomModelHosts, resolveCustomModelContextLength } from '../../custom-model-hosts.js';
-import type { CustomModelEndpointType } from '../../custom-model-hosts.js';
 import { applyCustomModelInjection, removeConfigDir } from '../../custom-model-injection-apply.js';
 import { buildCustomModelInjection } from '../../custom-model-injection.js';
 import {

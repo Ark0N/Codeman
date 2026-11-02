@@ -153,11 +153,11 @@ export function buildCustomModelInjection(
   switch (cap.kind) {
     case 'env': {
       const anthropic = endpoint.endpointType === 'anthropic';
-      // An Anthropic-type endpoint applies to Claude Code ONLY (owner decision: local
-      // models are never Claude models): claude's `supportsAnthropic` is the sole
-      // declarer of the flag, and every other env recipe — pointing a Gemini/OpenAI-
-      // convention var at the gateway's /anthropic route would 404 or worse, answer a
-      // protocol the CLI cannot parse.
+      // An Anthropic-type endpoint applies to Claude Code ONLY: the endpoints this tool
+      // configures serve local models, which never speak a Claude-specific protocol, so
+      // claude's `supportsAnthropic` is the sole declarer of the flag, and every other
+      // env recipe — pointing a Gemini/OpenAI-convention var at the gateway's
+      // /anthropic route would 404 or worse, answer a protocol the CLI cannot parse.
       if (anthropic && !cap.supportsAnthropic) return { kind: 'unsupported' };
       const envOverrides: Record<string, string> = {
         [cap.baseUrlVar]: anthropic
@@ -253,16 +253,11 @@ function renderConfigContent(
       // inside it itself, so `opencodeModelLimit` passes the real total through and only
       // `output` gets the capped reservation.
       const limit = opencodeModelLimit(contextLength);
-      // OpenAI form only: an Anthropic-type endpoint is refused for every
-      // configContentEnv recipe in the builder (Claude Code is the sole Anthropic CLI).
       return JSON.stringify({
         $schema: 'https://opencode.ai/config.json',
         provider: {
           custom: {
-            options: {
-              baseURL: withV1Suffix(endpoint.baseUrl),
-              apiKey,
-            },
+            options: { baseURL: withV1Suffix(endpoint.baseUrl), apiKey },
             models: { [modelId]: limit ? { limit } : {} },
           },
         },

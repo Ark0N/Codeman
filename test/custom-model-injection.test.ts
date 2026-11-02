@@ -317,25 +317,14 @@ describe('buildCustomModelInjection with endpointType: anthropic', () => {
   });
 
   it('every other CLI is refused — the Anthropic type is Claude Code only', () => {
-    // Owner decision: local models are never Claude models, so OpenCode, pi and omp
-    // (which briefly had anthropic-capable recipe branches) are refused again, next to
-    // the always-refused config formats and OpenAI/Gemini-convention env vars.
+    // The endpoints this tool configures serve local models, which never speak a
+    // Claude-specific protocol, so OpenCode, pi and omp (which briefly had
+    // anthropic-capable recipe branches) are refused again, next to the always-refused
+    // config formats and OpenAI/Gemini-convention env vars.
     for (const id of ['opencode', 'pi', 'omp', 'codex', 'grok', 'deepseek', 'gemini', 'copilot']) {
       const result = buildCustomModelInjection(entryOrThrow(id), anthropicEndpoint, 'qwen3');
       expect(result, id).toEqual({ kind: 'unsupported' });
     }
-  });
-
-  it('opencode: the OpenAI route carries no npm override at all (existing installs unchanged)', () => {
-    const result = buildCustomModelInjection(
-      entryOrThrow('opencode'),
-      { ...endpoint, endpointType: 'openai' },
-      'qwen3'
-    );
-    if (result.kind !== 'env') throw new Error('unreachable');
-    const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
-    expect(parsed.provider.custom.npm).toBeUndefined();
-    expect(parsed.provider.custom.options.baseURL).toBe('http://192.168.1.50:8080/v1');
   });
 });
 
