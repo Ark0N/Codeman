@@ -44,6 +44,8 @@ function bootApp(
     cliAvailable?: (id: string) => boolean;
     activeCase?: { location?: string } | null;
     settingsEnabled?: boolean;
+    /** Live sessions for the "in use by a session" fallback, in `this.sessions` Map shape. */
+    sessions?: Array<Record<string, unknown>>;
   } = {}
 ) {
   const dom = new JSDOM(
@@ -62,6 +64,7 @@ function bootApp(
         <input type="search" id="customModelPickSearch" aria-label="Search models"
           oninput="app.filterCustomModelPick(this.value)">
         <p id="customModelPickNoMatches" role="status" hidden>No models match</p>
+        <p id="customModelPickUnknown" role="status" hidden>Nothing is marked: this endpoint cannot report which model it has loaded, and no running session uses one. Pick the model to launch, or start a session on this endpoint first.</p>
         <div id="customModelPickList"></div>
       </div>
       <div class="modal" id="customModelSwapConfirmModal">
@@ -88,6 +91,10 @@ function bootApp(
   app.cases = options.activeCase ? [{ name: 'testcase', ...options.activeCase }] : [{ name: 'testcase' }];
   app.loadAppSettingsFromStorage = () => ({ customModelEndpointsEnabled: options.settingsEnabled ?? true });
   app.isCliAvailable = options.cliAvailable ?? (() => true);
+  // The real app keeps live sessions in a Map keyed by id (app.js), which is what
+  // _getCustomModelInUseBySession walks; empty by default so a test that says nothing
+  // about sessions sees no promotion, exactly like a box with none running.
+  app.sessions = new Map((options.sessions || []).map((s, i) => [String(i), s]));
   app.showToast = () => {};
   // Real implementation lives in panels-ui.js, not evaluated into this harness (only
   // constants.js + session-ui.js are — see below) — a no-op default handle matching its
@@ -707,7 +714,172 @@ describe('Custom Model Endpoint Profiles: the "which model" picker', () => {
   });
 });
 
-describe('Custom Model Endpoint Profiles: _getCustomModelCurrentlyLoaded is client-side bounded', () => {
+/**
+ * The reported bug: a gateway such as Bifrost (40 models, alphabetical, no llama-swap
+ * `/running` route of its own) showed "Choose a model" with nothing marked, so the user
+ * could not tell which model the endpoint was actually serving, while the same endpoint
+ * reached from the Codex CLI appeared to "default to alpha order" for every other CLI.
+ * The endpoint genuinely cannot answer, so the app falls back to what it does know: a
+ * live session it has itself pointed at that endpoint. And it says so plainly when it
+ * knows neither.
+ */
+describe('Custom Model Endpoint Profiles: gateways without /running fall back to a live session', () => {
+  const GATEWAY = {
+    id: 'bifrost',
+    label: 'bifrost',
+    baseUrl: 'https://bifrost.example',
+    models: ['llama-swap/alpha-3b', 'llama-swap/qwen3.8-flash-next-unsloth-ud-iq4_xs', 'llama-swap/zeta-70b'],
+  };
+
+  /** The gateway's exact shape: reachable, OpenAI-compatible, and not llama-swap. */
+  function gatewayApp(sessions: Array<Record<string, unknown>>) {
+    const booted = bootApp({ hosts: [GATEWAY], sessions });
+    const origApiJson = booted.app._apiJson;
+    booted.app._apiJson = async (path: string) => {
+      if (path === '/api/model-endpoints/bifrost/running-status') return { isLlamaSwap: false, running: [] };
+      return origApiJson(path);
+    };
+    return booted;
+  }
+
+  const live = (modelId: string, overrides: Record<string, unknown> = {}) => ({
+    name: 'w9-Gateway',
+    status: 'busy',
+    createdAt: 1_700_000_000_000,
+    customModel: { endpointId: 'bifrost', modelId, label: 'bifrost' },
+    ...overrides,
+  });
+
+  it('marks the model a live session is running, at the top, for EVERY CLI, not just claude', async () => {
+    const inUse = 'llama-swap/qwen3.8-flash-next-unsloth-ud-iq4_xs';
+    for (const mode of ['opencode', 'deepseek', 'codex', 'claude']) {
+      const { win, app } = gatewayApp([live(inUse)]);
+      await app._openCustomModelPickModal(mode, GATEWAY);
+      const buttons = [...win.document.getElementById('customModelPickList')!.querySelectorAll('button')];
+      expect(buttons).toHaveLength(3);
+      expect(buttons[0].textContent, mode).toContain(inUse);
+      expect(buttons[0].textContent, mode).toContain('In use by a session');
+      // The other rows keep discovery order and carry no tag of their own.
+      expect(buttons[1].textContent).toContain('llama-swap/alpha-3b');
+      expect(buttons[2].querySelectorAll('.set-scope')).toHaveLength(0);
+      // Nothing was fabricated about the endpoint itself.
+      expect(win.document.getElementById('customModelPickList')!.textContent).not.toContain('Currently loaded');
+      expect(win.document.getElementById('customModelPickUnknown')!.hasAttribute('hidden')).toBe(true);
+    }
+  });
+
+  it('a live session outranks this device’s "last used" memory, and both rank above nothing', async () => {
+    const { win, app } = gatewayApp([live('llama-swap/zeta-70b')]);
+    win.localStorage.setItem('codeman:customModelLastUsed:opencode:bifrost', 'llama-swap/alpha-3b');
+
+    await app._openCustomModelPickModal('opencode', GATEWAY);
+
+    const buttons = [...win.document.getElementById('customModelPickList')!.querySelectorAll('button')];
+    expect(buttons[0].textContent).toContain('llama-swap/zeta-70b');
+    expect(buttons[0].textContent).toContain('In use by a session');
+    expect(buttons[0].textContent).not.toContain('Last used');
+    // The remembered pick is still listed, just not promoted or double-tagged.
+    expect(buttons[1].textContent).toContain('llama-swap/alpha-3b');
+    expect(buttons[1].querySelectorAll('.set-scope')).toHaveLength(0);
+  });
+
+  it('a stopped session, an exited pane, another endpoint or an undiscovered model mark nothing', async () => {
+    const inUse = 'llama-swap/qwen3.8-flash-next-unsloth-ud-iq4_xs';
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['stopped', { status: 'stopped' }],
+      ['pane exited', { paneExit: { at: 1, status: 0 } }],
+      ['other endpoint', { customModel: { endpointId: 'other', modelId: inUse } }],
+      ['no custom model', { customModel: undefined }],
+      ['undiscovered model', { customModel: { endpointId: 'bifrost', modelId: 'llama-swap/retired-model' } }],
+    ];
+    for (const [label, overrides] of cases) {
+      const { win, app } = gatewayApp([live(inUse, overrides)]);
+      await app._openCustomModelPickModal('opencode', GATEWAY);
+      const list = win.document.getElementById('customModelPickList')!;
+      expect(list.textContent, label).not.toContain('In use by a session');
+      expect(list.textContent, label).not.toContain('Last used');
+      // Discovery order untouched: nothing got dragged to the top.
+      expect(list.querySelectorAll('button')![0].textContent).toContain('llama-swap/alpha-3b');
+    }
+  });
+
+  it('the most recently launched live session wins when two share an endpoint', async () => {
+    const { win, app } = gatewayApp([
+      live('llama-swap/alpha-3b', { createdAt: 1 }),
+      live('llama-swap/zeta-70b', { createdAt: 2 }),
+    ]);
+
+    await app._openCustomModelPickModal('opencode', GATEWAY);
+
+    const buttons = [...win.document.getElementById('customModelPickList')!.querySelectorAll('button')];
+    expect(buttons[0].textContent).toContain('llama-swap/zeta-70b');
+    expect(buttons.filter((b) => b.textContent!.includes('In use by a session'))).toHaveLength(1);
+  });
+
+  it('says so plainly when the endpoint cannot report a loaded model and nothing is known', async () => {
+    const { win, app } = gatewayApp([]);
+
+    await app._openCustomModelPickModal('opencode', GATEWAY);
+
+    const unknown = win.document.getElementById('customModelPickUnknown')!;
+    expect(unknown.hasAttribute('hidden')).toBe(false);
+    expect(unknown.textContent).toContain('cannot report which model it has loaded');
+    // The same class-of-bug trap as the no-matches line: `.form-hint`'s `display: block`
+    // outranks the UA `[hidden]` rule, so the attribute needs the CSS re-assertion.
+    const rule = STYLES_CSS.match(/#customModelPickModal \.custom-model-pick-unknown\[hidden\]\s*\{[^}]*\}/);
+    expect(rule, 'the unknown-endpoint line needs a [hidden] rule scoped to #customModelPickModal').toBeTruthy();
+    expect(rule![0]).toMatch(/display:\s*none\s*!important/);
+  });
+
+  it('hides that line whenever a row IS marked, and stays silent for an endpoint that never answered', async () => {
+    // Marked by a live session: nothing to explain.
+    const marked = gatewayApp([live('llama-swap/alpha-3b')]);
+    await marked.app._openCustomModelPickModal('opencode', GATEWAY);
+    expect(marked.win.document.getElementById('customModelPickUnknown')!.hasAttribute('hidden')).toBe(true);
+
+    // Probe timed out (`null`) rather than answered "not llama-swap": the endpoint may
+    // merely be asleep, so claiming it cannot report would be a guess.
+    const asleep = bootApp({ hosts: [GATEWAY] });
+    asleep.app._apiJson = async (path: string) => (path.includes('running-status') ? null : []);
+    await asleep.app._openCustomModelPickModal('opencode', GATEWAY);
+    expect(asleep.win.document.getElementById('customModelPickUnknown')!.hasAttribute('hidden')).toBe(true);
+  });
+
+  it('llama-swap’s own answer still wins over a session pin, and keeps its own tag', async () => {
+    const booted = bootApp({
+      hosts: [GATEWAY],
+      sessions: [live('llama-swap/alpha-3b')],
+    });
+    const origApiJson = booted.app._apiJson;
+    booted.app._apiJson = async (path: string) => {
+      if (path === '/api/model-endpoints/bifrost/running-status') {
+        return { isLlamaSwap: true, running: [{ model: 'llama-swap/zeta-70b', state: 'ready' }] };
+      }
+      return origApiJson(path);
+    };
+
+    await booted.app._openCustomModelPickModal('opencode', GATEWAY);
+
+    const buttons = [...booted.win.document.getElementById('customModelPickList')!.querySelectorAll('button')];
+    expect(buttons[0].textContent).toContain('llama-swap/zeta-70b');
+    expect(buttons[0].textContent).toContain('Currently loaded');
+    expect(buttons[0].textContent).not.toContain('In use by a session');
+    // The session's model is an ordinary row again: one promotion, not two.
+    expect(buttons.filter((b) => b.querySelector('.set-scope'))).toHaveLength(1);
+  });
+
+  it('never trusts displayModel: a session whose terminal merely printed a model marks nothing', async () => {
+    const booted = gatewayApp([
+      { name: 'w9-Other', status: 'busy', createdAt: 1, displayModel: { model: 'llama-swap/zeta-70b', source: 'screen' } },
+    ]);
+
+    await booted.app._openCustomModelPickModal('opencode', GATEWAY);
+
+    expect(booted.win.document.getElementById('customModelPickList')!.textContent).not.toContain('In use by a session');
+  });
+});
+
+describe('Custom Model Endpoint Profiles: _getCustomModelRunningStatus is client-side bounded', () => {
   // `timeoutMs` driven in milliseconds rather than the real 800 — same reasoning as
   // `_watchLlamaSwapLoading`'s own `pollIntervalMs` a few describe blocks down: this
   // code runs inside the JSDOM window's own realm, whose setTimeout vi.useFakeTimers()
@@ -722,26 +894,30 @@ describe('Custom Model Endpoint Profiles: _getCustomModelCurrentlyLoaded is clie
     // endpoint that is asleep or firewalled, distinct from one that answers an error.
     app._apiJson = () => new Promise(() => {});
 
-    const result = await app._getCustomModelCurrentlyLoaded({ id: 'llama-box', models: ['qwen3'] }, 5);
+    const status = await app._getCustomModelRunningStatus({ id: 'llama-box', models: ['qwen3'] }, 5);
 
-    expect(result).toBeNull();
+    // `null` means "no answer", which is NOT the same as an endpoint that answered that
+    // it cannot report: the picker keeps its "this endpoint cannot report" line hidden
+    // for exactly this case (pinned below).
+    expect(status).toBeNull();
+    expect(app._pickReadyRunningModel(status, { id: 'llama-box', models: ['qwen3'] })).toBeNull();
   });
 
   it('an endpoint that answers well within the bound is unaffected by it', async () => {
     const { app } = bootApp({});
     app._apiJson = async () => ({ isLlamaSwap: true, running: [{ model: 'qwen3', state: 'ready' }] });
 
-    const result = await app._getCustomModelCurrentlyLoaded({ id: 'llama-box', models: ['qwen3'] }, 5);
+    const status = await app._getCustomModelRunningStatus({ id: 'llama-box', models: ['qwen3'] }, 5);
 
-    expect(result).toBe('qwen3');
+    expect(app._pickReadyRunningModel(status, { id: 'llama-box', models: ['qwen3'] })).toBe('qwen3');
   });
 
   it('a rejected probe settles quietly to null rather than leaving an unhandled rejection once the timeout has already won the race', async () => {
     const { app } = bootApp({});
     app._apiJson = () => new Promise((_resolve, reject) => setTimeout(() => reject(new Error('boom')), 10));
 
-    const result = await app._getCustomModelCurrentlyLoaded({ id: 'llama-box', models: ['qwen3'] }, 2);
-    expect(result).toBeNull();
+    const status = await app._getCustomModelRunningStatus({ id: 'llama-box', models: ['qwen3'] }, 2);
+    expect(status).toBeNull();
     // Give the loser of the race a turn to actually reject and hit its own .catch —
     // an unswallowed rejection here would surface as an "Unhandled Errors" failure
     // for the whole test file, not a failed assertion in this test.

@@ -7824,6 +7824,17 @@ html[data-skin="og"] .welcome-primary:hover {
   padding: 1rem 0;
 }
 
+/* "This endpoint cannot report which model it has loaded": the same `.form-hint`
+   `display: block` beats `[hidden]` trap the two rules below fix for the no-matches
+   line and the filtered rows, so the attribute needs the same re-assertion. */
+#customModelPickModal .custom-model-pick-unknown {
+  padding-bottom: 0.15rem;
+}
+
+#customModelPickModal .custom-model-pick-unknown[hidden] {
+  display: none !important;
+}
+
 /* Same class of bug as the row rule below: the no-matches line carries
    `.form-hint`, whose `display: block` outranks the UA `[hidden]` rule, so
    `filterCustomModelPick()` toggling `hidden` changed nothing on screen and

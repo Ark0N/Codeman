@@ -1041,6 +1041,11 @@
             autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"
             oninput="app.filterCustomModelPick(this.value)">
           <p class="form-hint custom-model-pick-no-matches" id="customModelPickNoMatches" role="status" hidden>No models match</p>
+          <!-- Shown only when no row carries a loaded/in-use/last-used mark AND the endpoint
+               answered that it is not llama-swap (see _openCustomModelPickModal): it says out
+               loud WHY nothing is marked, in the user's language, rather than leaving an
+               alphabetical wall that looks like the question was ignored. -->
+          <p class="form-hint custom-model-pick-unknown" id="customModelPickUnknown" role="status" hidden>Nothing is marked: this endpoint cannot report which model it has loaded, and no running session uses one. Pick the model to launch, or start a session on this endpoint first.</p>
           <div id="customModelPickList" class="run-mode-custom-models"></div>
         </div>
       </div>
