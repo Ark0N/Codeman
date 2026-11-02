@@ -329,6 +329,27 @@ describe('Custom Model Endpoint Profiles: the "which model" picker', () => {
     expect(buttons[0].textContent).not.toContain('Currently loaded');
   });
 
+  it('treats a remembered "last used" id the host no longer lists as nothing promoted: no tag, the line shows', async () => {
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3'] }],
+    });
+    const origApiJson = app._apiJson;
+    app._apiJson = async (path: string) => {
+      if (path === '/api/model-endpoints/llama-box/running-status') return { isLlamaSwap: false, running: [] };
+      return origApiJson(path);
+    };
+    // The remembered model was deleted from this endpoint since the last launch.
+    win.localStorage.setItem('codeman:customModelLastUsed:claude:llama-box', 'gone-model');
+
+    await app.selectCustomModelEntry('claude', 'llama-box');
+
+    const list = win.document.getElementById('customModelPickList')!;
+    expect(list.textContent).not.toContain('Last used');
+    // Without a promoted row the probe really did answer "nothing is known", so the
+    // explanation line must show rather than leave two unmarked rows unexplained.
+    expect(win.document.getElementById('customModelPickUnknown')!.hidden).toBe(false);
+  });
+
   it('prefers the currently-loaded model over a stale "last used" entry when both are present', async () => {
     const { win, app } = bootApp({
       hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3', 'phi4'] }],

@@ -1133,7 +1133,10 @@ Object.assign(CodemanApp.prototype, {
     // `isLlamaSwap: false` is a real "I cannot tell you", where a probe that timed out or
     // failed (`runningStatus === null`) is not, the box may merely be asleep, so an
     // unreachable endpoint stays silent instead of explaining something it does not know.
-    const nothingKnown = !promoted && runningStatus?.isLlamaSwap === false;
+    // A remembered id that has since vanished from host.models is no promotion: count
+    // only a promoted id that is actually a row, or a stale "last used" would both skip
+    // tagging any row and hide this line, leaving 40 unmarked rows with no explanation.
+    const nothingKnown = !(promoted && models.includes(promoted)) && runningStatus?.isLlamaSwap === false;
     const unknownLine = document.getElementById('customModelPickUnknown');
     if (unknownLine) unknownLine.hidden = !nothingKnown;
     list.innerHTML = models
