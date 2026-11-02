@@ -355,7 +355,7 @@ describe('WebServer.renderIndexHtml', () => {
       const html = await render(server);
       expect(html.match(/<body>/g)).toHaveLength(1);
       const clis = JSON.parse(html.match(/window\.__codemanCustomModelClis=(\[.*?\]);/)![1]);
-      expect(clis).toEqual([{ id: 'claude', label }]);
+      expect(clis).toEqual([{ id: 'claude', label, supportsAnthropic: true }]);
     } finally {
       vi.mocked(enabledClis).mockImplementation(real);
     }
