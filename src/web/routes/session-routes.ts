@@ -71,7 +71,11 @@ import {
   CustomModelSelectionSchema,
 } from '../schemas.js';
 import { readCustomModelHosts, resolveCustomModelContextLength } from '../../custom-model-hosts.js';
-import { applyCustomModelInjection, removeConfigDir } from '../../custom-model-injection-apply.js';
+import {
+  applyCustomModelInjection,
+  customModelApplyErrorMessage,
+  removeConfigDir,
+} from '../../custom-model-injection-apply.js';
 import { buildCustomModelInjection } from '../../custom-model-injection.js';
 import {
   getLlamaSwapStatus,
@@ -825,20 +829,6 @@ function currentSignalForWait(
   const signal = currentSignalFor(session, dead);
   if (signal !== 'exit' && session.screenBlocked && until.includes('blocked')) return 'blocked';
   return signal;
-}
-
-/**
- * One shared wording of the custom-model apply refusal, used by both the swap route
- * and the quick-start path — `applyCustomModelInjection()` returns undefined for a
- * CLI with no injection mechanism AND for an Anthropic-type endpoint whose recipe
- * cannot speak the Anthropic protocol, and the user-facing fix differs, so the
- * endpoint type picks the sentence. The Anthropic wording names no protocol the CLI
- * "only speaks" (not accurate for Gemini, and true for every refused CLI as phrased).
- */
-function customModelApplyErrorMessage(mode: string, endpointType: CustomModelEndpointType | undefined): string {
-  return endpointType === 'anthropic'
-    ? `${mode} cannot use an Anthropic-type endpoint; pick an OpenAI-type endpoint for it`
-    : `${mode} has no known custom-model mechanism`;
 }
 
 // ── Worker liveness for tmux-backed sessions ────────────────────────────────

@@ -85,6 +85,7 @@ import { isCliEntryInstalled, probeStockCliAvailability } from '../utils/cli-ins
 import { readCustomModelHosts, resolveCustomModelContextLength } from '../custom-model-hosts.js';
 import {
   applyCustomModelInjection,
+  customModelApplyErrorMessage,
   customModelConfigDir,
   removeConfigDir,
   type AppliedCustomModel,
@@ -1515,8 +1516,9 @@ export class WebServer extends EventEmitter {
    * Recovery half of Custom Model Endpoint Profiles: the env values a selection injects
    * are never persisted (they carry the API key), so they are computed again from the
    * endpoint store, through the SAME apply path the route uses. Undefined when the
-   * endpoint is gone, the CLI is unregistered, or the endpoint's type no longer fits
-   * the CLI: the bookkeeping is still restored so
+   * endpoint is gone, the CLI is unregistered, the CLI's recipe is `unsupported` (no
+   * mechanism of its own, or a `clis.json` override), or the endpoint's type no longer
+   * fits the CLI: the bookkeeping is still restored so
    * the selection can be cleared, and the pane keeps running on tmux's retained env.
    */
   private async _rebuildCustomModelEnv(
@@ -1549,7 +1551,10 @@ export class WebServer extends EventEmitter {
       );
       if (!applied) {
         console.warn(
-          `[WebServer] custom-model endpoint ${saved.endpointId} is Anthropic-type, which ${session.mode} cannot use; selection kept for clearing`
+          `[WebServer] custom-model endpoint ${saved.endpointId}: ${customModelApplyErrorMessage(
+            session.mode,
+            endpoint.endpointType
+          )}; selection kept for clearing`
         );
         return undefined;
       }

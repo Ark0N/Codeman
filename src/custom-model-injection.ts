@@ -46,11 +46,10 @@ export interface CustomModelEndpoint {
   apiKey?: string;
   /**
    * Which wire protocol to inject; omitted means 'openai' (every endpoint saved
-   * before the field existed). 'anthropic' applies to Claude Code ONLY — local
-   * models are never Claude models, so no other CLI is pointed at an Anthropic
-   * route; everything else returns `{ kind: 'unsupported' }`. See
-   * `withAnthropicRootSuffix` and the `supportsAnthropic` registry flag (claude's
-   * alone).
+   * before the field existed). 'anthropic' applies to Claude Code ONLY: only
+   * claude's recipe declares `supportsAnthropic` (see `withAnthropicRootSuffix`);
+   * every other recipe returns `{ kind: 'unsupported' }` for an Anthropic-type
+   * endpoint.
    */
   endpointType?: CustomModelEndpointType;
 }

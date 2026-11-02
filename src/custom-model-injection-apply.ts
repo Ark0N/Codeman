@@ -15,6 +15,7 @@ import { homedir, platform } from 'node:os';
 import { join, dirname, isAbsolute } from 'node:path';
 import { dataPath } from './config/instance.js';
 import type { CliEntry } from './config/cli-registry/types.js';
+import type { CustomModelEndpointType } from './custom-model-hosts.js';
 import {
   buildCustomModelInjection,
   type ConfigDirInjection,
@@ -301,6 +302,22 @@ export interface AppliedCustomModel {
   envKeys: string[];
   configDir?: string;
   launchModel?: string;
+}
+
+/**
+ * One shared wording of the custom-model apply refusal, used by both swap route
+ * and the quick-start path, and by the boot-recovery warning in `web/server.ts` —
+ * `applyCustomModelInjection()` returns undefined for a CLI whose recipe is
+ * `unsupported` (no injection mechanism of its own, e.g. antigravity or a
+ * `clis.json` override) AND for an Anthropic-type endpoint that recipe cannot
+ * speak, and the user-facing fix differs, so the endpoint type picks the
+ * sentence. The Anthropic wording names no protocol the CLI "only speaks" (not
+ * accurate for Gemini, and true for every refused CLI as phrased).
+ */
+export function customModelApplyErrorMessage(mode: string, endpointType: CustomModelEndpointType | undefined): string {
+  return endpointType === 'anthropic'
+    ? `${mode} cannot use an Anthropic-type endpoint; pick an OpenAI-type endpoint for it`
+    : `${mode} has no known custom-model mechanism`;
 }
 
 /**
