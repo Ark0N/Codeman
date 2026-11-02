@@ -165,7 +165,7 @@ export interface DiscoveryResult {
    * over) any listed figure for the same model.
    */
   contextLengths: Record<string, number>;
-  /** See `CustomModelHost.modelSlotCounts`; populated on the same loaded-models-only basis as `contextLengths`. */
+  /** See `CustomModelHost.modelSlotCounts`; populated only for models the server reports loaded (launch command or `/props`). No listing states a slot count, unlike `contextLengths`. */
   slotCounts: Record<string, number>;
   /** See `CustomModelHost.modelSizesGB` — populated for every model whose own listing states one. */
   sizesGB: Record<string, number>;

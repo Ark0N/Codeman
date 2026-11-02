@@ -1225,18 +1225,22 @@ authStyle?, defaultModelId?, defaultContextLength? }` creates one. `id`
 - `DELETE /api/v1/model-endpoints/:id` removes one.
 - `POST /api/v1/model-endpoints/:id/discover-models` fetches the endpoint's
   own `GET /v1/models` and stores the result as `models`, updating
-  `lastDiscoveredAt`, plus (best-effort, only for a model llama-swap's own
-  response already reports loaded) `modelContextLengths`,
-  `modelSlotCounts` and `modelSizesGB`. A loaded model's context figure
-  comes from llama-swap's own launch command (`--fit-ctx` / `-c` /
-  `--ctx-size`), falling back to `/props` (`n_ctx`, `total_slots`) for
-  whatever the command did not answer; the model's own listing
+  `lastDiscoveredAt`, plus (best-effort) `modelContextLengths`,
+  `modelSlotCounts` and `modelSizesGB`: every listing entry is read for a
+  stated context figure (`context_length`, then `context_window`) and a
+  size, BEFORE any loaded check; only the launch-command/`/props`
+  enrichment needs a model llama-swap's own response reports loaded. A
+  loaded model's context figure comes from llama-swap's own launch command
+  (`--fit-ctx` / `-c` / `--ctx-size`), falling back to `/props` (`n_ctx`,
+  `total_slots`) for whatever the command did not answer, and OVERWRITES the
+  listed figure for that model; the model's own listing
   (`context_length`, then `context_window`) only ever fills the gap when
   neither probe does, and is recorded as a single-slot figure —
   llama-swap lists the PER-SLOT window, so whenever the listed figure is
   the one taken the stored slot count is 1. A server with no `status`
   field on any entry (plain llama.cpp, a non-llama-swap gateway) gets no
-  context/size enrichment at all. `modelContextLengths` falls back to the
+  launch-command/`/props` enrichment at all, only whatever its listings
+  state. `modelContextLengths` falls back to the
   endpoint's `defaultContextLength` when a session is assigned a model
   discovery never learned a window for. A `defaultModelId` that no longer
   appears in the fresh list is dropped

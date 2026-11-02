@@ -66,7 +66,8 @@ export interface CustomModelHost {
   modelContextLengths?: Record<string, number>;
   /**
    * Discovered number of parallel server slots per model id, keyed like `modelContextLengths`
-   * and populated on the same loaded-models-only basis. Read from the launch command's
+   * but populated only for models the server reports loaded (a listing never states a slot
+   * count, unlike `contextLengths`, which every entry can supply). Read from the launch command's
    * `--parallel`/`-np` when it states one, otherwise from llama.cpp's own `/props`
    * `total_slots` (a llama-server started without `--parallel` picks the count itself, so
    * the command cannot say). llama-server splits its context across these slots (by default
@@ -92,9 +93,12 @@ export interface CustomModelHost {
    */
   modelSizesGB?: Record<string, number>;
   /**
-   * User-set fallback context length (tokens), applied by the read sites in
-   * `session-routes.ts` only when `modelContextLengths` has no entry for the selected
-   * model (a gateway that states no per-model figure, a model never loaded yet). Never
+   * User-set fallback context length (tokens), applied via
+   * `resolveCustomModelContextLength()` at every read site (the swap route, the
+   * quick-start route, boot recovery) only when `modelContextLengths` has no entry for
+   * the selected model (a gateway that states no per-model figure, a model never loaded
+   * yet). It is the model's WHOLE window, never a per-slot figure: the Claude floor
+   * check divides it by any stored slot count exactly like a discovered figure. Never
    * written by discovery, so a value set in the endpoint editor survives every
    * re-discovery sweep; unset keeps the long-standing behaviour of letting each CLI
    * assume its own default.

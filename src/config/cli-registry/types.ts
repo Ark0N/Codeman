@@ -812,9 +812,11 @@ export interface CliCapabilities {
    * for pi and omp (`--model custom/<id>`, or the CLI stays on its own default
    * provider and reports "No API key found for the selected model") or for
    * grok (`--model codeman-custom`, the `[model.<name>]` block the config
-   * declares). Absent = the config alone selects the model (claude's env vars,
-   * opencode's blob, codex's top-level `model` key). Applied by the session's
-   * respawn options through the entry's `legacyConfigField`, never by id.
+   * declares), and codex carries its bare selected id (`{modelId}`, an id the
+   * entry's `model` token pattern must be able to carry). Absent = the config
+   * alone selects the model (claude's env vars, opencode's blob). Applied by
+   * the session's respawn options through the entry's `legacyConfigField`,
+   * never by id.
    *
    * `contextLengthVar` (env kind only): the env var a discovered per-model context-window
    * size is written to when known (claude's `CLAUDE_CODE_MAX_CONTEXT_TOKENS`) — without it,

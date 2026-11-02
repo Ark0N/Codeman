@@ -294,6 +294,15 @@ hot-swap. A Claude session is relaunched with `--resume <conversation> ||
 grok are relaunched with the `--model` value that selects the injected
 provider (`custom/<modelId>` for pi and omp, `codeman-custom` for grok),
 since for those three the config file alone does not switch the model.
+**Codex is relaunched with `--model <modelId>` too**, the bare selected id
+(not a provider selector): the launch param forces the session onto the
+model its generated `config.toml` already selected, so a launch-time model
+carried over from App Settings can never override the injected selection.
+That launch arg must satisfy the codex entry's `model-plain-colon` token
+pattern (a leading letter or digit, then letters, digits and `._-:/`, per
+`stock.ts`), so an id outside that shape, e.g. LM Studio's
+`org/model@q4_k_m`, is refused with a 400 at apply time now, where a
+`config.toml` alone used to carry it.
 **Remote (SSH) and Docker sessions are refused** (400) for now: their restart
 reattaches the durable remote/in-container tmux rather than relaunching the
 agent, so the selection would report success and change nothing.
@@ -451,15 +460,17 @@ Both apply routes (the restart route and the one-shot `POST
 /api/quick-start`) now check for this **before** launching or restarting
 anything, gated on the CLI's registry entry declaring a `contextLengthVar`
 (currently only claude — the check is a no-op for every other CLI by
-construction, never a hardcoded mode check). If the model's discovered
-context (`modelContextLengths`, from discovery above) is below
-`CLAUDE_MIN_SAFE_CONTEXT_TOKENS` (40000, comfortably above the measured
+construction, never a hardcoded mode check). If the model's context (the
+discovered figure from `modelContextLengths`, or the endpoint's
+`defaultContextLength` when discovery never learned one for that model) is
+below `CLAUDE_MIN_SAFE_CONTEXT_TOKENS` (40000, comfortably above the measured
 ~36.4K overhead), the response is `{requiresContextWarning: true, modelId,
 contextLength, minSafeContextTokens}` (plus `slotCount` when the model runs more than one parallel slot) instead of applying — nothing is
-restarted or created yet. A context length that was never discovered at
-all skips the check entirely (nothing to compare, so it fails open rather
-than warning on every model an endpoint hasn't reported a size for).
-The same warning fires when the context divided across the model's parallel slots (`contextLength / slotCount`) is below the floor, because Claude Code sends several 40K-token requests at once and the slots share one pool. Retrying with `confirmedContext: true` launches anyway (the legacy `confirmed: true` still means both questions).
+restarted or created yet. A model with neither a discovered figure nor a
+`defaultContextLength` skips the check entirely (nothing to compare, so it
+fails open rather than warning on every model an endpoint hasn't reported a
+size for).
+The same warning fires when the context divided across the model's parallel slots (`contextLength / slotCount`) is below the floor, because Claude Code sends several 40K-token requests at once and the slots share one pool. ⚠️ `defaultContextLength` is the model's whole window, never a per-slot figure, so a default small enough to split under the slot count trips that slot division exactly like a discovered figure does. Retrying with `confirmedContext: true` launches anyway (the legacy `confirmed: true` still means both questions).
 
 The Run-menu picker shows this as an in-app modal
 (`#customModelContextWarningModal`, matching the llama-swap conflict
@@ -536,7 +547,12 @@ for '<id>' not found. Defaulting to fallback metadata...` on launch —
   and fabricating a fake catalog entry would mean copying the _shape_ of
   OpenAI's own proprietary schema (their per-model system-prompt content
   included) for a warning that doesn't otherwise affect behavior — not
-  something to build into discovery.
+  something to build into discovery. ⚠️ The fallback-metadata warning is
+  NOT about the context window going un-overridden. Codex does now get a
+  real context-window override: when a figure is known the generated
+  `config.toml` sets the top-level `model_context_window` to it and
+  `model_auto_compact_token_limit` to 75% of it (floored), so Codex
+  compacts at that point instead of trusting its fallback guess.
 - **Gemini** — fails with `Invalid auth method selected`, traced to an
   undocumented `GATEWAY` auth path gemini-cli selects once
   `GOOGLE_GEMINI_BASE_URL` is set. Unresolved after real investigation
