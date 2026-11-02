@@ -2352,6 +2352,14 @@ export const WebviewUpdateSchema = WebviewBaseSchema.partial();
 /** POST /api/webviews/probe: reachability + framing check for the editor's Test button. */
 export const WebviewProbeSchema = z.object({ url: webviewUrlSchema });
 
+/**
+ * Ceiling on a stated context length (tokens), shared between the bounds below and
+ * discovery (`custom-model-routes.ts`): anything above it reads as nonsense and is
+ * ignored, because a bogus figure here overflows the smaller server, which is the exact
+ * failure the discovery field exists to prevent.
+ */
+export const MAX_DISCOVERED_CONTEXT_TOKENS = 100_000_000;
+
 // Custom Model Endpoint Profiles (docs/custom-model-endpoints-plan.md) — a
 // user-configured custom OpenAI-compatible endpoint, local (llama.cpp) or cloud
 // (Azure AI Foundry, etc.). Lives below `webviewUrlSchema` because `baseUrl` IS that
@@ -2375,14 +2383,16 @@ export const CustomModelHostSchema = z.object({
   defaultModelId: z.string().max(200).optional(),
   // Server-populated by discovery (custom-model-routes.ts); accepted here only so a client
   // round-tripping the GET response back through PUT (edit-save) doesn't drop it.
-  modelContextLengths: z.record(z.string().max(200), z.number().int().positive().max(100_000_000)).optional(),
+  modelContextLengths: z
+    .record(z.string().max(200), z.number().int().positive().max(MAX_DISCOVERED_CONTEXT_TOKENS))
+    .optional(),
   // Same reasoning as modelContextLengths above.
   modelSlotCounts: z.record(z.string().max(200), z.number().int().positive().max(4096)).optional(),
   // Same reasoning as modelContextLengths above.
   modelSizesGB: z.record(z.string().max(200), z.number().positive().max(100_000)).optional(),
   // User-set fallback for models discovery has no context length for (session-routes.ts);
   // discovery never writes it. Same bound as the modelContextLengths values above.
-  defaultContextLength: z.number().int().positive().max(100_000_000).optional(),
+  defaultContextLength: z.number().int().positive().max(MAX_DISCOVERED_CONTEXT_TOKENS).optional(),
 });
 
 /**

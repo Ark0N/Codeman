@@ -21,7 +21,7 @@ import { isMultiUserMode } from '../../config/multiuser.js';
 import { getDataDir } from '../../config/instance.js';
 import { isBlockedWebviewUrl } from '../webview-egress-policy.js';
 import { egressBlockedReason, webviewFetch } from '../webview-egress.js';
-import { CustomModelHostSchema } from '../schemas.js';
+import { CustomModelHostSchema, MAX_DISCOVERED_CONTEXT_TOKENS } from '../schemas.js';
 import { readCustomModelHosts, writeCustomModelHosts, type CustomModelHost } from '../../custom-model-hosts.js';
 import type { CliEntry } from '../../config/cli-registry/types.js';
 
@@ -186,13 +186,6 @@ function parseSizeGB(description: unknown): number | undefined {
   const size = Number(match[1]);
   return Number.isFinite(size) && size > 0 ? size : undefined;
 }
-
-/**
- * Ceiling shared with `schemas.ts`'s `CustomModelHostSchema` bound on context lengths:
- * anything above it reads as nonsense and is ignored, because a bogus figure here
- * overflows the smaller server, which is the exact failure this field exists to prevent.
- */
-const MAX_DISCOVERED_CONTEXT_TOKENS = 100_000_000;
 
 /**
  * Best-effort: reads a context length (tokens) stated by a model's OWN entry in
