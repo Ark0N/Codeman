@@ -23,7 +23,7 @@ import fastifyCookie from '@fastify/cookie';
 import { rm, readFile } from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { createMockRouteContext, safeRmHomeTree, type MockRouteContext } from '../mocks/index.js';
+import { createMockRouteContext, createMockSession, safeRmHomeTree, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { getDataDir } from '../../src/config/instance.js';
@@ -210,6 +210,37 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
     expect(res.json().error).toContain(
       'codex cannot use an Anthropic-type endpoint; pick an OpenAI-type endpoint for it'
     );
+    expect(restartSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses the Anthropic-type mismatch before the llama-swap probe: no /running fetch, no swap confirmation', async () => {
+    // The quick-start mirror of the swap route's early refusal: a llama-swap that WOULD
+    // ask for eviction approval (a ready model + a live session using it on this
+    // endpoint) and a codex request for an Anthropic-type endpoint. The refusal fires
+    // before the probe, so /running is never fetched and no session is created.
+    await writeCustomModelHosts(getDataDir(), [{ ...ENDPOINT, id: 'gw', endpointType: 'anthropic' }]);
+    const other = createMockSession('other-qs-session');
+    other.customModel = { endpointId: 'gw', modelId: 'llama3' };
+    ctx.sessions.set('other-qs-session', other);
+    fetchMock.mockImplementation(async (url: URL) => {
+      if (url.pathname === '/running') {
+        return new Response(JSON.stringify({ running: [{ model: 'llama3', state: 'ready' }] }), { status: 200 });
+      }
+      throw new Error(`unexpected request in this test: ${url.href}`);
+    });
+
+    const res = await quickStart({
+      caseName: 'cm-gw-codex-early',
+      mode: 'codex',
+      customModel: { endpointId: 'gw', modelId: 'qwen3' },
+    });
+
+    const body = res.json();
+    expect(body.success).toBe(false);
+    expect(body.errorCode).toBe('OPERATION_FAILED');
+    expect(body.error).toContain('codex cannot use an Anthropic-type endpoint; pick an OpenAI-type endpoint for it');
+    expect(body.requiresConfirmation).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(restartSpy).not.toHaveBeenCalled();
   });
 

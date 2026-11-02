@@ -1579,9 +1579,18 @@ export function registerSessionRoutes(
     if (!endpoint) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
     }
-    // Discovery's per-model figure wins; the endpoint's user-set default covers models
-    // whose size discovery could not determine (a gateway that states none, say). With
-    // neither, the existing "no override, CLI assumes its own default" behaviour stands.
+    // Refuse the type mismatch BEFORE the llama-swap checks: an Anthropic-type endpoint
+    // on a CLI whose recipe cannot speak it ends in `applied === undefined` below
+    // anyway, but reaching there first would probe `GET /running` and could answer
+    // `requiresConfirmation` — a question about evicting another session's model, for
+    // an apply that cannot happen. The Run menu already hides these rows, so this is
+    // the API-only path.
+    if (buildCustomModelInjection(entry, endpoint, body.modelId).kind === 'unsupported') {
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        customModelApplyErrorMessage(session.mode, endpoint.endpointType)
+      );
+    }
     const contextLength = resolveCustomModelContextLength(endpoint, body.modelId);
     const slotCount = endpoint.modelSlotCounts?.[body.modelId];
 
@@ -4505,8 +4514,14 @@ export function registerSessionRoutes(
       const cmHosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
       const cmEndpoint = cmHosts.find((h) => h.id === customModel.endpointId);
       if (!cmEndpoint) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
-      // Per-model discovery figure first, user-set endpoint default second, nothing third
-      // (see the dedicated route's own comment above).
+      // Same early refusal as the dedicated route above: never probe `GET /running`
+      // or ask for swap confirmation for an apply that cannot happen.
+      if (buildCustomModelInjection(cmEntry, cmEndpoint, customModel.modelId).kind === 'unsupported') {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          customModelApplyErrorMessage(mode, cmEndpoint.endpointType)
+        );
+      }
       const cmContextLength = resolveCustomModelContextLength(cmEndpoint, customModel.modelId);
       const cmSlotCount = cmEndpoint.modelSlotCounts?.[customModel.modelId];
 

@@ -166,6 +166,42 @@ describe('POST /api/sessions/:id/custom-model', () => {
     expect(session.restartCli).not.toHaveBeenCalled();
   });
 
+  it('refuses the Anthropic-type mismatch before the llama-swap probe: no /running fetch, no swap confirmation', async () => {
+    // The confirmation-asking setup exactly as the test below builds it (llama-swap
+    // reporting `llama3` ready + another session actively using it on this endpoint):
+    // without the early refusal a codex request would answer `requiresConfirmation` —
+    // asking the caller to approve evicting that session's model for an apply that can
+    // never happen. The refusal must fire before the probe, so /running is never fetched.
+    const { app, ctx } = await setup();
+    await writeCustomModelHosts(getDataDir(), [{ ...CLAUDE_ENDPOINT, id: 'gw', endpointType: 'anthropic' }]);
+    const session = ctx.sessions.get('test-session-1')!;
+    session.mode = 'codex';
+    const other = createMockSession('other-session');
+    other.customModel = { endpointId: 'gw', modelId: 'llama3' };
+    ctx.sessions.set('other-session', other);
+    fetchMock.mockImplementation(async (url: URL) => {
+      if (url.pathname === '/running') {
+        return new Response(JSON.stringify({ running: [{ model: 'llama3', state: 'ready' }] }), { status: 200 });
+      }
+      throw new Error(`unexpected request in this test: ${url.href}`);
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/test-session-1/custom-model',
+      payload: { endpointId: 'gw', modelId: 'qwen3' },
+    });
+
+    const body = res.json();
+    expect(body.success).toBe(false);
+    expect(body.errorCode).toBe('OPERATION_FAILED');
+    expect(body.error).toContain('codex cannot use an Anthropic-type endpoint; pick an OpenAI-type endpoint for it');
+    expect(body.requiresConfirmation).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(session.setCustomModel).not.toHaveBeenCalled();
+    expect(session.restartCli).not.toHaveBeenCalled();
+  });
+
   it('refuses a remote (SSH) session before touching it: restartCli would only reattach the remote tmux', async () => {
     const { app, ctx } = await setup();
     const session = ctx.sessions.get('test-session-1')!;

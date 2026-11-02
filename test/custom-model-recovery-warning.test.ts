@@ -41,7 +41,10 @@ describe('_rebuildCustomModelEnv refusal warning', () => {
     server = new WebServer(0, false, true);
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    // Same discipline as every other test that constructs a WebServer: even one that
+    // was never start()ed gets stopped, so no half-initialised watchers outlive the file.
+    await server.stop();
     vi.restoreAllMocks();
   });
 
