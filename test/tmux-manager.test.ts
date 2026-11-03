@@ -28,6 +28,20 @@ import type { MuxSession } from '../src/mux-interface.js';
 // ============================================================================
 
 // Mock child_process
+/**
+ * Runs a captured `… respawn-pane … bash -c <arg>` line through a real local sh (with a
+ * foreign HOME/PATH) and returns the string bash would get, i.e. what ssh sends on.
+ */
+async function bashArgAfterLocalShell(respawnCmd: string): Promise<string> {
+  const real = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+  const at = respawnCmd.indexOf(' bash -c ');
+  expect(at).toBeGreaterThan(0);
+  return real.execFileSync('/bin/sh', ['-c', `printf '%s' ${respawnCmd.slice(at + ' bash -c '.length)}`], {
+    env: { HOME: '/local-home-xyz', PATH: '/local-path-xyz:/usr/bin:/bin' },
+    encoding: 'utf8',
+  });
+}
+
 vi.mock('node:child_process', async () => {
   const actual = await vi.importActual('node:child_process');
   return {
@@ -860,6 +874,66 @@ describe('TmuxManager (unit)', () => {
         );
         expect(respawnCall?.[0]).toContain(`tmux -L 'codeman' respawn-pane -k -c /tmp -t "codeman-abc12345"`);
         expect(respawnCall?.[0]).toContain('cd \\"/mnt/gdrive/project with spaces\\" &&');
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
+    it('hands a remote launch to ssh with $HOME and $PATH unexpanded', async () => {
+      // respawn-pane runs `bash -c <arg>` through the local sh. In double quotes that sh
+      // expanded withRemoteTmuxPath's `$HOME/…:$PATH` to the Codeman host's values, so a
+      // remote user with another home found no tmux and the pane exited 127.
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+
+      try {
+        await nonTestManager.createSession({
+          sessionId: 'abc12345-1234-5678-90ab-cdef12345679',
+          workingDir: '/w',
+          mode: 'shell',
+          remote: { hostId: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu', remotePath: '/w' },
+        });
+        const launch = [...mockedExecSync.mock.calls, ...vi.mocked(exec).mock.calls]
+          .map(([cmd]) => cmd)
+          .find((cmd) => typeof cmd === 'string' && cmd.includes(' respawn-pane '));
+        const sent = await bashArgAfterLocalShell(launch as string);
+        expect(sent).toContain('ssh ');
+        expect(sent).toContain('export PATH="$HOME/');
+        expect(sent).toContain(':$PATH"; tmux ');
+        expect(sent).not.toContain('local-home-xyz');
+        expect(sent).not.toContain('local-path-xyz');
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
+    it('respawns a remote pane with $HOME unexpanded as well', async () => {
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+      nonTestManager.registerSession({
+        sessionId: 'respawnremote2',
+        muxName: 'codeman-abcd8888',
+        pid: 1000,
+        createdAt: Date.now(),
+        workingDir: '/w',
+        mode: 'shell',
+        attached: false,
+      });
+
+      try {
+        await nonTestManager.respawnPane({
+          sessionId: 'respawnremote2',
+          workingDir: '/w',
+          mode: 'shell',
+          remote: { hostId: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu', remotePath: '/w' },
+        });
+        const { exec: currentExec } = await import('node:child_process');
+        const respawnCall = vi
+          .mocked(currentExec)
+          .mock.calls.find(([cmd]) => typeof cmd === 'string' && cmd.includes(' respawn-pane '));
+        const sent = await bashArgAfterLocalShell(respawnCall?.[0] as string);
+        expect(sent).toContain('export PATH="$HOME/');
+        expect(sent).not.toContain('local-home-xyz');
       } finally {
         nonTestManager.destroy();
       }

@@ -2661,7 +2661,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // pane launch in /tmp, then cd inside bash against the current mount table.
       const launchCmd = remote || docker ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
       execSync(
-        `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,
+        `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${bashCArg(launchCmd, !!(remote || docker))}`,
         {
           timeout: EXEC_TIMEOUT_MS,
           stdio: 'ignore',
@@ -2914,7 +2914,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // -c /tmp + cd bounce — see createSession() for rationale (stale FUSE state).
       const launchCmd = remote || docker ? fullCmd : `cd ${JSON.stringify(workingDir)} && ${fullCmd}`;
       await execAsync(
-        `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${JSON.stringify(launchCmd)}`,
+        `${this.tmux()} respawn-pane -k -c ${TMUX_LAUNCH_CWD} -t "${muxName}" bash -c ${bashCArg(launchCmd, !!(remote || docker))}`,
         {
           timeout: EXEC_TIMEOUT_MS,
         }
@@ -4661,6 +4661,20 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return false;
     }
   }
+}
+
+/**
+ * The `bash -c` argument of a pane launch (`respawn-pane … bash -c <arg>`, run through the
+ * local sh). A remote or docker command is already quoted for the shell at the far end and
+ * must reach bash verbatim, so it goes in single quotes. Double quotes (JSON.stringify) let
+ * the local sh expand every `$` first: the PATH bootstrap of `withRemoteTmuxPath`
+ * (`$HOME/.local/bin:…:$PATH`) arrived on the remote host as this host's home and PATH, so
+ * a remote user with another home found no tmux and every new remote pane exited 127.
+ * `${SHELL:-/bin/sh}` in the remote launch was the local shell for the same reason.
+ * Local commands keep their double-quoted form.
+ */
+function bashCArg(launchCmd: string, verbatim: boolean): string {
+  return verbatim ? shellescape(launchCmd) : JSON.stringify(launchCmd);
 }
 
 /**
