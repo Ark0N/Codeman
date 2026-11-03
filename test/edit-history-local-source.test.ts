@@ -141,12 +141,25 @@ describe('readClaudeEditSources', () => {
 });
 
 describe('probeLocalPaths', () => {
-  it('reports kind, size and mtime, expands ~/ against home, null for missing', async () => {
+  it('reports size and mtime of files, expands ~/ against home, null for missing and directories', async () => {
     put('home/img.png', 'PNG!', 1_700_000_000);
     mkdirSync(join(root, 'dir'));
     const res = await probeLocalPaths(['~/img.png', join(root, 'dir'), join(root, 'nope.png')], join(root, 'home'));
     expect(res[0]).toEqual({ realPath: join(root, 'home/img.png'), kind: 'file', size: 4, mtimeMs: 1_700_000_000_000 });
-    expect(res[1]).toMatchObject({ kind: 'directory', size: 0 });
+    expect(res[1]).toBeNull();
     expect(res[2]).toBeNull();
+  });
+
+  it('touches a path only after the bounded probe saw a file there', async () => {
+    put('a.png', 'PNG!', 1_700_000_000);
+    put('b.png', 'PNG!', 1_700_000_000);
+    const asked: string[] = [];
+    const res = await probeLocalPaths([join(root, 'a.png'), join(root, 'b.png'), 'rel.png'], root, async (p) => {
+      asked.push(p);
+      return p.endsWith('a.png') ? 'unknown' : 'file';
+    });
+    // a.png exists, but its filesystem did not answer the bounded probe: no unbounded stat.
+    expect(res.map((r) => r?.realPath ?? null)).toEqual([null, join(root, 'b.png'), null]);
+    expect(asked).toEqual([join(root, 'a.png'), join(root, 'b.png')]); // relative: never probed
   });
 });

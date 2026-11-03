@@ -349,6 +349,50 @@ describe('extractImagePathCandidates', () => {
   });
 });
 
+describe('extractImagePathCandidates: linear in the line length (#693 review)', () => {
+  // Claude Code keeps up to 30,000 characters of Bash output, all of it agent-printed, and the
+  // scan runs synchronously in the request. Before the fix one such line took ~2.7 s.
+  const N = 30_000;
+  const BUDGET_MS = 250;
+  const timed = (text: string) => {
+    const t = performance.now();
+    const out = extractImagePathCandidates('render', text, '', CWD);
+    return { out, ms: performance.now() - t };
+  };
+  const base64 = Buffer.from(Array.from({ length: (N * 3) / 4 }, (_, i) => (i * 131 + 7) & 255)).toString('base64');
+
+  it.each([
+    ...'#+%@![{^:/a.~-$'.split('').map((c) => [`30,000 × ${c}`, c.repeat(N)] as const),
+    ['a base64 blob', base64] as const,
+    ['repeated file:///', 'file:///'.repeat(N / 8)] as const,
+    ['repeated file:///x', 'file:///x'.repeat(N / 9)] as const,
+    ['an unclosed quote', '"' + 'a'.repeat(N)] as const,
+    ['repeated =a', '=a'.repeat(N / 2)] as const,
+  ])('%s stays under the time budget and still finds a path after it', (_label, line) => {
+    const { out, ms } = timed(`${line}\nsaved out/plot.png`);
+    expect(ms).toBeLessThan(BUDGET_MS);
+    expect(out).toContain('/work/repo/out/plot.png');
+  });
+
+  it('parses a chunk of 139 Bash results with a 30,000-character base64 blob each under budget', () => {
+    const lines: string[] = [];
+    for (let i = 0; i < 139; i++) {
+      lines.push(bashUseLine(`toolu_${i}`, '2026-10-15T20:00:00.000Z', 'cat img.b64'));
+      lines.push(
+        toolResultLine(`toolu_${i}`, '2026-10-15T20:00:01.000Z', {
+          stdout: base64,
+          stderr: '',
+          interrupted: false,
+          isImage: false,
+        })
+      );
+    }
+    const t = performance.now();
+    parseClaudeEditLines(lines.join('\n'));
+    expect(performance.now() - t).toBeLessThan(1500);
+  });
+});
+
 describe('classifyEditPath', () => {
   it.each([
     ['/a/b.png', 'image'],

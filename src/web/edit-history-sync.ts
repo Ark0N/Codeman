@@ -436,8 +436,14 @@ export class EditHistorySync {
     this.dropMissing(store, requests, res);
     const wanted = new Set(requests.map((r) => r.relPath));
     const candidates: ImageCandidate[] = [];
+    let parsed = false;
     for (const f of res.files) {
       if (!wanted.has(f.relPath)) continue;
+      // Each file is up to one budget (8 MiB) of synchronous parsing: let the server breathe
+      // between them. A store removed meanwhile ignores the rest (it is inert once removed).
+      if (parsed) await new Promise<void>((resolve) => setImmediate(resolve));
+      parsed = true;
+      if (slot.gone) break;
       const r = store.applyOlder({
         transcriptId: res.transcriptId,
         source: f.relPath,

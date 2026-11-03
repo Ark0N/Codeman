@@ -25,6 +25,7 @@
 import { open, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join } from 'node:path';
+import { probePathKind, type PathProbeKind } from './utils/bounded-path-probe.js';
 import { claudeProjectsDir } from './utils/claude-transcript.js';
 
 const ID_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -207,26 +208,35 @@ export async function readClaudeEditSources(
   return { transcriptId, files, metas };
 }
 
-/** Per path its resolved path, kind, size and mtime, or null when it does not exist. `~/` means this user's home. */
+/**
+ * Per path its resolved path, kind, size and mtime, or null when it is not a regular file
+ * (missing, a directory, or on a filesystem that did not answer). `~/` means this user's home.
+ *
+ * The paths come from Bash output, so the agent chose them: each one first goes through the
+ * bounded probe (`probePathKind`, no `pastCap`, this is a bulk scan), and only a path it saw
+ * as a file is touched by `realpath` + `stat`. A path on a mount that stopped answering
+ * then costs one stalled stat at most, never a sync that cannot finish (#516 rule).
+ * Sequential, so one sync holds at most one threadpool worker.
+ */
 export async function probeLocalPaths(
   paths: readonly string[],
-  home: string = homedir()
+  home: string = homedir(),
+  probeKind: (path: string) => Promise<PathProbeKind> = probePathKind
 ): Promise<Array<PathProbe | null>> {
-  return Promise.all(
-    paths.map(async (p) => {
-      const path = p.startsWith('~/') ? join(home, p.slice(2)) : p;
-      try {
-        const real = await realpath(path);
-        const s = await stat(real);
-        return {
-          realPath: real,
-          kind: s.isFile() ? 'file' : s.isDirectory() ? 'directory' : 'other',
-          size: s.isFile() ? s.size : 0,
-          mtimeMs: Math.floor(s.mtimeMs),
-        } satisfies PathProbe;
-      } catch {
-        return null;
-      }
-    })
-  );
+  const out: Array<PathProbe | null> = [];
+  for (const p of paths) {
+    const path = p.startsWith('~/') ? join(home, p.slice(2)) : p;
+    if (!isAbsolute(path) || (await probeKind(path)) !== 'file') {
+      out.push(null);
+      continue;
+    }
+    try {
+      const real = await realpath(path);
+      const s = await stat(real);
+      out.push(s.isFile() ? { realPath: real, kind: 'file', size: s.size, mtimeMs: Math.floor(s.mtimeMs) } : null);
+    } catch {
+      out.push(null);
+    }
+  }
+  return out;
 }

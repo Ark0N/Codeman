@@ -105,13 +105,16 @@ export function registerEditHistoryRoutes(app: FastifyInstance, ctx: SessionPort
     const { sync: doSync } = req.query as { sync?: string };
     const { session, view } = sessionOf(id, req);
     const why = unsupportedReason(view);
+    // Never read: answer an empty list without loading (or creating) a store for it.
+    if (why) {
+      return {
+        success: true,
+        data: { state: 'unsupported', reason: why, backfillTruncated: false, agents: {}, entries: [] },
+      };
+    }
     // The sync starts in the same tick as the session check: a deletion right after it marks
     // the running sync gone (EditHistorySync.remove), so nothing writes a deleted session.
-    const status: EditHistoryStatus = why
-      ? { state: 'unsupported', reason: why }
-      : doSync === '1'
-        ? await sync.sync(view)
-        : sync.getStatus(session.id);
+    const status: EditHistoryStatus = doSync === '1' ? await sync.sync(view) : sync.getStatus(session.id);
     return { success: true, data: listOf(await sync.getStore(session.id), session.workingDir, status) };
   });
 

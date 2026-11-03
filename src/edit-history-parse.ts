@@ -104,13 +104,19 @@ const TOKEN_CHAR = '[^\\s\'"`<>|;&()=,:*?]';
 const PATH_TOKEN_RE = new RegExp(
   [
     // 1. file:// URL (Codex: `Saved to: file:///…`) — may contain spaces up to the extension.
-    `file://(/[^\\n]*?\\.${IMAGE_EXT})${EXT_END}`,
+    //    No `:` inside: it keeps the lazy scan from running to the line end from every
+    //    `file://` of a line that repeats it (quadratic otherwise).
+    `file://(/[^\\n:]*?\\.${IMAGE_EXT})${EXT_END}`,
     // 2./3. Quoted paths, spaces allowed.
     `"([^"\\n]*\\.${IMAGE_EXT})"`,
     `'([^'\\n]*\\.${IMAGE_EXT})'`,
-    // 4. Unquoted token. The lookbehind keeps a match from starting inside a URL, a glob
-    //    or a longer name; the name before the extension must not be empty.
-    `(?<![\\w:/.~*?$-])((?:${TOKEN_CHAR}*/)?[^\\s'"\`<>|;&()=,:*?/]+\\.${IMAGE_EXT})${EXT_END}`,
+    // 4. Unquoted token. A match starts only at a token boundary (line start or a character
+    //    that ends a token), never inside a URL (`:` is not a boundary), a glob or a longer
+    //    name. Anchoring at boundaries keeps this linear: a lookbehind that only excluded
+    //    some characters let a match start at every other character of a long token
+    //    (`####…`, a base64 blob) and rescan the token from each, quadratic in the line
+    //    length. The name before the extension must not be empty.
+    `(?<=^|[\\s'"\`<>|;&()=,*?])((?:${TOKEN_CHAR}*/)?[^\\s'"\`<>|;&()=,:*?/]+\\.${IMAGE_EXT})${EXT_END}`,
   ].join('|'),
   'gi'
 );
