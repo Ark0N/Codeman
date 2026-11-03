@@ -190,10 +190,12 @@ describe('GET /api/sessions/:id/edits', () => {
     const loadStore = vi.fn(async (id: string) => EditHistoryStore.load(id, { dir, debounceMs: 0 }));
     const { app, read } = await setup({ loadStore });
     Object.assign(session, patch);
+    const empty = { state: 'unsupported', reason, backfillTruncated: false, agents: {}, entries: [] };
     for (const url of [URL, `${URL}?sync=1`]) {
-      const data = (await app.inject({ method: 'GET', url })).json().data;
-      expect(data).toEqual({ state: 'unsupported', reason, backfillTruncated: false, agents: {}, entries: [] });
+      expect((await app.inject({ method: 'GET', url })).json().data).toEqual(empty);
     }
+    expect((await app.inject({ method: 'POST', url: `${URL}/older` })).json().data).toEqual(empty);
+    expect((await app.inject({ method: 'GET', url: `${URL}/t1` })).statusCode).toBe(404);
     expect(read).not.toHaveBeenCalled();
     expect(loadStore).not.toHaveBeenCalled();
   });

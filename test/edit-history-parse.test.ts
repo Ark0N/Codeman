@@ -308,6 +308,12 @@ describe('parseClaudeEditLines: images sent to the user', () => {
 });
 
 describe('extractImagePathCandidates', () => {
+  it('keeps a colon inside a file:// path (timestamped names)', () => {
+    expect(extractImagePathCandidates('', 'Saved to file:///tmp/plot-12:30.png', '', CWD)).toEqual([
+      '/tmp/plot-12:30.png',
+    ]);
+  });
+
   it('resolves relative paths against cwd and keeps ~/ paths literal', () => {
     expect(extractImagePathCandidates('cp a.png ../b.jpeg ~/shots/c.gif', '', '', CWD)).toEqual([
       '/work/repo/a.png',
@@ -353,7 +359,8 @@ describe('extractImagePathCandidates: linear in the line length (#693 review)', 
   // Claude Code keeps up to 30,000 characters of Bash output, all of it agent-printed, and the
   // scan runs synchronously in the request. Before the fix one such line took ~2.7 s.
   const N = 30_000;
-  const BUDGET_MS = 250;
+  // Generous: the gated suite runs at nice 19 next to the live service. Linear is ~1 ms.
+  const BUDGET_MS = 1000;
   const timed = (text: string) => {
     const t = performance.now();
     const out = extractImagePathCandidates('render', text, '', CWD);
@@ -366,6 +373,8 @@ describe('extractImagePathCandidates: linear in the line length (#693 review)', 
     ['a base64 blob', base64] as const,
     ['repeated file:///', 'file:///'.repeat(N / 8)] as const,
     ['repeated file:///x', 'file:///x'.repeat(N / 9)] as const,
+    ['repeated file:///a:', 'file:///a:'.repeat(N / 10)] as const,
+    ['file:/// then 30,000 characters', 'file:///' + 'a'.repeat(N)] as const,
     ['an unclosed quote', '"' + 'a'.repeat(N)] as const,
     ['repeated =a', '=a'.repeat(N / 2)] as const,
   ])('%s stays under the time budget and still finds a path after it', (_label, line) => {
@@ -389,7 +398,7 @@ describe('extractImagePathCandidates: linear in the line length (#693 review)', 
     }
     const t = performance.now();
     parseClaudeEditLines(lines.join('\n'));
-    expect(performance.now() - t).toBeLessThan(1500);
+    expect(performance.now() - t).toBeLessThan(3000); // 6.6 s before the fix
   });
 });
 

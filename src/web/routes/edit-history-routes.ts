@@ -86,6 +86,11 @@ function listOf(
   return list;
 }
 
+/** The answer for a session that is never read (remote, Docker, non-claude): no store involved. */
+function unsupportedList(reason: string): EditHistoryList {
+  return { state: 'unsupported', reason, backfillTruncated: false, agents: {}, entries: [] };
+}
+
 export function registerEditHistoryRoutes(app: FastifyInstance, ctx: SessionPort, sync: EditHistorySync): void {
   const sessionOf = (id: string, req: Parameters<typeof findSessionOrFail>[2]) => {
     const session = findSessionOrFail(ctx, id, req);
@@ -106,12 +111,7 @@ export function registerEditHistoryRoutes(app: FastifyInstance, ctx: SessionPort
     const { session, view } = sessionOf(id, req);
     const why = unsupportedReason(view);
     // Never read: answer an empty list without loading (or creating) a store for it.
-    if (why) {
-      return {
-        success: true,
-        data: { state: 'unsupported', reason: why, backfillTruncated: false, agents: {}, entries: [] },
-      };
-    }
+    if (why) return { success: true, data: unsupportedList(why) };
     // The sync starts in the same tick as the session check: a deletion right after it marks
     // the running sync gone (EditHistorySync.remove), so nothing writes a deleted session.
     const status: EditHistoryStatus = doSync === '1' ? await sync.sync(view) : sync.getStatus(session.id);
@@ -121,14 +121,16 @@ export function registerEditHistoryRoutes(app: FastifyInstance, ctx: SessionPort
   app.post('/api/sessions/:id/edits/older', async (req): Promise<ApiResponse<EditHistoryList>> => {
     const { id } = req.params as { id: string };
     const { session, view } = sessionOf(id, req);
+    const why = unsupportedReason(view);
+    if (why) return { success: true, data: unsupportedList(why) };
     const status = await sync.sync(view, { older: true });
     return { success: true, data: listOf(await sync.getStore(session.id), session.workingDir, status) };
   });
 
   app.get('/api/sessions/:id/edits/:entryId', async (req, reply): Promise<ApiResponse<EditHistoryDiff>> => {
     const { id, entryId } = req.params as { id: string; entryId: string };
-    const { session } = sessionOf(id, req);
-    const entry = (await sync.getStore(session.id)).get(entryId);
+    const { session, view } = sessionOf(id, req);
+    const entry = unsupportedReason(view) ? undefined : (await sync.getStore(session.id)).get(entryId);
     if (!entry) {
       reply.code(404);
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'No such edit in this session');

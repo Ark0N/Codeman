@@ -104,9 +104,10 @@ const TOKEN_CHAR = '[^\\s\'"`<>|;&()=,:*?]';
 const PATH_TOKEN_RE = new RegExp(
   [
     // 1. file:// URL (Codex: `Saved to: file:///…`) — may contain spaces up to the extension.
-    //    No `:` inside: it keeps the lazy scan from running to the line end from every
-    //    `file://` of a line that repeats it (quadratic otherwise).
-    `file://(/[^\\n:]*?\\.${IMAGE_EXT})${EXT_END}`,
+    //    The lazy scan stops at the next `file://`: otherwise it runs to the line end from
+    //    every `file://` of a line that repeats it (quadratic). `:` stays allowed, so a
+    //    timestamped name (`plot-12:30.png`) is still found.
+    `file://(/(?:(?!file://)[^\\n])*?\\.${IMAGE_EXT})${EXT_END}`,
     // 2./3. Quoted paths, spaces allowed.
     `"([^"\\n]*\\.${IMAGE_EXT})"`,
     `'([^'\\n]*\\.${IMAGE_EXT})'`,

@@ -229,6 +229,24 @@ describe('EditHistorySync', () => {
     ]);
   });
 
+  it('a removal during a read stops it: no further parsing, no probe of printed paths', async () => {
+    const probe = vi.fn(async (paths: readonly string[]) => paths.map(() => null));
+    let removal: Promise<void> | undefined;
+    const ctx = setup({
+      probe,
+      readSources: async (path, req, budget, opts) => {
+        const res = await ctx.host.read(path, req, budget, opts);
+        removal = ctx.sync.remove('s1'); // the session is deleted while this read is out
+        return res;
+      },
+    });
+    ctx.host.append('main', bashPair('b1', T0, T0 + 5000, 'render out/a.png'));
+    ctx.host.append('subagents/agent-a1.jsonl', bashPair('b2', T0, T0 + 5000, 'render out/b.png'));
+    await ctx.sync.sync(local);
+    await removal;
+    expect(probe).not.toHaveBeenCalled();
+  });
+
   it('keeps the edits when only the image probe fails', async () => {
     const { host, sync } = setup({
       probe: async () => {
