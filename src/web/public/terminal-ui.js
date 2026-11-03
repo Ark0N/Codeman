@@ -1356,7 +1356,8 @@ Object.assign(CodemanApp.prototype, {
             isTouching = true;
             touchContactId++;
             didScroll = false;
-            tapStartedWithTerminalFocus = this._isMobileTerminalInputFocused();
+            tapStartedWithTerminalFocus = this._mobileKeyboardIsUp();
+            if (!tapStartedWithTerminalFocus) this._prepareMobileTerminalFocusGesture();
             // Classifying scans the whole viewport with translateToString, and
             // this runs at the start of EVERY gesture including scroll drags.
             // Cache the result for the touchend of this same gesture rather than
@@ -1375,7 +1376,7 @@ Object.assign(CodemanApp.prototype, {
               // early return, closes both routes to focus at once. Since
               // selectSession() ends with scrollToLastNonEmptyLine(), that made
               // the keyboard unreachable after every tab switch.
-              ev.preventDefault();
+              if (!MobileDetection.isIOS?.() || document.hasFocus()) ev.preventDefault();
               this._blurMobileTerminalInput();
             }
             // Hold still and this press becomes a text selection. Cancelled by any
@@ -5763,13 +5764,104 @@ Object.assign(CodemanApp.prototype, {
     return hasMenuPrompt && hasMenuChoice && /^\s*(?:[❯›]\s*)?\d+[.)]\s/.test(tappedLine);
   },
 
-  _focusMobileTerminalInput() {
+
+  _prepareMobileTerminalFocusGesture() {
+    this._mobileNativeClickFocusRequest = null;
+    if (!this._isMobileTerminalInputFocused() || this._mobileKeyboardIsUp()) return false;
+    this._blurMobileTerminalInput();
+    if (typeof KeyboardHandler !== 'undefined') KeyboardHandler._traceKeyboardState?.('gesture-release');
+    return true;
+  },
+
+  _mobileKeyboardIsUp() {
+    if (!this._isMobileTerminalInputFocused()) return false;
+    const touch = typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice?.();
+    if (!touch || typeof KeyboardHandler === 'undefined') return true;
+    // Native dismissal can leave both textarea focus and our cached flag set.
+    // A menu tap happens to repair this by moving focus to a button. Re-read
+    // the viewport on the terminal tap instead, using the resize detector's
+    // existing hide thresholds; never blur a genuinely visible keyboard.
+    const viewport = window.visualViewport;
+    if (KeyboardHandler.keyboardVisible && viewport?.height > 0 &&
+        viewport.width === KeyboardHandler.lastViewportWidth &&
+        typeof KeyboardHandler.handleViewportResize === 'function') {
+      const baseline = KeyboardHandler.initialViewportHeight;
+      const minimum = KeyboardHandler._keyboardMinHeight;
+      const grewPastKeyboard = minimum > 0 && viewport.height - minimum > KeyboardHandler.KEYBOARD_GONE_GROWTH_PX;
+      if ((baseline > 0 && baseline - viewport.height < 100) || grewPastKeyboard) {
+        KeyboardHandler.handleViewportResize();
+        if (typeof _crashDiag !== 'undefined')
+          _crashDiag.log(`KEYBOARD_RECHECK: height=${Math.round(viewport.height)} baseline=${Math.round(baseline)} min=${Math.round(minimum)} up=${KeyboardHandler.keyboardVisible}`);
+      }
+    }
+    return KeyboardHandler.keyboardVisible === true;
+  },
+  _focusMobileTerminalInput(source = 'terminal-tap') {
     this._syncMobileHelperTextareaToCursor();
     const cjkInput = document.getElementById('cjkInput');
+    const target = cjkInput?.classList.contains('cjk-input-visible') ? cjkInput : this.terminal?.textarea;
+    const keyboardUp = this._mobileKeyboardIsUp();
+    // A caret tap that merely retains the same open input is not a new open.
+    // Counting it invalidated ownership, so the later native dismiss could
+    // leave stale editing focus behind. Actual opens/transfers still supersede
+    // the previous request BEFORE blur/focus callbacks can run (#35).
+    const retainsFocus = keyboardUp && !!target && document.activeElement === target;
+    if (!retainsFocus) this._mobileKeyboardFocusGeneration = (this._mobileKeyboardFocusGeneration || 0) + 1;
+    // Fallback for callers without a terminal touchstart (e.g. tab selection).
+    if (this._isMobileTerminalInputFocused() && !keyboardUp) this._blurMobileTerminalInput();
     if (cjkInput?.classList.contains('cjk-input-visible')) {
       cjkInput.focus();
     } else {
       this.terminal?.focus();
+    }
+    // A tab/search choice can reuse the visible keyboard without another
+    // viewport shrink. Transfer dismiss ownership only after that request has
+    // settled; a pending close must still leave a newer opening focused (#35).
+    const handler = typeof KeyboardHandler !== 'undefined' ? KeyboardHandler : null;
+    const viewport = window.visualViewport;
+    const transferGeneration = this._mobileKeyboardFocusGeneration;
+    const transferHeight = viewport?.height;
+    const transferWidth = viewport?.width;
+    if (source === 'session-tab' && !retainsFocus && handler?.keyboardVisible &&
+        Number.isSafeInteger(handler._keyboardFocusOwner) &&
+        transferHeight > 0 && transferHeight <= handler._keyboardMinHeight + 2 &&
+        handler.initialViewportHeight - transferHeight > 150) {
+      setTimeout(() => {
+        if (this._mobileKeyboardFocusGeneration !== transferGeneration ||
+            document.visibilityState !== 'visible' || !handler.keyboardVisible ||
+            !Number.isSafeInteger(handler._keyboardFocusOwner) ||
+            document.activeElement !== target || !this._isMobileTerminalInputFocused() ||
+            viewport?.height !== transferHeight || viewport?.width !== transferWidth ||
+            viewport.height > handler._keyboardMinHeight + 2) return;
+        handler._keyboardFocusOwner = transferGeneration;
+        handler._keyboardFocusOwnerInput = target;
+        handler._traceKeyboardState?.('tab-focus-owner-transfer');
+      }, handler.KEYBOARD_FOCUS_SETTLE_MS || 350);
+    }
+    // Script window.focus() was declined on the phone. Preserve the native
+    // compatibility mouse default that can activate its page, then focus from
+    // that trusted click. Never forward those mouse events to the CLI.
+    this._mobileNativeClickFocusRequest = source === 'terminal-tap' &&
+      MobileDetection.isIOS?.() && document.visibilityState === 'visible' &&
+      typeof document.hasFocus === 'function' && !document.hasFocus() &&
+      typeof navigator !== 'undefined' && navigator.userActivation?.isActive === true &&
+      !handler?.keyboardVisible && target ? {
+        target, element: this.terminal?.element, sessionId: this.activeSessionId,
+        generation: this._mobileKeyboardFocusGeneration,
+        expires: performance.now() + (window.CodemanTerminalInput?.TOUCH_COMPAT_MOUSE_SUPPRESS_MS || 450),
+      } : null;
+    if (typeof _crashDiag !== 'undefined') {
+      const handler = typeof KeyboardHandler !== 'undefined' ? KeyboardHandler : null;
+      _crashDiag.log(`KEYBOARD_FOCUS: focused=${this._isMobileTerminalInputFocused()} gesture=${typeof navigator !== 'undefined' ? navigator.userActivation?.isActive : undefined} cached=${handler?.keyboardVisible} retains=${retainsFocus} height=${Math.round(window.visualViewport?.height || 0)} baseline=${Math.round(handler?.initialViewportHeight || 0)} min=${Math.round(handler?._keyboardMinHeight || 0)}`);
+      // Observe delayed native viewport/focus changes without retrying focus.
+      const request = this._keyboardFocusRequestId = (this._keyboardFocusRequestId || 0) + 1;
+      handler?._traceKeyboardState?.(`request-${request}-${source}`);
+      for (const delay of [350, 1000]) {
+        setTimeout(() => {
+          if (request !== this._keyboardFocusRequestId || document.visibilityState === 'hidden') return;
+          handler?._traceKeyboardState?.(`request-${request}-after-${delay}ms`);
+        }, delay);
+      }
     }
   },
 
@@ -6430,11 +6522,28 @@ Object.assign(CodemanApp.prototype, {
     const suppressTrustedCompatMouse = (ev) => {
       const suppressUntil = this._trustedTapMouseSuppressUntil || 0;
       if (!ev.isTrusted || performance.now() > suppressUntil) return;
-      ev.preventDefault();
+      const request = this._mobileNativeClickFocusRequest;
+      const recover = request && ev.button === 0 && performance.now() <= request.expires &&
+        request.element === el && request.target?.isConnected &&
+        request.sessionId === this.activeSessionId &&
+        request.generation === this._mobileKeyboardFocusGeneration &&
+        document.visibilityState === 'visible' && !this._touchSelectionActive &&
+        !(typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible) &&
+        (document.activeElement === request.target || document.activeElement === document.body);
+      // stopImmediatePropagation fences xterm/CLI reports. preventDefault also
+      // blocks native page activation, so omit it only for the armed reopen.
+      if (!recover) ev.preventDefault();
       ev.stopImmediatePropagation();
+      if (recover && typeof _crashDiag !== 'undefined')
+        _crashDiag.log(`KEYBOARD_NATIVE_CLICK: v11 ${ev.type} page=${document.hasFocus()}`);
+      if (ev.type === 'click') {
+        this._mobileNativeClickFocusRequest = null;
+        if (recover) this._focusMobileTerminalInput('native-click-recovery');
+      }
     };
     el.addEventListener('mousedown', suppressTrustedCompatMouse, true);
     el.addEventListener('mouseup', suppressTrustedCompatMouse, true);
+    el.addEventListener('click', suppressTrustedCompatMouse, true);
   },
 
   _suppressTrustedTapMouseEvents() {

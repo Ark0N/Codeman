@@ -9870,6 +9870,15 @@ class CodemanApp {
     // fails toward acknowledging rather than toward an alert that can never be
     // cleared.
     const userInitiated = options?.auto !== true;
+    const touchDevice = typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice();
+    const focusTerminal = (fromGesture = false) => {
+      if (touchDevice && fromGesture) {
+        this._clearTouchSelection?.();
+        this._touchSelectionFocusGuardUntil = 0;
+        if (this._focusMobileTerminalInput) this._focusMobileTerminalInput('session-tab');
+        else this.terminal.focus();
+      } else this.terminal.focus();
+    };
     if (this.activeSessionId === sessionId && !forceReload) {
       // Tapping the tab you are already on is still "I checked it". The alert
       // can be armed on the ACTIVE tab (a live idle_prompt fires regardless of
@@ -9878,7 +9887,7 @@ class CodemanApp {
       // yellow tab that no tap could clear.
       if (userInitiated) {
         this.markIdleAlertSeen(sessionId);
-        if (this.terminal && this._shouldFocusTerminalForTabSwitch(options)) this.terminal.focus();
+        if (this.terminal && this._shouldFocusTerminalForTabSwitch(options)) focusTerminal(true);
       }
       return;
     }
@@ -9925,7 +9934,6 @@ class CodemanApp {
     // Explicit mobile selection opens the keyboard. App-driven selection only
     // preserves an already-visible keyboard; boot/replay must not pop it open.
     const shouldFocusTerminal = this._shouldFocusTerminalForTabSwitch(options);
-    if (shouldFocusTerminal && this.terminal) this.terminal.focus();
 
     const _selStart = performance.now();
     const _selName = this.sessions.get(sessionId)?.name || sessionId.slice(0,8);
@@ -9963,6 +9971,8 @@ class CodemanApp {
     // selectSession or reconnect catches up.
     this._updateSseSubscription(sessionId);
     this.hideWelcome();
+    // Reveal the input before spending the synchronous mobile focus gesture.
+    if (shouldFocusTerminal && this.terminal) focusTerminal(userInitiated);
     // Terminal-pane entrance: plays for a freshly created session, and on every
     // switch when that option is on. Transform/opacity/clip-path only, xterm's
     // FitAddon reads the untransformed layout box, so this cannot reach the PTY.
@@ -10511,7 +10521,7 @@ class CodemanApp {
       this._connectWs(sessionId);
 
       _crashDiag.log('FOCUS');
-      if (shouldFocusTerminal && this.terminal) this.terminal.focus();
+      if (shouldFocusTerminal && this.terminal && !touchDevice) focusTerminal();
       this.scrollToLastNonEmptyLine();
       // If we switched INTO this tab while the soft keyboard is already up, no
       // viewport-resize transition fires (handleViewportResize only runs

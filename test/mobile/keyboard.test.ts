@@ -1136,6 +1136,19 @@ describe('Virtual Keyboard', () => {
           )
         );
         app.terminal.focus();
+        // Headless Chromium has no native keyboard; model its visible viewport.
+        const viewport = window.visualViewport!;
+        const descriptor = Object.getOwnPropertyDescriptor(viewport, 'height');
+        const fullHeight = viewport.height;
+        Object.defineProperty(viewport, 'height', { configurable: true, value: fullHeight - 300 });
+        (window as any).__restoreKeyboardViewport35 = () => {
+          if (descriptor) Object.defineProperty(viewport, 'height', descriptor);
+          else delete (viewport as any).height;
+        };
+        KeyboardHandler.initialViewportHeight = fullHeight;
+        KeyboardHandler._keyboardMinHeight = fullHeight - 300;
+        KeyboardHandler.lastViewportWidth = viewport.width;
+        KeyboardHandler.keyboardVisible = true;
 
         const screen = app.terminal.element?.querySelector('.xterm-screen');
         const cell = app.terminal._core?._renderService?.dimensions?.css?.cell;
@@ -1165,7 +1178,13 @@ describe('Virtual Keyboard', () => {
       // one on an inert row — the case that now closes the keyboard. Previously
       // it re-focused, which left the accessory bar's chevron as the only way to
       // dismiss. The prompt row is unaffected and still positions the caret.
-      const activeClass = await page.evaluate(() => document.activeElement?.className);
+      const activeClass = await page.evaluate(() => {
+        const cls = document.activeElement?.className;
+        (window as any).__restoreKeyboardViewport35?.();
+        delete (window as any).__restoreKeyboardViewport35;
+        KeyboardHandler.keyboardVisible = false;
+        return cls;
+      });
       expect(activeClass).not.toContain('xterm-helper-textarea');
     });
 

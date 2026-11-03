@@ -276,12 +276,13 @@ describe('terminal touch tap mouse guard', () => {
     // The toggle is scoped to 'content' on purpose: a second tap on the PROMPT
     // must still position the cursor. This is the guarantee that makes the
     // change safe to make, so it is pinned separately.
-    const { app, setActiveElement } = loadTerminalUiHarness();
+    const { app, setActiveElement, setKeyboardVisible } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
     app.sessions = new Map([['sess-1', { mode: 'claude' }]]);
     app.terminal = createTerminalGrid(['transcript line', '', '', '', '❯ ask', ''], 4);
     app._sendInputAsync = vi.fn();
 
+    setKeyboardVisible(true);
     setActiveElement(app.terminal.textarea);
     expect(app._handleMobileTerminalTap({ clientX: 9, clientY: 65 }, true)).toBe('input');
     expect(app.terminal.textarea.blur).not.toHaveBeenCalled();
