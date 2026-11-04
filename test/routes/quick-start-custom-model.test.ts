@@ -21,7 +21,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { rm, readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMockRouteContext, safeRmHomeTree, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
@@ -195,7 +195,9 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
     expect(res.json().errorCode).toBe('OPERATION_FAILED');
   });
 
-  it('refuses a model id the CLI cannot carry on its command line, cleaning up any written config dir', async () => {
+  it('refuses a model id the CLI cannot carry on its command line, before writing anything', async () => {
+    const dirs = join(getDataDir(), 'custom-model-configs');
+    const before = existsSync(dirs) ? readdirSync(dirs).length : 0;
     const res = await quickStart({
       caseName: 'cm-badmodel',
       mode: 'pi',
@@ -203,6 +205,7 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
     });
     expect(res.json().success).toBe(false);
     expect(res.json().errorCode).toBe('INVALID_INPUT');
+    expect(existsSync(dirs) ? readdirSync(dirs).length : 0).toBe(before);
   });
 
   it('refuses customModel for a remote case', async () => {
@@ -228,6 +231,21 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
         throw new Error(`unexpected request in this test: ${url.href}`);
       });
     }
+
+    it('refuses a model id the CLI cannot launch before asking anyone to evict a model', async () => {
+      const other = ctx.sessions.get('test-session-1')!;
+      (other as unknown as { customModel: unknown }).customModel = { endpointId: 'ep1', modelId: 'llama3' };
+      mockRunning([{ model: 'llama3', state: 'ready' }]);
+
+      const res = await quickStart({
+        caseName: 'cm-badmodel-swap',
+        mode: 'codex',
+        customModel: { endpointId: 'ep1', modelId: 'org/model@q4_k_m' },
+      });
+
+      expect(res.json().requiresConfirmation).toBeUndefined();
+      expect(res.json().errorCode).toBe('INVALID_INPUT');
+    });
 
     it('asks for confirmation instead of launching when another live session is using the currently loaded model', async () => {
       const other = ctx.sessions.get('test-session-1')!;

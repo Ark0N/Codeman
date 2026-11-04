@@ -4501,6 +4501,23 @@ export function registerSessionRoutes(
       const cmContextLength = resolveCustomModelContextLength(cmEndpoint, customModel.modelId);
       const cmSlotCount = cmEndpoint.modelSlotCounts?.[customModel.modelId];
 
+      // See the dedicated route: refused on the pure build, before either confirmation, so
+      // nobody agrees to evict a model for an id that could never launch, and before anything
+      // is written.
+      const cmModelSpec = cmEntry.launch.params.model;
+      const cmInjection = buildCustomModelInjection(cmEntry, cmEndpoint, customModel.modelId, cmContextLength);
+      const cmForcedLaunchModel = cmInjection.kind === 'unsupported' ? undefined : cmInjection.launchModel;
+      if (
+        cmForcedLaunchModel !== undefined &&
+        cmModelSpec?.type === 'token' &&
+        !matchesPattern(cmModelSpec.pattern, cmForcedLaunchModel)
+      ) {
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          `Model id ${JSON.stringify(customModel.modelId)} cannot be passed to ${mode} on its command line`
+        );
+      }
+
       // See the dedicated route's own comment for the full reasoning: some CLIs' own fixed
       // overhead can exceed a small enough real context on the very first message,
       // regardless of contextLengthVar. Warn before creating a session that's certain to
@@ -4571,19 +4588,6 @@ export function registerSessionRoutes(
       if (!cmApplied) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${mode} has no known custom-model mechanism`);
       }
-      const cmModelSpec = cmEntry.launch.params.model;
-      if (
-        cmApplied.launchModel !== undefined &&
-        cmModelSpec?.type === 'token' &&
-        !matchesPattern(cmModelSpec.pattern, cmApplied.launchModel)
-      ) {
-        removeConfigDir(cmApplied.configDir);
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          `Model id ${JSON.stringify(customModel.modelId)} cannot be passed to ${mode} on its command line`
-        );
-      }
-
       qsCustomModelEnvOverrides = { ...qsGatedEnvOverrides, ...cmApplied.envOverrides };
       qsCustomModelAppliedEnvOverrides = cmApplied.envOverrides;
       qsCustomModelLaunchModel = cmApplied.launchModel;
