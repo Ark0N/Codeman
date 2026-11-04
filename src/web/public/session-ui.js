@@ -735,12 +735,12 @@ Object.assign(CodemanApp.prototype, {
     // where settings.json is server-wide and its PUT admin-only: the mode is kept as their own
     // on this device and wins over the server's on the next load (_rememberOwnSetting,
     // settings-ui.js). A PUT refused that way (sent before the role was known) marks the page
-    // read-only for the writes after it (_noteSettingsWriteRefusal).
+    // read-only for the writes after it (_noteSettingsWriteRefusal); any other failure is toasted.
     if (this._settingsReadOnly?.()) {
       this._rememberOwnSetting?.('runMode', mode);
     } else {
       this._apiPut('/api/settings', { runMode: mode })
-        .then((res) => this._noteSettingsWriteRefusal?.(res))
+        .then((res) => this._noteSettingsWriteResult?.(res, 'Run mode'))
         .catch(() => {});
     }
     // Close menu
