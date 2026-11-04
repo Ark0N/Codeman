@@ -1,6 +1,6 @@
 /**
  * Edit history end to end: the real reader (edit-history-local-source.ts), sync and store on
- * temp transcripts — what the fakes in edit-history-sync.test.ts cannot show (file order,
+ * temp transcripts: what the fakes in edit-history-sync.test.ts cannot show (file order,
  * a new conversation next to the old one, every line read exactly once).
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

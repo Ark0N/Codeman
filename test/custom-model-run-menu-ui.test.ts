@@ -20,7 +20,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 const CONSTANTS_JS = readFileSync(new URL('../src/web/public/constants.js', import.meta.url), 'utf-8');
 const SESSION_UI_JS = readFileSync(new URL('../src/web/public/session-ui.js', import.meta.url), 'utf-8');
-// Only for the [hidden] CSS guard below — the filter toggles the `hidden` property, and
+// Only for the [hidden] CSS guard below: the filter toggles the `hidden` property, and
 // `.run-mode-option`'s own `display: flex` would silently defeat it without the
 // `!important` re-assertion in styles.css.
 const STYLES_CSS = readFileSync(new URL('../src/web/public/styles.css', import.meta.url), 'utf-8');
@@ -697,7 +697,7 @@ describe('Custom Model Endpoint Profiles: the "which model" picker', () => {
 
   it('re-asserts display:none !important for hidden picker rows so the filter cannot be silently defeated', () => {
     // `.run-mode-option` carries its own `display: flex` (styles.css, restated in
-    // mobile.css), which outranks the UA `[hidden]` rule — without this scoped
+    // mobile.css), which outranks the UA `[hidden]` rule: without this scoped
     // !important re-assertion, toggling `hidden` would change nothing on screen.
     const rule = STYLES_CSS.match(/#customModelPickModal \.run-mode-option\[hidden\]\s*\{[^}]*\}/);
     expect(rule, 'picker rows need a [hidden] rule scoped to #customModelPickModal').toBeTruthy();
@@ -848,8 +848,8 @@ describe('Custom Model Endpoint Profiles: gateways without /running fall back to
     expect(unknown.hasAttribute('hidden')).toBe(false);
     expect(unknown.textContent).toContain('did not report which model it has loaded');
     // What REALLY arrives here, not a fiction: `getLlamaSwapStatus` (custom-model-routes.ts)
-    // turns EVERY upstream failure into `isLlamaSwap: false` — a gateway with no
-    // `/running` route, a closed port, an unresolvable host, a 401 — so this stub is
+    // turns EVERY upstream failure into `isLlamaSwap: false` (a gateway with no
+    // `/running` route, a closed port, an unresolvable host, a 401), so this stub is
     // also exactly what a DOWN endpoint produces, which is why the line's wording says
     // only "did not report" and never why.
     // The same class-of-bug trap as the no-matches line: `.form-hint`'s `display: block`

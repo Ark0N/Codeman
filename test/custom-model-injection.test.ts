@@ -117,7 +117,7 @@ describe('buildCustomModelInjection', () => {
     const result = buildCustomModelInjection(entryOrThrow('opencode'), endpoint, 'qwen3', 16384);
     if (result.kind !== 'env') throw new Error('unreachable');
     const parsed = JSON.parse(result.envOverrides.OPENCODE_CONFIG_CONTENT);
-    // `limit.context` IS the full window to opencode — it reserves for the reply itself —
+    // `limit.context` IS the full window to opencode (it reserves for the reply itself),
     // so the discovered total passes through; `output` only caps the reply at a quarter.
     expect(parsed.provider.custom.models.qwen3).toEqual({ limit: { context: 16384, output: 4096 } });
   });
@@ -236,7 +236,7 @@ describe('buildCustomModelInjection', () => {
     expect(result.extraEnv).toEqual({ CODEMAN_CUSTOM_MODEL_API_KEY: 'my-key' });
     expect(result.files[0].content).not.toContain('my-key');
     const patch = JSON.parse(result.files[0].content);
-    // The patch references the DEDICATED var by name, never dsh's own DEEPSEEK_API_KEY —
+    // The patch references the DEDICATED var by name, never dsh's own DEEPSEEK_API_KEY:
     // dsh's llm-deepseek/web-search rows read that too and would leak this key to
     // api.deepseek.com on an in-session /model switch back to the official route.
     expect(patch.find((row: { id: string }) => row.id === 'llm-pi-ai').config.providers['codeman-custom'].apiKeyEnv).toBe(

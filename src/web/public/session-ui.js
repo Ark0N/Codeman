@@ -1013,7 +1013,7 @@ Object.assign(CodemanApp.prototype, {
    * Resolves the raw route payload rather than a model id so the caller can tell the
    * three answers apart: llama-swap naming a model; `isLlamaSwap: false`, which is what
    * the route answers for EVERY failure it catches (a server without a `/running`
-   * route, a refused or unresolvable endpoint, a 401 from a wrong key) — safe to
+   * route, a refused or unresolvable endpoint, a 401 from a wrong key): safe to
    * explain in the UI as long as the wording also fits an endpoint that is down; and
    * `null`, only when Codeman's own request to the route failed or the client-side
    * bound below won the race, which stays silent, since the endpoint may merely have
@@ -1175,7 +1175,7 @@ Object.assign(CodemanApp.prototype, {
       })
       .join('');
     modal.classList.add('active');
-    // A fresh open always starts unfiltered with the caret in the search box — the
+    // A fresh open always starts unfiltered with the caret in the search box: the
     // list was just rebuilt, so clearing the input is the whole reset; focus is the
     // user's next keystroke away. Inside the generation guard above, so a
     // superseded probe can neither focus nor clear a modal that now shows another
@@ -1203,7 +1203,7 @@ Object.assign(CodemanApp.prototype, {
    * query restores the list byte for byte. ⚠️ `.run-mode-option` carries its own
    * `display: flex` (styles.css, restated in mobile.css), which outranks the UA
    * `[hidden]` rule, so styles.css re-asserts `display: none !important` for
-   * these rows — without it the filter would silently do nothing.
+   * these rows: without it the filter would silently do nothing.
    */
   filterCustomModelPick(value) {
     const list = document.getElementById('customModelPickList');

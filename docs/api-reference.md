@@ -1259,7 +1259,7 @@ authStyle?, defaultModelId?, defaultContextLength? }` creates one. `id`
   `total_slots`) for whatever the command did not answer, and OVERWRITES the
   listed figure for that model; the model's own listing
   (`context_length`, then `context_window`) only ever fills the gap when
-  neither probe does, and is recorded as a single-slot figure —
+  neither probe does, and is recorded as a single-slot figure:
   llama-swap lists the PER-SLOT window, so whenever the listed figure is
   the one taken the stored slot count is 1. A server with no `status`
   field on any entry (plain llama.cpp, a non-llama-swap gateway) gets no

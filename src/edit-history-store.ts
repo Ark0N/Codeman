@@ -4,8 +4,8 @@
  *
  * Sources are the main transcript (`main`) and each subagent transcript
  * (`subagents/agent-<id>.jsonl`). Each has a cursor:
- *   - `offset` — the next byte to read forward; always a line boundary.
- *   - `floor`  — the lowest byte already parsed; > 0 while older lines are unread
+ *   - `offset`: the next byte to read forward; always a line boundary.
+ *   - `floor`: the lowest byte already parsed; > 0 while older lines are unread
  *                ("ältere laden" reads `[floor − budget, floor)`, see `olderRange`).
  * The reader (`edit-history-local-source.ts`) reads forward from each `offset` of the
  * current conversation, a file without one from `budget` bytes before its end, and hands the

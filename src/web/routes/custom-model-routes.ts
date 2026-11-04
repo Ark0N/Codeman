@@ -364,7 +364,7 @@ async function discoverModels(
   // itself calls loaded. Listed figures above are unaffected: reading them triggers nothing.
   const hasStatusField = entries.some((m) => m && typeof m === 'object' && 'status' in m);
   const slotCounts: Record<string, number> = {};
-  // Ids whose figure THIS round's loaded-model probe answered — the listed figure remains
+  // Ids whose figure THIS round's loaded-model probe answered: the listed figure remains
   // the source only for the ids NOT in this set (see the per-slot correction below).
   const ctxFromProbe = new Set<string>();
   if (hasStatusField) {
@@ -412,13 +412,13 @@ async function discoverModels(
     }
   }
   // llama-swap documents the LISTED `context_length` as the PER-SLOT window, so whenever
-  // the listed figure is the one taken this round — the model was not loaded, or the
-  // probe answered nothing — its slot count is 1 by definition: the floor check must NOT
+  // the listed figure is the one taken this round (the model was not loaded, or the
+  // probe answered nothing), its slot count is 1 by definition: the floor check must NOT
   // divide a per-slot figure a second time. Without recording 1 here, the count a loaded
   // round stored survives the merge (applyDiscoveredModels keeps what a later round does
   // not overwrite): 262144 @ 4 slots stored, model unloaded, listed 65536 → 65536 with 4
   // slots → a false 16384-per-slot warning. Even a count this round's launch command
-  // parsed must yield — pairing a per-slot listed figure with the cmd's --parallel is the
+  // parsed must yield: pairing a per-slot listed figure with the cmd's --parallel is the
   // same double division. Same rule the /props branch above applies. Ids whose figure the
   // probe DID answer keep their probe-derived count untouched.
   for (const id of Object.keys(contextLengths)) {

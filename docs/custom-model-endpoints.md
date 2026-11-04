@@ -71,7 +71,7 @@ hosts — these are machine-level infra, not per-user settings.
 servers state no context-window field in the plain `GET /v1/models`
 response at all; current llama-swap states one per model (both
 `context_length` and `context_window`) and gateways like Bifrost pass
-`context_window` through — that listed figure is the *lowest*-precedence
+`context_window` through: that listed figure is the *lowest*-precedence
 source, used only when neither probe below answers, and because llama-swap
 documents it as the PER-SLOT window, a model whose figure comes from the
 listing is recorded with a slot count of 1 so the slot check never divides a
@@ -82,7 +82,7 @@ llama-swap treats `?model=` as a routing hint and asking about a model that
 isn't loaded risks triggering an actual (slow, GPU-swapping) load as a side
 effect of what should be read-only discovery. A server with no `status` field
 on any entry at all (not llama-swap) gets no launch-command/`/props`
-enrichment, only whatever its listings state — rather than guessing. A
+enrichment, only whatever its listings state, rather than guessing. A
 model's previously-learned context length survives a
 later cycle where it wasn't the loaded one; it's dropped only once the model
 disappears from the endpoint's list entirely. Stored per model in
@@ -344,9 +344,9 @@ agent, so the selection would report success and change nothing.
 **Claude gets two more env vars when known/applicable, both declared on its
 registry entry (`contextLengthVar`/`configDirVar`), not hardcoded here:**
 
-- `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is set to `modelId`'s context length —
+- `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is set to `modelId`'s context length:
   the discovered figure (see the discovery section above), falling back to
-  the endpoint's user-set `defaultContextLength` — whenever one is known.
+  the endpoint's user-set `defaultContextLength`, whenever one is known.
   Without
   it, Claude Code assumes a large (200k) window for any unrecognized custom
   model id and never compacts, which reliably overflows a much smaller real
@@ -602,7 +602,7 @@ for '<id>' not found. Defaulting to fallback metadata...` on launch —
   `POST <baseUrl>/v1/chat/completions` succeeds; the harness's own error
   template (`DeepSeek API error (HTTP ${status})`) matches the originally
   reported symptom exactly. The fix is no longer the original env redirect:
-  deepseek's `customModelInjection` is a `configDir` recipe — a per-session
+  deepseek's `customModelInjection` is a `configDir` recipe: a per-session
   `DSH_HOME` holding only a generated `cordis.patch.yml` that declares a
   `codeman-custom` `openai-completions` provider (the base URL gets the `/v1`
   suffix from the shared `renderConfigFile` step every file template goes
@@ -610,7 +610,7 @@ for '<id>' not found. Defaulting to fallback metadata...` on launch —
   recipe's `linkFromRealHome` field symlinks `profiles`, `sessions` and
   `settings.yaml` back out of the real dsh home so installed bundles,
   transcripts and user settings all survive the redirect (missing
-  directory entries are created first — a home that has never run a
+  directory entries are created first: a home that has never run a
   turn would otherwise get a dangling link whose every write through
   it failed with ENOENT). **Verified end-to-end against a real dsh
   install by the maintainer** (dsh 0.1.1-rc.2, dsh-TUI 0.10.0-beta.1):
@@ -619,7 +619,7 @@ for '<id>' not found. Defaulting to fallback metadata...` on launch —
   `POST /v1/chat/completions` with the right model, the bearer key and
   `max_tokens: 8192`; the reply renders and the context window shows in
   the footer. What such a session SHARES with the real home is
-  exactly the linked entries — `profiles/`, `sessions/`,
+  exactly the linked entries: `profiles/`, `sessions/`,
   `settings.yaml`. The last is shared only until the session writes
   it: dsh saves settings with a temp file and a rename
   (`writeFileAtomic` in `@deepseek-ai/dsh-atomic-write`), which replaces

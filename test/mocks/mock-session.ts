@@ -101,7 +101,7 @@ export class MockSession extends EventEmitter {
   /** The per-session CLAUDE_CONFIG_DIR override that Session.claudeConfigDir() reads. */
   claudeConfigDirOverride: string | undefined = undefined;
 
-  /** Mirrors Session.claudeConfigDir — the override, trimmed; undefined when unset. */
+  /** Mirrors Session.claudeConfigDir: the override, trimmed; undefined when unset. */
   claudeConfigDir(): string | undefined {
     return this.claudeConfigDirOverride?.trim() || undefined;
   }

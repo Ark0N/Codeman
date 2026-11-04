@@ -66,7 +66,7 @@ function expectRejectedOnDeepSeek(mutate: (recipe: Record<string, unknown>) => v
 
 describe('configDir real-home linking (linkFromRealHome / realHomeFallback)', () => {
   it('rejects a realHomeFallback that is not a single relative path segment', () => {
-    // The consumer joins it under the user's home, so any of these escapes that home —
+    // The consumer joins it under the user's home, so any of these escapes that home:
     // and bare `.` IS that home: linking through it would expose the whole tree
     // unshielded instead of just the declared segments.
     for (const bad of ['../x', '.dsh/evil', '/.dsh', '..', '.']) {

@@ -484,7 +484,7 @@ describe('refreshAllCustomModelHosts: parallel-slot enrichment (llama.cpp splits
 
   it('a round where only the listed figure answers resets the slot count a loaded round learned', async () => {
     // The false-warning scenario, measured on a real llama-swap: round 1 has the model
-    // loaded under `--ctx-size 262144 --parallel 4` — a TOTAL window shared across slots,
+    // loaded under `--ctx-size 262144 --parallel 4`: a TOTAL window shared across slots,
     // correctly stored with its count. Round 2 finds it unloaded and takes the LISTED
     // `context_length`, which llama-swap documents as the PER-SLOT window. If the stored 4
     // survived, the floor check would divide the per-slot figure a second time
@@ -524,7 +524,7 @@ describe('refreshAllCustomModelHosts: parallel-slot enrichment (llama.cpp splits
     const [round2] = await readCustomModelHosts(dir);
     expect(round2.modelContextLengths).toEqual({ m: 65536 });
     // 1 slot, not the stale 4: 65536 per slot with 1 recorded slot is the honest pair, so
-    // the floor check reads 65536/request — exactly what the server gives a single request.
+    // the floor check reads 65536/request: exactly what the server gives a single request.
     expect(round2.modelSlotCounts).toEqual({ m: 1 });
   });
 });

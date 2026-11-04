@@ -1,7 +1,7 @@
 /**
  * @fileoverview Boot recovery re-derives a saved custom-model selection through
  * `_rebuildCustomModelEnv` and rebuilds the BOOKKEEPING from what the CURRENT recipe
- * applied — not from the saved record. A selection persisted while deepseek still used
+ * applied, not from the saved record. A selection persisted while deepseek still used
  * the old env redirect comes back env-shaped (envKeys `DEEPSEEK_BASE_URL`/
  * `DEEPSEEK_API_KEY`, no `configDir`) although the recipe now writes a per-session patch
  * home: restoring the saved record unchanged left `DSH_HOME` on a generated config dir
@@ -11,11 +11,11 @@
  * `getEnvOverridesForPersist()` keeps only `CLAUDE_CODE_*`/`CLAUDE_CONFIG_DIR`, so a
  * session's own `DSH_HOME` never survives a real restart and the lookup only ever hit on
  * the first apply in-process. Recovery falls back to the server's `DSH_HOME` or the
- * recipe's `realHomeFallback` (~/.dsh) — see `_rebuildCustomModelEnv`'s comment.
+ * recipe's `realHomeFallback` (~/.dsh), see `_rebuildCustomModelEnv`'s comment.
  *
  * `_restoreCustomModel` reads no `this` state beyond the rebuild helper (it re-derives
  * everything from the endpoint store and the Session it is handed), so it is driven off
- * the prototype with a minimal receiver — `restoreMuxSessions()` itself cannot be
+ * the prototype with a minimal receiver: `restoreMuxSessions()` itself cannot be
  * reached under vitest, the same constraint recorded in test/session-model-recovery.test.ts.
  */
 import { mkdirSync, rmSync } from 'node:fs';
@@ -29,7 +29,7 @@ import { Session } from '../src/session.js';
 import { WebServer } from '../src/web/server.js';
 import type { CustomModelBookkeeping } from '../src/types/session.js';
 
-/** The real pair, on a receiver that only carries the rebuild helper — see the header. */
+/** The real pair, on a receiver that only carries the rebuild helper, see the header. */
 async function restoreCustomModel(session: Session, saved: CustomModelBookkeeping): Promise<void> {
   const proto = WebServer.prototype as unknown as {
     _rebuildCustomModelEnv: (session: Session, saved: CustomModelBookkeeping) => Promise<unknown>;

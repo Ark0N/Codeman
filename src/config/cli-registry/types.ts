@@ -861,11 +861,11 @@ export interface CliCapabilities {
    *
    * `appendV1Suffix` (env kind only): the raw `endpoint.baseUrl` gets `withV1Suffix()`
    * applied before being written to `baseUrlVar`, instead of being used verbatim. Only
-   * copilot declares it — its OpenAI-style route is `<base>/v1/chat/completions`, and a
+   * copilot declares it: its OpenAI-style route is `<base>/v1/chat/completions`, and a
    * gateway saves the bare root. claude/gemini must NOT get it: Claude Code's own SDK was
    * confirmed working end-to-end against the RAW `baseUrl`, so appending a suffix there
    * would be wrong, not just redundant. The per-session config-file recipes do not need
-   * this flag at all — `renderConfigFile()` applies the suffix inside every template
+   * this flag at all: `renderConfigFile()` applies the suffix inside every template
    * (deepseek's patch included), so no configDir entry carries a raw base URL.
    */
   customModelInjection:
@@ -890,11 +890,11 @@ export interface CliCapabilities {
         launchModel?: string;
         /**
          * Names of entries under this CLI's REAL home that must be symlinked into the
-         * isolated directory after the generated file is written — the same trick
+         * isolated directory after the generated file is written: the same trick
          * `linkSharedProjectsDir()` plays for claude's `projects`. Declared for CLIs whose
          * home carries state that must survive the redirect (deepseek's `sessions` transcript
          * root and `profiles` bundles, plus `settings.yaml`, which would otherwise stop
-         * applying and — for `sessions` — get deleted by `removeConfigDir` on clear/close).
+         * applying and, for `sessions`, get deleted by `removeConfigDir` on clear/close).
          * A CLI that saves a linked file by rename replaces the link: dsh does, so the first
          * in-session settings write turns `settings.yaml` into a local file.
          * Never include `fileName` itself: the generated file owns that name in the isolated
@@ -905,7 +905,7 @@ export interface CliCapabilities {
         /**
          * Which of `linkFromRealHome` are DIRECTORIES (`sessions`, `profiles`) rather than
          * files (`settings.yaml`). A missing directory target is created (mode 0700, what
-         * dsh does itself on a first turn) before linking — linking a nonexistent directory
+         * dsh does itself on a first turn) before linking: linking a nonexistent directory
          * leaves a dangling symlink the CLI's own `mkdir` under it fails on with ENOENT on
          * EVERY turn. A missing FILE target is skipped instead of linked (dangling-file
          * links serve no purpose the CLI could not do itself). Must be a subset of

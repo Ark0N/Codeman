@@ -594,13 +594,13 @@ const capabilitiesSchema = z
           launchModel: launchModelTemplate,
           // State that must survive the isolated-directory redirect, symlinked by name from
           // the CLI's real home (deepseek: profiles/sessions/settings.yaml). Single path
-          // segments only — the consumer joins them, so a traversal here would escape the
+          // segments only: the consumer joins them, so a traversal here would escape the
           // real home. See the field's comment in cli-registry/types.ts.
           linkFromRealHome: z.array(homeSegmentName).max(8).optional(),
           // Which of `linkFromRealHome` are directories (missing ones are created before
           // linking; missing files are skipped). Same segment pattern, see types.ts.
           linkFromRealHomeDirs: z.array(homeSegmentName).max(8).optional(),
-          // The real home's fallback location, relative to the user's home: ONE segment —
+          // The real home's fallback location, relative to the user's home, ONE segment:
           // a leading dot is legitimate (`.dsh` is what ships) but separators, `..` and
           // bare `.` are not; the consumer joins it under the user's home, a traversal
           // here escapes that home and `.` IS that home (linking THROUGH it unshielded).

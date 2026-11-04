@@ -109,7 +109,7 @@ export interface CustomModelHost {
 /**
  * The context window to apply for `modelId` on `host`: the discovered per-model figure when
  * discovery has one, else the endpoint's user-set `defaultContextLength`, else undefined
- * (no override applied, never a guess). ONE helper for every read site — the swap route,
+ * (no override applied, never a guess). ONE helper for every read site: the swap route,
  * the quickstart route and boot recovery each re-write the CLI's config files, and a site
  * that forgot the fallback silently loses the endpoint default on the next respawn.
  */

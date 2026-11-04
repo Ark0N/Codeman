@@ -241,8 +241,8 @@ describe('POST /api/sessions/:id/custom-model', () => {
     expect(existsSync(written)).toBe(true);
 
     // `@` is outside codex's `model-plain-colon` pattern. The pattern check now runs on
-    // the pure build BEFORE any write, so the refusal must leave the dir — and the file
-    // the live CLI reads — exactly as they were, rather than replacing and deleting the
+    // the pure build BEFORE any write, so the refusal must leave the dir, and the file
+    // the live CLI reads, exactly as they were, rather than replacing and deleting the
     // CODEX_HOME of a session that stays on qwen3:32b.
     const before = readFileSync(written, 'utf8');
     const res = await app.inject({

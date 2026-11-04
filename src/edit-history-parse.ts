@@ -10,7 +10,7 @@
  * yields a CANDIDATE: the image-looking paths in its command and output, with the call's
  * start and end time. Whether a candidate file was actually produced by the call (its
  * mtime falls inside that window) is decided later by whoever can stat it, locally or on
- * the remote host — this module does no IO.
+ * the remote host: this module does no IO.
  *
  * Chunked input: a transcript is read in byte ranges, so a Bash `tool_use` and its result
  * can land in different chunks. Unanswered calls are handed back as `pending` and passed
@@ -50,7 +50,7 @@ export interface EditHunk {
 }
 
 export interface EditRecord {
-  /** The `tool_use_id` of the edit — unique per edit, used to deduplicate. */
+  /** The `tool_use_id` of the edit: unique per edit, used to deduplicate. */
   id: string;
   /** ms since epoch, from the result line's `timestamp` (0 when missing). */
   ts: number;
@@ -103,7 +103,7 @@ const EXT_END = '(?![\\w-])(?!\\.\\w)';
 const TOKEN_CHAR = '[^\\s\'"`<>|;&()=,:*?]';
 const PATH_TOKEN_RE = new RegExp(
   [
-    // 1. file:// URL (Codex: `Saved to: file:///…`) — may contain spaces up to the extension.
+    // 1. file:// URL (Codex: `Saved to: file:///…`), which may contain spaces up to the extension.
     //    The lazy scan stops at the next `file://`: otherwise it runs to the line end from
     //    every `file://` of a line that repeats it (quadratic). `:` stays allowed, so a
     //    timestamped name (`plot-12:30.png`) is still found.

@@ -1581,7 +1581,7 @@ const DEEPSEEK: CliEntry = {
       // deliberately replaces the user's own for the session rather than linking it.
       // `sessions` and `profiles` are directories: dsh creates them itself on a first
       // turn, and a fresh/relocated $DSH_HOME that never ran one would otherwise get a
-      // dangling link whose every write fails ENOENT — the consumer creates missing
+      // dangling link whose every write fails ENOENT: the consumer creates missing
       // directory targets and skips missing file targets like `settings.yaml`.
       linkFromRealHome: ['profiles', 'sessions', 'settings.yaml'],
       linkFromRealHomeDirs: ['profiles', 'sessions'],

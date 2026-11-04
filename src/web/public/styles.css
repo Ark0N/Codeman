@@ -7815,7 +7815,7 @@ html[data-skin="og"] .welcome-primary:hover {
 }
 
 /* The picker's search box reuses .session-sidebar-filter-input's theme-token
-   styling (same reasoning as the .set-scope pill above) — only its own spacing
+   styling (same reasoning as the .set-scope pill above): only its own spacing
    and the no-matches line are added here. 0.35rem is the standard gap the
    modal's neighbouring form fields already use (`.form-hint`'s own margin-top):
    the global `* { margin: 0 }` reset left the box sitting flush under the CLI
@@ -22681,7 +22681,7 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
 
 /* ── Edit history: header button + panel (edit-history-ui.js) ───────────────── */
 
-/* "Edit history" header button — opt-in (App Settings → Header & Panels), hidden by default.
+/* "Edit history" header button: opt-in (App Settings → Header & Panels), hidden by default.
    Same marker pattern as the Attachments button: a base inline-flex !important so an inline
    style can't override it, and a more-specific marker rule to hide. Phones hide it regardless
    (mobile.css). */

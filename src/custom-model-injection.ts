@@ -87,11 +87,11 @@ export interface ConfigDirInjection {
    * `customModelInjection.launchModel` template, never hand-built per CLI.
    */
   launchModel?: string;
-  /** Carried from the registry recipe — see `cli-registry/types.ts` `linkFromRealHome`. */
+  /** Carried from the registry recipe, see `cli-registry/types.ts` `linkFromRealHome`. */
   linkFromRealHome?: string[];
-  /** Carried from the registry recipe — see `cli-registry/types.ts` `linkFromRealHomeDirs`. */
+  /** Carried from the registry recipe, see `cli-registry/types.ts` `linkFromRealHomeDirs`. */
   linkFromRealHomeDirs?: string[];
-  /** Carried from the registry recipe — see `cli-registry/types.ts` `realHomeFallback`. */
+  /** Carried from the registry recipe, see `cli-registry/types.ts` `realHomeFallback`. */
   realHomeFallback?: string;
 }
 
@@ -181,7 +181,7 @@ function withLaunchModel<T extends EnvInjection | ConfigDirInjection>(
 /**
  * One quarter of the window is held back for the reply, capped at 8192 tokens (a small local
  * model's window must not lose a disproportionate slice to the reservation). Returns undefined
- * for an unknown or non-finite size — opencode then keeps its own default guess, which is the
+ * for an unknown or non-finite size: opencode then keeps its own default guess, which is the
  * pre-fix behaviour; never invent a limit here.
  */
 function opencodeModelLimit(contextLength: number | undefined): { context: number; output: number } | undefined {
@@ -189,8 +189,8 @@ function opencodeModelLimit(contextLength: number | undefined): { context: numbe
   const total = Math.trunc(contextLength);
   if (total <= 0) return undefined;
   const output = Math.max(1, Math.min(8192, Math.floor(total / 4)));
-  // `limit.context` is the FULL window as far as opencode is concerned — it reserves for
-  // the reply itself — so the discovered total is passed through, never a shrunk figure.
+  // `limit.context` is the FULL window as far as opencode is concerned: it reserves for
+  // the reply itself, so the discovered total is passed through, never a shrunk figure.
   return { context: total, output };
 }
 
@@ -256,7 +256,7 @@ function renderConfigFile(
               config: {
                 providers: {
                   'codeman-custom': {
-                    // By NAME only (never the literal key — see CUSTOM_MODEL_API_KEY_ENV_VAR).
+                    // By NAME only (never the literal key, see CUSTOM_MODEL_API_KEY_ENV_VAR).
                     apiKeyEnv: CUSTOM_MODEL_API_KEY_ENV_VAR,
                     api: 'openai-completions',
                     baseURL: baseUrl,

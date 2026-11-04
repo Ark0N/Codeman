@@ -119,7 +119,7 @@ function breathe(): Promise<void> {
  * Bash candidates whose probed file is a regular file with an mtime inside the call's window
  * (files claude sent to the user skip the window: they exist and were shown on purpose).
  * A candidate whose file version is already recorded is skipped: `known(path)` is the newest
- * entry time for that path, and an entry at or after `mtime − slack` saw this version — the
+ * entry time for that path, and an entry at or after `mtime − slack` saw this version: the
  * `ls *.png` right after the render, or a Write followed by a listing. Candidates are taken
  * in call order so a batch dedupes itself the same way.
  */

@@ -55,7 +55,7 @@ describe('DeepSeek custom endpoint isolation', () => {
     expect(realpathSync(join(applied.configDir, 'sessions'))).toBe(join(realHome, 'sessions'));
     expect(realpathSync(join(applied.configDir, 'settings.yaml'))).toBe(join(realHome, 'settings.yaml'));
     // Re-apply onto the same config dir (boot recovery re-runs this every restart): the
-    // lstat guard must skip every existing link, which the old existsSync check missed —
+    // lstat guard must skip every existing link, which the old existsSync check missed:
     // recreating them would raise EEXIST.
     const reapplied = applyCustomModelInjection(entry, endpoint, 'chosen-model', 'deepseek-probe', 131072);
     expect(reapplied?.envOverrides.DSH_HOME).toBe(applied.configDir);
@@ -87,7 +87,7 @@ describe('DeepSeek custom endpoint isolation', () => {
       expect(realpathSync(join(applied.configDir, 'sessions'))).toBe(join(realHome, 'sessions'));
       expect(realpathSync(join(applied.configDir, 'profiles'))).toBe(join(realHome, 'profiles'));
       expect(statSync(join(realHome, 'sessions')).mode & 0o777).toBe(0o700);
-      // The missing FILE target is skipped outright: not a dangling link either — lstat
+      // The missing FILE target is skipped outright, not a dangling link either: lstat
       // must find nothing, so a later apply (once the file exists for real) links it.
       expect(existsSync(join(realHome, 'settings.yaml'))).toBe(false);
       expect(readlinkSafe(join(applied.configDir, 'settings.yaml'))).toBeUndefined();

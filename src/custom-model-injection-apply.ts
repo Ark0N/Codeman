@@ -32,7 +32,7 @@ export function customModelConfigDir(sessionId: string): string {
  * (the dir-redirect var plus any `extraEnv` the config file references by
  * name). The generated files stay under `baseDir`, but a recipe that declares
  * `linkFromRealHome` additionally links (and, for missing directory targets,
- * creates) entries in the CLI's REAL home — the caller is still responsible
+ * creates) entries in the CLI's REAL home: the caller is still responsible
  * for choosing an isolated `baseDir` (never the user's real `~/.codex`,
  * `~/.pi`, etc.), it is just no longer the only directory touched.
  *
@@ -46,7 +46,7 @@ export function applyConfigDirInjection(
   injection: ConfigDirInjection,
   /**
    * The value this SESSION's own env overrides set for `injection.dirEnvVar`, when it
-   * set one — a user who relocated the CLI's real home (an allowlisted key like
+   * set one: a user who relocated the CLI's real home (an allowlisted key like
    * DSH_HOME) must have their state linked from THAT directory, not the server's.
    */
   sessionHomeOverride?: string
@@ -66,10 +66,10 @@ export function applyConfigDirInjection(
  * into the otherwise-isolated `baseDir`, so redirecting `dirEnvVar` moves only the
  * generated config file and not the state that has to survive the session (deepseek:
  * the `sessions` transcript root `removeConfigDir` would otherwise delete, the `profiles`
- * bundles the patch composes over, and `settings.yaml`). Declared per entry in stock.ts —
+ * bundles the patch composes over, and `settings.yaml`). Declared per entry in stock.ts:
  * this consumer is recipe-driven and names no CLI itself.
  *
- * Home resolution: the session's own override first (unless it IS `baseDir` — a re-apply
+ * Home resolution: the session's own override first (unless it IS `baseDir`, a re-apply
  * onto a session already holding a previous injection's value must not self-link), then
  * the server's environment, then the recipe's `realHomeFallback`. Only ABSOLUTE values
  * are considered: a set-but-relative `DSH_HOME`-style home resolves against the CLI's
@@ -101,24 +101,24 @@ function linkRealHomeEntry(target: string, link: string, isDir: boolean): void {
   try {
     if (lstatSync(link)) return; // already linked (idempotent re-apply) or a real dir wrote one
   } catch {
-    // ENOENT — nothing is here yet, the only state in which a link gets created
+    // ENOENT: nothing is here yet, the only state in which a link gets created
   }
   if (!existsSync(target)) {
     if (!isDir) return; // missing FILE target: skip, never plant a dangling file link
-    // Missing DIRECTORY target: a dangling directory link is not inert — the CLI's own
+    // Missing DIRECTORY target: a dangling directory link is not inert, since the CLI's own
     // recursive mkdir THROUGH it fails ENOENT on every turn (dsh writing under
     // `$DSH_HOME/sessions` on a fresh/relocated home). Create it first, 0700, exactly
     // what dsh itself does on a first turn.
     try {
       mkdirSync(target, { recursive: true, mode: 0o700 });
     } catch {
-      return; // e.g. the target's parent refuses writes — no link rather than a dangling one
+      return; // e.g. the target's parent refuses writes: no link rather than a dangling one
     }
   }
   try {
     symlinkSync(target, link, platform() === 'win32' ? 'junction' : 'dir');
   } catch {
-    // best-effort only — a platform that refuses symlinks keeps the documented
+    // best-effort only: a platform that refuses symlinks keeps the documented
     // side effect for this session rather than failing the whole apply over it
   }
 }

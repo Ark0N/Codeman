@@ -1535,7 +1535,7 @@ export class WebServer extends EventEmitter {
       // already fired once) and the session-env real-home lookup: the injected VALUES are
       // never persisted, so after a real restart the session can no longer carry its
       // allowlisted `DSH_HOME` either (`getEnvOverridesForPersist()` keeps only
-      // `CLAUDE_CODE_*`/`CLAUDE_CONFIG_DIR`) — the lookup could only ever hit on the first
+      // `CLAUDE_CODE_*`/`CLAUDE_CONFIG_DIR`): the lookup could only ever hit on the first
       // apply in-process. Real-home resolution therefore falls back to the SERVER's
       // `DSH_HOME` or the recipe's `realHomeFallback` (~/.dsh).
       return applyCustomModelInjection(
@@ -1556,7 +1556,7 @@ export class WebServer extends EventEmitter {
    * bookkeeping must come from the CURRENT recipe, not from the saved record: this is the
    * first feature where a shipped recipe changed KIND (deepseek: env redirect -> per-session
    * patch home), so a selection saved by an old build restores with e.g. no `configDir`
-   * while the new recipe writes one — and clearing it later could then never delete the
+   * while the new recipe writes one, and clearing it later could then never delete the
    * generated dir. `envKeys` is the UNION of saved and applied keys: the tmux session may
    * still carry `setenv`s from both, and a clear has to unset every one.
    */
