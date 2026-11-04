@@ -57,6 +57,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/markdown-anchor-links.browser.test.ts',
   'test/fullscreen-tab-switch-capture.browser.test.ts',
   'test/terminal-touch-swipe-axis.browser.test.ts',
+  'test/phone-press-feedback.browser.test.ts',
 ];
 
 /**
