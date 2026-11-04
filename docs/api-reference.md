@@ -969,9 +969,9 @@ also pure decoration: it confers no permission, and a child is unaffected by its
 parent exiting. It appears on session state as `parentSessionId` (absent when
 unresolved) and survives a server restart.
 
-## Pane directory (`cwd`)
+## Pane directory (`paneCwd`)
 
-Session state (`GET /api/v1/sessions`, the `session:updated` event) may carry `cwd`,
+Session state (`GET /api/v1/sessions`, the `session:updated` event) may carry `paneCwd`,
 the directory the session's local tmux pane is in now (`#{pane_current_path}`), which
 the web UI uses as the base for a relative path printed in the terminal. It is
 never restored after a restart (it is written to `state.json` with the rest of the

@@ -441,7 +441,7 @@ export function derivePaneExits(rows: PaneRow[], now: number): Map<string, PaneE
  *   no entry: those are authoritative absences, not unanswered questions.
  *
  * The launch directory is NOT filtered here (unlike the rediscovery path): a
- * remote or docker pane that never leaves it is refused by `Session.setCwd()`,
+ * remote or docker pane that never leaves it is refused by `Session.setPaneCwd()`,
  * and a local pane reporting it really is there.
  */
 export function derivePaneCurrentPaths(
@@ -2049,7 +2049,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * muxName -> `#{pane_current_path}` from the last authoritative pane read
    * ({@link derivePaneCurrentPaths}). Replaced wholesale by each non-empty read,
    * so it is bounded by the panes on the socket. Like {@link paneExits} it holds
-   * the raw reading; `Session.setCwd()` decides which sessions may use it.
+   * the raw reading; `Session.setPaneCwd()` decides which sessions may use it.
    */
   private paneCurrentPaths: Map<string, string> = new Map();
   /** The pane-exit watcher's own interval. Runs whether or not stats are on. */

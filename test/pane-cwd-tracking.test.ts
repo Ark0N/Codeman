@@ -202,45 +202,45 @@ function localMuxSession(extra: Record<string, unknown> = {}) {
   });
 }
 
-describe('Session.setCwd scoping', () => {
+describe('Session.setPaneCwd scoping', () => {
   it('records an absolute directory for a local pane and reports the change once', () => {
     const session = localMuxSession();
-    expect(session.setCwd('/work/proj/sub')).toBe(true);
-    expect(session.cwd).toBe('/work/proj/sub');
-    expect(session.setCwd('/work/proj/sub')).toBe(false);
-    expect(session.toState().cwd).toBe('/work/proj/sub');
+    expect(session.setPaneCwd('/work/proj/sub')).toBe(true);
+    expect(session.paneCwd).toBe('/work/proj/sub');
+    expect(session.setPaneCwd('/work/proj/sub')).toBe(false);
+    expect(session.toState().paneCwd).toBe('/work/proj/sub');
   });
 
   it('clears the directory when the reading goes away', () => {
     const session = localMuxSession();
-    session.setCwd('/work/proj/sub');
-    expect(session.setCwd(undefined)).toBe(true);
-    expect(session.cwd).toBeUndefined();
+    session.setPaneCwd('/work/proj/sub');
+    expect(session.setPaneCwd(undefined)).toBe(true);
+    expect(session.paneCwd).toBeUndefined();
   });
 
   it('refuses a relative directory', () => {
     const session = localMuxSession();
-    expect(session.setCwd('rel/ative')).toBe(false);
-    expect(session.cwd).toBeUndefined();
+    expect(session.setPaneCwd('rel/ative')).toBe(false);
+    expect(session.paneCwd).toBeUndefined();
   });
 
   it('refuses a directory for a remote session, whose local pane runs the ssh client', () => {
     const session = localMuxSession({ remote });
-    expect(session.setCwd('/home/dev')).toBe(false);
-    expect(session.toState().cwd).toBeUndefined();
+    expect(session.setPaneCwd('/home/dev')).toBe(false);
+    expect(session.toState().paneCwd).toBeUndefined();
   });
 
   it('refuses a directory for a docker case, whose local pane runs docker exec', () => {
     const session = localMuxSession({ docker });
-    expect(session.setCwd('/work/proj')).toBe(false);
-    expect(session.toState().cwd).toBeUndefined();
+    expect(session.setPaneCwd('/work/proj')).toBe(false);
+    expect(session.toState().paneCwd).toBeUndefined();
   });
 
   it('refuses a directory for a direct-PTY session and a rediscovered one', () => {
     const direct = new Session({ workingDir: '/work/proj', mode: 'shell', useMux: false });
-    expect(direct.setCwd('/work/proj/sub')).toBe(false);
+    expect(direct.setPaneCwd('/work/proj/sub')).toBe(false);
     const discovered = localMuxSession({ discoveredMuxSession: true });
-    expect(discovered.setCwd('/work/proj/sub')).toBe(false);
+    expect(discovered.setPaneCwd('/work/proj/sub')).toBe(false);
   });
 });
 
@@ -257,18 +257,23 @@ describe('a pane read reaching the session record', () => {
     server = web;
     const mux = (web as unknown as { mux: Record<string, unknown> & { emit: (e: string) => void } }).mux;
     const sessions = (web as unknown as { sessions: Map<string, Session> }).sessions;
-    return { mux, sessions };
+    return { mux, sessions, web };
   };
 
   it("publishes the pane's directory on the existing paneExitsUpdated tick", () => {
-    const { mux, sessions } = build();
+    const { mux, sessions, web } = build();
     const session = localMuxSession();
     sessions.set(session.id, session);
     mux.getPaneExit = () => undefined;
     mux.getPaneCurrentPath = (muxName: string) => (muxName === 'codeman-aaaa' ? '/work/proj/sub' : undefined);
     mux.emit('paneExitsUpdated');
 
-    expect(session.toState().cwd).toBe('/work/proj/sub');
+    expect(session.toState().paneCwd).toBe('/work/proj/sub');
+    // What the browser actually receives: a future explicit field list must not drop it.
+    const state = (
+      web as unknown as { getSessionStateWithRespawn: (s: Session) => { paneCwd?: string } }
+    ).getSessionStateWithRespawn(session);
+    expect(state.paneCwd).toBe('/work/proj/sub');
     // A resolution base only: the confinement root is untouched.
     expect(session.toState().workingDir).toBe('/work/proj');
   });
@@ -294,7 +299,7 @@ describe('a pane read reaching the session record', () => {
     dir = '/work/proj/other';
     mux.emit('paneExitsUpdated');
     expect(broadcast).toHaveBeenCalledTimes(2);
-    expect(session.toState().cwd).toBe('/work/proj/other');
+    expect(session.toState().paneCwd).toBe('/work/proj/other');
     // Runtime-only: a directory change alone is never written to state.json.
     expect(persist).not.toHaveBeenCalled();
   });
@@ -335,12 +340,12 @@ describe('a pane read reaching the session record', () => {
   it('clears the directory once the session is split into several panes', async () => {
     const { session, broadcast, tick } = buildWithRealManager();
     await tick('codeman-aaaa|100|0|||/work/proj/sub');
-    expect(session.toState().cwd).toBe('/work/proj/sub');
+    expect(session.toState().paneCwd).toBe('/work/proj/sub');
     expect(broadcast).toHaveBeenCalledTimes(1);
 
     await tick(['codeman-aaaa|100|0|||/work/proj/sub', 'codeman-aaaa|101|0|||/work/proj'].join('\n'));
     // An absent cwd is what makes the browser fall back to workingDir.
-    expect(session.toState().cwd).toBeUndefined();
+    expect(session.toState().paneCwd).toBeUndefined();
     expect(broadcast).toHaveBeenCalledTimes(2);
 
     // The clear is announced once, not on every later tick that agrees.
@@ -351,10 +356,10 @@ describe('a pane read reaching the session record', () => {
   it('clears the directory once a read no longer lists the session', async () => {
     const { session, broadcast, tick } = buildWithRealManager();
     await tick('codeman-aaaa|100|0|||/work/proj/sub');
-    expect(session.toState().cwd).toBe('/work/proj/sub');
+    expect(session.toState().paneCwd).toBe('/work/proj/sub');
 
     await tick('codeman-other|300|0|||/elsewhere');
-    expect(session.toState().cwd).toBeUndefined();
+    expect(session.toState().paneCwd).toBeUndefined();
     expect(broadcast).toHaveBeenCalledTimes(2);
     await tick('codeman-other|300|0|||/elsewhere');
     expect(broadcast).toHaveBeenCalledTimes(2);
@@ -365,10 +370,10 @@ describe('a pane read reaching the session record', () => {
     await tick('codeman-aaaa|100|0|||/work/proj/sub');
     // tmux could not read the process cwd for one tick.
     await tick('codeman-aaaa|100|0|||');
-    expect(session.toState().cwd).toBe('/work/proj/sub');
+    expect(session.toState().paneCwd).toBe('/work/proj/sub');
     // A failed read arrives as no rows at all.
     await tick('');
-    expect(session.toState().cwd).toBe('/work/proj/sub');
+    expect(session.toState().paneCwd).toBe('/work/proj/sub');
     expect(broadcast).toHaveBeenCalledTimes(1);
   });
 
@@ -380,7 +385,7 @@ describe('a pane read reaching the session record', () => {
     mux.getPaneCurrentPath = () => '/work/proj';
     mux.emit('paneExitsUpdated');
 
-    expect(session.toState().cwd).toBeUndefined();
+    expect(session.toState().paneCwd).toBeUndefined();
   });
 
   it('publishes nothing for a remote session', () => {
@@ -391,7 +396,7 @@ describe('a pane read reaching the session record', () => {
     mux.getPaneCurrentPath = () => '/home/dev';
     mux.emit('paneExitsUpdated');
 
-    expect(session.toState().cwd).toBeUndefined();
+    expect(session.toState().paneCwd).toBeUndefined();
   });
 });
 
@@ -418,13 +423,15 @@ describe('browser resolution order: live cwd, then workingDir', () => {
   };
 
   it("resolves against the pane's live directory after a cd into a subdirectory", () => {
-    expect(resolveFor({ workingDir: '/work/proj', cwd: '/work/proj/sub' }, 'note.md')).toBe('/work/proj/sub/note.md');
+    expect(resolveFor({ workingDir: '/work/proj', paneCwd: '/work/proj/sub' }, 'note.md')).toBe(
+      '/work/proj/sub/note.md'
+    );
   });
 
   it('resolves outside the workspace when the pane cd-ed to a sibling repo', () => {
     // Routing is unchanged: an absolute target outside the workspace is what
     // `_isExternalPreviewPath` already sends through the attachment routes.
-    expect(resolveFor({ workingDir: '/work/proj', cwd: '/work/other' }, 'src/a.js')).toBe('/work/other/src/a.js');
+    expect(resolveFor({ workingDir: '/work/proj', paneCwd: '/work/other' }, 'src/a.js')).toBe('/work/other/src/a.js');
   });
 
   it('falls back to workingDir when no live directory is known', () => {
@@ -432,16 +439,20 @@ describe('browser resolution order: live cwd, then workingDir', () => {
   });
 
   it('ignores a live directory on a remote or docker session', () => {
-    expect(resolveFor({ workingDir: '/work/proj', cwd: '/tmp/x', remote: {} }, 'note.md')).toBe('/work/proj/note.md');
-    expect(resolveFor({ workingDir: '/work/proj', cwd: '/tmp/x', docker: {} }, 'note.md')).toBe('/work/proj/note.md');
+    expect(resolveFor({ workingDir: '/work/proj', paneCwd: '/tmp/x', remote: {} }, 'note.md')).toBe(
+      '/work/proj/note.md'
+    );
+    expect(resolveFor({ workingDir: '/work/proj', paneCwd: '/tmp/x', docker: {} }, 'note.md')).toBe(
+      '/work/proj/note.md'
+    );
   });
 
   it('ignores a relative live directory', () => {
-    expect(resolveFor({ workingDir: '/work/proj', cwd: 'sub' }, 'note.md')).toBe('/work/proj/note.md');
+    expect(resolveFor({ workingDir: '/work/proj', paneCwd: 'sub' }, 'note.md')).toBe('/work/proj/note.md');
   });
 
   it('leaves absolute and home paths alone', () => {
-    const session = { workingDir: '/work/proj', cwd: '/work/proj/sub' };
+    const session = { workingDir: '/work/proj', paneCwd: '/work/proj/sub' };
     expect(resolveFor(session, '/etc/hosts.md')).toBe('/etc/hosts.md');
     expect(resolveFor(session, '~/x.md')).toBe('~/x.md');
   });
@@ -481,12 +492,12 @@ describe('confinement is unchanged by the live cwd', () => {
   };
 
   it('keeps a target inside the workspace on the workspace route', () => {
-    const app = loadApp({ workingDir: '/work/proj', cwd: '/work/proj/sub' });
+    const app = loadApp({ workingDir: '/work/proj', paneCwd: '/work/proj/sub' });
     expect(app.external(app.target('note.md'))).toBe(false);
   });
 
   it('sends a target outside the workspace through the attachment route', () => {
-    const app = loadApp({ workingDir: '/work/proj', cwd: '/work/other' });
+    const app = loadApp({ workingDir: '/work/proj', paneCwd: '/work/other' });
     expect(app.target('src/a.js')).toBe('/work/other/src/a.js');
     expect(app.external(app.target('src/a.js'))).toBe(true);
   });
@@ -528,8 +539,8 @@ describe('a workspace reached through a symlink', () => {
   /** Feed a reading until the background resolution has settled and it is taken. */
   const settle = async (session: Session, reading: string) => {
     await vi.waitFor(() => {
-      session.setCwd(reading);
-      expect(session.cwd).toBeDefined();
+      session.setPaneCwd(reading);
+      expect(session.paneCwd).toBeDefined();
     });
   };
 
@@ -548,9 +559,9 @@ describe('a workspace reached through a symlink', () => {
     setup();
     const session = localMuxSession({ workingDir: link });
     await settle(session, physical);
-    expect(session.cwd).toBe(link);
-    expect(session.setCwd(join(physical, 'src'))).toBe(true);
-    expect(session.cwd).toBe(join(link, 'src'));
+    expect(session.paneCwd).toBe(link);
+    expect(session.setPaneCwd(join(physical, 'src'))).toBe(true);
+    expect(session.paneCwd).toBe(join(link, 'src'));
   });
 
   it('keeps an in-workspace relative link on the workspace route from the first reading', async () => {
@@ -565,7 +576,7 @@ describe('a workspace reached through a symlink', () => {
     setup();
     const session = localMuxSession({ workingDir: link });
     await settle(session, join(root, 'other'));
-    expect(session.cwd).toBe(join(root, 'other'));
+    expect(session.paneCwd).toBe(join(root, 'other'));
     const external = routingFor(session.toState() as unknown as Record<string, unknown>);
     expect(external('notes.md')).toBe(true);
   });
@@ -575,24 +586,24 @@ describe('a workspace reached through a symlink', () => {
     const session = localMuxSession({ workingDir: link });
     // The first call starts the resolution; a physical reading cannot be told
     // apart from a real cd yet, so it is not stored this tick.
-    expect(session.setCwd(physical)).toBe(false);
-    expect(session.cwd).toBeUndefined();
+    expect(session.setPaneCwd(physical)).toBe(false);
+    expect(session.paneCwd).toBeUndefined();
     // A reading lexically inside workingDir needs no translation and is taken.
-    expect(session.setCwd(join(link, 'src'))).toBe(true);
+    expect(session.setPaneCwd(join(link, 'src'))).toBe(true);
   });
 
   it('leaves the reading alone when workingDir has no symlink in it', async () => {
     setup();
     const session = localMuxSession({ workingDir: physical });
     await settle(session, join(physical, 'src'));
-    expect(session.cwd).toBe(join(physical, 'src'));
+    expect(session.paneCwd).toBe(join(physical, 'src'));
   });
 
   it('takes readings untranslated once a missing workingDir has settled', async () => {
     setup();
     const session = localMuxSession({ workingDir: join(root, 'gone') });
     await settle(session, join(root, 'other'));
-    expect(session.cwd).toBe(join(root, 'other'));
+    expect(session.paneCwd).toBe(join(root, 'other'));
   });
 });
 

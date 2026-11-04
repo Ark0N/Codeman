@@ -2866,10 +2866,10 @@ export class WebServer extends EventEmitter {
       // or empty read and carries a blank `#{pane_current_path}` forward, so an
       // `undefined` here means an authoritative read listed no single directory
       // for the session (split into several panes, or gone from the socket).
-      const cwdChanged = getPaneCurrentPath ? session.setCwd(getPaneCurrentPath(muxName)) : false;
+      const paneCwdChanged = getPaneCurrentPath ? session.setPaneCwd(getPaneCurrentPath(muxName)) : false;
       if (session.setPaneExit(getPaneExit(muxName))) {
         this.persistSessionState(session);
-      } else if (!cwdChanged) {
+      } else if (!paneCwdChanged) {
         continue;
       }
       this.broadcastSessionStateDebounced(session.id);

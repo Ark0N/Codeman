@@ -846,7 +846,7 @@ export interface SessionState {
    * to `workingDir`, and a path resolved outside it goes through the attachment
    * routes like any other out-of-workspace path.
    */
-  cwd?: string;
+  paneCwd?: string;
   /** Remote execution metadata, present when this session runs over SSH through local tmux */
   remote?: SessionRemote;
   /** Docker execution metadata, present when this session runs inside a container via local tmux + docker exec */

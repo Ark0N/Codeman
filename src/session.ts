@@ -765,7 +765,7 @@ export class Session extends EventEmitter {
    * The pane's live directory, from the pane-exit watcher's read. Runtime-only:
    * serialized by toState() but never restored by the constructor.
    */
-  private _cwd: string | undefined;
+  private _paneCwd: string | undefined;
   /**
    * `workingDir` with symlinks resolved, so a pane reading (tmux reads the
    * process cwd, always the resolved path) can be put back into `workingDir`'s
@@ -1530,8 +1530,8 @@ export class Session extends EventEmitter {
   }
 
   /** The pane's live working directory, when the pane read has reported one. */
-  get cwd(): string | undefined {
-    return this._cwd;
+  get paneCwd(): string | undefined {
+    return this._paneCwd;
   }
 
   /**
@@ -1553,7 +1553,7 @@ export class Session extends EventEmitter {
    * `workingDir`'s spelling. Until that resolution has settled, only a reading
    * lexically inside `workingDir` is accepted.
    */
-  setCwd(next: string | undefined): boolean {
+  setPaneCwd(next: string | undefined): boolean {
     let resolved = this.paneExitApplies && next?.startsWith('/') ? next : undefined;
     if (resolved !== undefined) {
       if (
@@ -1571,8 +1571,8 @@ export class Session extends EventEmitter {
         resolved = rebasePath(resolved, this._workspaceRealPath, this._workspaceSpelling());
       }
     }
-    if (resolved === this._cwd) return false;
-    this._cwd = resolved;
+    if (resolved === this._paneCwd) return false;
+    this._paneCwd = resolved;
     return true;
   }
 
@@ -1582,7 +1582,7 @@ export class Session extends EventEmitter {
   }
 
   /**
-   * Resolve `workingDir`'s symlinks in the background for {@link setCwd}.
+   * Resolve `workingDir`'s symlinks in the background for {@link setPaneCwd}.
    *
    * Bounded: the folder can sit on a network mount that stopped answering, so it
    * is probed with `probePathKind()` first and the `realpath()` is raced against
@@ -2299,7 +2299,7 @@ export class Session extends EventEmitter {
       pid: this.pid,
       status: this._status,
       workingDir: this.workingDir,
-      cwd: this._cwd,
+      paneCwd: this._paneCwd,
       remote: this._remote,
       docker: this._docker,
       owner: this._owner,
