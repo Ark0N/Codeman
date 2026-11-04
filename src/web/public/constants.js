@@ -2215,6 +2215,7 @@ function findFilePathLinks(text) {
     // Parentheses bound an inline path just as a whole line bounds a standalone path.
     const parenthesised = /\(([^()\r\n]{1,1000})\)/g;
     while ((match = parenthesised.exec(line)) !== null) {
+      if (opensBashCall(line, match.index)) continue;
       reserve(spacedFilePathOnLine(match[1], { parenthesised: true }), lineStart + match.index + 1);
     }
     lineStart += line.length + 1;
@@ -2245,6 +2246,20 @@ function findFilePathLinks(text) {
 /** Labels that explicitly identify a path, for {@link spacedFilePathOnLine}. */
 const SPACED_FILE_PATH_LABEL_PATTERN =
   /^(?:path|files?|saved (?:to|as)|wrote|written to|output|created|location|attachment):[ \t]*$/i;
+
+/**
+ * True when the `(` at `open` starts a `Bash(` tool row, which holds a command rather than
+ * a path: `Bash(/tmp/a.out input.txt)` is a program and its argument, so the parentheses do
+ * not bound one spaced path and the ordinary detectors keep the row. Only `Bash(`: the path
+ * tools (`Read(`, `Update(`, `Write(`) do hold a path, spaces included.
+ *
+ * @param {string} text
+ * @param {number} open Index of the `(`.
+ * @returns {boolean}
+ */
+function opensBashCall(text, open) {
+  return /(?:^|\W)Bash\($/.test(text.slice(Math.max(0, open - 5), open + 1));
+}
 
 /**
  * A file path WITH SPACES on one line, or null.
@@ -2637,7 +2652,7 @@ function terminalPathLine(buffer, row, cols, maxRows) {
       if (kind === 'join') {
         const opening = text.lastIndexOf('(');
         const closing = next.text.indexOf(')');
-        if (opening >= 0 && closing > 0) {
+        if (opening >= 0 && closing > 0 && !opensBashCall(text, opening)) {
           const before = text.slice(opening + 1);
           const after = next.text.slice(0, closing).trimStart();
           const spaced = spacedFilePathOnLine(`${before} ${after}`, { parenthesised: true });

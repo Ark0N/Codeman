@@ -343,6 +343,13 @@ describe('terminal link provider', () => {
     expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
   });
 
+  it('never looks up a spaced name for a hard-wrapped Bash( row, which holds a command', async () => {
+    const { app, links } = linksOn(['Bash(/mnt/data/Kobo', '  eReader.conf)'], 1, 120);
+    await links[0].activate({}, links[0].text);
+    expect(app._registerExternalPreview).not.toHaveBeenCalled();
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/mnt/data/KoboeReader.conf', 's1');
+  });
+
   it('uses the original opener when both hard-wrap filenames are missing', async () => {
     for (const row of [1, 2]) {
       const { app, links } = linksOn(['Saved (/mnt/data/Kobo', '  eReader.conf).'], row, 120);

@@ -452,4 +452,28 @@ describe('terminal link provider with spaced paths', () => {
   it('links nothing for an unlinkable spaced path', () => {
     expect(linksFor('/etc/secret files/passwords.txt').links).toEqual([]);
   });
+
+  // `Bash(` holds a command, so its parentheses bound no spaced path: master links the file
+  // (and the folder the executable sits in), never the whole command. The path tools do
+  // hold a path, a spaced filename included.
+  it.each([
+    ['Bash(/tmp/a.out input.txt)', [{ path: 'input.txt' }]],
+    [
+      'Bash(/home/me/proj/build/mytool convert input.json)',
+      [{ path: '/home/me/proj/build/mytool', folder: true }, { path: 'input.json' }],
+    ],
+    [
+      'Bash(/home/me/proj/target/release/app config.toml)',
+      [{ path: '/home/me/proj/target/release/app', folder: true }, { path: 'config.toml' }],
+    ],
+  ])('links %s the way master does, not as the whole command', (line, linked) => {
+    const found = findFilePathLinks(line).map(({ path, folder }) => (folder ? { path, folder } : { path }));
+    expect(found).toEqual(linked);
+    expect(found.map((hit) => hit.path)).not.toContain(line.slice(line.indexOf('(') + 1, -1));
+  });
+
+  it.each(['Read', 'Update', 'Write', 'Edit', 'NotBash'])('takes a spaced filename in %s( whole', (tool) => {
+    const path = '/mnt/data/Kobo/Kobo eReader.conf';
+    expect(paths(`${tool}(${path})`)).toEqual([path]);
+  });
 });
