@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { _resetNotifyBuckets, registerDiscordRoutes } from '../../src/web/routes/discord-routes.js';
 import { DiscordBridge, discordConfigPath, readDiscordConfig, type DiscordFetch } from '../../src/discord-bridge.js';
@@ -281,6 +281,32 @@ describe('discord-notify with a file', () => {
   ])('refuses %s', async (_n, path) => {
     const { app, bridge } = await ready();
     const res = await post(app, path());
+    expect(res.statusCode).toBe(400);
+    expect(fetchImpl.mock.calls.some((c) => c[1].body instanceof FormData)).toBe(false);
+    bridge.stop();
+  });
+
+  it.each([
+    ['a .env file', () => ['.env', 'TOKEN=x']],
+    ['a private key under .ssh', () => ['.ssh/id_ed25519', 'key']],
+    ['Codeman state with the bot token', () => ['.codeman/discord.json', '{}']],
+  ])('refuses %s even inside the session folder, as with a home directory', async (_n, entry) => {
+    const [rel, body] = entry();
+    mkdirSync(dirname(join(work, rel)), { recursive: true });
+    writeFileSync(join(work, rel), body);
+    const { app, bridge } = await ready();
+    const res = await post(app, join(work, rel));
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/credentials/);
+    expect(fetchImpl.mock.calls.some((c) => c[1].body instanceof FormData)).toBe(false);
+    bridge.stop();
+  });
+
+  it('refuses a symlink inside the folder that points at a blocked file', async () => {
+    writeFileSync(join(work, '.env'), 'TOKEN=x');
+    symlinkSync(join(work, '.env'), join(work, 'notes.txt'));
+    const { app, bridge } = await ready();
+    const res = await post(app, join(work, 'notes.txt'));
     expect(res.statusCode).toBe(400);
     expect(fetchImpl.mock.calls.some((c) => c[1].body instanceof FormData)).toBe(false);
     bridge.stop();

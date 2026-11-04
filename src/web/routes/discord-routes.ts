@@ -17,6 +17,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
 import { canAccessOwned, findSessionOrFail, getAuthUser, isAdmin, parseBody } from '../route-helpers.js';
 import type { SessionPort } from '../ports/session-port.js';
+import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { describeUnknownPath, probePathKind } from '../../utils/bounded-path-probe.js';
 import { DiscordNotifySchema, DiscordUpdateSchema } from '../schemas.js';
@@ -80,8 +81,10 @@ export function _resetNotifyBuckets(): void {
 
 /**
  * A file a session may send: a regular file, at most MAX_FILE_BYTES, whose REAL path (symlinks
- * followed) lies inside the session's working folder. Anything else is refused, so a CLI cannot be
- * talked into posting ~/.codeman/discord.json or an ssh key. Returns the bytes, or the reason.
+ * followed) lies inside the session's working folder and is not on the attachment blocklist. The
+ * blocklist matters as much as the folder: with a home directory as the session folder, confinement
+ * alone would let a CLI be talked into posting ~/.codeman/discord.json, an ssh key or a `.env`.
+ * Returns the bytes, or the reason.
  */
 async function fileProblem(
   workingDir: string,
@@ -103,6 +106,9 @@ async function fileProblem(
     const rel = relative(root, real);
     if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
       return 'The file must be inside the session folder';
+    if (isBlockedAttachmentPath(real, (await loadAttachmentGuardConfig()).blockedTrees)) {
+      return 'That file cannot be sent: it can hold credentials';
+    }
     const info = await stat(real);
     if (!info.isFile()) return 'Not a regular file';
     if (info.size > MAX_FILE_BYTES) return `The file is over ${MAX_FILE_BYTES / 1024 / 1024} MB`;

@@ -79,7 +79,7 @@ Discord for them; only the agent-initiated `codeman notify` habit is missing.
   `<tab folder>/.codeman-discord/<message id>-<name>` and the line the agent sees ends with
   `[attached: <path>]`. At most 5 files of 8 MB each. The folder ignores itself, so nothing in it is committed.
 - **Agent to you:** `codeman notify "message" --file <path>` uploads a file of at most 8 MB that lies
-  inside the tab's folder.
+  inside the tab's folder. Credential files such as `.env` are refused.
 - Remote (ssh) tabs have no local folder, so they neither send nor receive files.
 - A file you send is untrusted content to the agent that opens it.
 
