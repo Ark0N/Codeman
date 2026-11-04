@@ -200,31 +200,65 @@ saved default, not just confirming it.
 
 The modal promotes exactly one row to the top of the list rather than
 always showing raw discovery order, so the zero-wait choice is the one
-under your thumb:
+under your thumb. Three kinds of knowledge feed that promotion, best
+evidence first, and the first one that answers wins:
 
-- **"Currently loaded"** — a model from this host's own list that
+- **"Currently loaded"** is a model from this host's own list that
   llama-swap reports `ready` right now, queried via
   `GET /api/model-endpoints/:id/running-status`. Bounded client-side to
   ~800ms (`Promise.race`), on top of the route's own 5s server-side
   timeout, so an endpoint that is asleep or firewalled cannot leave the
   modal invisible for the full 5s after the Run menu has already closed.
-- **"Last used"** — shown only when nothing is currently loaded: the model
-  actually launched last for this exact (harness, endpoint) pair, read
-  from the per-device `codeman:customModelLastUsed:<mode>:<endpointId>`
-  localStorage key. Written by `_runCustomModelEntryViaRestart` (claude)
-  and `_quickStartWithCustomModelConfirm` (every one-shot launch; the
+- **"In use by a session"** is the fallback for every endpoint that
+  cannot report its own loaded model, which is every server except
+  llama-swap: a bare llama.cpp, Ollama, vLLM, and a gateway such as
+  Bifrost fronting a whole fleet all answer `isLlamaSwap: false`.
+  `_getCustomModelInUseBySession` walks `this.sessions` for one of your own
+  sessions whose `customModel.endpointId` is this host, newest
+  `createdAt` wins, and promotes its model. A live session is first-hand
+  evidence of a model in use on the endpoint, because Codeman put it
+  there, so it earns the promotion and the tag says where the knowledge
+  came from. Two fences keep it honest: it reads only `customModel`,
+  never `displayModel` (display text scraped off a CLI footer, so a
+  terminal that merely printed a similar string must not mark a row),
+  and a session with `status: 'stopped'`, a null `pid` (its PTY exited,
+  the same live-pane test keep-warm applies) or a recorded `paneExit`
+  does not count, since nothing is on the endpoint any more. Sessions on other
+  endpoints, and models the host no longer discovers, are skipped.
+- **"Last used"** appears only when neither of the above answers: the
+  model actually launched last for this exact (harness, endpoint) pair,
+  read from the per-device localStorage key
+  `codeman:customModelLastUsed:<mode>:<endpointId>`. That key is per CLI
+  on purpose, so it can only
+  ever promote the CLI that launched there before, which is why a gateway
+  box with no session running shows plain discovery order for the other
+  CLIs. Written by `_runCustomModelEntryViaRestart` (claude) and
+  `_quickStartWithCustomModelConfirm` (every one-shot launch; the
   `runCustomModelEntry` entry point itself only dispatches between the
-  two) only once the model is actually applied, never on the mere click —
+  two) only once the model is actually applied, never on the mere click:
   declining the context-window warning means this exact model cannot work
-  with this CLI at all, so promoting it next time would be actively wrong,
-  not just premature.
+  with this CLI at all, so promoting it next time would be actively
+  wrong, not just premature.
 
-Neither tag reorders anything past that one promoted row. The "Default"
+No promotion reorders anything past that one promoted row. The "Default"
 pill is a separate span, not a third value of the same slot: a promoted
 row that is also the endpoint's `defaultModelId` shows both tags (on a
 single-purpose GPU box that is the common case, and an exclusive slot
 silently dropped the Default marking for exactly that row), and a row
 with neither promotion nor default shows no tag at all.
+
+When nothing is known about any row, `#customModelPickUnknown` says so
+out loud instead of leaving an alphabetical wall that reads as the app
+ignoring the question. It shows when the probe answered
+`isLlamaSwap: false`, which the route gives for every failure it
+catches, so one answer covers a server that cannot report and an
+endpoint that is down or refused alike; the line's wording therefore
+claims only that nothing was reported. A probe that never got any
+answer (`_getCustomModelRunningStatus` resolving `null`, Codeman's own
+request failed or the client-side bound won) keeps the line hidden.
+Like its sibling no-matches line it needs an
+explicit `[hidden]` rule scoped to `#customModelPickModal`, because
+`.form-hint`'s `display: block` outranks the UA `[hidden]` rule.
 
 **How the launch itself applies the endpoint depends on the harness.** For
 opencode, Codex, Gemini, Pi, Grok, DeepSeek and OMP (`runCustomModelEntry` →
