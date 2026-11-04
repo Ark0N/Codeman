@@ -87,6 +87,12 @@ export interface ConfigDirInjection {
    * `customModelInjection.launchModel` template, never hand-built per CLI.
    */
   launchModel?: string;
+  /** Carried from the registry recipe — see `cli-registry/types.ts` `linkFromRealHome`. */
+  linkFromRealHome?: string[];
+  /** Carried from the registry recipe — see `cli-registry/types.ts` `linkFromRealHomeDirs`. */
+  linkFromRealHomeDirs?: string[];
+  /** Carried from the registry recipe — see `cli-registry/types.ts` `realHomeFallback`. */
+  realHomeFallback?: string;
 }
 
 export interface UnsupportedInjection {
@@ -143,7 +149,15 @@ export function buildCustomModelInjection(
     case 'configDir': {
       const { content, extraEnv } = renderConfigFile(cap.template, endpoint, modelId, apiKey, contextLength);
       return withLaunchModel(
-        { kind: 'configDir', dirEnvVar: cap.dirEnvVar, files: [{ relPath: cap.fileName, content }], extraEnv },
+        {
+          kind: 'configDir',
+          dirEnvVar: cap.dirEnvVar,
+          files: [{ relPath: cap.fileName, content }],
+          extraEnv,
+          ...(cap.linkFromRealHome ? { linkFromRealHome: cap.linkFromRealHome } : {}),
+          ...(cap.linkFromRealHomeDirs ? { linkFromRealHomeDirs: cap.linkFromRealHomeDirs } : {}),
+          ...(cap.realHomeFallback ? { realHomeFallback: cap.realHomeFallback } : {}),
+        },
         cap.launchModel,
         modelId
       );
@@ -209,14 +223,21 @@ function renderConfigContent(
   }
 }
 
-const CODEX_API_KEY_ENV_VAR = 'CODEMAN_CUSTOM_MODEL_API_KEY';
+/** The DEDICATED env var carrying a custom endpoint's API key for config-file recipes that
+ *  reference keys by name (codex's `env_key`, deepseek's `apiKeyEnv`). Never a CLI-native
+ *  name: dsh's own `llm-deepseek`/`web-search-deepseek` rows read `DEEPSEEK_API_KEY` too,
+ *  so an in-session `/model` switch back to `deepseek-official` (or a profile with web
+ *  search on) would otherwise send the custom endpoint's key to api.deepseek.com. Both
+ *  entries list it in `privilegedEnvKeys` (stock.ts) like each other's redirect vars.
+ */
+const CUSTOM_MODEL_API_KEY_ENV_VAR = 'CODEMAN_CUSTOM_MODEL_API_KEY';
 
 /** The `[model.<name>]` block name grok's config.toml uses for the injected model — also
  *  what `-m <name>` in the standalone script's ONE_SHOT argv must reference to select it. */
 export const GROK_CUSTOM_MODEL_NAME = 'codeman-custom';
 
 function renderConfigFile(
-  template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml',
+  template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml' | 'deepseek-patch-json',
   endpoint: CustomModelEndpoint,
   modelId: string,
   apiKey: string,
@@ -224,6 +245,47 @@ function renderConfigFile(
 ): { content: string; extraEnv?: Record<string, string> } {
   const baseUrl = withV1Suffix(endpoint.baseUrl);
   switch (template) {
+    case 'deepseek-patch-json': {
+      const route = { provider: 'codeman-custom', model: modelId };
+      return {
+        content: JSON.stringify(
+          [
+            {
+              id: 'llm-pi-ai',
+              name: '@deepseek-ai/dsh-llm-pi-ai',
+              config: {
+                providers: {
+                  'codeman-custom': {
+                    // By NAME only (never the literal key — see CUSTOM_MODEL_API_KEY_ENV_VAR).
+                    apiKeyEnv: CUSTOM_MODEL_API_KEY_ENV_VAR,
+                    api: 'openai-completions',
+                    baseURL: baseUrl,
+                    models: [
+                      {
+                        id: modelId,
+                        name: modelId,
+                        ...(contextLength !== undefined && Number.isFinite(contextLength) && contextLength > 0
+                          ? {
+                              contextWindow: Math.trunc(contextLength),
+                              // A quarter of the window keeps the reply inside the prompt's share; 8192 caps it on a large window.
+                              maxTokens: Math.max(1, Math.min(8192, Math.floor(contextLength / 4))),
+                            }
+                          : {}),
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+            { id: 'dsh-tui', name: '@deepseek-harness-tui/dsh-tui', config: route },
+            { id: 'agent-default-model', name: '@deepseek-ai/dsh-agent-default-model', config: route },
+          ],
+          null,
+          2
+        ),
+        extraEnv: { [CUSTOM_MODEL_API_KEY_ENV_VAR]: apiKey },
+      };
+    }
     case 'codex-toml': {
       // Verified against real codex (>= Feb 2026): `model` is a top-level STRING, never
       // a `[model].default` table — codex rejects that with "invalid type: map, expected
@@ -252,11 +314,11 @@ function renderConfigFile(
         '[model_providers.custom]',
         `name = "Custom Endpoint"`,
         `base_url = ${quoted(baseUrl)}`,
-        `env_key = ${quoted(CODEX_API_KEY_ENV_VAR)}`,
+        `env_key = ${quoted(CUSTOM_MODEL_API_KEY_ENV_VAR)}`,
         `wire_api = "responses"`,
         '',
       ].join('\n');
-      return { content, extraEnv: { [CODEX_API_KEY_ENV_VAR]: apiKey } };
+      return { content, extraEnv: { [CUSTOM_MODEL_API_KEY_ENV_VAR]: apiKey } };
     }
     case 'pi-models-json':
       // Verified against pi's OWN bundled docs (models.md): `models` is an ARRAY of

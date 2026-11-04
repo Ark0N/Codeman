@@ -1330,6 +1330,17 @@ export class Session extends EventEmitter {
     return value && value.trim() ? value.trim() : undefined;
   }
 
+  /**
+   * One env var from this session's overrides, for internal path resolution only
+   * (custom-model injection linking an isolated config dir back to a path that must
+   * survive lives in). Single-key lookup by design, like `deepSeekHomeOverride`: the
+   * map can hold provider credentials and stays off the public `SessionState`.
+   */
+  envOverrideValue(key: string): string | undefined {
+    const value = this._envOverrides?.[key];
+    return value && value.trim() ? value.trim() : undefined;
+  }
+
   /** Owning username in multi-user mode, else undefined. */
   get owner(): string | undefined {
     return this._owner;

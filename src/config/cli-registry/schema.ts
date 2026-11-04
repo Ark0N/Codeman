@@ -286,6 +286,14 @@ const launchModelTemplate = z
   .regex(/^[a-zA-Z0-9._\-/:{}]+$/)
   .optional();
 
+/** One entry name under a CLI's real home, for `linkFromRealHome`: single path segment,
+ * leading alphanumeric, no traversal or hidden-dot escape. */
+const homeSegmentName = z
+  .string()
+  .min(1)
+  .max(40)
+  .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
+
 const capabilitiesSchema = z
   .object({
     external: z.boolean(),
@@ -580,10 +588,61 @@ const capabilitiesSchema = z
           kind: z.literal('configDir'),
           dirEnvVar: envName,
           fileName: z.string().min(1).max(80),
-          template: z.enum(['codex-toml', 'pi-models-json', 'omp-models-yml', 'grok-toml']),
+          template: z.enum(['codex-toml', 'pi-models-json', 'omp-models-yml', 'grok-toml', 'deepseek-patch-json']),
           launchModel: launchModelTemplate,
+          // State that must survive the isolated-directory redirect, symlinked by name from
+          // the CLI's real home (deepseek: profiles/sessions/settings.yaml). Single path
+          // segments only — the consumer joins them, so a traversal here would escape the
+          // real home. See the field's comment in cli-registry/types.ts.
+          linkFromRealHome: z.array(homeSegmentName).max(8).optional(),
+          // Which of `linkFromRealHome` are directories (missing ones are created before
+          // linking; missing files are skipped). Same segment pattern, see types.ts.
+          linkFromRealHomeDirs: z.array(homeSegmentName).max(8).optional(),
+          // The real home's fallback location, relative to the user's home: ONE segment —
+          // a leading dot is legitimate (`.dsh` is what ships) but separators, `..` and
+          // bare `.` are not; the consumer joins it under the user's home, a traversal
+          // here escapes that home and `.` IS that home (linking THROUGH it unshielded).
+          realHomeFallback: z
+            .string()
+            .min(1)
+            .max(80)
+            .regex(/^(?!\.\.?$)[^/\\]+$/)
+            .optional(),
         })
-        .strict(),
+        .strict()
+        .superRefine((recipe, ctx) => {
+          // Both rules were comments before; the schema is the security boundary, so
+          // enforce them at load time (see the header of this file).
+          if (recipe.linkFromRealHome?.length && !recipe.realHomeFallback) {
+            ctx.addIssue({
+              code: 'custom',
+              message: 'realHomeFallback is required whenever linkFromRealHome is declared',
+              path: ['realHomeFallback'],
+            });
+          }
+          for (const name of recipe.linkFromRealHome ?? []) {
+            if (name === recipe.fileName) {
+              ctx.addIssue({
+                code: 'custom',
+                message: `linkFromRealHome must never include fileName (${JSON.stringify(name)}): the generated file owns that name in the isolated directory, a link there would write THROUGH into the user's real file`,
+                path: ['linkFromRealHome'],
+              });
+            }
+          }
+          // types.ts documents the dirs list as "must be a subset of linkFromRealHome";
+          // a name absent from it names nothing (missing-file entries are skipped as
+          // files), so the recipe would silently stop creating a directory it declares.
+          const linkedNames = new Set(recipe.linkFromRealHome ?? []);
+          for (const dir of recipe.linkFromRealHomeDirs ?? []) {
+            if (!linkedNames.has(dir)) {
+              ctx.addIssue({
+                code: 'custom',
+                message: `linkFromRealHomeDirs must be a subset of linkFromRealHome: ${JSON.stringify(dir)} is not linked, so the directory rule for it can never apply`,
+                path: ['linkFromRealHomeDirs'],
+              });
+            }
+          }
+        }),
       z.object({ kind: z.literal('unsupported') }).strict(),
     ]),
   })

@@ -53,9 +53,12 @@ describe('applyCustomModelInjection: context length', () => {
     expect(applied?.envOverrides.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
   });
 
-  it('deepseek: has no contextLengthVar declared, so a passed-in length is a no-op', () => {
-    const applied = applyCustomModelInjection(entryOrThrow('deepseek'), endpoint, 'qwen3', 'sess-ctx-3', 16384);
-    expect(Object.keys(applied?.envOverrides ?? {}).sort()).toEqual(['DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL']);
+  it('deepseek: passes the known context through its isolated model catalogue', () => {
+    const sessionId = 'sess-deepseek-context';
+    sessionsToClean.push(sessionId);
+    const applied = applyCustomModelInjection(entryOrThrow('deepseek'), endpoint, 'qwen3', sessionId, 32768);
+    expect(Object.keys(applied?.envOverrides ?? {}).sort()).toEqual(['CODEMAN_CUSTOM_MODEL_API_KEY', 'DSH_HOME']);
+    expect(readFileSync(join(applied!.configDir!, 'cordis.patch.yml'), 'utf8')).toContain('"contextWindow": 32768');
   });
 });
 
@@ -103,11 +106,12 @@ describe('applyCustomModelInjection: CLAUDE_CONFIG_DIR isolation', () => {
     expect(applied?.envOverrides.HOME).toBe(customModelConfigDir(sessionId));
   });
 
-  it('deepseek: no configDirVar declared, so no config dir is created at all', () => {
+  it('deepseek: creates an isolated profile patch', () => {
     const sessionId = 'sess-cfgdir-deepseek';
+    sessionsToClean.push(sessionId);
     const applied = applyCustomModelInjection(entryOrThrow('deepseek'), endpoint, 'qwen3', sessionId);
-    expect(applied?.configDir).toBeUndefined();
-    expect(existsSync(customModelConfigDir(sessionId))).toBe(false);
+    expect(applied?.configDir).toBe(customModelConfigDir(sessionId));
+    expect(existsSync(join(applied!.configDir!, 'cordis.patch.yml'))).toBe(true);
   });
 });
 

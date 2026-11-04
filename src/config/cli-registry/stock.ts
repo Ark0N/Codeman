@@ -1549,30 +1549,28 @@ const DEEPSEEK: CliEntry = {
     // SERVER's own key into every dsh pane, so DEEPSEEK_BASE_URL is the exfiltration
     // vector, not the key itself — a non-granted owner supplying THEIR OWN key removes
     // privilege rather than granting it, and clamping it here was a real regression
-    // (test/deepseek-mode.test.ts) fixed before this shipped.
-    privilegedEnvKeys: ['DSH_PERMISSION_MODE', 'DSH_HOME', 'DEEPSEEK_BASE_URL'],
-    // Reuses the already-existing DEEPSEEK_BASE_URL/DEEPSEEK_API_KEY keys above. No
-    // modelVars — dsh's model is a profile-composition entry (see `model: { source: 'none'
-    // }` above), not an env var, so forcing a specific model name may not fully work;
-    // verify against a real profile before shipping.
-    //
-    // ⚠️ appendV1Suffix is REQUIRED, not optional-nice-to-have: without it every request
-    // 404s. Confirmed live and by reading dsh's own bundled source
-    // (@deepseek-ai/dsh-llm-deepseek): it builds the request URL as
-    // `${DEEPSEEK_BASE_URL}/chat/completions` with no "/v1" of its own (its real public
-    // API, https://api.deepseek.com, expects the caller's base URL to already carry any
-    // needed prefix), while llama-swap/llama.cpp only serves the OpenAI-conventional
-    // "/v1/chat/completions" — a bare POST to ".../chat/completions" 404s live, and the
-    // 404 reported here originally ("dsh: HTTP_404: DeepSeek API error (HTTP 404)")
-    // matches dsh's own error-message template for exactly this failure. See the
-    // customModelInjection doc comment in cli-registry/types.ts for the full reasoning,
-    // including why claude/gemini must NOT get this.
+    // (test/deepseek-mode.test.ts) fixed before this shipped. CODEMAN_CUSTOM_MODEL_API_KEY
+    // joins it (like codex's entry): the dedicated custom-endpoint key rides the same
+    // allowlisted-envOverrides path as the redirect itself.
+    privilegedEnvKeys: ['DSH_PERMISSION_MODE', 'DSH_HOME', 'DEEPSEEK_BASE_URL', 'CODEMAN_CUSTOM_MODEL_API_KEY'],
+    // The installed profile supplies the transport; a per-session patch selects its exact model.
     customModelInjection: {
-      kind: 'env',
-      baseUrlVar: 'DEEPSEEK_BASE_URL',
-      apiKeyVar: 'DEEPSEEK_API_KEY',
-      modelVars: [],
-      appendV1Suffix: true,
+      kind: 'configDir',
+      dirEnvVar: 'DSH_HOME',
+      fileName: 'cordis.patch.yml',
+      template: 'deepseek-patch-json',
+      // dsh keeps state in its home that the redirect must NOT swallow: `sessions` is the
+      // session-log root (deleting it would take the user's transcripts with it on clear/
+      // close), `profiles` are the installed bundles the patch composes over, and
+      // `settings.yaml` must keep applying. The generated home-level `cordis.patch.yml`
+      // deliberately replaces the user's own for the session rather than linking it.
+      // `sessions` and `profiles` are directories: dsh creates them itself on a first
+      // turn, and a fresh/relocated $DSH_HOME that never ran one would otherwise get a
+      // dangling link whose every write fails ENOENT — the consumer creates missing
+      // directory targets and skips missing file targets like `settings.yaml`.
+      linkFromRealHome: ['profiles', 'sessions', 'settings.yaml'],
+      linkFromRealHomeDirs: ['profiles', 'sessions'],
+      realHomeFallback: '.dsh',
     },
   },
   overlays: {
