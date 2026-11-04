@@ -620,7 +620,12 @@ for '<id>' not found. Defaulting to fallback metadata...` on launch —
   `max_tokens: 8192`; the reply renders and the context window shows in
   the footer. What such a session SHARES with the real home is
   exactly the linked entries — `profiles/`, `sessions/`,
-  `settings.yaml`. Everything else in the generated `DSH_HOME` is
+  `settings.yaml`. The last is shared only until the session writes
+  it: dsh saves settings with a temp file and a rename
+  (`writeFileAtomic` in `@deepseek-ai/dsh-atomic-write`), which replaces
+  the symlink, so the first `/settings` change inside such a session
+  never reaches `~/.dsh/settings.yaml` and is deleted with the session's
+  directory on clear or close. Everything else in the generated `DSH_HOME` is
   isolated: `storages/` (dsh-TUI's persisted `/model` choice and
   workspace state), `.agent-presets` and `.env`. Two consequences of
   the generated home-level file follow: the user's own home-level

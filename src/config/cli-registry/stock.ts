@@ -1562,7 +1562,9 @@ const DEEPSEEK: CliEntry = {
       // dsh keeps state in its home that the redirect must NOT swallow: `sessions` is the
       // session-log root (deleting it would take the user's transcripts with it on clear/
       // close), `profiles` are the installed bundles the patch composes over, and
-      // `settings.yaml` must keep applying. The generated home-level `cordis.patch.yml`
+      // `settings.yaml` must keep applying (read through the link only until the session's
+      // first settings write: dsh saves by rename, which replaces the link with a local file
+      // that goes away with the session). The generated home-level `cordis.patch.yml`
       // deliberately replaces the user's own for the session rather than linking it.
       // `sessions` and `profiles` are directories: dsh creates them itself on a first
       // turn, and a fresh/relocated $DSH_HOME that never ran one would otherwise get a

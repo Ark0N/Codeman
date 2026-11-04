@@ -893,6 +893,8 @@ export interface CliCapabilities {
          * home carries state that must survive the redirect (deepseek's `sessions` transcript
          * root and `profiles` bundles, plus `settings.yaml`, which would otherwise stop
          * applying and — for `sessions` — get deleted by `removeConfigDir` on clear/close).
+         * A CLI that saves a linked file by rename replaces the link: dsh does, so the first
+         * in-session settings write turns `settings.yaml` into a local file.
          * Never include `fileName` itself: the generated file owns that name in the isolated
          * directory, and a link there would write THROUGH into the user's real file.
          * Consumed generically by custom-model-injection-apply.ts.

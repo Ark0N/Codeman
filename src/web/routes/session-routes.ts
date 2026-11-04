@@ -246,7 +246,7 @@ function landedInGroup(layout: TabLayout | undefined, sessionId: string): boolea
  * one env var, so linking falls through to the server's own environment and the unresponsive
  * path is never touched. Any other entry's lookup passes through untouched.
  */
-async function guardSessionConfigDirHome(
+export async function guardSessionConfigDirHome(
   entry: Pick<CliEntry, 'capabilities'>,
   baseLookup: (envVar: string) => string | undefined
 ): Promise<(envVar: string) => string | undefined> {
@@ -256,6 +256,7 @@ async function guardSessionConfigDirHome(
   const supplied = baseLookup(dirEnvVar)?.trim();
   if (!supplied || !isAbsolute(supplied)) return baseLookup;
   if ((await probePathKind(supplied, { pastCap: true })) === 'unknown') {
+    console.warn(`[custom-model] ${dirEnvVar} (${supplied}) did not answer; linking from the server's own home instead`);
     return (envVar: string) => (envVar === dirEnvVar ? undefined : baseLookup(envVar));
   }
   return baseLookup;
