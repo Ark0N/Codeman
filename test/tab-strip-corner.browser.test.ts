@@ -200,14 +200,22 @@ describe('L-shaped header tab strip (real Chromium)', () => {
     expect(await select(3)).toEqual({
       cornered: true,
       overlapping: [],
-      first: { besideToolbar: true, trimmed: false },
+      first: { besideToolbar: true, trimmed: true },
     });
     expect(await select(1)).toEqual({ cornered: true, overlapping: [], first: { besideToolbar: true, trimmed: true } });
     expect(await select(3)).toEqual({
       cornered: true,
       overlapping: [],
-      first: { besideToolbar: true, trimmed: false },
+      first: { besideToolbar: true, trimmed: true },
     });
+    // selectSession() widens the tab at once and the corner sync is debounced: the
+    // cap has to be on already, or the first row drops below the toolbar until then.
+    await p.evaluate(() => {
+      document
+        .querySelectorAll('#sessionTabs > .session-tab')
+        .forEach((tab, i) => tab.classList.toggle('active', i === 0));
+    });
+    expect(await firstTab()).toEqual({ besideToolbar: true, trimmed: true });
     await p.close();
   });
 
@@ -240,7 +248,9 @@ describe('L-shaped header tab strip (real Chromium)', () => {
   });
 
   it('keeps the plain wrap when the toolbar leaves no usable room beside it', async () => {
-    await open({ tabs: 40 });
+    // Few enough that the strip does not scroll: at 40 the scroll fallback turns the
+    // corner off before the room check is reached, and this would pass at any threshold.
+    await open({ tabs: 8 });
     await p.evaluate(() => {
       const head = document.querySelector('.header')!.getBoundingClientRect();
       const right = document.getElementById('headerRight')!;

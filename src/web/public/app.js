@@ -7073,8 +7073,6 @@ class CodemanApp {
     const contentTop = strip.top + parseFloat(style.paddingTop);
     const contentLeft = strip.left + container.clientLeft + parseFloat(style.paddingLeft);
     const contentRight = strip.left + container.clientLeft + container.clientWidth - parseFloat(style.paddingRight);
-    // A first tab that cannot fit beside the toolbar would drop the whole first
-    // line below it and leave an empty band: keep the plain strip instead.
     // The first tab must fit beside the toolbar, or the whole first line drops
     // below it and leaves an empty band. A selected tab is wider (gear and
     // close show), so falling back to the plain strip here made the layout
@@ -7090,17 +7088,14 @@ class CodemanApp {
       return;
     }
     const firstTab = container.querySelector(':scope > .session-tab');
-    // Cleared first, the first tab's included: the last pass's trim would
-    // otherwise be measured as its width, and a room that grew would untrim a
-    // tab still too wide for it.
-    for (const tab of container.querySelectorAll(':scope > .tab-corner-fit')) tab.classList.remove('tab-corner-fit');
-    // A selection change slides the gear and close open or shut (a width
-    // transition), and this runs in the same render: finish the first tab's
-    // slide, or it is judged by the width it is leaving.
-    for (const anim of firstTab?.getAnimations?.({ subtree: true }) ?? []) {
-      if (/^(width|padding)/.test(anim.transitionProperty ?? '')) anim.finish();
+    // Capped every time, not only once it measures too wide: selectSession()
+    // widens a newly selected tab at once and this pass is debounced, so a cap
+    // set only here afterwards would leave the first row below the toolbar until
+    // it runs. The cap changes nothing on a tab narrower than the room.
+    for (const tab of container.querySelectorAll(':scope > .tab-corner-fit')) {
+      if (tab !== firstTab) tab.classList.remove('tab-corner-fit');
     }
-    if (firstTab && firstTab.offsetWidth > room) firstTab.classList.add('tab-corner-fit');
+    firstTab?.classList.add('tab-corner-fit');
     if (container.style.getPropertyValue('--tab-corner-first-max') !== `${room}px`) {
       container.style.setProperty('--tab-corner-first-max', `${room}px`);
     }
