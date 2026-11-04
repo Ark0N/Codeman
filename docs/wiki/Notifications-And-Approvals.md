@@ -13,6 +13,7 @@ opening the session.
 | Desktop notification           | Another window on the same machine               | Opt-in  |
 | Push notification              | Anywhere, even with no tab open                  | Opt-in  |
 | Webhook (ntfy, Slack, Discord) | Anywhere, with no browser or subscription at all | Opt-in  |
+| Discord bridge (two-way)       | Anywhere, and you can answer in a thread per tab | Opt-in  |
 | Approvals Inbox                | One queue for Claude, Codex and DeepSeek prompts | Opt-in  |
 | Phone overview                 | Phone home screen, NEEDS YOU section             | On      |
 | Away Digest                    | Afterwards, as a summary                         | Opt-in  |
@@ -65,6 +66,11 @@ Setup:
    installed web apps, not to tabs.
 
 Once subscribed, a blocking prompt reaches your phone even from a locked screen.
+
+## Discord bridge: answer from your phone
+
+A webhook is one-way. To also **reply** to a blocked agent, use the [Discord Bridge](Discord-Bridge): a
+thread per tab, your reply typed into that tab, files in both directions.
 
 ## Webhooks: ntfy, Slack, Discord
 

@@ -213,8 +213,9 @@ how long a desktop notification stays up before Codeman closes it (**Browser
 notification display time**, default 8; both per device, and your OS may close a
 desktop notification sooner), the idle
 threshold that decides when a quiet session counts as needing you, and the server-wide
-webhook (ntfy, Slack, Discord or generic JSON; admins only in multi-user mode). See
-[Notifications And Approvals](Notifications-And-Approvals).
+webhook (ntfy, Slack, Discord or generic JSON; admins only in multi-user mode), and the
+Discord group for the two-way bot (token, IDs, thread and ping options; see
+[Discord Bridge](Discord-Bridge)). See [Notifications And Approvals](Notifications-And-Approvals).
 
 ### Voice
 

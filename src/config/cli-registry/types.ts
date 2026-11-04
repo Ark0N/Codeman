@@ -29,6 +29,8 @@ export type EngineValue =
   | 'muxName'
   | 'effortLevel'
   | 'effortSettingsJson'
+  /** The Discord bridge's startup hint, passed to Claude as `--append-system-prompt`. */
+  | 'appendSystemPrompt'
   /** `sessionId` prefixed `codeman_<id>` — codex's unique per-pane rollout originator. */
   | 'codemanPrefixedSessionId'
   /**

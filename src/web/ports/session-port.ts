@@ -11,6 +11,11 @@ import type { SessionPlacementHint } from '../../tab-layout-service.js';
 export interface SessionPort {
   readonly sessions: ReadonlyMap<string, Session>;
   /**
+   * The last-response reader (the body of `GET /api/sessions/:id/last-response`), filled in when the
+   * session routes register, so other server code reads the same per-CLI transcript the viewer does.
+   */
+  lastResponseFor?: (session: Session, context?: string) => Promise<{ text: string; timestamp?: string }>;
+  /**
    * Register a created session with the owner's tab layout. `placement.tabGroupId`
    * puts it at the end of that group in the same layout write (ignored when the
    * group is not in the owner's layout); without one (and without a parent that
