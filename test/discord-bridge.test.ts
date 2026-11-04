@@ -638,6 +638,18 @@ describe('DiscordBridge', () => {
       b.stop();
     });
 
+    it('converts only what can be posted, so one very wide table cell cannot stall the server', async () => {
+      const b = bridge();
+      const wide = ['| a |', '|---|', `| ${'x'.repeat(1024 * 1024)} |`, ...Array(190).fill('| y |')].join('\n');
+      const t0 = Date.now();
+      await b.notify({ ...MSG, event: 'hook:idle_prompt', fullText: async () => ({ text: wide, version: 'turn-1' }) });
+      expect(Date.now() - t0).toBeLessThan(500);
+      const said = posts.filter((p) => p.path.endsWith('/messages')).map((p) => String(p.body?.content));
+      expect(said.length).toBeLessThanOrEqual(9); // the title post plus at most 8 parts
+      expect(said.at(-1)).toContain('continues in the tab');
+      b.stop();
+    });
+
     it('does not post the same message twice when two alerts for one tab overlap', async () => {
       let release!: () => void;
       const gate = new Promise<void>((r) => (release = r));

@@ -25,6 +25,7 @@ import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { probePathKind } from './utils/bounded-path-probe.js';
+import { DISCORD_RECEIVED_DIR } from './web/paste-image-gc.js';
 import WebSocket from 'ws';
 import { WEBHOOK_SCOPES, type WebhookUrgency } from './types/push.js';
 import {
@@ -62,6 +63,12 @@ const DISCORD_EPOCH_MS = 1420070400000;
 /** A Markdown table wider or longer than this is posted as it was written, not padded into a code block. */
 const TABLE_MAX_COLS = 24;
 const TABLE_MAX_ROWS = 200;
+/**
+ * The most of a last message worth converting: what 8 posts can carry, twice over, since a table can
+ * shrink when formatted. The rest could never be posted, and a padded table costs its widest cell
+ * times its rows, so an agent-steerable message must not reach the conversion whole.
+ */
+const MAX_CONVERTED_TEXT = MAX_CONTENT * 8 * 2;
 /** Reading a CLI's transcript must not hold an alert back for long. */
 const FULL_TEXT_TIMEOUT_MS = 4000;
 
@@ -165,7 +172,7 @@ export const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_FILES_PER_REPLY = 5;
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 /** Where a session's received files go, relative to its working folder. */
-export const RECEIVED_DIR = '.codeman-discord';
+export const RECEIVED_DIR = DISCORD_RECEIVED_DIR;
 
 /**
  * What a session is told about the bridge. Claude gets it as `--append-system-prompt`; no other CLI
@@ -827,7 +834,6 @@ export class DiscordBridge {
   private lastReply = new Map<string, number>();
   /** The last name seen per session, so only a real rename touches the thread. */
   private names = new Map<string, string>();
-  /** Brand-new sessions that have not yet been sent the startup hint (non-Claude CLIs). */
   private pending = new Map<string, Promise<string | DiscordResult>>();
   /** Tabs closed while their thread was still being created: the creation applies `onSessionDelete` to it. */
   private closedWhilePending = new Set<string>();
@@ -1102,7 +1108,7 @@ export class DiscordBridge {
           const key = `${got?.version ?? ''}\u0000${text}`;
           msg = { ...msg, tail: undefined };
           if (this.lastFull.get(sid) !== key) {
-            chunks = splitForDiscord(tablesToCodeBlocks(text));
+            chunks = splitForDiscord(tablesToCodeBlocks(text.slice(0, MAX_CONVERTED_TEXT)));
             posted = key;
           } // else: said already, so only the header goes
         }
