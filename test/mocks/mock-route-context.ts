@@ -64,6 +64,7 @@ export function createMockRouteContext(options?: {
       forgetCaseDefaultGroup: vi.fn(async () => {}),
     },
     cleanupSession: vi.fn(async () => {}),
+    forgetEditHistory: vi.fn(),
     setupSessionListeners: vi.fn(async () => {}),
     persistSessionState: vi.fn(),
     persistSessionStateNow: vi.fn(),

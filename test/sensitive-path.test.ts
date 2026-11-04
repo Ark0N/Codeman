@@ -89,6 +89,10 @@ describe('isSensitivePath', () => {
       ['codeman intent profiles', `${HOME}/.codeman/intents.json`],
       ['codeman intents on a named instance', `${HOME}/.codeman-beta/intents.json`],
       ['codeman agent inbox snapshot', `${HOME}/.codeman/agent-inbox.json`],
+      // The edit history stores hold every diff an agent wrote (keys and .env
+      // contents included): 0600 and kept out of /api/search like intents.json.
+      ['codeman edit history store', `${HOME}/.codeman/edit-history/s1.json`],
+      ['codeman edit history on a named instance', `${HOME}/.codeman-beta/edit-history/s1.json`],
     ];
 
     it.each(blocked)('blocks the %s', (_label, path) => {

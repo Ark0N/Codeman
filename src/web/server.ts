@@ -137,6 +137,9 @@ import { probePathKind } from '../utils/bounded-path-probe.js';
 import { defaultDockerWorkspaces } from './routes/git-status-routes.js';
 import { composerIsEmpty, plainFrame } from '../session-submit-verifier.js';
 import { detectUsageLimitPause } from '../usage-limit-patterns.js';
+import { EditHistorySync } from './edit-history-sync.js';
+import { EditHistoryStore } from '../edit-history-store.js';
+import { probeLocalPaths, readClaudeEditSources, resolveClaudeTranscript } from '../edit-history-local-source.js';
 import { stopDeepSeekWeb } from '../deepseek-web-server.js';
 import {
   wireRespawnListeners,
@@ -222,6 +225,7 @@ import {
   registerRebootRestoreRoutes,
   registerReadMyMindRoutes,
   registerGitStatusRoutes,
+  registerEditHistoryRoutes,
   registerStatusTelemetryRoutes,
   registerSystemRoutes,
   registerCaseRoutes,
@@ -351,6 +355,24 @@ function getOrCreateSelfSignedCert(): { key: string; cert: string } {
 export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
+  /**
+   * The edit history panel's reader (edit-history-sync.ts). Reads only when the panel asks;
+   * the main transcript is the one the transcript watcher follows (hook-reported path), or,
+   * before the first hook after a restart, a lookup under the session's claude config dir.
+   */
+  private readonly editHistorySync = new EditHistorySync({
+    transcriptPath: (session) =>
+      resolveClaudeTranscript(
+        this.transcriptWatchers.get(session.id)?.getPath(),
+        [session.claudeSessionId || session.id, session.id],
+        session.claudeConfigDir
+      ),
+    readSources: readClaudeEditSources,
+    probe: probeLocalPaths,
+    loadStore: (sessionId) => EditHistoryStore.load(sessionId),
+    deleteStore: (sessionId) => EditHistoryStore.delete(sessionId),
+    sweepStores: (keep) => EditHistoryStore.sweep(keep),
+  });
   private respawnControllers: Map<string, RespawnController> = new Map();
   private respawnTimers: Map<string, { timer: NodeJS.Timeout; endAt: number; startedAt: number }> = new Map();
   private runSummaryTrackers: Map<string, RunSummaryTracker> = new Map();
@@ -902,6 +924,7 @@ export class WebServer extends EventEmitter {
       addSession: this.registerSessionWithLayout.bind(this),
       tabLayouts: this.tabLayouts,
       cleanupSession: this.cleanupSession.bind(this),
+      forgetEditHistory: this.forgetEditHistory.bind(this),
       setupSessionListeners: this.setupSessionListeners.bind(this),
       persistSessionState: this.persistSessionState.bind(this),
       persistSessionStateNow: this._persistSessionStateNow.bind(this),
@@ -1319,6 +1342,7 @@ export class WebServer extends EventEmitter {
     registerRebootRestoreRoutes(this.app, ctx);
     registerReadMyMindRoutes(this.app, ctx);
     registerGitStatusRoutes(this.app, ctx);
+    registerEditHistoryRoutes(this.app, ctx, this.editHistorySync);
     // Git fetch on an interval: this is only the wake-up, the scheduler itself decides what is due. Off in
     // tests for the same reason as the polls below: a test drives `tick()` directly instead of waiting on
     // a timer the harness would have to keep alive. The setting is read FRESH inside `tick()`, so turning
@@ -1831,7 +1855,8 @@ export class WebServer extends EventEmitter {
       // Only remove from state.json if we're also killing the mux session.
       // When killMux=false (server shutdown), preserve state for recovery.
       if (killMux) {
-        this.store.demoteOrRemoveSession(sessionId);
+        // The edit history goes with the record; a pinned session's demoted record keeps it.
+        if (this.store.demoteOrRemoveSession(sessionId) !== 'preserved') this.forgetEditHistory(sessionId);
       }
     }
 
@@ -2673,8 +2698,25 @@ export class WebServer extends EventEmitter {
     const lifecycleLog = getLifecycleLog();
     for (const s of result.cleaned) {
       lifecycleLog.log({ event: 'stale_cleaned', sessionId: s.id, name: s.name });
+      this.forgetEditHistory(s.id);
     }
+    // History files no session owns (a crash between removing a record and deleting its file).
+    const exists = (id: string) => this.sessions.has(id) || !!this.store.getSession(id);
+    await this.editHistorySync.sweep(exists).catch((err) => {
+      console.warn('[EditHistory] Sweeping orphaned histories failed:', getErrorMessage(err));
+    });
     return result.count;
+  }
+
+  /**
+   * Delete a session's edit history (diffs can hold secrets) once its record is gone: deleted
+   * live (`cleanupSession`), deleted as a record only (DELETE route), or cleaned as stale
+   * (startup, `POST /api/cleanup-state`).
+   */
+  private forgetEditHistory(sessionId: string): void {
+    void this.editHistorySync.remove(sessionId).catch((err) => {
+      console.warn(`[EditHistory] Removing history of ${sessionId} failed:`, getErrorMessage(err));
+    });
   }
 
   /**
@@ -4622,6 +4664,9 @@ export class WebServer extends EventEmitter {
     this.respawnTimers.clear();
     this.runSummaryTrackers.clear();
     this.transcriptWatchers.clear();
+    await this.editHistorySync.flushAll().catch((err) => {
+      console.warn('[EditHistory] Saving on shutdown failed:', getErrorMessage(err));
+    });
     this.sessionListenerRefs.clear();
     this.scheduledRuns.clear();
     // Dispose StaleExpirationMaps (stops internal cleanup timers)

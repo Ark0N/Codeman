@@ -1729,7 +1729,8 @@ export function registerSessionRoutes(
       // Called for its existence/ownership 404 side effect only — demoteOrRemoveSession
       // below re-looks-up the record by id, so the returned SessionState is unused here.
       findPersistedSessionOrFail(ctx.store, id, req);
-      ctx.store.demoteOrRemoveSession(id);
+      // The edit history goes with the record (same rule as `cleanupSession`).
+      if (ctx.store.demoteOrRemoveSession(id) === 'removed') ctx.forgetEditHistory(id);
       // A detached session kept its agent inbox (server.ts _doCleanupSession drops it
       // only on killMux); retiring the row is the delete, so the mail goes now.
       agentInbox.drop(id);

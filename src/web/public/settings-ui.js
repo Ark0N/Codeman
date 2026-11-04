@@ -610,6 +610,7 @@ Object.assign(CodemanApp.prototype, {
     // below and are not stripped from a save: a stripped key would never reach the scheduler.
     document.getElementById('appSettingsGitFetchEnabled').checked = settings.gitFetchEnabled === true;
     document.getElementById('appSettingsGitFetchIntervalSeconds').value = settings.gitFetchIntervalSeconds ?? 300;
+    document.getElementById('appSettingsShowEditHistory').checked = settings.showEditHistory ?? defaults.showEditHistory ?? false;
     // Gesture control lives in the Input section (alongside Local Echo / CJK Input)
     // but is only available when the instance runs with CODEMAN_GESTURE=1 (server sets
     // window.__codemanGestureAvailable). Hide just this item otherwise so the toggle
@@ -3158,6 +3159,7 @@ Object.assign(CodemanApp.prototype, {
         3600,
         Math.max(30, parseInt(document.getElementById('appSettingsGitFetchIntervalSeconds').value, 10) || 300)
       ),
+      showEditHistory: document.getElementById('appSettingsShowEditHistory').checked,
       gestureControlEnabled: document.getElementById('appSettingsGestureControl').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
@@ -3465,6 +3467,8 @@ Object.assign(CodemanApp.prototype, {
       gitStatusTree: _gst,
       gitStatusMaxRepos: _gsm,
       gitStatusTimeoutSeconds: _gst2,
+      // Per-device header button (edit-history-ui.js), likewise absent from the .strict() schema.
+      showEditHistory: _seh,
       showTabDetachButton: _tdb,
       showTabNewButton: _tnb,
       // Detach Tiles: what a tile drag does is a property of this device's
@@ -4826,6 +4830,8 @@ Object.assign(CodemanApp.prototype, {
     // Bottom-bar Git indicator (git-status-ui.js): opt-in, per-device. Starts or stops its poll to
     // match the setting, so a live toggle needs no reload.
     this.applyGitStatusVisibility?.();
+    // Header Edit history button (edit-history-ui.js): opt-in, per-device, marker-class hidden.
+    this.applyEditHistoryVisibility?.();
 
     // Notification bell is retired (notifications live in Settings → Notifications
     // + the drawer); keep it hidden regardless of the notification-enabled state.
@@ -5189,7 +5195,7 @@ Object.assign(CodemanApp.prototype, {
       'language',
       'terminalWheelLocalScrollback',
       'autoCopySelection', 'copyStripMargin',
-      'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree', 'gitStatusMaxRepos', 'gitStatusTimeoutSeconds',
+      'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree', 'gitStatusMaxRepos', 'gitStatusTimeoutSeconds', 'showEditHistory',
       'showTabDetachButton',
       'showTabNewButton',
       'mobileOverviewEnabled',

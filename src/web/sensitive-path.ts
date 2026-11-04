@@ -102,6 +102,10 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /\/\.codeman[^/]*\/intents\.json$/,
   // Pending agent-inbox messages (opt-in snapshot): same text as prompts, same 0600.
   /\/\.codeman[^/]*\/agent-inbox\.json$/,
+  // The edit history panel's stores (edit-history-store.ts) hold every diff an
+  // agent wrote, keys and .env contents included; written 0600 and kept out of
+  // /api/search for the same reason as intents.json.
+  /\/\.codeman[^/]*\/edit-history\//,
 ];
 
 /**
