@@ -29,8 +29,8 @@
  * ⚠️ The file holds secrets: a diff carries whatever the agent wrote, keys and `.env`
  * contents included. So, like `intents.json`, it is written 0600 via tmp+rename, bounded,
  * deleted with the session (`remove()`; `sweep()` at startup removes files no session owns),
- * never fed to `/api/search`, and blocked from the file routes by `isSensitivePath`
- * (`web/sensitive-path.ts`). `load()` takes the file as untrusted: past
+ * never fed to `/api/search`, and refused by the attachment, folder and download routes through
+ * `isSensitivePath` (`web/sensitive-path.ts`). `load()` takes the file as untrusted: past
  * {@link MAX_FILE_BYTES} it is not parsed, and every part is rebuilt under the same bounds.
  *
  * Persisted as JSON under `dataPath('edit-history', '<sessionId>.json')`, written debounced.

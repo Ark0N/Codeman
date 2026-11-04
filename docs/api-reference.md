@@ -900,6 +900,16 @@ already serves non-media text inert (`text/plain`, `nosniff`), so this just
 keeps the server from storing what it would serve or an agent could run, and
 html and svg are the ones deliberately kept out.
 
+## New folder in the path picker
+
+`POST /api/filesystem/mkdir` with `{ path, name, sessionId?, showHidden? }` makes one
+folder directly inside `path`, which must be a folder the path picker may browse, and
+answers `{ path }`. `name` is one path segment (letters, numbers, spaces and `_ - . ~`, not
+starting with a dot or `~`). `400` for a cases folder (use Add Case → New Case) or a `path`
+that is not a directory, `403` for a blocked tree or a `path` outside the browse roots,
+`404` for a `path` that does not exist, `409` when the folder already exists, and `422`
+when the mount under `path` does not answer.
+
 ## Rendered HTML files
 
 An `.html`/`.htm` file renders as a page in a sandbox, in two steps
@@ -1545,7 +1555,7 @@ One thread per tab in a private Discord channel, alerts out and replies typed ba
 | `GET` | `/api/discord` | none | Config without the token, plus `hasToken`, `tokenMasked`, `gateway` (`off` \| `connecting` \| `connected` \| `error`), `gatewayError` and `lastResult`. |
 | `PUT` | `/api/discord` | `{ enabled?, token?, guildId?, parentChannelId?, allowedUserIds?, threadCreation?, onSessionDelete?, staleThreads?, pingMode?, scope?, startupHint? }` (strict) | `threadCreation`: `lazy` \| `onSessionStart`. `onSessionDelete`: `keep` \| `archive` \| `delete`. `pingMode`: `off` \| `critical` \| `all`. `scope`: `attention` \| `all`. An absent `token` keeps the saved one; `""` clears it. `400` for a non-numeric id or enabling without a token, guild, channel and at least one allowed user. |
 | `POST` | `/api/discord/test` | none | Posts one message to the parent channel with the saved config, even while disabled. `200` with `data.ok`; `400` if no token or channel is saved. |
-| `POST` | `/api/sessions/:id/discord-notify` | `{ message, urgent?, file? }` (strict, message 1 to 1500 characters) | A CLI asks for the user: posts into that tab's thread, pinging when `urgent`. `file` is an absolute path inside the tab's working folder (real path, regular file, at most 8 MB, local sessions only) uploaded with the post; `400` otherwise. A `200` carries the delivery result: `data.ok` is `false` (with `data.error`) when Discord refused or failed the post. `409` while the bridge is disabled, `429` past 6 posts a minute per tab. The `codeman notify "message" [--urgent] [--file path]` command wraps this route. |
+| `POST` | `/api/sessions/:id/discord-notify` | `{ message, urgent?, file? }` (strict, message 1 to 1500 characters) | A CLI asks for the user: posts into that tab's thread, pinging when `urgent`. `file` is an absolute path inside the tab's working folder (real path, regular file, at most 8 MB, not on the attachment blocklist, local sessions only) uploaded with the post; `400` otherwise. A `200` carries the delivery result: `data.ok` is `false` (with `data.error`) when Discord refused or failed the post. `409` while the bridge is disabled, `429` past 6 posts a minute per tab. The `codeman notify "message" [--urgent] [--file path]` command wraps this route. |
 
 Only replies from `allowedUserIds`, in `guildId`, inside a thread the bridge created are typed into a session, as one printable line plus Enter (a lone digit while a permission or question is pending goes as the key alone), at most one per second per tab. Attached files are saved under `.codeman-discord/` in the tab's folder and their paths appended to that line (see [discord-bridge.md](discord-bridge.md)).
 
