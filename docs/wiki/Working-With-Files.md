@@ -87,7 +87,10 @@ detected at once would fork ten multi-minute converter processes.
 
 File paths in a session are links. That works in two places:
 
-- **In the terminal**, on any absolute path an agent prints.
+- **In the terminal**, on any path an agent or a command prints. A relative path (`src/app.ts`,
+  `../notes.md`) resolves against the directory the session's pane is in now, so after a `cd`
+  in a shell it opens the file there; until the pane reports a directory, and always for remote
+  SSH and Docker cases, it resolves against the session's working directory.
 - **In the response viewer**, where paths are usually written as prose or in backticks. They
   render as underlined monospace links. A Markdown link whose target is a path
   (`[report](/tmp/run/report.json)`, the way Codex cites files) opens the same way.

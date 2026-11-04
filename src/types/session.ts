@@ -834,6 +834,19 @@ export interface SessionState {
   status: SessionStatus;
   /** Working directory path */
   workingDir: string;
+  /**
+   * The directory the session's local tmux pane is in NOW (`#{pane_current_path}`),
+   * when known. `workingDir` is fixed at create time and never follows a `cd`;
+   * this is what a relative path printed in the terminal is relative to.
+   *
+   * Runtime-only: refreshed from the pane-exit watcher's read and never restored
+   * from disk, so a restart starts blank. Absent for remote and docker sessions
+   * (their local pane runs the ssh / docker-exec client) and for direct-PTY or
+   * rediscovered sessions. NOT a confinement root: the file routes stay confined
+   * to `workingDir`, and a path resolved outside it goes through the attachment
+   * routes like any other out-of-workspace path.
+   */
+  cwd?: string;
   /** Remote execution metadata, present when this session runs over SSH through local tmux */
   remote?: SessionRemote;
   /** Docker execution metadata, present when this session runs inside a container via local tmux + docker exec */

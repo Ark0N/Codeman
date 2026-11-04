@@ -2146,13 +2146,16 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * A clicked path as the preview needs it: relative paths resolved against the
-   * session's working directory, absolute and `~/` paths unchanged
+   * directory the session's pane is in now, else its working directory
+   * (`relativeResolutionBase`), absolute and `~/` paths unchanged
    * (`resolveLinkedFilePath`, constants.js). Shared by the terminal link
    * provider and the response viewer, so one path opens the same file in both.
    */
   _resolveLinkedFilePath(filePath, sessionId) {
     if (typeof resolveLinkedFilePath !== 'function') return filePath;
-    return resolveLinkedFilePath(filePath, this.sessions?.get?.(sessionId)?.workingDir);
+    const session = this.sessions?.get?.(sessionId);
+    const base = typeof relativeResolutionBase === 'function' ? relativeResolutionBase(session) : session?.workingDir;
+    return resolveLinkedFilePath(filePath, base);
   },
 
   /**
