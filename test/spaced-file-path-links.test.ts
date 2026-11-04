@@ -28,6 +28,32 @@ const LONG =
   '/mnt/c/Users/someone/OneDrive - Contoso/01_Projects/Other/kb/out/deliverables/fy27-messaging-market-story.docx';
 
 describe('spaced file paths', () => {
+  it('keeps a parenthesised configuration filename whole inside a sentence', () => {
+    const path = '/mnt/user/Scratch/Kobo/Set-KoboCovers/Kobo eReader.conf';
+    const text = `Prepared a corrected configuration (${path}).`;
+    expect(findFilePathLinks(text)).toEqual([{ path, index: text.indexOf(path) }]);
+  });
+
+  it('keeps separate parenthesised paths and the surrounding prose separate', () => {
+    const first = '/mnt/data/Kobo/Kobo eReader.conf';
+    const second = '/home/me/My Docs/notes.md';
+    expect(paths(`Updated (${first}) and (${second}).`)).toEqual([first, second]);
+    expect(paths('Do not link (/etc/private files/settings.conf).')).toEqual([]);
+    expect(paths('Do not link (/mnt/data/../private files/settings.conf).')).toEqual([]);
+  });
+
+  it('does not take a comma-separated list inside parentheses as one spaced filename', () => {
+    expect(paths('Updated (/home/me/proj, config.json)')).toEqual(['/home/me/proj', 'config.json']);
+  });
+
+  it.each([
+    ['/mnt/c/Users/me/Smith, John/report.docx', '/mnt/c/Users/me/Smith, John/report.docx'],
+    ['- /home/me/Clients/Acme, Inc/contract.pdf', '/home/me/Clients/Acme, Inc/contract.pdf'],
+    ['Saved to: /home/me/proj/Invoice 12, final.pdf', '/home/me/proj/Invoice 12, final.pdf'],
+  ])('keeps commas in a non-parenthesised spaced path: %s', (line, path) => {
+    expect(findFilePathLinks(line)).toEqual([{ path, index: line.indexOf(path) }]);
+  });
+
   it('links an own-line absolute path with spaces whole', () => {
     expect(paths(LONG)).toEqual([LONG]);
     expect(paths('/mnt/c/proj/My Big Docs/report.docx')).toEqual(['/mnt/c/proj/My Big Docs/report.docx']);
