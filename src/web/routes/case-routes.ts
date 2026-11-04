@@ -727,6 +727,7 @@ export function registerCaseRoutes(
           home: homedir(),
           dataDir: getDataDir(),
           casesDirs: [...new Set([casesDir, resolveCasesDir()])],
+          casesDirAdvice: 'clone there without a custom folder',
         });
         if (!prepared.ok) {
           reply.code(

@@ -296,6 +296,13 @@ describe.skipIf(!isGitAvailable())('POST /api/cases/clone with a custom folder',
       'HOST_UNREACHABLE'
     );
     expect(classifyGitFailure('fatal: TLS handshake failure', false).code).toBe('HOST_UNREACHABLE');
+    // `_` is a word character, so a bare \bssl\b misses OpenSSL's and LibreSSL's usual flaky-network error.
+    expect(
+      classifyGitFailure(
+        "fatal: unable to access 'https://github.com/o/r/': OpenSSL SSL_connect: SSL_ERROR_SYSCALL in connection to github.com:443",
+        false
+      ).code
+    ).toBe('HOST_UNREACHABLE');
     expect(classifyGitFailure('fatal: could not resolve host: example.invalid', false).code).toBe('HOST_UNREACHABLE');
     expect(classifyGitFailure("fatal: repository 'https://x/y.git/' not found", false).code).toBe('NOT_FOUND');
   });
@@ -315,6 +322,18 @@ describe.skipIf(!isGitAvailable())('POST /api/cases/clone with a custom folder',
       expect(existsSync(join(casesDir, 'default-inside'))).toBe(false);
     } finally {
       safeRmHomeTree(dataPath('docker-cases.json'));
+    }
+  });
+
+  it('points Clone Repo at itself, not Create New, for the cases folder and a folder directly in it', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    const casesDir = join(homedir(), 'codeman-cases');
+    mkdirSync(casesDir, { recursive: true });
+    for (const path of [casesDir, join(casesDir, 'direct-child')]) {
+      const res = await clone(app, { name: 'direct-child', repository: origin, path });
+      expect(res.statusCode, path).toBe(400);
+      expect(res.json().error, path).toMatch(/clone there without a custom folder/);
+      expect(res.json().error, path).not.toMatch(/Create New/);
     }
   });
 

@@ -637,7 +637,7 @@ export function classifyGitFailure(stderr: string, timedOut: boolean, spawnError
     };
   }
   if (
-    /could not resolve host|connection refused|connection timed out|network is unreachable|\bssl\b|\btls\b|certificate|handshake/.test(
+    /could not resolve host|connection refused|connection timed out|network is unreachable|\bssl(?:\b|_)|\btls\b|certificate|handshake/.test(
       lower
     )
   ) {
