@@ -59,4 +59,4 @@ A security notice is a sticky warning card about something outside Codeman that 
 - `title` (optional) is the card's bold line; keep it short. `link.url` must be https. `i18n` is optional; a missing string falls back to the English one.
 - Run `npx prettier --write src/web/public/security-notices.json` and `npm test -- test/security-notices.test.ts`, which validates the file (unique ids, real dates, https links, every `cli` a stock registry id, a zh-CN title wherever there is an English one).
 
-**Retiring one**: let it expire, or delete the entry once it has. Removing it early stops it on the next release only; browsers already showing it keep the card until they close it or reload.
+**Retiring one**: let it expire, or delete the entry once it has. Removing it early stops it on the next release only; browsers already showing it keep the card until they close it or reload. Until then a fresh install gets it too, because a new browser has no seen list, so give an `expires` no later than the warning stays useful. An empty list (`{ "notices": [] }`) is a valid file.
