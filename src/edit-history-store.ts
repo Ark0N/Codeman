@@ -569,15 +569,15 @@ export class EditHistoryStore {
     await run;
   }
 
-  /**
-   * Delete the persisted file (session deleted) and forget the content. The store takes no
-   * changes afterwards, so a read still in flight neither writes nor refills it.
-   */
   /** True once {@link remove} ran: the store ignores every later write. */
   isRemoved(): boolean {
     return this.removed;
   }
 
+  /**
+   * Delete the persisted file (session deleted) and forget the content. The store takes no
+   * changes afterwards, so a read still in flight neither writes nor refills it.
+   */
   async remove(): Promise<void> {
     this.removed = true;
     if (this.saveTimer) {
