@@ -47,7 +47,6 @@ only), never in the shared settings, and never shown again once saved.
 | @ ping                                   | Never, critical events only, every post     | Critical only   |
 | Which events                             | Needs attention, or everything              | Needs attention |
 | Tell Claude how to reach you             | On or off                                   | On              |
-| Also tell other CLIs, as a first message | On or off                                   | Off             |
 
 A finished turn, and an error, is posted as the CLI's whole last message, with its formatting and questions
 kept, split over several posts if it is long. A shell, and permission or question dialogs, show the last lines
@@ -69,8 +68,7 @@ permission prompt, a question, an error, or a post an agent marked urgent.
 An agent only posts deliberately if it knows it can:
 
 - **Claude** is launched with the instruction as part of its system prompt (**Tell Claude how to reach you**, on by default), so nothing shows in the chat. This reaches local tabs only (remote and Docker tabs have no `codeman` command).
-- **Every other CLI** is told only if you turn on **Also tell other CLIs, as a first message** (off by default: it costs one model turn per tab, and for a spawned worker or a scheduled run it arrives with the first real prompt). Then the same text is sent once, as a message, the first time a brand-new tab goes idle.
-  Restored tabs, shell tabs, and remote (ssh) and Docker tabs (which have no `codeman` command) are never sent it.
+- **Every other CLI** is not told. It can still run `codeman notify` if you tell it to.
 
 Tabs that were already open when you turned the bridge on are not told. The alerts still reach
 Discord for them; only the agent-initiated `codeman notify` habit is missing.

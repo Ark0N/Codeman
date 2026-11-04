@@ -75,6 +75,10 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('pure rules', () => {
+  it('names the command in the hint Claude is launched with', () => {
+    expect(DISCORD_STARTUP_HINT).toContain('codeman notify');
+  });
+
   it('sanitiseReply makes one printable line plus Enter', () => {
     expect(sanitiseReply('yes')).toBe('yes\r');
     expect(sanitiseReply('line one\nline two\r\nthree')).toBe('line one line two three\r');
@@ -282,7 +286,7 @@ describe('DiscordGateway', () => {
 
 describe('DiscordBridge', () => {
   let posts: Array<{ path: string; method: string; body: Record<string, unknown> | undefined }>;
-  let sendInput: ReturnType<typeof vi.fn<(id: string, text: string, fromUser: boolean) => Promise<boolean>>>;
+  let sendInput: ReturnType<typeof vi.fn<(id: string, text: string) => Promise<boolean>>>;
   let t: number;
 
   function bridge(overrides: Partial<DiscordConfig> = {}, fetchOverride?: DiscordFetch) {
@@ -447,7 +451,7 @@ describe('DiscordBridge', () => {
     it('types an allowed reply into the mapped session and ticks it', async () => {
       const b = await ready();
       await b.onGatewayMessage(reply());
-      expect(sendInput).toHaveBeenCalledWith('s1', 'press y\r', true); // a person typed it
+      expect(sendInput).toHaveBeenCalledWith('s1', 'press y\r');
       expect(posts[0].method).toBe('PUT');
       expect(posts[0].path).toContain('/reactions/');
       b.stop();
@@ -472,7 +476,7 @@ describe('DiscordBridge', () => {
       await b.onGatewayMessage(reply({ content: 'a\nb' }));
       await b.onGatewayMessage(reply({ content: 'again' }));
       expect(sendInput).toHaveBeenCalledTimes(1);
-      expect(sendInput).toHaveBeenCalledWith('s1', 'a b\r', true);
+      expect(sendInput).toHaveBeenCalledWith('s1', 'a b\r');
       // The second reply was not typed, and the person is told so instead of it vanishing.
       expect(posts.some((p) => p.method === 'PUT' && p.path.includes(encodeURIComponent('⏳')))).toBe(true);
       b.stop();
@@ -848,28 +852,26 @@ describe('DiscordBridge', () => {
 
   describe('per-tab state', () => {
     const internals = (b: DiscordBridge) =>
-      b as unknown as { names: Map<string, string>; lastReply: Map<string, number>; fresh: Set<string> };
+      b as unknown as { names: Map<string, string>; lastReply: Map<string, number> };
 
     it('a deleted tab that never had a thread still frees its entries', async () => {
       const b = bridge();
       await b.reload();
-      await b.sessionCreated('nothread', 'w', t - 1000);
+      await b.sessionCreated('nothread', 'w');
       await b.sessionRenamed('nothread', 'w');
       internals(b).lastReply.set('nothread', 1);
       await b.sessionDeleted('nothread');
       expect(internals(b).names.has('nothread')).toBe(false);
       expect(internals(b).lastReply.has('nothread')).toBe(false);
-      expect(internals(b).fresh.has('nothread')).toBe(false);
       b.stop();
     });
 
     it('stop() clears the maps and the gateway', async () => {
       const b = bridge();
       await b.reload();
-      await b.sessionCreated('x', 'w', t - 1000);
+      await b.sessionCreated('x', 'w');
       await b.sessionRenamed('x', 'w');
       b.stop();
-      expect(internals(b).fresh.size).toBe(0);
       expect(internals(b).names.size).toBe(0);
       expect(b.gatewayState).toBe('off');
     });
@@ -1025,7 +1027,7 @@ describe('DiscordBridge files and startup hint', () => {
     ...over,
   });
   let work: string;
-  let sent: Array<[string, string, boolean]>;
+  let sent: Array<[string, string]>;
   let posted: Array<{ path: string; body?: Record<string, unknown> }>;
   let downloads: string[];
 
@@ -1047,7 +1049,7 @@ describe('DiscordBridge files and startup hint', () => {
         posted.push({ path, body: init.body ? JSON.parse(String(init.body)) : undefined });
         return path.endsWith('/threads') ? jsonRes({ id: THREAD }) : jsonRes({ id: 'msg' });
       },
-      sendInput: async (id, text, fromUser) => (sent.push([id, text, fromUser]), true),
+      sendInput: async (id, text) => (sent.push([id, text]), true),
       sessionDir: dirFor,
       awaitingChoice,
       agentExited,
@@ -1055,7 +1057,7 @@ describe('DiscordBridge files and startup hint', () => {
       now: () => t,
       sleep: async () => undefined,
     });
-    return writeDiscordConfig(dir, { ...CFG, typedHint: true, ...cfg }).then(async () => {
+    return writeDiscordConfig(dir, { ...CFG, ...cfg }).then(async () => {
       await b.reload();
       await b.notify(MSG);
       posted.length = 0;
@@ -1078,7 +1080,7 @@ describe('DiscordBridge files and startup hint', () => {
     const dest = join(work, '.codeman-discord', '555555555555555555-shot_one.png');
     expect(readFileSync(dest)).toEqual(Buffer.from([7, 8, 9]));
     expect(statSync(dest).mode & 0o777).toBe(0o600);
-    expect(sent).toEqual([['s1', `[attached: ${dest}]\r`, true]]);
+    expect(sent).toEqual([['s1', `[attached: ${dest}]\r`]]);
     b.stop();
   });
 
@@ -1115,48 +1117,6 @@ describe('DiscordBridge files and startup hint', () => {
     expect(sent).toHaveLength(0);
     expect(String(posted.at(-1)?.body?.content)).toMatch(/no local folder/);
     b.stop();
-  });
-
-  it('sends the startup hint once, only to a fresh external session, and never to a shell', async () => {
-    const b = await make();
-    await b.sessionCreated('s2', 'w2', t - 1000);
-    await b.sessionIdle('s2', false); // shell or Claude: nothing
-    expect(sent).toHaveLength(0);
-    await b.sessionCreated('s3', 'w3', t - 1000);
-    await b.sessionIdle('s3', true);
-    await b.sessionIdle('s3', true); // second idle: nothing
-    expect(sent).toHaveLength(1);
-    expect(sent[0][0]).toBe('s3');
-    expect(sent[0][1]).toContain('codeman notify');
-    expect(sent[0][1].endsWith('\r')).toBe(true);
-    expect(sent[0][2]).toBe(false); // Codeman's own text: not a person's input, so it cannot auto-name the tab
-    expect(DISCORD_STARTUP_HINT).toContain('codeman notify');
-    b.stop();
-  });
-
-  it('holds the startup hint while a choice is pending and sends it at the next idle', async () => {
-    let choice = true;
-    const b = await make({}, undefined, () => choice);
-    await b.sessionCreated('s6', 'w6', t - 1000);
-    await b.sessionIdle('s6', true);
-    expect(sent).toHaveLength(0);
-    choice = false;
-    await b.sessionIdle('s6', true);
-    expect(sent).toHaveLength(1);
-    await b.sessionIdle('s6', true);
-    expect(sent).toHaveLength(1);
-    b.stop();
-  });
-
-  it('does not hint a tab that was already past its first idle while the hint was off', async () => {
-    const off = await make({ typedHint: false });
-    await off.sessionCreated('s8', 'w8', t - 1000);
-    await off.sessionIdle('s8', true); // first idle with the hint off: no longer new
-    await writeDiscordConfig(dir, { ...CFG, typedHint: true });
-    await off.reload();
-    await off.sessionIdle('s8', true);
-    expect(sent).toHaveLength(0);
-    off.stop();
   });
 
   it('says the agent has exited and types nothing when the tab reports it', async () => {
@@ -1201,28 +1161,6 @@ describe('DiscordBridge files and startup hint', () => {
     expect(sent).toHaveLength(0);
     expect(String(posted.at(-1)?.body?.content)).toMatch(/could not be saved/);
     b.stop();
-  });
-
-  it('sends the typed hint only when typedHint is on (the default is off)', async () => {
-    const off = await make({ typedHint: false });
-    await off.sessionCreated('s7', 'new', t - 1000);
-    await off.sessionIdle('s7', true);
-    expect(sent).toHaveLength(0);
-    off.stop();
-    expect(DEFAULT_DISCORD_CONFIG.typedHint).toBe(false);
-  });
-
-  it('does not hint a restored (old) session, or when startupHint is off', async () => {
-    const b = await make();
-    await b.sessionCreated('s4', 'old', 1); // created long ago: restored at server start
-    await b.sessionIdle('s4', true);
-    expect(sent).toHaveLength(0);
-    b.stop();
-    const off = await make({ startupHint: false });
-    await off.sessionCreated('s5', 'new', t - 1000);
-    await off.sessionIdle('s5', true);
-    expect(sent).toHaveLength(0);
-    off.stop();
   });
 });
 

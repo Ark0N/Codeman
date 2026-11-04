@@ -38,7 +38,6 @@ function server(): Internals {
     sessionRenamed: vi.fn(async () => undefined),
     sessionDeleted: vi.fn(async () => undefined),
     forgetTab: vi.fn(),
-    sessionIdle: vi.fn(async () => undefined),
     stop: vi.fn(),
   };
   return s;
@@ -57,6 +56,17 @@ describe('bridge deps', () => {
     expect(agentExited('dead')).toBe(true);
     expect(agentExited('alive')).toBe(false);
     expect(agentExited('missing')).toBe(false);
+  });
+
+  it("types a reply as the person's own input, so it can name the tab", async () => {
+    const s = new WebServer(0, false, true, '127.0.0.1', 'box') as unknown as Internals & {
+      discordBridge: { deps: { sendInput: (id: string, text: string) => Promise<boolean> } };
+    };
+    const writeViaMux = vi.fn(async () => true);
+    s.sessions.set('s1', { writeViaMux });
+    expect(await s.discordBridge.deps.sendInput('s1', 'yes\r')).toBe(true);
+    expect(writeViaMux).toHaveBeenCalledWith('yes\r', { fromUser: true });
+    expect(await s.discordBridge.deps.sendInput('missing', 'yes\r')).toBe(false);
   });
 });
 
@@ -152,7 +162,7 @@ describe('broadcast -> Discord tab lifecycle', () => {
   it('routes created, updated and deleted by kind, reading both payload shapes', () => {
     const s = server();
     s.broadcast(SseEvent.SessionCreated, { session: { id: 's1', name: 'w1', createdAt: 123 } });
-    expect(s.discordBridge.sessionCreated).toHaveBeenCalledWith('s1', 'w1', 123);
+    expect(s.discordBridge.sessionCreated).toHaveBeenCalledWith('s1', 'w1');
     s.broadcast(SseEvent.SessionUpdated, { id: 's1', name: 'renamed' });
     expect(s.discordBridge.sessionRenamed).toHaveBeenCalledWith('s1', 'renamed');
   });
@@ -188,24 +198,6 @@ describe('broadcast -> Discord tab lifecycle', () => {
     const s = server();
     s.broadcast(SseEvent.SessionUpdated, {});
     expect(s.discordBridge.sessionRenamed).not.toHaveBeenCalled();
-  });
-
-  it('allows the typed hint only for a local external CLI: not Claude, a shell, a remote or a Docker tab', () => {
-    const s = server();
-    s.sessions.set('cx', { mode: 'codex' });
-    s.sessions.set('cl', { mode: 'claude' });
-    s.sessions.set('sh', { mode: 'shell' });
-    s.sessions.set('rm', { mode: 'codex', remote: { label: 'box' } });
-    s.sessions.set('dk', { mode: 'codex', docker: { image: 'x' } });
-    for (const id of ['cx', 'cl', 'sh', 'rm', 'dk', 'missing']) s.broadcast(SseEvent.SessionIdle, { id });
-    expect(s.discordBridge.sessionIdle.mock.calls).toEqual([
-      ['cx', true],
-      ['cl', false],
-      ['sh', false],
-      ['rm', false],
-      ['dk', false],
-      ['missing', false],
-    ]);
   });
 
   it('closes the bridge when the server stops', async () => {

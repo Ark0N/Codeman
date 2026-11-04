@@ -77,7 +77,6 @@ export const DEFAULT_DISCORD_CONFIG: DiscordConfig = {
   pingMode: 'critical',
   scope: 'attention',
   startupHint: true,
-  typedHint: false,
 };
 
 export interface DiscordMessage {
@@ -169,9 +168,8 @@ const DOWNLOAD_TIMEOUT_MS = 30_000;
 export const RECEIVED_DIR = '.codeman-discord';
 
 /**
- * What a session is told about the bridge. Claude gets it as `--append-system-prompt`; every other
- * CLI is sent it once as its first message, only when `typedHint` is on (see DiscordBridge.sessionIdle). No apostrophes: it is
- * rendered into a shell command.
+ * What a session is told about the bridge. Claude gets it as `--append-system-prompt`; no other CLI
+ * is told. No apostrophes: it is rendered into a shell command.
  */
 export const DISCORD_STARTUP_HINT =
   'Codeman note: if you are blocked on something only the user can do (a physical step such as ' +
@@ -399,7 +397,6 @@ function coerce(raw: unknown): DiscordConfig {
     pingMode: oneOf(DISCORD_PING_MODES, r.pingMode, d.pingMode),
     scope: oneOf(WEBHOOK_SCOPES, r.scope, d.scope),
     startupHint: r.startupHint === undefined ? d.startupHint : r.startupHint === true,
-    typedHint: r.typedHint === true,
   };
 }
 
@@ -803,11 +800,10 @@ export interface DiscordBridgeDeps {
   configDir: string;
   fetchImpl: DiscordFetch;
   /**
-   * Types `text` into the session (a line ending in Enter, or a lone digit for a dialog). False when the
-   * session is gone. `fromUser` is true only for what a person typed (a Discord reply), false for text
-   * Codeman types itself.
+   * Types a person's Discord reply into the session (a line ending in Enter, or a lone digit for a
+   * dialog). False when the session is gone.
    */
-  sendInput: (sessionId: string, text: string, fromUser: boolean) => Promise<boolean>;
+  sendInput: (sessionId: string, text: string) => Promise<boolean>;
   /** True once the tab's agent has exited: tmux still accepts keys for a dead pane, so a tick would lie. */
   agentExited?: (sessionId: string) => boolean;
   /** True while the session shows a permission or question dialog, which acts on a bare keypress. */
@@ -832,7 +828,6 @@ export class DiscordBridge {
   /** The last name seen per session, so only a real rename touches the thread. */
   private names = new Map<string, string>();
   /** Brand-new sessions that have not yet been sent the startup hint (non-Claude CLIs). */
-  private fresh = new Set<string>();
   private pending = new Map<string, Promise<string | DiscordResult>>();
   /** Tabs closed while their thread was still being created: the creation applies `onSessionDelete` to it. */
   private closedWhilePending = new Set<string>();
@@ -1005,7 +1000,6 @@ export class DiscordBridge {
     this.lastSent.clear();
     this.lastReply.clear();
     this.names.clear();
-    this.fresh.clear();
     this.lastFull.clear();
     this.inbound.clear();
   }
@@ -1186,31 +1180,11 @@ export class DiscordBridge {
   }
 
   /** Session tab created: make its thread now when `threadCreation` is `onSessionStart`. */
-  async sessionCreated(sessionId: string, name: string | undefined, createdAt?: number): Promise<void> {
+  async sessionCreated(sessionId: string, name: string | undefined): Promise<void> {
     await this.ensureLoaded();
-    // Only a tab made just now: the same event also fires for sessions restored at server start.
-    if (createdAt !== undefined && this.now() - createdAt < 60_000) this.fresh.add(sessionId);
     if (!this.cfg.enabled || this.cfg.threadCreation !== 'onSessionStart') return;
     const made = await this.threadFor(sessionId, name);
     if (typeof made !== 'string') this.last = made;
-  }
-
-  /**
-   * First idle of a brand-new non-Claude session means its prompt is up: type the startup hint once.
-   * Claude gets the same text as a launch flag instead, and a shell must never receive it.
-   */
-  async sessionIdle(sessionId: string, hintable: boolean): Promise<void> {
-    if (!this.fresh.has(sessionId)) return;
-    if (!hintable || !this.cfg.enabled || !this.cfg.startupHint || !this.cfg.typedHint) {
-      this.fresh.delete(sessionId); // no longer new: turning the hint on later must not reach this tab
-      return;
-    }
-    // A dialog is up (codex's trust prompt reads as idle): Enter would pick its highlighted option, so wait for the next idle.
-    if (this.deps.awaitingChoice?.(sessionId)) return;
-    this.fresh.delete(sessionId);
-    const text = sanitiseReply(`${DISCORD_STARTUP_HINT} Reply with just: ok`);
-    // fromUser false: this is Codeman talking, so it must not auto-name the tab or count as the person's input.
-    if (text) await this.deps.sendInput(sessionId, text, false).catch(() => false);
   }
 
   async sessionRenamed(sessionId: string, name: string | undefined): Promise<void> {
@@ -1231,7 +1205,6 @@ export class DiscordBridge {
   forgetTab(sessionId: string): void {
     this.lastReply.delete(sessionId);
     this.names.delete(sessionId);
-    this.fresh.delete(sessionId);
     this.lastFull.delete(sessionId);
   }
 
@@ -1343,7 +1316,7 @@ export class DiscordBridge {
     if (saved.refused) await this.say(m.channel_id, saved.refused);
     // A lone digit answers a dialog by itself: an Enter after it would land on whatever comes next.
     const keys = /^\d\r$/.test(text) && this.deps.awaitingChoice?.(sessionId) ? text.slice(0, -1) : text;
-    const ok = await this.deps.sendInput(sessionId, keys, true).catch(() => false);
+    const ok = await this.deps.sendInput(sessionId, keys).catch(() => false);
     const reply = ok
       ? this.api.react(m.channel_id, m.id, '✅')
       : this.api.post(m.channel_id, {

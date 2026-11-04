@@ -37,11 +37,6 @@ export interface DiscordConfig {
   scope: WebhookScope;
   /** Tell each session how to reach the user (see DISCORD_STARTUP_HINT). On by default while the bridge is on. */
   startupHint: boolean;
-  /**
-   * Also type the hint, once, as the first message to a brand-new non-Claude CLI tab. Off by default: it spends a
-   * model turn per tab, and for a spawned worker or a cron session it lands on the same first idle as the real prompt.
-   */
-  typedHint: boolean;
 }
 
 export interface DiscordResult {

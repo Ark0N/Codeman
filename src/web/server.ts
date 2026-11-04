@@ -520,13 +520,12 @@ export class WebServer extends EventEmitter {
   private discordBridge = new DiscordBridge({
     configDir: getDataDir(),
     fetchImpl: webviewFetch,
-    sendInput: async (sessionId, text, fromUser) => {
+    sendInput: async (sessionId, text) => {
       const session = this.sessions.get(sessionId);
       if (!session) return false;
-      // fromUser is true only for a Discord reply (a person typed it); the startup hint is Codeman's own
-      // text and must not auto-name the tab or count as the person's input.
-      if (await session.writeViaMux(text, { fromUser }).catch(() => false)) return true;
-      return session.write(text, { fromUser });
+      // A Discord reply is a person's own input, so it names the tab like any other prompt.
+      if (await session.writeViaMux(text, { fromUser: true }).catch(() => false)) return true;
+      return session.write(text, { fromUser: true });
     },
     agentExited: (id) => !!this.sessions.get(id)?.paneExit,
     awaitingChoice: (id) => approvalInbox.listPending().some((item) => item.sessionId === id && item.kind !== 'idle'),
@@ -2786,41 +2785,19 @@ export class WebServer extends EventEmitter {
     this.bridgeSessionEvent(event, data);
   }
 
-  /**
-   * Whether the startup hint may be typed into this tab: an external CLI (never Claude, which has it as a
-   * launch flag, and never a shell), running locally. A remote (ssh) or Docker tab has no `codeman` on its
-   * PATH, so the hint would tell the agent to run a command it does not have.
-   */
-  private isHintableSession(sessionId: string): boolean {
-    const session = this.sessions.get(sessionId);
-    return !!session && isExternalCliMode(session.mode) && !session.remote && !session.docker;
-  }
-
   /** Keep the Discord thread in step with the tab: created, renamed, deleted. Never throws. */
   private bridgeSessionEvent(event: string, data: unknown): void {
     // Deletion is NOT handled here: `session:deleted` also fires for a detach (killMux=false), where the
     // session keeps running and can be re-attached. The real delete calls the bridge from the cleanup path.
-    if (event !== SseEvent.SessionCreated && event !== SseEvent.SessionUpdated && event !== SseEvent.SessionIdle) {
-      return;
-    }
-    const d = (data ?? {}) as {
-      id?: string;
-      name?: string;
-      createdAt?: number;
-      session?: { id?: string; name?: string; createdAt?: number };
-    };
+    if (event !== SseEvent.SessionCreated && event !== SseEvent.SessionUpdated) return;
+    const d = (data ?? {}) as { id?: string; name?: string; session?: { id?: string; name?: string } };
     const s = d.session ?? d;
     if (!s.id) return;
     const id = s.id;
     const run =
-      event === SseEvent.SessionIdle
-        ? // Claude is told at launch; a shell, a remote or a Docker tab must never be typed at.
-          this.discordBridge.sessionIdle(id, this.isHintableSession(id))
-        : event === SseEvent.SessionCreated
-          ? this.discordBridge
-              .sessionCreated(id, s.name, s.createdAt)
-              .then(() => this.discordBridge.sessionRenamed(id, s.name))
-          : this.discordBridge.sessionRenamed(id, s.name);
+      event === SseEvent.SessionCreated
+        ? this.discordBridge.sessionCreated(id, s.name).then(() => this.discordBridge.sessionRenamed(id, s.name))
+        : this.discordBridge.sessionRenamed(id, s.name);
     void run.catch(() => undefined);
   }
 

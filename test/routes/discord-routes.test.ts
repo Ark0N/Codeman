@@ -84,16 +84,16 @@ describe('/api/discord', () => {
     bridge.stop();
   });
 
-  it('stores startupHint (default on) and typedHint (default off) and returns them', async () => {
+  it('stores startupHint (default on) and returns it', async () => {
     const { app, bridge } = await harness();
     const first = (await app.inject({ method: 'GET', url: '/api/discord' })).json().data;
-    expect(first).toMatchObject({ startupHint: true, typedHint: false });
+    expect(first).toMatchObject({ startupHint: true });
     const put = await app.inject({
       method: 'PUT',
       url: '/api/discord',
-      payload: { typedHint: true, startupHint: false },
+      payload: { startupHint: false },
     });
-    expect(put.json().data).toMatchObject({ startupHint: false, typedHint: true });
+    expect(put.json().data).toMatchObject({ startupHint: false });
     bridge.stop();
   });
 
