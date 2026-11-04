@@ -1205,24 +1205,47 @@ data}` envelope on the wire — unwrap it the same way). Answers `[]` for a
 boolean` reports whether one is stored, so a client can render "unchanged
   if left blank" without ever holding the real value.
 - `POST /api/v1/model-endpoints` with `{ id, label, baseUrl, apiKey?,
-authStyle?, defaultModelId? }` creates one. `id` must match
+authStyle?, defaultModelId?, defaultContextLength? }` creates one. `id`
+  must match
   `^[a-zA-Z0-9_-]+$`; `authStyle` is `bearer` (default) or `api-key`, never
   both (a real server hung indefinitely when sent both headers on one
-  request); `baseUrl` must be `http(s)`, carry no embedded credentials, and
+  request); `defaultContextLength` is a user-set fallback used when
+  assigning a model that discovery has no context length for (discovery
+  itself never writes it); `baseUrl` must be `http(s)`, carry no embedded
+  credentials, and
   is refused if it points at (or resolves to) a link-local or
   cloud-metadata address. `409 ALREADY_EXISTS` on a duplicate id.
-- `PUT /api/v1/model-endpoints/:id` updates one. An **absent** `apiKey`
+- `PUT /api/v1/model-endpoints/:id` updates one, also accepting
+  `defaultContextLength`. An **absent** `apiKey`
   keeps the stored one rather than clearing it — the client never receives
   the real value to resend deliberately unchanged, so omission is the only
   way to say "leave it alone"; there is no way to clear a key back to unset
-  this way. `defaultModelId`, when set, must be one of that endpoint's own
+  this way. `defaultContextLength` behaves the opposite way: a PUT without
+  it clears the stored value, so send the field back to keep it.
+  `defaultModelId`, when set, must be one of that endpoint's own
   `models` (`400 INVALID_INPUT` otherwise).
 - `DELETE /api/v1/model-endpoints/:id` removes one.
 - `POST /api/v1/model-endpoints/:id/discover-models` fetches the endpoint's
   own `GET /v1/models` and stores the result as `models`, updating
-  `lastDiscoveredAt`, plus (best-effort, only for a model llama-swap's own
-  response already reports loaded) `modelContextLengths` and `modelSizesGB`.
-  A `defaultModelId` that no longer appears in the fresh list is dropped
+  `lastDiscoveredAt`, plus (best-effort) `modelContextLengths`,
+  `modelSlotCounts` and `modelSizesGB`: every listing entry is read for a
+  stated context figure (`context_length`, then `context_window`) and a
+  size, BEFORE any loaded check; only the launch-command/`/props`
+  enrichment needs a model llama-swap's own response reports loaded. A
+  loaded model's context figure comes from llama-swap's own launch command
+  (`--fit-ctx` / `-c` / `--ctx-size`), falling back to `/props` (`n_ctx`,
+  `total_slots`) for whatever the command did not answer, and OVERWRITES the
+  listed figure for that model; the model's own listing
+  (`context_length`, then `context_window`) only ever fills the gap when
+  neither probe does, and is recorded as a single-slot figure —
+  llama-swap lists the PER-SLOT window, so whenever the listed figure is
+  the one taken the stored slot count is 1. A server with no `status`
+  field on any entry (plain llama.cpp, a non-llama-swap gateway) gets no
+  launch-command/`/props` enrichment at all, only whatever its listings
+  state. `modelContextLengths` falls back to the
+  endpoint's `defaultContextLength` when a session is assigned a model
+  discovery never learned a window for. A `defaultModelId` that no longer
+  appears in the fresh list is dropped
   rather than carried forward invalid. Failures answer `422 OPERATION_FAILED`
   with the underlying connection error, or a named egress refusal if the
   resolved address turned out to be blocked. The same refresh also runs

@@ -70,8 +70,9 @@ import {
   SessionWaitOutputQuerySchema,
   CustomModelSelectionSchema,
 } from '../schemas.js';
-import { readCustomModelHosts } from '../../custom-model-hosts.js';
+import { readCustomModelHosts, resolveCustomModelContextLength } from '../../custom-model-hosts.js';
 import { applyCustomModelInjection, removeConfigDir } from '../../custom-model-injection-apply.js';
+import { buildCustomModelInjection } from '../../custom-model-injection.js';
 import {
   getLlamaSwapStatus,
   triggerLlamaSwapLoad,
@@ -1541,7 +1542,10 @@ export function registerSessionRoutes(
     if (!endpoint) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
     }
-    const contextLength = endpoint.modelContextLengths?.[body.modelId];
+    // Discovery's per-model figure wins; the endpoint's user-set default covers models
+    // whose size discovery could not determine (a gateway that states none, say). With
+    // neither, the existing "no override, CLI assumes its own default" behaviour stands.
+    const contextLength = resolveCustomModelContextLength(endpoint, body.modelId);
     const slotCount = endpoint.modelSlotCounts?.[body.modelId];
 
     // Some CLIs (today: only claude) carry enough of their own fixed system-prompt/tool-
@@ -1608,10 +1612,28 @@ export function registerSessionRoutes(
     }
 
     // A CLI whose config alone cannot select the model also gets its `model` launch param
-    // forced (pi/omp `custom/<id>`, grok's block name). The argv engine DROPS a token that
+    // forced (pi/omp `custom/<id>`, grok's block name, and codex now carries its bare
+    // selected id too). The argv engine DROPS a token that
     // fails its pattern rather than quoting it, which would silently launch the CLI on its
     // own default provider again, so refuse an id the pattern cannot carry up front.
+    // The check runs on the PURE build result, before applyCustomModelInjection below:
+    // the forced launch id only comes out of that build, and writing first would mean a
+    // refused id already replaced the config dir a live codex session uses as CODEX_HOME.
     const modelSpec = entry.launch.params.model;
+    const injection = buildCustomModelInjection(entry, endpoint, body.modelId, contextLength);
+    if (injection.kind === 'unsupported') {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${session.mode} has no known custom-model mechanism`);
+    }
+    if (
+      injection.launchModel !== undefined &&
+      modelSpec?.type === 'token' &&
+      !matchesPattern(modelSpec.pattern, injection.launchModel)
+    ) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        `Model id ${JSON.stringify(body.modelId)} cannot be passed to ${session.mode} on its command line`
+      );
+    }
     const applied = applyCustomModelInjection(
       entry,
       endpoint,
@@ -1622,17 +1644,6 @@ export function registerSessionRoutes(
     );
     if (!applied) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${session.mode} has no known custom-model mechanism`);
-    }
-    if (
-      applied.launchModel !== undefined &&
-      modelSpec?.type === 'token' &&
-      !matchesPattern(modelSpec.pattern, applied.launchModel)
-    ) {
-      removeConfigDir(applied.configDir);
-      return createErrorResponse(
-        ApiErrorCode.INVALID_INPUT,
-        `Model id ${JSON.stringify(body.modelId)} cannot be passed to ${session.mode} on its command line`
-      );
     }
 
     const { previousConfigDir } = session.setCustomModel(
@@ -4447,7 +4458,9 @@ export function registerSessionRoutes(
       const cmHosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
       const cmEndpoint = cmHosts.find((h) => h.id === customModel.endpointId);
       if (!cmEndpoint) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
-      const cmContextLength = cmEndpoint.modelContextLengths?.[customModel.modelId];
+      // Per-model discovery figure first, user-set endpoint default second, nothing third
+      // (see the dedicated route's own comment above).
+      const cmContextLength = resolveCustomModelContextLength(cmEndpoint, customModel.modelId);
       const cmSlotCount = cmEndpoint.modelSlotCounts?.[customModel.modelId];
 
       // See the dedicated route's own comment for the full reasoning: some CLIs' own fixed

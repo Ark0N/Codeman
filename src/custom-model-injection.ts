@@ -136,12 +136,12 @@ export function buildCustomModelInjection(
     }
 
     case 'configContentEnv': {
-      const content = renderConfigContent(cap.template, endpoint, modelId, apiKey);
+      const content = renderConfigContent(cap.template, endpoint, modelId, apiKey, contextLength);
       return withLaunchModel({ kind: 'env', envOverrides: { [cap.envVar]: content } }, cap.launchModel, modelId);
     }
 
     case 'configDir': {
-      const { content, extraEnv } = renderConfigFile(cap.template, endpoint, modelId, apiKey);
+      const { content, extraEnv } = renderConfigFile(cap.template, endpoint, modelId, apiKey, contextLength);
       return withLaunchModel(
         { kind: 'configDir', dirEnvVar: cap.dirEnvVar, files: [{ relPath: cap.fileName, content }], extraEnv },
         cap.launchModel,
@@ -164,24 +164,48 @@ function withLaunchModel<T extends EnvInjection | ConfigDirInjection>(
   return { ...result, launchModel: template.split('{modelId}').join(modelId) };
 }
 
+/**
+ * One quarter of the window is held back for the reply, capped at 8192 tokens (a small local
+ * model's window must not lose a disproportionate slice to the reservation). Returns undefined
+ * for an unknown or non-finite size — opencode then keeps its own default guess, which is the
+ * pre-fix behaviour; never invent a limit here.
+ */
+function opencodeModelLimit(contextLength: number | undefined): { context: number; output: number } | undefined {
+  if (contextLength === undefined || !Number.isFinite(contextLength)) return undefined;
+  const total = Math.trunc(contextLength);
+  if (total <= 0) return undefined;
+  const output = Math.max(1, Math.min(8192, Math.floor(total / 4)));
+  // `limit.context` is the FULL window as far as opencode is concerned — it reserves for
+  // the reply itself — so the discovered total is passed through, never a shrunk figure.
+  return { context: total, output };
+}
+
 function renderConfigContent(
   template: 'opencode-json',
   endpoint: CustomModelEndpoint,
   modelId: string,
-  apiKey: string
+  apiKey: string,
+  contextLength?: number
 ): string {
   switch (template) {
-    case 'opencode-json':
+    case 'opencode-json': {
+      // `limit` carries the discovered context window (issue #749): without it opencode assumes
+      // a large default window for an unrecognized model id and eventually overflows a much
+      // smaller local server. `context` is the FULL window and opencode reserves for the reply
+      // inside it itself, so `opencodeModelLimit` passes the real total through and only
+      // `output` gets the capped reservation.
+      const limit = opencodeModelLimit(contextLength);
       return JSON.stringify({
         $schema: 'https://opencode.ai/config.json',
         provider: {
           custom: {
             options: { baseURL: withV1Suffix(endpoint.baseUrl), apiKey },
-            models: { [modelId]: {} },
+            models: { [modelId]: limit ? { limit } : {} },
           },
         },
         model: `custom/${modelId}`,
       });
+    }
   }
 }
 
@@ -195,7 +219,8 @@ function renderConfigFile(
   template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml',
   endpoint: CustomModelEndpoint,
   modelId: string,
-  apiKey: string
+  apiKey: string,
+  contextLength?: number
 ): { content: string; extraEnv?: Record<string, string> } {
   const baseUrl = withV1Suffix(endpoint.baseUrl);
   switch (template) {
@@ -217,6 +242,12 @@ function renderConfigFile(
       const content = [
         `model = ${quoted(modelId)}`,
         `model_provider = "custom"`,
+        ...(contextLength !== undefined && Number.isFinite(contextLength) && contextLength > 0
+          ? [
+              `model_context_window = ${Math.trunc(contextLength)}`,
+              `model_auto_compact_token_limit = ${Math.max(1, Math.floor(contextLength * 0.75))}`,
+            ]
+          : []),
         '',
         '[model_providers.custom]',
         `name = "Custom Endpoint"`,

@@ -27,14 +27,20 @@ hosts — these are machine-level infra, not a per-user setting.
 shows up without another manual click of **Discover**. One endpoint being unreachable on a
 given cycle (powered off, wrong network) never blocks the others from refreshing.
 
-**Context length is picked up automatically where it can be, safely.** Against a
-llama.cpp/llama-swap server, discovery also learns each _currently loaded_ model's real
-context window and applies it to the launched session (Claude Code today — see below), so
-the harness stops assuming a large default window for a model name it doesn't recognise and
-overflowing a much smaller real one. It's deliberately never probed for a model that isn't
-already loaded, since asking a llama-swap server about an unloaded model can trigger an
-actual, slow model swap as a side effect — a model just not currently loaded keeps whatever
-context length an earlier cycle already learned for it instead.
+**Context length is picked up automatically where it can be, safely.** Every model's own
+listing entry is read for a stated context figure (`context_length`, then `context_window`,
+which current llama.cpp, llama-swap and gateway-style servers state to varying degrees);
+against a llama-swap server the stronger figures from its launch command and from llama.cpp's
+`/props` probe win where they exist, and those probes only ever run for a model the server
+already reports loaded, since asking about an unloaded model can trigger an actual, slow model
+swap as a side effect. A model that states no figure keeps whatever an earlier cycle learned:
+the stored figure always beats the endpoint's **Default context length** field
+(`modelContextLengths[id] ?? defaultContextLength`), which only applies where no figure was
+ever learned (that number is the model's whole window, never a per-slot figure). A model
+neither covers simply gets no override, never a guess. The window is applied to the launched session by the harnesses
+that can take it: Claude Code today (see below), OpenCode as the model's context limit, and
+Codex as a `model_context_window` entry in its generated config file, which also sets Codex's
+own auto-compact point via `model_auto_compact_token_limit` at 75% of the window.
 
 ## Running a session against one
 
@@ -48,7 +54,9 @@ pointed at.
 
 **Which model it uses depends on how many the endpoint has discovered.** With exactly one,
 the session launches straight away on that model — nothing to choose. With two or more, a
-small dialog asks which one to use for this launch before starting the session; the
+small dialog asks which one to use for this launch before starting the session; a search box
+at the top narrows a long list with a case-insensitive substring match, so a server hosting
+hundreds of models stays usable. The
 endpoint's default model, if set, is marked but not auto-picked, so a launch can deliberately
 use a different one without changing the saved default. The list is not raw discovery order
 either: the model llama-swap reports loaded and ready is moved to the top and tagged

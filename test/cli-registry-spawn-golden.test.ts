@@ -171,6 +171,15 @@ describe('codex', () => {
     expect(cx({ model: 'gpt-5', resumeSessionId: 'roll_42' })).toBe('codex --model gpt-5 resume roll_42');
   });
 
+  it('carries an Ollama-style `qwen3:32b` model id, and still drops a leading-flag shape', () => {
+    // `model-plain-colon`: the custom-model feature forces the selected id onto this param,
+    // and ids like `qwen3:32b` carry a colon. The leading-alphanumeric rule is what keeps a
+    // flag from riding the flag, so `:x` and `-x` must still drop out.
+    expect(cx({ model: 'qwen3:32b' })).toBe('codex --model qwen3:32b');
+    expect(cx({ model: ':leading' })).toBe('codex');
+    expect(cx({ model: '-yolo' })).toBe('codex');
+  });
+
   it('sends reasoning effort as one model_reasoning_effort config value, for every level', () => {
     for (const level of CODEX_REASONING_EFFORTS) {
       expect(cx({ reasoningEffort: level })).toBe(`codex --config model_reasoning_effort=${level}`);

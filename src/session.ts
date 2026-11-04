@@ -2724,7 +2724,8 @@ export class Session extends EventEmitter {
 
   /**
    * Force the custom-model selection's `launchModel` (pi/omp `custom/<id>`, grok's
-   * `[model.<name>]` block name) onto the CLI's `model` launch param. Where that param
+   * `[model.<name>]` block name, codex's bare selected id) onto the CLI's `model`
+   * launch param. Where that param
    * lives is registry DATA — the entry's `legacyConfigField` (`piConfig`, `grokConfig`,
    * ...) or the top-level `model` for an entry that declares none — so this stays a
    * generic reader rather than a branch per CLI. Applied on the OPTIONS only: the stored

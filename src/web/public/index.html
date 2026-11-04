@@ -1033,6 +1033,14 @@
         </div>
         <div class="modal-body">
           <p class="form-hint" id="customModelPickHint"></p>
+          <!-- Case-insensitive filter over the rendered rows (app.filterCustomModelPick):
+               a display layer only, the rows themselves are never re-rendered. Reset and
+               focused on every open, same in-memory rule as the rail's search box. -->
+          <input type="search" id="customModelPickSearch" class="session-sidebar-filter-input custom-model-pick-search"
+            placeholder="Search models" aria-label="Search models"
+            autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"
+            oninput="app.filterCustomModelPick(this.value)">
+          <p class="form-hint custom-model-pick-no-matches" id="customModelPickNoMatches" role="status" hidden>No models match</p>
           <div id="customModelPickList" class="run-mode-custom-models"></div>
         </div>
       </div>
@@ -2790,6 +2798,10 @@
                       <div class="set-row has-field">
                         <div class="set-row-text"><span class="set-row-label">Base URL</span></div>
                         <input type="text" id="customModelHostBaseUrl" class="set-input" placeholder="http://192.168.1.50:8080">
+                      </div>
+                      <div class="set-row has-field">
+                        <div class="set-row-text"><span class="set-row-label">Default context length (tokens)</span><span class="set-row-desc">Used for models whose size cannot be discovered. The model's whole window; the Claude floor check divides it by any stored slot count. Leave empty to let each CLI assume its own default.</span></div>
+                        <input type="number" id="customModelHostDefaultContextLength" class="set-input" min="1" max="100000000" step="1" placeholder="131072">
                       </div>
                       <div class="set-row has-field">
                         <div class="set-row-text"><span class="set-row-label">API key</span><span class="set-row-desc">Optional. Left blank on edit keeps the existing key.</span></div>

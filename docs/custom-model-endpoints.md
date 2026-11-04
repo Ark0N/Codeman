@@ -67,15 +67,23 @@ configured, `PUT`/`DELETE /api/model-endpoints/:id` update or remove one.
 Endpoint management is admin-only in multi-user mode, same as remote/docker
 hosts — these are machine-level infra, not per-user settings.
 
-**Context length is discovered too, opportunistically and safely.** The plain
-`GET /v1/models` response has no context-window field. Discovery only ever
-looks for one for a model llama-swap's own response already reports
+**Context length is discovered too, opportunistically and safely.** Older
+servers state no context-window field in the plain `GET /v1/models`
+response at all; current llama-swap states one per model (both
+`context_length` and `context_window`) and gateways like Bifrost pass
+`context_window` through — that listed figure is the *lowest*-precedence
+source, used only when neither probe below answers, and because llama-swap
+documents it as the PER-SLOT window, a model whose figure comes from the
+listing is recorded with a slot count of 1 so the slot check never divides a
+per-slot figure a second time. The probes are only ever looked for on a model
+llama-swap's own response already reports
 `status.value === "loaded"` for — never for an unloaded one, because
 llama-swap treats `?model=` as a routing hint and asking about a model that
 isn't loaded risks triggering an actual (slow, GPU-swapping) load as a side
 effect of what should be read-only discovery. A server with no `status` field
-on any entry at all (not llama-swap) gets no context-length enrichment,
-rather than guessing. A model's previously-learned context length survives a
+on any entry at all (not llama-swap) gets no launch-command/`/props`
+enrichment, only whatever its listings state — rather than guessing. A
+model's previously-learned context length survives a
 later cycle where it wasn't the loaded one; it's dropped only once the model
 disappears from the endpoint's list entirely. Stored per model in
 `modelContextLengths` and applied automatically (see "Applying a model to a
@@ -286,6 +294,15 @@ hot-swap. A Claude session is relaunched with `--resume <conversation> ||
 grok are relaunched with the `--model` value that selects the injected
 provider (`custom/<modelId>` for pi and omp, `codeman-custom` for grok),
 since for those three the config file alone does not switch the model.
+**Codex is relaunched with `--model <modelId>` too**, the bare selected id
+(not a provider selector): the launch param forces the session onto the
+model its generated `config.toml` already selected, so a launch-time model
+carried over from App Settings can never override the injected selection.
+That launch arg must satisfy the codex entry's `model-plain-colon` token
+pattern (a leading letter or digit, then letters, digits and `._-:/`, per
+`stock.ts`), so an id outside that shape, e.g. LM Studio's
+`org/model@q4_k_m`, is refused with a 400 at apply time now, where a
+`config.toml` alone used to carry it.
 **Remote (SSH) and Docker sessions are refused** (400) for now: their restart
 reattaches the durable remote/in-container tmux rather than relaunching the
 agent, so the selection would report success and change nothing.
@@ -293,14 +310,16 @@ agent, so the selection would report success and change nothing.
 **Claude gets two more env vars when known/applicable, both declared on its
 registry entry (`contextLengthVar`/`configDirVar`), not hardcoded here:**
 
-- `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is set to `modelId`'s discovered context
-  length (see the discovery section above) whenever one is known. Without
+- `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is set to `modelId`'s context length —
+  the discovered figure (see the discovery section above), falling back to
+  the endpoint's user-set `defaultContextLength` — whenever one is known.
+  Without
   it, Claude Code assumes a large (200k) window for any unrecognized custom
   model id and never compacts, which reliably overflows a much smaller real
   local context — confirmed live: a stock ~33.7K-token system prompt against
   a 16384-token llama-swap model failed with `exceeds the available context
-size`. No entry for the model in `modelContextLengths` means the var is
-  simply omitted, never a guess. ⚠️ **This var only affects when Claude
+size`. Neither a `modelContextLengths` entry nor a `defaultContextLength`
+  for the model means the var is simply omitted, never a guess. ⚠️ **This var only affects when Claude
   Code compacts conversation _history_ — it cannot fix a model whose real
   context is smaller than Claude Code's own fixed per-turn overhead**
   (system prompt + tool schemas, empirically ~36.4K tokens, confirmed live
@@ -441,15 +460,17 @@ Both apply routes (the restart route and the one-shot `POST
 /api/quick-start`) now check for this **before** launching or restarting
 anything, gated on the CLI's registry entry declaring a `contextLengthVar`
 (currently only claude — the check is a no-op for every other CLI by
-construction, never a hardcoded mode check). If the model's discovered
-context (`modelContextLengths`, from discovery above) is below
-`CLAUDE_MIN_SAFE_CONTEXT_TOKENS` (40000, comfortably above the measured
+construction, never a hardcoded mode check). If the model's context (the
+discovered figure from `modelContextLengths`, or the endpoint's
+`defaultContextLength` when discovery never learned one for that model) is
+below `CLAUDE_MIN_SAFE_CONTEXT_TOKENS` (40000, comfortably above the measured
 ~36.4K overhead), the response is `{requiresContextWarning: true, modelId,
 contextLength, minSafeContextTokens}` (plus `slotCount` when the model runs more than one parallel slot) instead of applying — nothing is
-restarted or created yet. A context length that was never discovered at
-all skips the check entirely (nothing to compare, so it fails open rather
-than warning on every model an endpoint hasn't reported a size for).
-The same warning fires when the context divided across the model's parallel slots (`contextLength / slotCount`) is below the floor, because Claude Code sends several 40K-token requests at once and the slots share one pool. Retrying with `confirmedContext: true` launches anyway (the legacy `confirmed: true` still means both questions).
+restarted or created yet. A model with neither a discovered figure nor a
+`defaultContextLength` skips the check entirely (nothing to compare, so it
+fails open rather than warning on every model an endpoint hasn't reported a
+size for).
+The same warning fires when the context divided across the model's parallel slots (`contextLength / slotCount`) is below the floor, because Claude Code sends several 40K-token requests at once and the slots share one pool. ⚠️ `defaultContextLength` is the model's whole window, never a per-slot figure, so a default small enough to split under the slot count trips that slot division exactly like a discovered figure does. Retrying with `confirmedContext: true` launches anyway (the legacy `confirmed: true` still means both questions).
 
 The Run-menu picker shows this as an in-app modal
 (`#customModelContextWarningModal`, matching the llama-swap conflict
@@ -526,7 +547,12 @@ for '<id>' not found. Defaulting to fallback metadata...` on launch —
   and fabricating a fake catalog entry would mean copying the _shape_ of
   OpenAI's own proprietary schema (their per-model system-prompt content
   included) for a warning that doesn't otherwise affect behavior — not
-  something to build into discovery.
+  something to build into discovery. ⚠️ The fallback-metadata warning is
+  NOT about the context window going un-overridden. Codex does now get a
+  real context-window override: when a figure is known the generated
+  `config.toml` sets the top-level `model_context_window` to it and
+  `model_auto_compact_token_limit` to 75% of it (floored), so Codex
+  compacts at that point instead of trusting its fallback guess.
 - **Gemini** — fails with `Invalid auth method selected`, traced to an
   undocumented `GATEWAY` auth path gemini-cli selects once
   `GOOGLE_GEMINI_BASE_URL` is set. Unresolved after real investigation

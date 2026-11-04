@@ -80,7 +80,7 @@ import { attachmentRegistry, buildFileThumbnailRoute, registerExternalAttachment
 import { folderGrants } from '../folder-listing.js';
 import { getCli, enabledClis, listClis } from '../config/cli-registry/registry.js';
 import { isCliEntryInstalled, probeStockCliAvailability } from '../utils/cli-installed-probes.js';
-import { readCustomModelHosts } from '../custom-model-hosts.js';
+import { readCustomModelHosts, resolveCustomModelContextLength } from '../custom-model-hosts.js';
 import { applyCustomModelInjection, customModelConfigDir, removeConfigDir } from '../custom-model-injection-apply.js';
 import type { CustomModelBookkeeping } from '../types/session.js';
 import { registerGeneratedArtifactAttachment } from '../generated-artifact-attachments.js';
@@ -1470,7 +1470,7 @@ export class WebServer extends EventEmitter {
         endpoint,
         saved.modelId,
         session.id,
-        endpoint.modelContextLengths?.[saved.modelId]
+        resolveCustomModelContextLength(endpoint, saved.modelId)
       )?.envOverrides;
     } catch (err) {
       console.warn('[WebServer] Failed to rebuild custom-model env on recovery:', err);

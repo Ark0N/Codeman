@@ -20,6 +20,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 const CONSTANTS_JS = readFileSync(new URL('../src/web/public/constants.js', import.meta.url), 'utf-8');
 const SESSION_UI_JS = readFileSync(new URL('../src/web/public/session-ui.js', import.meta.url), 'utf-8');
+// Only for the [hidden] CSS guard below — the filter toggles the `hidden` property, and
+// `.run-mode-option`'s own `display: flex` would silently defeat it without the
+// `!important` re-assertion in styles.css.
+const STYLES_CSS = readFileSync(new URL('../src/web/public/styles.css', import.meta.url), 'utf-8');
 // Only for the real _showCenterStatus DOM tests below (`bootAppWithRealCenterStatus`) —
 // every other test in this file stubs _showCenterStatus itself and has no need of it.
 const PANELS_UI_JS = readFileSync(new URL('../src/web/public/panels-ui.js', import.meta.url), 'utf-8');
@@ -55,6 +59,9 @@ function bootApp(
       <div class="modal" id="customModelPickModal">
         <h3 id="customModelPickTitle"></h3>
         <p id="customModelPickHint"></p>
+        <input type="search" id="customModelPickSearch" aria-label="Search models"
+          oninput="app.filterCustomModelPick(this.value)">
+        <p id="customModelPickNoMatches" role="status" hidden>No models match</p>
         <div id="customModelPickList"></div>
       </div>
       <div class="modal" id="customModelSwapConfirmModal">
@@ -531,6 +538,172 @@ describe('Custom Model Endpoint Profiles: the "which model" picker', () => {
     };
     await app.selectCustomModelEntry('claude', 'llama-box');
     expect(toastMessage).toMatch(/no models discovered/i);
+  });
+
+  it('resets and focuses the search box every time the picker opens', async () => {
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3'] }],
+    });
+    win.app = app;
+    await app.selectCustomModelEntry('claude', 'llama-box');
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    // The caret lands in the box, so the first keystroke filters with no click.
+    expect(win.document.activeElement).toBe(search);
+    // A stale query from a previous open must not survive into the next one.
+    search.value = 'zzz';
+    search.dispatchEvent(new win.Event('input'));
+    app.closeCustomModelPickModal();
+
+    await app.selectCustomModelEntry('claude', 'llama-box');
+    expect(search.value).toBe('');
+    expect(win.document.activeElement).toBe(search);
+    expect(win.document.getElementById('customModelPickNoMatches')!.hasAttribute('hidden')).toBe(true);
+    const visible = [...win.document.getElementById('customModelPickList')!.querySelectorAll('button')].filter(
+      (b) => !b.hasAttribute('hidden')
+    );
+    expect(visible).toHaveLength(2);
+  });
+
+  it('leaves the search box unfocused on touch devices so the OS keyboard stays off the list', async () => {
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3'] }],
+    });
+    win.app = app;
+    // The guard reads the global the browser defines (mobile-detection.js).
+    (win as unknown as { MobileDetection: { isTouchDevice: () => boolean } }).MobileDetection = {
+      isTouchDevice: () => true,
+    };
+
+    await app.selectCustomModelEntry('claude', 'llama-box');
+
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    expect(win.document.activeElement).not.toBe(search);
+    // Only the focus is skipped: the rows still render, unfiltered and functional.
+    const visible = [...win.document.getElementById('customModelPickList')!.querySelectorAll('button')].filter(
+      (b) => !b.hasAttribute('hidden')
+    );
+    expect(visible).toHaveLength(2);
+  });
+
+  it('filters rows case-insensitively on the model id, keeping the surviving row fully functional', async () => {
+    const { win, app } = bootApp({
+      hosts: [
+        {
+          id: 'llama-box',
+          label: 'llama.cpp',
+          baseUrl: 'http://x',
+          models: ['qwen3', 'llama3'],
+          defaultModelId: 'qwen3',
+        },
+      ],
+    });
+    let launched: unknown[] | null = null;
+    app.runCustomModelEntry = async (...args: unknown[]) => {
+      launched = args;
+    };
+    win.app = app;
+    await app.selectCustomModelEntry('claude', 'llama-box');
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    search.value = 'QWEN';
+    search.dispatchEvent(new win.Event('input'));
+
+    const buttons = [...win.document.getElementById('customModelPickList')!.querySelectorAll('button')];
+    expect(buttons.filter((b) => b.hasAttribute('hidden')).map((b) => b.textContent!.trim())).toEqual(['llama3']);
+    const [visible] = buttons.filter((b) => !b.hasAttribute('hidden'));
+    // The surviving row keeps its Default badge and its real, callable click handler.
+    expect(visible.textContent).toContain('qwen3');
+    expect(visible.textContent).toContain('Default');
+    (visible as unknown as HTMLButtonElement & { onclick: (e: unknown) => void }).onclick(
+      new (win as any).Event('click')
+    );
+    expect(launched).toEqual(['claude', 'llama-box', 'qwen3']);
+  });
+
+  it('shows the no-matches line only while a query matches nothing, and clears it with the query', async () => {
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3'] }],
+    });
+    win.app = app;
+    await app.selectCustomModelEntry('claude', 'llama-box');
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    const noMatches = win.document.getElementById('customModelPickNoMatches')!;
+    const isHidden = () =>
+      win.document.getElementById('customModelPickList')!.querySelectorAll('button[hidden]').length;
+
+    // Whitespace is not a query: everything stays visible, no message.
+    search.value = '   ';
+    search.dispatchEvent(new win.Event('input'));
+    expect(noMatches.hasAttribute('hidden')).toBe(true);
+    expect(isHidden()).toBe(0);
+
+    search.value = 'ghost';
+    search.dispatchEvent(new win.Event('input'));
+    expect(noMatches.hasAttribute('hidden')).toBe(false);
+    expect(isHidden()).toBe(2);
+
+    search.value = '';
+    search.dispatchEvent(new win.Event('input'));
+    expect(noMatches.hasAttribute('hidden')).toBe(true);
+    expect(isHidden()).toBe(0);
+  });
+
+  it('keeps an HTML-significant model id inert in the picker rows too, and filterable by its raw text', async () => {
+    // Same vector as the Run-menu row above, now via data-model-id: escapeHtml covers
+    // the double quote, and the filter reads the decoded raw id back off dataset.
+    const dangerousModel = '"><img src=x onerror=alert(1)>';
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', dangerousModel] }],
+    });
+    win.app = app;
+    await app.selectCustomModelEntry('claude', 'llama-box');
+    const list = win.document.getElementById('customModelPickList')!;
+    expect(list.querySelector('img')).toBeNull();
+
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    search.value = 'src=x';
+    search.dispatchEvent(new win.Event('input'));
+    const visible = list.querySelectorAll('button:not([hidden])');
+    expect(visible).toHaveLength(1);
+    expect(visible[0].getAttribute('data-model-id')).toBe(dangerousModel);
+  });
+
+  it('re-asserts display:none !important for hidden picker rows so the filter cannot be silently defeated', () => {
+    // `.run-mode-option` carries its own `display: flex` (styles.css, restated in
+    // mobile.css), which outranks the UA `[hidden]` rule — without this scoped
+    // !important re-assertion, toggling `hidden` would change nothing on screen.
+    const rule = STYLES_CSS.match(/#customModelPickModal \.run-mode-option\[hidden\]\s*\{[^}]*\}/);
+    expect(rule, 'picker rows need a [hidden] rule scoped to #customModelPickModal').toBeTruthy();
+    expect(rule![0]).toMatch(/display:\s*none\s*!important/);
+  });
+
+  it('pins "No models match" hidden with an empty query and shown only when a query hides every row, in CSS too', async () => {
+    // The visible symptom: the line carries `.form-hint`, whose `display: block`
+    // outranks the UA `[hidden]` rule, so `hidden` alone showed "No models match"
+    // while every model was listed with an empty search box. The attribute half
+    // was always right (session-ui.js's `filterCustomModelPick`); the CSS half
+    // needed the same `[hidden] { display: none !important }` re-assertion the
+    // rows above carry. This test pins both states AND the CSS that makes them
+    // actually render.
+    const rule = STYLES_CSS.match(/#customModelPickModal \.custom-model-pick-no-matches\[hidden\]\s*\{[^}]*\}/);
+    expect(rule, 'the no-matches line needs a [hidden] rule scoped to #customModelPickModal').toBeTruthy();
+    expect(rule![0]).toMatch(/display:\s*none\s*!important/);
+
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3'] }],
+    });
+    win.app = app;
+    await app.selectCustomModelEntry('claude', 'llama-box');
+    const noMatches = win.document.getElementById('customModelPickNoMatches')!;
+
+    // Empty query, models listed: the attribute must be set, and the CSS rule
+    // above is what makes that attribute actually hide the line.
+    expect(noMatches.hasAttribute('hidden')).toBe(true);
+
+    // A non-empty query that hides every row: shown again.
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    search.value = 'ghost';
+    search.dispatchEvent(new win.Event('input'));
+    expect(noMatches.hasAttribute('hidden')).toBe(false);
   });
 });
 

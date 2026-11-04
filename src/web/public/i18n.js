@@ -615,6 +615,9 @@
     'API key': 'API 密钥',
     'Optional. Left blank on edit keeps the existing key.': '可选。编辑时留空将保留现有密钥。',
     'Auth header': '认证请求头',
+    'Default context length (tokens)': '默认上下文长度（token 数）',
+    "Used for models whose size cannot be discovered. The model's whole window; the Claude floor check divides it by any stored slot count. Leave empty to let each CLI assume its own default.":
+      '用于无法自动发现上下文大小的模型。这是模型的完整窗口；Claude 下限检查会将其除以已存储的槽位数。留空则让各个 CLI 使用其自身的默认值。',
     'Never send both — some servers hang indefinitely.': '切勿同时发送两者 — 部分服务器会因此无限期挂起。',
     'Authorization: Bearer (default)': 'Authorization: Bearer（默认）',
     'api-key header (Azure)': 'api-key 请求头（Azure）',
@@ -627,6 +630,9 @@
     'Last used': '上次使用',
     'That endpoint no longer exists': '该端点已不存在',
     'No models discovered for this endpoint yet': '此端点尚未发现任何模型',
+    // Model picker search box (index.html placeholder/aria-label and the no-matches line)
+    'Search models': '搜索模型',
+    'No models match': '没有匹配的模型',
     'Subagent Options': '子智能体选项',
     'Enable Tracking': '启用跟踪',
     'Active Tab Only': '仅活动标签页',
