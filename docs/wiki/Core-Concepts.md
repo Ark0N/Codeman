@@ -22,11 +22,11 @@ Codeman-side configuration:
 Three ways to get one, all under **New or link a case…** at the bottom of the case picker
 (the case dropdown in the bottom toolbar; on a phone, the case sheet's **Create New Case**):
 
-| How               | Result                                                                                                                                                                                                              |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Create New**    | A fresh `~/codeman-cases/<name>` with a scaffolded `CLAUDE.md`, or with **Create in a custom folder**, a new folder inside a parent you choose, scaffolded the same way and registered in place like a linked case. |
-| **Clone Repo**    | A repo cloned into `~/codeman-cases/<name>` and registered as a case. Private repos need this machine's own git credentials (see below).                                                                            |
-| **Link Existing** | An existing folder anywhere on disk, registered in place. Nothing is copied or moved.                                                                                                                               |
+| How               | Result                                                                                                                                                                                                                |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Create New**    | A fresh `~/codeman-cases/<name>` with a scaffolded `CLAUDE.md`, or with **Create in a custom folder**, a new folder inside a parent you choose, scaffolded the same way and registered in place like a linked case.   |
+| **Clone Repo**    | A repo cloned into `~/codeman-cases/<name>` (or straight into a folder you choose, which must be empty or not exist yet) and registered as a case. Private repos need this machine's own git credentials (see below). |
+| **Link Existing** | An existing folder anywhere on disk, registered in place. Nothing is copied or moved.                                                                                                                                 |
 
 Linked cases keep living where they are. Deleting a case in Codeman removes the
 registration, and for a linked case that is all it removes.

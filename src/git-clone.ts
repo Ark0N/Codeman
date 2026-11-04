@@ -50,9 +50,10 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { rename, rm } from 'node:fs/promises';
+import { lstat, readdir, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
+import { probePathKind } from './utils/bounded-path-probe.js';
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
 
@@ -188,8 +189,13 @@ export interface GitFailure {
 export interface CloneOptions {
   /** Pre-validated operand from `parseGitRepositoryUrl`. */
   repository: string;
-  /** Absolute destination directory. Must NOT exist; created by git. */
+  /** Absolute destination directory. Must NOT exist (created by git), unless `intoEmptyDir` is set. */
   destination: string;
+  /**
+   * Clone straight into `destination` when it already exists as an EMPTY directory (the folder a user
+   * picked), instead of refusing it. A folder with anything in it, or a symlink, is still refused.
+   */
+  intoEmptyDir?: boolean;
   /** Optional branch or tag (`--branch <ref> --single-branch`). */
   ref?: string;
   /** `--depth 1`: history-less but much faster on large repos. */
@@ -590,6 +596,11 @@ export function classifyGitFailure(stderr: string, timedOut: boolean, spawnError
       stderr: clean,
     };
   }
+  // First: git's refusal quotes the destination path, so a folder named openssl, rustls or "not found" would
+  // otherwise match the host and repository patterns below, and a wrong code here decides a deletion.
+  if (/already exists and is not an empty directory|destination path .* already exists/.test(lower)) {
+    return { code: 'DESTINATION_EXISTS', message: 'The destination directory already exists.', stderr: clean };
+  }
   if (timedOut) {
     return {
       code: 'TIMEOUT',
@@ -625,11 +636,12 @@ export function classifyGitFailure(stderr: string, timedOut: boolean, spawnError
       stderr: clean,
     };
   }
-  if (/could not resolve host|connection refused|connection timed out|network is unreachable|ssl|tls/.test(lower)) {
+  if (
+    /could not resolve host|connection refused|connection timed out|network is unreachable|\bssl\b|\btls\b|certificate|handshake/.test(
+      lower
+    )
+  ) {
     return { code: 'HOST_UNREACHABLE', message: 'Could not reach that host from this machine.', stderr: clean };
-  }
-  if (/already exists and is not an empty directory|destination path .* already exists/.test(lower)) {
-    return { code: 'DESTINATION_EXISTS', message: 'The destination directory already exists.', stderr: clean };
   }
   return { code: 'FAILED', message: clean ? `git failed: ${firstLine(clean)}` : 'git failed.', stderr: clean };
 }
@@ -701,6 +713,8 @@ interface GitRun {
   stderr: string;
   code: number | null;
   timedOut: boolean;
+  /** False when git never ran (queue full, slot wait timed out, spawn failed): nothing was written. */
+  started: boolean;
   spawnError?: string;
 }
 
@@ -720,10 +734,17 @@ async function runGit(args: string[], timeoutMs: number, maxStdoutBytes: number)
   const queuedAt = Date.now();
   const slot = await acquireGitSlot(timeoutMs);
   if (slot === 'queue-full') {
-    return { stdout: '', stderr: '', code: null, timedOut: false, spawnError: 'EBUSY: git operation queue is full' };
+    return {
+      stdout: '',
+      stderr: '',
+      code: null,
+      timedOut: false,
+      spawnError: 'EBUSY: git operation queue is full',
+      started: false,
+    };
   }
   if (slot === 'timed-out') {
-    return { stdout: '', stderr: '', code: null, timedOut: true };
+    return { stdout: '', stderr: '', code: null, timedOut: true, started: false };
   }
   const remainingMs = Math.max(1, timeoutMs - (Date.now() - queuedAt));
   try {
@@ -736,7 +757,7 @@ async function runGit(args: string[], timeoutMs: number, maxStdoutBytes: number)
           detached: true,
         });
       } catch (err) {
-        resolve({ stdout: '', stderr: '', code: null, timedOut: false, spawnError: String(err) });
+        resolve({ stdout: '', stderr: '', code: null, timedOut: false, started: false, spawnError: String(err) });
         return;
       }
 
@@ -783,8 +804,10 @@ async function runGit(args: string[], timeoutMs: number, maxStdoutBytes: number)
         resolve(result);
       };
 
-      child.on('error', (err) => finish({ stdout, stderr, code: null, timedOut, spawnError: String(err) }));
-      child.on('close', (code) => finish({ stdout, stderr, code, timedOut }));
+      child.on('error', (err) =>
+        finish({ stdout, stderr, code: null, timedOut, started: false, spawnError: String(err) })
+      );
+      child.on('close', (code) => finish({ stdout, stderr, code, timedOut, started: true }));
     });
   } finally {
     releaseGitSlot();
@@ -847,6 +870,35 @@ export async function probeGitRemote(
   };
 }
 
+/** Destinations with a direct (`intoEmptyDir`) clone in flight. */
+const directClones = new Set<string>();
+
+function destinationExists(): CloneResult {
+  return {
+    ok: false,
+    failure: { code: 'DESTINATION_EXISTS', message: 'The destination directory already exists.', stderr: '' },
+  };
+}
+
+/** True for a real (not symlinked) directory with nothing in it. Any read error counts as not empty. */
+async function isEmptyDirectory(path: string): Promise<boolean> {
+  try {
+    const st = await lstat(path);
+    return st.isDirectory() && (await readdir(path)).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove everything inside `path`, keeping `path` itself. Best effort. */
+async function emptyDirectory(path: string): Promise<void> {
+  try {
+    for (const entry of await readdir(path)) await rm(join(path, entry), { recursive: true, force: true });
+  } catch {
+    /* nothing to clean, or it vanished */
+  }
+}
+
 /**
  * Clone `repository` into `destination`.
  *
@@ -872,10 +924,33 @@ export async function cloneRepository(opts: CloneOptions): Promise<CloneResult> 
     };
   }
   if (existsSync(opts.destination)) {
-    return {
-      ok: false,
-      failure: { code: 'DESTINATION_EXISTS', message: 'The destination directory already exists.', stderr: '' },
-    };
+    // One direct clone per folder at a time: once two gits have written into the same folder their
+    // files cannot be told apart, so the second caller is refused before it spawns anything. Taken
+    // before the emptiness check (which can precede a long wait for a git slot).
+    if (!opts.intoEmptyDir || directClones.has(opts.destination)) return destinationExists();
+    directClones.add(opts.destination);
+    try {
+      if (!(await isEmptyDirectory(opts.destination))) return destinationExists();
+      // The folder is the user's own, so there is no temporary sibling to rename into place: git fills it.
+      const direct = await runGit(buildCloneArgs(opts), opts.timeoutMs ?? GIT_CLONE_TIMEOUT_MS, MAX_STDERR_BYTES);
+      if (direct.code === 0 && !direct.spawnError) return { ok: true, stderr: sanitizeGitOutput(direct.stderr) };
+      const failure = classifyGitFailure(direct.stderr, direct.timedOut, direct.spawnError);
+      // The folder was empty when this attempt took it, so what is in it is this attempt's partial tree, but
+      // only if git actually ran: a refused folder, a full queue or a slot wait that timed out wrote nothing,
+      // and anything in the folder by then (files the user copied in, another case created there) is not ours.
+      // A mount that stopped answering is left alone too, so a libuv worker is not held on it.
+      // git's own refusal is tested on its text, not on the classifier's code, so the deletion never depends on
+      // which pattern matched first.
+      const refused = /already exists and is not an empty directory/i.test(direct.stderr);
+      if (direct.started && !refused && failure.code !== 'DESTINATION_EXISTS') {
+        if ((await probePathKind(opts.destination, { pastCap: true })) === 'directory') {
+          await emptyDirectory(opts.destination);
+        }
+      }
+      return { ok: false, failure };
+    } finally {
+      directClones.delete(opts.destination);
+    }
   }
 
   // Sibling of the destination (same filesystem), so the rename is atomic.
