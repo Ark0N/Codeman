@@ -133,13 +133,118 @@ describe('L-shaped header tab strip (real Chromium)', () => {
     await p.close();
   });
 
-  it('keeps the plain wrap when the first tab is too wide for the room beside the toolbar', async () => {
+  /** Give tab `n` (1-based) a name long enough to be wider than the room beside the toolbar. */
+  const longName = (n: number) =>
+    p.evaluate((n) => {
+      const tab = document.querySelectorAll<HTMLElement>('#sessionTabs > .session-tab')[n - 1];
+      const name = tab.querySelector<HTMLElement>('.tab-name')!;
+      name.textContent = 'a-very-long-session-name '.repeat(12);
+    }, n);
+  /** Is the first tab beside the toolbar (not dropped below it), and does it carry the trim? */
+  const firstTab = () =>
+    p.evaluate(() => {
+      const tab = document.querySelector('#sessionTabs > .session-tab')!;
+      const r = tab.getBoundingClientRect();
+      const b = document.getElementById('headerRight')!.getBoundingClientRect();
+      return {
+        besideToolbar: r.top < b.bottom && r.right <= b.left,
+        trimmed: tab.classList.contains('tab-corner-fit'),
+      };
+    });
+  /** Each visible tab's top, in strip order: equal tops share a row. */
+  const rowTops = async () => (await visibleTabs()).map((r) => Math.round(r.top));
+
+  it('trims a first tab too wide for the room beside the toolbar instead of dropping the corner', async () => {
+    await open({ tabs: 40 });
+    await longName(1);
+    await relayout();
+    expect(await cornered()).toBe(true);
+    expect(await overlapping()).toEqual([]);
+    // Beside the toolbar, not dropped a row below it.
+    const [first] = await visibleTabs();
+    const b = await toolbar();
+    expect(first.right).toBeLessThanOrEqual(b.left);
+    expect(first.top).toBeLessThan(b.bottom);
+    // The rows below still run the full width, several tabs to a row.
+    const tops = await rowTops();
+    expect(tops[1]).toBe(tops[2]);
+    await p.close();
+  });
+
+  it('keeps the corner whichever tab is selected, though selecting widens the first tab past the room', async () => {
+    await open({ tabs: 40 });
+    // Real selection: the gear and close show only on the active tab. The first
+    // tab's name is grown until it fits the room unselected but not selected.
+    await p.evaluate(() => {
+      for (const tab of document.querySelectorAll('#sessionTabs > .session-tab')) {
+        tab.insertAdjacentHTML('beforeend', '<span class="tab-gear">⚙</span><span class="tab-close">×</span>');
+      }
+    });
+    await relayout();
+    await p.evaluate(() => {
+      const strip = document.getElementById('sessionTabs')!;
+      const room = parseFloat(strip.style.getPropertyValue('--tab-corner-first-max'));
+      const tab = strip.querySelector<HTMLElement>(':scope > .session-tab')!;
+      const name = tab.querySelector('.tab-name')!;
+      while (tab.offsetWidth < room - 10) name.textContent += 'x';
+    });
+    const select = async (n: number) => {
+      await p.evaluate((n) => {
+        document
+          .querySelectorAll('#sessionTabs > .session-tab')
+          .forEach((tab, i) => tab.classList.toggle('active', i === n - 1));
+      }, n);
+      await relayout();
+      return { cornered: await cornered(), overlapping: await overlapping(), first: await firstTab() };
+    };
+    expect(await select(3)).toEqual({
+      cornered: true,
+      overlapping: [],
+      first: { besideToolbar: true, trimmed: false },
+    });
+    expect(await select(1)).toEqual({ cornered: true, overlapping: [], first: { besideToolbar: true, trimmed: true } });
+    expect(await select(3)).toEqual({
+      cornered: true,
+      overlapping: [],
+      first: { besideToolbar: true, trimmed: false },
+    });
+    await p.close();
+  });
+
+  it('re-trims the first tab when the room grows but is still too narrow for it', async () => {
+    await open({ tabs: 40 });
+    await longName(1);
+    // One pass must get it right: the toolbar's ResizeObserver would run a
+    // second one and hide a first pass that read the last trim as the width.
+    await p.evaluate(() => (window as any).__app._tabCornerObserver?.disconnect());
+    const toolbarWidth = async (px: string | null) => {
+      await p.evaluate((px) => {
+        const root = document.documentElement;
+        if (px === null) {
+          root.removeAttribute('data-header-right-width');
+          root.style.removeProperty('--header-right-width');
+        } else {
+          root.setAttribute('data-header-right-width', 'set');
+          root.style.setProperty('--header-right-width', px);
+        }
+      }, px);
+      await relayout();
+    };
+    await toolbarWidth('500px');
+    expect(await firstTab()).toEqual({ besideToolbar: true, trimmed: true });
+    await toolbarWidth('300px');
+    expect(await cornered()).toBe(true);
+    expect(await firstTab()).toEqual({ besideToolbar: true, trimmed: true });
+    expect(await overlapping()).toEqual([]);
+    await p.close();
+  });
+
+  it('keeps the plain wrap when the toolbar leaves no usable room beside it', async () => {
     await open({ tabs: 40 });
     await p.evaluate(() => {
       const head = document.querySelector('.header')!.getBoundingClientRect();
-      const right = document.getElementById('headerRight')!.getBoundingClientRect();
-      const first = document.querySelector<HTMLElement>('#sessionTabs > .session-tab')!;
-      first.style.minWidth = first.style.width = `${Math.round(head.width - right.width / 2)}px`;
+      const right = document.getElementById('headerRight')!;
+      right.style.minWidth = `${Math.round(head.width - 150)}px`;
     });
     await relayout();
     expect(await cornered()).toBe(false);

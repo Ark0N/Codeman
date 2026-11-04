@@ -281,6 +281,11 @@ function resolveTabRailKeyboardWidth(input = {}) {
 // the gap is what tells the user there is more strip to swipe to.
 const TAB_SCROLL_REVEAL_PX = 16;
 
+// Narrowest room beside the toolbar the L-shaped header strip trims its first
+// tab into (`_syncTabStripCorner()`, app.js). Less than this keeps the plain
+// wrap: a tab squeezed further shows its number and buttons but no name.
+const TAB_CORNER_MIN_FIRST_TAB = 120;
+
 // Phone/tablet tab-strip scroll policy (issue #257). Those breakpoints scroll
 // the strip horizontally (desktop wraps to a second row instead and never
 // scrolls), so the active tab can sit entirely outside the visible slice with
