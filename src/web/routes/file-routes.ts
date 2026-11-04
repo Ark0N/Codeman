@@ -1457,6 +1457,15 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // "New folder" in the path picker: creates ONE folder directly inside a folder the picker may browse.
   app.post('/api/filesystem/mkdir', async (req, reply): Promise<ApiResponse<{ path: string }>> => {
     const { path: parentPath, name, sessionId, showHidden } = parseBody(FilesystemMkdirSchema, req.body);
+    // Probed first (#516): the picker's resolver runs realpathSync on this path, which would freeze the
+    // whole server on a mount that stopped answering.
+    if ((await probePathKind(parentPath, { pastCap: true })) === 'unknown') {
+      reply.code(422);
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        describeUnknownPath('The folder', parentPath, { pastCap: true })
+      );
+    }
     const { candidatePath, resolvedPath, blockedTrees } = await resolveFilesystemPickerPath(
       ctx,
       req,

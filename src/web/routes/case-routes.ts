@@ -802,8 +802,14 @@ export function registerCaseRoutes(
       // with the workspace bind-mounted can write both while it fetches. Like git status, fetch and worktrees,
       // never clone at or inside a Docker case workspace. Fails closed when the Docker case list cannot be read.
       try {
+        // Probed first (#516): a case's workspace can sit on a mount that stopped answering, and an unbounded
+        // realpath there would hold this request and a threadpool worker. Such a root is judged as spelled.
         const roots = await Promise.all(
-          (await defaultDockerWorkspaces()).map((root) => fs.realpath(root).catch(() => resolve(root)))
+          (await defaultDockerWorkspaces()).map(async (root) =>
+            (await probePathKind(root, { pastCap: true })) === 'unknown'
+              ? resolve(root)
+              : fs.realpath(root).catch(() => resolve(root))
+          )
         );
         // A custom folder is already symlink-resolved; the default one is judged through its real cases dir.
         const dest =
