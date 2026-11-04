@@ -256,7 +256,9 @@ export async function guardSessionConfigDirHome(
   const supplied = baseLookup(dirEnvVar)?.trim();
   if (!supplied || !isAbsolute(supplied)) return baseLookup;
   if ((await probePathKind(supplied, { pastCap: true })) === 'unknown') {
-    console.warn(`[custom-model] ${dirEnvVar} (${supplied}) did not answer; linking from the server's own home instead`);
+    console.warn(
+      `[custom-model] ${dirEnvVar} (${supplied}) did not answer; linking from the server's own home instead`
+    );
     return (envVar: string) => (envVar === dirEnvVar ? undefined : baseLookup(envVar));
   }
   return baseLookup;
