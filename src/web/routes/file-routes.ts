@@ -57,6 +57,7 @@ import {
   findSessionOrFail,
   getAuthUser,
   parseBody,
+  resolveCasesDir,
   validateSessionFilePath,
   validateSessionFilePathLexical,
 } from '../route-helpers.js';
@@ -74,7 +75,12 @@ import { parseByteRange } from '../http-range.js';
 import { isSensitivePath } from '../sensitive-path.js';
 import { SseEvent } from '../sse-events.js';
 import type { ConfigPort, EventPort, SessionPort } from '../ports/index.js';
-import { FilesystemBrowseQuerySchema, FilesystemPreviewQuerySchema, FileWriteSchema } from '../schemas.js';
+import {
+  FilesystemBrowseQuerySchema,
+  FilesystemMkdirSchema,
+  FilesystemPreviewQuerySchema,
+  FileWriteSchema,
+} from '../schemas.js';
 import {
   MAX_EDITABLE_BYTES,
   applyEol,
@@ -1446,6 +1452,74 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         truncated,
       },
     };
+  });
+
+  // "New folder" in the path picker: creates ONE folder directly inside a folder the picker may browse.
+  app.post('/api/filesystem/mkdir', async (req, reply): Promise<ApiResponse<{ path: string }>> => {
+    const { path: parentPath, name, sessionId, showHidden } = parseBody(FilesystemMkdirSchema, req.body);
+    const { candidatePath, resolvedPath, blockedTrees } = await resolveFilesystemPickerPath(
+      ctx,
+      req,
+      parentPath,
+      sessionId,
+      wantsHiddenPickerEntries(showHidden)
+    );
+    const target = join(resolvedPath, name);
+    if (isBlockedPickerPath(resolvedPath, blockedTrees, true) || isBlockedPickerPath(target, blockedTrees, true)) {
+      reply.code(403);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Folders cannot be created here');
+    }
+    // The cases directories (shared, and the caller's own in multi-user mode) are what GET /api/cases lists as
+    // local cases: a folder made there is a case with no scaffold, which Link then refuses by name and which
+    // deleting would take the linked folder with. A case there is made through Add Case > New Case.
+    const casesDirs = await Promise.all(
+      [...new Set([CASES_DIR, resolveCasesDir(getAuthUser(req))])].map((dir) =>
+        fs.realpath(dir).catch(() => resolve(dir))
+      )
+    );
+    if (casesDirs.includes(resolvedPath)) {
+      reply.code(400);
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'This is a cases folder: every folder in it is a case. Use Add Case > New Case to make one there.'
+      );
+    }
+    // Like browse, a file is not a place to create in.
+    try {
+      if (!(await fs.stat(resolvedPath)).isDirectory()) throw new Error('not a directory');
+    } catch {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'The folder to create in must be a directory');
+    }
+    try {
+      // Not recursive: the parent was just resolved inside an allowed root, and an existing folder must be a 409.
+      await fs.mkdir(target);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') {
+        reply.code(409);
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `"${name}" already exists in this folder`);
+      }
+      if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') {
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'This folder is not writable');
+      }
+      if (code === 'ENOENT') {
+        reply.code(404);
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, `Folder not found: ${candidatePath}`);
+      }
+      if (code === 'ENAMETOOLONG') {
+        reply.code(400);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Folder name is too long');
+      }
+      // Never the errno text: it names the resolved, symlink-followed path, not the one the picker shows.
+      reply.code(500);
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        `Could not create the folder${code ? ` (${code})` : ''}`
+      );
+    }
+    return { success: true, data: { path: join(candidatePath, name) } };
   });
 
   // Inline preview for files selected through the root-confined filesystem picker.
