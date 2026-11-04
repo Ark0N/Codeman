@@ -3385,6 +3385,7 @@ Object.assign(CodemanApp.prototype, {
         ? await this._confirmTunnelEnable()
         : { proceed: true, acknowledge: false };
       if (!tunnelGate.proceed) {
+        this._unsavedSettingsBaseline = _prevServer;
         this._abandonTunnelEnable(settings, keepOpen);
         return;
       }
@@ -3416,6 +3417,7 @@ Object.assign(CodemanApp.prototype, {
       // not about the tunnel, and turning the switch off for it would be wrong too.
       const tunnelRefused = !refusedAsNonAdmin && settings.tunnelEnabled && res?.status === 403;
       if (tunnelRefused && (await this._handleTunnelEnableRefusal(res, body))) {
+        this._unsavedSettingsBaseline = _prevServer;
         this._abandonTunnelEnable(settings, keepOpen);
         return;
       }
