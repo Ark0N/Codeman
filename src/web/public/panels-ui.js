@@ -1963,7 +1963,16 @@ Object.assign(CodemanApp.prototype, {
 
       // Show in a modal or new window
       const content = data.data.formatted.join('\n');
-      const win = window.open('', '_blank', 'width=800,height=600');
+      // This open runs after the fetch above, so a pop-up blocker that wants a
+      // click can refuse it, and the Codeman desktop app always refuses an
+      // empty window. Both return null; say so instead of throwing into the
+      // catch below, whose 'Failed to load transcript' would be wrong.
+      let win = null;
+      try { win = window.open('', '_blank', 'width=800,height=600'); } catch {}
+      if (!win) {
+        this.showToast('Could not open the transcript window: pop-up windows are blocked here', 'error');
+        return;
+      }
       win.document.write(`
         <html>
           <head>

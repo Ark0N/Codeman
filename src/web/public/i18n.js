@@ -983,6 +983,14 @@
     'Could not open a new window for this session': '无法在新窗口中打开此会话',
     'Could not open a new window for this preview': '无法在新窗口中打开此预览',
     'Could not open a new window for this dashboard': '无法在新窗口中打开此网页标签',
+    // The Codeman desktop app's shim when the app would not open the window a
+    // page asked for (packages/desktop/src/assets.rs).
+    'Could not open a new window': '无法打开新窗口',
+    // A subagent transcript or a detached preview whose window.open came back
+    // null (panels-ui.js viewSubagentTranscript / detachFilePreview).
+    'Could not open the transcript window: pop-up windows are blocked here': '无法打开对话记录窗口：此处已阻止弹出窗口',
+    'Pop-up blocked: allow pop-ups for this site to detach previews':
+      '弹出窗口已被阻止：请允许此网站的弹出窗口以分离预览',
     // Dictation whose session closed before the text was sent (voice-input.js).
     'That session has closed; dictation not sent': '该会话已关闭，语音输入未发送',
     // Terminal touch-selection bar (long-press to select). The bar is a sibling of
@@ -1457,6 +1465,10 @@
       [/^Worktree (\S+) was kept: ([\s\S]+)$/, (_m, wt, why) => `工作树 ${wt} 已保留：${why}`],
       // A pick, drop or paste that mixed admitted files with refused ones (image-input.js).
       [/^(\d+) files? skipped: unsupported type$/, (_m, n) => `已跳过 ${n} 个不支持类型的文件`],
+      // The Codeman desktop app's download toasts (packages/desktop/src/assets.rs).
+      // The file name is user text: it passes through untranslated.
+      [/^Downloaded (.+) to Downloads$/, (_m, name) => `已将 ${name} 下载到“下载”文件夹`],
+      [/^Download of (.+) failed$/, (_m, name) => `下载 ${name} 失败`],
       // Group names are user text: they pass through untranslated.
       [/^Move to "(.+)"$/, (_m, group) => `移到“${group}”`],
       // Session names are user text too.
