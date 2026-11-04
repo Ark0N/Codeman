@@ -1034,16 +1034,17 @@
         <div class="modal-body">
           <p class="form-hint" id="customModelPickHint"></p>
           <!-- Case-insensitive filter over the rendered rows (app.filterCustomModelPick):
-               a display layer only, the rows themselves are never re-rendered. Reset and
-               focused on every open, same in-memory rule as the rail's search box. -->
+               a display layer only, the rows themselves are never re-rendered. Reset on every
+               open and focused only on non-touch devices, same in-memory rule as the rail's
+               search box. -->
           <input type="search" id="customModelPickSearch" class="session-sidebar-filter-input custom-model-pick-search"
             placeholder="Search models" aria-label="Search models"
             autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"
             oninput="app.filterCustomModelPick(this.value)">
           <p class="form-hint custom-model-pick-no-matches" id="customModelPickNoMatches" role="status" hidden>No models match</p>
-          <!-- Shown only when no row carries a loaded/in-use/last-used mark AND the endpoint
-               answered that it is not llama-swap (see _openCustomModelPickModal): it says out
-               loud WHY nothing is marked, in the user's language, rather than leaving an
+          <!-- Shown only when no row carries a loaded/in-use/last-used mark AND the
+               running-status probe answered `isLlamaSwap: false` (see
+               _openCustomModelPickModal): it says out loud WHY nothing is marked, in the user's language, rather than leaving an
                alphabetical wall that looks like the question was ignored. -->
           <p class="form-hint custom-model-pick-unknown" id="customModelPickUnknown" role="status" hidden>Nothing is marked: this endpoint did not report which model it has loaded, and none of your running sessions uses one. Pick the model to launch.</p>
           <div id="customModelPickList" class="run-mode-custom-models"></div>

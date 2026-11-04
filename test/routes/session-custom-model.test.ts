@@ -339,6 +339,28 @@ describe('POST /api/sessions/:id/custom-model', () => {
       expect(session.restartCli).not.toHaveBeenCalled();
     });
 
+    it('refuses a model id the CLI cannot launch before asking anyone to evict a model', async () => {
+      const { app, ctx } = await setup();
+      const session = ctx.sessions.get('test-session-1')!;
+      session.mode = 'codex';
+      const other = createMockSession('other-session');
+      other.name = 'w2-otherbox';
+      other.customModel = { endpointId: 'ep1', modelId: 'llama3' };
+      ctx.sessions.set('other-session', other);
+      mockRunning([{ model: 'llama3', state: 'ready' }]);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/sessions/test-session-1/custom-model',
+        payload: { endpointId: 'ep1', modelId: 'org/model@q4_k_m' },
+      });
+
+      // Agreeing to the swap first would only lead to this same 400.
+      expect(res.json().requiresConfirmation).toBeUndefined();
+      expect(res.json().errorCode).toBe('INVALID_INPUT');
+      expect(session.setCustomModel).not.toHaveBeenCalled();
+    });
+
     describe('multi-user: the confirm dialog must not name a session the caller cannot access', () => {
       const saved: Record<string, string | undefined> = {};
 

@@ -60,11 +60,14 @@ hundreds of models stays usable. The
 endpoint's default model, if set, is marked but not auto-picked, so a launch can deliberately
 use a different one without changing the saved default. The list is not raw discovery order
 either: the model llama-swap reports loaded and ready is moved to the top and tagged
-**Currently loaded**, and when nothing is loaded, the model you last launched on this harness
-and endpoint pair is moved up instead and tagged **Last used** (a per-device browser value, so
-another device starts from its own history). The default model keeps its own **Default** pill
-in both cases, and nothing is ever auto-chosen: the promoted row is simply the one under your
-thumb.
+**Currently loaded**. When nothing is reported loaded, the model one of your own running
+sessions is using on that endpoint is moved up instead and tagged **In use by a session** (it
+beats **Last used**, never **Currently loaded**), and failing that the model you last launched
+on this harness and endpoint pair is moved up and tagged **Last used** (a per-device browser
+value, so another device starts from its own history). With none of those, a line under the
+search box says nothing is marked, so the plain list is not mistaken for an answer. The default
+model keeps its own **Default** pill in every case, and nothing is ever auto-chosen: the
+promoted row is simply the one under your thumb.
 
 **For opencode, Codex, Gemini, Pi, Grok, DeepSeek, OMP and GitHub Copilot, picking an entry launches
 straight onto the endpoint** — no restart, because the endpoint is applied before the

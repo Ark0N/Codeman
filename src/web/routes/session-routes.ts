@@ -1548,6 +1548,30 @@ export function registerSessionRoutes(
     const contextLength = resolveCustomModelContextLength(endpoint, body.modelId);
     const slotCount = endpoint.modelSlotCounts?.[body.modelId];
 
+    // A CLI whose config alone cannot select the model also gets its `model` launch param
+    // forced (pi/omp `custom/<id>`, grok's block name, and codex now carries its bare
+    // selected id too). The argv engine DROPS a token that
+    // fails its pattern rather than quoting it, which would silently launch the CLI on its
+    // own default provider again, so refuse an id the pattern cannot carry up front.
+    // The check runs on the PURE build result, before applyCustomModelInjection below:
+    // the forced launch id only comes out of that build, and writing first would mean a
+    // refused id already replaced the config dir a live codex session uses as CODEX_HOME.
+    // It also runs before the two confirmations, so nobody agrees to evict a model only
+    // to be told the id was never usable.
+    const modelSpec = entry.launch.params.model;
+    const injection = buildCustomModelInjection(entry, endpoint, body.modelId, contextLength);
+    const forcedLaunchModel = injection.kind === 'unsupported' ? undefined : injection.launchModel;
+    if (
+      forcedLaunchModel !== undefined &&
+      modelSpec?.type === 'token' &&
+      !matchesPattern(modelSpec.pattern, forcedLaunchModel)
+    ) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        `Model id ${JSON.stringify(body.modelId)} cannot be passed to ${session.mode} on its command line`
+      );
+    }
+
     // Some CLIs (today: only claude) carry enough of their own fixed system-prompt/tool-
     // schema overhead that a small enough real context guarantees a first-message failure
     // no matter what CLAUDE_CODE_MAX_CONTEXT_TOKENS says — confirmed live at ~36.4K tokens
@@ -1611,29 +1635,6 @@ export function registerSessionRoutes(
       }
     }
 
-    // A CLI whose config alone cannot select the model also gets its `model` launch param
-    // forced (pi/omp `custom/<id>`, grok's block name, and codex now carries its bare
-    // selected id too). The argv engine DROPS a token that
-    // fails its pattern rather than quoting it, which would silently launch the CLI on its
-    // own default provider again, so refuse an id the pattern cannot carry up front.
-    // The check runs on the PURE build result, before applyCustomModelInjection below:
-    // the forced launch id only comes out of that build, and writing first would mean a
-    // refused id already replaced the config dir a live codex session uses as CODEX_HOME.
-    const modelSpec = entry.launch.params.model;
-    const injection = buildCustomModelInjection(entry, endpoint, body.modelId, contextLength);
-    if (injection.kind === 'unsupported') {
-      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${session.mode} has no known custom-model mechanism`);
-    }
-    if (
-      injection.launchModel !== undefined &&
-      modelSpec?.type === 'token' &&
-      !matchesPattern(modelSpec.pattern, injection.launchModel)
-    ) {
-      return createErrorResponse(
-        ApiErrorCode.INVALID_INPUT,
-        `Model id ${JSON.stringify(body.modelId)} cannot be passed to ${session.mode} on its command line`
-      );
-    }
     const applied = applyCustomModelInjection(
       entry,
       endpoint,
