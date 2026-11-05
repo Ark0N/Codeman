@@ -3965,7 +3965,7 @@ Object.assign(CodemanApp.prototype, {
           <div class="set-row" data-endpoint-id="${escapeHtml(h.id)}">
             <div class="set-row-text">
               <span class="set-row-label">${escapeHtml(h.label)}</span>
-              <span class="set-row-desc">${escapeHtml(h.baseUrl)} — ${modelSummary}</span>
+              <span class="set-row-desc">${escapeHtml(h.baseUrl)} — ${modelSummary}${h.endpointType === 'anthropic' ? ' · Anthropic (Claude Code only)' : ''}</span>
             </div>
             <div class="set-row-actions">
               <button type="button" class="btn-toolbar btn-sm" onclick="app.discoverCustomModelHostModels(${idArg})">Discover</button>

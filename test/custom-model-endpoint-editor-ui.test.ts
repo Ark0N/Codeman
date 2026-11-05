@@ -75,3 +75,13 @@ describe('custom model endpoint editor: endpoint type', () => {
     expect(saved.body.endpointType).toBe('openai');
   });
 });
+
+describe('real index.html endpoint type select', () => {
+  it('has the id the editor reads, with both option values', () => {
+    const html = readFileSync(new URL('../src/web/public/index.html', import.meta.url), 'utf-8');
+    const doc = new JSDOM(html).window.document;
+    const select = doc.getElementById('customModelHostEndpointType');
+    expect(select?.tagName).toBe('SELECT');
+    expect([...(select as HTMLSelectElement).options].map((o) => o.value)).toEqual(['openai', 'anthropic']);
+  });
+});
