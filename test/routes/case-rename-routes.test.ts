@@ -6,7 +6,6 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -36,6 +35,21 @@ let claudeCfg = '';
 const made: string[] = [];
 
 const linked = (): Record<string, string> => (existsSync(LINKED()) ? JSON.parse(readFileSync(LINKED(), 'utf8')) : {});
+/**
+ * The registry is replaced by renaming a temp file over it, which a read-only file does not stop, so a
+ * failed registry write is injected at that rename. `before` runs first (another writer landing then).
+ */
+const failRegistryWrite = (before?: () => Promise<unknown>, alsoFail?: (from: string) => boolean) => {
+  const realRename = fs.rename;
+  return vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+    if (to === LINKED()) {
+      if (before) await before();
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    }
+    if (alsoFail?.(String(from))) throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+    return realRename(from, to);
+  });
+};
 const settings = (): Record<string, unknown> => JSON.parse(readFileSync(SETTINGS_PATH, 'utf8'));
 const rename = (app: Awaited<ReturnType<typeof createRouteTestHarness>>['app'], name: string, payload: object) =>
   app.inject({ method: 'POST', url: `/api/cases/${name}/rename`, payload });
@@ -278,8 +292,13 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     writeFileSync(LINKED(), JSON.stringify({ proj: real }));
     writeFileSync(SETTINGS_PATH, JSON.stringify({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj' }));
     // the registry reads fine but cannot be written: the rename must undo the folder move
-    chmodSync(LINKED(), 0o444);
-    const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
+    const spy = failRegistryWrite();
+    let res;
+    try {
+      res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
+    } finally {
+      spy.mockRestore();
+    }
     expect(res.statusCode).toBe(500);
     expect(existsSync(real)).toBe(true);
     expect(linked()).toEqual({ proj: real });
@@ -294,14 +313,9 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     mkdirSync(real);
     writeFileSync(LINKED(), JSON.stringify({ proj: real }));
     writeFileSync(SETTINGS_PATH, JSON.stringify({ caseOrder: ['a', 'proj', 'b'], lastUsedCase: 'proj' }));
-    chmodSync(LINKED(), 0o444);
     // Another writer (a settings save) lands after the rename wrote settings.json and before the
     // registry write fails.
-    const realWriteFile = fs.writeFile;
-    const spy = vi.spyOn(fs, 'writeFile').mockImplementation(async (file, data, options) => {
-      if (file === LINKED()) await mutateSettingsFile((current) => ({ ...current, agentSkillEnabled: true }));
-      return realWriteFile(file, data, options);
-    });
+    const spy = failRegistryWrite(() => mutateSettingsFile((current) => ({ ...current, agentSkillEnabled: true })));
     try {
       const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
       expect(res.statusCode).toBe(500);
@@ -351,13 +365,8 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     const real = join(work, 'my-project');
     mkdirSync(real);
     writeFileSync(LINKED(), JSON.stringify({ proj: real }));
-    chmodSync(LINKED(), 0o444);
     const moved = join(work, 'renamed');
-    const realRename = fs.rename;
-    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
-      if (from === moved) throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
-      return realRename(from, to);
-    });
+    const spy = failRegistryWrite(undefined, (from) => from === moved);
     try {
       const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true });
       expect(res.statusCode).toBe(500);
@@ -373,9 +382,14 @@ describe('POST /api/cases/:name/rename (a linked case)', () => {
     const real = join(work, 'my-project');
     mkdirSync(real);
     writeFileSync(LINKED(), JSON.stringify({ proj: real }));
-    chmodSync(LINKED(), 0o444);
     (ctx.sessions as Map<string, unknown>).set('s1', { id: 's1', name: 'w1', workingDir: real });
-    const res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true, stopSessions: true });
+    const spy = failRegistryWrite();
+    let res;
+    try {
+      res = await rename(app, 'proj', { newName: 'renamed', renameFolder: true, stopSessions: true });
+    } finally {
+      spy.mockRestore();
+    }
     expect(res.statusCode).toBe(500);
     expect(res.json().stoppedSessions).toBe(1);
     expect(ctx.cleanupSession).toHaveBeenCalledWith('s1', true, 'case_rename');
