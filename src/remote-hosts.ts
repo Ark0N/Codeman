@@ -66,10 +66,11 @@ export async function writeRemoteCases(configDir: string, cases: RemoteCase[]): 
  * arrival, the #208 failure all over again (verified: `sh -c 'exec $SHELL -i -l'`
  * with SHELL unset prints `exec: -i: not found`). In practice tmux always exports
  * SHELL into a pane from its own `default-shell` option, so the command as USED
- * here is safe either way (also verified). The default matters because these
- * strings are the seed values a per-host `commands.*` override is edited from, and
- * nothing constrains where an edited one ends up running. Quoted for a shell path
- * containing spaces. `/bin/sh` exists on every POSIX host.
+ * here is safe either way (also verified). Quoted for a shell path containing
+ * spaces. `/bin/sh` exists on every POSIX host.
+ *
+ * ⚠️ This is POSIX text. fish refuses `${…}` (status 127), so a launch hands it to
+ * `/bin/sh -c`, never to the remote default-shell (`buildRemoteLaunchCommand`).
  */
 const REMOTE_LOGIN_SHELL = '"${SHELL:-/bin/sh}"';
 
@@ -80,10 +81,12 @@ const REMOTE_LOGIN_SHELL = '"${SHELL:-/bin/sh}"';
  * so a bare `exec claude` sees only sshd's minimal default PATH and dies with
  * "command not found" (exit 127).
  *
- * Shells that take neither flag (nushell, elvish, …) cannot be detected from here
- * the way `loginShellArgs()` detects them locally, since the shell is whatever the
- * REMOTE passwd says. A host like that is what the per-host `commands.*` override
- * is for.
+ * Shells that take neither flag cannot be detected from here the way
+ * `loginShellArgs()` detects them locally, since the shell is whatever the REMOTE
+ * passwd says. A host like that is what the per-host `commands.*` override is for
+ * (tcsh, which rejects `-l` combined with `-i`). It only goes so far: the PATH
+ * bootstrap below runs in the login shell first, so a shell that cannot parse
+ * `export` at all (nushell, elvish) cannot be rescued by an override.
  */
 export function remoteLoginShellCommand(command: string): string {
   return `exec ${REMOTE_LOGIN_SHELL} -i -l -c ${shellescape(command)}`;
@@ -143,8 +146,9 @@ function overlayCliCommand(mode: SessionMode, location: 'remote' | 'docker'): st
  * The per-host `commands.*` override remains the escape hatch for every mode.
  */
 export function defaultRemoteCommandForMode(mode: SessionMode): string {
-  // $SHELL, not a hardcoded bash: sshd sets it from the remote user's /etc/passwd entry, so
-  // this launches their actual login shell (zsh, fish, …). `-i -l` so it sources rc files,
+  // $SHELL, not a hardcoded bash: sshd sets it from the remote user's /etc/passwd entry, and
+  // tmux exports its default-shell as SHELL into the pane, so this launches their actual
+  // login shell, or the default-shell their tmux.conf picks (zsh, fish, …). `-i -l` so it sources rc files,
   // matching the local shell-mode launch. Not templatable as overlay data: the shell is
   // whatever the REMOTE passwd says, which is why `shell` is the one arm still written here.
   const shellCommand = `exec ${REMOTE_LOGIN_SHELL} -i -l`;

@@ -1,0 +1,5 @@
+---
+"aicodeman": patch
+---
+
+Remote sessions: new sessions no longer die with `tmux: command not found` (exit 127) when the remote user's home differs from the Codeman host's. The launch line reached the local shell in double quotes, so `$HOME` and `$PATH` in the remote PATH bootstrap expanded on the Codeman host before ssh ran. Launches now reach the far end verbatim, which also means a remote session starts in the remote user's own shell rather than the Codeman host's, and a Codeman host whose `$SHELL` path does not exist on the remote no longer kills the pane. Codeman's own pane command now runs through `/bin/sh` so fish hosts keep working, while a per-host `commands.*` override still runs in the remote user's shell. Behaviour change: in a `commands.*` override, `$` now expands on the far end (remote host or container) instead of on the Codeman host, and a bare `$VAR` in a Docker `extraCreateArgs`/`extraExecArgs` value is passed to `docker` literally, so write the value out. Thanks to @Randalix for the report and the fix.

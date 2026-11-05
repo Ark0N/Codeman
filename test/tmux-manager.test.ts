@@ -939,6 +939,38 @@ describe('TmuxManager (unit)', () => {
       }
     });
 
+    it('hands a docker override to bash with $HOME unexpanded', async () => {
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+
+      try {
+        await nonTestManager.createSession({
+          sessionId: 'abc12345-1234-5678-90ab-cdef12345680',
+          workingDir: '/w',
+          mode: 'shell',
+          docker: {
+            hostId: 'h',
+            label: 'L',
+            engine: 'docker',
+            image: 'codeman/agent:base',
+            containerName: 'codeman-case-x',
+            hostWorkspacePath: '/w',
+            containerWorkdir: '/w',
+            commands: { shell: 'echo CONTAINER_HOME=$HOME; exec sleep 30' },
+          } as never,
+        });
+        const launch = [...mockedExecSync.mock.calls, ...vi.mocked(exec).mock.calls]
+          .map(([cmd]) => cmd)
+          .find((cmd) => typeof cmd === 'string' && cmd.includes(' respawn-pane '));
+        const sent = await bashArgAfterLocalShell(launch as string);
+        expect(sent).toContain('docker');
+        expect(sent).toContain('CONTAINER_HOME=$HOME');
+        expect(sent).not.toContain('local-home-xyz');
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
     it('changes the global history default on tmux versions that cannot resize panes', async () => {
       const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
       const nonTestManager = new NonTestTmuxManager();

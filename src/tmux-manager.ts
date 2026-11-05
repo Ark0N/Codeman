@@ -1303,10 +1303,12 @@ export function remoteTmuxLocation(remote: SessionRemote, sessionId: string): { 
  * - The `set` options are scoped per-session (`set -t <name>` / server-level
  *   `set -s`), never `-g`, so they never mutate other sessions' prefix/mouse.
  * - The whole tmux invocation is a SINGLE ssh argument (the remote login shell
- *   runs it), so it is shell-quoted as one unit; the `cd && exec` command is in
- *   turn a single tmux argument (tmux runs it via `/bin/sh -c`), so the path is
- *   shell-quoted inside it too. This keeps escaping correct through every layer
- *   even when the remote path contains spaces.
+ *   runs it), so it is shell-quoted as one unit. The `cd && exec` command is the
+ *   pane command: Codeman's own text goes to `/bin/sh -c` as separate tmux
+ *   arguments, and a per-host `commands.*` override stays one argument, which
+ *   tmux hands to the remote default-shell (see the comment at `paneCommand`).
+ *   Each is shell-quoted, so escaping stays correct through every layer even
+ *   when the remote path contains spaces.
  */
 export function buildRemoteLaunchCommand(options: {
   mode: SessionMode;
@@ -1389,17 +1391,25 @@ export function buildRemoteLaunchCommand(options: {
   }
   const remoteName = remoteTmuxSessionName(sessionId);
 
-  // Innermost: the command tmux runs in the new pane. Run via `/bin/sh -c` by
-  // tmux, so the path needs shell-quoting here. `exec` replaces the shell with
-  // the CLI so the pane PID is the agent itself.
+  // Innermost: the command tmux runs in the new pane. `exec` replaces the shell
+  // with the CLI so the pane PID is the agent itself.
+  //
+  // tmux runs a ONE-argument command through the remote default-shell, which is
+  // the user's login shell, and bypasses it for two or more arguments (both
+  // measured on tmux 3.4). Codeman's own text is POSIX (`"${SHELL:-/bin/sh}"` is
+  // a parse error in fish, status 127, a dead pane on every new session), so it
+  // goes to `/bin/sh -c` as separate arguments and no login shell has to parse it.
+  // An override is the user's own text for THEIR shell: it stays one argument,
+  // because `source` and `[[` work in bash and zsh and die in a dash `/bin/sh`.
   const paneCommand = `cd ${shellescape(remote.remotePath)} && ${modeCommand}`;
+  const paneArgv = `${override ? '' : '/bin/sh -c '}${shellescape(paneCommand)}`;
 
   // The tmux command line, with `\;` separating commands so the config `set`s
   // apply on the SAME connection (and are idempotent on reattach). Options are
   // scoped per-session (`set -t <name>` / server `set -s`), NEVER `-g`, so a
   // shared remote tmux server's other sessions keep their own prefix/mouse.
   const tmuxInvocation = [
-    `tmux -L ${REMOTE_TMUX_SOCKET} new-session -A -s ${remoteName} -c ${shellescape(remote.remotePath)} ${shellescape(paneCommand)}`,
+    `tmux -L ${REMOTE_TMUX_SOCKET} new-session -A -s ${remoteName} -c ${shellescape(remote.remotePath)} ${paneArgv}`,
     `set -t ${remoteName} status off`,
     `set -t ${remoteName} mouse off`,
     `set -t ${remoteName} prefix ${NESTED_TMUX_PREFIX}`,
@@ -1574,7 +1584,7 @@ export interface DockerLaunchOptions {
  * Build the ONE `bash -c` launch string for a docker session: image-check ->
  * ensure (inspect-or-create) -> start -> `exec docker exec -it` into the durable
  * in-container tmux (resume-aware). PURE and unit-testable. The escaping survives
- * four layers: outer `bash -c "…"` (JSON.stringify at respawn-pane) -> the joined
+ * four layers: outer `bash -c '…'` (`bashCArg()` at respawn-pane) -> the joined
  * command -> `docker exec … sh -lc '<tmux>'` -> tmux `'<paneCommand>'`.
  */
 export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
@@ -1602,8 +1612,8 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   } else if (resumeSessionId) {
     modeCommand = appendResumeFlag(modeCommand, mode, resumeSessionId);
   }
-  // Run by tmux via /bin/sh -c, so the path is shell-quoted here. `exec` makes the
-  // pane PID the agent itself.
+  // Run by tmux through the container's default-shell, so the path is shell-quoted
+  // here. `exec` makes the pane PID the agent itself.
   const paneCommand = `cd ${workdir} && ${modeCommand}`;
 
   // `setenv -g` primes the session id so reattaches / newly-created panes inherit
@@ -1665,11 +1675,10 @@ export function buildDockerLaunchCommand(opts: DockerLaunchOptions): string {
   const ensure = adopted
     ? `${base} inspect ${name} >/dev/null 2>&1 || { echo ${notFoundMsg}; exit 1; }`
     : `${base} inspect ${name} >/dev/null 2>&1 || ${createCommand}`;
-  // ⚠️ No double quotes and no `$(…)` in the ADOPTED arms. This whole chain is
-  // embedded in an outer `bash -c "…"`, so an unescaped `"` closes that string early,
-  // the rest is re-tokenized, and tmux fails to exec with a bare `execvp(3) failed`.
-  // A `grep -qx` pipeline reads the same answer using only the single-quoted form
-  // every other line in this builder already uses.
+  // A `grep -qx` pipeline, in the single-quoted form every other line in this builder
+  // uses. This chain reaches `bash -c` verbatim now (`bashCArg()`), but it went through
+  // a double-quoted layer for a long time, where a `"` closed that string early and tmux
+  // failed with a bare `execvp(3) failed`, so keep it free of double quotes and `$(…)`.
   const start = adopted
     ? `${base} inspect -f ${shellescape('{{.State.Running}}')} ${name} 2>/dev/null | grep -qx true || { echo ${notRunningMsg}; exit 1; }`
     : `${base} start ${name} >/dev/null 2>&1 || { echo ${startFailMsg}; exit 1; }`;
@@ -4672,6 +4681,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
  * a remote user with another home found no tmux and every new remote pane exited 127.
  * `${SHELL:-/bin/sh}` in the remote launch was the local shell for the same reason.
  * Local commands keep their double-quoted form.
+ *
+ * ⚠️ So nothing in a verbatim launch is expanded on this host any more, the docker client's
+ * own arguments included: a bare `$VAR` in `extraCreateArgs`/`extraExecArgs` reaches docker
+ * as those literal characters.
  */
 function bashCArg(launchCmd: string, verbatim: boolean): string {
   return verbatim ? shellescape(launchCmd) : JSON.stringify(launchCmd);

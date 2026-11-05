@@ -878,11 +878,11 @@ const RemoteCommandOverridesSchema = z
 const NO_SHELL_INJECTION = /^[^\n\r\0`]*$/;
 const noCommandSubstitution = (s: string) => !s.includes('$(');
 
-// `remotePath`/`identityFile` are shell-escaped, then the whole launch command is
-// embedded via `JSON.stringify(...)` inside `bash -c "..."` (tmux-manager). That
-// outer DOUBLE-quote layer re-exposes `$(...)`, backticks, and `$VAR` even though
-// the inner value is single-quoted — so a `$(cmd)` in the path would run LOCALLY at
-// launch. Reject `$` and backtick (and newline/CR/NUL) entirely at the boundary.
+// `remotePath`/`identityFile` are shell-escaped, and a remote launch reaches `bash -c`
+// single-quoted (`bashCArg()` in tmux-manager). They are also pasted into strings the
+// far end's shells parse, and hosts stored before a launch-quoting change are read with
+// no schema, so `$` and backtick (and newline/CR/NUL) stay rejected at the boundary as
+// defense in depth, whatever the current quoting does with them.
 const NO_SHELL_META = /^[^\n\r\0`$]*$/;
 
 export const RemoteHostSchema = z.object({
@@ -982,10 +982,10 @@ export const RemoteCaseLinkSchema = z.object({
 //
 // Docker mode is a location overlay on cases (see docs/docker-cases-plan.md),
 // the analog of the remote-SSH schemas above. `image`, `hostWorkspacePath`,
-// `containerWorkdir`, and `container` all reach the outer `bash -c "..."` launch
-// layer, so they carry NO_SHELL_META (rejects `$`/backtick that survive the
-// double-quote layer) exactly like remotePath/identityFile. `--privileged` and
-// any docker-socket mount are structurally unrepresentable (never accepted).
+// `containerWorkdir`, and `container` all reach the `bash -c` launch layer, so they
+// carry NO_SHELL_META (rejects `$`/backtick) exactly like remotePath/identityFile.
+// `--privileged` and any docker-socket mount are structurally unrepresentable
+// (never accepted).
 
 const DockerResourceLimitsSchema = z
   .object({
