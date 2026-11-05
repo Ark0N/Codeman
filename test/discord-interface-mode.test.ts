@@ -33,6 +33,7 @@ let sequence: number;
 let remoteChannels: Map<string, any>;
 let remoteMessages: Map<string, any>;
 let statusEditRefused: boolean;
+let activityRenameRetryAfter: number | undefined;
 let uploaded: Array<{ name: string; text: string }>;
 const BOT = '888888888888888888';
 
@@ -121,6 +122,8 @@ function makeBridge(
       }
       const id = path.split('/').pop()!;
       if (method === 'PATCH') {
+        if (body?.name && activityRenameRetryAfter)
+          return Response.json({ retry_after: activityRenameRetryAfter }, { status: 429 });
         const c = remoteChannels.get(id);
         if (c) {
           Object.assign(c, body);
@@ -158,6 +161,7 @@ beforeEach(async () => {
   remoteChannels = new Map();
   remoteMessages = new Map();
   statusEditRefused = false;
+  activityRenameRetryAfter = undefined;
   uploaded = [];
   sendInput = vi.fn(async () => true);
   await writeDiscordConfig(dir, cfg);
@@ -168,6 +172,70 @@ afterEach(async () => {
 });
 
 describe('Discord interface mode', () => {
+  it('reacts to a native session update even when the thread name did not change', async () => {
+    let now = 1_000;
+    sessions = [{ id: 's1', name: 'hs-lab', working: false }];
+    const b = makeBridge(undefined, { now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    const thread = (await readFullMap(dir)).s1;
+    await b.sessionRenamed('s1', 'hs-lab');
+    await b.pollActivity();
+    sessions[0].working = true;
+    now += 100;
+    await b.sessionRenamed('s1', 'hs-lab');
+    await b.pollActivity();
+    expect(remoteChannels.get(thread).name).toBe('🟡 Working · hs-lab');
+    expect(posts.some((p) => p.path.endsWith('/typing'))).toBe(true);
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
+  it('keeps typing when an existing Idle thread cannot be renamed yet, without inline retries', async () => {
+    let now = 1_000;
+    sessions = [{ id: 's1', name: 'hs-lab', working: false }];
+    const b = makeBridge(undefined, { now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    const thread = (await readFullMap(dir)).s1;
+    const titleEdits = () => posts.filter((p) => p.method === 'PATCH' && p.path.endsWith('/' + thread) && p.body?.name);
+    const typing = () => posts.filter((p) => p.method === 'POST' && p.path.endsWith('/typing'));
+    await b.pollActivity();
+    expect(titleEdits()).toHaveLength(0);
+    expect(typing()).toHaveLength(0);
+    sessions[0].working = true;
+    activityRenameRetryAfter = 120;
+    now += 4_000;
+    await b.pollActivity();
+    expect(remoteChannels.get(thread).name).toBe('🟢 Idle · hs-lab');
+    expect(typing()).toHaveLength(1);
+    expect(titleEdits()).toHaveLength(1);
+    now += 8_000;
+    await b.pollActivity();
+    expect(typing()).toHaveLength(2);
+    expect(titleEdits()).toHaveLength(1);
+    activityRenameRetryAfter = undefined;
+    now += 120_000;
+    await b.pollActivity();
+    expect(remoteChannels.get(thread).name).toBe('🟡 Working · hs-lab');
+    expect(titleEdits()).toHaveLength(2);
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
+  it('repairs a stale Idle title after a concurrent request overwrites its published Working title', async () => {
+    let now = 1_000;
+    sessions = [{ id: 's1', name: 'hs-lab', working: true }];
+    const b = makeBridge(undefined, { now: () => now });
+    await b.reload();
+    await b.syncSessions();
+    const thread = (await readFullMap(dir)).s1;
+    await b.pollActivity();
+    remoteChannels.get(thread).name = '🟢 Idle · hs-lab';
+    now += 8_000;
+    await b.pollActivity();
+    expect(remoteChannels.get(thread).name).toBe('🟡 Working · hs-lab');
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
   it('shows activity in the owned thread, types only while working, and stops on disable', async () => {
     let now = 1_000;
     let waiting = false;

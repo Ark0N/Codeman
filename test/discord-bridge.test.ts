@@ -541,8 +541,11 @@ describe('DiscordBridge', () => {
   it('drops a thread whose creation finished after the parent channel changed', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const creating = new Promise<void>((resolve) => (entered = resolve));
     const b = bridge({}, async (url, init) => {
       if (String(url).endsWith(`/channels/${PARENT}/threads`)) {
+        entered();
         await gate;
         return jsonRes({ id: THREAD });
       }
@@ -554,7 +557,7 @@ describe('DiscordBridge', () => {
       return jsonRes({ id: 'msg' });
     });
     const first = b.notify(MSG);
-    await new Promise((r) => setTimeout(r, 10));
+    await creating;
     await writeDiscordConfig(dir, { ...CFG, parentChannelId: '777777777777777777' });
     await b.reload();
     release();

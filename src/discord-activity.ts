@@ -24,7 +24,7 @@ interface ActivityDeps {
   sessions(): DiscordActivitySession[];
   destination(id: string): string | undefined;
   /** Check current ownership without reopening an archived or locked thread. */
-  verify(id: string, destination: string): Promise<boolean>;
+  verify(id: string, destination: string): Promise<boolean | { name: string }>;
   rename(destination: string, name: string, current: () => boolean): Promise<unknown>;
   typing(destination: string, current: () => boolean): Promise<unknown>;
   now(): number;
@@ -34,8 +34,21 @@ interface Progress {
   name?: string;
   renamedAt?: number;
   typedAt?: number;
-  retryAt?: number;
+  verifiedAt?: number;
+  idleSince?: number;
+  verifyRetryAt?: number;
+  renameRetryAt?: number;
+  typingRetryAt?: number;
 }
+
+const RETRY_MS = 30_000;
+function retryAfter(error: unknown): number {
+  const delay = (error as { retryAfterMs?: unknown })?.retryAfterMs;
+  return typeof delay === 'number' && Number.isFinite(delay) && delay > 0 ? delay : RETRY_MS;
+}
+
+const activityPrefix = (session: DiscordActivitySession) =>
+  discordActivityName({ ...session, name: '' }).split(' · ')[0];
 
 /** Coalesced sweeps, four sessions at a time. No messages, pings, agent input or new destinations. */
 export class DiscordActivity {
@@ -97,24 +110,57 @@ export class DiscordActivity {
       this.progress.set(id, progress);
     }
     const now = this.deps.now();
-    if ((progress.retryAt ?? 0) > now) return;
+    if (session.working || session.waiting || session.exited) progress.idleSince = undefined;
+    else progress.idleSince ??= now;
+    if ((progress.verifyRetryAt ?? 0) > now) return;
     const needsRename = () => {
       const s = current();
-      return (
-        s &&
-        progress.name !== discordActivityName(s) &&
-        (progress.renamedAt === undefined || now - progress.renamedAt >= 30_000)
-      );
+      if (!s || (progress.renameRetryAt ?? 0) > now || progress.name === discordActivityName(s)) return false;
+      const active = s.working || s.waiting || s.exited;
+      const stateChanged = !progress.name?.startsWith(activityPrefix(s) + ' · ');
+      // Show a new active state promptly; only settling back to Idle is delayed. Short
+      // gaps between turns must not spend the rename budget or hide the next short turn.
+      if (active && stateChanged) return progress.renamedAt === undefined || now - progress.renamedAt >= 1_000;
+      if (!active && /^(🟡 Working|🔴 Needs input|⚫ Offline) · /.test(progress.name ?? ''))
+        return now - (progress.idleSince ?? now) >= 30_000;
+      return progress.renamedAt === undefined || now - progress.renamedAt >= 30_000;
     };
     const needsTyping = () => {
       const s = current();
       return (
-        s?.working && !s.waiting && !s.exited && (progress.typedAt === undefined || now - progress.typedAt >= 8_000)
+        s?.working &&
+        !s.waiting &&
+        !s.exited &&
+        (progress.typingRetryAt ?? 0) <= now &&
+        (progress.typedAt === undefined || now - progress.typedAt >= 8_000)
       );
     };
-    if (!needsRename() && !needsTyping()) return;
+    if (!needsRename() && !needsTyping() && progress.verifiedAt !== undefined && now - progress.verifiedAt < 30_000)
+      return;
     try {
-      if (!(await this.deps.verify(id, destination)) || !current()) return;
+      const verified = await this.deps.verify(id, destination);
+      if (!verified || !current()) return;
+      progress.verifiedAt = now;
+      // Another in-flight bridge request (or a manual rename) may have written an
+      // older title after our PATCH. Reconcile the real title, not just our cache.
+      if (typeof verified === 'object') progress.name = verified.name;
+    } catch (error) {
+      progress.verifyRetryAt = this.deps.now() + retryAfter(error);
+      return;
+    }
+    // Typing has its own endpoint/budget and must not wait behind a rename's 429.
+    if (needsTyping()) {
+      progress.typedAt = now;
+      try {
+        await this.deps.typing(destination, () => {
+          const s = current();
+          return !!s?.working && !s.waiting && !s.exited;
+        });
+      } catch (error) {
+        progress.typingRetryAt = this.deps.now() + retryAfter(error);
+      }
+    }
+    try {
       if (needsRename()) {
         const name = discordActivityName(current()!);
         // Record the attempt, including failures: never spend repeated rename requests on a flap.
@@ -123,16 +169,9 @@ export class DiscordActivity {
         if (!current()) return;
         progress.name = name;
       }
-      if (needsTyping()) {
-        progress.typedAt = now;
-        await this.deps.typing(destination, () => {
-          const s = current();
-          return !!s?.working && !s.waiting && !s.exited;
-        });
-      }
-    } catch {
+    } catch (error) {
       // Cosmetic failures never block agent execution or response delivery.
-      progress.retryAt = now + 30_000;
+      progress.renameRetryAt = this.deps.now() + retryAfter(error);
     }
   }
 }

@@ -42,17 +42,17 @@ describe('Discord live activity', () => {
     expect(typing).toHaveBeenCalledTimes(2);
     expect(rename).toHaveBeenCalledTimes(1);
   });
-  it('stops typing immediately for questions, idle and exit, and coalesces title changes', async () => {
+  it('shows questions and exit promptly, stops typing, and delays only settling to Idle', async () => {
     await activity.poll();
     sessions[0].waiting = true;
     now += 8_000;
     await activity.poll();
     expect(typing).toHaveBeenCalledTimes(1);
-    expect(rename).toHaveBeenCalledTimes(1);
+    expect(rename).toHaveBeenLastCalledWith('thread', '🔴 Needs input · hs-lab', expect.any(Function));
+    sessions[0] = { id: 's1', name: 'hs-lab', working: false };
     now += 30_000;
     await activity.poll();
     expect(rename).toHaveBeenLastCalledWith('thread', '🔴 Needs input · hs-lab', expect.any(Function));
-    sessions[0] = { id: 's1', name: 'hs-lab', working: false };
     now += 30_000;
     await activity.poll();
     expect(rename).toHaveBeenLastCalledWith('thread', '🟢 Idle · hs-lab', expect.any(Function));
@@ -113,7 +113,85 @@ describe('Discord live activity', () => {
     now += 30_000;
     await activity.poll();
     expect(rename).toHaveBeenCalledTimes(2);
+    expect(typing).toHaveBeenCalledTimes(2);
+  });
+  it('does not spend a rename on an already-correct title and shows a new short turn promptly', async () => {
+    sessions[0].working = false;
+    verify.mockResolvedValue({ name: '🟢 Idle · hs-lab' });
+    await activity.poll();
+    expect(rename).not.toHaveBeenCalled();
+    now += 4_000;
+    sessions[0].working = true;
+    await activity.poll();
+    expect(rename).toHaveBeenCalledWith('thread', '🟡 Working · hs-lab', expect.any(Function));
     expect(typing).toHaveBeenCalledTimes(1);
+  });
+  it('delays Idle between short turns rather than spending the title budget on a brief gap', async () => {
+    await activity.poll();
+    sessions[0].working = false;
+    now += 4_000;
+    await activity.poll();
+    expect(rename).toHaveBeenCalledTimes(1);
+    sessions[0].working = true;
+    now += 4_000;
+    await activity.poll();
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(typing).toHaveBeenCalledTimes(2);
+  });
+  it('reconciles a stale Idle title written after our successful Working rename', async () => {
+    await activity.poll();
+    verify.mockResolvedValue({ name: '🟢 Idle · hs-lab' });
+    now += 8_000;
+    await activity.poll();
+    expect(rename).toHaveBeenCalledTimes(2);
+    expect(rename).toHaveBeenLastCalledWith('thread', '🟡 Working · hs-lab', expect.any(Function));
+  });
+  it('keeps typing through a long rename rate limit and honors the actual retry-after', async () => {
+    rename.mockRejectedValueOnce(Object.assign(new Error('limited'), { retryAfterMs: 120_000 }));
+    await activity.poll();
+    expect(typing).toHaveBeenCalledTimes(1);
+    now += 8_000;
+    await activity.poll();
+    expect(typing).toHaveBeenCalledTimes(2);
+    expect(rename).toHaveBeenCalledTimes(1);
+    now += 111_000;
+    await activity.poll();
+    expect(rename).toHaveBeenCalledTimes(1);
+    now += 1_000;
+    await activity.poll();
+    expect(rename).toHaveBeenCalledTimes(2);
+  });
+  it('keeps title updates independent of typing endpoint failures', async () => {
+    typing.mockRejectedValueOnce(Object.assign(new Error('typing limited'), { retryAfterMs: 60_000 }));
+    await activity.poll();
+    expect(rename).toHaveBeenCalledWith('thread', '🟡 Working · hs-lab', expect.any(Function));
+    now += 8_000;
+    sessions[0].waiting = true;
+    await activity.poll();
+    expect(rename).toHaveBeenLastCalledWith('thread', '🔴 Needs input · hs-lab', expect.any(Function));
+    expect(typing).toHaveBeenCalledTimes(1);
+  });
+  it('measures retry-after from the response rather than an earlier slow ownership check', async () => {
+    rename.mockImplementationOnce(async () => {
+      now += 20_000;
+      throw Object.assign(new Error('limited'), { retryAfterMs: 120_000 });
+    });
+    await activity.poll();
+    now += 119_000;
+    await activity.poll();
+    expect(rename).toHaveBeenCalledTimes(1);
+    now += 1_000;
+    await activity.poll();
+    expect(rename).toHaveBeenCalledTimes(2);
+  });
+  it('reconciles an externally stale title even while Idle', async () => {
+    sessions[0].working = false;
+    verify.mockResolvedValue({ name: '🟢 Idle · hs-lab' });
+    await activity.poll();
+    verify.mockResolvedValue({ name: '🟡 Working · hs-lab' });
+    now += 30_000;
+    await activity.poll();
+    expect(rename).toHaveBeenCalledWith('thread', '🟢 Idle · hs-lab', expect.any(Function));
   });
   it('refreshes the destination after a scope change, forget and restart', async () => {
     await activity.poll();
@@ -136,18 +214,33 @@ describe('Discord live activity', () => {
     await activity.poll();
     expect(activity.name(sessions[0])).toBe('🔴 Needs input · hs-lab');
   });
-  it.each(['typing', 'rename'] as const)('cancels a rate-limited %s retry after disable', async (method) => {
-    const fetch = vi.fn(async () => Response.json({ retry_after: 1 }, { status: 429 }));
-    const api = new DiscordApi(
-      () => 'test-token',
-      fetch,
-      async () => {
-        scope = undefined;
-      }
-    );
-    if (method === 'typing') await api.typing('thread', () => !!scope);
-    else await api.rename('thread', '🟡 Working · hs-lab', () => !!scope);
+  it.each(['typing', 'rename'] as const)(
+    'defers a rate-limited cosmetic %s without holding the activity sweep',
+    async (method) => {
+      const fetch = vi.fn(async () => Response.json({ retry_after: 1 }, { status: 429 }));
+      const api = new DiscordApi(
+        () => 'test-token',
+        fetch,
+        async () => {
+          scope = undefined;
+        }
+      );
+      const request =
+        method === 'typing'
+          ? api.typing('thread', () => !!scope)
+          : api.rename('thread', '🟡 Working · hs-lab', () => !!scope);
+      await expect(request).rejects.toMatchObject({ status: 429, retryAfterMs: 1000 });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(scope).toBe('guild/category');
+    }
+  );
+  it('retains a long Discord Retry-After header for the caller instead of retrying early', async () => {
+    const fetch = vi.fn(async () => Response.json({}, { status: 429, headers: { 'retry-after': '123.5' } }));
+    const sleep = vi.fn(async () => undefined);
+    const api = new DiscordApi(() => 'test-token', fetch, sleep);
+    await expect(api.request('GET', '/channels/thread')).rejects.toMatchObject({ status: 429, retryAfterMs: 123_500 });
     expect(fetch).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
   it('caps names at Discord limits and gives waiting/offline priority over busy', () => {
     expect(discordActivityName({ id: 's', working: true, waiting: true })).toContain('Needs input');

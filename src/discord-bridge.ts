@@ -507,7 +507,9 @@ export class DiscordHttpError extends Error {
   constructor(
     readonly status: number,
     /** Discord's own error code (10003 unknown channel, 50001 missing access ...). */
-    readonly code?: number
+    readonly code?: number,
+    /** Discord's actual wait, retained so independent cosmetic endpoints can defer their own retries. */
+    readonly retryAfterMs?: number
   ) {
     super(`Discord HTTP ${status}${code ? ` (code ${code})` : ''}`);
   }
@@ -526,7 +528,8 @@ export class DiscordApi {
     path: string,
     body?: unknown,
     attempt = 0,
-    current?: () => boolean
+    current?: () => boolean,
+    deferRateLimit = false
   ): Promise<T | null> {
     if (current && !current()) return null;
     const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
@@ -550,19 +553,24 @@ export class DiscordApi {
       // Creating a thread/channel has no idempotency key: a lost response must not create a duplicate.
       if (!retrySafe || attempt >= 2) throw err;
       await this.sleep(500 * 2 ** attempt);
-      return this.request<T>(method, path, body, attempt + 1, current);
+      return this.request<T>(method, path, body, attempt + 1, current, deferRateLimit);
     }
-    if (res.status === 429 && attempt < 2) {
-      const j = (await res.json().catch(() => ({}))) as { retry_after?: number };
-      const delay = Number.isFinite(j.retry_after) ? Math.max((j.retry_after ?? 1) * 1000, 100) : 1000;
+    if (res.status === 429) {
+      const j = (await res.json().catch(() => ({}))) as { retry_after?: number; code?: number };
+      const headerSeconds = Number(res.headers.get('retry-after'));
+      const seconds = Math.max(
+        typeof j.retry_after === 'number' && Number.isFinite(j.retry_after) && j.retry_after > 0 ? j.retry_after : 0,
+        Number.isFinite(headerSeconds) && headerSeconds > 0 ? headerSeconds : 0
+      );
+      const delay = seconds > 0 ? Math.max(seconds * 1000, 100) : 1000;
       // Never retry earlier than Discord permits. A longer wait is surfaced instead of blocking a session chain.
-      if (delay > 30_000) throw new DiscordHttpError(429);
+      if (deferRateLimit || attempt >= 2 || delay > 30_000) throw new DiscordHttpError(429, j.code, delay);
       await this.sleep(delay);
-      return this.request<T>(method, path, body, attempt + 1, current);
+      return this.request<T>(method, path, body, attempt + 1, current, deferRateLimit);
     }
     if (res.status >= 500 && retrySafe && attempt < 2) {
       await this.sleep(500 * 2 ** attempt);
-      return this.request<T>(method, path, body, attempt + 1, current);
+      return this.request<T>(method, path, body, attempt + 1, current, deferRateLimit);
     }
     if (!res.ok) {
       const j = (await res.json().catch(() => ({}))) as { code?: number };
@@ -631,10 +639,10 @@ export class DiscordApi {
     );
   }
   rename(threadId: string, name: string, current?: () => boolean): Promise<unknown> {
-    return this.request('PATCH', `/channels/${threadId}`, { name }, 0, current);
+    return this.request('PATCH', `/channels/${threadId}`, { name }, 0, current, !!current);
   }
   typing(threadId: string, current?: () => boolean): Promise<unknown> {
-    return this.request('POST', `/channels/${threadId}/typing`, undefined, 0, current);
+    return this.request('POST', `/channels/${threadId}/typing`, undefined, 0, current, !!current);
   }
   archive(threadId: string): Promise<unknown> {
     return this.request('PATCH', `/channels/${threadId}`, { archived: true });
@@ -1040,7 +1048,7 @@ export class DiscordBridge {
             return undefined;
           });
         const bot = await this.activityBot;
-        return (
+        const owned =
           !!bot &&
           channel?.id === thread &&
           channel.type === 11 &&
@@ -1048,8 +1056,8 @@ export class DiscordBridge {
           channel.parent_id === this.cfg.parentChannelId &&
           channel.owner_id === bot &&
           !channel.thread_metadata?.archived &&
-          !channel.thread_metadata?.locked
-        );
+          !channel.thread_metadata?.locked;
+        return owned ? { name: channel!.name ?? '' } : false;
       },
       rename: (thread, name, current) => this.api.rename(thread, name, current),
       typing: (thread, current) => this.api.typing(thread, current),
@@ -1918,6 +1926,9 @@ export class DiscordBridge {
   async sessionRenamed(sessionId: string, name: string | undefined): Promise<void> {
     const seen = this.names.get(sessionId);
     this.names.set(sessionId, name ?? '');
+    // SessionUpdated also carries native working/idle changes. React even when its
+    // name is unchanged, so a short turn need not wait for the periodic sweep.
+    if (this.cfg.enabled && this.deps.sessions) void this.pollActivity().catch(() => undefined);
     // First sight only records the name: the thread was made with it, so a PATCH would spend a rename for nothing.
     if (seen === undefined || seen === (name ?? '')) return;
     if (this.cfg.enabled && this.cfg.mode === 'full') {
