@@ -1306,7 +1306,9 @@ confirmed? } | { clear: true }` applies (or clears) the session's
   those three the config file alone does not select it. `400 INVALID_INPUT`
   for a remote (SSH) or Docker session — both restart their agent
   differently under the hood, and applying to one would report success
-  while changing nothing. Two more responses replace the normal
+  while changing nothing. An Anthropic-type endpoint on a CLI that cannot use
+  it answers `OPERATION_FAILED` with the shared refusal message, before any
+  llama-swap check. Two more responses replace the normal
   `{customModel, restarted}` shape, neither an error, and neither restarts
   or creates anything on the first ask. ⚠️ **Each is answered by its OWN
   flag on the retry, and answering one is not consent to the other**: they
