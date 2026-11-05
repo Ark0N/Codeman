@@ -168,6 +168,49 @@ afterEach(async () => {
 });
 
 describe('Discord interface mode', () => {
+  it('shows activity in the owned thread, types only while working, and stops on disable', async () => {
+    let now = 1_000;
+    let waiting = false;
+    sessions = [{ id: 's1', name: 'hs-lab', working: true }];
+    const b = makeBridge(undefined, { now: () => now, awaitingChoice: () => waiting });
+    await b.reload();
+    await b.syncSessions();
+    const thread = (await readFullMap(dir)).s1;
+    await b.pollActivity();
+    expect(remoteChannels.get(thread).name).toBe('🟡 Working · hs-lab');
+    const typing = () => posts.filter((p) => p.method === 'POST' && p.path.endsWith('/typing'));
+    expect(typing().at(-1)?.path).toBe(`/api/v10/channels/${thread}/typing`);
+    const count = typing().length;
+    waiting = true;
+    now += 30_000;
+    await b.pollActivity();
+    expect(remoteChannels.get(thread).name).toBe('🔴 Needs input · hs-lab');
+    expect(typing()).toHaveLength(count);
+    // Synchronization must not strip the activity label.
+    await b.syncSessions();
+    expect(remoteChannels.get(thread).name).toBe('🔴 Needs input · hs-lab');
+    await writeDiscordConfig(dir, { ...cfg, enabled: false });
+    await b.reload();
+    waiting = false;
+    now += 30_000;
+    await b.pollActivity();
+    expect(typing()).toHaveLength(count);
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
+  it('never reopens an archived thread merely to show agent activity', async () => {
+    sessions = [{ id: 's1', name: 'hs-lab', working: true }];
+    const b = makeBridge();
+    await b.reload();
+    await b.syncSessions();
+    const thread = (await readFullMap(dir)).s1;
+    remoteChannels.get(thread).thread_metadata.archived = true;
+    const start = posts.length;
+    await b.pollActivity();
+    expect(posts.slice(start).some((p) => p.method === 'PATCH' || p.path.endsWith('/typing'))).toBe(false);
+    expect(remoteChannels.get(thread).thread_metadata.archived).toBe(true);
+  });
+
   it('groups a case into one parent with exact session-thread input and safe parent selection', async () => {
     const caseKey = 'a'.repeat(64);
     const control = vi.fn(async () => ({ text: 'Management ready' }));

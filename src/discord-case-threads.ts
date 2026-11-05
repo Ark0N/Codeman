@@ -271,6 +271,15 @@ export class DiscordCaseThreads {
     await this.verify(e, true);
     if (!this.active(this.state.entries[key], key)) throw new DiscordChannelProblem('Session was closed');
   }
+  /** Cosmetic activity must not reopen an archived thread or recreate a deleted destination. */
+  async activityOwned(scope: DiscordChannelScope, id: string, thread: string): Promise<boolean> {
+    await this.load();
+    const key = this.state.current[scopeKey(scope, id)],
+      e = this.state.entries[key];
+    if (!e || !this.active(e, key) || e.starterId !== thread) return false;
+    const t = await this.verify(e, false);
+    return this.active(this.state.entries[key], key) && !t.thread_metadata?.archived && !t.thread_metadata?.locked;
+  }
   forSession(scope: DiscordChannelScope, id: string, name?: string): Promise<string> {
     const key = scopeKey(scope, id),
       pending = this.pending.get(key);

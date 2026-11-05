@@ -37,6 +37,7 @@ import { boundedDiscordDownload } from './discord-file-transfers.js';
 import { probePathKind } from './utils/bounded-path-probe.js';
 import { DISCORD_RECEIVED_DIR } from './web/paste-image-gc.js';
 import WebSocket from 'ws';
+import { DiscordActivity, type DiscordActivitySession } from './discord-activity.js';
 import { stripVTControlCharacters } from 'node:util';
 import { DiscordDeliveryError, DiscordDeliveryJournal, type DiscordDelivery } from './discord-delivery.js';
 import { DiscordChannelProblem, type DiscordManagedChannel } from './discord-session-channels.js';
@@ -520,7 +521,14 @@ export class DiscordApi {
     private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))
   ) {}
 
-  async request<T = unknown>(method: string, path: string, body?: unknown, attempt = 0): Promise<T | null> {
+  async request<T = unknown>(
+    method: string,
+    path: string,
+    body?: unknown,
+    attempt = 0,
+    current?: () => boolean
+  ): Promise<T | null> {
+    if (current && !current()) return null;
     const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
     const payload = isForm ? JSON.parse(String((body as FormData).get('payload_json') ?? '{}')) : body;
     const retrySafe = method !== 'POST' || !!(payload as DiscordPost | undefined)?.enforce_nonce;
@@ -542,7 +550,7 @@ export class DiscordApi {
       // Creating a thread/channel has no idempotency key: a lost response must not create a duplicate.
       if (!retrySafe || attempt >= 2) throw err;
       await this.sleep(500 * 2 ** attempt);
-      return this.request<T>(method, path, body, attempt + 1);
+      return this.request<T>(method, path, body, attempt + 1, current);
     }
     if (res.status === 429 && attempt < 2) {
       const j = (await res.json().catch(() => ({}))) as { retry_after?: number };
@@ -550,11 +558,11 @@ export class DiscordApi {
       // Never retry earlier than Discord permits. A longer wait is surfaced instead of blocking a session chain.
       if (delay > 30_000) throw new DiscordHttpError(429);
       await this.sleep(delay);
-      return this.request<T>(method, path, body, attempt + 1);
+      return this.request<T>(method, path, body, attempt + 1, current);
     }
     if (res.status >= 500 && retrySafe && attempt < 2) {
       await this.sleep(500 * 2 ** attempt);
-      return this.request<T>(method, path, body, attempt + 1);
+      return this.request<T>(method, path, body, attempt + 1, current);
     }
     if (!res.ok) {
       const j = (await res.json().catch(() => ({}))) as { code?: number };
@@ -622,8 +630,11 @@ export class DiscordApi {
       { content, allowed_mentions: { parse: [], users: [] } }
     );
   }
-  rename(threadId: string, name: string): Promise<unknown> {
-    return this.request('PATCH', `/channels/${threadId}`, { name });
+  rename(threadId: string, name: string, current?: () => boolean): Promise<unknown> {
+    return this.request('PATCH', `/channels/${threadId}`, { name }, 0, current);
+  }
+  typing(threadId: string, current?: () => boolean): Promise<unknown> {
+    return this.request('POST', `/channels/${threadId}/typing`, undefined, 0, current);
   }
   archive(threadId: string): Promise<unknown> {
     return this.request('PATCH', `/channels/${threadId}`, { archived: true });
@@ -955,6 +966,9 @@ export class DiscordBridge {
   private syncState: DiscordSessionSync = { state: 'idle', total: 0, ready: 0, failed: 0 };
   private stopped = false;
   private outputTimer?: ReturnType<typeof setInterval>;
+  private activityTimer?: ReturnType<typeof setInterval>;
+  private readonly activity: DiscordActivity;
+  private activityBot?: Promise<string | undefined>;
   private outputReads = new Map<string, { remote: boolean; run: Promise<void> }>();
   private outputIndex = 0;
   private actions = new Map<string, DiscordBoundAction>();
@@ -1009,6 +1023,54 @@ export class DiscordBridge {
         this.cfg.categoryId === scope.categoryId &&
         (!this.deps.sessions || this.deps.sessions().some((s) => s.id === id))
     );
+    this.activity = new DiscordActivity({
+      scope: () =>
+        !this.stopped && !this.held && this.cfg.enabled && this.cfg.token ? this.destinationScope() : undefined,
+      sessions: () => this.activitySessions(),
+      destination: (id) =>
+        this.cfg.mode === 'full' ? this.channels.channelForSession(this.cfg, id) : this.threads[id],
+      verify: async (id, thread) => {
+        if (this.cfg.mode === 'full') return this.channels.activityOwned(this.cfg, id, thread);
+        const channel = await this.api.getChannel(thread);
+        this.activityBot ??= this.api
+          .botUserId()
+          .then((me) => me?.id)
+          .catch(() => {
+            this.activityBot = undefined;
+            return undefined;
+          });
+        const bot = await this.activityBot;
+        return (
+          !!bot &&
+          channel?.id === thread &&
+          channel.type === 11 &&
+          channel.guild_id === this.cfg.guildId &&
+          channel.parent_id === this.cfg.parentChannelId &&
+          channel.owner_id === bot &&
+          !channel.thread_metadata?.archived &&
+          !channel.thread_metadata?.locked
+        );
+      },
+      rename: (thread, name, current) => this.api.rename(thread, name, current),
+      typing: (thread, current) => this.api.typing(thread, current),
+      now: this.now,
+    });
+  }
+
+  private activitySessions(): DiscordActivitySession[] {
+    return (this.deps.sessions?.() ?? []).map((s) => ({
+      ...s,
+      waiting: !!this.deps.awaitingChoice?.(s.id),
+      exited: !!this.deps.agentExited?.(s.id),
+    }));
+  }
+  private activityName(id: string, name?: string): string | undefined {
+    const session = this.activitySessions().find((s) => s.id === id);
+    return session ? this.activity.name({ ...session, name: name ?? session.name }) : name;
+  }
+  /** Cosmetic status only: safe to call without a native transcript or a working agent. */
+  pollActivity(): Promise<void> {
+    return this.activity.poll();
   }
 
   async provisionCategory(config: DiscordConfig): Promise<string> {
@@ -1483,6 +1545,15 @@ export class DiscordBridge {
     // A save that changed neither the switch nor the token keeps the gateway session, so it can resume.
     // A gateway that gave up (a fatal close, such as a missing intent) is replaced, or a fix could never take.
     const want = this.cfg.enabled && this.cfg.token && !this.held ? this.cfg.token : '';
+    this.activityBot = undefined;
+    this.activity.reset();
+    if (want && this.deps.sessions && !this.activityTimer) {
+      this.activityTimer = setInterval(() => void this.pollActivity().catch(() => undefined), 4000);
+      this.activityTimer.unref();
+    } else if (!want) {
+      clearInterval(this.activityTimer);
+      this.activityTimer = undefined;
+    }
     if (want)
       void this.channels.flushRetirements(this.cfg.guildId).catch((err) => {
         this.last = this.fail(err);
@@ -1517,6 +1588,9 @@ export class DiscordBridge {
 
   stop(): void {
     this.stopped = true;
+    this.activity.reset();
+    clearInterval(this.activityTimer);
+    this.activityTimer = undefined;
     this.actions.clear();
     this.syncQueued = false;
     clearInterval(this.outputTimer);
@@ -1585,7 +1659,7 @@ export class DiscordBridge {
     if (this.cfg.mode === 'full') {
       const scope = this.destinationScope();
       return this.channels
-        .forSession(this.cfg, sessionId, name)
+        .forSession(this.cfg, sessionId, this.activityName(sessionId, name))
         .then((id) =>
           scope === this.destinationScope()
             ? id
@@ -1607,7 +1681,7 @@ export class DiscordBridge {
     const mine: { p?: Promise<string | DiscordResult> } = {};
     const p = (mine.p = (async () => {
       try {
-        const t = await this.api.createThread(parent, threadNameFor(name, sessionId));
+        const t = await this.api.createThread(parent, threadNameFor(this.activityName(sessionId, name), sessionId));
         if (!t?.id) return this.fail(new BridgeProblem('Discord did not return a thread'));
         // A save moved the bridge to another channel meanwhile: this thread belongs to the old one.
         if (parent !== this.cfg.parentChannelId) {
@@ -1847,14 +1921,14 @@ export class DiscordBridge {
     // First sight only records the name: the thread was made with it, so a PATCH would spend a rename for nothing.
     if (seen === undefined || seen === (name ?? '')) return;
     if (this.cfg.enabled && this.cfg.mode === 'full') {
-      await this.channels.rename(this.cfg, sessionId, name).catch((err) => {
+      await this.channels.rename(this.cfg, sessionId, this.activityName(sessionId, name)).catch((err) => {
         this.last = this.fail(err);
       });
       return;
     }
     const thread = this.threads[sessionId];
     if (!thread || !this.cfg.enabled) return;
-    await this.api.rename(thread, threadNameFor(name, sessionId)).catch(() => undefined);
+    await this.api.rename(thread, threadNameFor(this.activityName(sessionId, name), sessionId)).catch(() => undefined);
   }
 
   /**
@@ -1863,6 +1937,7 @@ export class DiscordBridge {
    * Per-tab state goes whether or not the tab ever had a thread, so these maps cannot grow for the life of the server.
    */
   forgetTab(sessionId: string): void {
+    this.activity.forget(sessionId);
     this.outputDue.delete(sessionId);
     this.lastReply.delete(sessionId);
     this.names.delete(sessionId);
