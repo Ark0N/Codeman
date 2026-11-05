@@ -2060,8 +2060,9 @@ export class WebServer extends EventEmitter {
       // the injection builder itself whether a saved Anthropic-type endpoint injects,
       // through a synthetic probe endpoint that is never saved and never contacted.
       // The menu uses the flag to hide rows whose CLI cannot speak the Anthropic
-      // protocol, so a refused click can never happen (CLAUDE.md: never branch on a
-      // CLI id in UI code).
+      // protocol (CLAUDE.md: never branch on a CLI id in UI code). The menu only hides
+      // the rows; the server still refuses whatever arrives, e.g. from a menu opened
+      // before the endpoint was switched to Anthropic.
       const anthropicProbe = {
         id: 'menu-probe',
         label: 'menu-probe',

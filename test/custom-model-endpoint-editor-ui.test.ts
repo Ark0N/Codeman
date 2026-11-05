@@ -16,6 +16,7 @@ const SETTINGS_UI_JS = readFileSync(new URL('../src/web/public/settings-ui.js', 
 function bootEditor(hosts: unknown[]) {
   const dom = new JSDOM(
     `<!doctype html><body>
+      <div id="customModelHostsList"></div>
       <div id="customModelHostEditor" style="display:none">
         <h4 id="customModelHostEditorTitle"></h4>
         <input id="customModelHostId">
@@ -73,6 +74,20 @@ describe('custom model endpoint editor: endpoint type', () => {
 
     const saved = await saveBody('old', hosts);
     expect(saved.body.endpointType).toBe('openai');
+  });
+});
+
+describe('custom model endpoint list: endpoint type marker', () => {
+  it('marks an Anthropic-type host and leaves a legacy host unmarked', () => {
+    const hosts = [
+      { id: 'gw', label: 'Gateway', baseUrl: 'http://gw', endpointType: 'anthropic' },
+      { id: 'old', label: 'Old', baseUrl: 'http://old' },
+    ];
+    const { app, doc } = bootEditor(hosts);
+    app.renderCustomModelHostsList();
+    const desc = (id: string) => doc.querySelector(`[data-endpoint-id="${id}"] .set-row-desc`)?.textContent ?? '';
+    expect(desc('gw')).toContain('Anthropic (Claude Code only)');
+    expect(desc('old')).not.toContain('Anthropic');
   });
 });
 

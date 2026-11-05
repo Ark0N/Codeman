@@ -1599,8 +1599,9 @@ export function registerSessionRoutes(
     const injection = buildCustomModelInjection(entry, endpoint, body.modelId, contextLength);
     // Refuse the type mismatch BEFORE the llama-swap checks: probing `GET /running` could
     // answer `requiresConfirmation`, a question about evicting another session's model,
-    // for an apply that cannot happen. The Run menu already hides these rows, so this is
-    // the API-only path.
+    // for an apply that cannot happen. The Run menu hides these rows and the server
+    // refuses whatever still arrives (an API caller, or a menu opened before the
+    // endpoint was switched to Anthropic).
     if (injection.kind === 'unsupported') {
       return createErrorResponse(
         ApiErrorCode.OPERATION_FAILED,
