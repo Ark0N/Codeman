@@ -142,6 +142,23 @@ describe('POST /api/sessions/:id/custom-model', () => {
     expect(res.json().errorCode).toBe('OPERATION_FAILED');
   });
 
+  it('applies an Anthropic-type endpoint to a claude session with the /anthropic base URL', async () => {
+    const { app, ctx } = await setup();
+    await writeCustomModelHosts(getDataDir(), [{ ...CLAUDE_ENDPOINT, id: 'gw', endpointType: 'anthropic' }]);
+    const session = ctx.sessions.get('test-session-1')!;
+    session.mode = 'claude';
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/test-session-1/custom-model',
+      payload: { endpointId: 'gw', modelId: 'qwen3' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const [, envOverrides] = session.setCustomModel.mock.calls[0];
+    expect(envOverrides.ANTHROPIC_BASE_URL).toBe('http://192.168.1.50:8080/anthropic');
+  });
+
   it('refuses an Anthropic-type endpoint for a CLI that cannot speak it, with the shared refusal wording', async () => {
     // codex's recipe has no Anthropic route, so the builder refuses and the swap route
     // must name the endpoint-type mismatch (one message for every refused CLI) rather

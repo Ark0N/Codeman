@@ -62,8 +62,8 @@ recipe is the sole declarer of `supportsAnthropic`) — it points only claude's
 `ANTHROPIC_BASE_URL` at the gateway's Anthropic route; every other harness is
 refused with a clear message at launch or switch time — and hidden from the Run
 menu for that endpoint — rather than silently pointed at a route it cannot
-parse. Model discovery ignores the type
-and always calls the gateway's OpenAI `GET /v1/models`.
+parse. Model discovery ignores the type and always calls the gateway's OpenAI
+`GET /v1/models`.
 
 Discover its available models:
 
