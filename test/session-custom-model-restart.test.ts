@@ -16,6 +16,9 @@
  *    gated on that transcript existing, so these tests write one.
  * 3. pi/omp/grok wrote their config file and then launched without the `--model`
  *    that selects it, so the file was ignored.
+ * 4. A value the session set itself under an injected key was overwritten, then deleted
+ *    with the injected one on clear: an own `DSH_HOME` fell back to the server's tree and
+ *    an own `CLAUDE_CONFIG_DIR` silently moved the session to the default Claude account.
  *
  * Drives a real `Session` against the in-memory tmux layer vitest substitutes,
  * spying on `respawnPane` to read the options the relaunch would get.
@@ -251,5 +254,106 @@ describe('Codex custom endpoint model overrides', () => {
     respawn.mockClear();
     await session.restartCli();
     expect(respawn.mock.calls[0][0].codexConfig).toEqual({ model: 'native-model', reasoningEffort: 'high' });
+  });
+});
+
+describe('a value the session set itself comes back with the selection gone', () => {
+  const DSH_SELECTION = {
+    endpointId: 'ep',
+    modelId: 'q',
+    envKeys: ['DSH_HOME', 'CODEMAN_CUSTOM_MODEL_API_KEY'],
+    configDir: '/isolated/dsh',
+    homeEnvVar: 'DSH_HOME',
+  };
+  const DSH_ENV = { DSH_HOME: '/isolated/dsh', CODEMAN_CUSTOM_MODEL_API_KEY: 'k' };
+
+  it('puts an own DSH_HOME back on clear and sets it rather than unsetting it', async () => {
+    const { session, respawn } = liveSession('deepseek', { envOverrides: { DSH_HOME: '/home/u/my-dsh' } });
+    session.setCustomModel(DSH_SELECTION, DSH_ENV);
+    expect(session.envOverrideValue('DSH_HOME')).toBe('/isolated/dsh');
+
+    session.setCustomModel(undefined);
+    expect(session.envOverrideValue('DSH_HOME')).toBe('/home/u/my-dsh');
+    expect(session.deepSeekHomeOverride).toBe('/home/u/my-dsh');
+
+    await session.restartCli();
+    const options = respawn.mock.calls[0][0];
+    expect(options.envOverrides).toEqual({ DSH_HOME: '/home/u/my-dsh' });
+    expect(options.unsetEnvKeys).toEqual(['CODEMAN_CUSTOM_MODEL_API_KEY']);
+  });
+
+  it('carries it across a switch between endpoints', () => {
+    const { session } = liveSession('deepseek', { envOverrides: { DSH_HOME: '/home/u/my-dsh' } });
+    session.setCustomModel(DSH_SELECTION, DSH_ENV);
+    session.setCustomModel({ ...DSH_SELECTION, endpointId: 'other' }, DSH_ENV);
+    expect(session.envOverrideValue('DSH_HOME')).toBe('/isolated/dsh');
+
+    session.setCustomModel(undefined);
+    expect(session.envOverrideValue('DSH_HOME')).toBe('/home/u/my-dsh');
+  });
+
+  it('keeps a claude session on its own account, the #255 override', async () => {
+    const { session, respawn } = liveSession('claude', {
+      envOverrides: { CLAUDE_CONFIG_DIR: '/home/u/.claude-client', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '100000' },
+    });
+    session.setCustomModel(
+      {
+        endpointId: 'ep',
+        modelId: 'q',
+        envKeys: [...CLAUDE_KEYS, 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS'],
+        configDir: '/isolated/claude',
+        homeEnvVar: 'CLAUDE_CONFIG_DIR',
+      },
+      { ...claudeEnv, CLAUDE_CONFIG_DIR: '/isolated/claude', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '32768' }
+    );
+
+    session.setCustomModel(undefined);
+    await session.restartCli();
+    const options = respawn.mock.calls[0][0];
+    expect(options.envOverrides).toEqual({
+      CLAUDE_CONFIG_DIR: '/home/u/.claude-client',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '100000',
+    });
+    expect(options.unsetEnvKeys).toEqual(CLAUDE_KEYS);
+  });
+
+  it('still unsets a key whose own value was empty, since tmux never held that value', () => {
+    const { session } = liveSession('deepseek', { envOverrides: { DSH_HOME: '' } });
+    session.setCustomModel(DSH_SELECTION, DSH_ENV);
+
+    session.setCustomModel(undefined);
+    expect(session.envOverrideValue('DSH_HOME')).toBeUndefined();
+  });
+
+  it('writes the own home to state.json and no other own value', () => {
+    const { session } = liveSession('gemini', {
+      envOverrides: { GEMINI_API_KEY: 'own-secret', DSH_HOME: '/home/u/my-dsh' },
+    });
+    session.setCustomModel(
+      {
+        endpointId: 'ep',
+        modelId: 'q',
+        envKeys: ['GEMINI_API_KEY', 'DSH_HOME'],
+        homeEnvVar: 'DSH_HOME',
+      },
+      { GEMINI_API_KEY: 'endpoint-key', DSH_HOME: '/isolated/dsh' }
+    );
+
+    const persisted = session.getCustomModelForPersist();
+    expect(persisted?.ownEnv).toEqual({ DSH_HOME: '/home/u/my-dsh' });
+    expect(JSON.stringify(persisted)).not.toContain('own-secret');
+    // The secret is still put back: it just never leaves memory.
+    session.setCustomModel(undefined);
+    expect(session.envOverrideValue('GEMINI_API_KEY')).toBe('own-secret');
+  });
+
+  it('persists nothing extra for a recipe with no home variable', () => {
+    const { session } = liveSession('gemini', { envOverrides: { GEMINI_API_KEY: 'own-secret' } });
+    session.setCustomModel(
+      { endpointId: 'ep', modelId: 'q', envKeys: ['GEMINI_API_KEY'] },
+      { GEMINI_API_KEY: 'endpoint-key' }
+    );
+
+    expect(session.getCustomModelForPersist()).toEqual({ endpointId: 'ep', modelId: 'q', envKeys: ['GEMINI_API_KEY'] });
   });
 });

@@ -535,13 +535,19 @@ id, model and injected key NAMES are persisted, the values are re-derived
 from the endpoint store on recovery, and the pane keeps running against the
 endpoint in between because tmux retains its environment.
 
-⚠️ Clearing removes injected keys **by name**, and `CLAUDE_CONFIG_DIR` is one
-of the names claude's selection injects — so a session that ALSO had
-`CLAUDE_CONFIG_DIR` set through the generic `envOverrides` field (the
-per-client-account case) loses that override on clear too, and silently
-falls back to the server's default Claude account. If you route a session
-to a specific account this way, re-apply the override after clearing a
-custom-model selection from it.
+A value the session set itself under an injected key comes back when the
+selection goes, on a clear or a switch to another endpoint. That is what
+keeps a session on its own `DSH_HOME`, `CODEX_HOME` or `GROK_HOME`, and on
+its own account through `CLAUDE_CONFIG_DIR` (the per-client-account case).
+
+⚠️ Across a Codeman restart only the home directory comes back. The
+selection overwrote the tmux `setenv` that held it, so its record in
+`state.json` keeps that one path (`ownEnv`), and a non-granted owner loses it
+at recovery like any other privileged override. Any other own value can be a
+credential and stays in memory: a session that set its own `GEMINI_API_KEY`,
+picked an endpoint and then outlived a restart falls back to the server's key
+on clear. A selection saved by an older build has no such record, so its first
+clear still falls back to the server's default.
 
 **New sessions always default back to the harness's native backend.** A
 custom-endpoint selection is a per-session choice, never a sticky global

@@ -26,7 +26,7 @@
  * re-resolves the grant at the moment it builds a session, for the same reason.
  *
  * @dependencies user-store (canUsernameRunPrivilegedCommands), config/cli-registry
- * @consumedby web/routes/session-routes, web/routes/reboot-restore-routes
+ * @consumedby web/routes/session-routes, web/routes/reboot-restore-routes, web/server
  *
  * @module session-env-clamp
  */

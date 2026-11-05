@@ -702,6 +702,19 @@ export interface CustomModelBookkeeping extends CustomModelSelection {
   configDir?: string;
   /** Value forced onto the CLI's `model` launch param (pi/omp `custom/<id>`, grok's block name). */
   launchModel?: string;
+  /**
+   * The variable that moves the CLI's home, when the recipe redirects one (`DSH_HOME`,
+   * `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`). Its value is a path, which is what
+   * lets {@link CustomModelBookkeeping.ownEnv} keep that one entry on disk.
+   */
+  homeEnvVar?: string;
+  /**
+   * What the session itself had set under keys the selection replaced, put back when the
+   * selection goes. In memory this can hold a credential (a session's own `GEMINI_API_KEY`),
+   * so `Session.getCustomModelForPersist()` writes `homeEnvVar`'s entry and nothing else:
+   * tmux keeps only the injected value, so state.json is the one copy left after a restart.
+   */
+  ownEnv?: Record<string, string>;
 }
 
 /**

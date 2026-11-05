@@ -301,6 +301,8 @@ export interface AppliedCustomModel {
   envKeys: string[];
   configDir?: string;
   launchModel?: string;
+  /** The env key among `envKeys` that moves the CLI's home, see `CustomModelBookkeeping`. */
+  homeEnvVar?: string;
 }
 
 /**
@@ -360,9 +362,16 @@ export function applyCustomModelInjection(
       envKeys: Object.keys(envOverrides),
       configDir,
       launchModel: injection.launchModel,
+      homeEnvVar: injection.configDirVar,
     };
   }
   const configDir = customModelConfigDir(sessionId);
   const envOverrides = applyConfigDirInjection(configDir, injection, sessionEnvLookup?.(injection.dirEnvVar));
-  return { envOverrides, envKeys: Object.keys(envOverrides), configDir, launchModel: injection.launchModel };
+  return {
+    envOverrides,
+    envKeys: Object.keys(envOverrides),
+    configDir,
+    launchModel: injection.launchModel,
+    homeEnvVar: injection.dirEnvVar,
+  };
 }

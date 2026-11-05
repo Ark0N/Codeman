@@ -7,11 +7,10 @@
  * home: restoring the saved record unchanged left `DSH_HOME` on a generated config dir
  * that clearing could never delete.
  *
- * Real-home resolution is NOT recovered from the session's env overrides any more:
- * `getEnvOverridesForPersist()` keeps only `CLAUDE_CODE_*`/`CLAUDE_CONFIG_DIR`, so a
- * session's own `DSH_HOME` never survives a real restart and the lookup only ever hit on
- * the first apply in-process. Recovery falls back to the server's `DSH_HOME` or the
- * recipe's `realHomeFallback` (~/.dsh), see `_rebuildCustomModelEnv`'s comment.
+ * Real-home resolution takes no session lookup on this path: the first apply's links are
+ * still in the generated directory, and one someone removed links from the server's
+ * `DSH_HOME` or the recipe's `realHomeFallback` (~/.dsh), see `_rebuildCustomModelEnv`'s
+ * comment. A session's own home comes back on clear from `ownEnv`, the last block here.
  *
  * `_restoreCustomModel` reads no `this` state beyond the rebuild helper (it re-derives
  * everything from the endpoint store and the Session it is handed), so it is driven off
@@ -98,5 +97,92 @@ describe('_restoreCustomModel: bookkeeping rebuilt from the current recipe', () 
     await restoreCustomModel(session, saved);
 
     expect(session.getCustomModelForPersist()).toEqual(saved);
+  });
+
+  describe("a session's own value across a restart", () => {
+    const OWN_HOME = '/home/u/my-dsh';
+    const ORIGINAL_MULTIUSER = process.env.CODEMAN_MULTIUSER;
+
+    afterEach(() => {
+      if (ORIGINAL_MULTIUSER === undefined) delete process.env.CODEMAN_MULTIUSER;
+      else process.env.CODEMAN_MULTIUSER = ORIGINAL_MULTIUSER;
+    });
+
+    /** What a previous run left in state.json for a deepseek session on its own home. */
+    function savedByPreviousRun(): CustomModelBookkeeping {
+      const previous = new Session({ workingDir: '/tmp', mode: 'deepseek', envOverrides: { DSH_HOME: OWN_HOME } });
+      configs.push(previous.id);
+      previous.setCustomModel(
+        {
+          endpointId: 'ep',
+          modelId: 'qwen3',
+          envKeys: ['DSH_HOME', 'CODEMAN_CUSTOM_MODEL_API_KEY'],
+          configDir: customModelConfigDir(previous.id),
+          homeEnvVar: 'DSH_HOME',
+        },
+        { DSH_HOME: customModelConfigDir(previous.id), CODEMAN_CUSTOM_MODEL_API_KEY: 'k' }
+      );
+      return JSON.parse(JSON.stringify(previous.getCustomModelForPersist())) as CustomModelBookkeeping;
+    }
+
+    it('gets DSH_HOME back from state.json, which is the only copy left', async () => {
+      await writeCustomModelHosts(getDataDir(), [endpoint()]);
+      const session = new Session({ workingDir: '/tmp', mode: 'deepseek' });
+      configs.push(session.id);
+
+      await restoreCustomModel(session, savedByPreviousRun());
+      expect(session.envOverrideValue('DSH_HOME')).toBe(customModelConfigDir(session.id));
+
+      session.setCustomModel(undefined);
+      expect(session.envOverrideValue('DSH_HOME')).toBe(OWN_HOME);
+    });
+
+    it('keeps it when the endpoint is gone', async () => {
+      await writeCustomModelHosts(getDataDir(), []);
+      const session = new Session({ workingDir: '/tmp', mode: 'deepseek' });
+
+      await restoreCustomModel(session, savedByPreviousRun());
+
+      session.setCustomModel(undefined);
+      expect(session.envOverrideValue('DSH_HOME')).toBe(OWN_HOME);
+    });
+
+    it('never reads what the previous run injected as the session own value', async () => {
+      // A record from before `ownEnv` existed. `__envOverrides` holds the isolated
+      // CLAUDE_CONFIG_DIR and the injected limit, which must go on clear, or the session
+      // stays pinned to a directory the clear just deleted.
+      await writeCustomModelHosts(getDataDir(), [endpoint()]);
+      const session = new Session({
+        workingDir: '/tmp',
+        mode: 'claude',
+        envOverrides: { CLAUDE_CONFIG_DIR: '/isolated/old', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '32768' },
+      });
+      configs.push(session.id);
+
+      await restoreCustomModel(session, {
+        endpointId: 'ep',
+        modelId: 'qwen3',
+        envKeys: ['CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS'],
+      });
+
+      session.setCustomModel(undefined);
+      expect(session.envOverrideValue('CLAUDE_CONFIG_DIR')).toBeUndefined();
+      expect(session.envOverrideValue('CLAUDE_CODE_MAX_CONTEXT_TOKENS')).toBeUndefined();
+    });
+
+    it('does not give a revoked owner their DSH_HOME back from disk', async () => {
+      // DSH_HOME is a privileged key: the reboot-restore clamp strips `__envOverrides`, and
+      // this record must not be a way around it.
+      await writeCustomModelHosts(getDataDir(), [endpoint()]);
+      const saved = savedByPreviousRun();
+      process.env.CODEMAN_MULTIUSER = '1';
+      const session = new Session({ workingDir: '/tmp', mode: 'deepseek', owner: 'nobody' });
+      configs.push(session.id);
+
+      await restoreCustomModel(session, saved);
+
+      session.setCustomModel(undefined);
+      expect(session.envOverrideValue('DSH_HOME')).toBeUndefined();
+    });
   });
 });

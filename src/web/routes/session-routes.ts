@@ -1689,6 +1689,7 @@ export function registerSessionRoutes(
         envKeys: applied.envKeys,
         configDir: applied.configDir,
         launchModel: applied.launchModel,
+        homeEnvVar: applied.homeEnvVar,
       },
       applied.envOverrides
     );
@@ -4467,12 +4468,12 @@ export function registerSessionRoutes(
     // unknown endpoint, a model id the CLI's argv pattern can't carry) rather than trusting
     // a lighter version of them, since this is the same server-side authority reached a
     // different way, not a separate, less-checked path.
-    let qsCustomModelEnvOverrides = qsGatedEnvOverrides;
-    // Only the INJECTED keys (never the caller's envOverrides merged in) — this is what
-    // setCustomModel() bookkeeping must be given below. The Session constructor already
-    // applies qsCustomModelEnvOverrides (the full merged set) directly; re-merging that
-    // full set into setCustomModel() would put CLAUDE_CODE_EFFORT_LEVEL back after the
-    // constructor stripped it (see setCustomModel()'s own doc comment in session.ts).
+    //
+    // Only the INJECTED keys (never the caller's envOverrides merged in): setCustomModel()
+    // merges these over what the Session constructor took, which is how it learns which of
+    // the caller's values the selection replaced. Handing the constructor the merged set
+    // would hide them, and giving setCustomModel() that set would put
+    // CLAUDE_CODE_EFFORT_LEVEL back after the constructor stripped it.
     let qsCustomModelAppliedEnvOverrides: Record<string, string> | undefined;
     let qsCustomModelLaunchModel: string | undefined;
     let qsCustomModelSessionId: string | undefined;
@@ -4485,6 +4486,7 @@ export function registerSessionRoutes(
           envKeys: string[];
           configDir?: string;
           launchModel?: string;
+          homeEnvVar?: string;
         }
       | undefined;
     if (customModel) {
@@ -4588,7 +4590,6 @@ export function registerSessionRoutes(
       if (!cmApplied) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${mode} has no known custom-model mechanism`);
       }
-      qsCustomModelEnvOverrides = { ...qsGatedEnvOverrides, ...cmApplied.envOverrides };
       qsCustomModelAppliedEnvOverrides = cmApplied.envOverrides;
       qsCustomModelLaunchModel = cmApplied.launchModel;
       qsCustomModelBookkeeping = {
@@ -4598,6 +4599,7 @@ export function registerSessionRoutes(
         envKeys: cmApplied.envKeys,
         configDir: cmApplied.configDir,
         launchModel: cmApplied.launchModel,
+        homeEnvVar: cmApplied.homeEnvVar,
       };
 
       // Actually kick off llama-swap's load now — see the dedicated apply route's own
@@ -4630,7 +4632,7 @@ export function registerSessionRoutes(
       copilotConfig: mode === 'copilot' ? qsGatedCopilotConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? qsGatedDeepSeekConfig : undefined,
       ompConfig: qsResolvedOmpConfig,
-      envOverrides: qsCustomModelEnvOverrides,
+      envOverrides: qsGatedEnvOverrides,
       effort,
       advisorModel,
       remote,
@@ -4659,10 +4661,10 @@ export function registerSessionRoutes(
     const session = new Session(qsSessionOptions);
 
     // Records the selection for session.customModel/getCustomModelForPersist() and future
-    // clear/switch calls — the actual env vars and launch-model config are already part of
-    // the launch above (constructor envOverrides, piConfig/grokConfig/ompConfig.model), so
-    // this is bookkeeping only, never a restart: setCustomModel() is synchronous state, no
-    // tmux IO of its own (see its own doc comment in session.ts).
+    // clear/switch calls, and merges the injected env, which the launch below reads along
+    // with the launch-model config set above (piConfig/grokConfig/ompConfig.model). Nothing
+    // has started yet, so this is never a restart: setCustomModel() is synchronous state,
+    // no tmux IO of its own (see its own doc comment in session.ts).
     if (qsCustomModelBookkeeping) {
       session.setCustomModel(qsCustomModelBookkeeping, qsCustomModelAppliedEnvOverrides);
     }

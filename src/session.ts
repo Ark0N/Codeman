@@ -1994,21 +1994,36 @@ export class Session extends EventEmitter {
 
   /**
    * The full selection incl. bookkeeping, for state.json ONLY (`__customModel`, the
-   * same disk-only convention as `getEnvOverridesForPersist()`). Carries no env values,
-   * so nothing secret lands on disk; recovery re-derives them from the endpoint store.
+   * same disk-only convention as `getEnvOverridesForPersist()`). Carries no injected env
+   * values, so nothing secret lands on disk; recovery re-derives them from the endpoint store.
    * Without this a Codeman restart left the pane on the custom endpoint (tmux keeps
    * its `setenv`s) while `customModel` came back undefined, so the state was wrong and
    * clearing had nothing to unset. Must NOT be included in any API-bound serializer.
+   *
+   * The one value it does carry is the session's own home directory (`ownEnv`, narrowed to
+   * `homeEnvVar`), a path like `configDir` beside it: the selection overwrote the tmux
+   * `setenv` that held it, so without this a clear after a restart would lose it. Any other
+   * entry of `ownEnv` may be a credential and stays in memory.
    */
   getCustomModelForPersist(): CustomModelBookkeeping | undefined {
-    return this._customModel ? { ...this._customModel, envKeys: [...this._customModel.envKeys] } : undefined;
+    if (!this._customModel) return undefined;
+    const { ownEnv, ...selection } = this._customModel;
+    const { homeEnvVar } = selection;
+    const ownHome = homeEnvVar ? ownEnv?.[homeEnvVar] : undefined;
+    return {
+      ...selection,
+      envKeys: [...selection.envKeys],
+      ...(homeEnvVar && ownHome ? { ownEnv: { [homeEnvVar]: ownHome } } : {}),
+    };
   }
 
   /**
    * Update this session's custom-model selection and merge the endpoint's injected env
    * vars into `_envOverrides` — first UNDOING whatever the previous selection injected
-   * (removing exactly those env keys), so switching endpoints, or clearing back to the
-   * harness's native cloud default, never leaves a stale key behind. Synchronous and
+   * (removing exactly those env keys, and putting back a value the session had set under
+   * one itself), so switching endpoints, or clearing back to the harness's native cloud
+   * default, never leaves a stale key behind and never loses the session's own `DSH_HOME`
+   * or `CLAUDE_CONFIG_DIR`. Synchronous and
    * side-effect-free beyond mutating state, matching `setNice`/`setColor` above — this
    * class does no file IO, so it reports the PREVIOUS `configDir` (if any) for the
    * caller to clean up on disk (custom-model-injection.ts's configDir kind).
@@ -2018,7 +2033,12 @@ export class Session extends EventEmitter {
    * `_buildRespawnPaneOptions().unsetEnvKeys`): the tmux session inherits every
    * `setenv` into `respawn-pane`, so dropping them from the map alone would relaunch
    * the CLI still pointed at the old endpoint — and for the `configDir` kinds, at a
-   * `HOME`/`CODEX_HOME`/`GROK_HOME` the caller has just deleted.
+   * `HOME`/`CODEX_HOME`/`GROK_HOME` the caller has just deleted. A key put back stays out
+   * of that queue: `applyEnvOverrides()` writes its value over the injected one.
+   *
+   * `next.ownEnv` is for recovery, which states the session's own values itself: after a
+   * restart `_envOverrides` holds what the previous run injected (`CLAUDE_CONFIG_DIR` is
+   * persisted), and reading those as the session's own would pin it to a deleted directory.
    */
   setCustomModel(
     next: CustomModelBookkeeping | undefined,
@@ -2027,13 +2047,30 @@ export class Session extends EventEmitter {
     const previousConfigDir = this._customModel?.configDir;
     const removedEnvKeys: string[] = [];
     if (this._customModel) {
+      const previousOwnEnv = this._customModel.ownEnv ?? {};
       for (const key of this._customModel.envKeys) {
         if (this._envOverrides) delete this._envOverrides[key];
         removedEnvKeys.push(key);
-        this._pendingEnvUnsets.add(key);
+        const own = previousOwnEnv[key];
+        if (own) {
+          this._envOverrides = { ...(this._envOverrides ?? {}), [key]: own };
+          this._pendingEnvUnsets.delete(key);
+        } else {
+          this._pendingEnvUnsets.add(key);
+        }
       }
     }
-    this._customModel = next ? { ...next, envKeys: [...next.envKeys] } : undefined;
+    // Read after the undo, so a switch between endpoints carries the own values across. An
+    // empty value is skipped: `applyEnvOverrides()` never set one, so it has nothing to
+    // restore, and the injected key still has to be unset.
+    const ownEnv: Record<string, string> = { ...next?.ownEnv };
+    if (!next?.ownEnv) {
+      for (const key of Object.keys(envOverrides ?? {})) {
+        const own = this._envOverrides?.[key];
+        if (own) ownEnv[key] = own;
+      }
+    }
+    this._customModel = next ? { ...next, envKeys: [...next.envKeys], ownEnv } : undefined;
     if (envOverrides && Object.keys(envOverrides).length > 0) {
       this._envOverrides = { ...(this._envOverrides ?? {}), ...envOverrides };
       // A key the new selection sets again does not need an unset (applyEnvOverrides
