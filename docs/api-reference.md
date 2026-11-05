@@ -1246,8 +1246,9 @@ boolean` reports whether one is stored, so a client can render "unchanged
   deliberately unchanged, so omission is the only way to say "leave it alone";
   there is no way to clear a key back to unset this way.
   `defaultContextLength` behaves the opposite way: a PUT without it clears the
-  stored value, so send the field back to keep it. `endpointType` follows the
-  POST semantics and may be switched in place. `defaultModelId`, when set,
+  stored value, so send the field back to keep it. A PUT without
+  `endpointType` resets an Anthropic endpoint to `openai`, the same
+  whole-record replace `authStyle` gets, so send it back to keep it. `defaultModelId`, when set,
   must be one of that endpoint's own `models` (`400 INVALID_INPUT` otherwise).
 - `DELETE /api/v1/model-endpoints/:id` removes one.
 - `POST /api/v1/model-endpoints/:id/discover-models` fetches the endpoint's

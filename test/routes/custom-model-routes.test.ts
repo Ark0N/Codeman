@@ -135,6 +135,22 @@ describe('custom model endpoint CRUD', () => {
     expect(update.json().data.host.endpointType).toBe('anthropic');
   });
 
+  it('a PUT without endpointType resets an Anthropic endpoint to openai', async () => {
+    const { app } = await setup();
+    await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'ep-reset', label: 'A', baseUrl: 'http://localhost:8080', endpointType: 'anthropic' },
+    });
+    const update = await app.inject({
+      method: 'PUT',
+      url: '/api/model-endpoints/ep-reset',
+      payload: { label: 'A', baseUrl: 'http://localhost:8080' },
+    });
+    expect(update.statusCode).toBe(200);
+    expect(update.json().data.host.endpointType ?? 'openai').toBe('openai');
+  });
+
   it('an Anthropic-type endpoint is still discovered through the gateway OpenAI /v1/models route', async () => {
     const { app } = await setup();
     await app.inject({

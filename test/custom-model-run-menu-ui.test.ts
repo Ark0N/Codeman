@@ -232,10 +232,8 @@ describe('Custom Model Endpoint Profiles: Run-menu picker generation', () => {
 
   it('skips Anthropic-incapable rows for an Anthropic-type endpoint but not for an OpenAI-type one', async () => {
     // `supportsAnthropic` ships on __codemanCustomModelClis from the server, where the
-    // injection builder itself answers the question (never an id list) — and since the
-    // Anthropic endpoint type was narrowed to Claude Code only, Claude is the only
-    // harness that ever carries the flag as true. This pins the frontend half: the menu
-    // must not offer a CLI a gateway it will only refuse.
+    // injection builder answers the question; only Claude carries it as true. The menu
+    // must not offer a CLI an Anthropic-type endpoint it would refuse.
     const { win, app } = bootApp({
       customModelClis: [
         { id: 'claude', label: 'Claude Code', supportsAnthropic: true },

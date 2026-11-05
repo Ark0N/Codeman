@@ -2071,7 +2071,7 @@ export class WebServer extends EventEmitter {
       const customModelClis = enabledClis()
         .filter((entry) => entry.kind === 'agent' && entry.capabilities.customModelInjection.kind !== 'unsupported')
         .map((entry) => ({
-          id: entry.id as string,
+          id: entry.id,
           label: entry.label,
           supportsAnthropic: buildCustomModelInjection(entry, anthropicProbe, 'probe-model').kind !== 'unsupported',
         }));

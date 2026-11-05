@@ -309,10 +309,8 @@ export interface AppliedCustomModel {
  * and the quick-start path, and by the boot-recovery warning in `web/server.ts` —
  * `applyCustomModelInjection()` returns undefined for a CLI whose recipe is
  * `unsupported` (no injection mechanism of its own, e.g. antigravity or a
- * `clis.json` override) AND for an Anthropic-type endpoint that recipe cannot
- * speak, and the user-facing fix differs, so the endpoint type picks the
- * sentence. The Anthropic wording names no protocol the CLI "only speaks" (not
- * accurate for Gemini, and true for every refused CLI as phrased).
+ * `clis.json` override) and for an Anthropic-type endpoint that recipe cannot
+ * speak. The user-facing fix differs, so the endpoint type picks the sentence.
  */
 export function customModelApplyErrorMessage(mode: string, endpointType: CustomModelEndpointType | undefined): string {
   return endpointType === 'anthropic'

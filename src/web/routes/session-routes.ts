@@ -1694,8 +1694,8 @@ export function registerSessionRoutes(
       await guardSessionConfigDirHome(entry, (envVar) => session.envOverrideValue(envVar))
     );
     if (!applied) {
-      // A mechanism-less CLI and an Anthropic-type endpoint the CLI cannot speak are the
-      // same undefined here, but the fix the user needs differs — shared helper.
+      // Unreachable for a mismatched endpoint type (refused above, before the probe); kept
+      // as the guard that narrows `applied`, with the shared refusal wording.
       return createErrorResponse(
         ApiErrorCode.OPERATION_FAILED,
         customModelApplyErrorMessage(session.mode, endpoint.endpointType)
@@ -4615,7 +4615,7 @@ export function registerSessionRoutes(
         await guardSessionConfigDirHome(cmEntry, (envVar) => qsGatedEnvOverrides?.[envVar])
       );
       if (!cmApplied) {
-        // See the swap route above — same shared refusal wording.
+        // Unreachable after the early refusal above; kept to narrow `cmApplied`.
         return createErrorResponse(
           ApiErrorCode.OPERATION_FAILED,
           customModelApplyErrorMessage(mode, cmEndpoint.endpointType)

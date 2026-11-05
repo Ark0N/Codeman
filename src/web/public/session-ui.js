@@ -925,10 +925,9 @@ Object.assign(CodemanApp.prototype, {
       if (models.length === 0) continue; // nothing discovered yet — the settings panel explains why
       const modelId = host.defaultModelId || models[0];
       // An Anthropic-type endpoint only pairs with harnesses whose injection recipe
-      // can speak it — `supportsAnthropic` comes from the server-side projection
-      // (built by asking the injection builder itself, never an id list here), and
-      // omitting it reads as OpenAI like the stored field. Without this skip the
-      // menu offered rows that only failed on click with the routes' refusal.
+      // can speak it. `supportsAnthropic` comes from the server-side projection (built
+      // by the injection builder, never an id list here); omitting it reads as OpenAI,
+      // like the stored field.
       const anthropic = host.endpointType === 'anthropic';
       for (const cli of capableClis) {
         if (anthropic && !cli.supportsAnthropic) continue;
