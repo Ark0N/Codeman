@@ -71,8 +71,8 @@ describe('_rebuildCustomModelEnv refusal warning', () => {
   }
 
   it('warns without "Anthropic-type" when the CLI recipe is unsupported and the endpoint is OpenAI-type', async () => {
-    // antigravity is stock `{ kind: 'unsupported' }` — the same undefined an override
-    // produces for any CLI, and the case the old hardcoded wording lied about.
+    // antigravity is stock `{ kind: 'unsupported' }`: the same undefined an override
+    // produces for any CLI. An OpenAI-type endpoint must not get the Anthropic wording.
     const env = await rebuild('antigravity', 'ep-open');
 
     expect(env).toBeUndefined();
