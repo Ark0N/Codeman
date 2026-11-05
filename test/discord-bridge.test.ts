@@ -26,7 +26,7 @@ import {
   safeAttachmentName,
   screenTail,
   splitForDiscord,
-  tablesToCodeBlocks,
+  formatDiscordTables,
   DEFAULT_DISCORD_CONFIG,
   DiscordApi,
   DiscordBridge,
@@ -586,7 +586,7 @@ describe('DiscordBridge', () => {
       b.stop();
     });
 
-    it('posts a Markdown table as an aligned code block, since Discord does not render tables', async () => {
+    it('posts a Markdown table as wrapping labeled records', async () => {
       const b = bridge();
       const table = [
         '| Variant | Decode (tokens/s) |',
@@ -599,7 +599,8 @@ describe('DiscordBridge', () => {
         .filter((p) => p.path.endsWith('/messages'))
         .map((p) => String(p.body?.content))
         .join('\n');
-      expect(posted).toContain('```\nVariant     Decode (tokens/s)\n');
+      expect(posted).toContain('**Variant:** kv-f16\n**Decode (tokens/s):** 557.0');
+      expect(posted).not.toContain('```');
       expect(posted).not.toContain('|---');
       b.stop();
     });
@@ -1214,8 +1215,8 @@ describe('DiscordBridge files and startup hint', () => {
   });
 });
 
-describe('tablesToCodeBlocks', () => {
-  it('turns a Markdown table into an aligned code block, dropping bold and code marks', () => {
+describe('formatDiscordTables', () => {
+  it('turns a Markdown table into labeled records while retaining inline formatting', () => {
     const md = [
       'Results:',
       '',
@@ -1227,17 +1228,18 @@ describe('tablesToCodeBlocks', () => {
       '',
       'Done.',
     ].join('\n');
-    expect(tablesToCodeBlocks(md)).toBe(
+    expect(formatDiscordTables(md)).toBe(
       [
         'Results:',
         '',
-        '```',
-        'Variant        Decode (tokens/s)',
-        '-------------  -----------------',
-        'kv-f16                     557.0',
-        'n-gram simple              554.5',
-        'n-gram mod                 550.2',
-        '```',
+        '**Variant:** `kv-f16`',
+        '**Decode (tokens/s):** 557.0',
+        '',
+        '**Variant:** **n-gram simple**',
+        '**Decode (tokens/s):** 554.5',
+        '',
+        '**Variant:** n-gram mod',
+        '**Decode (tokens/s):** 550.2',
         '',
         'Done.',
       ].join('\n')
@@ -1246,42 +1248,42 @@ describe('tablesToCodeBlocks', () => {
 
   it('leaves a table inside a code fence, prose with pipes and a table-less message alone', () => {
     const fenced = ['```', '| a | b |', '|---|---|', '| 1 | 2 |', '```'].join('\n');
-    expect(tablesToCodeBlocks(fenced)).toBe(fenced);
+    expect(formatDiscordTables(fenced)).toBe(fenced);
     const prose = 'Use a | b to pipe.\nThen c | d.';
-    expect(tablesToCodeBlocks(prose)).toBe(prose);
+    expect(formatDiscordTables(prose)).toBe(prose);
   });
 
   it('converts a hostile separator row of 100,000 spaces in well under a second', () => {
     const rows = ['| a | b |', `|---${' '.repeat(100_000)}x`, '| 1 | 2 |'].join('\n');
     const t0 = Date.now();
-    expect(tablesToCodeBlocks(rows)).toBe(rows);
+    expect(formatDiscordTables(rows)).toBe(rows);
     expect(Date.now() - t0).toBeLessThan(500);
     const real = ['| a | b |', `| --- ${' '.repeat(50_000)}| --- |`, '| 1 | 2 |'].join('\n');
     const t1 = Date.now();
-    expect(tablesToCodeBlocks(real)).toContain('```');
+    expect(formatDiscordTables(real)).toContain('**a:** 1');
     expect(Date.now() - t1).toBeLessThan(500);
   });
 
   it('leaves a wide or long table as written, quickly: 3000 columns over 3000 one-pipe rows', () => {
     const wide = [`|${' a |'.repeat(3000)}`, '|---|', ...Array.from({ length: 3000 }, () => '| x |')].join('\n');
     const t0 = Date.now();
-    expect(tablesToCodeBlocks(wide)).toBe(wide);
+    expect(formatDiscordTables(wide)).toBe(wide);
     expect(Date.now() - t0).toBeLessThan(500);
     const tall = ['| a | b |', '|---|---|', ...Array.from({ length: 300 }, (_, i) => `| ${i} | y |`)].join('\n');
-    expect(tablesToCodeBlocks(tall)).toBe(tall);
+    expect(formatDiscordTables(tall)).toBe(tall);
     const big = ['| a |', '|---|', ...Array.from({ length: 200_000 }, () => '| x |')].join('\n');
     const t1 = Date.now();
-    expect(() => tablesToCodeBlocks(big)).not.toThrow(); // no spread of 200,000 rows into Math.max
+    expect(() => formatDiscordTables(big)).not.toThrow(); // no spread of 200,000 rows into Math.max
     expect(Date.now() - t1).toBeLessThan(1000);
   });
 
   it('keeps a sentence with a pipe under a table out of the code block', () => {
-    const out = tablesToCodeBlocks(['| a | b |', '|---|---|', '| 1 | 2 |', 'Use x | y to pipe.'].join('\n'));
-    expect(out).toBe(['```', 'a  b', '-  -', '1  2', '```', 'Use x | y to pipe.'].join('\n'));
+    const out = formatDiscordTables(['| a | b |', '|---|---|', '| 1 | 2 |', 'Use x | y to pipe.'].join('\n'));
+    expect(out).toBe(['**a:** 1', '**b:** 2', 'Use x | y to pipe.'].join('\n'));
   });
 
-  it('pads a short row and keeps an escaped pipe in a cell', () => {
-    const out = tablesToCodeBlocks(['| a | b |', '|---|---|', '| x \\| y |', '| p | q |'].join('\n'));
+  it('labels missing cells and keeps an escaped pipe in a cell', () => {
+    const out = formatDiscordTables(['| a | b |', '|---|---|', '| x \\| y |', '| p | q |'].join('\n'));
     expect(out).toContain('x | y');
     expect(out.split('\n').every((l) => !/\s$/.test(l))).toBe(true);
   });

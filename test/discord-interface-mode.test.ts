@@ -33,6 +33,7 @@ let sequence: number;
 let remoteChannels: Map<string, any>;
 let remoteMessages: Map<string, any>;
 let statusEditRefused: boolean;
+let uploaded: Array<{ name: string; text: string }>;
 const BOT = '888888888888888888';
 
 function makeBridge(
@@ -47,7 +48,14 @@ function makeBridge(
     fetchImpl: async (url, init) => {
       const method = String(init.method);
       const path = url.pathname;
-      const body = init.body ? JSON.parse(String(init.body)) : undefined;
+      const body = init.body
+        ? JSON.parse(init.body instanceof FormData ? String(init.body.get('payload_json')) : String(init.body))
+        : undefined;
+      if (init.body instanceof FormData) {
+        const file = init.body.get('files[0]');
+        if (file instanceof Blob)
+          uploaded.push({ name: String((file as { name?: string }).name), text: await file.text() });
+      }
       posts.push({ path, method, body } as any);
       if (method === 'GET' && path.endsWith('/users/@me')) return Response.json({ id: BOT });
       if (method === 'GET' && path.endsWith('/channels'))
@@ -150,6 +158,7 @@ beforeEach(async () => {
   remoteChannels = new Map();
   remoteMessages = new Map();
   statusEditRefused = false;
+  uploaded = [];
   sendInput = vi.fn(async () => true);
   await writeDiscordConfig(dir, cfg);
 });
@@ -642,6 +651,58 @@ describe('Discord interface mode', () => {
     expect(
       posts.some((p) => p.body?.content?.includes('private-footer') || p.body?.content?.includes('<oai-mem'))
     ).toBe(false);
+  });
+
+  it('formats tables consistently in historical context, live replies and history controls', async () => {
+    const table = (name: string) =>
+      '| Item | Status |\n|---|---|\n| ' +
+      name +
+      ' | Long status with **formatting** and [details](https://example.test). |';
+    let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [
+      { cursor: 'native1:1', role: 'assistant', text: table('Historical'), timestamp: '' },
+    ];
+    const history = async () => ({ conversationId: 'native1', partial: false, turns });
+    sessions = [{ id: 's1', name: 'one' }];
+    const b = makeBridge(undefined, { history, control: async () => ({ text: table('Requested history') }) });
+    await b.reload();
+    await b.syncSessions();
+    const past = posts.find((p) => p.body?.content?.includes('**Historical context**'));
+    expect(past?.body.content).toContain('**Item:** Historical');
+    expect(past?.body.content).toContain('**Status:** Long status');
+    expect(past?.body.content).not.toContain('```');
+    turns.push({ cursor: 'native1:2', role: 'assistant', text: table('Live'), timestamp: '' });
+    await b.pollConversations();
+    const live = posts.find((p) => p.body?.content?.includes('**Item:** Live'));
+    expect(live?.body.content).toContain('[details](https://example.test)');
+    expect(live?.body.content).not.toContain('|---');
+    await b.onGatewayMessage({
+      id: '900000000000000001',
+      guild_id: cfg.guildId,
+      channel_id: (await readFullMap(dir)).s1,
+      author: { id: cfg.allowedUserIds[0] },
+      content: '!codeman history',
+    });
+    expect(posts.some((p) => p.body?.content?.includes('**Item:** Requested history'))).toBe(true);
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
+  it('attaches the full response when labeled table expansion exceeds the chat budget', async () => {
+    let turns: import('../src/discord-history.js').DiscordHistoryTurn[] = [];
+    const history = async () => ({ conversationId: 'native1', partial: false, turns });
+    sessions = [{ id: 's1', name: 'one' }];
+    const b = makeBridge(undefined, { history });
+    await b.reload();
+    await b.syncSessions();
+    const table = [
+      '| A descriptive first label | A descriptive second label |',
+      '|---|---|',
+      ...Array.from({ length: 200 }, (_, i) => `| row${i}value | statevalue |`),
+    ].join('\n');
+    expect(table.length).toBeLessThan(12000);
+    turns.push({ cursor: 'native1:1', role: 'assistant', text: table, timestamp: '' });
+    await b.pollConversations();
+    expect(uploaded).toHaveLength(1);
+    expect(uploaded[0]).toEqual({ name: 'response.txt', text: table });
   });
 
   it('binds component clicks to the prompt, message, channel and allowlisted user and consumes once', async () => {

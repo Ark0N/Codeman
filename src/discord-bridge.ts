@@ -1,3 +1,5 @@
+import { formatDiscordTables } from './discord-tables.js';
+export { formatDiscordTables } from './discord-tables.js';
 import { discordDisplayText } from './discord-display-text.js';
 import { DiscordCaseCategories } from './discord-case-categories.js';
 import { DiscordCaseThreads, type DiscordStarter } from './discord-case-threads.js';
@@ -74,8 +76,6 @@ const STALE_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const STALE_MAX_PER_SWEEP = 25;
 const DISCORD_EPOCH_MS = 1420070400000;
 /** A Markdown table wider or longer than this is posted as it was written, not padded into a code block. */
-const TABLE_MAX_COLS = 24;
-const TABLE_MAX_ROWS = 200;
 /**
  * The most of a last message worth converting: what 8 posts can carry, twice over, since a table can
  * shrink when formatted. The rest could never be posted, and a padded table costs its widest cell
@@ -241,82 +241,6 @@ export function screenTail(screen: string, maxLines = 14, maxChars = 900, compos
 }
 
 /**
- * Discord does not render Markdown tables: a `| a | b |` block shows as raw pipes. Each table outside a
- * code fence becomes a code block with the columns padded to their widest cell (right-aligned where the
- * separator row says `---:`), which a monospace font lines up. Bold and code marks inside a cell are
- * dropped, since a code block would show them literally.
- */
-export function tablesToCodeBlocks(text: string): string {
-  const cells = (row: string): string[] => {
-    let r = row.trim();
-    if (r.startsWith('|')) r = r.slice(1);
-    if (r.endsWith('|') && !r.endsWith('\\|')) r = r.slice(0, -1);
-    return r.split(/(?<!\\)\|/).map((c) =>
-      c
-        .replace(/\\\|/g, '|')
-        .replace(/\*\*|`/g, '')
-        .trim()
-    );
-  };
-  // Whitespace stripped first, so the pattern has none to backtrack over (a run of spaces made the old one quadratic).
-  const isSeparator = (row: string) => {
-    const r = row.replace(/\s+/g, '');
-    return r.includes('|') && /^\|?:?-+:?(\|:?-+:?)*\|?$/.test(r);
-  };
-  const lines = text.split('\n');
-  const out: string[] = [];
-  let fence = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^\s*```/.test(line)) fence = !fence;
-    if (fence || !line.includes('|') || i + 1 >= lines.length || !isSeparator(lines[i + 1])) {
-      out.push(line);
-      continue;
-    }
-    // Rows belong to the table while they carry a pipe, and start with one when the header does, so a
-    // sentence with a pipe under a table stays prose.
-    const piped = line.trim().startsWith('|');
-    let j = i + 2;
-    while (
-      j < lines.length &&
-      lines[j].trim() !== '' &&
-      lines[j].includes('|') &&
-      (!piped || lines[j].trim().startsWith('|'))
-    ) {
-      j++;
-    }
-    const header = cells(line);
-    // A table past these bounds is left as it was (raw pipes): formatting costs columns times rows, and the
-    // text can be steered by whatever the agent read.
-    if (header.length > TABLE_MAX_COLS || j - i - 1 > TABLE_MAX_ROWS) {
-      for (let k = i; k < j; k++) out.push(lines[k]); // a loop: a spread of 200,000 lines overflows the stack
-      i = j - 1;
-      continue;
-    }
-    const align = cells(lines[i + 1]).map((c) => (c.endsWith(':') ? 'right' : 'left'));
-    const rows = [header];
-    for (let k = i + 2; k < j; k++) rows.push(cells(lines[k]));
-    let cols = 0;
-    for (const r of rows) if (r.length > cols) cols = r.length;
-    if (cols > TABLE_MAX_COLS) {
-      for (let k = i; k < j; k++) out.push(lines[k]); // a loop: a spread of 200,000 lines overflows the stack
-      i = j - 1;
-      continue;
-    }
-    const width = Array.from({ length: cols }, () => 1);
-    for (const r of rows) for (let c = 0; c < r.length; c++) width[c] = Math.max(width[c], [...r[c]].length);
-    const pad = (v: string, c: number) => (align[c] === 'right' ? v.padStart(width[c]) : v.padEnd(width[c]));
-    const fmt = (r: string[]) =>
-      Array.from({ length: cols }, (_, c) => pad((r[c] ?? '').replace(/```/g, '\u2019\u2019\u2019'), c))
-        .join('  ')
-        .trimEnd();
-    out.push('```', fmt(header), width.map((w) => '-'.repeat(w)).join('  '), ...rows.slice(1).map(fmt), '```');
-    i = j - 1;
-  }
-  return out.join('\n');
-}
-
-/**
  * Split a long message into posts of at most `max` characters, on blank lines first, then lines, then
  * (for one huge line) by length. A code fence the cut lands inside is closed and reopened, so each post
  * renders on its own. At most `maxPosts`; the last carries a note when text is left over.
@@ -436,7 +360,10 @@ export function buildPost(msg: DiscordMessage, cfg: DiscordConfig, explicitUrgen
   tailText = tailText ? discordDisplayText(tailText) : undefined;
   const fence = tailText?.trim() ? `\n\`\`\`\n${tailText.trim().replace(/```/g, "'''")}\n\`\`\`` : '';
   const host = msg.host ? ` (${clip(msg.host, 60)})` : '';
-  const content = clip(`${head}${host}${msg.body ? `\n${discordDisplayText(msg.body)}` : ''}${fence}`, MAX_CONTENT);
+  const content = clip(
+    `${head}${host}${msg.body ? `\n${formatDiscordTables(discordDisplayText(msg.body))}` : ''}${fence}`,
+    MAX_CONTENT
+  );
   // Agent output and session names must not be able to @everyone the server; only the allowlisted ids ping.
   return { content, allowed_mentions: { parse: [], users: ping } };
 }
@@ -1245,7 +1172,7 @@ export class DiscordBridge {
           throw new BridgeProblem('Session changed during history sync');
         const turn = history.turns.find((t) => t.cursor === progress!.seed[i]);
         if (!turn) throw new BridgeProblem('Historical boundary expired; use !codeman history for catch-up');
-        const visible = turn.role === 'assistant' ? discordDisplayText(turn.text) : turn.text;
+        const visible = formatDiscordTables(turn.role === 'assistant' ? discordDisplayText(turn.text) : turn.text);
         if (!visible.trim()) {
           progress = { ...progress, seedIndex: i + 1 };
           await this.conversationProgress.set(key, progress);
@@ -1342,9 +1269,8 @@ export class DiscordBridge {
           throw new BridgeProblem('Session changed');
         if (turn.role === 'assistant' || (turn.role === 'tool' && progress.verbose)) {
           const visible = turn.role === 'assistant' ? discordDisplayText(turn.text) : turn.text;
-          const chunks = splitForDiscord(
-            tablesToCodeBlocks((turn.role === 'tool' ? '**Tool output**\n' : '') + visible)
-          );
+          const formatted = formatDiscordTables((turn.role === 'tool' ? '**Tool output**\n' : '') + visible);
+          const chunks = splitForDiscord(formatted);
           for (const [i, content] of chunks.entries())
             await this.deliverPost(
               channel,
@@ -1353,7 +1279,7 @@ export class DiscordBridge {
               sessionId,
               `native:${turn.cursor}:${i}`
             );
-          if (visible.length > 12000)
+          if (visible.length > 12000 || formatted.length > 12000)
             await this.deliverPost(
               channel,
               { content: 'Full user-visible response', allowed_mentions: { parse: [], users: [] } },
@@ -1790,7 +1716,7 @@ export class DiscordBridge {
           const key = `${got?.version ?? ''}\u0000${text}`;
           msg = { ...msg, tail: undefined };
           if (this.lastFull.get(sid) !== key) {
-            chunks = splitForDiscord(tablesToCodeBlocks(text.slice(0, MAX_CONVERTED_TEXT)), 1520);
+            chunks = splitForDiscord(formatDiscordTables(text.slice(0, MAX_CONVERTED_TEXT)), 1520);
             posted = key;
           } // else: said already, so only the header goes
         }
@@ -2074,7 +2000,7 @@ export class DiscordBridge {
           },
         ]
       : undefined;
-    for (const [i, content] of splitForDiscord(tablesToCodeBlocks(result.text), 1900 - mentions.length).entries()) {
+    for (const [i, content] of splitForDiscord(formatDiscordTables(result.text), 1900 - mentions.length).entries()) {
       const posted = (await this.deliverPost(
         channel,
         {
