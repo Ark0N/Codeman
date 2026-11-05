@@ -179,7 +179,7 @@ describe('PathPicker New folder', () => {
       return sessionUiJs.slice(start, sessionUiJs.indexOf('PathPicker.open', start) + 400);
     };
     expect(block('openLinkCasePathPicker')).toContain('allowNewFolder: true');
-    for (const other of ['openDockerWorkspacePathPicker', 'openDockerWorkdirPicker']) {
+    for (const other of ['openDockerWorkspacePathPicker', 'openDockerWorkdirPicker', 'openCloneCasePathPicker']) {
       expect(block(other), other).not.toContain('allowNewFolder');
     }
   });

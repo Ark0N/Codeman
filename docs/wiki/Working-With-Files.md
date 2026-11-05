@@ -171,7 +171,7 @@ choice is remembered per device. The picker inserts the path into your prompt
 **without** pressing Enter, so nothing is submitted by accident. Its sibling **⌫ All**
 key clears the unsent prompt, and never sends the agent's `/clear` command.
 
-In **Link Existing**'s picker, **+📁** (New folder) makes a folder inside the folder you
+In the **Link Existing** and **Create New** (custom folder) pickers, **+📁** (New folder) makes a folder inside the folder you
 are viewing and selects it. Names use letters, numbers, spaces and `_ - . ~` (not starting
 with a dot or `~`). The cases folder is refused, since every folder there is already a
 case: use **Add Case → New Case** instead.
