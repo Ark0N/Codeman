@@ -153,8 +153,8 @@ export function buildCustomModelInjection(
     case 'env': {
       const anthropic = endpoint.endpointType === 'anthropic';
       // The Anthropic type applies to Claude Code only: claude's `supportsAnthropic`
-      // is the sole declarer of the flag, and every other env recipe (gemini, copilot,
-      // deepseek) refuses an Anthropic-type endpoint here, rather than pointing its
+      // is the sole declarer of the flag, and every other env recipe (gemini, copilot)
+      // refuses an Anthropic-type endpoint here, rather than pointing its
       // OpenAI/Gemini-convention var at an Anthropic route.
       if (anthropic && !cap.supportsAnthropic) return { kind: 'unsupported' };
       const envOverrides: Record<string, string> = {
@@ -185,7 +185,7 @@ export function buildCustomModelInjection(
     }
 
     case 'configDir': {
-      // Claude Code only — every config-file recipe (pi, omp, codex, grok) writes its
+      // Claude Code only — every config-file recipe (pi, omp, codex, grok, deepseek) writes its
       // OpenAI form; an Anthropic-type endpoint is refused here, loudly unsupported,
       // never silently injected as OpenAI.
       if (endpoint.endpointType === 'anthropic') return { kind: 'unsupported' };

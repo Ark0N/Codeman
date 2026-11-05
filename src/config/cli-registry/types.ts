@@ -885,8 +885,8 @@ export interface CliCapabilities {
          * so an endpoint saved with `endpointType: 'anthropic'` may be injected into it
          * (Claude Code: ANTHROPIC_BASE_URL gets the gateway's `/anthropic` root and the
          * SDK appends `/v1/messages` itself). Claude Code is the ONLY CLI that declares
-         * this. Every other recipe, env (gemini, copilot, deepseek), configContentEnv
-         * (opencode) or configDir (pi, omp, codex, grok), writes OpenAI forms only,
+         * this. Every other recipe, env (gemini, copilot), configContentEnv
+         * (opencode) or configDir (pi, omp, codex, grok, deepseek), writes OpenAI forms only,
          * and an Anthropic-type endpoint against one of them must fail as unsupported,
          * never be pointed at a route that answers a different protocol.
          */

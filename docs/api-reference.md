@@ -1227,30 +1227,28 @@ data}` envelope on the wire — unwrap it the same way). Answers `[]` for a
 boolean` reports whether one is stored, so a client can render "unchanged
   if left blank" without ever holding the real value.
 - `POST /api/v1/model-endpoints` with `{ id, label, baseUrl, apiKey?,
-authStyle?, endpointType?, defaultModelId?, defaultContextLength? }` creates one. `id`
-  must match
-  `^[a-zA-Z0-9_-]+$`; `authStyle` is `bearer` (default) or `api-key`, never
-  both (a real server hung indefinitely when sent both headers on one
-  request); `endpointType` is `openai` (default when omitted) or `anthropic`
-  — which wire protocol gets injected (an `anthropic` endpoint applies to
-  **Claude Code only** — the `supportsAnthropic` registry flag is claude's
-  alone, and every other harness refuses it at apply time; model discovery
-  always uses the gateway's OpenAI `/v1/models`); `defaultContextLength` is a user-set fallback used when
-  assigning a model that discovery has no context length for (discovery
-  itself never writes it); `baseUrl` must be `http(s)`, carry no embedded
-  credentials, and
-  is refused if it points at (or resolves to) a link-local or
-  cloud-metadata address. `409 ALREADY_EXISTS` on a duplicate id.
+  authStyle?, endpointType?, defaultModelId?, defaultContextLength? }` creates
+  one. `id` must match `^[a-zA-Z0-9_-]+$`; `authStyle` is `bearer` (default)
+  or `api-key`, never both (a real server hung indefinitely when sent both
+  headers on one request); `endpointType` is `openai` (default when omitted)
+  or `anthropic` — which wire protocol gets injected (an `anthropic` endpoint
+  applies to **Claude Code only** — the `supportsAnthropic` registry flag is
+  claude's alone, and every other harness refuses it at apply time; model
+  discovery always uses the gateway's OpenAI `/v1/models`);
+  `defaultContextLength` is a user-set fallback used when assigning a model
+  that discovery has no context length for (discovery itself never writes it);
+  `baseUrl` must be `http(s)`, carry no embedded credentials, and is refused
+  if it points at (or resolves to) a link-local or cloud-metadata address.
+  `409 ALREADY_EXISTS` on a duplicate id.
 - `PUT /api/v1/model-endpoints/:id` updates one, also accepting
-  `defaultContextLength`. An **absent** `apiKey`
-  keeps the stored one rather than clearing it — the client never receives
-  the real value to resend deliberately unchanged, so omission is the only
-  way to say "leave it alone"; there is no way to clear a key back to unset
-  this way. `defaultContextLength` behaves the opposite way: a PUT without
-  it clears the stored value, so send the field back to keep it.
-  `endpointType` follows the POST semantics and may be switched in
-  place. `defaultModelId`, when set, must be one of that endpoint's own
-  `models` (`400 INVALID_INPUT` otherwise).
+  `defaultContextLength`. An **absent** `apiKey` keeps the stored one rather
+  than clearing it — the client never receives the real value to resend
+  deliberately unchanged, so omission is the only way to say "leave it alone";
+  there is no way to clear a key back to unset this way.
+  `defaultContextLength` behaves the opposite way: a PUT without it clears the
+  stored value, so send the field back to keep it. `endpointType` follows the
+  POST semantics and may be switched in place. `defaultModelId`, when set,
+  must be one of that endpoint's own `models` (`400 INVALID_INPUT` otherwise).
 - `DELETE /api/v1/model-endpoints/:id` removes one.
 - `POST /api/v1/model-endpoints/:id/discover-models` fetches the endpoint's
   own `GET /v1/models` and stores the result as `models`, updating

@@ -1591,6 +1591,9 @@ export function registerSessionRoutes(
         customModelApplyErrorMessage(session.mode, endpoint.endpointType)
       );
     }
+    // Discovery's per-model figure wins; the endpoint's user-set default covers models
+    // whose size discovery could not determine (a gateway that states none, say). With
+    // neither, the existing "no override, CLI assumes its own default" behaviour stands.
     const contextLength = resolveCustomModelContextLength(endpoint, body.modelId);
     const slotCount = endpoint.modelSlotCounts?.[body.modelId];
 
@@ -4522,6 +4525,8 @@ export function registerSessionRoutes(
           customModelApplyErrorMessage(mode, cmEndpoint.endpointType)
         );
       }
+      // Per-model discovery figure first, user-set endpoint default second, nothing third
+      // (see the dedicated route's own comment above).
       const cmContextLength = resolveCustomModelContextLength(cmEndpoint, customModel.modelId);
       const cmSlotCount = cmEndpoint.modelSlotCounts?.[customModel.modelId];
 

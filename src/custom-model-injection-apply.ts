@@ -322,7 +322,8 @@ export function customModelApplyErrorMessage(mode: string, endpointType: CustomM
 
 /**
  * Compute (and for the `configDir` kind, write) everything a session needs to run
- * against `endpoint`/`modelId`. Returns undefined for a CLI with no mechanism.
+ * against `endpoint`/`modelId`. Returns undefined for a CLI with no mechanism, or for an endpoint type the CLI
+ * cannot use (the Anthropic type on anything but Claude Code).
  *
  * Idempotent on purpose: the boot-recovery path calls it again for a session that
  * was already pointed at an endpoint, so the config files are rewritten in place

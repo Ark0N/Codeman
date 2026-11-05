@@ -15,6 +15,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import { WebServer } from '../src/web/server.js';
 import { getDataDir } from '../src/config/instance.js';
 import { writeCustomModelHosts, type CustomModelHost } from '../src/custom-model-hosts.js';
+import type { AppliedCustomModel } from '../src/custom-model-injection-apply.js';
 import type { Session } from '../src/session.js';
 import type { CustomModelBookkeeping } from '../src/types/session.js';
 
@@ -57,13 +58,13 @@ describe('_rebuildCustomModelEnv refusal warning', () => {
     warn.mockRestore();
   });
 
-  async function rebuild(mode: Session['mode'], endpointId: string): Promise<Record<string, string> | undefined> {
+  async function rebuild(mode: Session['mode'], endpointId: string): Promise<AppliedCustomModel | undefined> {
     const session = { id: 'recovery-1', mode } as unknown as Session;
     const saved: CustomModelBookkeeping = { endpointId, modelId: 'some-model', envKeys: [] };
     return (
       server as unknown as {
         _rebuildCustomModelEnv(session: Session, saved: CustomModelBookkeeping): Promise<
-          Record<string, string> | undefined
+          AppliedCustomModel | undefined
         >;
       }
     )._rebuildCustomModelEnv(session, saved);

@@ -1577,7 +1577,7 @@ export class WebServer extends EventEmitter {
   private async _restoreCustomModel(session: Session, saved: CustomModelBookkeeping): Promise<void> {
     const applied = await this._rebuildCustomModelEnv(session, saved);
     if (!applied) {
-      // Endpoint gone or CLI unregistered: restore the bookkeeping exactly as saved, which
+      // Endpoint gone, CLI unregistered or endpoint type mismatch: restore the bookkeeping exactly as saved, which
       // is what a later clear needs.
       session.setCustomModel(saved);
       return;
