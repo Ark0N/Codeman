@@ -1755,7 +1755,7 @@ Object.assign(CodemanApp.prototype, {
     const res = await this._api('/api/discord');
     let body = null;
     try { body = res && res.ok ? await res.json() : null; } catch { /* leave hidden */ }
-    if (!body || body.success === false) { group.style.display = 'none'; return; } // not an admin, or an older server
+    if (!body || body.success === false) { this._discordLoaded = null; group.style.display = 'none'; return; } // not an admin, or an older server
     const d = body.data;
     group.style.display = '';
     document.getElementById('discordEnabled').checked = d.enabled === true;
@@ -1766,6 +1766,16 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('discordGuildId').value = d.guildId || '';
     document.getElementById('discordParentChannelId').value = d.parentChannelId || '';
     document.getElementById('discordAllowedUserIds').value = (d.allowedUserIds || []).join(', ');
+    document.getElementById('discordMode').value = d.mode || 'notifications';
+    document.getElementById('discordCategoryId').value = d.categoryId || '';
+    document.getElementById('discordOnChannelDelete').value = d.onChannelDelete || 'keep';
+    this.updateDiscordMode();
+    const sync = d.sessionSync;
+    document.getElementById('discordSyncStatus').textContent = sync?.state === 'syncing'
+      ? 'Syncing existing sessions…'
+      : sync?.state === 'complete' || sync?.state === 'error'
+        ? `${sync.ready} of ${sync.total} sessions ready.${sync.failed ? ` ${sync.failed} failed; try Sync sessions again.` : ''}`
+        : 'Save to sync existing sessions.';
     document.getElementById('discordThreadCreation').value = d.threadCreation;
     document.getElementById('discordOnSessionDelete').value = d.onSessionDelete;
     document.getElementById('discordStaleThreads').value = d.staleThreads || 'keep';
@@ -1780,14 +1790,56 @@ Object.assign(CodemanApp.prototype, {
       const when = new Date(d.lastResult.at).toLocaleString();
       line += d.lastResult.ok ? ` Last post succeeded (${when}).` : ` Last post failed (${when}): ${d.lastResult.error}`;
     }
+    this._discordLoaded = JSON.stringify(this._discordPayload());
+    document.getElementById('discordCategoryId').removeAttribute('aria-invalid');
     this._discordSay(line.trim(), d.gateway === 'error' || (d.lastResult && !d.lastResult.ok));
   },
 
-  /** PUT the group's state. Resolves to '' on success, else the error (also shown in the group). */
-  async saveDiscord() {
+  updateDiscordMode() {
+    const full = document.getElementById('discordMode').value === 'full';
+    document.getElementById('discordModeHint').textContent = full
+      ? 'One channel per case, one thread per session. Save creates a private Codeman category when no category ID is set. Threads provide recent history, live native responses, local/SSH files and supported controls. Use !codeman help for session management. Some CLI dialogs and ambiguous recoveries still require the terminal.'
+      : 'Notifications keeps the current alerts and thread replies. Threads appear on the first alert unless configured below.';
+    document.getElementById('discordThreadCreation').disabled = full;
+    document.getElementById('discordCategoryRow').style.display = full ? '' : 'none';
+    document.getElementById('discordChannelDeleteRow').style.display = 'none';
+    document.getElementById('discordStaleThreadsRow').style.display = full ? 'none' : '';
+    document.getElementById('discordThreadCreationRow').style.display = full ? 'none' : '';
+    document.getElementById('discordSyncRow').style.display = full ? '' : 'none';
+  },
+
+  async syncDiscordSessions() {
+    const btn = document.getElementById('discordSyncBtn');
+    btn.disabled = true;
+    try {
+      if (await this.saveDiscord()) return;
+      const res = await this._apiPost('/api/discord/sync', {});
+      const body = res ? await res.json() : null;
+      if (!res?.ok || !body?.success) {
+        this._discordSay(body?.error || 'Could not sync sessions.', true);
+        return;
+      }
+      await this.loadDiscord();
+    } catch {
+      this._discordSay('Could not sync sessions. Try again.', true);
+    } finally {
+      btn.disabled = false;
+    }
+  },
+
+  _discordPending() {
+    const group = document.getElementById('discordGroup');
+    return !!group && group.style.display !== 'none' && typeof this._discordLoaded === 'string' &&
+      JSON.stringify(this._discordPayload()) !== this._discordLoaded;
+  },
+
+  _discordPayload() {
     const ids = document.getElementById('discordAllowedUserIds').value.split(/[\s,]+/).filter(Boolean);
     const payload = {
       enabled: document.getElementById('discordEnabled').checked,
+      mode: document.getElementById('discordMode').value,
+      categoryId: document.getElementById('discordCategoryId').value.trim(),
+      onChannelDelete: document.getElementById('discordOnChannelDelete').value,
       guildId: document.getElementById('discordGuildId').value.trim(),
       parentChannelId: document.getElementById('discordParentChannelId').value.trim(),
       allowedUserIds: ids,
@@ -1800,12 +1852,19 @@ Object.assign(CodemanApp.prototype, {
     };
     const token = document.getElementById('discordToken').value.trim();
     if (token) payload.token = token; // blank = keep the saved one (Remove token is the way to clear it)
+    return payload;
+  },
+
+  /** Save beside the main settings PUT; tokens never enter settings.json or localStorage. */
+  async saveDiscord() {
+    const payload = this._discordPayload();
     const res = await this._api('/api/discord', { method: 'PUT', body: payload });
     let body = null;
     try { body = res ? await res.json() : null; } catch { /* fall through */ }
     if (!res || !res.ok || !body || body.success === false) {
       const error = body?.error || 'Could not save the Discord settings.';
       this._discordSay(error, true);
+      document.getElementById('discordResult')?.scrollIntoView({ block: 'center' });
       return error;
     }
     await this.loadDiscord();
@@ -3490,6 +3549,7 @@ Object.assign(CodemanApp.prototype, {
       ...serverSettings
     } = settings;
     let webhookError = '';
+    let discordError = '';
     let saveError = '';
     let serverSaved = false;
     try {
@@ -3556,8 +3616,11 @@ Object.assign(CodemanApp.prototype, {
       // it. Only when the group was edited: an untouched group must not re-PUT. A refusal (bad URL,
       // enabled with no URL) keeps the modal open below, with the pasted URL still in the box.
       webhookError = this._webhookPending() ? await this.saveWebhook() : '';
+      discordError = this._discordPending?.() ? await this.saveDiscord() : '';
       if (saveError) {
         this.showToast(`Saved on this device, not on the server: ${saveError}`, 'warning', { duration: 0 });
+      } else if (discordError) {
+        this.showToast(`Settings saved, but not Discord: ${discordError}`, 'warning', { duration: 0 });
       } else if (webhookError) {
         this.showToast(`Settings saved, but not the webhook: ${webhookError}`, 'warning');
       } else if (syncedChangeRefused || modelConfigRefused || refusedAsNonAdmin) {
@@ -3584,7 +3647,9 @@ Object.assign(CodemanApp.prototype, {
     if (keepOpen && serverSaved) this._refreshSettingsAfterApply(settings);
 
     // A failed settings PUT keeps the modal open too, with the form as the user left it.
-    if (webhookError) {
+    if (discordError) {
+      document.getElementById('discordResult')?.scrollIntoView({ block: 'center' });
+    } else if (webhookError) {
       document.getElementById('webhookGroup')?.scrollIntoView({ block: 'center' });
     } else if (!keepOpen && !saveError) {
       this.closeAppSettings();

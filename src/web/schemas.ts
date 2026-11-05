@@ -20,7 +20,7 @@ import {
 import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
 import { CODEX_REASONING_EFFORTS } from '../types/session.js';
 import { WEBHOOK_KINDS, WEBHOOK_SCOPES } from '../types/push.js';
-import { DISCORD_ON_DELETE, DISCORD_PING_MODES, DISCORD_THREAD_CREATION } from '../types/discord.js';
+import { DISCORD_MODES, DISCORD_ON_DELETE, DISCORD_PING_MODES, DISCORD_THREAD_CREATION } from '../types/discord.js';
 import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
 import { MAX_WAKE_MACS } from '../config/remote-wake-limits.js';
 import { MAX_INPUT_LENGTH } from '../config/terminal-limits.js';
@@ -2258,6 +2258,9 @@ export const WebhookUpdateSchema = z
 export const DiscordUpdateSchema = z
   .object({
     enabled: z.boolean().optional(),
+    mode: z.enum(DISCORD_MODES).optional(),
+    categoryId: z.string().max(25).optional(),
+    onChannelDelete: z.enum(['keep', 'retain', 'delete']).optional(),
     token: z.string().max(200).optional(),
     guildId: z.string().max(25).optional(),
     parentChannelId: z.string().max(25).optional(),

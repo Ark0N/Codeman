@@ -77,6 +77,8 @@ export interface SessionWriteOptions {
    * name a tab; Ralph, respawn, cron and approval writes leave this unset.
    */
   fromUser?: boolean;
+  /** Internal writeViaMux option: preserve structured-message whitespace and newline bytes. */
+  preserveWhitespace?: boolean;
 }
 
 export type RemoteCommandMode = Extract<

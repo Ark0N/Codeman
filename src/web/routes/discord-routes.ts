@@ -1,3 +1,4 @@
+import { DiscordCategoryProblem } from '../../discord-case-categories.js';
 /**
  * @fileoverview Discord bridge settings and the deliberate-post route (src/discord-bridge.ts).
  *
@@ -11,19 +12,16 @@
  * events. `discord-notify` follows the session's own ownership rules instead.
  */
 
-import { readFile, realpath, stat } from 'node:fs/promises';
-import { basename, isAbsolute, relative, sep } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
 import { canAccessOwned, findSessionOrFail, getAuthUser, isAdmin, parseBody } from '../route-helpers.js';
 import type { SessionPort } from '../ports/session-port.js';
-import { isBlockedAttachmentPath, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
+import { readDiscordSessionFile, DiscordFileProblem } from '../../discord-file-transfers.js';
+import type { SessionRemote } from '../../types/session.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
-import { describeUnknownPath, probePathKind } from '../../utils/bounded-path-probe.js';
 import { DiscordNotifySchema, DiscordUpdateSchema } from '../schemas.js';
 import {
   discordConfigProblem,
-  MAX_FILE_BYTES,
   maskToken,
   readDiscordConfig,
   writeDiscordConfig,
@@ -88,33 +86,13 @@ export function _resetNotifyBuckets(): void {
  */
 async function fileProblem(
   workingDir: string,
-  remote: boolean,
+  remote: SessionRemote | undefined,
   file: string
 ): Promise<{ name: string; data: Uint8Array } | string> {
-  if (remote) return 'Files can only be sent from a local session';
-  if (!isAbsolute(file)) return 'The file path must be absolute';
-  // Bounded first: realpath on a dead mount would hang the request.
-  if ((await probePathKind(workingDir, { pastCap: true })) !== 'directory') {
-    return describeUnknownPath('The session folder', workingDir, { pastCap: true });
-  }
-  // The agent chose this path: probe it bounded too, before realpath can hold a worker on a dead mount.
-  const kind = await probePathKind(file, { pastCap: true });
-  if (kind === 'unknown') return describeUnknownPath('The file', file, { pastCap: true });
-  if (kind !== 'file') return 'Not a regular file';
   try {
-    const [root, real] = await Promise.all([realpath(workingDir), realpath(file)]);
-    const rel = relative(root, real);
-    if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
-      return 'The file must be inside the session folder';
-    if (isBlockedAttachmentPath(real, (await loadAttachmentGuardConfig()).blockedTrees)) {
-      return 'That file cannot be sent: it can hold credentials';
-    }
-    const info = await stat(real);
-    if (!info.isFile()) return 'Not a regular file';
-    if (info.size > MAX_FILE_BYTES) return `The file is over ${MAX_FILE_BYTES / 1024 / 1024} MB`;
-    return { name: basename(real), data: new Uint8Array(await readFile(real)) };
-  } catch {
-    return 'The file could not be read';
+    return await readDiscordSessionFile({ workingDir, remote }, file);
+  } catch (err) {
+    return err instanceof DiscordFileProblem ? err.message : 'The file could not be read';
   }
 }
 
@@ -136,6 +114,7 @@ export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDe
       gateway: deps.bridge.gatewayState,
       gatewayError: deps.bridge.gatewayError,
       lastResult: deps.bridge.lastResult,
+      sessionSync: deps.bridge.sessionSync,
     };
   };
 
@@ -143,6 +122,12 @@ export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDe
     const no = denied(req, reply);
     if (no) return no;
     return { success: true, data: await status() };
+  });
+
+  app.get('/api/discord/deliveries', async (req, reply) => {
+    const no = denied(req, reply);
+    if (no) return no;
+    return { success: true, data: await deps.bridge.recentDeliveries() };
   });
 
   app.put('/api/discord', async (req, reply): Promise<ApiResponse<DiscordStatus>> => {
@@ -155,16 +140,27 @@ export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDe
       ...patch,
       token: patch.token !== undefined ? patch.token.trim() : current.token,
     };
-    const problem = discordConfigProblem(next);
+    const automaticCategory = next.enabled && next.mode === 'full' && !next.categoryId;
+    const problem = discordConfigProblem(next, automaticCategory);
     if (problem) {
       reply.code(400);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, problem);
     }
     try {
+      if (automaticCategory) {
+        next.categoryId = await deps.bridge.provisionCategory(next);
+        if (JSON.stringify(await readDiscordConfig(deps.configDir)) !== JSON.stringify(current)) {
+          reply.code(409);
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            'Discord settings changed during category setup. Reload Settings and save again.'
+          );
+        }
+      }
       await writeDiscordConfig(deps.configDir, next);
       await deps.bridge.reload();
     } catch (err) {
-      reply.code(500);
+      reply.code(err instanceof DiscordCategoryProblem ? err.status : 500);
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }
     return { success: true, data: await status() };
@@ -182,6 +178,18 @@ export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDe
     return { success: true, data: await deps.bridge.sendTest(cfg, deps.hostTitle()) };
   });
 
+  app.post('/api/discord/sync', async (req, reply) => {
+    const no = denied(req, reply);
+    if (no) return no;
+    const cfg = await readDiscordConfig(deps.configDir);
+    if (!cfg.enabled || cfg.mode !== 'full') {
+      reply.code(409);
+      return createErrorResponse(ApiErrorCode.CONFLICT, 'Enable Full interface mode before syncing sessions');
+    }
+    // Join the background pass rather than creating duplicate threads.
+    return { success: true, data: await deps.bridge.syncSessions() };
+  });
+
   app.post('/api/sessions/:id/discord-notify', async (req, reply): Promise<ApiResponse<DiscordResult | null>> => {
     const { id: rawId } = req.params as { id: string };
     const id = resolveSessionId(deps.ctx, req, rawId);
@@ -197,7 +205,7 @@ export function registerDiscordRoutes(app: FastifyInstance, deps: DiscordRouteDe
     }
     let upload: { name: string; data: Uint8Array } | undefined;
     if (file !== undefined) {
-      const problem = await fileProblem(session.workingDir, !!session.remote, file);
+      const problem = await fileProblem(session.workingDir, session.remote, file);
       if (typeof problem === 'string') {
         refundNotifyToken(session.id);
         reply.code(400);

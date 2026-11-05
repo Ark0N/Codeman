@@ -65,7 +65,7 @@ describe('bridge deps', () => {
     const writeViaMux = vi.fn(async () => true);
     s.sessions.set('s1', { writeViaMux });
     expect(await s.discordBridge.deps.sendInput('s1', 'yes\r')).toBe(true);
-    expect(writeViaMux).toHaveBeenCalledWith('yes\r', { fromUser: true });
+    expect(writeViaMux).toHaveBeenCalledWith('yes\r', { fromUser: true, preserveWhitespace: true });
     expect(await s.discordBridge.deps.sendInput('missing', 'yes\r')).toBe(false);
   });
 });

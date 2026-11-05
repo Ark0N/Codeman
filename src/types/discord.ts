@@ -17,6 +17,8 @@ import type { WebhookScope } from './push.js';
 
 export const DISCORD_THREAD_CREATION = ['lazy', 'onSessionStart'] as const;
 export type DiscordThreadCreation = (typeof DISCORD_THREAD_CREATION)[number];
+export const DISCORD_MODES = ['notifications', 'full'] as const;
+export type DiscordMode = (typeof DISCORD_MODES)[number];
 export const DISCORD_ON_DELETE = ['keep', 'archive', 'delete'] as const;
 export type DiscordOnDelete = (typeof DISCORD_ON_DELETE)[number];
 export const DISCORD_PING_MODES = ['off', 'critical', 'all'] as const;
@@ -24,6 +26,10 @@ export type DiscordPingMode = (typeof DISCORD_PING_MODES)[number];
 
 export interface DiscordConfig {
   enabled: boolean;
+  /** Full is an opt-in conversation-interface preview; notifications preserves legacy behavior. */
+  mode: DiscordMode;
+  categoryId: string;
+  onChannelDelete: 'keep' | 'retain' | 'delete';
   token: string;
   guildId: string;
   parentChannelId: string;
@@ -57,4 +63,12 @@ export type DiscordStatus = Omit<DiscordConfig, 'token'> & {
   gateway: DiscordGatewayState;
   gatewayError: string | null;
   lastResult: DiscordResult | null;
+  sessionSync: DiscordSessionSync;
 };
+
+export interface DiscordSessionSync {
+  state: 'idle' | 'syncing' | 'complete' | 'error';
+  total: number;
+  ready: number;
+  failed: number;
+}

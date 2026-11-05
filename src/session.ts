@@ -5361,7 +5361,9 @@ export class Session extends EventEmitter {
     try {
       const submittedPrompt = this._trackSubmit(data, options);
       if (this._mux && this._muxSession) {
-        const sent = await this._mux.sendInput(this.id, data);
+        const sent = options.preserveWhitespace
+          ? await this._mux.sendInput(this.id, data, { preserveWhitespace: true })
+          : await this._mux.sendInput(this.id, data);
         if (sent) {
           this._emitSubmittedPrompt(submittedPrompt);
           this._verifySubmitted(data);
@@ -5370,6 +5372,8 @@ export class Session extends EventEmitter {
       }
       // Fallback to PTY write
       if (this.ptyProcess) {
+        // Structured multiline messages require the bracketed-paste/Enter transport above.
+        if (options.preserveWhitespace && data.includes('\n')) return false;
         this.ptyProcess.write(data);
         this._emitSubmittedPrompt(submittedPrompt);
         return true;

@@ -210,7 +210,7 @@ describe('sendInput line breaks', () => {
     }
   }
 
-  function managerWithSession(): RecordingManager {
+  function managerWithSession(mode: 'claude' | 'codex' = 'claude'): RecordingManager {
     const manager = new RecordingManager();
     manager.registerSession({
       sessionId: 's1',
@@ -218,7 +218,7 @@ describe('sendInput line breaks', () => {
       pid: 100,
       createdAt: 0,
       workingDir: '/tmp',
-      mode: 'claude',
+      mode,
       attached: true,
     } as MuxSession);
     return manager;
@@ -254,6 +254,23 @@ describe('sendInput line breaks', () => {
     expect(paste).toMatch(/ paste-buffer -p -d -b \S+ -t 'codeman-abc12345'$/);
     expect(enter).toMatch(/ send-keys -t "codeman-abc12345" Enter$/);
   });
+
+  it.each(['claude', 'codex'] as const)(
+    'preserves structured-message whitespace for %s in one paste and one Enter',
+    async (mode) => {
+      const manager = managerWithSession(mode);
+      const text = '\n\n  **Review**\n\n\t- first\n\t- second\n\n';
+      try {
+        expect(await manager.sendInput('s1', text + '\r', { preserveWhitespace: true })).toBe(true);
+        expect(manager.ran).toHaveLength(3);
+        expect(bufferText(manager.ran[0])).toBe(text);
+        expect(manager.ran[1]).toContain('paste-buffer -p -r');
+        expect(manager.ran.filter((cmd) => / Enter$/.test(cmd))).toHaveLength(1);
+      } finally {
+        manager.destroy();
+      }
+    }
+  );
 
   it('turns CRLF line endings into plain line breaks', async () => {
     const manager = managerWithSession();
