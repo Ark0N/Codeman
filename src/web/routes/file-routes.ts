@@ -1595,12 +1595,27 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // File tree listing
   app.get('/api/sessions/:id/files', async (req) => {
     const { id } = req.params as { id: string };
-    const { depth, showHidden, q } = req.query as { depth?: string; showHidden?: string; q?: string };
+    const { depth, showHidden, q, root } = req.query as {
+      depth?: string;
+      showHidden?: string;
+      q?: string;
+      root?: string;
+    };
     const session = findSessionOrFail(ctx, id, req);
 
     const maxDepth = Math.min(parseInt(depth || '5', 10), 10);
     const includeHidden = showHidden === 'true';
     const workingDir = session.workingDir;
+    // `root=live` starts the walk at the linked worktree the pane is in (#765). That folder is
+    // inside `workingDir` (`live-worktree.ts`), and every `path` below stays relative to
+    // `workingDir`, so file-content, file-raw and the edit route need nothing new and judge these
+    // paths against the same root as any other. Only the search predicate reads a path relative
+    // to the listing, since that is the tree the person is looking at.
+    const liveWorktree = session.liveWorktree;
+    const walkRoot =
+      root === 'live' && liveWorktree && (await probePathKind(liveWorktree.path, { pastCap: true })) === 'directory'
+        ? liveWorktree.path
+        : workingDir;
     // null for an empty/whitespace query, which is what keeps the default
     // tree response byte-identical when no search is requested.
     const matcher = compileFileQuery(q ?? '');
@@ -1676,17 +1691,18 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
 
           const fullPath = join(dirPath, entry.name);
           const relativePath = relative(workingDir, fullPath);
+          const listedPath = relative(walkRoot, fullPath);
 
           if (entry.isDirectory()) {
             totalDirectories++;
-            if (matcher(entry.name, relativePath)) {
+            if (matcher(entry.name, listedPath)) {
               matches.push({ name: entry.name, path: relativePath, type: 'directory' });
             }
             // Always recurse, even when this directory does not match.
             await searchDirectory(fullPath, currentDepth + 1);
           } else {
             totalFiles++;
-            if (matcher(entry.name, relativePath)) {
+            if (matcher(entry.name, listedPath)) {
               let size: number | undefined;
               try {
                 size = (await fs.stat(fullPath)).size;
@@ -1705,12 +1721,13 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         }
       };
 
-      await searchDirectory(workingDir, 1);
+      await searchDirectory(walkRoot, 1);
 
       return {
         success: true,
         data: {
-          root: workingDir,
+          root: walkRoot,
+          ...(liveWorktree && { worktree: liveWorktree }),
           tree: [],
           matches,
           totalFiles,
@@ -1791,12 +1808,13 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       }
     };
 
-    const tree = await scanDirectory(workingDir, 1);
+    const tree = await scanDirectory(walkRoot, 1);
 
     return {
       success: true,
       data: {
-        root: workingDir,
+        root: walkRoot,
+        ...(liveWorktree && { worktree: liveWorktree }),
         tree,
         totalFiles,
         totalDirectories,

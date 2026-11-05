@@ -2458,6 +2458,8 @@ class CodemanApp {
     }
     // cliMouseTracking (Claude's fullscreen mode) ends a keyboard row hold.
     if (session.id === this.activeSessionId) this._reconcileKeyboardHold?.();
+    // The agent moved into or out of a git worktree while the Files panel is open (#765).
+    if (session.id === this.activeSessionId) this._followFileBrowserWorktree?.(session);
     // Update parentSessionName for any subagents belonging to this session
     // (fixes stale name display after session rename)
     this.updateSubagentParentNames(session.id);

@@ -39,6 +39,19 @@ name.
 
 **Open** on a worktree's row starts another session in it, with the CLI chosen above.
 
+## When an agent moves into a worktree
+
+Claude Code can move a running session into a worktree part way through (its EnterWorktree tool),
+and the session's tab stays on the case. While the session's pane is in a worktree inside the
+session's folder, the **Files** panel lists that worktree, so you see the files the agent is
+editing. A strip under the panel's title names the worktree, and its **Session folder** button
+switches to the session's own folder (**Back to worktree** returns). The panel follows the agent
+in and back out on its own while it is open.
+
+A worktree outside the session's folder (`git worktree add ../feature`) is not followed: Codeman
+only serves files inside the session's folder. Open such a worktree as a case of its own with
+Add Case > Link Existing.
+
 ## Removing one
 
 Two ways, and both use `git worktree remove` **without** `--force`:

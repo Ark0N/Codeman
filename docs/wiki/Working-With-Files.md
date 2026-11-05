@@ -6,8 +6,9 @@ until you get home.
 
 ## The File Viewer
 
-A panel that browses the active session's working directory. Its header button is on by
-default; if it is missing, re-enable it in **App Settings → Header & Panels**.
+A panel that browses the active session's working directory, or the git worktree its agent
+moved into ([Git Worktrees](Git-Worktrees#when-an-agent-moves-into-a-worktree)). Its header
+button is on by default; if it is missing, re-enable it in **App Settings → Header & Panels**.
 
 It renders what it can:
 

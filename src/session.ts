@@ -73,6 +73,7 @@ import type { GitFetchStatus } from './git-fetch.js';
 import { resolveAndClaimOmpSessionId } from './utils/omp-session-resolver.js';
 import { claudeTranscriptExists } from './utils/claude-transcript.js';
 import { probePathKind } from './utils/bounded-path-probe.js';
+import type { LiveWorktree } from './live-worktree.js';
 import { PATH_PROBE_TIMEOUT_MS, WORKSPACE_REALPATH_RETRY_MS } from './config/path-probe.js';
 import { matchesPattern } from './config/cli-registry/patterns.js';
 import { probeDockerCliVersion } from './docker-hosts.js';
@@ -766,6 +767,8 @@ export class Session extends EventEmitter {
    * serialized by toState() but never restored by the constructor.
    */
   private _paneCwd: string | undefined;
+  /** See {@link liveWorktree}. */
+  private _liveWorktree: LiveWorktree | undefined;
   /**
    * `workingDir` with symlinks resolved, so a pane reading (tmux reads the
    * process cwd, always the resolved path) can be put back into `workingDir`'s
@@ -1576,6 +1579,22 @@ export class Session extends EventEmitter {
     return true;
   }
 
+  /**
+   * The linked git worktree inside `workingDir` that {@link paneCwd} is in, when there is one
+   * (`live-worktree.ts`). The Files panel lists it instead of the main checkout. Runtime-only and
+   * never a confinement root, like `paneCwd`: it is always a folder the file routes already serve.
+   */
+  get liveWorktree(): LiveWorktree | undefined {
+    return this._liveWorktree;
+  }
+
+  /** Record the result of a worktree lookup. Returns whether it CHANGED, so the caller broadcasts only then. */
+  setLiveWorktree(next: LiveWorktree | undefined): boolean {
+    if (next?.path === this._liveWorktree?.path) return false;
+    this._liveWorktree = next;
+    return true;
+  }
+
   /** `workingDir` without a trailing separator (the root stays `/`). */
   private _workspaceSpelling(): string {
     return this.workingDir.length > 1 ? this.workingDir.replace(/\/+$/, '') : this.workingDir;
@@ -2300,6 +2319,7 @@ export class Session extends EventEmitter {
       status: this._status,
       workingDir: this.workingDir,
       paneCwd: this._paneCwd,
+      liveWorktree: this._liveWorktree,
       remote: this._remote,
       docker: this._docker,
       owner: this._owner,
