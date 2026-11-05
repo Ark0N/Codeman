@@ -79,7 +79,7 @@ describe('edit history image probe on an unresponsive mount', () => {
 
     const sync = new EditHistorySync({
       transcriptPath: async () => '/p/conv1.jsonl',
-      readSources: async (_path, requests, budget): Promise<EditSources> => {
+      readSources: async (_session, _path, requests, budget): Promise<EditSources> => {
         const req = requests.find((r) => r.relPath === 'main');
         const start = Math.min(req?.offset ?? 0, main.length);
         const len = Math.min(budget, main.length - start);
@@ -89,7 +89,7 @@ describe('edit history image probe on an unresponsive mount', () => {
           metas: {},
         };
       },
-      probe: (paths) => probeLocalPaths(paths),
+      probe: (_session, paths) => probeLocalPaths(paths),
       loadStore: (id) => EditHistoryStore.load(id, { dir: stores, debounceMs: 0 }),
       deleteStore: (id) => EditHistoryStore.delete(id, { dir: stores }),
       sweepStores: async () => 0,

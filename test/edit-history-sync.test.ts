@@ -249,11 +249,11 @@ describe('EditHistorySync', () => {
   });
 
   it('a removal during a read stops it: no further parsing, no probe of printed paths', async () => {
-    const probe = vi.fn(async (paths: readonly string[]) => paths.map(() => null));
+    const probe = vi.fn(async (_session: unknown, paths: readonly string[]) => paths.map(() => null));
     let removal: Promise<void> | undefined;
     const ctx = setup({
       probe,
-      readSources: async (path, req, budget, opts) => {
+      readSources: async (_session, path, req, budget, opts) => {
         const res = await ctx.host.read(path, req, budget, opts);
         removal = ctx.sync.remove('s1'); // the session is deleted while this read is out
         return res;
