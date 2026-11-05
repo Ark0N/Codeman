@@ -2497,6 +2497,9 @@ export class DiscordBridge {
       await this.deliveries.update(id, 'files_transferred');
       // Persist the submission boundary before the final live routing check.
       await this.deliveries.update(id, 'submitting');
+      // Ownership reads may wait on Discord too. Finish every external check before the
+      // final live routing/dialog checks, so a new prompt cannot turn this reply into a blind answer.
+      if (this.cfg.mode === 'full') await this.channels.assertOwned(this.cfg, sessionId, m.channel_id);
       // Downloads can wait: recheck routing and permission immediately before any terminal write.
       if (
         !this.cfg.enabled ||
@@ -2510,9 +2513,16 @@ export class DiscordBridge {
         await this.say(m.channel_id, 'The session or Discord configuration changed. Nothing was typed.');
         return;
       }
+      if (this.cfg.mode === 'full' && this.deps.awaitingChoice?.(sessionId)) {
+        await this.deliveries.update(id, 'failed', 'invalid_command');
+        await this.say(
+          m.channel_id,
+          'A question or permission dialog appeared while preparing this reply. Use its buttons or !codeman pending for a prompt-bound answer; nothing was typed.'
+        );
+        return;
+      }
       const keys = /^\d\r$/.test(text) && this.deps.awaitingChoice?.(sessionId) ? text.slice(0, -1) : text;
       // A crash beyond the durable boundary is ambiguous; never retry the whole input.
-      if (this.cfg.mode === 'full') await this.channels.assertOwned(this.cfg, sessionId, m.channel_id);
       const ok = await this.deps.sendInput(sessionId, keys);
       await this.deliveries.update(id, ok ? 'input_accepted' : 'uncertain', ok ? undefined : 'input_uncertain');
       if (ok) await this.api.react(m.channel_id, m.id, '✅').catch(() => undefined);

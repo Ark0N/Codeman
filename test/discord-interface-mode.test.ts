@@ -310,6 +310,47 @@ describe('Discord interface mode', () => {
     expect(await readFile(join(dir, 'discord-channels.json'), 'utf8')).toBe('{"legacy":"preserve"}');
     expect(posts.some((p) => p.method === 'DELETE' && p.path.endsWith('/777777777777777777'))).toBe(false);
   });
+  it.each([
+    ['history', '2'],
+    ['history', 'Please continue'],
+    ['ownership', '2'],
+    ['ownership', 'Please continue'],
+  ])('refuses an ordinary reply when a dialog appears during the final %s await (%s)', async (phase, content) => {
+    let waiting = false;
+    let armed = false;
+    let afterHistory = false;
+    const history = async () => {
+      if (armed) {
+        afterHistory = true;
+        if (phase === 'history') waiting = true;
+      }
+      return { conversationId: 'native1', partial: false, turns: [] };
+    };
+    const b = makeBridge(undefined, { history, awaitingChoice: () => waiting });
+    await b.reload();
+    await b.syncSessions();
+    const thread = (await readFullMap(dir)).s1;
+    const channels = (b as unknown as { channels: { assertOwned: (...args: unknown[]) => Promise<void> } }).channels;
+    const assertOwned = channels.assertOwned.bind(channels);
+    vi.spyOn(channels, 'assertOwned').mockImplementation(async (...args) => {
+      await assertOwned(...args);
+      if (armed && afterHistory && phase === 'ownership') waiting = true;
+    });
+    armed = true;
+    await b.onGatewayMessage({
+      id: '555555555555555555',
+      guild_id: cfg.guildId,
+      channel_id: thread,
+      author: { id: cfg.allowedUserIds[0] },
+      content,
+    });
+    expect(afterHistory).toBe(true);
+    expect(waiting).toBe(true);
+    expect(sendInput).not.toHaveBeenCalled();
+    expect(posts.some((p) => p.body?.content?.includes('dialog appeared while preparing this reply'))).toBe(true);
+    const deliveries = await b.recentDeliveries();
+    expect(deliveries.find((d) => d.id === `in:${cfg.guildId}:555555555555555555`)?.state).toBe('failed');
+  });
   it('routes a full-mode channel reply to its exact session and preserves it across mode changes', async () => {
     const b = makeBridge();
     await b.reload();
