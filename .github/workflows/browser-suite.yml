@@ -21,7 +21,9 @@ permissions:
 jobs:
   browser:
     name: Playwright browser suite
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: that moved to 26.04 on 2026-11-05 and the locked Playwright 1.60.0
+    # refuses to install there (support starts at 1.61.0). Unpin when Playwright is bumped.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     steps:
