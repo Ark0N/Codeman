@@ -246,11 +246,12 @@ function landedInGroup(layout: TabLayout | undefined, sessionId: string): boolea
  * Guard a session-supplied configDir home BEFORE `applyCustomModelInjection` runs.
  *
  * The apply resolves the CLI's real home from this session's env override and then runs
- * synchronous `existsSync`/`mkdirSync` on it (deepseek `DSH_HOME`, and any future
- * `linkFromRealHome` recipe). A path on an unreachable network mount makes a synchronous
- * stat wait forever, and this runs INSIDE a request handler, so it would freeze the whole
- * web server (CLAUDE.md, the #516 rule on user-chosen paths). A relative home is left to
- * the apply, which already refuses to join non-absolute values.
+ * synchronous `existsSync`/`mkdirSync` on it (deepseek `DSH_HOME`, any future
+ * `linkFromRealHome` recipe, and claude's `CLAUDE_CONFIG_DIR` for `projects`). A path on an
+ * unreachable network mount makes a synchronous stat wait forever, and this runs INSIDE a
+ * request handler, so it would freeze the whole web server (CLAUDE.md, the #516 rule on
+ * user-chosen paths). A relative home is left to the apply, which already refuses to join
+ * non-absolute values.
  *
  * Probe the session's own home with `probePathKind(..., { pastCap: true })` first: on
  * `'unknown'` (a dead mount that never answered) hand the apply a lookup that hides that
@@ -264,8 +265,13 @@ export async function guardSessionConfigDirHome(
   probeOptions: PathProbeOptions = { pastCap: true }
 ): Promise<(envVar: string) => string | undefined> {
   const recipe = entry.capabilities.customModelInjection;
-  if (recipe?.kind !== 'configDir' || !recipe.linkFromRealHome?.length) return baseLookup;
-  const dirEnvVar = recipe.dirEnvVar;
+  const dirEnvVar =
+    recipe?.kind === 'env'
+      ? recipe.configDirVar
+      : recipe?.kind === 'configDir' && recipe.linkFromRealHome?.length
+        ? recipe.dirEnvVar
+        : undefined;
+  if (!dirEnvVar) return baseLookup;
   const supplied = baseLookup(dirEnvVar)?.trim();
   if (!supplied || !isAbsolute(supplied)) return baseLookup;
   if ((await probePathKind(supplied, probeOptions)) === 'unknown') {

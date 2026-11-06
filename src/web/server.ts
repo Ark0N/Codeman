@@ -1556,7 +1556,7 @@ export class WebServer extends EventEmitter {
       // there, so this only decides an entry that is missing, which an own home skips when it
       // does not hold one. With no own home, or one that does not answer (probed under the
       // bulk cap, this walks every saved session), a missing entry links from the SERVER's
-      // `DSH_HOME` or the recipe's `realHomeFallback` (~/.dsh).
+      // `DSH_HOME` or `CLAUDE_CONFIG_DIR`, or their defaults (~/.dsh, ~/.claude).
       return applyCustomModelInjection(
         entry,
         endpoint,

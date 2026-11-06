@@ -324,8 +324,7 @@ CLI process in place** — same pane, same tmux session, fresh env. That
 restart is necessary, not incidental: every supported harness reads its
 endpoint config at process start, not per-turn, so there is no live
 hot-swap. A Claude session is relaunched with `--resume <conversation> ||
---session-id <id>`, so it continues the conversation it was on (one exception:
-a session on its own `CLAUDE_CONFIG_DIR`, see below); pi, omp and
+--session-id <id>`, so it continues the conversation it was on; pi, omp and
 grok are relaunched with the `--model` value that selects the injected
 provider (`custom/<modelId>` for pi and omp, `codeman-custom` for grok),
 since for those three the config file alone does not switch the model.
@@ -385,14 +384,10 @@ size`. Neither a `modelContextLengths` entry nor a `defaultContextLength`
   included), user-level agents and commands, and the MCP servers configured
   in `~/.claude.json` — none of those are symlinked back, only `projects` is.
   A fine trade for "point this session at my local llama.cpp," but worth
-  knowing before it surprises you mid-session. ⚠️ **A session on its own
-  `CLAUDE_CONFIG_DIR` does not carry its conversation across an endpoint.**
-  The link goes to the server's Claude directory, never the session's own, so
-  the relaunch finds no transcript and starts a new conversation, and that
-  conversation's transcript lands in the server's tree. A clear goes back to
-  the own directory and resumes what that held from before the selection; a
-  session launched straight onto the endpoint has nothing there, so a clear
-  starts another new conversation.
+  knowing before it surprises you mid-session. A session on its own
+  `CLAUDE_CONFIG_DIR` links `projects` from that directory instead, so its
+  conversation, and what the endpoint run adds to it, stay on its own account
+  across an apply and a clear.
 
 **That isolated directory needed one more fix to actually be usable
 non-interactively.** An otherwise-empty `CLAUDE_CONFIG_DIR` has none of a

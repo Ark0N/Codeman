@@ -24,7 +24,7 @@
  * spying on `respawnPane` to read the options the relaunch would get.
  * Port: N/A.
  */
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -32,6 +32,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Session } from '../src/session.js';
 import { getCli } from '../src/config/cli-registry/index.js';
 import { buildCustomModelInjection } from '../src/custom-model-injection.js';
+import {
+  applyCustomModelInjection,
+  customModelConfigDir,
+  removeConfigDir,
+} from '../src/custom-model-injection-apply.js';
 import { TmuxManager } from '../src/tmux-manager.js';
 import type { MuxSession, SessionMode } from '../src/types.js';
 
@@ -380,5 +385,75 @@ describe('a value the session set itself comes back with the selection gone', ()
     );
 
     expect(session.getCustomModelForPersist()).toEqual({ endpointId: 'ep', modelId: 'q', envKeys: ['GEMINI_API_KEY'] });
+  });
+});
+
+describe('a claude session on its own config dir keeps its conversation', () => {
+  const ownDir = join(homedir(), 'custom-model-restart-own-claude');
+  const endpoint = { id: 'ep', label: 'Ep', baseUrl: 'http://box:8080', apiKey: 'k' };
+
+  afterEach(() => rmSync(ownDir, { recursive: true, force: true }));
+
+  function writeTranscript(configDir: string, conversationId: string): string {
+    const dir = join(configDir, 'projects', '-custom-model-restart');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${conversationId}.jsonl`);
+    writeFileSync(file, '{"type":"user"}\n');
+    return file;
+  }
+
+  /** The route's apply, with the real isolated directory and its `projects` link. */
+  function applyEndpoint(session: Session) {
+    const applied = applyCustomModelInjection(
+      getCli('claude')!,
+      endpoint,
+      'q',
+      session.id,
+      undefined,
+      workingDir,
+      (envVar) => session.ownEnvValue(envVar)
+    )!;
+    session.setCustomModel(
+      {
+        endpointId: 'ep',
+        modelId: 'q',
+        envKeys: applied.envKeys,
+        configDir: applied.configDir,
+        homeEnvVar: applied.homeEnvVar,
+      },
+      applied.envOverrides
+    );
+    return applied;
+  }
+
+  it('resumes it on apply, from under the own dir', async () => {
+    const { session, respawn } = liveSession('claude', { envOverrides: { CLAUDE_CONFIG_DIR: ownDir } });
+    writeTranscript(ownDir, session.id);
+    const applied = applyEndpoint(session);
+
+    await session.restartCli();
+    const options = respawn.mock.calls[0][0];
+    expect(options.envOverrides?.CLAUDE_CONFIG_DIR).toBe(applied.configDir);
+    expect(options.resumeSessionId).toBe(session.id);
+    removeConfigDir(applied.configDir);
+  });
+
+  it('resumes what the endpoint run wrote on clear, on the own account', async () => {
+    // The server's tree exists, as it does on any machine that has run claude: this is
+    // where the `projects` link used to send the transcript, out of the own dir's sight.
+    mkdirSync(join(homedir(), '.claude', 'projects'), { recursive: true });
+    const { session, respawn } = liveSession('claude', { envOverrides: { CLAUDE_CONFIG_DIR: ownDir } });
+    const applied = applyEndpoint(session);
+    writeTranscript(applied.configDir!, session.id);
+
+    const { previousConfigDir } = session.setCustomModel(undefined);
+    removeConfigDir(previousConfigDir);
+    await session.restartCli();
+
+    expect(existsSync(customModelConfigDir(session.id))).toBe(false);
+    expect(existsSync(join(ownDir, 'projects', '-custom-model-restart', `${session.id}.jsonl`))).toBe(true);
+    const options = respawn.mock.calls[0][0];
+    expect(options.envOverrides?.CLAUDE_CONFIG_DIR).toBe(ownDir);
+    expect(options.resumeSessionId).toBe(session.id);
   });
 });

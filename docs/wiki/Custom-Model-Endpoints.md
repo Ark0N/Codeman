@@ -75,9 +75,7 @@ session's process ever starts. **Claude still restarts the harness's process in 
 same tab, same conversation (`--resume`) — after a normal native launch, since that restart
 is far less jarring for Claude than for the others, whose own TUI can fully
 reinitialize on a restart. Either way, every supported harness reads its endpoint config at
-process start, never per turn, so there is no live hot-swap while a turn is running. A Claude
-session on its own `CLAUDE_CONFIG_DIR` does not keep its conversation, see
-[What it does not do](#what-it-does-not-do).
+process start, never per turn, so there is no live hot-swap while a turn is running.
 
 Picking an entry that launches a **brand-new** Claude session waits (up to 20 seconds) for it to
 finish its own startup before applying — a freshly started CLI reports itself as busy for its
@@ -219,10 +217,6 @@ missing entry is the more current answer.
   a key the endpoint replaced, such as its own `DSH_HOME` or `CLAUDE_CONFIG_DIR`. If Codeman
   restarted in between, only the home directory comes back, and an own `DSH_HOME`, `CODEX_HOME`
   or `GROK_HOME` only when the endpoint was picked before that restart.
-- **No conversation carried across for a session on its own `CLAUDE_CONFIG_DIR`.** Picking an
-  endpoint starts a new conversation, and its transcript lands in the server's Claude directory.
-  A clear goes back to what the session's own directory held from before, or starts a new
-  conversation if it held none.
 - **Nothing is shared with your real cloud credentials.** The endpoint's own key, if any,
   never touches your Anthropic/OpenAI/Google login — a custom endpoint is a separate,
   explicit choice per session.

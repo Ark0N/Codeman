@@ -58,6 +58,16 @@ describe('guardSessionConfigDirHome', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("guards claude's own config dir too: the apply makes its projects folder", async () => {
+    probe.mockResolvedValue('unknown');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const lookup = await guardSessionConfigDirHome(getCli('claude')!, env({ CLAUDE_CONFIG_DIR: '/mnt/dead/claude' }));
+
+    expect(lookup('CLAUDE_CONFIG_DIR')).toBeUndefined();
+    expect(probe).toHaveBeenCalledWith('/mnt/dead/claude', { pastCap: true });
+  });
+
   it('boot recovery probes the own home under the stall cap: it is a bulk pass, not one request', async () => {
     probe.mockResolvedValue('unknown');
     vi.spyOn(console, 'warn').mockImplementation(() => {});
