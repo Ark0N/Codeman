@@ -1377,8 +1377,9 @@ export function registerSessionRoutes(
     const globalNice = await ctx.getGlobalNiceConfig();
     const modelConfig = await ctx.getModelConfig();
     const mode = body.mode || 'claude';
-    // Synced App Settings launch defaults (capabilities.launchDefaults, codex's model and
-    // effort today) fill the CLI's own config object where the caller left it unset.
+    // Synced App Settings launch defaults (capabilities.launchDefaults, codex's model,
+    // effort and network access today) fill the CLI's own config object where the caller
+    // left it unset.
     // Local launches only: a remote attach runs whatever the remote pane already runs.
     const launchBody = remote ? body : await applyLaunchDefaults(mode, body);
     // Where a model override comes from is a capability, and the three answers are

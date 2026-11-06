@@ -277,8 +277,8 @@ function getModeLabel(mode: SessionMode): string {
  *
  * Only such a CLI needs its version probed at session start — probing one with no gates
  * would spawn a `--version` subprocess whose answer nothing reads. Today that is claude
- * (the `--name` flag, gated at 2.1.224), which is why the probe used to be written as
- * `mode === 'claude'`.
+ * (the `--name` flag, gated at 2.1.224) and codex (`--no-daemon`, gated at 0.162.0). The
+ * probe used to be written as `mode === 'claude'`, when claude was the only one.
  */
 function cliNeedsVersionProbe(mode: SessionMode): boolean {
   return Object.keys(getCli(mode)?.capabilities.gates ?? {}).length > 0;
