@@ -140,9 +140,11 @@ import { defaultDockerWorkspaces } from './routes/git-status-routes.js';
 import { guardSessionConfigDirHome } from './routes/session-routes.js';
 import { composerIsEmpty, plainFrame } from '../session-submit-verifier.js';
 import { detectUsageLimitPause } from '../usage-limit-patterns.js';
-import { EditHistorySync } from './edit-history-sync.js';
+import { EditHistorySync, remoteTranscriptIds } from './edit-history-sync.js';
 import { EditHistoryStore } from '../edit-history-store.js';
 import { probeLocalPaths, readClaudeEditSources, resolveClaudeTranscript } from '../edit-history-local-source.js';
+import { remoteLocateClaudeTranscript, remoteProbePaths, remoteReadClaudeEditSources } from '../remote-files.js';
+import { remoteTmuxLocation } from '../tmux-manager.js';
 import { stopDeepSeekWeb } from '../deepseek-web-server.js';
 import {
   wireRespawnListeners,
@@ -359,19 +361,31 @@ export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
   /**
-   * The edit history panel's reader (edit-history-sync.ts). Reads only when the panel asks;
-   * the main transcript is the one the transcript watcher follows (hook-reported path), or,
-   * before the first hook after a restart, a lookup under the session's claude config dir.
+   * The edit history panel's reader (edit-history-sync.ts). Reads only when the panel asks.
+   * A local session's main transcript is the one the transcript watcher follows (hook-reported
+   * path), or, before the first hook after a restart, a lookup under the session's claude
+   * config dir. A remote session sends no hooks: its host is asked over ssh for the transcript
+   * the pane's claude writes, else the stored conversation's (`remoteTranscriptIds`), and is
+   * never woken for it (remote-files.ts).
    */
   private readonly editHistorySync = new EditHistorySync({
-    transcriptPath: (session) =>
-      resolveClaudeTranscript(
-        this.transcriptWatchers.get(session.id)?.getPath(),
-        [session.claudeSessionId || session.id, session.id],
-        session.claudeConfigDir
-      ),
-    readSources: readClaudeEditSources,
-    probe: probeLocalPaths,
+    transcriptPath: (session, storedTranscriptId) =>
+      session.remote
+        ? remoteLocateClaudeTranscript(
+            session.remote,
+            remoteTranscriptIds(session, storedTranscriptId),
+            remoteTmuxLocation(session.remote, session.id)
+          )
+        : resolveClaudeTranscript(
+            this.transcriptWatchers.get(session.id)?.getPath(),
+            [session.claudeSessionId || session.id, session.id],
+            session.claudeConfigDir
+          ),
+    readSources: (session, mainPath, requests, budget, opts) =>
+      session.remote
+        ? remoteReadClaudeEditSources(session.remote, mainPath, requests, budget, opts)
+        : readClaudeEditSources(mainPath, requests, budget, opts),
+    probe: (session, paths) => (session.remote ? remoteProbePaths(session.remote, paths) : probeLocalPaths(paths)),
     loadStore: (sessionId) => EditHistoryStore.load(sessionId),
     deleteStore: (sessionId) => EditHistoryStore.delete(sessionId),
     sweepStores: (keep) => EditHistoryStore.sweep(keep),

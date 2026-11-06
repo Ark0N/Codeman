@@ -150,8 +150,8 @@ session uses: one `realpath` plus `stat` probe for the file and the workspace ro
 streamed `cat` (or a slice of it, so video seeking works). Symlinks are resolved on the host
 that can resolve them, the size cap applies to the remote size before a byte is requested,
 and an unreachable host answers 502 rather than pretending the file is missing. Nothing is
-ever copied onto the Codeman host, and a same-named local file is never served under a
-remote name.
+ever copied onto the Codeman host, apart from the diffs the [edit history](#edit-history)
+stores, and a same-named local file is never served under a remote name.
 
 Not available over ssh, and said so with a 400 instead of a misleading 404: editing in
 place, Office previews and generated thumbnails (both need the bytes on the server's disk),
@@ -317,20 +317,28 @@ Click it for a draggable window listing the active session's edits, newest first
   first catches up on the ones it had not read yet. **Load older** then goes back within the new
   conversation.
 
-It works for local Claude sessions only. Remote (SSH), Docker and other CLIs' sessions say so instead.
+It works for Claude sessions, local and remote (SSH). Docker and other CLIs' sessions say so instead.
+A remote session's images show no thumbnail (each would be one more SSH read); click one to
+preview it. A remote host that is asleep is never woken for the history: the window shows the
+stored edits with the SSH error on top.
 
 How it reads:
 
 - **Only while you look.** The history is read from the session's Claude transcript when you open
   the window, and again after each tool call that can change files and at the end of each turn,
-  while it stays open on that session. A closed window reads nothing, and Codeman does no work in
-  the background for sessions nobody looks at.
+  while it stays open on that session (a remote session at the end of each turn only: its host
+  sends no tool events). A closed window reads nothing, and Codeman does no work in the
+  background for sessions nobody looks at.
 - **The transcript is found through the session's hooks.** Each prompt tells Codeman where the
   session's transcript is. Right after a server restart, before the next prompt, Codeman looks in
   the session's `CLAUDE_CONFIG_DIR` if you set one for it in Codeman, else in the default config
   directory. A `CLAUDE_CONFIG_DIR` set outside Codeman (in a shell profile or a wrapper script)
   is only known after the next prompt; until then the window says "No transcript found for this
-  session yet".
+  session yet". A remote session's transcript is looked up on its host over SSH: the
+  conversation its Claude writes now, else the most recently written of the one the window
+  showed last and the session's own, under the remote user's `~/.claude`, or under
+  `CLAUDE_CONFIG_DIR` when the host sets it for every SSH command (`.zshenv`,
+  `/etc/environment`); one set only in `.profile`, `.bash_profile` or `.zshrc` is not seen.
 - **The history is stored, and it holds secrets.** Every diff an agent wrote is copied to
   `~/.codeman/edit-history/<session-id>.json`, including API keys or `.env` contents it edited. The file is
   readable by your user only, capped at 500 edits and 4 MiB of diff text per session (the oldest

@@ -51,8 +51,8 @@ function setup(budget?: number, base = root) {
   let current = at('convA');
   const sync = new EditHistorySync({
     transcriptPath: async () => (existsSync(current) ? current : null),
-    readSources: readClaudeEditSources,
-    probe: async (paths) => paths.map(() => null),
+    readSources: (_session, path, requests, budget, opts) => readClaudeEditSources(path, requests, budget, opts),
+    probe: async (_session, paths) => paths.map(() => null),
     loadStore: async (id) => {
       const store = await EditHistoryStore.load(id, { dir: join(base, 'store'), debounceMs: 10 });
       opened.push(store);

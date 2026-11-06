@@ -84,9 +84,11 @@ clamping each other, and discovery shows a shared badge with the client count.
 
 Previews, downloads and text reads in a remote case go over the same ssh connection the
 session uses, so a clicked path opens the file on the machine the agent is on, `Range`
-seeking included. Nothing is copied to the Codeman host. Editing, Office previews,
-thumbnails, the file tree and the tail viewer are not available remotely and answer a clear
-400 rather than a misleading 404. Details in [Working With Files](Working-With-Files).
+seeking included. Nothing is copied to the Codeman host, apart from the diffs the
+[Edit history](Working-With-Files#edit-history) panel keeps, which works for remote Claude
+sessions too. Editing, Office previews, thumbnails, the file tree and the tail viewer are not
+available remotely and answer a clear 400 rather than a misleading 404. Details in
+[Working With Files](Working-With-Files).
 
 ## Security
 

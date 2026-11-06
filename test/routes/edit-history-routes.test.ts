@@ -62,7 +62,7 @@ async function setup(
   const sync = new EditHistorySync({
     transcriptPath: async () => '/p/conv1.jsonl',
     readSources: read,
-    probe: async (p) => p.map(() => null),
+    probe: async (_session, p) => p.map(() => null),
     loadStore: async (id) => {
       const store = await EditHistoryStore.load(id, { dir, debounceMs: 0 });
       opened.push(store);
@@ -183,7 +183,6 @@ describe('GET /api/sessions/:id/edits', () => {
   });
 
   it.each([
-    ['remote', { remote: { host: 'huff' } }],
     ['docker', { docker: { image: 'x' } }],
     ['mode', { mode: 'shell' }],
   ])('answers unsupported (%s) without reading or loading a store', async (reason, patch) => {
@@ -242,7 +241,12 @@ describe('POST /api/sessions/:id/edits/older', () => {
     const lines = [0, 1, 2, 3].map((i) => editLine(`t${i}`, T0 + i, `/w/${i}.ts`)).join('');
     const full = Buffer.from(lines);
     const read = vi.fn(
-      async (_path: string, requests: readonly { relPath: string; offset: number; len?: number }[], budget: number) => {
+      async (
+        _session: unknown,
+        _path: string,
+        requests: readonly { relPath: string; offset: number; len?: number }[],
+        budget: number
+      ) => {
         const req = requests.find((r) => r.relPath === 'main');
         const start = req ? req.offset : full.length - budget;
         const len = req?.len ?? full.length - start;
@@ -260,12 +264,13 @@ describe('POST /api/sessions/:id/edits/older', () => {
     expect(older.entries.length).toBeGreaterThan(first.entries.length);
   });
 
-  it('answers unsupported for a remote session without reading', async () => {
+  it('reads a remote session, handing the reader that session', async () => {
     const { app, read } = await setup();
     session.remote = { host: 'huff' };
-    const data = (await app.inject({ method: 'POST', url: `${URL}/older` })).json().data;
-    expect(data).toMatchObject({ state: 'unsupported', reason: 'remote' });
-    expect(read).not.toHaveBeenCalled();
+    const data = (await app.inject({ method: 'GET', url: `${URL}?sync=1` })).json().data;
+    expect(data).toMatchObject({ state: 'ok', entries: [{ path: '/w/src/a.ts' }] });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect((read.mock.calls[0] as unknown[])[0]).toMatchObject({ id: session.id, remote: { host: 'huff' } });
   });
 });
 
