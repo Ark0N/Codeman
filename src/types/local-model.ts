@@ -1,9 +1,12 @@
 /**
  * @fileoverview Types of the hardware-aware local model recommendation: what the server sees of
- * this Mac, the catalogue of models and harnesses, and the answer of `GET /api/local-model`.
+ * this Mac, the catalogue of models and harnesses, and the recommendation part of the answer of
+ * `GET /api/local-model`.
  *
- * This stage is read-only: Codeman looks at the Mac and recommends. It downloads nothing,
- * installs nothing and writes no file.
+ * Everything here is the READ side: Codeman looks at the Mac and recommends. The types of the
+ * install (the job states, the progress, the `install` object of the GET, the request bodies,
+ * the state file, the runtime pin) and `LocalModelStatus`, the whole `data` of the GET, are in
+ * src/types/local-model-install.ts. Both files go out through the barrel (`../types.js`).
  *
  * Who produces what:
  *  - `HardwareFacts`: src/local-model/hardware.ts (one bounded `sysctl` spawn, never throws).
@@ -11,7 +14,11 @@
  *  - `HarnessFact`: src/local-model/harness-facts.ts (server only, read from the CLI registry at
  *    call time; it holds a function, so it never goes over HTTP).
  *  - `Recommendation`, `Candidate`, `DeviceBudget`: src/local-model/recommend.ts (pure).
- *  - `LocalModelStatus`: src/web/routes/local-model-routes.ts (the `data` of the GET).
+ *
+ * Fields marked "Stage 2" were added for the install. They are OPTIONAL in the type only so
+ * that the stage 1 catalogue and `recommend()` keep compiling until their owner fills them:
+ * once `recommend()` and the catalogue rows carry them, they become required, and a consumer
+ * (the chooser window, the install job) may rely on every one of them.
  *
  * Three rules every producer and consumer follows:
  *
@@ -100,6 +107,13 @@ export interface TestedOn {
   cli: string;
   /** ISO date of the test ('2026-11-06'). */
   date: string;
+  /**
+   * Stage 2. The generation speed measured in that test, in tokens per second (67.7 for the
+   * 2026-11-06 run on an Apple M5 Pro with 48 GB). A candidate that matches this entry reports
+   * this figure as `Candidate.tokensPerSecond` in place of the estimate from the chip's memory
+   * bandwidth: a measurement on the same Mac beats a formula.
+   */
+  tokensPerSecond?: number;
 }
 
 /** One model of the catalogue. */
@@ -112,10 +126,42 @@ export interface LocalModelEntry {
   license: string;
   /** Parameter count in billions. When no model that fits has 12 or more, the verdict is `limited`, never `ok`. */
   paramsB: number;
-  /** Size of the weights in bytes: both the download and what they take in memory. */
+  /**
+   * Size of the weights in bytes: both the download and what they take in memory.
+   *
+   * Stage 2: the size of the build the runtime really downloads ON A MAC. That is not always
+   * the sum of the registry manifest: `qwen3.6:35b-a3b` is an MLX build of 23,105,798,956 bytes
+   * on Apple silicon, 2% more than the manifest's 22,621,314,161. A row whose Mac size nobody
+   * measured keeps the manifest sum and says so in `figures`.
+   */
   bytes: number;
-  /** Bytes of KV cache one token of context costs. */
+  /**
+   * Stage 1 figure: the bytes of KV cache one token of context costs, COMPUTED from the model's
+   * config. Measured on a Mac it was too low by almost half (20 KiB against about 37 KB held),
+   * so the need is computed from `heldBytesPerToken` once that is filled. Kept only until
+   * `recommend()` stops reading it; it is deleted together with `promptCacheTiers` then.
+   */
   kvBytesPerToken: number;
+  /**
+   * Stage 2. Bytes that stay HELD in memory per token of context once the token was processed
+   * (measured on the MLX runner: 36,000 to 38,000, so about 37,000).
+   */
+  heldBytesPerToken?: number;
+  /** Stage 2. What the runner holds beside the weights and the context (measured: about 3 GB). */
+  overheadBytes?: number;
+  /**
+   * Stage 2. The TRANSIENT extra the runner takes while it processes a long prompt, on top of
+   * what stays held (measured: about 5 GB). The fit is judged on the peak:
+   * `bytes + heldBytesPerToken * context + overheadBytes + peakExtraBytes`. For
+   * `qwen3.6:35b-a3b` at 131072 tokens that is about 36 GB, which is tight on a 48 GB Mac.
+   */
+  peakExtraBytes?: number;
+  /**
+   * Stage 2. Where `bytes` and the three memory figures above come from: `measured` on a Mac by
+   * us, or `estimated` (the manifest size, and the per-token, overhead and peak figures of the
+   * measured row applied to this one).
+   */
+  figures?: 'measured' | 'estimated';
   /** Context lengths (tokens) the model may be run at, largest first. */
   contexts: number[];
   /** Preference among models that fit: the HIGHER rank wins. A judgement, not a measurement. */
@@ -194,6 +240,13 @@ export interface HarnessFact {
   installed: boolean;
   /** Not installed, but the registry has an install command for this platform that needs no administrator rights. */
   installable: boolean;
+  /**
+   * Stage 2. The literal install command the install job would run for this CLI: the STOCK
+   * command of the CLI registry for this platform, never one a `clis.json` override supplies.
+   * Present exactly when `installable` is true. The consent screen prints it
+   * (`CandidateHarness.installCommand`).
+   */
+  installCommand?: string;
   /** Whether this CLI can be launched with that model id (its command-line pattern accepts it). */
   acceptsModelId: (modelId: string) => boolean;
 }
@@ -223,16 +276,52 @@ export type SpeedGrade = 'ok' | 'slow' | 'unknown';
  */
 export type NoneReason = 'not-macos' | 'intel' | 'memory' | 'disk' | 'macos' | 'no-harness';
 
-/** Where the device budget came from: a formula (`estimated`) or `iogpu.wired_limit_mb` above 0 (`wired-limit`). */
-export type BudgetSource = 'estimated' | 'wired-limit';
+/**
+ * Where the device budget came from.
+ *  - `estimated`: a formula over the installed memory. All there is before the runtime ran.
+ *  - `wired-limit`: `iogpu.wired_limit_mb` above 0.
+ *  - `measured` (stage 2): the device total the runtime itself printed when it started
+ *    (`RecommendOptions.measuredTotalBytes`). The chooser says "estimated" next to the memory
+ *    bar for the first value only.
+ */
+export type BudgetSource = 'estimated' | 'wired-limit' | 'measured';
 
 /** The memory a model may use on this Mac. */
 export interface DeviceBudget {
-  /** L: the wired limit when above 0, else 2/3 of memory below 36 GB and 3/4 from 36 GB. */
+  /**
+   * L: the measured device total when there is one, else the wired limit when above 0, else
+   * 2/3 of memory below 36 GB and 3/4 from 36 GB.
+   */
   limitBytes: number;
-  /** B = min(L - 1 GiB, memory - reserve). What `Candidate.budgetShare` is measured against. */
+  /**
+   * What `Candidate.budgetShare` is measured against. Estimated or from the wired limit:
+   * B = min(L - 1 GiB, memory - reserve). Measured: B = min(L, memory - reserve), without the
+   * 1 GiB, because the runtime's figure is already what it will really use (37.4 GiB on the
+   * 48 GB test Mac, which reads '40.2').
+   */
   budgetBytes: number;
   source: BudgetSource;
+}
+
+/**
+ * Stage 2. What the caller of `recommend()` knows beyond the hardware probe. Both members are
+ * optional and an empty object is the stage 1 behaviour.
+ */
+export interface RecommendOptions {
+  /**
+   * The device total the runtime reported in its log line "inference compute"
+   * (`total="37.4 GiB"`), in bytes: `parseInferenceComputeTotal()` in
+   * src/local-model/runtime.ts. Present: the budget is `measured`. The install job passes it
+   * right after the runtime started, before the model is downloaded, and the GET passes the
+   * stored figure from then on.
+   */
+  measuredTotalBytes?: number;
+  /**
+   * What an install adds to every candidate's download beside the model: the size of the
+   * pinned runtime archive while the runtime is not installed, 0 once it is. It is the
+   * difference between `Candidate.installBytes` and `Candidate.downloadBytes`. Default 0.
+   */
+  runtimeDownloadBytes?: number;
 }
 
 /**
@@ -315,6 +404,60 @@ export interface LocalModelMessage {
   vars?: Record<string, string>;
 }
 
+/**
+ * Stage 2. The one tag a model row of the chooser carries, by what it says.
+ *  - `tested`: `Candidate.tested` is true. Replaces every other tag.
+ *  - `best`: the pick. The one tag drawn in the accent colour.
+ *  - `tight`: `Candidate.fit` is `tight`.
+ *  - `slow`: `Candidate.speed` is `slow`.
+ *  - `small`: the model has fewer than 12 billion parameters.
+ * A row gets the FIRST kind of this list that applies and no tag when none does, so a pick
+ * that is tight says "Best fit" (the memory bar already shows how full it is).
+ */
+export type CandidateTagKind = 'tested' | 'best' | 'tight' | 'slow' | 'small';
+
+/**
+ * The text of each tag, in English (the i18n source language), like `LOCAL_MODEL_LABELS`. A
+ * constant of its own so that a consumer can list the tag texts apart from the sentences.
+ */
+export const LOCAL_MODEL_TAG_LABELS = {
+  tested: 'Tested on a Mac like this',
+  best: 'Best fit',
+  tight: 'Tight',
+  slow: 'Slow',
+  small: 'Small model',
+} as const satisfies Record<CandidateTagKind, string>;
+
+/** One of the texts in `LOCAL_MODEL_TAG_LABELS`. */
+export type LocalModelTagLabel = (typeof LOCAL_MODEL_TAG_LABELS)[CandidateTagKind];
+
+/** Stage 2. The tag of a model row: what kind it is (for the styling) and the text to print. */
+export interface CandidateTag {
+  kind: CandidateTagKind;
+  /** `LOCAL_MODEL_TAG_LABELS[kind]`. */
+  label: LocalModelTagLabel;
+}
+
+/**
+ * Stage 2. One coding agent a candidate's model can be run with on this Mac, for the "Runs
+ * with" select of the chooser. Everything a browser needs is here, so it compares no CLI id.
+ */
+export interface CandidateHarness {
+  /** The CLI registry id, as data: what `POST /api/local-model/install` is sent as `cli`. */
+  cli: string;
+  /** The registry's display label ('OpenCode'). */
+  cliLabel: string;
+  /** False: the install job installs it first (it is installable, or it would not be listed). */
+  installed: boolean;
+  /**
+   * The literal command the install job would run to install it (`HarnessFact.installCommand`).
+   * Present exactly when `installed` is false. The consent screen prints it as it is.
+   */
+  installCommand?: string;
+  /** The harness row's `slowFirstTurn`. */
+  slowFirstTurn?: boolean;
+}
+
 /** One model at one context with one harness, measured against this Mac. Plain JSON. */
 export interface Candidate {
   /** `LocalModelEntry.id`. */
@@ -333,7 +476,12 @@ export interface Candidate {
   cliInstalled: boolean;
   /** The harness row's `slowFirstTurn`. */
   slowFirstTurn?: boolean;
-  /** F = weights + kvBytesPerToken * context + 1 GiB + prompt cache. */
+  /**
+   * What the model needs in memory at this context. Stage 1: F = weights + kvBytesPerToken *
+   * context + 1 GiB + prompt cache. Stage 2: the PEAK, `bytes + heldBytesPerToken * context +
+   * overheadBytes + peakExtraBytes` of the catalogue row. The memory bar of the chooser is
+   * filled to `budgetShare`, which is this over the budget.
+   */
   needBytes: number;
   /** `needBytes` as decimal GB text, no unit. */
   needGb: string;
@@ -350,10 +498,33 @@ export interface Candidate {
   speed: SpeedGrade;
   /** `speedSlow` or `speedUnknown`. Absent when `speed` is `ok`. */
   speedLabel?: LocalModelLabel;
-  /** Estimated generation speed, rounded to one decimal. Present exactly when `speed` is not `unknown`. `speed` is decided on the unrounded figure. */
+  /**
+   * Generation speed in tokens per second, rounded to one decimal. Present exactly when `speed`
+   * is not `unknown`; `speed` is decided on the unrounded figure. An estimate from the chip's
+   * memory bandwidth, except (stage 2) for a candidate that is `tested`, which reports the
+   * speed measured in that test (`TestedOn.tokensPerSecond`).
+   */
   tokensPerSecond?: number;
   /** A `TestedOn` entry of the model matches this Mac (same chip, same `memClassGb`) and this harness. */
   tested: boolean;
+  /** Stage 2. `LocalModelEntry.figures` of the model: whether `needBytes` rests on a measurement of this model. */
+  needSource?: 'measured' | 'estimated';
+  /** Stage 2. The row's one tag, see `CandidateTagKind`. Absent when no kind applies. */
+  tag?: CandidateTag;
+  /**
+   * Stage 2. Every coding agent this model can be run with at `context` on this Mac, best
+   * first. The first entry is the one the flat fields above name (`cli`, `cliLabel`,
+   * `cliInstalled`, `slowFirstTurn`). Never empty.
+   */
+  harnesses?: CandidateHarness[];
+  /**
+   * Stage 2. The whole download a click on Install starts for this row: `downloadBytes` plus
+   * `RecommendOptions.runtimeDownloadBytes`. It is the server's own total, and exactly the
+   * number `POST /api/local-model/install` must be sent as `acknowledgedBytes`.
+   */
+  installBytes?: number;
+  /** Stage 2. `installBytes` as decimal GB text, no unit. */
+  installGb?: string;
 }
 
 /**
@@ -385,12 +556,4 @@ export interface Recommendation {
   budgetSource: BudgetSource;
 }
 
-// ---------- API ----------
-
-/** The `data` of `GET /api/local-model`. Read-only; admin only in multi-user mode. */
-export interface LocalModelStatus {
-  hardware: HardwareFacts;
-  recommendation: Recommendation;
-  /** `LocalModelCatalog.updated`. */
-  catalogUpdated: string;
-}
+// `LocalModelStatus`, the `data` of `GET /api/local-model`, is in src/types/local-model-install.ts.

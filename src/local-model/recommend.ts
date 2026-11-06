@@ -71,6 +71,7 @@ import {
   type LocalModelMessage,
   type NoneReason,
   type Recommendation,
+  type RecommendOptions,
   type SpeedGrade,
 } from '../types.js';
 import { chipBandwidthGbps } from '../config/local-model-catalog.js';
@@ -133,6 +134,29 @@ function fitGrade(need: number, budgetBytes: number): FitGrade {
   if (share <= FIT_GOOD_MAX_SHARE) return 'good';
   if (share <= FIT_TIGHT_MAX_SHARE) return 'tight';
   return 'out';
+}
+
+/**
+ * Whether the catalogue model `modelId` at `context` tokens fits this Mac's budget (a `good`
+ * or a `tight` fit). The install job asks this right after the runtime started, with the
+ * budget the runtime measured, BEFORE it downloads the model: a `false` ends the job with
+ * `does-not-fit`. It is the same judgement `recommend()` makes for a candidate, without the
+ * ranking, so a model that fits is never ruled out for being listed sixth.
+ *
+ * `options` is the stage 2 input, as for `recommend()`; nothing reads it yet, so the budget
+ * is still the estimate. False for a model the catalogue does not have.
+ */
+export function modelFitsBudget(
+  hw: HardwareFacts,
+  catalog: LocalModelCatalog,
+  modelId: string,
+  context: number,
+  options: RecommendOptions = {}
+): boolean {
+  void options;
+  const model = catalog.models.find((entry) => entry.id === modelId);
+  if (!model) return false;
+  return fitGrade(needBytes(model, context, catalog, hw), deviceBudget(hw).budgetBytes) !== 'out';
 }
 
 /**
@@ -256,12 +280,18 @@ function none(
 /**
  * The recommendation for this Mac. `harnessFacts` holds one fact per catalogue harness the
  * caller could resolve; a catalogue harness without a fact is not offered.
+ *
+ * `options` is the stage 2 input (`RecommendOptions`: the budget the runtime measured, and
+ * the runtime download an install still needs). The parameter is in place so callers compile
+ * against the final signature; nothing reads it yet.
  */
 export function recommend(
   hw: HardwareFacts,
   catalog: LocalModelCatalog,
-  harnessFacts: readonly HarnessFact[]
+  harnessFacts: readonly HarnessFact[],
+  options: RecommendOptions = {}
 ): Recommendation {
+  void options;
   // Off macOS and on an Intel Mac there is no budget to compute: a model has no memory to run in.
   const noBudget: DeviceBudget = { limitBytes: 0, budgetBytes: 0, source: 'estimated' };
   if (hw.platform !== 'darwin') return none('not-macos', noBudget);
