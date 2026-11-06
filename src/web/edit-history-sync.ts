@@ -33,8 +33,9 @@
  *
  * WHICH SESSIONS. Claude sessions, local and remote. Docker and non-claude sessions answer
  * `unsupported` and are never read. The deps get the session and read a remote one over ssh
- * (`remote-files.ts`): one round trip to find its transcript, one per read. A remote read never
- * wakes its host; a sleeping one is a connect timeout (`unavailable`, stored entries kept).
+ * (`remote-files.ts`): one round trip to find its transcript, one per read (more for a
+ * conversation with hundreds of subagents). A remote read never wakes its host; a sleeping one
+ * is a connect timeout (`unavailable`, stored entries kept).
  *
  * IMAGES. A Bash candidate counts only when the file's mtime lies in the call's window
  * (start − 2 s … end + 2 s), so `ls *.png` lists nothing. Transcript times and mtimes come

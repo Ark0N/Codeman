@@ -440,6 +440,15 @@ const EDIT_SOURCE_META_BUDGET_BYTES = 4 * 1024 * 1024;
 const EDIT_SOURCE_HEADER_SLACK_BYTES = 1024 * 1024;
 
 /**
+ * Subagent requests per ssh round trip of an edit-history read. Like
+ * {@link REMOTE_PROBE_CHUNK_SIZE}: the script is ONE argument of the ssh line, Linux caps a
+ * single argv string at 128 KiB, and each request adds a `case` line of 125 bytes once
+ * shellescaped twice (about 370 with the longest name a filesystem allows; the test pins that
+ * worst case). See {@link planRemoteEditSourceRounds}.
+ */
+const EDIT_SOURCE_REQUESTS_PER_ROUND_TRIP = 300;
+
+/**
  * The slowest link an edit-history read is given time for. Such a read can carry megabytes
  * (a forward pass its budget plus the metas, "Load older" up to three budgets), which a flat
  * {@link REMOTE_READ_TIMEOUT_MS} would cut off below ~1 MiB/s. 256 KiB/s ≈ 2 Mbit/s.
@@ -618,9 +627,79 @@ export async function remoteLocateClaudeTranscript(
   return path;
 }
 
+/** The requests a read script may take: the first per relPath, valid ones only. */
+function validEditSourceRequests(requests: readonly EditSourceRequest[]): Map<string, EditSourceRequest> {
+  const byRelPath = new Map<string, EditSourceRequest>();
+  for (const request of requests) {
+    if (!request || typeof request.relPath !== 'string') continue;
+    if (!EDIT_SOURCE_REL_PATH_PATTERN.test(request.relPath)) continue;
+    if (!isByteCount(request.offset)) continue;
+    if (request.len !== undefined && !isByteCount(request.len)) continue;
+    if (byRelPath.has(request.relPath)) continue;
+    byRelPath.set(request.relPath, request);
+  }
+  return byRelPath;
+}
+
+/** One ssh round trip of an edit-history read ({@link planRemoteEditSourceRounds}). */
+export interface RemoteEditSourceRound {
+  requests: EditSourceRequest[];
+  /** It reads the main transcript: the first round trip of a read does. */
+  main: boolean;
+  /** It takes the subagent files after this name ('' = from the first), in byte order. */
+  after: string;
+  /** It takes them up to and including this name ('' = to the last). */
+  upTo: string;
+}
+
 /**
- * Script that reads a remote claude session's main transcript at `mainPath` and its subagent
- * transcripts (`<mainPath without .jsonl>/subagents/agent-<id>.jsonl`) in ONE ssh round trip,
+ * The ssh round trips a read takes. Up to `perRound` subagent requests fit one; more are sorted
+ * and cut into groups of `perRound`, or the ssh line would hit `E2BIG` and the session would
+ * stay `unavailable`: the cursors have no cap and the stored conversation is read first, so
+ * not even a `/clear` would get past it.
+ *
+ * ⚠️ The cuts are NAME RANGES, not only groups of requests. The script takes a file that no
+ * `case` line names for a new one (its tail, its meta), so a plain group would read every
+ * file of the other groups as new. Each round trip walks only the names between its cuts; the
+ * ranges cover every possible name exactly once, so a new file lands in one of them and the
+ * merged result is the one a single script would give (the fuzz test compares it with the
+ * local reader).
+ */
+export function planRemoteEditSourceRounds(
+  requests: readonly EditSourceRequest[],
+  perRound: number = EDIT_SOURCE_REQUESTS_PER_ROUND_TRIP
+): RemoteEditSourceRound[] {
+  const valid = validEditSourceRequests(requests);
+  const subagents = [...valid.values()].filter((request) => request.relPath !== 'main');
+  if (subagents.length <= perRound) return [{ requests: [...valid.values()], main: true, after: '', upTo: '' }];
+
+  const main = valid.get('main');
+  const fileName = (request: EditSourceRequest): string => request.relPath.slice('subagents/'.length);
+  subagents.sort((a, b) => (a.relPath < b.relPath ? -1 : 1));
+  const rounds: RemoteEditSourceRound[] = [];
+  for (let i = 0; i < subagents.length; i += perRound) {
+    const group = subagents.slice(i, i + perRound);
+    rounds.push({
+      requests: i === 0 && main ? [main, ...group] : group,
+      main: i === 0,
+      after: i === 0 ? '' : fileName(subagents[i - 1]),
+      upTo: i + perRound < subagents.length ? fileName(group[group.length - 1]) : '',
+    });
+  }
+  return rounds;
+}
+
+/** What {@link buildRemoteClaudeEditSourcesCommand} takes beyond the local reader's options. */
+export interface RemoteEditSourceCommandOptions extends EditSourceReadOptions {
+  /** Which part of a split read this command is; without it, all of it. */
+  round?: Pick<RemoteEditSourceRound, 'main' | 'after' | 'upTo'>;
+  /** Meta bytes this command may send; without it, {@link EDIT_SOURCE_META_BUDGET_BYTES}. */
+  metaBudget?: number;
+}
+
+/**
+ * Script for one round trip of a read of a remote claude session's main transcript at
+ * `mainPath` and its subagent transcripts (`<mainPath without .jsonl>/subagents/agent-<id>.jsonl`),
  * with exactly the local reader's rules (`readClaudeEditSources`):
  *
  * - a request without `len` reads from `offset` (clamped to the size);
@@ -631,7 +710,8 @@ export async function remoteLocateClaudeTranscript(
  *
  * `budgetBytes` is shared by all transcript files, main first, then the subagents in byte
  * order. A file that gets none of it still produces a zero-length record, because the caller
- * needs its size. Exit {@link TRANSCRIPT_NOT_FOUND_EXIT} when `mainPath` is not a file.
+ * needs its size. Exit {@link TRANSCRIPT_NOT_FOUND_EXIT} when `mainPath` is not a file. A read
+ * with more requests than fit one script is several of these ({@link planRemoteEditSourceRounds}).
  *
  * Output: `\0<transcriptId>\0`, then per record `<relPath>\0<size>\0<start>\0<len>\0`
  * followed by exactly `<len>` raw bytes. Should a file shrink between `wc -c` and the read,
@@ -646,30 +726,30 @@ export function buildRemoteClaudeEditSourcesCommand(
   mainPath: string,
   requests: readonly EditSourceRequest[],
   budgetBytes: number,
-  opts: EditSourceReadOptions = {}
+  opts: RemoteEditSourceCommandOptions = {}
 ): string {
   if (!isRemoteClaudeTranscriptPath(mainPath)) return `exit ${TRANSCRIPT_NOT_FOUND_EXIT}`;
   const transcriptId = mainPath.slice(mainPath.lastIndexOf('/') + 1, -'.jsonl'.length);
 
-  const byRelPath = new Map<string, { offset: number; len: number | null }>();
-  for (const request of requests) {
-    if (!request || typeof request.relPath !== 'string') continue;
-    if (!EDIT_SOURCE_REL_PATH_PATTERN.test(request.relPath)) continue;
-    if (!isByteCount(request.offset)) continue;
-    if (request.len !== undefined && !isByteCount(request.len)) continue;
-    if (byRelPath.has(request.relPath)) continue;
-    byRelPath.set(request.relPath, { offset: request.offset, len: request.len ?? null });
-  }
+  const byRelPath = validEditSourceRequests(requests);
   const budget = Number.isFinite(budgetBytes) ? Math.max(0, Math.floor(budgetBytes)) : 0;
-  const requestArgs = (request: { offset: number; len: number | null }): string =>
-    `r ${request.offset} ${request.len === null ? "''" : String(request.len)}`;
+  const requestArgs = (request: EditSourceRequest): string =>
+    `r ${request.offset} ${request.len === undefined ? "''" : String(request.len)}`;
+  const { main: readsMain, after, upTo } = opts.round ?? { main: true, after: '', upTo: '' };
 
   const main = byRelPath.get('main');
-  const mainLine = main
-    ? `emit main "$best" ${requestArgs(main)}`
-    : opts.onlyRequested
-      ? ''
-      : 'emit main "$best" t 0 \'\'';
+  const mainLine = !readsMain
+    ? ''
+    : main
+      ? `emit main "$best" ${requestArgs(main)}`
+      : opts.onlyRequested
+        ? ''
+        : 'emit main "$best" t 0 \'\'';
+  // The names come from validated relPaths, and `$0` stays a string: every name starts `agent-`.
+  const rangeFilter =
+    after || upTo
+      ? ` | awk -v after=${shellescape(after)} -v upto=${shellescape(upTo)} '$0 > after && (upto == "" || $0 <= upto)'`
+      : '';
   const subagentCases = [...byRelPath.entries()]
     .filter(([relPath]) => relPath !== 'main')
     .map(([relPath, request]) => {
@@ -699,7 +779,7 @@ export function buildRemoteClaudeEditSourcesCommand(
     `[ -f "$best" ] || exit ${TRANSCRIPT_NOT_FOUND_EXIT}`,
     `printf '\\0%s\\0' ${shellescape(transcriptId)}`,
     `budget=${budget}`,
-    `mbudget=${EDIT_SOURCE_META_BUDGET_BYTES}`,
+    `mbudget=${opts.metaBudget ?? EDIT_SOURCE_META_BUDGET_BYTES}`,
     // Size via `wc -c <` (POSIX; BSD pads it with spaces, hence the tr).
     'fsize() {',
     '  s=$(wc -c < "$1" 2>/dev/null | tr -d \' \\t\\n\')',
@@ -728,11 +808,20 @@ export function buildRemoteClaudeEditSourcesCommand(
     '  printf \'%s\\0%s\\0%s\\0%s\\0\' "$1" "$s" "$start" "$n"',
     '  [ "$n" -eq 0 ] || bytes "$2" "$start" "$n"',
     '}',
+    // The valid names, one per line in byte order (the glob's order under `C`). Nothing but
+    // `[A-Za-z0-9_.-]` is left, so the unquoted `$(…)` below splits on them and globs nothing.
+    // A function, because bash 3.2 (macOS `sh`) cannot parse a `case` inside `$(…)`.
+    'subagent_names() {',
+    '  for f in "${best%.jsonl}"/subagents/agent-*.jsonl; do',
+    '    b=${f##*/}',
+    '    case $b in agent-.jsonl|agent-*[!A-Za-z0-9_-]*.jsonl) continue ;; esac',
+    '    printf \'%s\\n\' "$b"',
+    '  done',
+    '}',
     mainLine,
-    'for f in "${best%.jsonl}"/subagents/agent-*.jsonl; do',
+    `for b in $(subagent_names${rangeFilter}); do`,
+    '  f=${best%.jsonl}/subagents/$b',
     '  [ -f "$f" ] || continue',
-    '  b=${f##*/}',
-    '  case $b in agent-.jsonl|agent-*[!A-Za-z0-9_-]*.jsonl) continue ;; esac',
     '  case $b in',
     ...subagentCases,
     ...newSubagent,
@@ -795,9 +884,53 @@ export function parseRemoteClaudeEditSources(stdout: Buffer): EditSources | null
 }
 
 /**
- * Read a remote claude session's transcripts (see {@link buildRemoteClaudeEditSourcesCommand}),
- * the remote twin of `readClaudeEditSources`. `null` when `mainPath` does not exist; an
- * unreachable host, an ssh failure or broken output is a `RemoteFileAccessError`. Never wakes.
+ * Runs one read command on the host: its stdout, at most `maxBytes`, or null for "no such
+ * transcript" ({@link TRANSCRIPT_NOT_FOUND_EXIT}).
+ */
+export type RemoteEditSourceRunner = (command: string, maxBytes: number) => Promise<Buffer | null>;
+
+/**
+ * Run the round trips of a read ({@link planRemoteEditSourceRounds}) one after the other and
+ * merge them into what one read returns. Budget and meta budget carry over: a later round trip
+ * gets what the earlier ones left, and still lists its files, because a requested file missing
+ * from the result counts as deleted and loses its cursor. So a read is all or nothing: a failed
+ * round trip fails it, and nothing of it reaches the store.
+ */
+export async function readRemoteEditSourceRounds(
+  mainPath: string,
+  requests: readonly EditSourceRequest[],
+  budgetBytes: number,
+  opts: EditSourceReadOptions,
+  run: RemoteEditSourceRunner,
+  perRound?: number
+): Promise<EditSources | null> {
+  let budget = Number.isFinite(budgetBytes) ? Math.max(0, Math.floor(budgetBytes)) : 0;
+  let metaBudget = EDIT_SOURCE_META_BUDGET_BYTES;
+  const merged: EditSources = { transcriptId: '', files: [], metas: {} };
+  for (const round of planRemoteEditSourceRounds(requests, perRound)) {
+    const stdout = await run(
+      buildRemoteClaudeEditSourcesCommand(mainPath, round.requests, budget, { ...opts, round, metaBudget }),
+      budget + metaBudget + EDIT_SOURCE_HEADER_SLACK_BYTES
+    );
+    if (!stdout) return null;
+    const parsed = parseRemoteClaudeEditSources(stdout);
+    if (!parsed || !mainPath.endsWith(`/${parsed.transcriptId}.jsonl`)) {
+      throw new RemoteFileAccessError('unexpected output from the remote edit-history read');
+    }
+    merged.transcriptId = parsed.transcriptId;
+    merged.files.push(...parsed.files);
+    Object.assign(merged.metas, parsed.metas);
+    for (const file of parsed.files) budget -= file.chunk.length;
+    for (const text of Object.values(parsed.metas)) metaBudget = Math.max(0, metaBudget - Buffer.byteLength(text));
+  }
+  return merged;
+}
+
+/**
+ * Read a remote claude session's transcripts (see {@link readRemoteEditSourceRounds}), the
+ * remote twin of `readClaudeEditSources`. `null` when `mainPath` does not exist; an unreachable
+ * host, an ssh failure or broken output is a `RemoteFileAccessError`. Each round trip takes its
+ * own slot of the ssh limiter. Never wakes.
  */
 export async function remoteReadClaudeEditSources(
   remote: SessionRemote,
@@ -807,33 +940,23 @@ export async function remoteReadClaudeEditSources(
   opts: EditSourceReadOptions = {}
 ): Promise<EditSources | null> {
   assertNotUnderTest();
-  const budget = Number.isFinite(budgetBytes) ? Math.max(0, Math.floor(budgetBytes)) : 0;
-  const command = buildRemoteEditHistoryCommand(
-    remote,
-    buildRemoteClaudeEditSourcesCommand(mainPath, requests, budget, opts)
-  );
-  const maxBytes = budget + EDIT_SOURCE_META_BUDGET_BYTES + EDIT_SOURCE_HEADER_SLACK_BYTES;
-  let stdout: Buffer;
-  try {
-    const result = await runWithRemoteSshLimit(() =>
-      execAsync(command, {
-        timeout: remoteEditSourcesTimeoutMs(maxBytes),
-        maxBuffer: maxBytes,
-        encoding: 'buffer',
-      })
-    );
-    stdout = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout);
-  } catch (err) {
-    if ((err as { code?: unknown }).code === TRANSCRIPT_NOT_FOUND_EXIT) return null;
-    throw new RemoteFileAccessError(
-      `remote host ${remote.label || remote.host} unreachable: ${describeExecError(err)}`
-    );
-  }
-  const parsed = parseRemoteClaudeEditSources(stdout);
-  if (!parsed || !mainPath.endsWith(`/${parsed.transcriptId}.jsonl`)) {
-    throw new RemoteFileAccessError('unexpected output from the remote edit-history read');
-  }
-  return parsed;
+  return readRemoteEditSourceRounds(mainPath, requests, budgetBytes, opts, async (command, maxBytes) => {
+    try {
+      const result = await runWithRemoteSshLimit(() =>
+        execAsync(buildRemoteEditHistoryCommand(remote, command), {
+          timeout: remoteEditSourcesTimeoutMs(maxBytes),
+          maxBuffer: maxBytes,
+          encoding: 'buffer',
+        })
+      );
+      return Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout);
+    } catch (err) {
+      if ((err as { code?: unknown }).code === TRANSCRIPT_NOT_FOUND_EXIT) return null;
+      throw new RemoteFileAccessError(
+        `remote host ${remote.label || remote.host} unreachable: ${describeExecError(err)}`
+      );
+    }
+  });
 }
 
 /**
