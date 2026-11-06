@@ -1,9 +1,10 @@
 /**
- * @fileoverview The two adoption guards that are not reachable over HTTP: the
- * boot-time workspace-hook sweep, and the workspace-trust auto-accept.
+ * @fileoverview The adoption guards that are not reachable over HTTP: the
+ * boot-time workspace-hook sweep, the workspace-trust auto-accept and the
+ * new-shell clear.
  *
- * Both act on a session's WORKSPACE or its PANE, both run unattended, and both
- * previously keyed off `session.remote` or the mode alone — neither of which
+ * Each acts on a session's WORKSPACE or its PANE, each runs unattended, and each
+ * previously keyed off `session.remote`, the mode or nothing at all, none of which
  * sees an adopted session, whose connection facts live on `adopt.remote` /
  * `adopt.docker`. So a tab wrapping someone's claude read as a plain local
  * claude: Codeman wrote `.claude/settings.local.json` into their repo on every
@@ -120,5 +121,45 @@ describe('the workspace-trust auto-accept', () => {
     expect(priv._trustDialogAccepted).toBe(true); // short-circuited, never scans again
     expect(priv._trustDialogTimer).toBeFalsy();
     await s.stop(true).catch(() => {});
+  });
+});
+
+describe('the new-shell clear', () => {
+  /** What a shell session writes to its pane once the mux attach is up. */
+  const bytesWrittenAfterStart = async (adopt?: Record<string, unknown>) => {
+    const s = new Session({
+      id: adopt ? 'adopt-shell' : 'own-shell',
+      name: 't',
+      workingDir: '/tmp',
+      mode: 'shell',
+      useMux: true,
+      mux: {},
+      ...(adopt ? { adopt } : {}),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    const write = vi.fn();
+    const disposable = () => ({ dispose() {} });
+    const priv = s as unknown as Record<string, unknown>;
+    priv._setupOrAttachMuxSession = async () => {
+      priv.ptyProcess = { write, onData: disposable, onExit: disposable, kill() {}, pid: 1 };
+      return { isRestored: false, respawnedDeadPane: false };
+    };
+    await s.startShell();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    priv.ptyProcess = null;
+    await s.stop(true).catch(() => {});
+    return write.mock.calls.map((c) => c[0]);
+  };
+
+  it('clears a shell Codeman started', async () => {
+    expect(await bytesWrittenAfterStart()).toEqual(['clear\n']);
+  });
+
+  it('types nothing into an adopted pane', async () => {
+    // ⚠️ That pane is someone else's, and `shell` is also the answer for anything the
+    // classifier cannot name (vim, psql, a `read` prompt). `clear` plus a newline landed
+    // on a half-typed command or in whatever was reading stdin, on every adoption.
+    const adopt = { location: 'local', socketPath: '/tmp/tmux-0/default', targetSession: 'work', viewSession: '' };
+    expect(await bytesWrittenAfterStart(adopt)).toEqual([]);
   });
 });

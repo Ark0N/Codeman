@@ -4382,7 +4382,10 @@ export class Session extends EventEmitter {
 
         // For NEW sessions: clear by sending 'clear' command to the shell
         // For RESTORED sessions: don't clear - we want to see the existing output
-        if (!isRestored) {
+        // ⚠️ Never for an ADOPTED one: this pane is someone else's, so the write would land
+        // on their half-typed command and submit it (measured), or in whatever is reading
+        // stdin. `shell` is also the mode of anything the classifier cannot name.
+        if (!isRestored && !this._adopt) {
           setTimeout(() => {
             if (this.ptyProcess) {
               this._terminalBuffer.clear();
