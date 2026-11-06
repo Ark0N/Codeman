@@ -157,7 +157,9 @@ describe('findLiveWorktree outside the session folder', () => {
     const fake = join(base, 'fake');
     mkdirSync(fake);
     symlinkSync(join(repo, '.git'), join(fake, '.git'));
-    // The session is in the linked worktree, so the main-worktree branch is the one exercised.
+    // From a session in the main checkout.
+    expect(await findLiveWorktree(repo, fake, { home })).toBeUndefined();
+    // From a session in a linked worktree.
     expect(await findLiveWorktree(sibling, fake, { home })).toBeUndefined();
     // The real main worktree is still followed from the same session.
     expect(await findLiveWorktree(sibling, repo, { home })).toEqual({ name: 'myapp', path: repo, outside: true });

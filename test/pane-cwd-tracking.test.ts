@@ -491,6 +491,20 @@ describe('a pane read reaching the session record', () => {
       }
     });
 
+    it('follows nothing while docker-cases.json cannot be parsed', async () => {
+      const casesFile = dataPath('docker-cases.json');
+      mkdirSync(dirname(casesFile), { recursive: true });
+      try {
+        // A read that lands while the writer is rewriting the file.
+        writeFileSync(casesFile, '[{"hostWorkspacePath": "/hom');
+        expect(await paneInSibling()).toBeUndefined();
+        writeFileSync(casesFile, '[]');
+        expect(await paneInSibling()).toEqual({ name: 'myapp-feature', path: sibling, outside: true });
+      } finally {
+        rmSync(casesFile, { force: true });
+      }
+    });
+
     it('applies the owner folder rule in multi-user mode', async () => {
       const spaces = join(base, 'spaces');
       mkdirSync(spaces);
