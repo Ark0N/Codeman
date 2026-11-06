@@ -29,6 +29,7 @@ describe('Git status indicator in a real browser', () => {
   let repoSession: string;
   let plainSession: string;
   const gitStatusRequests: string[] = [];
+  const gitFetchRequests: string[] = [];
   const settingsPutStatuses: number[] = [];
 
   const write = (rel: string, text = 'x\n') => writeFileSync(join(repo, rel), text);
@@ -91,6 +92,9 @@ describe('Git status indicator in a real browser', () => {
     page.on('request', (r) => {
       // The API route only: the page also loads /git-status-ui.js, whose URL contains the same words.
       if (/\/api\/sessions\/[^/]+\/git-status/.test(r.url())) gitStatusRequests.push(r.url());
+      // Anchored: the per-case Git settings route (/git-fetch-settings) is a different route, and a bare
+      // /git-fetch test would count its PUTs as fetches. The fetch route carries the limits as a query.
+      if (/\/api\/sessions\/[^/]+\/git-fetch(\?|$)/.test(r.url())) gitFetchRequests.push(r.url());
     });
     page.on('response', (r) => {
       if (r.request().method() === 'PUT' && r.url().endsWith('/api/settings')) settingsPutStatuses.push(r.status());
@@ -513,6 +517,147 @@ describe('Git status indicator in a real browser', () => {
     await setLimits('12', '30');
     await refresh();
   }, 40000);
+
+  it('puts Fetch in the header row, between Refresh and Close', async () => {
+    const order = await page.evaluate(() =>
+      [...document.querySelectorAll('.git-status-actions button')].map((b) => b.getAttribute('aria-label'))
+    );
+    expect(order).toEqual(['Refresh git status', 'Fetch git status', 'Close git status']);
+    // A repository the panel can read is a repository Fetch can fetch, so the button is live here.
+    expect(await page.evaluate(() => document.getElementById('gitStatusFetchBtn')!.disabled)).toBe(false);
+  });
+
+  it('Fetch fetches for real, moves the behind number, and reports what it brought', async () => {
+    // A second clone pushes a commit this repository has not fetched, so its remote-tracking ref is stale:
+    // the panel cannot show a `behind` number until a fetch runs. That is what the footer means by
+    // "as of the last fetch", and the number only becomes current by the button.
+    const other = join(root, 'other-clone');
+    git(root, 'clone', '-q', join(root, 'origin.git'), other);
+    writeFileSync(join(other, 'from-elsewhere.txt'), 'y\n');
+    git(other, 'add', '-A');
+    git(other, 'commit', '-q', '-m', 'from elsewhere');
+    git(other, 'push', '-q');
+    await refresh();
+    expect(await page.textContent('#gitStatusBody')).not.toMatch(/behind/);
+
+    const before = gitFetchRequests.length;
+    await page.click('#gitStatusFetchBtn');
+    await page.waitForFunction(
+      () => /↓ 1 behind/.test(document.getElementById('gitStatusBody')?.textContent ?? ''),
+      null,
+      { timeout: 20000 }
+    );
+    expect(gitFetchRequests.length).toBe(before + 1);
+    // The same limits the status route gets go with the fetch, so the two agree on which repositories count.
+    expect(gitFetchRequests.at(-1)).toMatch(/maxRepos=12/);
+    expect(await page.locator('.git-status-chip', { hasText: 'behind' }).textContent()).toBe('↓ 1 behind');
+    expect(await page.textContent('#gitStatusBody .git-status-fetch-summary')).toMatch(
+      /^Fetched .+: 1 of 1 repository\.$/
+    );
+    expect(await page.locator('#gitStatusBody .git-status-fetch-row').count()).toBe(0);
+
+    // The 15 s poll rebuilds the whole body, so the note has to come from the renderer, not from the click.
+    await refresh();
+    expect(await page.locator('#gitStatusBody .git-status-fetch-summary').count()).toBe(1);
+    const foot = (await page.textContent('#gitStatusFooter')) ?? '';
+    expect(foot).toMatch(/Read-only apart from Fetch/);
+    // No longer "only when you click": an interval the user turned on fetches too, and the footer says so.
+    expect(foot).toMatch(/interval/);
+    // The chip itself says how it got current, so the number is not read as live.
+    expect(await page.locator('.git-status-chip', { hasText: 'behind' }).getAttribute('title')).toMatch(/interval/);
+    rmSync(other, { recursive: true, force: true });
+  }, 30000);
+
+  it('a repository Fetch could not fetch keeps its row and shows why', async () => {
+    await page.route('**/api/sessions/*/git-fetch*', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            state: 'ok',
+            reposTruncated: false,
+            fetchedAt: Date.now(),
+            repos: [
+              { name: 'fetchable', path: 'fetchable', ok: true },
+              {
+                name: 'private',
+                path: '/srv/private',
+                ok: false,
+                failure: { code: 'AUTH', message: 'could not read the remote' },
+              },
+            ],
+          },
+        }),
+      })
+    );
+    await page.click('#gitStatusFetchBtn');
+    await page.waitForFunction(() =>
+      /could not read the remote/.test(document.getElementById('gitStatusBody')?.textContent ?? '')
+    );
+    // The summary counts what landed, and the failure is named rather than folded into the count. The
+    // summary is the panel's first note line, so the count is read off it, not off the whole body.
+    expect(await page.textContent('#gitStatusBody .git-status-fetch-summary')).toMatch(
+      /^Fetched .+: 1 of 2 repositories\.$/
+    );
+    const row = (await page.textContent('#gitStatusBody .git-status-fetch-row')) ?? '';
+    expect(row).toContain('private');
+    expect(row).toContain('⚠ could not read the remote');
+    expect(await page.locator('#gitStatusBody .git-status-fetch-row').count()).toBe(1);
+    // Git text is untrusted: the row is text, never markup.
+    expect(await page.$('#gitStatusBody img')).toBeNull();
+    await page.unroute('**/api/sessions/*/git-fetch*');
+  }, 30000);
+
+  it('one click means one fetch: the button is busy while it runs and a second call is ignored', async () => {
+    let slow = true;
+    await page.route('**/api/sessions/*/git-fetch*', async (route) => {
+      if (slow) await new Promise((r) => setTimeout(r, 1500));
+      await route.continue();
+    });
+    page.setDefaultTimeout(6000);
+    await page.click('#gitStatusFetchBtn');
+    await page.waitForFunction(() => (window as any).app._gitFetchInFlight === true);
+    const busy = await page.evaluate(() => {
+      const b = document.getElementById('gitStatusFetchBtn')!;
+      return { ariaBusy: b.getAttribute('aria-busy'), disabled: b.disabled };
+    });
+    expect(busy.ariaBusy).toBe('true');
+    // Disabled is what stops a second click reaching the handler, so one click is one fetch per repository.
+    expect(busy.disabled).toBe(true);
+    const during = gitFetchRequests.length;
+    await page.evaluate(() => void (window as any).app.fetchGitStatusNow());
+    expect(gitFetchRequests.length).toBe(during);
+    slow = false;
+    // The flag goes false before the re-render that follows it, so wait for the button itself, not the flag:
+    // reading it right at the flip catches the panel mid-render.
+    await page.waitForFunction(
+      () => {
+        const b = document.getElementById('gitStatusFetchBtn')!;
+        return (window as any).app._gitFetchInFlight === false && !b.disabled && !b.getAttribute('aria-busy');
+      },
+      null,
+      { timeout: 15000 }
+    );
+    // The handler is still asleep: unrouting without waiting fails the run as an unhandled rejection.
+    await page.unrouteAll({ behavior: 'wait' });
+    page.setDefaultTimeout(30000);
+  }, 30000);
+
+  it('Fetch is inert for a session nothing can be fetched for', async () => {
+    await select(plainSession);
+    await page.waitForFunction(
+      () => /No git repository here/.test(document.getElementById('gitStatusBody')?.textContent ?? ''),
+      null,
+      { timeout: 15000 }
+    );
+    expect(await page.evaluate(() => document.getElementById('gitStatusFetchBtn')!.disabled)).toBe(true);
+    await select(repoSession);
+    await page.waitForFunction(() => document.getElementById('gitStatusFetchBtn')!.disabled === false, null, {
+      timeout: 15000,
+    });
+    await page.waitForSelector('#gitStatusPanel.visible');
+  }, 30000);
 
   it('closing the panel resets it; turning the setting off hides the button, closes the panel and stops polling', async () => {
     await page.click('.git-status-actions button[aria-label="Close git status"]');

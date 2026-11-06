@@ -16,6 +16,7 @@ import { isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import { dataPath } from './config/instance.js';
 import { readCodemanCredentials } from './codeman-credentials.js';
+import { runNotify } from './cli-notify.js';
 import { casePath } from './config/cases-dir.js';
 import { assertValidBasePath } from './config/base-path.js';
 import {
@@ -29,6 +30,7 @@ import {
 import type { AgentSkillDir } from './config/cli-registry/types.js';
 import { getCli, listClis } from './config/cli-registry/registry.js';
 import { registerAgentCommands } from './cli-agent.js';
+import { registerHistoryCommands } from './cli-history.js';
 import { resolveMcpConfig, runMcpStdio } from './mcp-server.js';
 import { getSessionManager } from './session-manager.js';
 import { getTaskQueue } from './task-queue.js';
@@ -90,6 +92,22 @@ async function postAttachment(apiUrl: string, sessionId: string, filePath: strin
     req.end();
   });
 }
+
+program
+  .command('notify <message>')
+  .description(
+    "Post a message to this tab's Discord thread (needs the user: a physical step, a blocker, a timed-out wait)"
+  )
+  .option('--urgent', 'Ping the user')
+  .option('--file <path>', 'Send a file from the session folder with the message')
+  .option('-s, --session <id>', 'Codeman session ID (defaults to CODEMAN_SESSION_ID)')
+  .option('--url <url>', 'Codeman API URL (defaults to CODEMAN_API_URL)')
+  .action(async (message: string, options) => {
+    const { code, out, err } = await runNotify({ message, ...options }, process.env, process.cwd());
+    if (out) console.log(code === 0 && out.startsWith('Posted') ? palette.ok(`✓ ${out}`) : out);
+    if (err) console.error(palette.err(`✗ ${err}`));
+    process.exit(code);
+  });
 
 program
   .command('attach <path>')
@@ -324,6 +342,7 @@ skillCmd
 // ============ Agent Commands (session-to-session, any CLI mode) ============
 
 registerAgentCommands(program);
+registerHistoryCommands(program);
 
 // ============ MCP server (any MCP client drives Codeman) ============
 
@@ -951,6 +970,10 @@ function addWebLaunchOptions(cmd: Command): Command {
       'Allow non-loopback web access without CODEMAN_PASSWORD (dangerous; terminal control is exposed)'
     )
     .option(
+      '--allow-unauthenticated-tunnel',
+      'Allow starting the Cloudflare tunnel without CODEMAN_PASSWORD (dangerous; publishes terminal control to a public URL; env: CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL)'
+    )
+    .option(
       '--multiuser',
       'Enable opt-in multi-user mode (named users in ~/.codeman/users.json; env: CODEMAN_MULTIUSER)'
     );
@@ -964,6 +987,7 @@ function toWebLaunchOptions(options: {
   baseUrl?: string;
   titleHostname?: string;
   allowUnauthenticatedNetwork?: boolean;
+  allowUnauthenticatedTunnel?: boolean;
   multiuser?: boolean;
 }): WebLaunchOptions {
   const port = parseInt(options.port, 10);
@@ -985,6 +1009,7 @@ function toWebLaunchOptions(options: {
     basePath,
     titleHostname: options.titleHostname,
     allowUnauthenticatedNetwork: !!options.allowUnauthenticatedNetwork,
+    allowUnauthenticatedTunnel: !!options.allowUnauthenticatedTunnel,
     multiuser: !!options.multiuser,
   };
 }
@@ -1072,6 +1097,7 @@ webCmd.action(async (options) => {
   const https = launch.https;
   const titleHostname = options.titleHostname;
   const allowUnauthenticatedNetwork = launch.allowUnauthenticatedNetwork ?? false;
+  const allowUnauthenticatedTunnel = launch.allowUnauthenticatedTunnel ?? false;
   const basePath = launch.basePath ?? '';
   // Single source of truth for subsystems that read it directly (e.g. renderers).
   if (basePath) process.env.CODEMAN_BASE_URL = basePath;
@@ -1086,7 +1112,16 @@ webCmd.action(async (options) => {
   try {
     // The server prints its own "running at" line (it also covers the daemon and
     // service launch paths), so this one used to be a duplicate of it.
-    const server = await startWebServer(port, https, false, host, titleHostname, allowUnauthenticatedNetwork, basePath);
+    const server = await startWebServer(
+      port,
+      https,
+      false,
+      host,
+      titleHostname,
+      allowUnauthenticatedNetwork,
+      basePath,
+      allowUnauthenticatedTunnel
+    );
     if (https) {
       console.log(palette.warn('  Note: Accept the self-signed certificate in your browser on first visit'));
     }

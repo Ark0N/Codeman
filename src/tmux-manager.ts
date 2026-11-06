@@ -423,6 +423,46 @@ export function derivePaneExits(rows: PaneRow[], now: number): Map<string, PaneE
 }
 
 /**
+ * Decide, from every pane tmux listed, which directory each tmux session's pane
+ * is in now (`#{pane_current_path}`). Exported for unit testing.
+ *
+ * This is what a relative path printed in the terminal is relative TO: a
+ * session's `workingDir` is fixed at create time and never follows a `cd`.
+ *
+ * - Only sessions with EXACTLY ONE pane answer, for the reason
+ *   {@link derivePaneExits} gives: a hand-split session has no single "the"
+ *   pane to speak for it.
+ * - Only absolute paths count. A blank field is a tmux that could not read the
+ *   process cwd: usually a pane whose program exited under `remain-on-exit`
+ *   (tmux 3.4 then reports it blank on every read), otherwise a read that
+ *   failed that tick. Either way the directory is unknown, not gone, so a
+ *   single-pane session with a blank field keeps its entry from `previous`.
+ *   A session split into several panes, or one the read no longer lists, gets
+ *   no entry: those are authoritative absences, not unanswered questions.
+ *
+ * The launch directory is NOT filtered here (unlike the rediscovery path): a
+ * remote or docker pane that never leaves it is refused by `Session.setPaneCwd()`,
+ * and a local pane reporting it really is there.
+ */
+export function derivePaneCurrentPaths(
+  rows: PaneRow[],
+  previous: ReadonlyMap<string, string> = new Map()
+): Map<string, string> {
+  const panesPerSession = new Map<string, number>();
+  for (const row of rows) {
+    panesPerSession.set(row.sessionName, (panesPerSession.get(row.sessionName) ?? 0) + 1);
+  }
+  const paths = new Map<string, string>();
+  for (const row of rows) {
+    if (panesPerSession.get(row.sessionName) !== 1) continue;
+    const path = row.currentPath ?? previous.get(row.sessionName);
+    if (!path || !path.startsWith('/')) continue;
+    paths.set(row.sessionName, path);
+  }
+  return paths;
+}
+
+/**
  * Could any of these tmux sessions ever produce a pane-exit answer? Exported
  * for unit testing.
  *
@@ -982,6 +1022,20 @@ export function formatCursorRestore(geometry: PaneCursorGeometry): string {
   // `\r` first so the column is known: the replay leaves the caret wherever the
   // last row's text ended.
   return `${up > 0 ? `\x1b[${up}A` : ''}\r${right > 0 ? `\x1b[${right}C` : ''}`;
+}
+
+/**
+ * Split the output of `capture-pane -p \; display-message -p '<cursor format>'`
+ * into the captured rows and the cursor line, which tmux prints last. Null unless
+ * that last line has the cursor query's shape (four leading integers), so a query
+ * that printed nothing can never have the frame's own last row taken for it.
+ */
+export function splitFrameAndCursor(output: string): { frame: string; cursor: string } | null {
+  const body = output.endsWith('\n') ? output.slice(0, -1) : output;
+  const split = body.lastIndexOf('\n');
+  const cursor = body.slice(split + 1);
+  if (!/^\d+ \d+ \d+ \d+(?: |$)/.test(cursor)) return null;
+  return { frame: body.slice(0, split + 1), cursor };
 }
 
 export function formatPaneSnapshot(
@@ -1991,6 +2045,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * raw pane reading.
    */
   private paneExits: Map<string, TrackedPaneExit> = new Map();
+  /**
+   * muxName -> `#{pane_current_path}` from the last authoritative pane read
+   * ({@link derivePaneCurrentPaths}). Replaced wholesale by each non-empty read,
+   * so it is bounded by the panes on the socket. Like {@link paneExits} it holds
+   * the raw reading; `Session.setPaneCwd()` decides which sessions may use it.
+   */
+  private paneCurrentPaths: Map<string, string> = new Map();
   /** The pane-exit watcher's own interval. Runs whether or not stats are on. */
   private paneExitInterval: NodeJS.Timeout | null = null;
   /**
@@ -3494,6 +3555,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * The directory the session's pane was in at the last authoritative pane
+   * read, or `undefined` when unknown. Costs nothing: it reads the map the
+   * pane-exit watcher's batched `list-panes -a` fills, so no tmux call is made
+   * per click. A failed or empty read keeps the previous answers, and so does
+   * a blank `#{pane_current_path}` on a single-pane session. After a successful
+   * read, `undefined` means that read listed no single directory for the
+   * session: it was split into several panes or is no longer on the socket.
+   */
+  getPaneCurrentPath(muxName: string): string | undefined {
+    return this.paneCurrentPaths.get(muxName);
+  }
+
+  /**
    * What the last pane read saw of this tmux session's agent. `undefined` is
    * the UNKNOWN answer and must never be rendered as "alive": it covers a pane
    * that is running, a tmux session that no longer exists, a probe that failed,
@@ -3554,6 +3628,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       this.paneExitReadInFlight = false;
     }
     if (rows.length === 0) return;
+    // The directory reading rides the same read. It is applied before the
+    // generation check below: a respawn invalidates an exit observation, but the
+    // pane's directory at read time is still the best answer there is. A blank
+    // field on a single-pane session carries the previous answer forward.
+    this.paneCurrentPaths = derivePaneCurrentPaths(rows, this.paneCurrentPaths);
     // A pane was respawned or killed while this read was out, so what it saw is
     // already history. Dropping it is what stops a freshly respawned pane from
     // being republished as exited.
@@ -3983,7 +4062,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * - `Enter` key is sent as a SEPARATE tmux invocation after a small delay
    * - Ink (Claude CLI) needs text and Enter split to avoid treating Enter as a newline
    */
-  async sendInput(sessionId: string, input: string): Promise<boolean> {
+  async sendInput(sessionId: string, input: string, options?: { beforeDispatch?: () => boolean }): Promise<boolean> {
+    if (options?.beforeDispatch && input !== '\r') return false;
     const session = this.sessions.get(sessionId);
     if (!session) {
       console.error(
@@ -3996,7 +4076,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // inputRunner() so a test subclass can record what WOULD reach tmux.
     const run = this.inputRunner();
     if (!run) {
-      return true;
+      return options?.beforeDispatch?.() ?? true;
     }
 
     console.log(
@@ -4050,7 +4130,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
           `${this.tmux()} send-keys -t "${session.muxName}" -l -- ${shellescape(escapeTmuxTrailingSemicolon(textPart))}`
         );
       } else if (hasCarriageReturn) {
-        // Enter only
+        // Enter only: no await between the guard and dispatch.
+        if (options?.beforeDispatch && !options.beforeDispatch()) return false;
         await run(`${this.tmux()} send-keys -t "${session.muxName}" Enter`);
       }
 
@@ -4279,7 +4360,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   capturePaneBuffer(muxName: string, paneTarget?: string, opts?: PaneCaptureOptions): string | null {
-    if (IS_TEST_MODE) return '';
+    const exec = this.captureRunner();
+    if (!exec) return '';
     const target = resolveTmuxPaneTarget(muxName, paneTarget);
     if (!target) {
       console.error('[TmuxManager] Invalid pane target in capturePaneBuffer:', { muxName, paneTarget });
@@ -4317,9 +4399,28 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         execOpts.maxBuffer =
           (opts?.maxCaptureBytes ?? DEFAULT_TERMINAL_BUFFER_MAX_BYTES) + FULL_HISTORY_CAPTURE_SLACK_BYTES;
       }
+      const cursorQuery = `display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size} #{alternate_on}'`;
+      const captureCommand = `${this.tmux()} ${captureFlags} -t ${shellescape(target)}`;
+      // The visible frame and its caret come from ONE tmux invocation
+      // (the capture, `\;`, then the cursor query): tmux runs a command list back to back
+      // in its command queue, with no pane output parsed between the two, so the
+      // caret belongs to the frame. Two separate calls raced the CLI's repaint: a
+      // CLI that redraws its composer a few ms after input arrives (codex) could be
+      // captured before the redraw and its caret queried after it, and guarded
+      // stage then refused a frame the keys had already reached. Only output that
+      // splitFrameAndCursor() cannot split (a last line that is not the query's)
+      // falls back to the two separate calls, which is what this always did. A call
+      // that THREW (a hung tmux timing out) goes to the catch below like any other
+      // capture failure: retrying it would block the event loop for a second timeout
+      // on every `GET .../terminal` load.
+      const combined = fullHistory
+        ? null
+        : splitFrameAndCursor(
+            exec(`${captureCommand} \\; ${cursorQuery}`, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS })
+          );
       const rawCapture = joinScrollbackAndFrame(
         scrollbackOverride,
-        execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, execOpts),
+        combined?.frame ?? exec(captureCommand, execOpts),
         scrollbackOverride !== undefined ? opts?.scrollbackOverrideScreen : undefined
       );
       // Query the cursor BEFORE deciding anything else. On the full-history path
@@ -4327,10 +4428,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // appended, and those two have to agree: trailing blank rows are only safe
       // to keep when a move follows to put the caret back above them.
       const geometry = queryPaneCursor(() =>
-        execSync(
-          `${this.tmux()} display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size} #{alternate_on}'`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-        )
+        combined
+          ? combined.cursor
+          : exec(`${this.tmux()} ${cursorQuery}`, { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS })
       );
       // Report the size the pane was really drawing at. The visible-frame path
       // below addresses every row absolutely, so a consumer whose terminal is
@@ -4394,6 +4494,18 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       }
       return null;
     }
+  }
+
+  /**
+   * How {@link capturePaneBuffer} runs tmux, or null where it must not (vitest).
+   * Split out like {@link inputRunner} so a test subclass can count and script the
+   * calls a capture makes.
+   */
+  protected captureRunner():
+    | ((cmd: string, opts: { encoding: 'utf-8'; timeout: number; maxBuffer?: number }) => string)
+    | null {
+    if (IS_TEST_MODE) return null;
+    return (cmd, opts) => execSync(cmd, opts);
   }
 
   /**

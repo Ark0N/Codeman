@@ -9,7 +9,7 @@ import { createRouteTestHarness } from './_route-test-utils.js';
 import { createMockSession } from '../mocks/index.js';
 import { getDataDir } from '../../src/config/instance.js';
 import { writeCustomModelHosts, type CustomModelHost } from '../../src/custom-model-hosts.js';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { webviewFetch } from '../../src/web/webview-egress.js';
 
@@ -203,6 +203,10 @@ describe('POST /api/sessions/:id/custom-model', () => {
     const { app, ctx } = await setup();
     const session = ctx.sessions.get('test-session-1')!;
     session.mode = 'pi';
+    // Start from no dir at all (a sibling test's successful pi apply may have left one),
+    // so the existsSync below says something about THIS request.
+    const dir = join(getDataDir(), 'custom-model-configs', 'test-session-1');
+    rmSync(dir, { recursive: true, force: true });
 
     const res = await app.inject({
       method: 'POST',
@@ -214,8 +218,45 @@ describe('POST /api/sessions/:id/custom-model', () => {
     expect(res.json().errorCode).toBe('INVALID_INPUT');
     expect(session.setCustomModel).not.toHaveBeenCalled();
     expect(session.restartCli).not.toHaveBeenCalled();
-    // The config dir written before the check is cleaned up again.
-    expect(existsSync(join(getDataDir(), 'custom-model-configs', 'test-session-1'))).toBe(false);
+    // The pattern check runs on the pure build BEFORE any write, so a refused id leaves
+    // no directory behind at all, nothing to clean up.
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it('codex: a refused forced launch id never touches the live config dir the session runs on as CODEX_HOME', async () => {
+    const { app, ctx } = await setup();
+    const session = ctx.sessions.get('test-session-1')!;
+    session.mode = 'codex';
+
+    // First apply succeeds: the session now runs codex on qwen3:32b, whose config.toml
+    // lives in the per-session dir the running CLI itself uses as CODEX_HOME.
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/test-session-1/custom-model',
+      payload: { endpointId: 'ep1', modelId: 'qwen3:32b' },
+    });
+    expect(ok.statusCode).toBe(200);
+    const dir = join(getDataDir(), 'custom-model-configs', 'test-session-1');
+    const written = join(dir, 'config.toml');
+    expect(existsSync(written)).toBe(true);
+
+    // `@` is outside codex's `model-plain-colon` pattern. The pattern check now runs on
+    // the pure build BEFORE any write, so the refusal must leave the dir, and the file
+    // the live CLI reads, exactly as they were, rather than replacing and deleting the
+    // CODEX_HOME of a session that stays on qwen3:32b.
+    const before = readFileSync(written, 'utf8');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/test-session-1/custom-model',
+      payload: { endpointId: 'ep1', modelId: 'org/model@q4_k_m' },
+    });
+
+    expect(res.json().success).toBe(false);
+    expect(res.json().errorCode).toBe('INVALID_INPUT');
+    expect(session.setCustomModel).toHaveBeenCalledTimes(1);
+    expect(session.restartCli).toHaveBeenCalledTimes(1);
+    expect(existsSync(dir)).toBe(true);
+    expect(readFileSync(written, 'utf8')).toBe(before);
   });
 
   it('clear removes the previous config dir the session reports', async () => {
@@ -296,6 +337,28 @@ describe('POST /api/sessions/:id/custom-model', () => {
       // Nothing actually applied yet — this call only asked, it did not switch.
       expect(session.setCustomModel).not.toHaveBeenCalled();
       expect(session.restartCli).not.toHaveBeenCalled();
+    });
+
+    it('refuses a model id the CLI cannot launch before asking anyone to evict a model', async () => {
+      const { app, ctx } = await setup();
+      const session = ctx.sessions.get('test-session-1')!;
+      session.mode = 'codex';
+      const other = createMockSession('other-session');
+      other.name = 'w2-otherbox';
+      other.customModel = { endpointId: 'ep1', modelId: 'llama3' };
+      ctx.sessions.set('other-session', other);
+      mockRunning([{ model: 'llama3', state: 'ready' }]);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/sessions/test-session-1/custom-model',
+        payload: { endpointId: 'ep1', modelId: 'org/model@q4_k_m' },
+      });
+
+      // Agreeing to the swap first would only lead to this same 400.
+      expect(res.json().requiresConfirmation).toBeUndefined();
+      expect(res.json().errorCode).toBe('INVALID_INPUT');
+      expect(session.setCustomModel).not.toHaveBeenCalled();
     });
 
     describe('multi-user: the confirm dialog must not name a session the caller cannot access', () => {
@@ -447,6 +510,58 @@ describe('POST /api/sessions/:id/custom-model', () => {
       // Nothing actually applied yet — this call only warned, it did not switch.
       expect(session.setCustomModel).not.toHaveBeenCalled();
       expect(session.restartCli).not.toHaveBeenCalled();
+    });
+
+    it('the endpoint defaultContextLength stands in when discovery recorded no per-model figure', async () => {
+      const { app, ctx } = await setup();
+      // A gateway that states nothing per model: only the user's default is known.
+      const endpoint: CustomModelHost = {
+        id: 'ep-default',
+        label: 'silent gateway',
+        baseUrl: 'http://192.168.1.53:8080',
+        apiKey: 'k',
+        defaultContextLength: 16384,
+      };
+      await writeCustomModelHosts(getDataDir(), [CLAUDE_ENDPOINT, endpoint]);
+      const session = ctx.sessions.get('test-session-1')!;
+      session.mode = 'claude';
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/sessions/test-session-1/custom-model',
+        payload: { endpointId: 'ep-default', modelId: 'some-unknown-model' },
+      });
+
+      const body = res.json();
+      expect(body.requiresContextWarning).toBe(true);
+      expect(body.contextLength).toBe(16384);
+      expect(session.setCustomModel).not.toHaveBeenCalled();
+    });
+
+    it('a discovered per-model figure wins over the endpoint defaultContextLength', async () => {
+      const { app, ctx } = await setup();
+      // The default is small enough to warn on; the discovered figure for THIS model is
+      // not, so the fallback must not leak into the per-model path.
+      const endpoint: CustomModelHost = {
+        id: 'ep-precedence',
+        label: 'mixed box',
+        baseUrl: 'http://192.168.1.54:8080',
+        apiKey: 'k',
+        modelContextLengths: { 'qwen3.8-27b-ud-q4_k_xl': 131072 },
+        defaultContextLength: 16384,
+      };
+      await writeCustomModelHosts(getDataDir(), [CLAUDE_ENDPOINT, endpoint]);
+      const session = ctx.sessions.get('test-session-1')!;
+      session.mode = 'claude';
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/sessions/test-session-1/custom-model',
+        payload: { endpointId: 'ep-precedence', modelId: 'qwen3.8-27b-ud-q4_k_xl' },
+      });
+
+      expect(res.json().requiresContextWarning).toBeUndefined();
+      expect(session.setCustomModel).toHaveBeenCalledTimes(1);
     });
 
     // llama-server splits its context across --parallel slots, and Claude Code sends several

@@ -30,6 +30,7 @@ import {
   buildSendBody,
   deleteRefusal,
   describeFailure,
+  describeRequestError,
   httpRequest,
   inboxCell,
   inputRefusal,
@@ -547,6 +548,75 @@ describe('agent spawn', () => {
     expect(await agentSpawn(deps, { caseName: 'c', mode: 'claude', ready: true, timeoutMs: 1000 })).toBe(EXIT.error);
     expect(deps.calls).toHaveLength(1);
     expect(deps.err.join('')).toMatch(/SESSION_BUSY/);
+  });
+
+  it.each([false, true])('preserves the created id when readiness throws (json=%s)', async (json) => {
+    const deps = fakeDeps((options) => {
+      if (options.path === '/api/v1/quick-start') return ok({ sessionId: OTHER, caseName: 'c' });
+      throw new Error('readiness connection reset');
+    }, json);
+    const exit = await agentSpawn(deps, { caseName: 'c', mode: 'claude', ready: true, timeoutMs: 1000 }).catch(
+      () => undefined
+    );
+
+    if (json) {
+      expect(deps.out).toHaveLength(1);
+      expect(JSON.parse(deps.out[0])).toEqual({
+        sessionId: OTHER,
+        caseName: 'c',
+        readinessError: 'readiness connection reset',
+      });
+      expect(deps.err).toEqual([]);
+    } else {
+      expect(deps.out).toEqual([OTHER]);
+      expect(deps.err.join('')).toContain('readiness check failed: readiness connection reset');
+      expect(deps.err.join('')).not.toMatch(/composer not seen|startup dialog/);
+    }
+    expect(exit).toBe(EXIT.error);
+    expect(deps.calls.map(({ method, path }) => ({ method, path }))).toEqual([
+      { method: 'POST', path: '/api/v1/quick-start' },
+      { method: 'GET', path: `/api/v1/sessions/${OTHER}/wait-output` },
+    ]);
+  });
+
+  it.each([
+    { error: new Error(''), kind: 'Error' },
+    { error: '', kind: 'string' },
+  ])('reports a readiness failure when the thrown $kind has no message', async ({ error }) => {
+    const deps = fakeDeps((options) => {
+      if (options.path === '/api/v1/quick-start') return ok({ sessionId: OTHER });
+      throw error;
+    }, true);
+
+    expect(await agentSpawn(deps, { caseName: 'c', mode: 'claude', ready: true, timeoutMs: 1000 })).toBe(EXIT.error);
+    expect(deps.out).toHaveLength(1);
+    expect(JSON.parse(deps.out[0])).toEqual({ sessionId: OTHER, readinessError: 'request failed without a message' });
+    expect(deps.calls).toHaveLength(2);
+  });
+
+  it('keeps the error code when a refused connection rejects with an empty AggregateError', async () => {
+    // Node 22 on a host resolving to ::1 and 127.0.0.1: message '', code ECONNREFUSED.
+    const refused = Object.assign(new AggregateError([new Error('connect ECONNREFUSED ::1:3000')], ''), {
+      code: 'ECONNREFUSED',
+    });
+    const deps = fakeDeps((options) => {
+      if (options.path === '/api/v1/quick-start') return ok({ sessionId: OTHER });
+      throw refused;
+    }, true);
+
+    expect(await agentSpawn(deps, { caseName: 'c', mode: 'claude', ready: true, timeoutMs: 1000 })).toBe(EXIT.error);
+    expect(JSON.parse(deps.out[0])).toEqual({ sessionId: OTHER, readinessError: 'ECONNREFUSED' });
+  });
+});
+
+describe('describeRequestError', () => {
+  it('prefers the message, then the code, then a generic line', () => {
+    expect(describeRequestError(new Error('socket hang up'))).toBe('socket hang up');
+    expect(describeRequestError(Object.assign(new AggregateError([], ''), { code: 'ECONNREFUSED' }))).toBe(
+      'ECONNREFUSED'
+    );
+    expect(describeRequestError(new Error(''))).toBe('request failed without a message');
+    expect(describeRequestError('')).toBe('request failed without a message');
   });
 });
 

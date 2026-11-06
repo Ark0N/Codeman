@@ -26,13 +26,15 @@
  * **1. One zstd FRAME per append, not one zstd stream.** The file is
  * `session.jsonl.zstd`, and dsh appends by compressing each batch of lines into
  * its own frame and writing it at the end. `zstd -dc` handles that (frames
- * concatenate by definition), but Node's `zlib.zstdDecompress()` and
- * `createZstdDecompress()` both stop at the first frame end: measured on a real
- * 56-line transcript, Node returned 158 bytes / 1 line where the CLI returned
- * 43,747 bytes / 56 lines. That is a silent truncation to the session header —
- * every call would have reported "no answer yet" forever. `decodeZstdFrames()`
- * below walks the frame headers itself and decompresses each frame, and
- * `test/deepseek-transcript.test.ts` pins it against multi-frame fixtures.
+ * concatenate by definition), but before Node 24.22 and 26.10
+ * (nodejs/node#65865) `zlib.zstdDecompress()` and `createZstdDecompress()` both
+ * stop at the first frame end, and the supported range still includes those
+ * versions: measured on a real 56-line transcript, Node returned 158 bytes /
+ * 1 line where the CLI returned 43,747 bytes / 56 lines. That is a silent
+ * truncation to the session header: every call would have reported "no answer
+ * yet" forever. `decodeZstdFrames()` below walks the frame headers itself and
+ * decompresses each frame, and `test/deepseek-transcript.test.ts` pins it
+ * against multi-frame fixtures.
  *
  * **2. The user's prompts are mixed with injected context.** Every turn also
  * writes a `user/message` whose source is a plugin (the runtime-context

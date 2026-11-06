@@ -53,7 +53,7 @@ async function send(method: string, path: string, headers: Record<string, string
   return { status: res.status, body: (await res.json()) as Record<string, any> };
 }
 
-/** The quick-start write of lastUsedCase is fire-and-forget: poll for it briefly. */
+/** Read settings.json until `predicate` holds (briefly), so a write that never comes fails on its value. */
 async function settleSettings(predicate: (s: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> {
   let last: Record<string, unknown> = {};
   for (let i = 0; i < 40; i++) {
@@ -61,7 +61,7 @@ async function settleSettings(predicate: (s: Record<string, unknown>) => boolean
       last = JSON.parse(await readSettingsBytes());
       if (predicate(last)) return last;
     } catch {
-      // the write is not atomic: a read that lands between its truncate and its data is empty, so poll again
+      // not there yet, or not JSON: poll again
     }
     await new Promise((r) => setTimeout(r, 25));
   }
@@ -127,7 +127,7 @@ describe('a non-admin and the server-wide settings.json', () => {
     const mine = await send('POST', '/api/quick-start', bob, { caseName: 'bobproj' });
     expect(mine.status).toBe(200);
     expect(mine.body.success).toBe(true);
-    // Give a (wrong) fire-and-forget write every chance to land before checking.
+    // Give a (wrong) write every chance to land before checking.
     await new Promise((r) => setTimeout(r, 200));
     expect(JSON.parse(await readSettingsBytes()).lastUsedCase).toBe('rootcase');
 

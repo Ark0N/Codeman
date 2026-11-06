@@ -153,6 +153,12 @@ already writing in the editor.
 
 - The terminal and toolbar shift up when the keyboard opens, tracked through the browser's
   visual viewport rather than guessed.
+- **Opening the keyboard does not resize a Claude session.** Each resize made Claude reprint
+  its screen at the new height and drop transcript lines from the session's history, so for a
+  local Claude session the terminal keeps its size while the keyboard is up and the view
+  scrolls instead, with the prompt and the line under it just above the keyboard. Codex,
+  Claude's fullscreen mode, remote and Docker sessions still resize. **Keep Size Under
+  Keyboard** in App Settings turns it off on this device.
 - **Two ways to dismiss the keyboard**: tap outside the terminal on inert space, or tap twice
   on inert terminal content. Tapping a control never dismisses it, and tapping the prompt row
   keeps focus so you can place the caret.

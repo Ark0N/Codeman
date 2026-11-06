@@ -77,6 +77,14 @@ An agent tab shows its CLI's logo before the name, and a shell tab an `SH` badge
 on Tabs** (App Settings → Appearance → Tabs) hides the logos on that device; the tile and split
 headers and the Run menus keep theirs.
 
+**New Session Button on Tabs** (same place, per device, off by default) adds a **+** beside
+the tab's gear. It lists the CLIs that tab's case can start, each with its logo and name (a
+Docker case lists what its container has), and a pick starts one session in that tab's case,
+or the worktree it runs in, and in its named group. The Run button keeps its own mode and case.
+Wherever a tab has a row menu (the vertical rail, the sidebar, `Shift+F10` on a grouped row),
+the same list is its **New session here…** entry. From a tab outside any named group, the new
+session lands in the case's default group if the case has one, as a Run from the toolbar does.
+
 **Status is carried by the dot and the tab's own styling:**
 
 | Look                          | Meaning                                                                 |

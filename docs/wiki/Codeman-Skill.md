@@ -123,8 +123,11 @@ message a worker directly instead of typing into its terminal.
 
 ## What it will and will not do
 
-- **It self-gates.** Outside a Codeman session (`CODEMAN_MUX` unset) it refuses to act and
-  never guesses an API URL, so a global install costs an unrelated agent session nothing.
+- **It self-gates.** Outside a Codeman session (`CODEMAN_MUX` unset) it refuses every live
+  API operation and never guesses an API URL, so a global install cannot drive a server it
+  is not part of. The one exception is reading saved Codex conversations with
+  `codeman history read` (see [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent#reading-saved-codex-conversations)),
+  a local, read-only command that needs no server or session.
 - **Unprompted, it may only** start sessions, prompt them, and delete the ones **it created
   in that conversation, by exact id**, behind a guard that refuses to delete the agent's own
   session.
@@ -153,6 +156,8 @@ The skill checks for both and says so instead of acting.
 | [`reference/recipes.md`](https://github.com/Ark0N/Codeman/blob/master/skills/codeman/reference/recipes.md) | Worked flows: claude, DeepSeek Harness and shell workers, fan-out, watching a blocked worker, messaging. Loaded on demand. |
 | [`reference/endpoints.md`](https://github.com/Ark0N/Codeman/blob/master/skills/codeman/reference/endpoints.md) | Endpoint tables, error codes, the signals each mode emits, capacity limits. Loaded on demand. |
 | [`reference/messaging.md`](https://github.com/Ark0N/Codeman/blob/master/skills/codeman/reference/messaging.md) | Talking to claude workers directly through Claude Code's cross-session messaging. Loaded on demand. |
+| [`reference/history.md`](https://github.com/Ark0N/Codeman/blob/master/skills/codeman/reference/history.md) | Reading saved Codex conversations offline with `codeman history read`: selectors, filters, forks, budgets. Loaded on demand. |
+| [`reference/inspection-and-staging.md`](https://github.com/Ark0N/Codeman/blob/master/skills/codeman/reference/inspection-and-staging.md) | Experimental and opt-in (App Settings, Experimental agent coordination): bounded pane inspection and guarded submission with `codeman agent inspect`, `stage` and `submit`. Loaded on demand. |
 
 Only `SKILL.md` sits in the agent's context; the references load when a job needs them, so a
 quick run stays quick.

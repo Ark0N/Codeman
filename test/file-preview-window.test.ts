@@ -14,7 +14,9 @@
  *   9. stepping onto a folder-grid page moves the grid's own index with it,
  *  10. Alt+←/→ steps, ignores other chords and text fields, and is swallowed at the ends,
  *  11. the corner grip doubles the pointer delta and clamps the size,
- *  12. phones ignore Expand and the grip (mobile.css).
+ *  12. phones ignore Expand and the grip (mobile.css),
+ *  13. the rendered document carries no width cap, so it fills the window the
+ *      grip and Expand give it (styles.css).
  *
  * Loaded via `vm` against a stub app, same harness style as file-preview-detach.test.ts.
  */
@@ -27,6 +29,7 @@ import { describe, expect, it, vi } from 'vitest';
 const PUBLIC = resolve(import.meta.dirname, '../src/web/public');
 const panelsJs = readFileSync(resolve(PUBLIC, 'panels-ui.js'), 'utf8');
 const indexHtml = readFileSync(resolve(PUBLIC, 'index.html'), 'utf8');
+const stylesCss = readFileSync(resolve(PUBLIC, 'styles.css'), 'utf8');
 
 function btn() {
   const attrs: Record<string, string> = {};
@@ -373,6 +376,24 @@ describe('file viewer resize grip', () => {
   it('clamps to the minimum and to 96% x 94% of the viewport', () => {
     expect(drag([-500, -500])).toMatchObject({ width: '320px', height: '240px' });
     expect(drag([900, 900])).toMatchObject({ width: '960px', height: '752px' });
+  });
+});
+
+describe('file viewer rendered markdown width', () => {
+  it('carries no fixed reading column, so the document fills the window the grip and Expand give it', () => {
+    const mdRule = stylesCss.match(/\.file-preview-body > \.file-preview-md \{[^}]*\}/);
+    expect(mdRule, 'the rule the rendered document lives in').not.toBeNull();
+    // Any cap here reflows nothing once the window is wider than it, which is
+    // what the shipped 960px column did. The window width is the user's choice,
+    // so nothing in this rule may cap it.
+    expect(mdRule![0], 'no width cap on the document').not.toMatch(/max-width/);
+    // The shared .rv-text prose rule must not reintroduce one either.
+    const rvBase = stylesCss.match(/\.rv-text,\s*\.response-viewer-body > :not\(\.rv-message\) \{[^}]*\}/);
+    expect(rvBase, 'the shared prose rule').not.toBeNull();
+    expect(rvBase![0], 'no width cap on the shared prose rule').not.toMatch(/max-width/);
+    // ASCII-diagram blocks cap themselves at var(--rv-content-max, 720px), which only the
+    // Response Viewer sets; the document lifts it so a diagram follows the window too.
+    expect(mdRule![0], 'diagram blocks follow the window').toMatch(/--rv-content-max:\s*none;/);
   });
 });
 

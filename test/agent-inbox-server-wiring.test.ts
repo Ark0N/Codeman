@@ -29,6 +29,7 @@ function bareServer(live: string[] = [], persisted: string[] = []): CleanupServe
   Object.assign(server, {
     sessions: new Map(live.map((id) => [id, {}])),
     keepWarmService: { remove: () => {} },
+    gitFetchScheduler: { remove: () => {} },
     store: {
       getSession: () => null,
       getSessions: () => Object.fromEntries(persisted.map((id) => [id, {}])),
@@ -48,6 +49,8 @@ function bareServer(live: string[] = [], persisted: string[] = []): CleanupServe
     stopTranscriptWatcher: () => {},
     persistDeb: { cancelKey: () => {} },
     sse: { cleanupSessionBatches: () => {} },
+    // A real delete also tells the Discord bridge, which frees its per-tab state and may archive the thread.
+    discordBridge: { sessionDeleted: async () => {}, forgetTab: () => {} },
     broadcast: () => {},
   });
   return server;

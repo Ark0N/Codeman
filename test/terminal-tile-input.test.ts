@@ -48,6 +48,17 @@ function loadContext() {
     // would run against no controller at all.
     setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
     clearTimeout: (id: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(id),
+    // The real controller attaches only for a coarse pointer (#716). Tile tests
+    // that exercise soft-keyboard recovery opt in; a test sets this false to
+    // prove a desktop fine pointer installs nothing.
+    __coarsePointer: true,
+    matchMedia(query: string) {
+      return {
+        matches: query === '(pointer: coarse)' && windowStub.__coarsePointer !== false,
+        addEventListener() {},
+        removeEventListener() {},
+      };
+    },
   };
   const context = vm.createContext({
     console: { ...console, log: vi.fn(), debug: vi.fn() },
@@ -151,6 +162,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  windowStub.__coarsePointer = true;
   FakeTerminal.coreFactory = null;
   FakeFit.proposed = { cols: 80, rows: 24 };
   FakeSocket.instances = [];
@@ -269,6 +281,27 @@ describe('what xterm generates never enters the durable queue', () => {
 
     expect(ws.inputFrames()).toEqual([{ t: 'i', d: '\x1b[I' }]);
     expect(app._pendingDeliveries.get('s-tile')).toBeUndefined();
+  });
+
+  it('queues a Ctrl+V bracketed-paste frame on the durable path', async () => {
+    // image-input.js hands this shape to terminal.input(). onData must not
+    // drop it as a query reply or send it once as a mouse/focus report: the
+    // same two predicates gate the primary pane before its bracketed-paste branch.
+    const app = makeApp();
+    const { ws, term } = await connectTile(app);
+    ws.open();
+    const input = windowStub.CodemanTerminalInput as {
+      shouldSuppressTerminalQueryResponse(data: string): boolean;
+      isTerminalFocusOrMouseReport(data: string): boolean;
+    };
+    const framed = '\x1b[200~line one\r\x1b[?1;2c\r\x1b[<0;10;5M\r\x1b[I\x1b[201~';
+
+    expect(input.shouldSuppressTerminalQueryResponse(framed)).toBe(false);
+    expect(input.isTerminalFocusOrMouseReport(framed)).toBe(false);
+    term.type(framed);
+
+    expect(ws.inputFrames().map((f) => [f.d, f.seq, f.cid])).toEqual([[framed, 1, 'c-test']]);
+    expect(app._pendingDeliveries.get('s-tile')?.map((r) => r.data)).toEqual([framed]);
   });
 });
 
@@ -1183,6 +1216,13 @@ function lineOf(frames: Array<{ d?: string }>) {
 type ControllerTile = Tile & { _keyCode229Recovery: unknown };
 
 describe("TerminalTile wires the primary pane's soft-keyboard controller (#441, #541)", () => {
+  it('does not install the controller on a fine pointer', async () => {
+    windowStub.__coarsePointer = false;
+    const { tile, term } = await connectTile(makeApp());
+    expect((tile as ControllerTile)._keyCode229Recovery).toBeNull();
+    expect(term.textareaListeners).toEqual([]);
+  });
+
   it("installs on THIS tile's composition helper and textarea, and destroy() restores xterm's own", async () => {
     const helpers = withCompositionHelpers();
     const { tile, term } = await connectTile(makeApp());

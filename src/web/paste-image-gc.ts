@@ -38,6 +38,12 @@ export const UPLOADS_DIR = '.codeman-uploads';
 export const LEGACY_UPLOADS_DIR = '.claude-images';
 /** Every upload dir name, current first. Retiring the legacy one here retires it for every reader. */
 export const UPLOAD_DIR_NAMES = [UPLOADS_DIR, LEGACY_UPLOADS_DIR];
+/**
+ * Where files a person sent from Discord land (discord-bridge.ts). Named here with the others so the
+ * image watcher can skip it without importing the bridge. Not an upload dir: neither the sweep nor a
+ * session delete touches it.
+ */
+export const DISCORD_RECEIVED_DIR = '.codeman-discord';
 
 /**
  * Every directory a session's uploads sit in, current first. Both consumers

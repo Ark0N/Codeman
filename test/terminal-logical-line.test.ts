@@ -64,6 +64,12 @@ describe('terminalLogicalLine', () => {
   const ROW1 = '   ackage/thing';
   const HARD = [{ text: ROW0 }, { text: ROW1 }];
 
+  it('keeps full-width dividers out of link and touch-selection text', () => {
+    const rows = buffer([{ text: '─'.repeat(COLS) }, { text: 'https://example.com/docs' }]);
+    expect(terminalLogicalLine(rows, 0, COLS)).toMatchObject({ startRow: 0, endRow: 0, text: '─'.repeat(COLS) });
+    expect(terminalLogicalLine(rows, 1, COLS)).toMatchObject({ startRow: 1, endRow: 1, text: 'https://example.com/docs' });
+  });
+
   it('stitches a hard wrap and drops the indent the continuation carries', () => {
     const line = terminalLogicalLine(buffer(HARD), 0, COLS)!;
 

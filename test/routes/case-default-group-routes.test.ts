@@ -3,13 +3,16 @@
  * read and write it, and the create routes that carry the case into the real
  * TabLayoutService so a new session lands in its case's group in the creating
  * write (POST /api/sessions, and POST /api/quick-start for local, remote and
- * Docker cases).
+ * Docker cases). The tab "+" picker (app.js) is driven end to end against the
+ * same routes, since an ungrouped tab relies on this fallback by design.
  *
  * Uses app.inject(), so no real HTTP port is needed.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { JSDOM } from 'jsdom';
 import { homedir } from 'node:os';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
@@ -100,6 +103,56 @@ const unwrap = (raw: string) => {
   const parsed = JSON.parse(raw);
   return parsed.data ?? parsed;
 };
+
+/**
+ * The shipping frontend in JSDOM, with fetch answered by the route harnesses, so
+ * a click in the tab "+" picker reaches the real create route and layout service.
+ */
+async function bootTabApp(route: (url: string, init?: { method?: string; body?: string }) => Promise<unknown>) {
+  const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', {
+    url: 'https://localhost/',
+    runScripts: 'outside-only',
+  });
+  if (dom.window.document.readyState !== 'complete') {
+    await new Promise((resolve) => dom.window.addEventListener('load', resolve));
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const win = dom.window as any;
+  win.setInterval = () => 0;
+  win.requestAnimationFrame = () => 0;
+  win.__codemanCliCatalog = [{ id: 'shell', kind: 'shell', label: 'Shell', enabled: true }];
+  const publicDir = join(process.cwd(), 'src/web/public');
+  win.eval(
+    'var MobileDetection = { isTouchDevice: () => false, getDeviceType: () => "desktop" }, KeyboardHandler = {}, ' +
+      'SwipeHandler = {}, VoiceInput = {}, DeepgramProvider = {}, NotificationManager = function(){};\n' +
+      ['constants.js', 'app.js', 'mobile-overview.js', 'session-ui.js']
+        .map((file) => readFileSync(join(publicDir, file), 'utf8'))
+        .join('\n;\n') +
+      '\n;window.__CdgCodemanApp = CodemanApp;'
+  );
+  win.fetch = async (url: string, init?: { method?: string; body?: string }) => {
+    const body = await route(url, init);
+    return { ok: true, status: 200, json: async () => body };
+  };
+  win.document.body.innerHTML = '<div id="sessionTabs"></div><select id="quickStartCase"></select>';
+  const app = Object.create(win.__CdgCodemanApp.prototype);
+  Object.assign(app, {
+    $: (id: string) => win.document.getElementById(id),
+    sessions: new Map(),
+    activeSessionId: 'tab-1',
+    terminal: { clear: () => {}, writeln: () => {}, focus: () => {}, cols: 80, rows: 24 },
+    _runMinLockMs: 0,
+    _runMode: 'claude',
+    getTerminalDimensions: () => null,
+    selectSession: async () => {},
+    loadQuickStartCases: () => {},
+    showToast: vi.fn(),
+    _applyTabLayout: () => {},
+    _onSessionCreated: () => {},
+    _renderSessionTabsImmediate: () => {},
+  });
+  return { app, win };
+}
 
 describe('case default group: create routes', () => {
   let harness: RouteTestHarness;
@@ -279,6 +332,63 @@ describe('case default group: create routes', () => {
     expect(unwrap(res.body).sessionId).toBeUndefined();
     // The route's own error path ran cleanupSession for the registered id.
     expect(harness.ctx.cleanupSession).toHaveBeenCalledTimes(1);
+  });
+
+  describe('from a tab "+" in the browser', () => {
+    /** Opens the tab's "+" picker, picks Shell, and returns the create request and the new session's group. */
+    async function launchBeside(tabGroupId: string | null) {
+      const cases = await createRouteTestHarness(registerCaseRoutes);
+      const creates: Array<Record<string, unknown>> = [];
+      try {
+        const { app, win } = await bootTabApp(async (url, init) => {
+          const payload = init?.body ? JSON.parse(init.body) : undefined;
+          if (url === '/api/sessions' && init?.method === 'POST') creates.push(payload);
+          const target = url.startsWith('/api/cases/') ? cases : harness;
+          const res = await target.app.inject({ method: (init?.method ?? 'GET') as 'GET', url, payload });
+          // The envelope server.ts's preSerialization hook adds, which the harness does not install.
+          const body = res.body ? JSON.parse(res.body) : {};
+          return typeof body.success === 'boolean' ? body : { success: true, data: body };
+        });
+        app.cases = [{ name: CASE, path: caseDir }];
+        app.sessions.set('tab-1', { id: 'tab-1', name: 'w1-cdg', workingDir: caseDir });
+        app.tabLayout = {
+          ...world.layouts[OWNER],
+          groups: world.layouts[OWNER].groups.map((g) => ({
+            ...g,
+            refs: g.id === tabGroupId ? [{ kind: 'session', id: 'tab-1' }] : [],
+          })),
+        };
+        app.collapsedTabGroupIds = new Set();
+        app.toggleTabGroupCollapsed = () => {};
+        const plus = win.document.createElement('span');
+        win.document.body.appendChild(plus);
+        app.openTabNewSessionMenu({ preventDefault() {}, stopPropagation() {}, currentTarget: plus }, 'tab-1');
+        const shell = [...win.document.querySelectorAll('[aria-label="New session here"] button')].find(
+          (button: Element) => button.textContent === 'Terminal / Shell'
+        ) as HTMLElement;
+        shell.click();
+        await vi.waitFor(() => expect(creates).toHaveLength(1));
+        await vi.waitFor(() => expect(harness.ctx.sessions.size).toBe(1));
+        const [id] = [...harness.ctx.sessions.keys()];
+        return { create: creates[0], group: groupOf(world.layouts[OWNER], id), toasts: app.showToast.mock.calls };
+      } finally {
+        await cases.app.close();
+      }
+    }
+
+    it('an ungrouped tab sends no group, so the case default group places the session (chosen on purpose)', async () => {
+      const { create, group, toasts } = await launchBeside(null);
+      expect(create).toEqual({ workingDir: caseDir, mode: 'shell', name: `s1-${CASE}` });
+      expect(group).toBe('g-ops');
+      // The launch went through: no error reported along the way.
+      expect(toasts.filter(([, kind]: [string, string]) => kind === 'error')).toEqual([]);
+    });
+
+    it('a grouped tab sends its own group, which wins over the case default', async () => {
+      const { create, group } = await launchBeside('g-core');
+      expect(create).toEqual({ workingDir: caseDir, mode: 'shell', name: `s1-${CASE}`, tabGroupId: 'g-core' });
+      expect(group).toBe('g-core');
+    });
   });
 });
 

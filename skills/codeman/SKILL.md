@@ -8,11 +8,18 @@ description: >-
   read their output, and clean up; where available, message claude workers directly
   (Claude Code cross-session messaging). Use when asked to orchestrate or parallelize
   work across Codeman sessions, get a second opinion from another CLI or model, watch
-  another session, or start and manage workers. Only usable inside a Codeman-managed
-  session (CODEMAN_MUX=1); refuse to act otherwise.
+  another session, start and manage workers, or retrieve saved local Codex history
+  by file/native ID or root and descendants with topic/date filters. Live API
+  operations require a Codeman-managed session (CODEMAN_MUX=1). Offline history
+  reads do not require a server or managed session.
 ---
 
 # Driving Codeman from inside a session
+
+For **saved Codex conversation history**, use `codeman history read` and
+[reference/history.md](reference/history.md). This is a read-only local command:
+route to it **before §0**, including outside a managed session. It needs no API
+URL, credentials or running server. All live API operations below retain §0.
 
 You are an agent running inside a Codeman-managed terminal session. Codeman is the
 server that spawned you; its HTTP API can start, prompt, watch, and delete other
@@ -30,21 +37,33 @@ through: the verbs in detail (the old §5) in [reference/verbs.md](reference/ver
 worked multi-worker flows in [reference/recipes.md](reference/recipes.md), endpoint
 tables and a symptom gallery in [reference/endpoints.md](reference/endpoints.md), and
 direct messaging to claude workers in [reference/messaging.md](reference/messaging.md).
+Experimental bounded inspection and guarded stage/submit load only when needed from
+[reference/inspection-and-staging.md](reference/inspection-and-staging.md).
 
 This skill works the same whichever CLI you are: Codeman puts it where each CLI looks
 for skills (`.claude/skills/` for Claude Code, `.agents/skills/` for Codex, Gemini CLI,
 OpenCode, Antigravity, Grok, DeepSeek and OMP). A **pi** or **shell** worker never gets
 it, but has the same environment: tell it *"other sessions: `codeman agent --help`"*.
-That bundled CLI (`ls`, `spawn`, `send`, `wait`, `read`, `interrupt`, `rm`, and the inbox
-verbs `post`, `inbox`, `ack`) is the same
+That bundled CLI (`ls`, `spawn`, `send`, `wait`, `read`, `inspect`, `stage`, `submit`,
+`interrupt`, `rm`, and the inbox verbs `post`, `inbox`, `ack`) is the same
 verbs over the same endpoints, with the guards below (no control bytes, no self-delete,
 no guessed URL) enforced in code, and it is also your own way through when this
 machine has no `jq` for the preamble below.
 
+For an existing project, use one command:
+`codeman agent spawn --working-dir /path/to/project --mode codex`. With no case and
+no `--working-dir`, `spawn` uses cwd. Give editing workers separate worktrees. A
+positional case keeps quick-start behavior and cannot be combined with
+`--working-dir`; an empty `--working-dir` (`"$WT"` unset) refuses with exit 4
+rather than falling back to cwd, and a cwd that is HOME refuses too (hooks would
+land in `~/.claude`; pass `--working-dir ~` to mean it). Directory launches keep parent lineage and never
+mark the project as agent scratch. If startup fails or is ambiguous, the CLI
+reports the exact created ID: inspect it before retrying or cleaning up.
+
 ## 0. Guard and bootstrap
 
-If `CODEMAN_MUX` is not `1`, **stop and say so**. Do not guess an API URL; a server
-you are not part of is not yours to drive.
+For live API operations, if `CODEMAN_MUX` is not `1`, **stop and say so**.
+Do not guess an API URL; a server you are not part of is not yours to drive.
 
 Two failures come from your CLI, not from Codeman: name them to the user instead of
 retrying.

@@ -348,6 +348,8 @@ and it follows the same rule as the launch path: every ssh command line comes fr
 | `POST /api/sessions/:id/folders` | Lists a folder (absolute or `~/`) on the **remote** host in one ssh round trip (`remoteListFolder`): resolved with `cd -P`, missing → `404`, a file → `400 Not a folder` |
 | `GET /api/sessions/:id/folders/:folderId/files/:name/raw` | Streams one file of a granted remote folder over ssh after the same re-probe + guard as an attachment; `preview` (office) and `thumbnail` answer `400` |
 | `GET /api/sessions/:id/attachments/:attachmentId`, `GET …/attachments` (history) | Size/mtime/existence resolved over ssh, so a remote entry is not reported `missing`; the history list resolves EVERY entry in one batched probe, never one connection per entry |
+| `POST /api/sessions/:id/fix-plan/read` | Reads `@fix_plan.md` on the **remote** host (one probe of the file and the workspace, the same confinement, a 1 MB cap); missing or resolving outside the workspace → `NOT_FOUND`, not a regular file, over the cap or an ssh failure → `OPERATION_FAILED`; never a local fallback |
+| `POST /api/sessions/:id/fix-plan/write`, `POST /api/sessions/:id/ralph-prompt/write` | `400` (`INVALID_INPUT`) before any disk is touched: remote writes are out of scope, and a local write would land in a same-named local folder |
 
 ⚠️ The attachment route is the one a clicked path takes when it is **outside** the case
 directory (a remote `/tmp` scratchpad capture, a screenshot elsewhere in the home dir):
@@ -428,6 +430,14 @@ different file on each host. What decides which host to read is therefore never 
 path but the SESSION (`session.remote`): a remote session never falls back to local
 `fs`, and a local session never opens an ssh connection — including for attachment
 records, which are keyed to the session that registered them.
+
+**Local watchers skip a remote session.** The Ralph tracker's `@fix_plan.md` auto-load
+(and the `fs.watch` behind it) never runs for a remote session, because the watcher reads
+the LOCAL disk, where that path is missing or a different tree: `setupSessionListeners()`
+(`server.ts`) calls `setRemoteWorkingDir()` instead, which only records the path. The fix
+plan stays authoritative exactly as for a local session, so the tracker's output-based
+completion guessers stay off there too; the file reaches the tracker only through
+`fix-plan/read`, over ssh. The image watcher skips remote sessions the same way.
 
 ## Wake-on-LAN from user input
 

@@ -22,6 +22,11 @@ vi.mock('node:fs/promises', () => ({
   default: {
     readFile: vi.fn(async () => '{}'),
     writeFile: vi.fn(async () => undefined),
+    // settings.json is written to a temp file and renamed over the real one (settings-writer.ts).
+    realpath: vi.fn(async (p: string) => p),
+    mkdir: vi.fn(async () => undefined),
+    rename: vi.fn(async () => undefined),
+    rm: vi.fn(async () => undefined),
   },
 }));
 
@@ -414,6 +419,19 @@ describe('system-routes', () => {
       } finally {
         agentInbox.resetForTests();
       }
+    });
+
+    it('deletes the edit history of every session it cleaned (diffs can hold secrets)', async () => {
+      harness.ctx.tabLayouts.runStaleSessionCleanup = vi.fn(async () => ({
+        count: 2,
+        cleaned: [
+          { id: 'stale-1', name: 'a' },
+          { id: 'stale-2', name: 'b' },
+        ],
+      })) as never;
+      const res = await harness.app.inject({ method: 'POST', url: '/api/cleanup-state' });
+      expect(JSON.parse(res.body).cleanedSessions).toBe(2);
+      expect(vi.mocked(harness.ctx.forgetEditHistory).mock.calls).toEqual([['stale-1'], ['stale-2']]);
     });
   });
 

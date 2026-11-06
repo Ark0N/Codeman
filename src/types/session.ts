@@ -33,6 +33,7 @@
 
 import type { RespawnConfig } from './respawn.js';
 import type { AttachmentDetectedType } from './tools.js';
+import type { GitFetchStatus } from '../git-fetch.js';
 
 /** Status of a Claude session */
 export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error';
@@ -833,6 +834,19 @@ export interface SessionState {
   status: SessionStatus;
   /** Working directory path */
   workingDir: string;
+  /**
+   * The directory the session's local tmux pane is in NOW (`#{pane_current_path}`),
+   * when known. `workingDir` is fixed at create time and never follows a `cd`;
+   * this is what a relative path printed in the terminal is relative to.
+   *
+   * Runtime-only: refreshed from the pane-exit watcher's read and never restored
+   * from disk, so a restart starts blank. Absent for remote and docker sessions
+   * (their local pane runs the ssh / docker-exec client) and for direct-PTY or
+   * rediscovered sessions. NOT a confinement root: the file routes stay confined
+   * to `workingDir`, and a path resolved outside it goes through the attachment
+   * routes like any other out-of-workspace path.
+   */
+  paneCwd?: string;
   /** Remote execution metadata, present when this session runs over SSH through local tmux */
   remote?: SessionRemote;
   /** Docker execution metadata, present when this session runs inside a container via local tmux + docker exec */
@@ -891,6 +905,20 @@ export interface SessionState {
   keepWarmEnabled?: boolean;
   /** What the keep-warm is doing right now; ephemeral, never restored. */
   keepWarm?: KeepWarmStatus;
+  /**
+   * Git fetch on an interval for this session's repositories; absent = follow the app-wide
+   * `gitFetchEnabled` default. Restored on a restart, like `keepWarmEnabled`, because the choice is the
+   * user's and outlives the run.
+   */
+  gitFetchEnabled?: boolean;
+  /** Seconds between this session's runs; absent = follow the app-wide `gitFetchIntervalSeconds` default. */
+  gitFetchIntervalSeconds?: number;
+  /**
+   * What this session's last fetch did. Written to disk with the rest of the record, but the restore copies
+   * only the fields its own config lists and this is not one of them, so it is the panel's truth for the
+   * life of the session, not across a restart.
+   */
+  gitFetch?: GitFetchStatus;
   /** Pinned to the top of the session manager list (COD-139) */
   pinned?: boolean;
   /** When the session was pinned (epoch ms) — orders the pinned group, most-recent-first */

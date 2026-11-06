@@ -9,9 +9,13 @@
  * OPTIONAL and per-device: `showGitStatus` (App Settings → Header & Panels → Bottom bar), default
  * OFF. While it is off nothing polls and the button never shows. While it is on, the page asks
  * `GET /api/sessions/:id/git-status` for the active session on a slow poll (and at once when the
- * session changes or the window regains focus). The route is read-only and offline: it never fetches
- * or changes the repository, so the "behind" number reflects the last `git fetch`, which the panel
- * footer says. Remote (SSH) and Docker sessions answer `unsupported` and show no indicator.
+ * session changes or the window regains focus). The status route is read-only: it never changes the
+ * repository, so the "behind" number reflects the last `git fetch`, which the panel footer says. Fetching
+ * happens when the user clicks Fetch in that window's header (`POST /api/sessions/:id/git-fetch`,
+ * src/git-fetch.ts), or on the interval when the session is on: this is the only git command the Git panel
+ * runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too,
+ * but only when the user asked for them at that moment). Remote (SSH)
+ * and Docker sessions answer `unsupported`, show no indicator, and cannot be fetched.
  *
  * Everything that comes from git (file names, commit subjects, author names) is untrusted text: it is
  * only ever written with `textContent`, never `innerHTML`.
@@ -265,6 +269,78 @@ Object.assign(CodemanApp.prototype, {
     return this.refreshGitStatus({ fresh: true });
   },
 
+  /**
+   * Fetch, on this click only: one `git fetch --quiet` per repository the panel shows
+   * (`POST /api/sessions/:id/git-fetch`). It is the only git command the Git panel runs that writes, and the
+   * only one Codeman runs on a timer, and it updates remote-tracking refs only: nothing here commits or
+   * touches the working tree, so an agent's own work is left alone, though a fetch does hold git's ref lock,
+   * so an agent's `git pull` in the same repository can hit the same `cannot lock ref` while it runs. One
+   * click means one fetch per repository: the button is busy and a second click is ignored while it runs, and
+   * a click that joins a fetch already running reports that run, not itself. The panel then re-reads, so the
+   * "behind" number reflects what this fetch brought.
+   */
+  async fetchGitStatusNow() {
+    const sid = this.activeSessionId || null;
+    const btn = this.$('gitStatusFetchBtn');
+    if (!sid || !btn || this._gitFetchInFlight) return;
+    this._gitFetchInFlight = true;
+    this._renderGitFetchButton();
+    let report = null;
+    try {
+      const query = new URLSearchParams(this.gitStatusLimits());
+      report = await this._apiJson(`/api/sessions/${encodeURIComponent(sid)}/git-fetch?${query}`, { method: 'POST' });
+    } catch {
+      report = null;
+    }
+    // A fetch that lands after a session switch is not shown for the session on screen now; the refs it
+    // moved are still on disk, so that session's own read reflects them.
+    if (sid === this.activeSessionId) this._gitStatusFetch = report ? { sessionId: sid, data: report } : null;
+    this._gitFetchInFlight = false;
+    await this.refreshGitStatus({ fresh: true });
+  },
+
+  /** The last Fetch this window ran for the session on screen, or null. */
+  _currentGitFetch() {
+    const f = this._gitStatusFetch;
+    return f && f.sessionId === this.activeSessionId && f.data ? f.data : null;
+  },
+
+  /** Busy while a fetch runs, and never enabled for a session there is nothing to fetch for. */
+  _renderGitFetchButton() {
+    const btn = this.$('gitStatusFetchBtn');
+    if (!btn) return;
+    const overview = this._currentGitStatus();
+    const fetchable = !!this.activeSessionId && !!overview && overview.state === 'ok';
+    btn.disabled = this._gitFetchInFlight || !fetchable;
+    if (this._gitFetchInFlight) btn.setAttribute('aria-busy', 'true');
+    else btn.removeAttribute('aria-busy');
+  },
+
+  /** What the last Fetch brought: a summary line, then one row per repository it could not fetch. */
+  _gitFetchNote() {
+    const report = this._currentGitFetch();
+    if (!report || report.state !== 'ok' || !report.repos?.length) return null;
+    const el = (tag, cls, text) => this._gitEl(tag, cls, text);
+    const failed = report.repos.filter((r) => !r.ok);
+    const count = report.repos.length;
+    const note = el('div', 'git-status-fetch-note');
+    note.append(
+      el(
+        'div',
+        'git-status-fetch-summary',
+        `Fetched ${new Date(report.fetchedAt).toLocaleTimeString()}: ${count - failed.length} of ${count} ${count === 1 ? 'repository' : 'repositories'}.`
+      )
+    );
+    for (const r of failed) {
+      const row = el('div', 'git-status-fetch-row');
+      row.append(el('span', 'git-status-repo-name', r.name));
+      if (r.path !== r.name) row.append(el('span', 'git-status-repo-path', r.path));
+      row.append(el('span', 'git-status-repo-unreadable', `⚠ ${r.failure?.message || 'git fetch failed'}`));
+      note.append(row);
+    }
+    return note;
+  },
+
   /** Drag by the header. Pointer events cover mouse, pen and touch; one set of listeners lives as long as the page. */
   _ensureGitStatusPanelDrag() {
     const panel = this.$('gitStatusPanel');
@@ -313,6 +389,7 @@ Object.assign(CodemanApp.prototype, {
     if (!body) return;
     const overview = this._currentGitStatus();
     const el = (tag, cls, text) => this._gitEl(tag, cls, text);
+    this._renderGitFetchButton();
     // The 15 s poll replaces every row: put keyboard focus back on the same file afterwards.
     const focusKey = body.contains(document.activeElement)
       ? document.activeElement.closest?.('[data-git-key]')?.dataset.gitKey
@@ -379,8 +456,13 @@ Object.assign(CodemanApp.prototype, {
       }
     }
 
+    const note = this._gitFetchNote();
+    if (note) body.append(note);
+
     if (foot) {
-      foot.textContent = `Checked ${new Date(overview.checkedAt).toLocaleTimeString()}. Read-only: Codeman never fetches or changes the repository, so “behind” is as of your last fetch.`;
+      // Runtime text (the panel footer carries data-i18n-skip), so naming the interval here does not fight the
+      // translator. It says what actually runs: this click, or the interval the user turned on.
+      foot.textContent = `Checked ${new Date(overview.checkedAt).toLocaleTimeString()}. Read-only apart from Fetch: Codeman fetches on your click, or on the interval you turned on in Settings, and never commits or changes the repository, so “behind” is as of the last fetch.`;
     }
     if (focusKey) {
       const again = [...body.querySelectorAll('[data-git-key]')].find((n) => n.dataset.gitKey === focusKey);
@@ -449,7 +531,8 @@ Object.assign(CodemanApp.prototype, {
       if (data.ahead) line.append(el('span', 'git-status-chip git-status-chip--warn', `↑ ${data.ahead} ahead`));
       if (data.behind) {
         const behind = el('span', 'git-status-chip', `↓ ${data.behind} behind`);
-        behind.title = 'As of the last git fetch: Codeman never fetches.';
+        behind.title =
+          'As of the last git fetch. Click Fetch in this window, or turn on the fetch interval in Settings, to bring it current.';
         line.append(behind);
       }
     } else if (data.hasRemote) {

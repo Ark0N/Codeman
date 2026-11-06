@@ -105,7 +105,9 @@ The warning points at three ways to secure the instance:
 2. `--host 127.0.0.1` + an authenticated tunnel (`cloudflared` / `tailscale serve`).
 3. `--allow-unauthenticated-network` / `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1`
    — explicitly accept the risk (downgrades the warning to a one‑line note). This
-   flag is **only** an acknowledgement; it does not change reachability.
+   flag is **only** an acknowledgement; it does not change reachability. It covers
+   the bind and nothing else: it does **not** let the managed Cloudflare tunnel
+   start without a password, which has its own opt‑in (§2, the tunnel caveat).
 
 `CODEMAN_API_URL` (used by hooks/child processes) is always derived as a loopback
 address (`0.0.0.0`/`localhost`/`::1` → `127.0.0.1`) so in‑process hooks reach the
@@ -209,8 +211,15 @@ requests as local:
 **Mitigation:** set `CODEMAN_PASSWORD` whenever a loopback‑connecting tunnel is
 up — it gates everything except the (secret‑gated) hook exemption and is the
 documented practice; since COD‑55 enabling the managed tunnel **refuses** to start
-without it unless `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1` explicitly
-acknowledges the exposure. Prefer `tailscale serve` (below), which authenticates
+without a login (`CODEMAN_PASSWORD` or multi‑user mode) unless
+`CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL=1` / `--allow-unauthenticated-tunnel`
+acknowledges the exposure, or the request carries `acknowledgeUnauthTunnel: true`
+(what the browser sends after its confirm). The network acknowledgement
+(`CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK`) does **not** count: the installer writes
+it for every LAN install without a password, so it once turned a click on the
+welcome screen's tunnel link into a public, login‑free URL with no confirm. With
+no login the browser asks before every enable, whatever the server would accept,
+reading `loginConfigured` from `GET /api/tunnel/status`. Prefer `tailscale serve` (below), which authenticates
 at the tailnet layer so untrusted clients never reach the loopback port at all.
 
 ### Host‑header & Origin allowlist (DNS‑rebinding & CSRF defense)
@@ -573,6 +582,7 @@ Opt-in and off by default: the server POSTs the Web Push events (permission prom
 
 - **A second server-side outbound channel through the web-tab egress guard (§10b).** Delivery goes through `webviewFetch`, so link-local and cloud-metadata targets are refused at save time and again on the RESOLVED address at connect time; redirects are not followed (`redirect: 'manual'`) and each send is bounded by a 5 s timeout. Loopback and RFC1918 stay allowed on purpose (a self-hosted ntfy is the point), so **Send test** works as a blind reachability probe (status, refused or timed out, never a response body) for whoever may call it. Web tabs already give that caller full LAN reach with bodies, so nothing new is exposed.
 - **The URL is a bearer secret** (anyone holding a Slack or Discord webhook URL can post as it). It lives in `~/.codeman/webhook.json` (0600, tmp+rename), is kept out of `settings.json` (which every logged-in user reads through `GET /api/settings`), is never returned (`GET /api/webhook` gives scheme + host only), and never appears in a log line, a delivery result or an error message.
+- **Discord bridge** (`src/discord-bridge.ts`, [setup](discord-bridge.md)): the bot token lives in `~/.codeman/discord.json` (0600, tmp+rename) and is never returned by the Discord routes, logged or put in an error, and the attachment, folder and download routes refuse the file. A session whose folder is the home directory can still read it through its own file viewer, which serves that workspace without the blocklist. Inbound replies are typed into a session only from `allowedUserIds`, in the configured guild, inside a thread the bridge created; anything else is dropped unread. A reply becomes one printable line plus Enter, capped at 1000 characters and one per second per tab. Posts send `allowed_mentions` limited to the allowlisted ids, so agent output cannot ping a server. **Files:** an attachment is fetched only from Discord's own HTTPS hosts (no redirects followed), at most 5 per reply and 8 MB each, saved 0600 under `<tab folder>/.codeman-discord/` with the name reduced to `[A-Za-z0-9._-]`; a file a CLI sends must be a regular file whose real path (symlinks followed) lies inside its own tab's folder and is not on the attachment blocklist (`isBlockedAttachmentPath`, since a tab's folder can be the home directory), which stops a sensitive file being uploaded by mistake, and remote sessions send and receive none. A received file is untrusted content to whatever opens it. **What the checks do not stop:** the agent runs as the same OS user, so the path check prevents accidental uploads, not a determined agent that pastes a file's contents into the message. **What leaves the machine:** a permission or question alert sends the rendered screen (whatever the agent printed), and a finished turn or an error sends the CLI's whole last message, read from its transcript (up to 8 posts of 1,900 characters). `idle_prompt` is a warning, so with the default scope every Claude turn left unanswered for a minute is posted, and with **Which events** set to Everything every turn end is; treat the Discord server as holding that output. **Multi-user:** the bridge is one allowlist for the whole server, so an allowlisted Discord account can type into every user's sessions; only an admin can configure it. **Startup hint:** a fixed text (no user input) is added to Claude's system prompt; no other CLI is sent it. The bridge only dials out (REST and the gateway WebSocket), so it needs no inbound exposure. A Discord account on the allowlist can drive agents that run shell commands: it needs 2FA.
 - **It carries session data to a third party.** Titles and bodies include session names, tool names and error text, all agent- or user-controlled, so Discord gets `allowed_mentions: { parse: [] }` and Slack's `& < >` are escaped: agent output cannot ping a channel. In multi-user mode all three routes are admin-only and the channel is instance-wide: it receives every user's session events, the same reach an admin's own Web Push has, which means non-admins' session details leave the box at the admin's choice.
 
 ---
@@ -585,7 +595,8 @@ Opt-in and off by default: the server POSTs the Web Push events (permission prom
 | `--host` / `CODEMAN_HOST` | Bind host (default `127.0.0.1`) |
 | `CODEMAN_ALLOWED_HOSTS` | Extra `Host`/`Origin` allowlist entries for reverse proxies (comma‑separated; exact host, or leading‑dot `.suffix` for subdomains) — see §3 |
 | `--base-url` / `CODEMAN_BASE_URL` | Sub‑path prefix Codeman is mounted under behind a reverse proxy, e.g. `/codeman` (default `/`); the proxy must forward the prefix unchanged. Independent of `CODEMAN_ALLOWED_HOSTS` |
-| `--allow-unauthenticated-network` / `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledge an unauthenticated non‑loopback bind (downgrades the warning) |
+| `--allow-unauthenticated-network` / `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledge an unauthenticated non‑loopback bind (downgrades the warning). Does not cover the tunnel |
+| `--allow-unauthenticated-tunnel` / `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL` | Let the managed Cloudflare tunnel start without a login (the browser still asks first). Never written by the installer |
 | `--https` | Enable TLS (adds HSTS) |
 | `CODEMAN_INSTANCE` | Scope tmux socket + data dir for isolation |
 | `CODEMAN_GESTURE=1` | Make the gesture overlay available (widens CSP) |

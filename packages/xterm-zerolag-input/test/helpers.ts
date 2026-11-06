@@ -204,3 +204,21 @@ export function createMockTerminal(opts: MockTerminalOptions = {}) {
     },
   };
 }
+
+/**
+ * The glyph spans of a rendered overlay line, with each one's left edge and
+ * width in px. The spans sit side by side in a flex row, so a span's left
+ * edge is the sum of the widths before it (what the browser lays out), not a
+ * style property of its own; jsdom does no layout, so this adds them up.
+ */
+export function lineSpans(lineDiv: Element): { text: string; left: number; width: number; el: HTMLSpanElement }[] {
+  const spans: { text: string; left: number; width: number; el: HTMLSpanElement }[] = [];
+  let left = 0;
+  for (const child of Array.from(lineDiv.children)) {
+    const el = child as HTMLSpanElement;
+    const width = parseFloat(el.style.width);
+    spans.push({ text: el.textContent || '', left, width, el });
+    left += width;
+  }
+  return spans;
+}

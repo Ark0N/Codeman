@@ -14,7 +14,7 @@ import { basename, extname, relative } from 'node:path';
 import { statSync } from 'node:fs';
 import type { AttachmentDetectedEvent, AttachmentDetectedType, ImageDetectedEvent } from './types.js';
 import { KeyedDebouncer } from './utils/index.js';
-import { UPLOAD_DIR_NAMES } from './web/paste-image-gc.js';
+import { DISCORD_RECEIVED_DIR, UPLOAD_DIR_NAMES } from './web/paste-image-gc.js';
 
 // ========== Types ==========
 
@@ -159,14 +159,14 @@ export class ImageWatcher extends EventEmitter {
         // Ignore common heavy directories for performance
         ignored: (path: string) => {
           // Skip node_modules, .git, and other heavy directories, and Codeman's
-          // own upload folders: a pdf the user handed to the agent is not a file
-          // the agent produced.
+          // own upload folders: a pdf the user handed to the agent, by upload or
+          // from Discord, is not a file the agent produced.
           if (
             path.includes('/node_modules/') ||
             path.includes('/.git/') ||
             path.includes('/dist/') ||
             path.includes('/.next/') ||
-            UPLOAD_DIR_NAMES.some((name) => path.includes(`/${name}/`))
+            [...UPLOAD_DIR_NAMES, DISCORD_RECEIVED_DIR].some((name) => path.includes(`/${name}/`))
           ) {
             return true;
           }

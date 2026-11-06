@@ -55,6 +55,65 @@ describe('customModelInjection.launchModel', () => {
   });
 });
 
+/** Mutates the shipped deepseek configDir recipe (the one real-home-linking entry) and expects rejection. */
+function expectRejectedOnDeepSeek(mutate: (recipe: Record<string, unknown>) => void, because: string): void {
+  const entry = baseEntry('deepseek');
+  const recipe = (entry.capabilities as Record<string, unknown>).customModelInjection as Record<string, unknown>;
+  mutate(recipe);
+  const result = CliEntrySchema.safeParse(entry);
+  expect(result.success, `expected rejection: ${because}`).toBe(false);
+}
+
+describe('configDir real-home linking (linkFromRealHome / realHomeFallback)', () => {
+  it('rejects a realHomeFallback that is not a single relative path segment', () => {
+    // The consumer joins it under the user's home, so any of these escapes that home:
+    // and bare `.` IS that home: linking through it would expose the whole tree
+    // unshielded instead of just the declared segments.
+    for (const bad of ['../x', '.dsh/evil', '/.dsh', '..', '.']) {
+      expectRejectedOnDeepSeek((r) => {
+        r.realHomeFallback = bad;
+      }, `realHomeFallback ${JSON.stringify(bad)}`);
+    }
+  });
+
+  it('accepts a shipped-style dot-prefixed segment', () => {
+    const entry = baseEntry('deepseek');
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true); // ships as `.dsh`
+    const recipe = (entry.capabilities as Record<string, unknown>).customModelInjection as Record<string, unknown>;
+    recipe.realHomeFallback = '.dsh-relocated';
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true);
+  });
+
+  it('requires realHomeFallback whenever linkFromRealHome is declared', () => {
+    expectRejectedOnDeepSeek((r) => {
+      delete r.realHomeFallback;
+    }, 'without it the consumer would have to hardcode a per-CLI home default');
+  });
+
+  it('rejects a linked entry that collides with fileName', () => {
+    // A symlink at the generated file's own name would write THROUGH into the user's real config.
+    expectRejectedOnDeepSeek((r) => {
+      r.linkFromRealHome = ['cordis.patch.yml', 'profiles'];
+    }, 'linkFromRealHome containing fileName');
+  });
+
+  it('requires linkFromRealHomeDirs to be a subset of linkFromRealHome', () => {
+    // types.ts documents the rule; a name absent from the linked list names nothing,
+    // so the create-missing-directory behaviour would silently never apply to it.
+    expectRejectedOnDeepSeek((r) => {
+      r.linkFromRealHome = ['profiles', 'settings.yaml'];
+      r.linkFromRealHomeDirs = ['profiles', 'sessions'];
+    }, 'linkFromRealHomeDirs naming an unlinked entry');
+    // The shipped recipe is a valid subset (deepseek: profiles and sessions are dirs
+    // of the three linked entries) and keeps loading.
+    const entry = baseEntry('deepseek');
+    const recipe = (entry.capabilities as Record<string, unknown>).customModelInjection as Record<string, unknown>;
+    expect(recipe.linkFromRealHome).toEqual(['profiles', 'sessions', 'settings.yaml']);
+    expect(recipe.linkFromRealHomeDirs).toEqual(['profiles', 'sessions']);
+    expect(CliEntrySchema.safeParse(entry).success).toBe(true);
+  });
+});
+
 describe('the shipped catalog', () => {
   it('validates every stock entry exactly as shipped', () => {
     // If this fails, the catalog cannot load at all — every other test here is downstream.
@@ -181,6 +240,69 @@ describe('workDetect.workingLine is guarded like every other config regex', () =
       const src = entry.capabilities.workDetect?.awaitingLine;
       if (!src) continue;
       expect(compileVersionRegex(src), `${entry.id} declares an awaitingLine the guard refuses`).not.toBeNull();
+    }
+  });
+
+  it('holds the optional composerFooterLine to the same guard', () => {
+    // Run over the rows under the composer each time guarded input reads the pane.
+    for (const composerFooterLine of ['(a+)+b', 'a'.repeat(201), '([unclosed', '']) {
+      expectRejected((e) => {
+        (e.capabilities as Record<string, unknown>).workDetect = {
+          promptGlyph: '>',
+          workingLine: 'working',
+          composerFooterLine,
+        };
+      }, 'guarded input tests it against pane rows a clis.json override can supply');
+    }
+  });
+
+  it('accepts every shipped composerFooterLine', () => {
+    for (const entry of STOCK_CLIS) {
+      const src = entry.capabilities.workDetect?.composerFooterLine;
+      if (!src) continue;
+      expect(compileVersionRegex(src), `${entry.id} declares a composerFooterLine the guard refuses`).not.toBeNull();
+    }
+  });
+
+  it('holds the optional composerPopupLine to the same guard, and accepts the shipped one', () => {
+    // Run over the rows just above the composer each time guarded input reads the pane.
+    for (const composerPopupLine of ['(a+)+b', 'a'.repeat(201), '([unclosed', '']) {
+      expectRejected((e) => {
+        (e.capabilities as Record<string, unknown>).workDetect = {
+          promptGlyph: '>',
+          workingLine: 'working',
+          composerPopupLine,
+        };
+      }, 'guarded input tests it against pane rows a clis.json override can supply');
+    }
+    for (const entry of STOCK_CLIS) {
+      const src = entry.capabilities.workDetect?.composerPopupLine;
+      if (src)
+        expect(compileVersionRegex(src), `${entry.id} declares a composerPopupLine the guard refuses`).not.toBeNull();
+    }
+  });
+
+  it('takes only short runs of ASCII punctuation as composer trigger characters', () => {
+    for (const field of ['composerCommandPrefixes', 'composerCompletionSigils']) {
+      for (const value of ['', 'a', '/a', '/ ', '/\t', '\u00a7', '!!!!!!!!!']) {
+        expectRejected(
+          (e) => {
+            (e.capabilities as Record<string, unknown>).workDetect = {
+              promptGlyph: '>',
+              workingLine: 'working',
+              [field]: value,
+            };
+          },
+          `${field} ${JSON.stringify(value)} would refuse letters, spaces or an unbounded set`
+        );
+      }
+      const entry = baseEntry();
+      (entry.capabilities as Record<string, unknown>).workDetect = {
+        promptGlyph: '>',
+        workingLine: 'working',
+        [field]: '/!@$',
+      };
+      expect(CliEntrySchema.safeParse(entry).success, field).toBe(true);
     }
   });
 
@@ -483,6 +605,30 @@ describe('capability shapes', () => {
     expectRejected((e) => {
       (e.capabilities as Record<string, unknown>).transcriptPageKeys = 'yes';
     }, 'transcriptPageKeys is a boolean');
+  });
+
+  it("takes keyboardHold as an optional 'inline', absent meaning the keyboard resizes", () => {
+    const inline = baseEntry();
+    (inline.capabilities as Record<string, unknown>).keyboardHold = 'inline';
+    expect(CliEntrySchema.safeParse(inline).success).toBe(true);
+    const absent = baseEntry();
+    delete (absent.capabilities as Record<string, unknown>).keyboardHold;
+    expect(CliEntrySchema.safeParse(absent).success).toBe(true);
+    for (const value of [true, 'fullscreen', '']) {
+      expectRejected(
+        (e) => {
+          (e.capabilities as Record<string, unknown>).keyboardHold = value;
+        },
+        `keyboardHold=${JSON.stringify(value)} names no renderer kind`
+      );
+    }
+  });
+
+  it('declares keyboardHold for exactly the inline renderer measured losing lines on a height change', () => {
+    // Claude Code 2.1.306's inline renderer was measured dropping transcript lines from
+    // tmux on keyboard-driven height changes; every other stock entry resizes.
+    const holding = STOCK_CLIS.filter((e) => e.capabilities.keyboardHold === 'inline').map((e) => e.id as string);
+    expect(holding).toEqual(['claude']);
   });
 
   it('declares which CLIs get the wheel forwarded, and whether a version gates it', () => {

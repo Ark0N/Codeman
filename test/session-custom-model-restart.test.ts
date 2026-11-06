@@ -27,6 +27,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Session } from '../src/session.js';
+import { getCli } from '../src/config/cli-registry/index.js';
+import { buildCustomModelInjection } from '../src/custom-model-injection.js';
 import { TmuxManager } from '../src/tmux-manager.js';
 import type { MuxSession, SessionMode } from '../src/types.js';
 
@@ -223,5 +225,31 @@ describe('launchModel reaches the CLI through its own launch param', () => {
     session.setCustomModel({ endpointId: 'ep', modelId: 'q', envKeys: CLAUDE_KEYS }, claudeEnv);
     await session.restartCli();
     expect(respawn.mock.calls[0][0].model).toBeUndefined();
+  });
+});
+
+describe('Codex custom endpoint model overrides', () => {
+  it('selects the local model over a native launch default and restores the default on clear', async () => {
+    const entry = getCli('codex');
+    if (!entry) throw new Error('Missing Codex entry');
+    const injection = buildCustomModelInjection(
+      entry,
+      { id: 'ep', label: 'Local', baseUrl: 'http://box:8080' },
+      'qwen3'
+    );
+    if (injection.kind !== 'configDir') throw new Error('Expected isolated Codex config');
+    const { session, respawn } = liveSession('codex', {
+      codexConfig: { model: 'native-model', reasoningEffort: 'high' },
+    });
+    session.setCustomModel(
+      { endpointId: 'ep', modelId: 'qwen3', envKeys: ['CODEX_HOME'], launchModel: injection.launchModel },
+      { CODEX_HOME: '/isolated/codex' }
+    );
+    await session.restartCli();
+    expect(respawn.mock.calls[0][0].codexConfig).toEqual({ model: 'qwen3', reasoningEffort: 'high' });
+    session.setCustomModel(undefined);
+    respawn.mockClear();
+    await session.restartCli();
+    expect(respawn.mock.calls[0][0].codexConfig).toEqual({ model: 'native-model', reasoningEffort: 'high' });
   });
 });

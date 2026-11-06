@@ -616,6 +616,52 @@ body {
   padding-left: var(--lineage-spine-channel);
 }
 
+/* L-shaped strip (`_syncTabStripCorner()`, app.js): a wrapped classic strip
+   runs the header's full width, the toolbar sits over its top-right corner,
+   and only the rows beside the toolbar stop short of it. A flex line cannot
+   be shortened on its own, so the strip lays its tabs out inline, around a
+   float the size of the toolbar's box (measured into --tab-corner-width and
+   --tab-corner-height). The strip is a scroll container, so it contains the
+   float and is never shorter than the toolbar it now holds up; a strip that
+   would actually scroll keeps the plain wrap instead. Inline tabs space their
+   rows with a bottom margin (the old row-gap, lineage's included); the strip
+   carries no font size of its own, so the whitespace between tabs is 0 wide. */
+.header:has(> .session-tabs-host > .session-tabs.tabs-corner) > .header-right {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.75rem;
+}
+
+.session-tabs-host > .session-tabs.tabs-corner {
+  display: block;
+  font-size: 0;
+  padding-bottom: 0;
+}
+
+.session-tabs-host > .session-tabs.tabs-corner::before {
+  content: '';
+  float: right;
+  width: var(--tab-corner-width, 0px);
+  height: var(--tab-corner-height, 0px);
+}
+
+.session-tabs-host > .session-tabs.tabs-corner > .session-tab {
+  display: inline-flex;
+  vertical-align: top;
+  margin: 0 2px var(--lineage-row-gap, 4px) 0;
+}
+
+/* The first tab is capped to the room beside the toolbar: one wider than that (a
+   selected one shows its gear and close) has its name trimmed to fit, so the
+   layout never depends on which tab is selected. */
+.session-tabs-host > .session-tabs.tabs-corner > .session-tab.tab-corner-fit {
+  max-width: var(--tab-corner-first-max, none);
+}
+
+.session-tabs-host > .session-tabs.lineage-tree.tabs-corner {
+  padding-bottom: calc(var(--lineage-bottom-room) - var(--lineage-row-gap));
+}
+
 .session-tabs::-webkit-scrollbar {
   width: 4px;
   height: 0;
@@ -2992,6 +3038,33 @@ html[data-header-stats] .header-system-stats .stat-item[hidden] {
   transform: rotate(45deg);
 }
 
+/* "+" (new session beside this tab, app.openTabNewSessionMenu): same reveal as the gear. */
+.session-tab .tab-new {
+  opacity: 0;
+  width: 0;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  overflow: hidden;
+  transition: opacity 0.15s, width 0.15s, padding 0.15s;
+}
+.session-tab.active .tab-new {
+  opacity: 1;
+  width: auto;
+  padding: 0 0.3rem;
+}
+.session-tab .tab-new:hover {
+  color: var(--accent-hover);
+}
+
+/* Per-device toggle (App Settings → Tab Bar), mirrored as tabs-show-new on <html>
+   by settings-ui.js. !important so no layout's reveal rule (sidebar, touch) wins. */
+html:not(.tabs-show-new) .session-tab .tab-new {
+  display: none !important;
+}
+
 /* ===== Session detach / undock (beta/session-detach) ===================== */
 
 /* Pop-out (detach) icon on each tab — mirrors .tab-gear reveal-on-hover. */
@@ -3145,7 +3218,7 @@ html[data-tab-orientation='vertical']:not(.tab-rail-compact) .tab-rail
   pointer-events: auto;
 }
 
-html[data-tab-orientation='vertical'].tab-rail-compact .session-tab .tab-actions > :is(.tab-gear, .tab-detach, .tab-close) {
+html[data-tab-orientation='vertical'].tab-rail-compact .session-tab .tab-actions > :is(.tab-gear, .tab-new, .tab-detach, .tab-close) {
   display: none;
 }
 
@@ -7739,6 +7812,52 @@ html[data-skin="og"] .welcome-primary:hover {
   color: var(--text-muted);
   border: 1px solid var(--border);
   opacity: 0.8;
+}
+
+/* The picker's search box reuses .session-sidebar-filter-input's theme-token
+   styling (same reasoning as the .set-scope pill above): only its own spacing
+   and the no-matches line are added here. 0.35rem is the standard gap the
+   modal's neighbouring form fields already use (`.form-hint`'s own margin-top):
+   the global `* { margin: 0 }` reset left the box sitting flush under the CLI
+   hint line above it, and the old 0.5rem read as too big a gap above the list
+   (compounded by the always-visible no-matches line the rule below fixes). */
+#customModelPickModal .custom-model-pick-search {
+  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+#customModelPickModal .custom-model-pick-no-matches {
+  text-align: center;
+  padding: 1rem 0;
+}
+
+/* "Nothing is marked: this endpoint did not report which model it has loaded": the same
+   `.form-hint` `display: block` beats `[hidden]` trap the two rules below fix for the
+   no-matches line and the filtered rows, so the attribute needs the same re-assertion. */
+#customModelPickModal .custom-model-pick-unknown {
+  padding-bottom: 0.15rem;
+}
+
+#customModelPickModal .custom-model-pick-unknown[hidden] {
+  display: none !important;
+}
+
+/* Same class of bug as the row rule below: the no-matches line carries
+   `.form-hint`, whose `display: block` outranks the UA `[hidden]` rule, so
+   `filterCustomModelPick()` toggling `hidden` changed nothing on screen and
+   "No models match" showed while every model was listed with an empty search
+   box. The `[hidden]` re-assertion makes the attribute hide the line again. */
+#customModelPickModal .custom-model-pick-no-matches[hidden] {
+  display: none !important;
+}
+
+/* A filtered-out row's `hidden` must actually hide it: `.run-mode-option` sets
+   `display: flex` (and mobile.css restates the class in a media query), which
+   outranks the UA `[hidden] { display: none }` rule, so the filter would
+   silently do nothing without this re-assertion. Scoped to this modal's rows;
+   the Run menu's own .run-mode-option entries never take `hidden`. */
+#customModelPickModal .run-mode-option[hidden] {
+  display: none !important;
 }
 
 /* Custom Model Endpoint Profiles: llama-swap model-swap confirmation — replaces a native
@@ -12544,13 +12663,21 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 
 /* ---- File Viewer rendered markdown ----
    Styling comes from the Response Viewer's .rv-text rules; .rv-text itself
-   carries no padding or base font (the chat card supplies those). */
+   carries no padding or base font (the chat card supplies those).
+
+   No width cap. The window is whatever the user drags or expands it to, so the
+   document must reflow to fill it; the fixed 960px reading column this rule
+   shipped before the resize grip existed stops reflow once the window is wider
+   than the cap. --rv-content-max: none lets ASCII-diagram blocks
+   (.rv-text .rv-diagram-wrap, capped by that variable with a 720px fallback
+   meant for the Response Viewer) follow the rest of the document too. Pinned by
+   test/file-preview-window.test.ts. */
 
 .file-preview-body > .file-preview-md {
   padding: 1rem 1.25rem 2rem;
   font-size: 15px;
   line-height: 1.55;
-  max-width: 960px;
+  --rv-content-max: none;
 }
 
 /* Relative links in the document are rebased onto a.rv-path so the Response
@@ -15694,6 +15821,7 @@ body.touch-device.cjk-input-visible .main {
 
 .path-picker-up,
 .path-picker-refresh,
+.path-picker-newfolder,
 .path-picker-hidden {
   flex: 0 0 38px;
   height: 38px;
@@ -15716,6 +15844,45 @@ body.touch-device.cjk-input-visible .main {
 .path-picker-hidden.active {
   color: var(--accent);
   border-color: var(--accent);
+}
+
+.path-picker-newfolder {
+  flex: 0 0 auto;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.path-picker-newfolder[hidden],
+.path-picker-newfolder-form[hidden] {
+  display: none;
+}
+
+.path-picker-newfolder-form {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 10px;
+}
+
+.path-picker-newfolder-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.path-picker-newfolder-create,
+.path-picker-newfolder-cancel {
+  height: 38px;
+  padding: 0 12px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
 }
 
 .path-picker-up:disabled {
@@ -19869,6 +20036,7 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-row > .ta
    actions permanently visible on the active session — no layout jitter when
    the pointer crosses the list. */
 html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-gear,
+html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-new,
 html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-detach,
 html[data-session-list="sidebar"] .session-sidebar .session-tab.active .tab-close {
   opacity: 1;
@@ -20383,6 +20551,7 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .se
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-info,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-number,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-gear,
+html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-new,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-detach,
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .tab-close {
   display: none;
@@ -22152,6 +22321,42 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
   gap: 0.25rem;
 }
 
+/* A Fetch button cannot be clicked twice while its fetch is running, and is not offered for a session
+   there is nothing to fetch for (no repository, remote or Docker). Scoped to the Git panel's header: the
+   File Viewer's Back/Forward and the folder grid's Up button are .btn-icon-sm too, and keep their own look. */
+.git-status-actions .btn-icon-sm[disabled] {
+  color: var(--text-dim);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.git-status-actions .btn-icon-sm[disabled]:hover {
+  background: none;
+}
+
+.git-status-actions .btn-icon-sm[aria-busy='true'] {
+  color: var(--text);
+  animation: btn-icon-busy 1.1s ease-in-out infinite;
+}
+
+@keyframes btn-icon-busy {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* No pulse under reduced motion: the button holds the pulse's brighter step, still dimmer than at rest. */
+@media (prefers-reduced-motion: reduce) {
+  .git-status-actions .btn-icon-sm[aria-busy='true'] {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 .git-status-body {
   flex: 1;
   overflow-y: auto;
@@ -22171,13 +22376,32 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
 .git-status-empty,
 .git-status-ok,
 .git-status-note,
-.git-status-more {
+.git-status-more,
+.git-status-fetch-note {
   color: var(--text-muted);
   padding: 0.25rem 0;
 }
 
 .git-status-ok {
   color: rgb(34, 197, 94);
+}
+
+/* The last Fetch's result: a summary line, then a row per repository it could not fetch. */
+.git-status-fetch-note {
+  margin-top: 0.6rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
+}
+
+.git-status-fetch-summary {
+  margin-bottom: 0.2rem;
+}
+
+.git-status-fetch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.1rem 0;
 }
 
 .git-status-branchline {
@@ -22457,6 +22681,297 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
 .git-status-repo-unreadable {
   color: #e0a030;
   font-size: 0.68rem;
+}
+
+/* ── Edit history: header button + panel (edit-history-ui.js) ───────────────── */
+
+/* "Edit history" header button: opt-in (App Settings → Header & Panels), hidden by default.
+   Same marker pattern as the Attachments button: a base inline-flex !important so an inline
+   style can't override it, and a more-specific marker rule to hide. Phones hide it regardless
+   (mobile.css). */
+.btn-edit-history {
+  display: inline-flex !important;
+}
+.btn-edit-history.btn-edit-history--hidden {
+  display: none !important;
+}
+
+.btn-edit-history[aria-expanded='true'] {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
+/* Same frame as the Git and Files windows: draggable by the header, resizable at the corner. */
+.edit-history-panel {
+  position: fixed;
+  top: calc(var(--header-height) + 10px);
+  /* Left of the Git window's default spot; on a narrow viewport slide right so the left edge stays on screen. */
+  right: clamp(8px, calc(100vw - 428px), 410px);
+  width: 420px;
+  max-width: calc(100vw - 16px);
+  height: calc(100vh - var(--header-height) - var(--toolbar-height) - 40px);
+  height: calc(100dvh - var(--header-height) - var(--toolbar-height) - 40px);
+  max-height: 640px;
+  min-width: 260px;
+  min-height: 220px;
+  background: var(--floating-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  resize: both;
+}
+
+.edit-history-panel.visible {
+  display: flex;
+}
+
+.edit-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.edit-history-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.edit-history-count {
+  margin-left: 0.4rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.edit-history-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.edit-history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.9rem;
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.edit-history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+}
+
+.edit-history-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.74rem;
+  color: var(--text);
+}
+
+.edit-history-empty,
+.edit-history-note,
+.edit-history-more {
+  color: var(--text-muted);
+  padding: 0.25rem 0;
+}
+
+.edit-history-note--warn {
+  color: #e0a030;
+}
+
+.edit-history-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.15rem 0.25rem;
+  border-radius: 4px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.edit-history-entry:hover,
+.edit-history-entry:focus-visible,
+.edit-history-entry--open {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.edit-history-time {
+  flex: 0 0 auto;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.edit-history-badge {
+  flex: 0 0 auto;
+  min-width: 2rem;
+  text-align: center;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #e0a030;
+}
+
+.edit-history-badge--new {
+  color: rgb(34, 197, 94);
+}
+
+.edit-history-badge--image {
+  color: var(--text-muted);
+  align-self: center;
+}
+
+.edit-history-badge--image svg {
+  display: block;
+  margin: 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Only the name itself opens the preview: the rest of the row (the spacer) toggles the diff. */
+/* The folder part gives way first, so the file name stays readable (…/icons/bremse_alt1.png). */
+.edit-history-path {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.edit-history-path-dir {
+  /* Shrinks long before the name does; the name only gives way once the folder is at min-width. */
+  flex: 0 10000 auto;
+  min-width: 1.2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Ellipsis at the START of the folder (rtl); the inner <bdi dir="ltr"> keeps its text in order. */
+  direction: rtl;
+  text-align: left;
+  opacity: 0.7;
+}
+
+.edit-history-path-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.edit-history-path:hover,
+.edit-history-path:focus-visible {
+  text-decoration: underline;
+}
+
+.edit-history-spacer {
+  flex: 1;
+  align-self: stretch;
+  min-width: 0.5rem;
+  min-height: 1em;
+}
+
+.edit-history-stats {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 0.3rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.64rem;
+}
+
+.edit-history-add {
+  color: rgb(34, 197, 94);
+}
+
+.edit-history-del {
+  color: #e5534b;
+}
+
+.edit-history-agent {
+  flex: 0 1 auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.62rem;
+  color: var(--text-muted);
+}
+
+.edit-history-thumb {
+  display: block;
+  max-width: 160px;
+  max-height: 90px;
+  margin: 0.15rem 0 0.35rem 3.2rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+
+.edit-history-diff {
+  margin: 0.2rem 0 0.5rem 0.25rem;
+}
+
+.edit-history-group {
+  margin-bottom: 0.45rem;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.edit-history-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.2rem 0.25rem;
+  min-width: 0;
+}
+
+.edit-history-group-head .edit-history-path {
+  font-weight: 600;
+}
+
+.edit-history-group-count {
+  flex: 0 0 auto;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.edit-history-older {
+  margin: 0.5rem auto 0.25rem;
 }
 
 /* ============================================================
@@ -23198,4 +23713,13 @@ html[data-header-stats='tiles'] .header-plan-usage:not(:has(.pu-row)) {
   background: var(--control-bg);
   border: 1px solid var(--control-border);
   color: var(--text-muted);
+}
+
+/* Rows held under the on-screen keyboard (keyboardHoldsRows; keyboardClipPx in
+   constants.js): the screen stays taller than its box and is scrolled up by
+   --kb-clip, set on #terminalContainer by _applyKeyboardClip (terminal-ui.js).
+   The helper textarea, IME preview, link layer and both echo overlays live
+   inside .xterm-screen, so they move with it, and every hit test reads rects. */
+body.keyboard-visible .terminal-container .xterm-screen {
+  transform: translateY(calc(-1 * var(--kb-clip, 0px)));
 }

@@ -46,9 +46,19 @@ function inputEvent(data: string, overrides: Record<string, unknown> = {}) {
   return { data, inputType: 'insertText', isComposing: false, ...overrides };
 }
 
-function harness({ screenReader = false } = {}) {
+function harness({ screenReader = false, coarse = true, matchMedia = true, userAgent = '' } = {}) {
   const source = readFileSync(new URL('../src/web/public/terminal-keycode229-recovery.js', import.meta.url), 'utf8');
-  const exposed: Record<string, any> = {};
+  const exposed: Record<string, any> = { navigator: { userAgent } };
+  if (matchMedia) {
+    // create() attaches only for a coarse pointer (#716). The recovery cases
+    // below are the soft-keyboard behaviour, so they opt in. A fine pointer
+    // (or no matchMedia at all) must get null and no listeners.
+    exposed.matchMedia = (query: string) => ({
+      matches: query === '(pointer: coarse)' && coarse,
+      addEventListener() {},
+      removeEventListener() {},
+    });
+  }
   vm.runInNewContext(source, { window: exposed, globalThis: exposed }, { filename: 'terminal-keycode229-recovery.js' });
 
   const textarea = makeTextarea();
@@ -111,6 +121,55 @@ function loadTerminalInput() {
 }
 
 describe('orphaned terminal input recovery', () => {
+  it('does not attach on a fine pointer, so a desktop dead key is not forwarded twice', () => {
+    const h = harness({ coarse: false });
+    expect(h.controller).toBeNull();
+    expect(h.textarea.listenerCount()).toBe(0);
+    expect(h.textarea.registrations()).toEqual([]);
+  });
+
+  it('does not attach when matchMedia is missing', () => {
+    // Fail closed. Treating "unknown" as coarse would put the recovery back on
+    // a desktop whose matchMedia threw, which is the doubled backtick.
+    const h = harness({ matchMedia: false });
+    expect(h.controller).toBeNull();
+    expect(h.textarea.listenerCount()).toBe(0);
+  });
+
+  it('attaches on Android even when the primary pointer reports fine (a mouse or stylus attached)', () => {
+    // Chromium makes a mouse, a trackpad cover or an S Pen the primary pointer, but the text still comes
+    // from the soft keyboard, so the #441/#541 recovery must stay on there.
+    const h = harness({
+      coarse: false,
+      userAgent:
+        'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
+    });
+    expect(h.controller).not.toBeNull();
+    h.keydown();
+    h.input('`');
+    h.flushTimers();
+    expect(h.emitted).toEqual(['`']);
+  });
+
+  it('stays off on a desktop fine pointer that is not Android', () => {
+    const h = harness({
+      coarse: false,
+      userAgent:
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+    });
+    expect(h.controller).toBeNull();
+  });
+
+  it('still recovers a dropped insertText on a coarse pointer', () => {
+    const h = harness({ coarse: true });
+    h.keydown();
+    h.input('`');
+    expect(h.emitted).toEqual([]);
+    h.flushTimers();
+    expect(h.emitted).toEqual(['`']);
+    expect(h.textarea.listenerCount()).toBeGreaterThan(0);
+  });
+
   it('forwards the committed text when xterm stayed silent', () => {
     const h = harness();
     h.keydown();
@@ -432,7 +491,14 @@ describe('terminal-ui wiring: what counts as "xterm spoke for this keystroke"', 
  */
 function editSyncHarness() {
   const source = readFileSync(new URL('../src/web/public/terminal-keycode229-recovery.js', import.meta.url), 'utf8');
-  const exposed: Record<string, any> = {};
+  const exposed: Record<string, any> = {
+    // Autocorrect recovery is the coarse-pointer (soft keyboard) path.
+    matchMedia: (query: string) => ({
+      matches: query === '(pointer: coarse)',
+      addEventListener() {},
+      removeEventListener() {},
+    }),
+  };
   vm.runInNewContext(source, { window: exposed, globalThis: exposed }, { filename: 'terminal-keycode229-recovery.js' });
 
   const textarea = Object.assign(makeTextarea(), { value: '' });

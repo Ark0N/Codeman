@@ -20,7 +20,8 @@ In order of how much they matter:
 
 1. **Do not expose it without `CODEMAN_PASSWORD`.** Binding a non-loopback host without one
    starts, but warns loudly. A tunnel refuses outright unless you acknowledge the exposure
-   in the UI.
+   in the UI, which asks every time, or set `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL`. The
+   installer's `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` covers the LAN bind only.
 2. **Prefer Tailscale over a public tunnel.** Keeping the loopback bind and putting a
    private network in front of it removes the public attack surface entirely, and gives you
    real HTTPS. See [Remote Access](Remote-Access).

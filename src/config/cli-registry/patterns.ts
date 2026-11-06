@@ -21,6 +21,7 @@ export type TokenPattern =
   | 'model'
   | 'model-claude'
   | 'model-plain'
+  | 'model-plain-colon'
   | 'model-pi'
   | 'id'
   | 'id-dotted'
@@ -47,6 +48,10 @@ const PATTERNS: Record<TokenPattern, RegExp> = {
   // copilot --model. Same characters as `model`, but a leading alphanumeric: the value follows a
   // flag, so `--yolo` must not pass as a model id and become its own flag (the allowAll clamp bypass).
   'model-plain': /^[a-zA-Z0-9][a-zA-Z0-9._\-/]*$/,
+  // codex --model, and the value a custom-model `launchModel` is forced onto it. Same
+  // shape as `model-plain` (leading alphanumeric, so a flag cannot ride the flag) plus
+  // `:`, since Ollama-style ids like `qwen3:32b` must survive onto the command line.
+  'model-plain-colon': /^[a-zA-Z0-9][a-zA-Z0-9._\-/:]*$/,
   // buildPiCommand — `:` for a thinking suffix (`sonnet:high`), `/` for `provider/id`
   'model-pi': /^[a-zA-Z0-9._\-/:]+$/,
   // opencode --session, codex resume

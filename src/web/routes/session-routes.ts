@@ -7,7 +7,7 @@
 import { claudeProjectDirName } from '../../case-rename.js';
 import { FastifyInstance, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { join, dirname, extname, basename, resolve as resolvePath } from 'node:path';
+import { join, dirname, extname, basename, isAbsolute, resolve as resolvePath } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
@@ -35,6 +35,7 @@ import {
   type RemoteHost,
 } from '../../types.js';
 import {
+  GuardedInputBusyError,
   Session,
   cliTakesSessionModel,
   isAltScreenStripMode,
@@ -57,6 +58,7 @@ import {
   AutoCompactSchema,
   AutoResumeSchema,
   KeepWarmSchema,
+  GitFetchSettingsSchema,
   PinSessionSchema,
   ImageWatcherSchema,
   FlickerFilterSchema,
@@ -68,8 +70,9 @@ import {
   SessionWaitOutputQuerySchema,
   CustomModelSelectionSchema,
 } from '../schemas.js';
-import { readCustomModelHosts } from '../../custom-model-hosts.js';
+import { readCustomModelHosts, resolveCustomModelContextLength } from '../../custom-model-hosts.js';
 import { applyCustomModelInjection, removeConfigDir } from '../../custom-model-injection-apply.js';
+import { buildCustomModelInjection } from '../../custom-model-injection.js';
 import {
   getLlamaSwapStatus,
   triggerLlamaSwapLoad,
@@ -114,17 +117,17 @@ import {
   resolveCasesDir,
   resolveParentSessionId,
   sessionCapacityMessage,
-  SETTINGS_PATH,
   validatePathWithinBase,
   waitCapacityResponse,
   abortOnClientHangUp,
 } from '../route-helpers.js';
+import { mutateSettingsFile } from '../settings-writer.js';
 import { buildAgentCaseMarker, writeAgentCaseMarker } from '../../agent-case-marker.js';
 import { agentInbox } from '../agent-inbox.js';
 import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
 import { clampEnvOverridesForOwner } from '../../session-env-clamp.js';
 import { enabledClis, getCli } from '../../config/cli-registry/registry.js';
-import type { AgentSkillDir, NewlineSequence } from '../../config/cli-registry/types.js';
+import type { AgentSkillDir, CliEntry, NewlineSequence } from '../../config/cli-registry/types.js';
 import { resolveCliLaunchError } from '../../utils/cli-launcher.js';
 import { applyLaunchDefaults } from '../launch-defaults.js';
 import { legacyConfigForMode } from '../../session-cli-registry-bridge.js';
@@ -226,6 +229,39 @@ const CLAUDE_WORKTREE_PATH = /^(.*)\/\.claude\/worktrees\/([^/]+)\/?$/;
 /** Did the committed layout put this session in a named group (not Ungrouped)? */
 function landedInGroup(layout: TabLayout | undefined, sessionId: string): boolean {
   return !!layout?.groups.some((group) => group.refs.some((ref) => ref.kind === 'session' && ref.id === sessionId));
+}
+
+/**
+ * Guard a session-supplied configDir home BEFORE `applyCustomModelInjection` runs.
+ *
+ * The apply resolves the CLI's real home from this session's env override and then runs
+ * synchronous `existsSync`/`mkdirSync` on it (deepseek `DSH_HOME`, and any future
+ * `linkFromRealHome` recipe). A path on an unreachable network mount makes a synchronous
+ * stat wait forever, and this runs INSIDE a request handler, so it would freeze the whole
+ * web server (CLAUDE.md, the #516 rule on user-chosen paths). A relative home is left to
+ * the apply, which already refuses to join non-absolute values.
+ *
+ * Probe the session's own home with `probePathKind(..., { pastCap: true })` first: on
+ * `'unknown'` (a dead mount that never answered) hand the apply a lookup that hides that
+ * one env var, so linking falls through to the server's own environment and the unresponsive
+ * path is never touched. Any other entry's lookup passes through untouched.
+ */
+export async function guardSessionConfigDirHome(
+  entry: Pick<CliEntry, 'capabilities'>,
+  baseLookup: (envVar: string) => string | undefined
+): Promise<(envVar: string) => string | undefined> {
+  const recipe = entry.capabilities.customModelInjection;
+  if (recipe?.kind !== 'configDir' || !recipe.linkFromRealHome?.length) return baseLookup;
+  const dirEnvVar = recipe.dirEnvVar;
+  const supplied = baseLookup(dirEnvVar)?.trim();
+  if (!supplied || !isAbsolute(supplied)) return baseLookup;
+  if ((await probePathKind(supplied, { pastCap: true })) === 'unknown') {
+    console.warn(
+      `[custom-model] ${dirEnvVar} (${supplied}) did not answer; linking from the server's own home instead`
+    );
+    return (envVar: string) => (envVar === dirEnvVar ? undefined : baseLookup(envVar));
+  }
+  return baseLookup;
 }
 
 /**
@@ -1539,8 +1575,35 @@ export function registerSessionRoutes(
     if (!endpoint) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
     }
-    const contextLength = endpoint.modelContextLengths?.[body.modelId];
+    // Discovery's per-model figure wins; the endpoint's user-set default covers models
+    // whose size discovery could not determine (a gateway that states none, say). With
+    // neither, the existing "no override, CLI assumes its own default" behaviour stands.
+    const contextLength = resolveCustomModelContextLength(endpoint, body.modelId);
     const slotCount = endpoint.modelSlotCounts?.[body.modelId];
+
+    // A CLI whose config alone cannot select the model also gets its `model` launch param
+    // forced (pi/omp `custom/<id>`, grok's block name, and codex now carries its bare
+    // selected id too). The argv engine DROPS a token that
+    // fails its pattern rather than quoting it, which would silently launch the CLI on its
+    // own default provider again, so refuse an id the pattern cannot carry up front.
+    // The check runs on the PURE build result, before applyCustomModelInjection below:
+    // the forced launch id only comes out of that build, and writing first would mean a
+    // refused id already replaced the config dir a live codex session uses as CODEX_HOME.
+    // It also runs before the two confirmations, so nobody agrees to evict a model only
+    // to be told the id was never usable.
+    const modelSpec = entry.launch.params.model;
+    const injection = buildCustomModelInjection(entry, endpoint, body.modelId, contextLength);
+    const forcedLaunchModel = injection.kind === 'unsupported' ? undefined : injection.launchModel;
+    if (
+      forcedLaunchModel !== undefined &&
+      modelSpec?.type === 'token' &&
+      !matchesPattern(modelSpec.pattern, forcedLaunchModel)
+    ) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        `Model id ${JSON.stringify(body.modelId)} cannot be passed to ${session.mode} on its command line`
+      );
+    }
 
     // Some CLIs (today: only claude) carry enough of their own fixed system-prompt/tool-
     // schema overhead that a small enough real context guarantees a first-message failure
@@ -1605,32 +1668,17 @@ export function registerSessionRoutes(
       }
     }
 
-    // A CLI whose config alone cannot select the model also gets its `model` launch param
-    // forced (pi/omp `custom/<id>`, grok's block name). The argv engine DROPS a token that
-    // fails its pattern rather than quoting it, which would silently launch the CLI on its
-    // own default provider again, so refuse an id the pattern cannot carry up front.
-    const modelSpec = entry.launch.params.model;
     const applied = applyCustomModelInjection(
       entry,
       endpoint,
       body.modelId,
       session.id,
       contextLength,
-      session.workingDir
+      session.workingDir,
+      await guardSessionConfigDirHome(entry, (envVar) => session.envOverrideValue(envVar))
     );
     if (!applied) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${session.mode} has no known custom-model mechanism`);
-    }
-    if (
-      applied.launchModel !== undefined &&
-      modelSpec?.type === 'token' &&
-      !matchesPattern(modelSpec.pattern, applied.launchModel)
-    ) {
-      removeConfigDir(applied.configDir);
-      return createErrorResponse(
-        ApiErrorCode.INVALID_INPUT,
-        `Model id ${JSON.stringify(body.modelId)} cannot be passed to ${session.mode} on its command line`
-      );
     }
 
     const { previousConfigDir } = session.setCustomModel(
@@ -1681,7 +1729,8 @@ export function registerSessionRoutes(
       // Called for its existence/ownership 404 side effect only — demoteOrRemoveSession
       // below re-looks-up the record by id, so the returned SessionState is unused here.
       findPersistedSessionOrFail(ctx.store, id, req);
-      ctx.store.demoteOrRemoveSession(id);
+      // The edit history goes with the record (same rule as `cleanupSession`).
+      if (ctx.store.demoteOrRemoveSession(id) === 'removed') ctx.forgetEditHistory(id);
       // A detached session kept its agent inbox (server.ts _doCleanupSession drops it
       // only on killMux); retiring the row is the delete, so the mail goes now.
       agentInbox.drop(id);
@@ -2077,6 +2126,32 @@ export function registerSessionRoutes(
       }
     }
 
+    // A guarded submit (agent-staging.ts) holds the input lease for the few
+    // milliseconds of its conditional Enter, and input that arrives meanwhile is held
+    // and written in arrival order after it. A TAGGED request is refused for that span
+    // (the lease plus the held input's drain) rather than overtake held input: say so
+    // instead of answering 200 for bytes that were never written, and give the seq
+    // back so the browser's durable queue (which keeps a frame on any 409, and whose
+    // POST drainer sends one frame at a time) delivers it on its next retry. An
+    // UNTAGGED request has no retry behind it (the phone accessory keys and the Stop
+    // button's Ctrl+C are fire-and-forget POSTs that never read the answer), so it is
+    // held instead, like a WebSocket frame: `writeViaMux` takes its own turn behind
+    // the lease, and the raw write below is held explicitly. Nothing from here to the
+    // write below awaits, so the lease cannot be taken in between.
+    const refuseGuarded = () =>
+      reply
+        .code(409)
+        .send(
+          createErrorResponse(
+            ApiErrorCode.CONFLICT,
+            'A guarded submit is in progress on this session; nothing was written. Retry the input.'
+          )
+        );
+    if (!duplicate && tagged && session.guardedInputHeld === true) {
+      session.forgetInputSeq(clientId as string, seq as number);
+      return refuseGuarded();
+    }
+
     // Only a waiting request pays for the tmux probe: the browser's plain input path
     // (thousands of calls per session) must stay exec-free.
     const workerDead = wantsWait && workerIsDead(ctx.mux, session);
@@ -2187,7 +2262,38 @@ export function registerSessionRoutes(
       // Same rollback. NOT an error response, deliberately: a session can
       // legitimately have no PTY yet (created but not started), and callers have
       // always been able to write to one without a 4xx.
-      delivered = session.write(inputStr, { fromUser: true });
+      //
+      // During a guarded submit (untagged only: a tagged one was refused above) the
+      // write is held and runs in arrival order once the lease is released. The answer
+      // is a 200 once held; a send-and-wait reads `delivered` from the held write. Only
+      // a full hold queue refuses, after releasing the waiter registered above.
+      let heldWrite: Promise<boolean> | null = null;
+      if (session.guardedInputHeld === true) {
+        let settle!: (written: boolean) => void;
+        const written = new Promise<boolean>((resolve) => {
+          settle = resolve;
+        });
+        const held = session.holdForGuardedLease(
+          () => {
+            let ok = false;
+            try {
+              ok = session.write(inputStr, { fromUser: true });
+            } finally {
+              settle(ok);
+            }
+          },
+          inputStr.length,
+          inputStr
+        );
+        if (held === 'full') {
+          abort.abort();
+          stopDeathWatch();
+          return refuseGuarded();
+        }
+        if (held === 'held') heldWrite = written;
+      }
+      if (heldWrite && !waitPromise) return {};
+      delivered = heldWrite ? await heldWrite : session.write(inputStr, { fromUser: true });
       if (!delivered && tagged) {
         session.forgetInputSeq(clientId as string, seq as number);
       }
@@ -2398,7 +2504,7 @@ export function registerSessionRoutes(
   // own `capabilities.newline`. Claude Code's Ink input recognizes 0x0a as "insert newline" vs
   // 0x0d (carriage return = submit).
 
-  app.post('/api/sessions/:id/send-key', async (req) => {
+  app.post('/api/sessions/:id/send-key', async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = req.body as Record<string, unknown>;
     const key = typeof body?.key === 'string' ? body.key : '';
@@ -2428,18 +2534,26 @@ export function registerSessionRoutes(
     try {
       // Route through the dedicated Codeman socket — bare `tmux` would target the
       // user's default server and never find this session (same #80 regression class).
-      await new Promise<void>((resolve, reject) => {
-        execFile(
-          'tmux',
-          ['-L', ctx.mux.muxSocket, 'send-keys', '-H', '-t', muxName, ...hex],
-          { timeout: 5000 },
-          (err) => {
-            if (err) reject(err);
-            else resolve();
-          }
-        );
-      });
+      await session.performAuxiliaryInput(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            execFile(
+              'tmux',
+              ['-L', ctx.mux.muxSocket, 'send-keys', '-H', '-t', muxName, ...hex],
+              { timeout: 5000 },
+              (err) => {
+                if (err) reject(err);
+                else resolve();
+              }
+            );
+          })
+      );
     } catch (err) {
+      // A guarded submit's lease holds the key until its Enter is out; only a full
+      // hold queue refuses it, and that is a retryable conflict, not a tmux failure.
+      if (err instanceof GuardedInputBusyError) {
+        return reply.code(409).send(createErrorResponse(ApiErrorCode.CONFLICT, err.message));
+      }
       console.error('[Server] send-key failed:', err);
       return createErrorResponse(ApiErrorCode.INTERNAL_ERROR, 'tmux send-keys failed');
     }
@@ -2807,16 +2921,14 @@ export function registerSessionRoutes(
     return candidates[0] ?? null;
   }
 
-  app.get('/api/sessions/:id/last-response', async (req) => {
-    const { id } = req.params as { id: string };
-    const session = findSessionOrFail(ctx, id, req);
-
+  // The body of GET /api/sessions/:id/last-response, so the Discord bridge reads the same transcript
+  // the response viewer does (per-CLI reader, pane fallback) without a second copy of this logic.
+  const lastResponseFor = async (session: Session, context?: string) => {
     // Codex sessions don't write to ~/.claude/projects — their transcripts
     // live in ~/.codex/sessions/**. Branch to a Codex-specific reader so the
     // response-viewer works for Codex panes too.
     if (getCli(session.mode)?.capabilities.transcript === 'codex-rollout') {
-      const codexQuery = req.query as { context?: string };
-      return await readCodexLastResponse(session, codexQuery.context === 'full');
+      return await readCodexLastResponse(session, context === 'full');
     }
 
     // DeepSeek Harness writes a real structured transcript under
@@ -2835,8 +2947,7 @@ export function registerSessionRoutes(
     // would starve on an answer that exists. Those configurations keep the
     // pane segmenter below: coarse, but the real conversation.
     if (getCli(session.mode)?.capabilities.transcript === 'deepseek-zstd' && !session.docker && !session.remote) {
-      const deepSeekQuery = req.query as { context?: string };
-      const full = deepSeekQuery.context === 'full';
+      const full = context === 'full';
       const transcript = await readDeepSeekLastResponse(session, { blocks: full });
       if (transcript) {
         return {
@@ -2854,7 +2965,6 @@ export function registerSessionRoutes(
     // the pane IS the transcript for these CLIs. Codex is already handled above,
     // where a real rollout file is the better source.
     if (isExternalCliTranscriptMode(session.mode)) {
-      const externalQuery = req.query as { context?: string };
       // A repainting full-screen TUI (copilot) streams absolute cursor moves, not lines, so the
       // buffer cannot be segmented; read the pane's visible screen instead, and fall back to the
       // buffer when there is no tmux pane to ask (direct PTY, tests).
@@ -2867,7 +2977,7 @@ export function registerSessionRoutes(
         text: getLastTranscriptResponse(blocks),
         timestamp: '',
         hasContext: blocks.length > 0,
-        messages: externalQuery.context === 'full' ? blocks : undefined,
+        messages: context === 'full' ? blocks : undefined,
       };
     }
 
@@ -2893,11 +3003,10 @@ export function registerSessionRoutes(
       }
     }
 
-    const query = req.query as { context?: string };
     // `turn` is the brief view's context: the last ANSWERED turn's assistant
     // messages, so a multi-row answer is not reduced to its final row. `text`
     // stays the last assistant row in every mode (agent pollers hash it).
-    const wantsMessages = query.context === 'full' || query.context === 'turn';
+    const wantsMessages = context === 'full' || context === 'turn';
     const claudeSessionId = session.claudeSessionId || session.id;
     const transcript = await findClaudeTranscript(projectsDir, claudeSessionId, session.id);
     if (!transcript) {
@@ -2918,7 +3027,7 @@ export function registerSessionRoutes(
     try {
       const content = await fs.readFile(transcript.path, 'utf8');
       const parsed = parseClaudeResponseTranscript(content, wantsMessages);
-      if (query.context === 'turn') {
+      if (context === 'turn') {
         return {
           text: parsed.text,
           timestamp: parsed.timestamp,
@@ -2929,6 +3038,13 @@ export function registerSessionRoutes(
     } catch {
       return wantsMessages ? { text: '', timestamp: '', messages: [] } : { text: '', timestamp: '' };
     }
+  };
+  ctx.lastResponseFor = lastResponseFor;
+
+  app.get('/api/sessions/:id/last-response', async (req) => {
+    const { id } = req.params as { id: string };
+    const session = findSessionOrFail(ctx, id, req);
+    return lastResponseFor(session, (req.query as { context?: string }).context);
   });
 
   function isCodexInjectedContext(text: string): boolean {
@@ -3608,6 +3724,40 @@ export function registerSessionRoutes(
     };
   });
 
+  // ========== Git fetch on an interval ==========
+
+  // Per-session override for the fetch interval (src/git-fetch-scheduler.ts), which is what the Session
+  // Options rows say it is: two sessions on one folder can hold different choices, and that folder is
+  // fetched when the first of them is due. `null` on either field clears this session's choice so the
+  // app-wide setting applies again, and a field left out of the body leaves the other half as it was: the
+  // Session Options rows save on their own. Refused for a remote or Docker session, exactly as the Git
+  // panel excludes them: a container can write to the repository it mounts, so git there would run that
+  // repository's own configuration on the host.
+  app.post('/api/sessions/:id/git-fetch-settings', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = parseBody(GitFetchSettingsSchema, req.body, 'Invalid request body');
+    const session = findSessionOrFail(ctx, id, req);
+    if (session.remote || session.docker) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Git fetch does not run for remote or Docker sessions');
+    }
+
+    const enabled = 'enabled' in body ? (body.enabled ?? undefined) : session.gitFetchEnabled;
+    const intervalSeconds =
+      'intervalSeconds' in body ? (body.intervalSeconds ?? undefined) : session.gitFetchIntervalSeconds;
+    session.setGitFetchSettings(enabled, intervalSeconds);
+    persistAndBroadcastSession(ctx, session);
+
+    return {
+      success: true,
+      data: {
+        gitFetchSettings: {
+          enabled: session.gitFetchEnabled ?? null,
+          intervalSeconds: session.gitFetchIntervalSeconds ?? null,
+        },
+      },
+    };
+  });
+
   // ========== Auto-Resume (usage-limit pause) ==========
 
   app.post('/api/sessions/:id/auto-resume', async (req) => {
@@ -3679,6 +3829,11 @@ export function registerSessionRoutes(
     const { id } = req.params as { id: string };
     const body = parseBody(ImageWatcherSchema, req.body, 'Invalid request body');
     const session = findSessionOrFail(ctx, id, req);
+    // A remote session's workingDir is a path on the remote host; the watcher would watch it on the
+    // LOCAL disk (a missing folder, or a same-named local one whose images are not the session's).
+    if (body.enabled && session.remote) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Image watching does not run for remote sessions');
+    }
 
     if (body.enabled) {
       imageWatcher.watchSession(session.id, session.workingDir);
@@ -4341,8 +4496,27 @@ export function registerSessionRoutes(
       const cmHosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
       const cmEndpoint = cmHosts.find((h) => h.id === customModel.endpointId);
       if (!cmEndpoint) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
-      const cmContextLength = cmEndpoint.modelContextLengths?.[customModel.modelId];
+      // Per-model discovery figure first, user-set endpoint default second, nothing third
+      // (see the dedicated route's own comment above).
+      const cmContextLength = resolveCustomModelContextLength(cmEndpoint, customModel.modelId);
       const cmSlotCount = cmEndpoint.modelSlotCounts?.[customModel.modelId];
+
+      // See the dedicated route: refused on the pure build, before either confirmation, so
+      // nobody agrees to evict a model for an id that could never launch, and before anything
+      // is written.
+      const cmModelSpec = cmEntry.launch.params.model;
+      const cmInjection = buildCustomModelInjection(cmEntry, cmEndpoint, customModel.modelId, cmContextLength);
+      const cmForcedLaunchModel = cmInjection.kind === 'unsupported' ? undefined : cmInjection.launchModel;
+      if (
+        cmForcedLaunchModel !== undefined &&
+        cmModelSpec?.type === 'token' &&
+        !matchesPattern(cmModelSpec.pattern, cmForcedLaunchModel)
+      ) {
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          `Model id ${JSON.stringify(customModel.modelId)} cannot be passed to ${mode} on its command line`
+        );
+      }
 
       // See the dedicated route's own comment for the full reasoning: some CLIs' own fixed
       // overhead can exceed a small enough real context on the very first message,
@@ -4408,24 +4582,12 @@ export function registerSessionRoutes(
         customModel.modelId,
         qsCustomModelSessionId,
         cmContextLength,
-        workspacePath
+        workspacePath,
+        await guardSessionConfigDirHome(cmEntry, (envVar) => qsGatedEnvOverrides?.[envVar])
       );
       if (!cmApplied) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${mode} has no known custom-model mechanism`);
       }
-      const cmModelSpec = cmEntry.launch.params.model;
-      if (
-        cmApplied.launchModel !== undefined &&
-        cmModelSpec?.type === 'token' &&
-        !matchesPattern(cmModelSpec.pattern, cmApplied.launchModel)
-      ) {
-        removeConfigDir(cmApplied.configDir);
-        return createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          `Model id ${JSON.stringify(customModel.modelId)} cannot be passed to ${mode} on its command line`
-        );
-      }
-
       qsCustomModelEnvOverrides = { ...qsGatedEnvOverrides, ...cmApplied.envOverrides };
       qsCustomModelAppliedEnvOverrides = cmApplied.envOverrides;
       qsCustomModelLaunchModel = cmApplied.launchModel;
@@ -4576,28 +4738,14 @@ export function registerSessionRoutes(
       // settings.json, readable by every user through GET /api/settings, so a non-admin's
       // case name is not written there in multi-user mode (writes are admin-only, like
       // PUT /api/settings). isAdmin is always true in single-user mode.
+      // Awaited and serialized with every other settings.json writer (mutateSettingsFile): the
+      // un-awaited write this replaced could land after the response, over a settings save.
       if (isAdmin(req)) {
         try {
-          const settingsFilePath = SETTINGS_PATH;
-          let settings: Record<string, unknown> = {};
-          try {
-            settings = JSON.parse(await fs.readFile(settingsFilePath, 'utf-8'));
-          } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-          }
-          settings.lastUsedCase = caseName;
-          const dir = dirname(settingsFilePath);
-          if (!existsSync(dir)) {
-            mkdirSync(dir, { recursive: true });
-          }
-          // Use async write to avoid blocking event loop
-          fs.writeFile(settingsFilePath, JSON.stringify(settings, null, 2)).catch((err) => {
-            // Non-critical but log for debugging
-            console.warn('[Server] Failed to save settings (lastUsedCase):', err);
-          });
+          await mutateSettingsFile((settings) => ({ ...settings, lastUsedCase: caseName }));
         } catch (err) {
-          // Non-critical but log for debugging
-          console.warn('[Server] Failed to prepare settings update:', err);
+          // Non-critical: the session is already running.
+          console.warn('[Server] Failed to save settings (lastUsedCase):', getErrorMessage(err));
         }
       }
 

@@ -30,6 +30,7 @@
 
 import { EventEmitter } from 'node:events';
 import { basename } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { execSync, execFileSync } from 'node:child_process';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
@@ -68,8 +69,11 @@ import {
   type StatusLineExporter,
   type KeepWarmStatus,
 } from './types.js';
+import type { GitFetchStatus } from './git-fetch.js';
 import { resolveAndClaimOmpSessionId } from './utils/omp-session-resolver.js';
 import { claudeTranscriptExists } from './utils/claude-transcript.js';
+import { probePathKind } from './utils/bounded-path-probe.js';
+import { PATH_PROBE_TIMEOUT_MS, WORKSPACE_REALPATH_RETRY_MS } from './config/path-probe.js';
 import { matchesPattern } from './config/cli-registry/patterns.js';
 import { probeDockerCliVersion } from './docker-hosts.js';
 import { probeRemoteCliVersion } from './remote-hosts.js';
@@ -129,6 +133,14 @@ import { DEFAULT_TMUX_HISTORY_LIMIT } from './config/terminal-history.js';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 import { getCli } from './config/cli-registry/registry.js';
 import { SubmitVerifier } from './session-submit-verifier.js';
+import {
+  guardedComposerChrome,
+  promptSha256,
+  readGuardedSnapshotDetails,
+  type GuardedInputSnapshot,
+} from './agent-staging.js';
+import { isKeyboardTerminalInput } from './terminal-input-classifier.js';
+import { stripAnsi } from './utils/regex-patterns.js';
 import { KEEP_WARM_NUDGE } from './prompt-cache-keepwarm.js';
 import { compileVersionRegex } from './config/cli-registry/patterns.js';
 import { resolveSessionCliVersion } from './utils/cli-resolver.js';
@@ -389,6 +401,21 @@ const DOCKER_CLI_VERSION_PROBE_DELAY_MS = 3000;
 /** Delay before the over-ssh Claude CLI version probe (keeps session start off the ssh round-trip). */
 const REMOTE_CLI_VERSION_PROBE_DELAY_MS = 3000;
 
+/** Whether absolute `path` is `root` or lies under it (a lexical compare). */
+function isSameOrUnder(path: string, root: string): boolean {
+  return path === root || path.startsWith(root === '/' ? '/' : `${root}/`);
+}
+
+/**
+ * Rewrite `path` from under `from` to the same place under `to`; a path not at or
+ * under `from` comes back unchanged. Exported for unit testing.
+ */
+export function rebasePath(path: string, from: string, to: string): string {
+  if (path === from) return to;
+  if (path.startsWith(`${from}/`)) return to + path.slice(from.length);
+  return path;
+}
+
 /**
  * Ask tmux for the current window geometry of `muxName` so a re-attaching PTY
  * client can spawn at the same size and avoid the resize-flicker / scrollback
@@ -455,6 +482,17 @@ export interface ClaudeMessage {
   total_cost_usd?: number;
   /** Total duration in milliseconds (on result messages) */
   duration_ms?: number;
+}
+
+/**
+ * A write that a guarded submit's lease could not hold, because the per-lease hold
+ * queue (`Session.MAX_GUARDED_HELD_INPUTS`) was full. Nothing was written; retry it.
+ */
+export class GuardedInputBusyError extends Error {
+  constructor() {
+    super('A guarded submit is in progress on this session; nothing was written. Retry the input.');
+    this.name = 'GuardedInputBusyError';
+  }
 }
 
 /**
@@ -614,6 +652,12 @@ export class Session extends EventEmitter {
   private _keepWarmEnabled: boolean | undefined;
   /** Last status the keep-warm service published for this session; ephemeral. */
   private _keepWarm: KeepWarmStatus | null = null;
+  /** Git fetch on an interval for this session; undefined = follow the app-wide default. Persisted. */
+  private _gitFetchEnabled: boolean | undefined;
+  /** Seconds between this session's fetch runs; undefined = follow the app-wide default. Persisted. */
+  private _gitFetchIntervalSeconds: number | undefined;
+  /** Last status the fetch scheduler published for this session; ephemeral. */
+  private _gitFetch: GitFetchStatus | null = null;
   /** Until when the current turn counts as Codeman's own keep-alive (hooks open pre-acknowledged). */
   private _keepAliveTurnUntil = 0;
   /** Last keystroke a person sent through a `fromUser` write. */
@@ -717,6 +761,21 @@ export class Session extends EventEmitter {
    * rendered as "alive".
    */
   private _paneExit: PaneExit | null = null;
+  /**
+   * The pane's live directory, from the pane-exit watcher's read. Runtime-only:
+   * serialized by toState() but never restored by the constructor.
+   */
+  private _paneCwd: string | undefined;
+  /**
+   * `workingDir` with symlinks resolved, so a pane reading (tmux reads the
+   * process cwd, always the resolved path) can be put back into `workingDir`'s
+   * spelling. `undefined` until the first resolution settles; `null` when there
+   * is nothing to translate (no symlink in the path) or it could not be resolved.
+   */
+  private _workspaceRealPath: string | null | undefined;
+  private _workspaceRealPathPending = false;
+  /** When a resolution that met an unreachable folder may be tried again (0 = never). */
+  private _workspaceRealPathRetryAt = 0;
   /**
    * How many starts, attaches or relaunches are running for this session's
    * pane. While one is, a dead-pane reading may describe a pane that is being
@@ -926,6 +985,10 @@ export class Session extends EventEmitter {
       lastRealPromptAt?: number;
       /** Restored prompt-cache keep-warm choice (see `keepWarmEnabled`). */
       keepWarmEnabled?: boolean;
+      /** Restored Git fetch override for this session (see `gitFetchEnabled`). */
+      gitFetchEnabled?: boolean;
+      /** Restored Git fetch interval for this session (see `gitFetchIntervalSeconds`). */
+      gitFetchIntervalSeconds?: number;
       /** Restored conversation chain, oldest first (see `claudeSessionChain`). */
       claudeSessionChain?: string[];
       /** Restored agent-exit observation for this session's pane (see `paneExit`). */
@@ -1015,6 +1078,10 @@ export class Session extends EventEmitter {
     // from before the field has only `lastSubmitAt`, and every submit then was a real one.
     this._lastRealPromptAt = config.lastRealPromptAt ?? config.lastSubmitAt ?? 0;
     this._keepWarmEnabled = config.keepWarmEnabled;
+    // Restored, like the keep-warm choice: the interval is the user's decision about their repositories
+    // and outlives the run that made it, so a restart keeps it rather than falling back to the app default.
+    this._gitFetchEnabled = config.gitFetchEnabled;
+    this._gitFetchIntervalSeconds = config.gitFetchIntervalSeconds;
     // Restored chain: its tail is the conversation the CLI was actually on when
     // the server stopped, which outranks the launch id seeded just above. The
     // FIRST-HAND flag is deliberately NOT restored — a persisted claim is not a
@@ -1296,6 +1363,17 @@ export class Session extends EventEmitter {
     return value && value.trim() ? value.trim() : undefined;
   }
 
+  /**
+   * One env var from this session's overrides, for internal path resolution only
+   * (custom-model injection linking an isolated config dir back to a path that must
+   * survive lives in). Single-key lookup by design, like `deepSeekHomeOverride`: the
+   * map can hold provider credentials and stays off the public `SessionState`.
+   */
+  envOverrideValue(key: string): string | undefined {
+    const value = this._envOverrides?.[key];
+    return value && value.trim() ? value.trim() : undefined;
+  }
+
   /** Owning username in multi-user mode, else undefined. */
   get owner(): string | undefined {
     return this._owner;
@@ -1308,6 +1386,7 @@ export class Session extends EventEmitter {
 
   /** Set the owning username (used by recovery to restore ownership). */
   set owner(username: string | undefined) {
+    if (this._owner !== username) this._guardedPaneRevision++;
     this._owner = username;
   }
 
@@ -1412,11 +1491,13 @@ export class Session extends EventEmitter {
    * tmux session whose record is about to be deleted (Ark0N/Codeman#446).
    */
   markClosing(closing: boolean): void {
+    if (this._closing !== closing) this._guardedPaneRevision++;
     this._closing = closing;
   }
 
   /** Run one pane start, attach or relaunch with {@link paneLifecycleInFlight} raised. */
   private async _withPaneLifecycle<T>(op: () => Promise<T>): Promise<T> {
+    this._guardedPaneRevision++;
     this._paneLifecycleOps++;
     try {
       return await op();
@@ -1443,8 +1524,102 @@ export class Session extends EventEmitter {
    * Ark0N/Codeman#446 review; both now persist on their success path.
    */
   private clearPaneExitForNewPane(): void {
+    this._guardedPaneRevision++;
     this.setPaneExit(undefined);
     if (this._muxSession) this._mux?.clearPaneExit?.(this._muxSession.muxName);
+  }
+
+  /** The pane's live working directory, when the pane read has reported one. */
+  get paneCwd(): string | undefined {
+    return this._paneCwd;
+  }
+
+  /**
+   * Record the pane's live directory. Returns whether it CHANGED, so the caller
+   * broadcasts only on a real transition.
+   *
+   * Scoped by {@link paneExitApplies}, the same rule as the exit reading: a
+   * remote session's local pane runs the ssh client and a docker case's runs a
+   * `docker exec`, so their pane directory is a host directory the agent was
+   * never in, and a direct-PTY or rediscovered session has no pane Codeman can
+   * vouch for. A relative value is refused rather than stored.
+   *
+   * tmux reads the pane's directory from the process cwd, which is always the
+   * resolved path, while `workingDir` keeps the spelling the case was created
+   * with. A workspace reached through a symlink would otherwise read as outside
+   * itself, and the browser's preview routing (a lexical compare against
+   * `workingDir`) would send every relative link to the attachment route. So a
+   * reading at or under the workspace's resolved path is written back in
+   * `workingDir`'s spelling. Until that resolution has settled, only a reading
+   * lexically inside `workingDir` is accepted.
+   */
+  setPaneCwd(next: string | undefined): boolean {
+    let resolved = this.paneExitApplies && next?.startsWith('/') ? next : undefined;
+    if (resolved !== undefined) {
+      if (
+        this._workspaceRealPath === undefined ||
+        (this._workspaceRealPathRetryAt !== 0 && Date.now() >= this._workspaceRealPathRetryAt)
+      ) {
+        this._resolveWorkspaceRealPath();
+      }
+      if (this._workspaceRealPath === undefined) {
+        // The workspace's resolved path is not known yet. A reading outside
+        // `workingDir` could be the workspace itself seen through its symlink, so
+        // it waits for the next tick rather than mis-route links for one.
+        if (!isSameOrUnder(resolved, this._workspaceSpelling())) return false;
+      } else if (this._workspaceRealPath !== null) {
+        resolved = rebasePath(resolved, this._workspaceRealPath, this._workspaceSpelling());
+      }
+    }
+    if (resolved === this._paneCwd) return false;
+    this._paneCwd = resolved;
+    return true;
+  }
+
+  /** `workingDir` without a trailing separator (the root stays `/`). */
+  private _workspaceSpelling(): string {
+    return this.workingDir.length > 1 ? this.workingDir.replace(/\/+$/, '') : this.workingDir;
+  }
+
+  /**
+   * Resolve `workingDir`'s symlinks in the background for {@link setPaneCwd}.
+   *
+   * Bounded: the folder can sit on a network mount that stopped answering, so it
+   * is probed with `probePathKind()` first and the `realpath()` is raced against
+   * the same timeout. An `unknown` probe, a failed or slow `realpath()` leave no
+   * translation and allow one more try after `WORKSPACE_REALPATH_RETRY_MS`; a
+   * folder that is absent or not a directory is settled for good.
+   */
+  private _resolveWorkspaceRealPath(): void {
+    if (this._workspaceRealPathPending) return;
+    this._workspaceRealPathPending = true;
+    const spelling = this._workspaceSpelling();
+    void (async () => {
+      let real: string | null = null;
+      let retry = false;
+      try {
+        const kind = await probePathKind(spelling);
+        if (kind === 'unknown') {
+          retry = true;
+        } else if (kind === 'directory') {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const answer = await Promise.race([
+            realpath(spelling).catch(() => undefined),
+            new Promise<undefined>((resolveTimeout) => {
+              timer = setTimeout(() => resolveTimeout(undefined), PATH_PROBE_TIMEOUT_MS);
+              timer.unref?.();
+            }),
+          ]).finally(() => clearTimeout(timer));
+          if (answer === undefined) retry = true;
+          else if (answer !== spelling && answer !== '/') real = answer;
+        }
+      } catch {
+        retry = true;
+      }
+      this._workspaceRealPath = real;
+      this._workspaceRealPathRetryAt = retry ? Date.now() + WORKSPACE_REALPATH_RETRY_MS : 0;
+      this._workspaceRealPathPending = false;
+    })();
   }
 
   /**
@@ -1576,6 +1751,37 @@ export class Session extends EventEmitter {
   setKeepWarmStatus(status: KeepWarmStatus): boolean {
     const changed = JSON.stringify(status) !== JSON.stringify(this._keepWarm);
     this._keepWarm = status;
+    return changed;
+  }
+
+  /** Git fetch override for this session; undefined means the app-wide setting applies. */
+  get gitFetchEnabled(): boolean | undefined {
+    return this._gitFetchEnabled;
+  }
+
+  /** Interval override for this session; undefined means the app-wide setting applies. */
+  get gitFetchIntervalSeconds(): number | undefined {
+    return this._gitFetchIntervalSeconds;
+  }
+
+  /**
+   * Set the session's override. The Session Options rows save on their own, so a caller passes what it has
+   * and leaves the other half as it was; `undefined` on either means the app-wide setting applies again.
+   */
+  setGitFetchSettings(enabled: boolean | undefined, intervalSeconds: number | undefined): void {
+    this._gitFetchEnabled = enabled;
+    this._gitFetchIntervalSeconds = intervalSeconds;
+  }
+
+  /** What the fetch scheduler last reported for this session, or null before its first run. */
+  get gitFetch(): GitFetchStatus | null {
+    return this._gitFetch;
+  }
+
+  /** Replace the fetch status; true when it differs from the previous one. */
+  setGitFetchStatus(status: GitFetchStatus): boolean {
+    const changed = JSON.stringify(status) !== JSON.stringify(this._gitFetch);
+    this._gitFetch = status;
     return changed;
   }
 
@@ -2093,6 +2299,7 @@ export class Session extends EventEmitter {
       pid: this.pid,
       status: this._status,
       workingDir: this.workingDir,
+      paneCwd: this._paneCwd,
       remote: this._remote,
       docker: this._docker,
       owner: this._owner,
@@ -2116,6 +2323,9 @@ export class Session extends EventEmitter {
       statusLineExporter: this.statusLineExporter,
       keepWarmEnabled: this._keepWarmEnabled,
       keepWarm: this._keepWarm ?? undefined,
+      gitFetchEnabled: this._gitFetchEnabled,
+      gitFetchIntervalSeconds: this._gitFetchIntervalSeconds,
+      gitFetch: this._gitFetch ?? undefined,
       imageWatcherEnabled: this._imageWatcherEnabled,
       pinned: this._pinned || undefined,
       pinnedAt: this._pinned ? (this._pinnedAt ?? undefined) : undefined,
@@ -2620,7 +2830,7 @@ export class Session extends EventEmitter {
     if (entry?.launch.chain !== 'fallback') return options;
 
     const resumeIdPattern = entry.launch.params?.resumeId;
-    const configDir = this._claudeConfigDir();
+    const configDir = this.claudeConfigDir();
     const chainTail = this._claudeSessionChain[this._claudeSessionChain.length - 1];
     const candidates = [chainTail, options.resumeSessionId, this.id].filter((v): v is string => !!v);
     for (const candidate of candidates) {
@@ -2642,8 +2852,11 @@ export class Session extends EventEmitter {
     return options;
   }
 
-  /** The session's Claude config dir when it has been relocated (#255), else undefined. */
-  private _claudeConfigDir(): string | undefined {
+  /**
+   * The session's Claude config dir when it has been relocated (#255), else undefined.
+   * Public for the edit history reader, which looks for the transcript there.
+   */
+  claudeConfigDir(): string | undefined {
     // Trimmed like `claudeProjectsDir()` trims the process-wide override: the
     // envOverrides schema validates keys only, and a whitespace-only value would
     // otherwise resolve to a relative path and read "no transcript" for everything.
@@ -2652,7 +2865,8 @@ export class Session extends EventEmitter {
 
   /**
    * Force the custom-model selection's `launchModel` (pi/omp `custom/<id>`, grok's
-   * `[model.<name>]` block name) onto the CLI's `model` launch param. Where that param
+   * `[model.<name>]` block name, codex's bare selected id) onto the CLI's `model`
+   * launch param. Where that param
    * lives is registry DATA — the entry's `legacyConfigField` (`piConfig`, `grokConfig`,
    * ...) or the top-level `model` for an entry that declares none — so this stays a
    * generic reader rather than a branch per CLI. Applied on the OPTIONS only: the stored
@@ -4206,6 +4420,11 @@ export class Session extends EventEmitter {
     prompt: string,
     options?: { model?: string; onProgress?: (info: { tokens?: number; status?: string }) => void }
   ): Promise<{ result: string; cost: number }> {
+    if (this.guardedInputHeld) {
+      this._guardedInputRevision++;
+      throw new Error('Guarded submission in progress');
+    }
+    this._guardedPaneRevision++;
     return new Promise((resolve, reject) => {
       if (this.ptyProcess) {
         reject(new Error('Session already has a running process'));
@@ -4715,6 +4934,229 @@ export class Session extends EventEmitter {
 
   // Note: checkAutoCompact/checkAutoClear moved to SessionAutoOps (this._autoOps)
 
+  private readonly _inspectionInstance = uuidv4();
+  private _guardedPaneRevision = 0;
+  private _guardedGeometryRevision = 0;
+  private _guardedInputRevision = 0;
+  private _guardedPendingWrites = 0;
+  private _guardedSubmitInFlight = false;
+  /**
+   * Input that arrived while a guarded submit held the lease, in arrival order. Each
+   * entry runs when the lease is released; an entry that returns a promise (a mux
+   * write, a named key) is waited for before the next runs, so nothing overtakes it.
+   */
+  private _guardedHeld: Array<{ run: () => void | Promise<unknown>; bytes: number }> = [];
+  private _guardedHeldBytes = 0;
+  /** True while the drain waits for a held asynchronous write to finish. */
+  private _guardedHeldDraining = false;
+  /** Held entries per lease. A lease lasts milliseconds; past this the caller backs off. */
+  static readonly MAX_GUARDED_HELD_INPUTS = 256;
+  /** Held bytes per lease (16 browser frames at the 64 KiB frame cap). */
+  static readonly MAX_GUARDED_HELD_BYTES = 16 * 64 * 1024;
+  /** Ephemeral identity, never persisted or based on a potentially reused pid alone. */
+  get inspectionGeneration(): string {
+    return `${this._inspectionInstance}:${this._guardedPaneRevision}:${this.owner ?? ''}`;
+  }
+  /** Staging additionally binds geometry; transcript cursors survive a terminal resize. */
+  get guardedInputGeneration(): string {
+    return `${this.inspectionGeneration}:${this._guardedGeometryRevision}`;
+  }
+  get guardedInputPendingWrites(): number {
+    return this._guardedPendingWrites;
+  }
+  /**
+   * True while a guarded submit holds the input lease (a few milliseconds). Input that
+   * arrives in that span is held and written after it (see {@link guardedInputHeld}).
+   */
+  get guardedSubmitInFlight(): boolean {
+    return this._guardedSubmitInFlight;
+  }
+  /**
+   * True while input is being held behind a guarded submit: the lease itself, or held
+   * input not yet written after it. A write that is not routed through
+   * {@link holdForGuardedLease} must refuse in this window, or it overtakes held input.
+   * `write()` is the known exception: it refuses during the lease only, since the drain
+   * writes held input through it, so a direct `write()` caller (cron's `paste` mode in
+   * `cron/cron-service.ts`) can still land ahead of input that is draining.
+   */
+  get guardedInputHeld(): boolean {
+    return this._guardedSubmitInFlight || this._guardedHeld.length > 0 || this._guardedHeldDraining;
+  }
+  /**
+   * Hold input behind a guarded submit's lease instead of refusing it.
+   *
+   * `free`: nothing is held, so the caller writes inline as it always did. `held`: `run`
+   * is queued and runs, in arrival order with every other held input, once the lease is
+   * released (whatever the submit's outcome). `full`: the per-lease cap is reached and
+   * nothing was queued; the caller must stop delivering from that source until it can
+   * resend in order. Refusing instead lost input: the browser's WebSocket path does not
+   * wait for ACKs, so a refused seq N was overtaken by N+1 and its redelivery was then
+   * rejected as a duplicate. `data`, when given, is observed as input on arrival, so a
+   * keystroke held during the lease still moves the input revision at once.
+   */
+  holdForGuardedLease(run: () => void | Promise<unknown>, bytes = 0, data?: string): 'free' | 'held' | 'full' {
+    if (!this.guardedInputHeld) return 'free';
+    if (data !== undefined) this._observeGuardedKeyboardInput(data);
+    if (
+      this._guardedHeld.length >= Session.MAX_GUARDED_HELD_INPUTS ||
+      this._guardedHeldBytes + bytes > Session.MAX_GUARDED_HELD_BYTES
+    )
+      return 'full';
+    this._guardedHeld.push({ run, bytes });
+    this._guardedHeldBytes += bytes;
+    return 'held';
+  }
+  /**
+   * Run an asynchronous write now, or in its turn behind a guarded submit's lease. The
+   * turn lasts until the write settles, so later held input waits for it. Resolves
+   * `whenFull` without running anything when the hold queue is full.
+   */
+  private _inGuardedTurn<T>(write: () => Promise<T>, whenFull: () => T): Promise<T> {
+    if (!this.guardedInputHeld) return write();
+    return new Promise<T>((resolve, reject) => {
+      const held = this.holdForGuardedLease(() => {
+        const running = write();
+        running.then(resolve, reject);
+        return running;
+      });
+      if (held === 'full') {
+        try {
+          resolve(whenFull());
+        } catch (err) {
+          reject(err);
+        }
+      }
+    });
+  }
+  /** Run held input in arrival order until it is all written or a new lease is taken. */
+  private _drainGuardedHeld(): void {
+    while (this._guardedHeld.length > 0 && !this._guardedSubmitInFlight && !this._guardedHeldDraining) {
+      const entry = this._guardedHeld.shift()!;
+      this._guardedHeldBytes -= entry.bytes;
+      let running: void | Promise<unknown>;
+      try {
+        running = entry.run();
+      } catch (err) {
+        console.error(`[Session ${this.id}] held input failed after a guarded submit:`, getErrorMessage(err));
+        continue;
+      }
+      if (running && typeof running.then === 'function') {
+        this._guardedHeldDraining = true;
+        void running
+          .catch(() => {})
+          .then(() => {
+            this._guardedHeldDraining = false;
+            this._drainGuardedHeld();
+          });
+      }
+    }
+  }
+  /** Expose only the path selection needed for attributed Codex evidence, never credentials. */
+  getCodexHomeOverride(): string | undefined {
+    return this._envOverrides?.CODEX_HOME || undefined;
+  }
+  private _observeGuardedKeyboardInput(data: string): void {
+    if (data && isKeyboardTerminalInput(data)) this._guardedInputRevision++;
+  }
+  guardedInputSnapshot(): GuardedInputSnapshot | null {
+    return this._readGuardedInputSnapshot(false);
+  }
+  private _readGuardedInputSnapshot(allowLease: boolean): GuardedInputSnapshot | null {
+    if (
+      this._isStopped ||
+      this._closing ||
+      this.paneLifecycleInFlight ||
+      this._guardedPendingWrites ||
+      (!allowLease && this.guardedInputHeld) ||
+      this.remote ||
+      this.docker ||
+      this.paneExit ||
+      !this._muxSession
+    )
+      return null;
+    // Only a CLI whose registry entry describes its composer chrome takes guarded input.
+    const chrome = guardedComposerChrome(getCli(this.mode));
+    if (!chrome) return null;
+    const capture: import('./mux-interface.js').PaneCaptureOptions = {};
+    const screen = this._mux?.capturePaneBuffer?.(this._muxSession.muxName, undefined, capture);
+    if (!screen) return null;
+    // tmux's replay has CUP addresses rather than line breaks. Read the SAME
+    // fresh frame for dialog/work chrome and exact composer/caret proof.
+    // eslint-disable-next-line no-control-regex
+    const plain = stripAnsi(screen.replace(/\x1b\[\d+;\d+H/g, '\n'));
+    const working = this._workingLinePattern();
+    working.lastIndex = 0;
+    if (this._paneShowsBlocked(plain) || working.test(plain) || this._paneAwaitsWorkers(plain)) return null;
+    const composer = readGuardedSnapshotDetails(screen, chrome);
+    return composer === null
+      ? null
+      : {
+          generation: this.guardedInputGeneration,
+          revision: this._guardedInputRevision,
+          composerSha: promptSha256(composer.composer),
+          availableColumns: Number.isFinite(capture.capturedGeometry?.cols)
+            ? capture.capturedGeometry!.cols - composer.prefixWidth
+            : 0,
+        };
+  }
+  /** Stage through ordinary delivery, after cancelling any older Enter retry timer. */
+  async stageGuardedInput(message: string): Promise<boolean> {
+    if (/[\r\n]/.test(message)) return false;
+    if (this._guardedPendingWrites || this.guardedInputHeld) {
+      this._guardedInputRevision++;
+      return false;
+    }
+    this._submitVerifier?.cancel();
+    return this.writeViaMux(message, { fromUser: true });
+  }
+  /** One conditional Enter. An ambiguous acknowledgement is never replayed. */
+  async submitGuardedInput(expected: GuardedInputSnapshot): Promise<boolean> {
+    const matches = (current: GuardedInputSnapshot | null): boolean =>
+      !!current &&
+      current.generation === expected.generation &&
+      current.revision === expected.revision &&
+      current.composerSha === expected.composerSha &&
+      current.availableColumns === expected.availableColumns;
+    if (!matches(this.guardedInputSnapshot()) || !this._mux || !this._muxSession) return false;
+    this._guardedSubmitInFlight = true;
+    let dispatched = false;
+    try {
+      const sent = await this._mux.sendInput(this.id, '\r', {
+        beforeDispatch: () => {
+          if (!matches(this._readGuardedInputSnapshot(true))) return false;
+          this._guardedInputRevision++;
+          dispatched = true;
+          return true;
+        },
+      });
+      if (sent && dispatched) this._emitSubmittedPrompt(this._trackSubmit('\r', { fromUser: true }));
+      return sent && dispatched;
+    } finally {
+      this._guardedSubmitInFlight = false;
+      this._drainGuardedHeld();
+    }
+  }
+  /**
+   * Lease/pending boundary for named keys whose bytes bypass the ordinary write methods.
+   * During a guarded submit the operation waits for the lease like any other write;
+   * only a full hold queue refuses it, with {@link GuardedInputBusyError}.
+   */
+  async performAuxiliaryInput(operation: () => Promise<void>): Promise<void> {
+    this._guardedInputRevision++;
+    return this._inGuardedTurn(
+      async () => {
+        this._guardedPendingWrites++;
+        try {
+          await operation();
+        } finally {
+          this._guardedPendingWrites--;
+        }
+      },
+      () => {
+        throw new GuardedInputBusyError();
+      }
+    );
+  }
   /**
    * Sends input directly to the PTY process.
    *
@@ -4734,6 +5176,9 @@ export class Session extends EventEmitter {
    * input could disappear while the caller believed it had been delivered.
    */
   write(data: string, options: SessionWriteOptions = {}): boolean {
+    this._observeGuardedKeyboardInput(data);
+    // The lease only, not the drain, which writes held input through here (see guardedInputHeld).
+    if (this._guardedSubmitInFlight) return false;
     const submittedPrompt = this._trackSubmit(data, options);
     if (!this.ptyProcess) return false;
     this.ptyProcess.write(data);
@@ -4782,6 +5227,7 @@ export class Session extends EventEmitter {
    * separator. Reports submissions like a write would (a line feed never is one).
    */
   trackUserInput(data: string): void {
+    this._observeGuardedKeyboardInput(data);
     if (!this._acceptsPrompts) return;
     this._emitSubmittedPrompt(this._submittedPromptTracker.feed(data));
   }
@@ -4803,6 +5249,7 @@ export class Session extends EventEmitter {
    * their prompt must count as real and alert normally.
    */
   markPromptSubmitted(prompt?: string): void {
+    this._guardedInputRevision++;
     if (prompt !== undefined && prompt.trim() !== KEEP_WARM_NUDGE) this._keepAliveTurnUntil = 0;
     this._stampSubmit();
   }
@@ -4898,22 +5345,39 @@ export class Session extends EventEmitter {
    * ```
    */
   async writeViaMux(data: string, options: SessionWriteOptions = {}): Promise<boolean> {
-    const submittedPrompt = this._trackSubmit(data, options);
-    if (this._mux && this._muxSession) {
-      const sent = await this._mux.sendInput(this.id, data);
-      if (sent) {
-        this._emitSubmittedPrompt(submittedPrompt);
-        this._verifySubmitted(data);
+    this._observeGuardedKeyboardInput(data);
+    // A guarded submit's lease lasts for its Enter only: wait for it, in arrival order,
+    // rather than refusing, so an approval answer or a programmatic prompt is not
+    // dropped. Without a lease the write starts synchronously, so the pending count
+    // rises before any await and no lease can be taken while it is in flight.
+    return this._inGuardedTurn(
+      () => this._writeViaMuxNow(data, options),
+      () => false
+    );
+  }
+
+  private async _writeViaMuxNow(data: string, options: SessionWriteOptions): Promise<boolean> {
+    this._guardedPendingWrites++;
+    try {
+      const submittedPrompt = this._trackSubmit(data, options);
+      if (this._mux && this._muxSession) {
+        const sent = await this._mux.sendInput(this.id, data);
+        if (sent) {
+          this._emitSubmittedPrompt(submittedPrompt);
+          this._verifySubmitted(data);
+        }
+        return sent;
       }
-      return sent;
+      // Fallback to PTY write
+      if (this.ptyProcess) {
+        this.ptyProcess.write(data);
+        this._emitSubmittedPrompt(submittedPrompt);
+        return true;
+      }
+      return false;
+    } finally {
+      this._guardedPendingWrites--;
     }
-    // Fallback to PTY write
-    if (this.ptyProcess) {
-      this.ptyProcess.write(data);
-      this._emitSubmittedPrompt(submittedPrompt);
-      return true;
-    }
-    return false;
   }
 
   /**
@@ -4941,7 +5405,16 @@ export class Session extends EventEmitter {
         this._isStopped || !this._mux || !this._muxSession
           ? null
           : this._mux.capturePaneText?.(this._muxSession.muxName),
-      sendEnter: () => this._mux?.sendInput(this.id, '\r'),
+      sendEnter: () => {
+        // A retry Enter is never held behind a guarded submit: once that submit's
+        // Enter went out, a re-press would submit whatever is on the composer next.
+        if (this.guardedInputHeld) {
+          this._guardedInputRevision++;
+          this._submitVerifier?.cancel();
+          return Promise.resolve(false);
+        }
+        return this.writeViaMux('\r');
+      },
       // ⚠ NO fallback glyph here, unlike the screen-reading probe elsewhere in this file.
       // Only claude, codex, pi, opencode, omp, gemini and antigravity declare a promptGlyph; the other modes would fall back
       // to claude's `❯`, which is ALSO starship's default shell prompt (and pure's, and
@@ -4970,6 +5443,7 @@ export class Session extends EventEmitter {
    * `resize()` skipped a real resize that happened to match them.
    */
   private _notePtySpawnGeometry(cols: number, rows: number): void {
+    this._guardedPaneRevision++;
     this._ptyCols = cols;
     this._ptyRows = rows;
   }
@@ -5092,6 +5566,7 @@ export class Session extends EventEmitter {
     }
     const dimsChanged = cols !== this._ptyCols || rows !== this._ptyRows;
     if (this.ptyProcess && (dimsChanged || options.force)) {
+      this._guardedGeometryRevision++;
       this._ptyCols = cols;
       this._ptyRows = rows;
       if (!IS_TEST_MODE && this._mux && this._muxSession) {
@@ -5108,6 +5583,10 @@ export class Session extends EventEmitter {
 
   // Legacy method for sending input - wraps runPrompt
   async sendInput(input: string): Promise<void> {
+    if (this.guardedInputHeld) {
+      this._guardedInputRevision++;
+      throw new Error('Guarded submission in progress');
+    }
     this._status = 'busy';
     this._markActivity(true);
     this.runPrompt(input).catch((err) => {

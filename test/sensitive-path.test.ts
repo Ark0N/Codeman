@@ -89,6 +89,18 @@ describe('isSensitivePath', () => {
       ['codeman intent profiles', `${HOME}/.codeman/intents.json`],
       ['codeman intents on a named instance', `${HOME}/.codeman-beta/intents.json`],
       ['codeman agent inbox snapshot', `${HOME}/.codeman/agent-inbox.json`],
+      // The edit history stores hold every diff an agent wrote (keys and .env
+      // contents included): 0600 and kept out of /api/search like intents.json.
+      ['codeman edit history store', `${HOME}/.codeman/edit-history/s1.json`],
+      ['codeman edit history on a named instance', `${HOME}/.codeman-beta/edit-history/s1.json`],
+      // Credentials outside settings.json, and the backups that copy all of these.
+      ['codeman Discord bot token', `${HOME}/.codeman/discord.json`],
+      ['codeman Discord token on a named instance', `${HOME}/.codeman-beta/discord.json`],
+      ['codeman webhook URL', `${HOME}/.codeman/webhook.json`],
+      ['codeman custom endpoint API keys', `${HOME}/.codeman/custom-model-hosts.json`],
+      ['a generated custom model config', `${HOME}/.codeman/custom-model-configs/s1/opencode.json`],
+      ['a backed-up user list', `${HOME}/.codeman/backups/config/cfg-20261104-120000/users.json`],
+      ['a backed-up settings file', `${HOME}/.codeman/backups/config/cfg-20261104-120000/settings.json`],
     ];
 
     it.each(blocked)('blocks the %s', (_label, path) => {

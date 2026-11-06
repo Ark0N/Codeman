@@ -20,6 +20,7 @@ import {
 import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
 import { CODEX_REASONING_EFFORTS } from '../types/session.js';
 import { WEBHOOK_KINDS, WEBHOOK_SCOPES } from '../types/push.js';
+import { DISCORD_ON_DELETE, DISCORD_PING_MODES, DISCORD_THREAD_CREATION } from '../types/discord.js';
 import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
 import { MAX_WAKE_MACS } from '../config/remote-wake-limits.js';
 import { MAX_INPUT_LENGTH } from '../config/terminal-limits.js';
@@ -81,6 +82,35 @@ const filesystemPickerPathSchema = z
  * means off) so a client can send the flag unconditionally.
  */
 const showHiddenQuerySchema = z.enum(['true', 'false']).optional();
+
+/**
+ * Body for the path picker's "New folder": one folder name created directly inside `path`. The name is held
+ * to the character set `safePathSchema` accepts (letters, digits, `_ - . ~` and space, no `..`), so every
+ * name it accepts is one Link Existing and a session working directory accept (the parent's own path is
+ * judged there separately), and never a control character. It is also one path segment, not dot-prefixed (the picker hides those by default) and not tilde-prefixed (a folder named `~` is an `rm -rf ~` accident), and at
+ * most 255 BYTES, the usual filesystem limit.
+ */
+export const FilesystemMkdirSchema = z.object({
+  path: filesystemPickerPathSchema,
+  name: z
+    .string()
+    .trim()
+    .min(1, 'Folder name is required')
+    .refine((n) => Buffer.byteLength(n) <= 255, { message: 'Folder name is too long' })
+    .refine((n) => /^[\p{L}\p{N}_\-. ~]+$/u.test(n), {
+      message: 'Folder name can only use letters, numbers, spaces and _ - . ~',
+    })
+    .refine((n) => !n.includes('..') && !n.startsWith('.') && !n.startsWith('~'), {
+      message: 'Folder name cannot contain "..", or start with a dot or a tilde',
+    }),
+  sessionId: z
+    .string()
+    .max(100)
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid session id')
+    .optional(),
+  /** Same opt-in flag as browse: lets the picker create inside a hidden folder it is showing. */
+  showHidden: showHiddenQuerySchema,
+});
 
 /** Query validation for the lazy, allowlisted filesystem path picker. */
 export const FilesystemBrowseQuerySchema = z.object({
@@ -785,6 +815,12 @@ export const CloneCaseSchema = z.object({
   /** `--depth 1`. */
   shallow: z.boolean().optional(),
   description: z.string().max(1000).optional(),
+  /**
+   * Clone into this exact folder (the folder itself, no case-name subfolder is added) instead of under the cases directory, and
+   * register it as a linked case. Absolute or starting with `~`; only length-bounded here, since
+   * `prepareNewCasePath()` (web/case-path.ts) judges it and produces the user-facing reason.
+   */
+  path: z.string().min(1).max(1000).optional(),
 });
 
 /** Schema for POST /api/cases/clone-preflight — ask the remote what it has, clone nothing. */
@@ -1489,6 +1525,19 @@ export const SettingsUpdateSchema = z
     /** Hours after the last real prompt during which keep-alives are sent (default 2, DEFAULT_KEEP_WARM_MAX_HOURS). */
     promptCacheKeepWarmMaxHours: z.number().min(0.5).max(24).optional(),
     /**
+     * Git fetch on an interval (src/git-fetch-scheduler.ts): `git fetch` for the repositories the Git panel
+     * lists, run on a timer instead of only on the panel's Fetch click. SYNCED, default OFF, because the
+     * server is what runs it: `git fetch` is the only git command the Git panel runs that writes (cloning
+     * and worktree management write too, but only when the user asked for them at the moment they asked), and
+     * the only one that can run later by itself, on a timer, and the only one that can run a repository's own
+     * hooks (`reference-transaction`, `pre-auto-gc` through the automatic maintenance a fetch triggers, config
+     * commands such as `credential.helper`), so nothing runs on a timer until the user turns this on. Cap in seconds between runs (30 to 3600, default 300). A
+     * session can override both in Session Options → Git; `null` there clears the override, and sessions
+     * sharing one folder are fetched by one run.
+     */
+    gitFetchEnabled: z.boolean().optional(),
+    gitFetchIntervalSeconds: z.number().int().min(30).max(3600).optional(),
+    /**
      * Spawned tabs follow their parent: a session created by another one keeps
      * following its parent's tab (into its group, moving with it) until moved by
      * hand. SYNCED, default OFF, because the server does the placement:
@@ -1545,6 +1594,13 @@ export const SettingsUpdateSchema = z
      */
     agentInboxPersistEnabled: z.boolean().optional(),
     /**
+     * Experimental agent coordination (src/web/routes/agent-session-routes.ts): bounded
+     * inspection and the guarded stage/submit routes behind `codeman agent inspect|stage|submit`.
+     * SYNCED, default OFF: the routes are labeled experimental and may change in a minor or
+     * patch release, so automation has to opt in. While OFF, all three routes answer 403.
+     */
+    agentCoordinationEnabled: z.boolean().optional(),
+    /**
      * Read My Mind predictor model override. Empty/absent = the AI-checker
      * default (opus: prediction quality is the product and it runs only on an
      * explicit press). Shell-safety is validated again at spawn time.
@@ -1554,7 +1610,7 @@ export const SettingsUpdateSchema = z
     // Action field (NOT persisted): explicit per-request acknowledgment that the
     // operator accepts exposing an UNAUTHENTICATED public tunnel (no CODEMAN_PASSWORD).
     // Lets the UI enable a tunnel after a confirm dialog without the
-    // CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK env var. Stripped before persisting.
+    // CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL opt-in. Stripped before persisting.
     acknowledgeUnauthTunnel: z.boolean().optional(),
     tabTwoRows: z.boolean().optional(),
     /**
@@ -1928,6 +1984,15 @@ export const AutoResumeSchema = z.object({
 /** `POST /api/sessions/:id/keep-warm`: `null` clears the session's choice so the app-wide default applies. */
 export const KeepWarmSchema = z.object({ enabled: z.boolean().nullable() });
 
+/**
+ * `POST /api/sessions/:id/git-fetch-settings`: `null` clears the session's choice so the app-wide default
+ * applies. Both fields are optional, so a row that saves on its own does not clear the other.
+ */
+export const GitFetchSettingsSchema = z.object({
+  enabled: z.boolean().nullable().optional(),
+  intervalSeconds: z.number().int().min(30).max(3600).nullable().optional(),
+});
+
 /** POST /api/sessions/:id/pin (COD-139) — explicit pin state for idempotency. */
 export const PinSessionSchema = z.object({
   pinned: z.boolean(),
@@ -2185,6 +2250,37 @@ export const WebhookUpdateSchema = z
   })
   .strict();
 
+/**
+ * PUT /api/discord. `.strict()` and every field optional, so a change of one option never needs the
+ * token re-sent; an empty `token` clears it. Option lists are the bridge's own, so the schema cannot
+ * accept a value the store would coerce away. Ids are checked again (as snowflakes) by the route.
+ */
+export const DiscordUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    token: z.string().max(200).optional(),
+    guildId: z.string().max(25).optional(),
+    parentChannelId: z.string().max(25).optional(),
+    allowedUserIds: z.array(z.string().max(25)).max(20).optional(),
+    threadCreation: z.enum(DISCORD_THREAD_CREATION).optional(),
+    onSessionDelete: z.enum(DISCORD_ON_DELETE).optional(),
+    staleThreads: z.enum(DISCORD_ON_DELETE).optional(),
+    pingMode: z.enum(DISCORD_PING_MODES).optional(),
+    scope: z.enum(WEBHOOK_SCOPES).optional(),
+    startupHint: z.boolean().optional(),
+  })
+  .strict();
+
+/** POST /api/sessions/:id/discord-notify */
+export const DiscordNotifySchema = z
+  .object({
+    message: z.string().min(1).max(1500),
+    urgent: z.boolean().optional(),
+    /** Absolute path of a file inside the session's working folder, uploaded with the post. */
+    file: z.string().min(1).max(1024).optional(),
+  })
+  .strict();
+
 // ========== Ralph Loop ==========
 
 /** POST /api/ralph-loop/start */
@@ -2323,6 +2419,14 @@ export const WebviewUpdateSchema = WebviewBaseSchema.partial();
 /** POST /api/webviews/probe: reachability + framing check for the editor's Test button. */
 export const WebviewProbeSchema = z.object({ url: webviewUrlSchema });
 
+/**
+ * Ceiling on a stated context length (tokens), shared between the bounds below and
+ * discovery (`custom-model-routes.ts`): anything above it reads as nonsense and is
+ * ignored, because a bogus figure here overflows the smaller server, which is the exact
+ * failure the discovery field exists to prevent.
+ */
+export const MAX_DISCOVERED_CONTEXT_TOKENS = 100_000_000;
+
 // Custom Model Endpoint Profiles (docs/custom-model-endpoints-plan.md) — a
 // user-configured custom OpenAI-compatible endpoint, local (llama.cpp) or cloud
 // (Azure AI Foundry, etc.). Lives below `webviewUrlSchema` because `baseUrl` IS that
@@ -2346,11 +2450,16 @@ export const CustomModelHostSchema = z.object({
   defaultModelId: z.string().max(200).optional(),
   // Server-populated by discovery (custom-model-routes.ts); accepted here only so a client
   // round-tripping the GET response back through PUT (edit-save) doesn't drop it.
-  modelContextLengths: z.record(z.string().max(200), z.number().int().positive().max(100_000_000)).optional(),
+  modelContextLengths: z
+    .record(z.string().max(200), z.number().int().positive().max(MAX_DISCOVERED_CONTEXT_TOKENS))
+    .optional(),
   // Same reasoning as modelContextLengths above.
   modelSlotCounts: z.record(z.string().max(200), z.number().int().positive().max(4096)).optional(),
   // Same reasoning as modelContextLengths above.
   modelSizesGB: z.record(z.string().max(200), z.number().positive().max(100_000)).optional(),
+  // User-set fallback for models discovery has no context length for (session-routes.ts);
+  // discovery never writes it. Same bound as the modelContextLengths values above.
+  defaultContextLength: z.number().int().positive().max(MAX_DISCOVERED_CONTEXT_TOKENS).optional(),
 });
 
 /**
@@ -2410,3 +2519,15 @@ export const CustomModelSelectionSchema = z.union([
   }),
   z.object({ clear: z.literal(true) }),
 ]);
+
+/** Agent inspection bounds are bytes of evidence, independent of the JSON envelope. */
+export const AgentInspectQuerySchema = z
+  .object({
+    maxBytes: z.coerce.number().int().min(1).max(65536).default(8192),
+    since: z.string().uuid().optional(),
+  })
+  .strict();
+export const AgentStageSchema = z.object({ message: z.string().min(1).max(8192) }).strict();
+export const AgentSubmitSchema = z
+  .object({ stageId: z.string().uuid(), confirmSha: z.string().regex(/^[a-f0-9]{64}$/) })
+  .strict();

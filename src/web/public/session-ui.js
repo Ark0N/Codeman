@@ -684,9 +684,12 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Run using the selected mode (Claude Code, OpenCode, Codex, Gemini, or Antigravity).
-   * `options` comes from the tab group menu's "New session": `count` overrides
-   * the instance steppers for this launch only, `tabGroupId` rides every create
-   * request so the server places the session in that group.
+   * `options` comes from the tab group menu's "New session", `_launchOnce` (a
+   * worktree, a tab's "+"): `count` overrides the instance steppers for this
+   * launch only, `tabGroupId` rides every create request so the server places the
+   * session in that group, `caseName` launches in that case instead of the
+   * toolbar's selected one, and `mode` starts that CLI instead of the Run
+   * button's mode, which is never touched.
    */
   async run(options = {}) {
     if (this._runInFlight) return;
@@ -701,7 +704,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     try {
-      const mode = this._runMode || 'claude';
+      const mode = options.mode || this._runMode || 'claude';
       if (mode === 'shell') {
         return await this.runShell(options);
       }
@@ -732,12 +735,12 @@ Object.assign(CodemanApp.prototype, {
     // where settings.json is server-wide and its PUT admin-only: the mode is kept as their own
     // on this device and wins over the server's on the next load (_rememberOwnSetting,
     // settings-ui.js). A PUT refused that way (sent before the role was known) marks the page
-    // read-only for the writes after it (_noteSettingsWriteRefusal).
+    // read-only for the writes after it (_noteSettingsWriteRefusal); any other failure is toasted.
     if (this._settingsReadOnly?.()) {
       this._rememberOwnSetting?.('runMode', mode);
     } else {
       this._apiPut('/api/settings', { runMode: mode })
-        .then((res) => this._noteSettingsWriteRefusal?.(res))
+        .then((res) => this._noteSettingsWriteResult?.(res, 'Run mode'))
         .catch(() => {});
     }
     // Close menu
@@ -820,7 +823,8 @@ Object.assign(CodemanApp.prototype, {
    * never gated; both callers skip it before asking.
    *
    * Reads only what is already known and never starts a container probe: the
-   * Run menu starts one (_probeDockerCaseModes), and its answer lands in
+   * Run menu and a tab's "+" (openTabNewSessionMenu, app.js) start one
+   * (_probeDockerCaseModes), and its answer lands in
    * _dockerCaseModes, which this reads. Until then (a probe still in flight)
    * the stored availableModes decide, else nothing is gated.
    */
@@ -998,12 +1002,23 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Best-effort lookup of the model llama-swap currently has loaded and ready on this
-   * endpoint, so the picker can offer it first instead of making the user remember what
-   * they picked last time it mattered. Mirrors `_watchLlamaSwapLoading`'s own
-   * `state === 'ready'` check. Returns null for a plain (non-llama-swap) server, an
-   * unreachable endpoint, or a loaded model this host no longer lists as discovered —
-   * never throws, since a failed probe should just skip promotion, not break the picker.
+   * Best-effort lookup of what the endpoint itself says it has loaded and ready, so the
+   * picker can offer it first instead of making the user remember what they picked last
+   * time it mattered. Only llama-swap answers this question (the route reads its
+   * `/running`); every other OpenAI-compatible server (a bare llama.cpp, Ollama, vLLM,
+   * or a gateway such as Bifrost fronting a whole fleet) replies `isLlamaSwap: false`,
+   * which is why `_getCustomModelInUseBySession` exists. `state === 'ready'` mirrors
+   * `_watchLlamaSwapLoading`'s own check.
+   *
+   * Resolves the raw route payload rather than a model id so the caller can tell the
+   * three answers apart: llama-swap naming a model; `isLlamaSwap: false`, which is what
+   * the route answers for EVERY failure it catches (a server without a `/running`
+   * route, a refused or unresolvable endpoint, a 401 from a wrong key): safe to
+   * explain in the UI as long as the wording also fits an endpoint that is down; and
+   * `null`, only when Codeman's own request to the route failed or the client-side
+   * bound below won the race, which stays silent, since the endpoint may merely have
+   * been asleep. Never throws: a failed probe should
+   * just skip promotion, not break the picker.
    *
    * ⚠️ Client-side bounded to ~800ms via Promise.race, on top of (never instead of) the
    * route's own 5s server-side timeout (`RUNNING_TIMEOUT_MS`, custom-model-routes.ts) —
@@ -1020,15 +1035,56 @@ Object.assign(CodemanApp.prototype, {
    * `vi.useFakeTimers()` patches, so a param is the only way to test the timeout without
    * actually waiting on it. Real callers never pass it.
    */
-  async _getCustomModelCurrentlyLoaded(host, timeoutMs = 800) {
+  async _getCustomModelRunningStatus(host, timeoutMs = 800) {
     const probe = this._apiJson(`/api/model-endpoints/${encodeURIComponent(host.id)}/running-status`).catch(
       () => null
     );
     const timeout = new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs));
-    const status = await Promise.race([probe, timeout]);
+    return Promise.race([probe, timeout]);
+  },
+
+  /**
+   * The model llama-swap reports `ready` on this endpoint AND that this host still lists
+   * as discovered (an undropped-but-undiscovered model has no row to promote), else null.
+   */
+  _pickReadyRunningModel(status, host) {
     if (!status?.isLlamaSwap) return null;
     const ready = (status.running || []).find((r) => r.state === 'ready' && (host.models || []).includes(r.model));
     return ready?.model || null;
+  },
+
+  /**
+   * The model a LIVE session of this instance is pointed at on `host`, or null. It is the
+   * fallback for every endpoint that cannot answer "what is loaded?" about itself.
+   * A session already running on the endpoint is first-hand evidence of a model in use
+   * there: Codeman itself injected that endpoint and model into it, so it earns the same
+   * promotion llama-swap's own answer gets, under its own honest tag.
+   *
+   * ⚠️ Reads ONLY `customModel` (what Codeman injected), never `displayModel`: that field
+   * is display text scraped off a CLI's footer or statusline for a session header (pane
+   * derived, `source: 'screen'`), and promoting a row because a terminal printed a
+   * similar string is worse than showing nothing.
+   * ⚠️ Requires a live pane: `status: 'stopped'`, a null `pid` (the PTY exited; the
+   * same live-pane test keep-warm applies, `src/prompt-cache-keepwarm.ts`) or a recorded
+   * `paneExit` means nothing is on the endpoint any more, and a dead session's stale pin
+   * is exactly what an "in use" claim must not resurrect. `session:updated` keeps it
+   * current, so a session cleared back to the CLI's own backend or moved to another
+   * endpoint stops counting.
+   * ⚠️ A since-deleted endpoint simply matches no host, so no extra liveness check is
+   * needed here.
+   */
+  _getCustomModelInUseBySession(host) {
+    const models = host?.models || [];
+    if (models.length === 0) return null;
+    let newest = null;
+    for (const [, session] of this.sessions || []) {
+      if (!session || session.status === 'stopped' || session.pid === null || session.paneExit) continue;
+      const pinned = session.customModel;
+      if (!pinned || pinned.endpointId !== host.id) continue;
+      if (!models.includes(pinned.modelId)) continue; // undiscovered since: no row to promote
+      if (!newest || (newest.createdAt || 0) <= (session.createdAt || 0)) newest = session;
+    }
+    return newest?.customModel?.modelId || null;
   },
 
   /**
@@ -1051,15 +1107,17 @@ Object.assign(CodemanApp.prototype, {
     const generation = (this._customModelPickGeneration = (this._customModelPickGeneration || 0) + 1);
     const isCurrent = () => this._customModelPickGeneration === generation;
 
-    // Whichever model llama-swap actually has loaded right now beats a merely
-    // remembered choice — it's what a launch would attach to with zero wait, while
-    // "last used" might have been swapped out by another session since. Neither
-    // reorders past the top: exactly one model is promoted, everything else keeps
-    // its discovery order.
-    const currentlyLoaded = await this._getCustomModelCurrentlyLoaded(host);
+    // Three kinds of knowledge, best first: what llama-swap says it has loaded right
+    // now (zero wait to attach to), what a live session of this instance is pointed at
+    // on that endpoint (the endpoint itself cannot say, but Codeman put it there), and
+    // only then this device's memory of the last launch. One wins, and it never reorders
+    // anything else: every other row keeps its discovery order.
+    const runningStatus = await this._getCustomModelRunningStatus(host);
     if (!isCurrent()) return; // a newer pick opened (and possibly already rendered) while this probe was in flight
-    const lastUsed = currentlyLoaded ? null : this._getCustomModelLastUsed(mode, host.id);
-    const promoted = currentlyLoaded || lastUsed;
+    const currentlyLoaded = this._pickReadyRunningModel(runningStatus, host);
+    const inUse = currentlyLoaded ? null : this._getCustomModelInUseBySession(host);
+    const lastUsed = currentlyLoaded || inUse ? null : this._getCustomModelLastUsed(mode, host.id);
+    const promoted = currentlyLoaded || inUse || lastUsed;
     const models = [...(host.models || [])];
     if (promoted && models.includes(promoted)) {
       models.splice(models.indexOf(promoted), 1);
@@ -1074,23 +1132,91 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('customModelPickTitle').textContent = 'Choose a model';
     document.getElementById('customModelPickHint').textContent =
       `${cliLabel} → ${host.label} — ${(host.models || []).length} models discovered.`;
+    // A plain static line (its markup lives in index.html), shown when NOTHING is known
+    // about any row: 40 alphabetical rows with no mark on any of them otherwise read as
+    // the app ignoring the question. `isLlamaSwap: false` is what the route answers for
+    // every failure it catches: a server that cannot report AND a down or refused one
+    // alike (`getLlamaSwapStatus`, custom-model-routes.ts), so the line's wording
+    // promises only that nothing was reported, which stays true either way. A probe
+    // that never got an answer at all (`runningStatus === null`: Codeman's own request
+    // failed or the 800ms bound won) keeps the line hidden, the box may merely be
+    // asleep.
+    // A remembered id that has since vanished from host.models is no promotion: count
+    // only a promoted id that is actually a row, or a stale "last used" would both skip
+    // tagging any row and hide this line, leaving 40 unmarked rows with no explanation.
+    const nothingKnown = !(promoted && models.includes(promoted)) && runningStatus?.isLlamaSwap === false;
+    const unknownLine = document.getElementById('customModelPickUnknown');
+    if (unknownLine) unknownLine.hidden = !nothingKnown;
     list.innerHTML = models
       .map((m) => {
-        // Two independent tags, never one exclusive slot: the promotion tag says what
-        // llama-swap (or this device's history) knows about the model, the Default pill
-        // says what the saved endpoint says about it, and on a single-purpose GPU box the
-        // promoted model IS the default more often than not. One slot holding whichever
-        // applied first silently dropped the Default marking for exactly that row.
-        const promotion = m === currentlyLoaded ? 'Currently loaded' : m === lastUsed ? 'Last used' : null;
+        // Two independent tags, never one exclusive slot: the promotion tag says what the
+        // endpoint, a live session, or this device's history knows about the model, the
+        // Default pill says what the saved endpoint says about it, and on a
+        // single-purpose GPU box the promoted model IS the default more often than not.
+        // One slot holding whichever applied first silently dropped the Default marking
+        // for exactly that row.
+        const promotion =
+          m === currentlyLoaded
+            ? 'Currently loaded'
+            : m === inUse
+              ? 'In use by a session'
+              : m === lastUsed
+                ? 'Last used'
+                : null;
         const tags = [promotion, m === host.defaultModelId ? 'Default' : null].filter(Boolean);
         const arg = escapeHtml(JSON.stringify(m));
+        // data-model-id is the filter's haystack (escapeHtml covers `"` as well as
+        // `<>&`, so a hostile model id cannot break out of the attribute); the
+        // filter reads it back through dataset, which decodes it.
         return `
-          <button class="run-mode-option" onclick="app.chooseCustomModelAndRun(${arg})">
+          <button class="run-mode-option" data-model-id="${escapeHtml(m)}" onclick="app.chooseCustomModelAndRun(${arg})">
             <span class="run-mode-dot ${escapeHtml(mode)}"></span>${escapeHtml(m)}${tags.map((t) => ` <span class="set-scope">${escapeHtml(t)}</span>`).join('')}
           </button>`;
       })
       .join('');
     modal.classList.add('active');
+    // A fresh open always starts unfiltered with the caret in the search box: the
+    // list was just rebuilt, so clearing the input is the whole reset; focus is the
+    // user's next keystroke away. Inside the generation guard above, so a
+    // superseded probe can neither focus nor clear a modal that now shows another
+    // endpoint's models.
+    const search = document.getElementById('customModelPickSearch');
+    if (search) {
+      search.value = '';
+      // readmymind-ui.js's rule: on touch devices never focus an input unprompted, or
+      // the OS keyboard pops over the very list the picker just opened to show. Desktop
+      // keeps the caret in the box, one keystroke from filtering.
+      if (!(typeof MobileDetection !== 'undefined' && MobileDetection.isTouchDevice())) {
+        search.focus();
+      }
+    }
+    this.filterCustomModelPick('');
+  },
+
+  /**
+   * View filter for the open "Choose a model" picker: case-insensitive substring
+   * over each row's model id, driven from the search input's own `oninput`.
+   * Deliberately toggles `hidden` on the already-rendered buttons rather than
+   * re-rendering from a second copy of the model list: the loaded/last-used
+   * promotion, the Default pill, the escaped inline click argument and the async
+   * generation guard all then stay exactly where they are, and clearing the
+   * query restores the list byte for byte. ⚠️ `.run-mode-option` carries its own
+   * `display: flex` (styles.css, restated in mobile.css), which outranks the UA
+   * `[hidden]` rule, so styles.css re-asserts `display: none !important` for
+   * these rows: without it the filter would silently do nothing.
+   */
+  filterCustomModelPick(value) {
+    const list = document.getElementById('customModelPickList');
+    if (!list) return;
+    const query = String(value || '').trim().toLowerCase();
+    let visible = 0;
+    for (const btn of list.querySelectorAll('button[data-model-id]')) {
+      const match = !query || btn.dataset.modelId.toLowerCase().includes(query);
+      btn.hidden = !match;
+      if (match) visible += 1;
+    }
+    const noMatches = document.getElementById('customModelPickNoMatches');
+    if (noMatches) noMatches.hidden = visible > 0;
   },
 
   closeCustomModelPickModal() {
@@ -2014,11 +2140,28 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /** The case a launch runs in: its worktree's, the one it names (a tab's "+"), else the toolbar's. */
+  _runCaseName(options) {
+    if (options.worktree) return options.worktree.caseName;
+    return options.caseName || document.getElementById('quickStartCase').value || 'testcase';
+  },
+
+  /**
+   * Re-reads the case list after a launch, keeping the toolbar on its own case.
+   * The no-argument reload would re-select the server's `lastUsedCase`, and a
+   * tab's "+" launching through quick-start sets that to the tab's case while the
+   * toolbar stays where it was, so every later launch (a worktree's, a plain Run,
+   * a group's "New session") would otherwise move the toolbar there.
+   */
+  _reloadCasesAfterRun() {
+    this.loadQuickStartCases(document.getElementById('quickStartCase').value || null);
+  },
+
   async runClaude(options = {}) {
     // `options.worktree` ({ caseName, name, path }, from the worktree modal): the session runs in
     // that git worktree of the case and its tab is named after the worktree.
     const wt = options.worktree || null;
-    const caseName = wt ? wt.caseName : document.getElementById('quickStartCase').value || 'testcase';
+    const caseName = this._runCaseName(options);
     const nameBase = wt ? wt.name : caseName;
     const tabCount = this._readTabCount(options.count);
     const group = options.tabGroupId ? { tabGroupId: options.tabGroupId } : {};
@@ -2123,7 +2266,7 @@ Object.assign(CodemanApp.prototype, {
         this._appendSessionLaunchStatus(ownsLaunchTerminal, `All ${tabCount} remote session(s) ready`);
         if (remoteIds[0]) {
           await this.selectSession(remoteIds[0]);
-          this.loadQuickStartCases();
+          this._reloadCasesAfterRun();
         }
         this.terminal.focus();
         return;
@@ -2202,7 +2345,7 @@ Object.assign(CodemanApp.prototype, {
       // Auto-switch to the new session using selectSession (does proper refresh)
       if (firstSessionId) {
         await this.selectSession(firstSessionId);
-        this.loadQuickStartCases();
+        this._reloadCasesAfterRun();
       }
 
       this.terminal.focus();
@@ -2249,7 +2392,7 @@ Object.assign(CodemanApp.prototype, {
   async runShell(options = {}) {
     // `options.worktree`: see runClaude.
     const wt = options.worktree || null;
-    const caseName = wt ? wt.caseName : document.getElementById('quickStartCase').value || 'testcase';
+    const caseName = this._runCaseName(options);
     const nameBase = wt ? wt.name : caseName;
     // Run Shell reads the toolbar's one instance stepper, like every other run*();
     // its own second `− 1 +` group (#shellCount) was removed (#428).
@@ -2450,7 +2593,7 @@ Object.assign(CodemanApp.prototype, {
     // `options.worktree`: see runClaude. Quick-start resolves it server-side (`worktree`), so the
     // session starts through the same path as any other, only in the worktree's folder.
     const wt = options.worktree || null;
-    const caseName = wt ? wt.caseName : document.getElementById('quickStartCase').value || 'testcase';
+    const caseName = this._runCaseName(options);
     // Remote/docker cases run the CLI on the OTHER side — the local status
     // probe and the local-only config/env below don't apply (quick-start
     // rejects them for remote cases).
@@ -2685,7 +2828,13 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('modalKeepWarmEnabled').checked =
       session.keepWarm?.enabled ?? session.keepWarmEnabled ?? false;
     this.updateKeepWarmStatus(sessionId);
-    document.getElementById('modalImageWatcherEnabled').checked = session.imageWatcherEnabled ?? true;
+    // Git: the session's own choice if it has one, otherwise the app setting. updateGitFetchStatus is also
+    // what SSE calls when a scheduled run lands, so the rows stay current while the modal is open.
+    this.updateGitFetchStatus(sessionId);
+    const imageWatcherToggle = document.getElementById('modalImageWatcherEnabled');
+    imageWatcherToggle.checked = session.imageWatcherEnabled ?? true;
+    // The server never watches a remote session's directory (it is on another host), so the row is hidden.
+    imageWatcherToggle.closest('.set-row').style.display = session.remote ? 'none' : '';
     document.getElementById('modalFlickerFilterEnabled').checked = session.flickerFilterEnabled ?? false;
 
     // Populate session name input with prefix/suffix split
@@ -2740,6 +2889,12 @@ Object.assign(CodemanApp.prototype, {
       if (ralphTabBtn) ralphTabBtn.style.display = '';
       if (respawnTabBtn) respawnTabBtn.style.display = '';
     }
+
+    // Git is local git only: a remote (SSH) or Docker case answers 'unsupported' on both git routes and is
+    // never fetched by the interval scheduler, so its Git tab has nothing to say and its rail entry goes
+    // hidden the same way.
+    const gitTabBtn = document.querySelector('#sessionOptionsModal .set-rail-item[data-tab="git"]');
+    if (gitTabBtn) gitTabBtn.style.display = session.remote || session.docker ? 'none' : '';
 
     // Populate Ralph Wiggum form with current session values (skip for external CLI sessions)
     if (!isExternalCli) {
@@ -3022,11 +3177,114 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /**
+   * The Git tab: the session's last scheduled run, and which values its rows show. A session with no choice of
+   * its own follows the app setting, so its switch and interval display the app's numbers and go inert (the
+   * same inert-row pattern as updateKeepWarmStatus above), because changing them here is what makes the session
+   * stop following. The app numbers come from the settings cache, so what this shows can be one settings load
+   * behind; the server decides from a fresh read, not from what the page displays.
+   *
+   * SSE calls this on every `session:updated` for the open session (app.js `_onSessionUpdated`), and a working
+   * session sends one on each working/idle change, so a control the user is in (`document.activeElement`) is
+   * left as it is: rewriting it put a half-typed interval back to the stored one before `onchange` could save it.
+   */
+  updateGitFetchStatus(sessionId) {
+    const statusEl = document.getElementById('gitFetchStatus');
+    const followBox = document.getElementById('modalGitFetchFollow');
+    const box = document.getElementById('modalGitFetchEnabled');
+    const num = document.getElementById('modalGitFetchInterval');
+    if (!statusEl || !followBox || !box || !num || this.editingSessionId !== sessionId) return;
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    const app = this.loadAppSettingsFromStorage() || {};
+    // No choice of its own on either field means the session follows the app. A partial one (its own switch,
+    // the app's interval) means it does not, and the row that still follows shows the app's value, which is
+    // also the value the scheduler runs it with (a default here would show one number and fetch at another).
+    const follows = session.gitFetchEnabled === undefined && session.gitFetchIntervalSeconds === undefined;
+    const enabled = session.gitFetchEnabled ?? (app.gitFetchEnabled === true);
+    const interval = session.gitFetchIntervalSeconds ?? app.gitFetchIntervalSeconds ?? 300;
+
+    const focused = document.activeElement;
+    if (followBox !== focused) followBox.checked = follows;
+    if (box !== focused) box.checked = enabled;
+    if (num !== focused) num.value = interval;
+    for (const el of [box, num]) {
+      el.closest('.set-row')?.classList.toggle('set-row-disabled', follows);
+      el.disabled = follows;
+    }
+
+    const run = session.gitFetch;
+    const parts = run
+      ? [
+          `Last run ${this._gitFetchAgo(run.ranAt)}${run.trigger === 'interval' ? ' on the interval' : ' by click'}`,
+          run.state === 'ok' ? `${run.repos} repositories` : run.state,
+          run.failed ? `${run.failed} failed` : '',
+        ]
+      : [follows ? 'Nothing fetched on a timer yet, and this session follows the app setting.' : 'Nothing fetched on a timer yet for this session.'];
+    statusEl.textContent = parts.filter(Boolean).join(' · ');
+    statusEl.hidden = false;
+  },
+
+  /** 'just now', '4m', '2h': the short stamps the tab rows use, measured from a run's start. */
+  _gitFetchAgo(ts) {
+    const seconds = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    if (seconds < 60) return seconds < 10 ? 'just now' : `${seconds}s`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+    return `${Math.round(seconds / 3600)}h`;
+  },
+
+  async autoSaveGitFetch() {
+    if (!this.editingSessionId) return;
+    const follow = document.getElementById('modalGitFetchFollow').checked;
+    const num = document.getElementById('modalGitFetchInterval');
+    // `null` on the route means "no choice of your own", which is what following the app setting is.
+    const body = follow
+      ? { enabled: null, intervalSeconds: null }
+      : {
+          enabled: document.getElementById('modalGitFetchEnabled').checked,
+          intervalSeconds: Math.min(3600, Math.max(30, parseInt(num.value, 10) || 300)),
+        };
+    // Enter fires `onchange` with the field still focused, and updateGitFetchStatus leaves a focused field
+    // alone, so the clamped number is written back here or the field would keep showing what was typed.
+    if (!follow) num.value = body.intervalSeconds;
+    try {
+      // `_apiPost` hands back the Response without checking it, so a refused body (a 400) still read as a
+      // save. `_apiJson` is the one that says whether the call went through, and null here means it did not.
+      const data = await this._apiJson(`/api/sessions/${this.editingSessionId}/git-fetch-settings`, {
+        method: 'POST',
+        body,
+      });
+      if (!data) {
+        this.showToast('Failed to save Git fetch settings', 'error');
+        return;
+      }
+      const session = this.sessions.get(this.editingSessionId);
+      const saved = data.gitFetchSettings;
+      if (session && saved) {
+        session.gitFetchEnabled = saved.enabled ?? undefined;
+        session.gitFetchIntervalSeconds = saved.intervalSeconds ?? undefined;
+      }
+      this.updateGitFetchStatus(this.editingSessionId);
+      this.showToast('Git fetch settings saved', 'success');
+    } catch (err) {
+      this.showToast('Failed to save Git fetch settings: ' + err.message, 'error');
+    }
+  },
+
   async toggleSessionImageWatcher() {
     if (!this.editingSessionId) return;
-    const enabled = document.getElementById('modalImageWatcherEnabled').checked;
+    const toggle = document.getElementById('modalImageWatcherEnabled');
+    const enabled = toggle.checked;
     try {
-      await this._apiPost(`/api/sessions/${this.editingSessionId}/image-watcher`, { enabled });
+      const res = await this._apiPost(`/api/sessions/${this.editingSessionId}/image-watcher`, { enabled });
+      // `_apiPost` hands back the Response without checking it, so a refused request (a 400) must not
+      // read as a save: put the switch back and say so.
+      if (!res?.ok) {
+        toggle.checked = !enabled;
+        this.showToast('Failed to toggle image watcher', 'error');
+        return;
+      }
       // Update local session state
       const session = this.sessions.get(this.editingSessionId);
       if (session) {
@@ -3160,6 +3418,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('context-tab').classList.toggle('hidden', tabName !== 'context');
     document.getElementById('ralph-tab').classList.toggle('hidden', tabName !== 'ralph');
     document.getElementById('summary-tab').classList.toggle('hidden', tabName !== 'summary');
+    document.getElementById('git-tab').classList.toggle('hidden', tabName !== 'git');
 
     // A switched-to section starts at its own top, not at the scroll offset the
     // previous one was left at.
@@ -3960,6 +4219,15 @@ Object.assign(CodemanApp.prototype, {
     set('cloneRepoUrl', '');
     set('cloneCaseName', '');
     set('cloneRepoRef', '');
+    set('cloneCasePath', '');
+    // Custom folder starts off each time, and is not offered to a non-admin in multi-user mode: the
+    // server refuses it (it writes outside the cases directory and into the shared registry).
+    const customToggle = document.getElementById('cloneCustomPathToggle');
+    if (customToggle) customToggle.checked = false;
+    const customRow = document.getElementById('cloneCustomPathToggleRow');
+    const me = window.__codemanUser || {};
+    if (customRow) customRow.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+    this.toggleCloneCustomPath();
     const shallow = document.getElementById('cloneShallow');
     if (shallow) shallow.checked = false;
     const start = document.getElementById('cloneStartSession');
@@ -3985,6 +4253,50 @@ Object.assign(CodemanApp.prototype, {
       const current = this.runMode || 'claude';
       brain.value = [...brain.options].some((o) => o.value === current && !o.hidden) ? current : '';
     }
+  },
+
+  /** Custom-folder row for Clone Repo: shows or hides the parent-folder field and rewords the name hint. */
+  toggleCloneCustomPath() {
+    const custom = document.getElementById('cloneCustomPathToggle');
+    const row = document.getElementById('cloneCustomPathRow');
+    if (!custom || !row) return;
+    row.style.display = custom.checked ? '' : 'none';
+    const hint = document.getElementById('cloneCaseNameHint');
+    if (hint) {
+      hint.textContent = custom.checked
+        ? 'Filled in from the URL. Names the case only: the repository is cloned into the folder chosen below.'
+        : 'Filled in from the URL. Cloned into ~/codeman-cases/<name>, so deleting the case deletes this working tree.';
+    }
+    this.updateCloneCasePathPreview();
+  },
+
+  /** The folder the repository is cloned into: exactly what the field holds (no case name is added). */
+  _cloneTargetPath() {
+    const raw = (document.getElementById('cloneCasePath')?.value || '').trim();
+    // Trailing slashes off, but `/` stays the root rather than becoming an empty path.
+    return raw.length > 1 ? raw.replace(/\/+$/, '') || '/' : raw;
+  },
+
+  updateCloneCasePathPreview() {
+    const hint = document.getElementById('cloneCasePathPreview');
+    if (!hint) return;
+    const target = this._cloneTargetPath();
+    hint.textContent = target ? `Will clone into: ${target}` : 'Pick an empty folder, or one that does not exist yet, to clone into.';
+  },
+
+  openCloneCasePathPicker() {
+    const input = document.getElementById('cloneCasePath');
+    PathPicker.open({
+      title: 'Choose the folder to clone into',
+      initialPath: input.value.trim(),
+      directoriesOnly: true,
+      onSelect: (path) => {
+        input.value = path;
+        this.updateCloneCasePathPreview();
+        input.focus();
+        input.setSelectionRange(path.length, path.length);
+      },
+    });
   },
 
   _setCloneStatus(message, kind) {
@@ -4135,6 +4447,12 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
 
+    const customFolder = !!document.getElementById('cloneCustomPathToggle')?.checked;
+    if (customFolder && !(document.getElementById('cloneCasePath')?.value || '').trim()) {
+      this.showToast('Choose the folder to clone into', 'error');
+      return;
+    }
+
     this._setCloneStatus(`Cloning ${url}… this can take a while for a large repository.`, '');
     try {
       const res = await fetch('/api/cases/clone', {
@@ -4142,7 +4460,13 @@ Object.assign(CodemanApp.prototype, {
         headers: { 'Content-Type': 'application/json' },
         // Zod `.optional()` rejects an explicit null, and JSON.stringify keeps one
         // on the wire — omit the empty fields instead of sending null.
-        body: JSON.stringify({ name, repository: url, ...(ref ? { ref } : {}), ...(shallow ? { shallow: true } : {}) }),
+        body: JSON.stringify({
+          name,
+          repository: url,
+          ...(ref ? { ref } : {}),
+          ...(shallow ? { shallow: true } : {}),
+          ...(customFolder ? { path: this._cloneTargetPath() } : {}),
+        }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -4178,6 +4502,7 @@ Object.assign(CodemanApp.prototype, {
       title: 'Select Existing Project Folder',
       initialPath: pathInput.value.trim(),
       directoriesOnly: true,
+      allowNewFolder: true,
       onSelect: (path) => {
         pathInput.value = path;
         const nameInput = document.getElementById('linkCaseName');
@@ -5754,7 +6079,7 @@ Object.assign(CodemanApp.prototype, {
       const created = r.data.worktree;
       this.showToast?.(`Worktree ${created.name} created on branch ${created.branch}`, 'success');
       this.closeWorktreeModal();
-      await this._launchInWorktree({ caseName, name: created.name, path: created.path }, mode);
+      await this._launchOnce(mode, { worktree: { caseName, name: created.name, path: created.path } });
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -5766,26 +6091,22 @@ Object.assign(CodemanApp.prototype, {
     if (!caseName || !wt) return;
     const mode = this._selectedWorktreeMode();
     this.closeWorktreeModal();
-    await this._launchInWorktree({ caseName, name, path: wt.path }, mode);
+    await this._launchOnce(mode, { worktree: { caseName, name, path: wt.path } });
   },
 
   /**
-   * Start ONE session of `mode` in a worktree through run(), the Run button's own entry (its
-   * launch lock, its per-mode paths), with the same temporary `_runMode` swap the custom-model
-   * entries use, so the Run button's chosen mode is untouched afterwards.
+   * Start ONE session of `mode` through run(), the Run button's own entry (its launch lock, its
+   * per-mode paths), outside the toolbar's choices: `runOptions` names a worktree, or a case and
+   * tab group (a tab's "+"). The mode rides the call (`run({ mode })`) rather than a swap of the
+   * Run button's mode, so a mode the user picks while the launch is pending is never overwritten.
    */
-  async _launchInWorktree(worktree, mode) {
+  async _launchOnce(mode, runOptions) {
     if (this._runInFlight) {
       this.showToast?.('A launch is already in progress', 'info');
       return;
     }
-    const previous = this._runMode;
-    this._runMode = mode || previous;
-    try {
-      await this.run({ count: 1, worktree });
-    } finally {
-      this._runMode = previous;
-    }
+    if (runOptions.tabGroupId) this.toggleTabGroupCollapsed?.(runOptions.tabGroupId, false);
+    await this.run({ count: 1, ...runOptions, ...(mode ? { mode } : {}) });
   },
 
   /** The Codeman-managed worktree a session runs in, or null (see managedWorktreeOfDir). */
