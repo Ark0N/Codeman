@@ -321,7 +321,7 @@ describe('planRemoteEditSourceRounds', () => {
 
   it('keeps every ssh line under the 128 KiB argv limit, longest names and offsets included', () => {
     // 255 bytes is the longest file name a filesystem allows; a request without `len` is the
-    // longer one, because its `''` costs 13 bytes per quote once shellescaped twice.
+    // longer one, because its `''` costs 16 bytes per quote once escaped and encoded.
     const requests: EditSourceRequest[] = Array.from({ length: 5000 }, (_, i) => ({
       relPath: `subagents/agent-${String(i).padStart(6, '0')}${'x'.repeat(237)}.jsonl`,
       offset: Number.MAX_SAFE_INTEGER,

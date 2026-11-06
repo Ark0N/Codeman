@@ -166,6 +166,15 @@ Key points:
   prerequisite probe's `command -v tmux` needs a `command` executable: macOS and the
   BSDs ship one, Debian and Ubuntu do not, so linking a tcsh host there is refused
   with `could not verify tmux`.
+- **File reads never leave a quote for the login shell** (`remoteLoginShellLine()` in
+  `remote-files.ts`). Previews, downloads, folder grids and Edit history are multi-line
+  POSIX scripts holding a path someone else may have named. fish reads `\'` inside
+  single quotes as a quote, so the shell-quoted text flips in and out of quotes, and
+  csh and tcsh end a command at a newline even inside quotes, so both ran part of a path
+  as a command (measured). The script therefore crosses the login shell as one word of
+  `printf` text with those bytes in octal, and only `sh` ever reads it. Plain csh caps
+  a word at about 8 KB and answers `Word too long` for a larger read; tcsh has no such
+  cap.
 - Connection options come from the **same `buildSshConnectionArgs(remote)`** as
   the prereq probe; `-t` is inserted right after `ssh -o BatchMode=yes`,
   preserving historical token order.

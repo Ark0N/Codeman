@@ -17,9 +17,9 @@
  *
  * ⚠️ The path is the injection surface: it arrives from the browser (`?path=`). It is
  * always interpolated as a single `shellescape`d token, and the whole remote command
- * is itself shellescaped into the ssh line, so the local shell and the remote shell
- * each see one opaque argument. Never build a command here by concatenating a raw
- * path into the string.
+ * is {@link remoteLoginShellLine} shellescaped into the ssh line, so the local shell
+ * and the remote login shell each see one opaque argument, whichever shell that is.
+ * Never build a command here by concatenating a raw path into the string.
  *
  * Read-only by design: previews, text reads and streaming. Writing to a remote file
  * is deliberately NOT implemented (docs/file-viewer-edit-plan.md §6), nor are the
@@ -110,15 +110,41 @@ export class RemoteFileAccessError extends Error {
 }
 
 /**
+ * A POSIX script as one line that every remote login shell reads the same way, and hands
+ * to `sh`.
+ *
+ * ⚠️ sshd gives the command to the user's LOGIN shell, and {@link shellescape} quotes for a
+ * POSIX one. Inside single quotes fish takes `\'` as a literal quote, so `'\''` stops
+ * closing and reopening the string, and csh and tcsh end a command at a newline even there
+ * and run the script line by line. Both let a path act as a command (measured: a path
+ * holding `';touch x;'` ran `touch x` under fish, and one holding a newline ran the next
+ * line under tcsh). So the script travels as `printf` text with the bytes those shells
+ * treat specially written as octal: no quote, backslash pair, newline or `!` for the login
+ * shell to read, and `%` so `printf` keeps its hands off too. Only `sh` sees the script.
+ */
+export function remoteLoginShellLine(script: string): string {
+  const text = Array.from(Buffer.from(script), (byte) => {
+    const char = String.fromCharCode(byte);
+    return byte < 0x20 || byte > 0x7e || "'\\%!".includes(char) ? `\\${byte.toString(8).padStart(3, '0')}` : char;
+  }).join('');
+  return `sh -c 'eval "$(printf "$1")"' sh '${text}'`;
+}
+
+/**
  * Wrap a remote shell command in the shared, shellescaped ssh line.
  *
  * The single entry point for "run this on the remote host": connection args (port,
  * identity, jump host, SOCKS ProxyCommand, extra `-o`) all come from
- * `buildSshConnectionArgs`, and the command is ONE shellescaped token, so a path with
- * spaces, quotes or `$(…)` cannot escape into the ssh command line.
+ * `buildSshConnectionArgs`, and the command is ONE shellescaped token holding
+ * {@link remoteLoginShellLine}, so a path with spaces, quotes or `$(…)` cannot escape
+ * into the ssh command line or the remote login shell.
  */
 export function buildRemoteFileCommand(remote: SessionRemote, shellCommand: string): string {
-  return [...buildSshConnectionArgs(remote), remoteSshTarget(remote), shellescape(shellCommand)].join(' ');
+  return [
+    ...buildSshConnectionArgs(remote),
+    remoteSshTarget(remote),
+    shellescape(remoteLoginShellLine(shellCommand)),
+  ].join(' ');
 }
 
 /**
@@ -442,9 +468,9 @@ const EDIT_SOURCE_HEADER_SLACK_BYTES = 1024 * 1024;
 /**
  * Subagent requests per ssh round trip of an edit-history read. Like
  * {@link REMOTE_PROBE_CHUNK_SIZE}: the script is ONE argument of the ssh line, Linux caps a
- * single argv string at 128 KiB, and each request adds a `case` line of 125 bytes once
- * shellescaped twice (about 370 with the longest name a filesystem allows; the test pins that
- * worst case). See {@link planRemoteEditSourceRounds}.
+ * single argv string at 128 KiB, and each request adds a `case` line of 139 bytes once
+ * encoded for the login shell (376 with the longest name a filesystem allows; the test pins
+ * that worst case). See {@link planRemoteEditSourceRounds}.
  */
 const EDIT_SOURCE_REQUESTS_PER_ROUND_TRIP = 300;
 

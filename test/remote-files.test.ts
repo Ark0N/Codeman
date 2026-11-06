@@ -23,6 +23,7 @@ import {
   RemoteFileAccessError,
   buildRemoteFileCommand,
   buildRemoteProbeCommand,
+  remoteLoginShellLine,
   buildRemoteReadCommand,
   parseRemoteProbeRecord,
   parseRemoteProbeOutput,
@@ -55,6 +56,34 @@ function remoteFixture(overrides: Partial<SessionRemote> = {}): SessionRemote {
   };
 }
 
+describe('remoteLoginShellLine', () => {
+  const run = (command: string) => execFileSync('sh', ['-c', command]).toString();
+
+  it('runs the script in sh, byte for byte', () => {
+    const script = [
+      `printf '%s\\n' "it's 100% done!"`,
+      `printf 'back\\\\slash\\n'`,
+      `echo "zürich $((6 * 7))"`,
+      `for x in a b; do echo "$x"; done`,
+    ].join('\n');
+
+    expect(run(remoteLoginShellLine(script))).toBe(run(script));
+    expect(run(remoteLoginShellLine(script))).toContain("it's 100% done!\nback\\slash\nzürich 42\na\nb\n");
+  });
+
+  it('gives the login shell nothing it could read differently', () => {
+    // sshd runs this in the user's login shell, and fish and csh do not parse single quotes
+    // the way sh does. Neither is on CI, so this pins what makes their answer the same as
+    // sh's: one fixed wrapper around a word with no quote, newline, `!` or backslash pair.
+    const script = buildRemoteProbeCommand(["/srv/it's\n#!/bin/\\'100%.txt"]);
+    const match = /^sh -c 'eval "\$\(printf "\$1"\)"' sh '([\s\S]*)'$/.exec(remoteLoginShellLine(script));
+
+    expect(match).not.toBeNull();
+    expect(match![1]).toMatch(/^(?:[\x20-\x7e]|\\[0-7]{3})*$/);
+    expect(match![1].replace(/\\[0-7]{3}/g, '')).not.toMatch(/['\\%!]/);
+  });
+});
+
 describe('buildRemoteFileCommand', () => {
   it('builds the ssh line from the shared connection args and one shellescaped command', () => {
     const argv = shellArgv(buildRemoteFileCommand(remoteFixture(), 'cat /etc/hostname'));
@@ -65,7 +94,7 @@ describe('buildRemoteFileCommand', () => {
     expect(argv).toContain('ConnectTimeout=10');
     expect(argv).toContain('j@192.0.2.10');
     // The remote command is ONE argument, whatever it contains.
-    expect(argv[argv.length - 1]).toBe('cat /etc/hostname');
+    expect(argv[argv.length - 1]).toBe(remoteLoginShellLine('cat /etc/hostname'));
     expect(argv[argv.length - 2]).toBe('j@192.0.2.10');
   });
 
@@ -95,7 +124,7 @@ describe('buildRemoteFileCommand', () => {
     const command = "cat '/tmp/it''s here' ; rm -rf ~ #";
     const argv = shellArgv(buildRemoteFileCommand(remoteFixture(), command));
 
-    expect(argv[argv.length - 1]).toBe(command);
+    expect(argv[argv.length - 1]).toBe(remoteLoginShellLine(command));
     expect(argv).not.toContain('rm');
     expect(argv).not.toContain('-rf');
   });
@@ -115,7 +144,7 @@ describe('buildRemoteProbeCommand', () => {
     const script = buildRemoteProbeCommand([nasty]);
 
     expect(script).toContain(`probe 0 '/srv/case/it'\\''s $(touch /tmp/pwned).txt'`);
-    expect(shellArgv(buildRemoteFileCommand(remoteFixture(), script)).at(-1)).toBe(script);
+    expect(shellArgv(buildRemoteFileCommand(remoteFixture(), script)).at(-1)).toBe(remoteLoginShellLine(script));
   });
 });
 
