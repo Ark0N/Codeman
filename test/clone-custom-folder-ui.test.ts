@@ -123,7 +123,7 @@ describe('Clone Repo custom folder', () => {
       allowNewFolder: boolean;
       onSelect(p: string): void;
     };
-    expect(options.title).toBe('Choose the parent folder for the clone');
+    expect(options.title).toBe('Choose the folder to clone inside');
     expect(options.directoriesOnly).toBe(true);
     // A parent that does not exist yet is refused, so the picker has to be able to make it.
     expect(options.allowNewFolder).toBe(true);
@@ -140,7 +140,7 @@ describe('Clone Repo custom folder', () => {
     app.showToast = vi.fn();
     (doc.getElementById('cloneCustomPathToggle') as HTMLInputElement).checked = true;
     await app.cloneCase();
-    expect(app.showToast).toHaveBeenCalledWith('Choose the parent folder for the clone', 'error');
+    expect(app.showToast).toHaveBeenCalledWith('Choose the folder to clone inside', 'error');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -158,5 +158,31 @@ describe('Clone Repo custom folder', () => {
     await app.cloneCase();
     expect(app.showToast).toHaveBeenCalledWith('Please enter a case name', 'error');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the preview when the preflight replaces the case name', () => {
+    const { app, doc, set } = bootClone();
+    set('cloneRepoUrl', 'https://github.com/opticon454/bifrost?tab=readme-ov-file');
+    set('cloneCaseName', 'bifrost-tab-readme-ov-file');
+    set('cloneCasePath', '/mnt/projects');
+    app.updateCloneCasePathPreview();
+    expect(doc.getElementById('cloneCasePathPreview')?.textContent).toBe(
+      'Will clone into: /mnt/projects/bifrost-tab-readme-ov-file'
+    );
+    app._applyClonePreflight({ gitAvailable: true, parse: { cloneable: true, suggestedName: 'bifrost' } }, '');
+    expect((doc.getElementById('cloneCaseName') as HTMLInputElement).value).toBe('bifrost');
+    expect(doc.getElementById('cloneCasePathPreview')?.textContent).toBe('Will clone into: /mnt/projects/bifrost');
+  });
+
+  it('previews the name taken from the URL as it is typed', () => {
+    const { app, doc, set, win } = bootClone();
+    app.isCliAvailable = () => true; // lives in settings-ui.js, which this test does not load
+    set('cloneCaseName', '');
+    set('cloneCasePath', '/mnt/projects');
+    set('cloneRepoUrl', 'https://github.com/opticon454/bifrost');
+    app.onCloneUrlInput();
+    win.clearTimeout(app._clonePreflightTimer);
+    expect((doc.getElementById('cloneCaseName') as HTMLInputElement).value).toBe('bifrost');
+    expect(doc.getElementById('cloneCasePathPreview')?.textContent).toBe('Will clone into: /mnt/projects/bifrost');
   });
 });
