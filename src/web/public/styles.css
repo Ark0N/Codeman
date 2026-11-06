@@ -12338,6 +12338,16 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   display: none;
 }
 
+/* Under an expanded folder the scan's file limit stopped short of. Inert: no hover, no click. */
+.file-tree-incomplete {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.7rem;
+  font-style: italic;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: default;
+}
+
 .file-tree-icon {
   width: 1rem;
   text-align: center;
@@ -12394,15 +12404,15 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 
 /* File tree indent levels */
 .file-tree-item[data-depth="0"] { padding-left: 0.5rem; }
-.file-tree-item[data-depth="1"] { padding-left: 1.25rem; }
-.file-tree-item[data-depth="2"] { padding-left: 2rem; }
-.file-tree-item[data-depth="3"] { padding-left: 2.75rem; }
-.file-tree-item[data-depth="4"] { padding-left: 3.5rem; }
-.file-tree-item[data-depth="5"] { padding-left: 4.25rem; }
-.file-tree-item[data-depth="6"] { padding-left: 5rem; }
-.file-tree-item[data-depth="7"] { padding-left: 5.75rem; }
-.file-tree-item[data-depth="8"] { padding-left: 6.5rem; }
-.file-tree-item[data-depth="9"] { padding-left: 7.25rem; }
+.file-tree-item[data-depth="1"], .file-tree-incomplete[data-depth="1"] { padding-left: 1.25rem; }
+.file-tree-item[data-depth="2"], .file-tree-incomplete[data-depth="2"] { padding-left: 2rem; }
+.file-tree-item[data-depth="3"], .file-tree-incomplete[data-depth="3"] { padding-left: 2.75rem; }
+.file-tree-item[data-depth="4"], .file-tree-incomplete[data-depth="4"] { padding-left: 3.5rem; }
+.file-tree-item[data-depth="5"], .file-tree-incomplete[data-depth="5"] { padding-left: 4.25rem; }
+.file-tree-item[data-depth="6"], .file-tree-incomplete[data-depth="6"] { padding-left: 5rem; }
+.file-tree-item[data-depth="7"], .file-tree-incomplete[data-depth="7"] { padding-left: 5.75rem; }
+.file-tree-item[data-depth="8"], .file-tree-incomplete[data-depth="8"] { padding-left: 6.5rem; }
+.file-tree-item[data-depth="9"], .file-tree-incomplete[data-depth="9"] { padding-left: 7.25rem; }
 
 /* ========== File Preview Overlay ========== */
 
