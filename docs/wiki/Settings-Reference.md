@@ -193,6 +193,20 @@ attached.
 section to the Run dropdown, for pointing a harness at your own OpenAI-compatible server
 instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-Endpoints).
 
+**Model on this Mac** is not a setting: it is a read-only answer. When the Codeman server
+runs on a Mac with Apple silicon, it shows that Mac's chip, memory and free disk space, the
+local coding model that fits it best with the agent CLI to run it, what the model needs of
+the memory the Mac can give one, its download size and an estimated speed, and the other
+models that fit (Good or Tight for the memory, Slow or Speed unknown for the speed). A Mac
+that can only run a model under 12 billion parameters is told so in plain words, and a Mac
+with too little memory, too little free disk space or an Intel processor is told why nothing
+is offered. The numbers are estimates from a catalogue that ships with each release; nothing
+has been tested on your Mac. **Nothing is downloaded or installed from here yet**: setting
+the model up from Codeman is the next step and is not built. The same answer appears as a
+card on the welcome screen, which you can hide per device (it stays here). The group is not
+shown when the server runs on Linux or Windows, and in multi-user mode only an admin sees
+it. The "Mac" is always the machine the server runs on, not the device you are reading on.
+
 ### Agents & CLIs
 
 | Setting                          | Notes                                                                                        |

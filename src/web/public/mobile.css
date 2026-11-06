@@ -1857,6 +1857,17 @@ html.mobile-init .file-browser-panel {
     margin-top: 0.75rem;
   }
 
+  /* Model on this Mac (local-model-ui.js). Only reached with the phone overview
+     switched off. The card has no fixed width and every line in it wraps, so
+     the narrow column only takes some of the spacing back. */
+  .local-model-card {
+    margin-top: 0.6rem;
+  }
+
+  .local-model-box {
+    padding: 0.5rem 0.55rem;
+  }
+
   /* Ralph wizard responsive */
   .modal-wizard {
     display: flex;
@@ -3967,6 +3978,16 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-row-desc {
     font-size: 0.69rem;
     max-width: none;
+  }
+
+  /* Model on this Mac (local-model-ui.js): its row follows the label size above. */
+  #localModelSettings .local-model-headline,
+  #localModelSettings .local-model-name {
+    font-size: 0.84rem;
+  }
+
+  #localModelSettings .local-model-alt .local-model-name {
+    font-size: 0.78rem;
   }
 
   /* Fields go full width under their label instead of fighting for the row */

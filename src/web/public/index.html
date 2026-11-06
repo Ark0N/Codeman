@@ -583,6 +583,14 @@
             </div>
             <div class="history-list" id="historyList"></div>
           </div>
+          <!-- What the Mac the server runs on can run as a local coding model
+               (local-model-ui.js). Read-only. Ships `hidden` and only that module
+               reveals it, once the server has answered for a Mac: a server on
+               another system never shows it, and the user can hide it per device.
+               The module writes every string through its own translator call
+               (model and chip names are not ours to translate), hence
+               data-i18n-skip. -->
+          <section class="local-model-card" id="localModelCard" aria-labelledby="localModelCardTitle" data-i18n-skip hidden></section>
           <!-- Sessions a human started outside Codeman (foreign-sessions.js).
                Hidden until a scan finds one; never rendered empty on a fresh
                install, where an empty block reads as a broken feature. -->
@@ -2867,6 +2875,24 @@
                   </div>
                 </div>
               </div>
+
+              <!-- What the Mac the server runs on can run as a local model (local-model-ui.js).
+                   Read-only: the module fills the row from GET /api/local-model, the same body
+                   the welcome card shows, through its own translator call (hence data-i18n-skip
+                   on the row's text). The module shows the group only once the server has
+                   answered for a Mac: it hides it for a server on another system (the title
+                   and hint are about "this Mac"), while the first request is in flight, and
+                   for a non-admin in multi-user mode (the route is admin-only). Not gated on
+                   the endpoints toggle above: the answer does not depend on it. -->
+              <div class="set-group" id="localModelGroup">
+                <div class="set-group-head"><h4>Model on this Mac</h4></div>
+                <p class="set-group-hint">What the Mac that Codeman runs on can run as a local coding model. Read-only: nothing is downloaded or installed from here.</p>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="local model mac apple silicon memory llm recommendation offline">
+                    <div class="set-row-text" id="localModelSettings" data-i18n-skip aria-live="polite"></div>
+                  </div>
+                </div>
+              </div>
             </section>
 
             <!-- ══ Agents &amp; CLIs ═════════════════════════════════════════ -->
@@ -4685,6 +4711,7 @@
   <script defer src="foreign-sessions.js"></script>
   <script defer src="git-status-ui.js"></script>
   <script defer src="edit-history-ui.js"></script>
+  <script defer src="local-model-ui.js"></script>
   <script defer src="entrance-animations.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>

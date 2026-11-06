@@ -22303,6 +22303,196 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   line-height: 1.35;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Model on this Mac (local-model-ui.js): what the server's Mac can run as
+   a local coding model. One body (`.local-model-body`), drawn in two places:
+   the welcome card and a row of App Settings > Models.
+
+   Same vocabulary as the two blocks above it on the welcome screen: a dim
+   heading row, then one bordered surface with a name over dim meta lines.
+   Theme tokens only (`--control-bg`, never a white alpha: that fill is
+   invisible on the light skins), and the fit and speed labels are neutral
+   pills: the words carry the meaning, so no skin needs a colour of its own.
+   Nothing here is keyed on a CLI or a model id, and nothing animates.
+   ═══════════════════════════════════════════════════════════════ */
+
+.local-model-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  width: 100%;
+  margin-top: 0.75rem;
+  text-align: left;
+}
+
+/* A flex container, so `[hidden]` needs re-asserting or the module's only
+   visibility lever does nothing (same trap as .foreign-sessions). */
+.local-model-card[hidden] {
+  display: none;
+}
+
+.local-model-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.local-model-title {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.local-model-hide {
+  margin-left: auto;
+  font: inherit;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  cursor: pointer;
+}
+
+.local-model-hide:hover {
+  color: var(--text);
+  background: var(--control-bg-hover);
+}
+
+.local-model-box {
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--control-bg);
+  min-width: 0;
+}
+
+.local-model-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+/* The line that says nothing can be set up from here yet (.local-model-next) is
+   the one a reader must not miss, so it reads like every other line: same size,
+   same --text-dim. --text-muted on this surface was 3.9:1. */
+.local-model-hw,
+.local-model-line,
+.local-model-note,
+.local-model-next {
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.local-model-headline {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* The pick is the one thing in the card set apart: a rule in the accent, on the
+   reading side (logical, so it follows a right-to-left page). */
+.local-model-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  padding-inline-start: 0.55rem;
+  border-inline-start: 2px solid var(--accent);
+}
+
+.local-model-name-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 0.4rem;
+  min-width: 0;
+}
+
+.local-model-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* Each pill carries what it measures as its tooltip (a title), hence the cursor. */
+.local-model-pill {
+  flex: 0 0 auto;
+  font-size: 0.62rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 0.42rem;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.local-model-alts-title {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+/* The welcome card folds the list behind a native disclosure (keyboard and
+   screen-reader behaviour for free); the summary keeps `display: list-item`
+   so its marker stays. */
+.local-model-alts > summary {
+  cursor: pointer;
+}
+
+.local-model-alts > summary:hover {
+  color: var(--text);
+}
+
+.local-model-alt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin-top: 0.3rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid var(--border);
+}
+
+.local-model-alt .local-model-name {
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+/* In App Settings the body sits inside an ordinary .set-row, so it takes that
+   surface's type scale (label 0.76rem over a muted description) and the row
+   supplies the border. */
+#localModelSettings {
+  padding: 3px 0;
+}
+
+#localModelSettings .local-model-headline,
+#localModelSettings .local-model-name {
+  font-size: 0.76rem;
+}
+
+#localModelSettings .local-model-alt .local-model-name {
+  font-size: 0.72rem;
+}
+
+/* Touch: the two things in the card that take a press get a finger's height. */
+@media (pointer: coarse) {
+  .local-model-hide {
+    min-height: 32px;
+    padding: 0.3rem 0.8rem;
+  }
+
+  .local-model-alts > summary {
+    padding: 0.4rem 0;
+  }
+}
+
 /* XLSX preview in the file-preview overlay (spreadsheet-preview.js). Read-only; cells are
    absolutely positioned inside a virtualized grid, so only the visible tile is in the DOM. */
 .spreadsheet-preview-shell {

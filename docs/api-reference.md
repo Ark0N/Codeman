@@ -1676,6 +1676,41 @@ Only replies from `allowedUserIds`, in `guildId`, inside a thread the bridge cre
 
 `GET /api/doctor[?category=core|office|other]` returns the `codeman doctor --json` report (`platform`, `summary`, `tools[]` with `status` `ok` \| `missing` \| `outdated` \| `skipped` \| `error`, `version`, `path`, `installHint`). The probe engine is synchronous, so it runs in a child process of the same entry script, never on the server's event loop (30 s timeout). It names install paths and versions, so it is admin only in multi-user mode (`403`). `400` for an unknown category, `500` if the child produces no report.
 
+## Local model recommendation
+
+`GET /api/local-model` looks at the machine the server runs on and says which local coding model fits it, and with which agent CLI. It covers Apple silicon macOS only; anywhere else the answer is still a `200`, with verdict `none`. **Read-only:** the route downloads nothing, installs nothing, writes no file and reads or changes no setting (setting a model up from Codeman is a later step and is not built yet). It names the host's hardware, so it is admin only in multi-user mode (`403`, answered before anything is probed). The models, their sizes and the agent CLIs it considers are a catalogue compiled into the release; there is no override file.
+
+**Experimental.** This endpoint and its payload are labeled experimental until the step that sets a model up ships: that step will add to and may change the fields below, the verdicts and the sentences, in a MINOR or PATCH release (see [versioning-policy.md](versioning-policy.md), "What SemVer does NOT cover", item 3). Do not build on its shape yet.
+
+| Method | Path               | Body | Notes                                                                                                                                                                                                    |
+| ------ | ------------------ | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/api/local-model` | none | `200` with `{ hardware, recommendation, catalogUpdated }`. `403 FORBIDDEN` for a non-admin in multi-user mode. `500 INTERNAL_ERROR` only when the recommendation itself fails, never for a failed probe. |
+
+A probe that fails is an answer, not an error: a server that is not on macOS, or a Mac whose `sysctl` call failed or timed out, still gets a `200`, and `hardware.source` says what was read.
+
+`data`:
+
+- `hardware`: what the server sees of the machine it runs on.
+  - `platform`, `arch`: `process.platform` and `os.arch()` of the server process. `arm64: true` means the machine is Apple silicon whatever `arch` says; `translated: true` means the server process runs under Rosetta.
+  - `memBytes`, `memGb` (the bytes as decimal GB text, `"51.5"` for a 48 GB Mac) and `memClassGb` (the memory size the Mac is sold as: 16, 32, 48; `0` when the size could not be read). `memClassGb` is what to show as the installed memory: it is the number on the box and in About This Mac. It is the one size here that is not decimal GB.
+  - `chip`, `model`, `macosVersion`, `macosMajor`, `wiredLimitMb` (`0` means not set), `freeDiskBytes` and `freeDiskGb` (free space on the filesystem of Codeman's data directory). Each is absent when it could not be read.
+  - `source`: `sysctl` (the one bounded `sysctl` call answered), `os-fallback` (macOS, but that call failed: memory, architecture, the chip name and the free disk space come from Node, and nothing only `sysctl` knows, such as `arm64`, `translated`, `model`, `macosVersion`, `macosMajor` or `wiredLimitMb`, is present) or `not-probed` (not macOS, nothing was run).
+- `recommendation`:
+  - `verdict`: `ok`, `limited` or `none`. `limited` is a statement about the Mac: no model with 12 billion parameters or more fits its memory, so what it can run handles small edits and questions and does not replace a cloud model. It is judged on every model that fits, before the free disk space is looked at and whatever the pick is. With `ok` the pick can still be a small model (a larger one may fit only tightly, have no speed figure or have no room on the disk); `notes` then says so.
+  - `reason`, present only with `none`: `not-macos`, `intel`, `memory`, `disk`, `macos` (too old) or `no-harness` (no agent CLI that can be connected to a local model is installed or installable). `memory` has three sentences: nothing fits at all (slot `memory`, the size the Mac is sold as), a model fits but only below the context length an agent CLI needs (slots `budget` and `need`, so a Mac that misses by a little reads as that), and the memory size could not be read (no slot).
+  - `headline` and `notes[]`: `{ text, vars? }`. `text` is an English sentence that may hold `{placeholder}` slots, and `vars` carries the slot values as text. Notes, in order: the pick is a small model although larger ones fit (verdict `ok` only); a model that fits the memory was left out because its download would not leave 10 GiB free on the disk (slots `model` and `missing`: the best-ranked such model and the GB to free up); nobody tested the pick on a Mac like this one.
+  - `pick` (absent with `none`) and `alternatives[]` (at most four, best first; empty with `none`), each one model at one context length with one agent CLI. A model whose download would leave less than 10 GiB free on the disk is not listed (an unknown free disk space excludes nothing):
+    - `modelId` (`name:tag`), `modelLabel`, `license`, `paramsB` (parameters in billions), `context` (tokens);
+    - `cli`, `cliLabel`, `cliInstalled` (`false`: the CLI is not on this machine yet but can be installed without administrator rights), `slowFirstTurn?`;
+    - `needBytes` and `needGb` (memory the model needs at that context), `downloadBytes` and `downloadGb`, `budgetShare` (need divided by `budgetBytes`, rounded to three decimals);
+    - `fit`: `good` (up to 0.85 of the budget) or `tight` (up to 0.98), with its label `fitLabel`;
+    - `speed`: `ok`, `slow` (under 10 tokens per second) or `unknown`, with `speedLabel` (absent for `ok`) and `tokensPerSecond` (rounded to one decimal, absent for `unknown`; `speed` is decided on the unrounded figure, so `10` can be `slow`). `unknown` means the chip is in no row of the catalogue's chip table, or the catalogue has no speed figure for the model: a speed is never guessed;
+    - `tested`: we ran this model with this CLI on a Mac like this one. No catalogue row has such an entry yet, so it is `false` today.
+  - `budgetBytes` and `budgetGb`: the memory a model may use on this Mac (`0` for `not-macos` and `intel`, where none is computed). `budgetSource` is `wired-limit` (taken from `iogpu.wired_limit_mb`) or `estimated` (computed from the installed memory).
+- `catalogUpdated`: ISO date on which the catalogue's rows were last checked.
+
+Every computed size a person reads travels twice: as bytes, and as decimal GB text without the unit (`"needGb": "29.6"`). Show the text and add the unit; do not divide the bytes yourself, so one request never shows two different roundings. The installed memory is the exception named above: show `memClassGb`.
+
 ## Voice dictation
 
 Browser dictation transcribed through this server's Claude Code login, i.e. the
