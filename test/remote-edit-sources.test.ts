@@ -173,9 +173,20 @@ describe('the transcript lookup on a real shell', () => {
       bin = mkdtempSync(join(tmpdir(), 'codeman-fake-tmux-'));
       const localBin = join(home, '.local', 'bin');
       mkdirSync(localBin, { recursive: true });
+      // Only the exact `=name:` target reaches the pane. Real tmux (3.4, measured) reads `=name`
+      // without the colon as a window target too, so it also answers for a window of that name
+      // or a session the name is a prefix of: the second pattern is that second case.
       writeFileSync(
         join(localBin, 'tmux'),
-        '#!/bin/sh\ncase "$*" in *"=codeman-ssh-conv1abc"*) echo 100 ;; *) echo "no such session" >&2; exit 1 ;; esac\n'
+        [
+          '#!/bin/sh',
+          'for a; do',
+          '  case "$a" in =codeman-ssh-conv1abc:|=codeman-ssh-conv1) echo 100; exit 0 ;; esac',
+          'done',
+          'echo "no such session" >&2',
+          'exit 1',
+          '',
+        ].join('\n')
       );
       writeFileSync(join(bin, 'ps'), '#!/bin/sh\nprintf "  1     0\\n100     1\\n200   100\\n300   200\\n"\n');
       chmodSync(join(localBin, 'tmux'), 0o755);
@@ -208,6 +219,12 @@ describe('the transcript lookup on a real shell', () => {
       expect(locateIn({ ...pane, sessionName: 'codeman-ssh-other' })).toBe(join(projects(), 'new', 'conv-1.jsonl'));
       session('{"pid":300,"sessionId":"gone"}');
       expect(locateIn(pane)).toBe(join(projects(), 'new', 'conv-1.jsonl'));
+    });
+
+    it('never takes the pane of another tmux session whose name starts with this one', () => {
+      // codeman-ssh-conv1 is gone, codeman-ssh-conv1abc is alive: its conversation is not ours.
+      session('{"pid":300,"sessionId":"solo"}');
+      expect(locateIn({ ...pane, sessionName: 'codeman-ssh-conv1' })).toBe(join(projects(), 'new', 'conv-1.jsonl'));
     });
 
     it('reads the live id from the sessions dir under CLAUDE_CONFIG_DIR', () => {

@@ -522,12 +522,16 @@ function claudeConfigDirLines(): string[] {
  * non-interactive shell may not list the directory it lives in, and a silent miss here leaves
  * the panel on the launch conversation after a `/clear`. The `export` stays inside the `$(…)`,
  * and inside this script, which runs under `sh` whatever the remote user's login shell is.
+ *
+ * ⚠️ `=name:` is an EXACT session match. Without the colon tmux reads a window target, so a
+ * session that is gone resolves to a window of that name or a session the name is a prefix of,
+ * and that session's conversation would land in this one's edit history.
  */
 function liveClaudeIdLines(pane: RemoteClaudePane | undefined): string[] {
   if (!pane || !TMUX_NAME_PATTERN.test(pane.socket) || !TMUX_NAME_PATTERN.test(pane.sessionName)) return [];
   return [
     'live=',
-    `pp=$(${withRemoteTmuxPath(`tmux -L ${shellescape(pane.socket)} list-panes -t ${shellescape(`=${pane.sessionName}`)} -F '#{pane_pid}' 2>/dev/null | head -n 1`)})`,
+    `pp=$(${withRemoteTmuxPath(`tmux -L ${shellescape(pane.socket)} list-panes -t ${shellescape(`=${pane.sessionName}:`)} -F '#{pane_pid}' 2>/dev/null | head -n 1`)})`,
     "case $pp in ''|*[!0-9]*) pp= ;; esac",
     'if [ -n "$pp" ]; then',
     '  tree=$(ps -A -o pid= -o ppid= 2>/dev/null)',
