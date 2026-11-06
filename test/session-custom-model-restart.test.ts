@@ -195,6 +195,53 @@ describe('restartCli() must not kill a working pane', () => {
 });
 
 describe('launchModel reaches the CLI through its own launch param', () => {
+  /** A session the route just built: no pane yet, so its launch is `createSession`. */
+  function freshSession(mode: SessionMode, extra: Record<string, unknown> = {}) {
+    mkdirSync(workingDir, { recursive: true });
+    const mux = new TmuxManager();
+    const create = vi.spyOn(mux, 'createSession');
+    vi.spyOn(mux, 'muxSessionExists').mockReturnValue(true);
+    const respawn = vi.spyOn(mux, 'respawnPane').mockResolvedValue(4242);
+    const session = new Session({ workingDir, mode, mux, useMux: true, ...extra });
+    sessions.push(session);
+    return { session, create, respawn };
+  }
+
+  it('the first launch carries it too, and a clear relaunches on the model the session was created with', async () => {
+    const { session, create, respawn } = freshSession('pi', { piConfig: { model: 'anthropic/claude-x' } });
+    session.setCustomModel(
+      { endpointId: 'ep', modelId: 'qwen3', envKeys: ['HOME'], configDir: '/tmp/cfg', launchModel: 'custom/qwen3' },
+      { HOME: '/tmp/cfg' }
+    );
+    await session.startInteractive();
+    expect(create.mock.calls[0][0].piConfig?.model).toBe('custom/qwen3');
+    expect(session.toState().piConfig?.model).toBe('anthropic/claude-x');
+
+    session.setCustomModel(undefined);
+    expect(await session.restartCli()).toBe(true);
+    expect(respawn.mock.calls[0][0].piConfig?.model).toBe('anthropic/claude-x');
+  });
+
+  it('a clear on a session created with no model relaunches with none', async () => {
+    const { session, create, respawn } = freshSession('codex');
+    session.setCustomModel(
+      { endpointId: 'ep', modelId: 'qwen3', envKeys: ['CODEX_HOME'], configDir: '/tmp/cfg', launchModel: 'qwen3' },
+      { CODEX_HOME: '/tmp/cfg' }
+    );
+    await session.startInteractive();
+    expect(create.mock.calls[0][0].codexConfig?.model).toBe('qwen3');
+
+    session.setCustomModel(undefined);
+    expect(await session.restartCli()).toBe(true);
+    expect(respawn.mock.calls[0][0].codexConfig?.model).toBeUndefined();
+  });
+
+  it('leaves the launch untouched without a selection', async () => {
+    const { session, create } = freshSession('pi', { piConfig: { model: 'anthropic/claude-x', thinking: 'low' } });
+    await session.startInteractive();
+    expect(create.mock.calls[0][0].piConfig).toEqual({ model: 'anthropic/claude-x', thinking: 'low' });
+  });
+
   it('pi: the selection forces piConfig.model on the respawn options, leaving the stored config alone', async () => {
     const { session, respawn } = liveSession('pi', { piConfig: { model: 'anthropic/claude-x', thinking: 'low' } });
     session.setCustomModel(

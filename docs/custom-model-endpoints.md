@@ -543,6 +543,11 @@ selection goes, on a clear or a switch to another endpoint. That is what
 keeps a session on its own `DSH_HOME`, `CODEX_HOME` or `GROK_HOME`, and on
 its own account through `CLAUDE_CONFIG_DIR` (the per-client-account case).
 
+The launch model goes the same way: a clear relaunches on the model the session
+was created with, or with none if it was created without one. A session an
+older build launched straight onto an endpoint saved that endpoint's model in
+its config, so its clear still relaunches on that id.
+
 ⚠️ Across a Codeman restart only the home directory comes back, and only as
 an absolute path. The selection overwrote the tmux `setenv` that held it, so
 its record in `state.json` keeps that one path (`ownEnv`), and a non-granted

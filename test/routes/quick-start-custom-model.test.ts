@@ -204,6 +204,34 @@ describe('POST /api/quick-start: customModel (one-shot custom-model launch)', ()
     expect(restartSpy).not.toHaveBeenCalled();
   });
 
+  it("leaves the caller's own model in the stored config, which is what a later clear falls back to", async () => {
+    const res = await quickStart({
+      caseName: 'cm-pi-own-model',
+      mode: 'pi',
+      piConfig: { model: 'anthropic/claude-x' },
+      customModel: { endpointId: 'ep1', modelId: 'qwen3' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const { sessionId } = res.json();
+    const session = ctx.sessions.get(sessionId) as unknown as Session;
+    expect(session.getCustomModelForPersist()?.launchModel).toBe('custom/qwen3');
+    expect(session.toState().piConfig?.model).toBe('anthropic/claude-x');
+  });
+
+  it('stores no model at all for a caller that chose none', async () => {
+    const res = await quickStart({
+      caseName: 'cm-codex-no-model',
+      mode: 'codex',
+      customModel: { endpointId: 'ep1', modelId: 'qwen3' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const session = ctx.sessions.get(res.json().sessionId) as unknown as Session;
+    expect(session.getCustomModelForPersist()?.launchModel).toBe('qwen3');
+    expect(session.toState().codexConfig?.model).toBeUndefined();
+  });
+
   it('404s for an unknown endpoint id', async () => {
     const res = await quickStart({
       caseName: 'cm-ghost',

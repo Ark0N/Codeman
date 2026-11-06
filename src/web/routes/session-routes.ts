@@ -4750,7 +4750,6 @@ export function registerSessionRoutes(
     // would hide them, and giving setCustomModel() that set would put
     // CLAUDE_CODE_EFFORT_LEVEL back after the constructor stripped it.
     let qsCustomModelAppliedEnvOverrides: Record<string, string> | undefined;
-    let qsCustomModelLaunchModel: string | undefined;
     let qsCustomModelSessionId: string | undefined;
     let qsCustomModelSwapInProgress = false;
     let qsCustomModelBookkeeping:
@@ -4866,7 +4865,6 @@ export function registerSessionRoutes(
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `${mode} has no known custom-model mechanism`);
       }
       qsCustomModelAppliedEnvOverrides = cmApplied.envOverrides;
-      qsCustomModelLaunchModel = cmApplied.launchModel;
       qsCustomModelBookkeeping = {
         endpointId: cmEndpoint.id,
         modelId: customModel.modelId,
@@ -4916,30 +4914,15 @@ export function registerSessionRoutes(
       tmuxHistoryLimit: qsTerminalHistoryConfig.tmuxHistoryLimit,
       parentSessionId: qsParentSessionId,
     };
-    // Force the custom-model selection's launchModel (pi/omp `custom/<id>`, grok's
-    // `[model.<name>]` block name) onto whichever config field the registry says the
-    // CLI's `model` launch param lives in — mirrors Session._withCustomModelLaunchModel,
-    // which the restart-in-place path already uses, rather than a hardcoded per-CLI
-    // branch here that a CLI landing its injection recipe later would silently miss.
-    if (qsCustomModelLaunchModel !== undefined) {
-      const qsCustomModelField = getCli(mode)?.launch.legacyConfigField;
-      if (qsCustomModelField) {
-        const qsSessionOptionsBag = qsSessionOptions as unknown as Record<string, unknown>;
-        qsSessionOptionsBag[qsCustomModelField] = {
-          ...((qsSessionOptionsBag[qsCustomModelField] as Record<string, unknown>) ?? {}),
-          model: qsCustomModelLaunchModel,
-        };
-      } else {
-        qsSessionOptions.model = qsCustomModelLaunchModel;
-      }
-    }
     const session = new Session(qsSessionOptions);
 
     // Records the selection for session.customModel/getCustomModelForPersist() and future
-    // clear/switch calls, and merges the injected env, which the launch below reads along
-    // with the launch-model config set above (piConfig/grokConfig/ompConfig.model). Nothing
-    // has started yet, so this is never a restart: setCustomModel() is synchronous state,
-    // no tmux IO of its own (see its own doc comment in session.ts).
+    // clear/switch calls, and merges the injected env. The launch below reads both: the
+    // selection's launchModel is forced onto the launch options, never onto the stored
+    // config above, because that config is what a later clear falls back to
+    // (Session._withCustomModelLaunchModel). Nothing has started yet, so this is never a
+    // restart: setCustomModel() is synchronous state, no tmux IO of its own (see its own
+    // doc comment in session.ts).
     if (qsCustomModelBookkeeping) {
       session.setCustomModel(qsCustomModelBookkeeping, qsCustomModelAppliedEnvOverrides);
     }

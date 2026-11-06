@@ -2990,13 +2990,13 @@ export class Session extends EventEmitter {
    * launch param. Where that param
    * lives is registry DATA — the entry's `legacyConfigField` (`piConfig`, `grokConfig`,
    * ...) or the top-level `model` for an entry that declares none — so this stays a
-   * generic reader rather than a branch per CLI. Applied on the OPTIONS only: the stored
-   * `<Mode>Config` keeps whatever model the user chose at create, which is exactly what a
-   * later clear must fall back to.
+   * generic reader rather than a branch per CLI. Applied on the OPTIONS only, on both the
+   * respawn and the create path: the stored `<Mode>Config` keeps whatever model the user
+   * chose at create, which is exactly what a later clear must fall back to.
    */
-  private _withCustomModelLaunchModel(
-    options: import('./mux-interface.js').RespawnPaneOptions
-  ): import('./mux-interface.js').RespawnPaneOptions {
+  private _withCustomModelLaunchModel<
+    T extends import('./mux-interface.js').RespawnPaneOptions | import('./mux-interface.js').CreateSessionOptions,
+  >(options: T): T {
     const launchModel = this._customModel?.launchModel;
     if (!launchModel) return options;
     const entry = getCli(this.mode);
@@ -3348,7 +3348,7 @@ export class Session extends EventEmitter {
         const { isRestored, respawnedResumeId, respawnedDeadPane } = await this._setupOrAttachMuxSession({
           // Single source of truth shared with reattachRemote() (COD-108).
           respawnPaneOptions: this._buildRespawnPaneOptions(),
-          createSessionOptions: {
+          createSessionOptions: this._withCustomModelLaunchModel({
             sessionId: this.id,
             workingDir: this.workingDir,
             mode: this.mode,
@@ -3378,7 +3378,7 @@ export class Session extends EventEmitter {
             docker: this._docker,
             adopt: this._adopt,
             owner: this._owner,
-          },
+          }),
           spawnErrLabel: 'mux attachment',
         });
 
