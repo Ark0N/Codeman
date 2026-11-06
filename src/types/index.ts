@@ -29,6 +29,7 @@
  * | plan         | PlanItem, PlanTaskStatus, TddPhase                                    | In-memory → `GET /api/sessions/:id/plan/tasks` |
  * | orchestrator | OrchestratorState, OrchestratorPlan, OrchestratorConfig, OrchestratorPersistState | `~/.codeman/state.json` → `GET /api/orchestrator/status` |
  * | mcp-sync     | McpSyncResult, McpSyncTargetResult                                    | Other CLIs' own config files → `GET`/`POST /api/mcp-sync` |
+ * | local-model  | HardwareFacts, LocalModelCatalog, Candidate, Recommendation, LocalModelStatus, LOCAL_MODEL_LABELS | In-memory only (nothing persisted) → `GET /api/local-model` |
  *
  * ## Cross-domain relationship map
  *
@@ -77,3 +78,4 @@ export * from './webview.js';
 export * from './intent.js';
 export * from './foreign-tmux.js';
 export * from './mcp-sync.js';
+export * from './local-model.js';
