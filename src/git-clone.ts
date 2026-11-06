@@ -54,6 +54,7 @@ import { lstat, readdir, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { EXEC_TIMEOUT_MS } from './config/exec-timeout.js';
 import { probePathKind } from './utils/bounded-path-probe.js';
+import { gitMissingError, gitSpawnAllowed } from './utils/git-availability.js';
 
 // ─── Tunables ────────────────────────────────────────────────────────────────
 
@@ -728,6 +729,17 @@ interface GitRun {
  * signal is used rather than `child.kill()`.
  */
 async function runGit(args: string[], timeoutMs: number, maxStdoutBytes: number): Promise<GitRun> {
+  // Never Apple's placeholder git on a Mac without developer tools: answered as a missing git.
+  if (!gitSpawnAllowed()) {
+    return {
+      stdout: '',
+      stderr: '',
+      code: null,
+      timedOut: false,
+      started: false,
+      spawnError: String(gitMissingError()),
+    };
+  }
   // The queue wait spends the SAME deadline as the operation: `timeoutMs` is a
   // promise about the whole call, not about git's runtime after some unbounded
   // wait. A full queue is refused outright rather than queued.
@@ -814,10 +826,17 @@ async function runGit(args: string[], timeoutMs: number, maxStdoutBytes: number)
   }
 }
 
-/** Is a usable `git` on this machine? Memoized: the answer cannot change without a restart. */
+/**
+ * Is a usable `git` on this machine? Memoized: the answer cannot change without a restart. The one
+ * exception is a Mac whose only git is Apple's placeholder with no developer tools behind it: running
+ * that, even as `git --version`, opens macOS's "install the developer tools" window, so it is never
+ * run, and that refusal is not memoized here (the gate keeps its own short memory), so the page finds
+ * git once the tools are installed.
+ */
 let gitAvailable: boolean | null = null;
 export function isGitAvailable(): boolean {
   if (gitAvailable !== null) return gitAvailable;
+  if (!gitSpawnAllowed()) return false;
   try {
     execFileSync('git', ['--version'], {
       encoding: 'utf-8',
