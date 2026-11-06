@@ -65,6 +65,7 @@ import {
   resolveWorkspaceRepos,
   type GitRunner,
 } from './git-workspace-status.js';
+import { gitMissingError, gitSpawnAllowed } from './utils/git-availability.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -205,6 +206,7 @@ export function fetchEnvFor(base: NodeJS.ProcessEnv, repoSshCommand: string | nu
  * add a fifth git process or push a fetch past the user's timeout: it spends part of it.
  */
 export async function readRepoSshCommand(cwd: string, timeoutMs: number): Promise<string | null> {
+  if (!gitSpawnAllowed()) return null;
   try {
     const { stdout } = await execFileAsync('git', ['config', '--get', 'core.sshCommand'], {
       cwd,
@@ -240,6 +242,8 @@ export async function readRepoSshCommand(cwd: string, timeoutMs: number): Promis
  * as a timeout without starting the fetch.
  */
 export const runFetch: GitRunner = async (cwd, args, opts) => {
+  // Never Apple's placeholder git on a Mac without developer tools: answered as GIT_MISSING.
+  if (!gitSpawnAllowed()) throw gitMissingError();
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS;
   const startedAt = Date.now();
   const env = fetchEnvFor(process.env, await readRepoSshCommand(cwd, timeoutMs));
