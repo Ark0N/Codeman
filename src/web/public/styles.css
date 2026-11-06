@@ -5682,21 +5682,6 @@ html[data-skin="og"] .welcome-primary:hover {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
-.welcome-ralph-link {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 0.75rem;
-  cursor: pointer;
-  padding: 0.25rem 0;
-  margin-top: 0.25rem;
-  transition: color 0.15s ease;
-}
-
-.welcome-ralph-link:hover {
-  color: var(--accent);
-}
-
 /* Short window (a 1470x840 laptop is the common case): the column above now
    fits by construction, but only by taking the space out of the Resume list,
    which collapses to two rows. Buying ~80px back from the vertical rhythm keeps
