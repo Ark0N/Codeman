@@ -166,10 +166,11 @@ fi
 # appdata directory (which creates it): this script updates an EXISTING
 # deployment, so a missing appdata path means there is nothing here yet to
 # update, and creating one would just be this script quietly doing
-# Start-Codeman.sh's first-run job worse.
+# Start-Codeman.sh's first-run job worse. No early `exit` in awk: a closed pipe
+# would end this script through pipefail, with no message.
 appdata_path=$(
   "${compose_command[@]}" config --environment |
-    awk -F= '$1 == "CODEMAN_APPDATA_PATH" { sub(/^[^=]*=/, ""); print; exit }'
+    awk -F= '$1 == "CODEMAN_APPDATA_PATH" && !found { sub(/^[^=]*=/, ""); print; found = 1 }'
 )
 if [[ -z "$appdata_path" || ! -d "$appdata_path" ]]; then
   printf 'Error: CODEMAN_APPDATA_PATH is not set or does not exist: %s\n' "${appdata_path:-<unset>}" >&2
