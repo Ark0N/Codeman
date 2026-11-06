@@ -1188,9 +1188,11 @@ session: respawn, Ralph (its config and the `fix-plan/write`, `fix-plan/read` an
 `ralph-prompt/write` file routes), auto-clear, auto-compact, auto-resume, custom model
 endpoints, prompt uploads and the image watcher. `stop` waits are a 400, and so are
 `blocked` waits unless Codeman reads that CLI's dialogs off its screen (codex), the git
-routes answer `unsupported` with `reason: "adopted"`, and `last-response` answers empty,
-since Codeman knows no transcript for it. Its `paneExit` stays absent, because the pane
-holds a `tmux attach` and not the agent. Reboot restore does not rebuild one.
+routes answer `unsupported` with `reason: "adopted"`, and
+`last-response` answers empty, since Codeman knows no transcript for it. Its `paneExit`
+stays absent, because the pane holds a `tmux attach` and not the agent. Reboot restore
+does not rebuild one. A wrapper that cannot start answers `OPERATION_FAILED` and leaves
+the tab to be tried again: Codeman never starts a local process in its place.
 
 ## Approvals Inbox
 

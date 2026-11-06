@@ -3205,6 +3205,26 @@ export class Session extends EventEmitter {
     this.emit('output', data);
   }
 
+  /**
+   * End a start that cannot reach an adopted session's wrapper.
+   *
+   * ⚠️ Never the direct-PTY fallback. What that starts is a NEW process on THIS host
+   * (`claude --dangerously-skip-permissions`, or a server-account shell) in the neutral
+   * `/tmp`, under a tab still carrying the foreign session's name, so someone who opened an
+   * ssh or container session would end up typing into this machine. `_useMux` stays on, so
+   * the next start, which is what selecting the tab sends, tries the wrapper again.
+   *
+   * The `error` event is what the tab shows: the browser's re-attach does not read the
+   * route's answer.
+   */
+  private _failAdoptedStart(err: unknown): never {
+    const message = `Could not attach to ${this._adopt?.targetSession}: ${getErrorMessage(err)}`;
+    console.error(`[Session] ${message}`);
+    this._status = 'stopped';
+    this.emit('error', message);
+    throw new Error(message);
+  }
+
   async startInteractive(): Promise<void> {
     if (this.ptyProcess) {
       throw new Error('Session already has a running process');
@@ -3441,6 +3461,7 @@ export class Session extends EventEmitter {
           this._armPaneSettle(true);
         }
       } catch (err) {
+        if (this._adopt) this._failAdoptedStart(err);
         console.error('[Session] Failed to create mux session, falling back to direct PTY:', err);
         this._useMux = false;
         this._muxSession = null;
@@ -3460,6 +3481,7 @@ export class Session extends EventEmitter {
       if (getCli(this.mode)?.capabilities.requiresMux) {
         throw new Error(`${getModeLabel(this.mode)} sessions require tmux. Direct PTY fallback is not supported.`);
       }
+      if (this._adopt) this._failAdoptedStart(new Error('tmux is not available'));
       try {
         // Pass --session-id to use the SAME ID as the Codeman session
         // This ensures subagents can be directly matched to the correct tab.
@@ -4463,6 +4485,7 @@ export class Session extends EventEmitter {
           }, 100);
         }
       } catch (err) {
+        if (this._adopt) this._failAdoptedStart(err);
         console.error('[Session] Failed to create mux session, falling back to direct PTY:', err);
         this._useMux = false;
         this._muxSession = null;
@@ -4471,6 +4494,7 @@ export class Session extends EventEmitter {
 
     // Fallback to direct PTY if mux is not used
     if (!this.ptyProcess) {
+      if (this._adopt) this._failAdoptedStart(new Error('tmux is not available'));
       try {
         this.ptyProcess = spawnPtyWithHelperRepair(() =>
           pty.spawn(shell, [], {

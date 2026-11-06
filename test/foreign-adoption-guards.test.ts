@@ -1,7 +1,7 @@
 /**
  * @fileoverview The adoption guards that are not reachable over HTTP: the
- * boot-time workspace-hook sweep, the workspace-trust auto-accept and the
- * new-shell clear.
+ * boot-time workspace-hook sweep, the workspace-trust auto-accept, the new-shell
+ * clear and the direct-PTY fallback.
  *
  * Each acts on a session's WORKSPACE or its PANE, each runs unattended, and each
  * previously keyed off `session.remote`, the mode or nothing at all, none of which
@@ -22,6 +22,20 @@ const applyWorkspaceHooks = vi.fn(async () => {});
 vi.mock('../src/hooks-config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/hooks-config.js')>();
   return { ...actual, applyWorkspaceHooks: (...args: unknown[]) => applyWorkspaceHooks(...(args as [])) };
+});
+
+// The direct-PTY fallback must never run the real `claude` or a real login shell from a
+// test, and the spawn is the one thing that proves whether it happened at all.
+const ptySpawn = vi.fn();
+vi.mock('node-pty', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node-pty')>();
+  return {
+    ...real,
+    spawn: (file: string, args: string[] | string, options: import('node-pty').IPtyForkOptions) => {
+      ptySpawn(file, args);
+      return real.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], options);
+    },
+  };
 });
 
 const { WebServer } = await import('../src/web/server.js');
@@ -161,5 +175,80 @@ describe('the new-shell clear', () => {
     // on a half-typed command or in whatever was reading stdin, on every adoption.
     const adopt = { location: 'local', socketPath: '/tmp/tmux-0/default', targetSession: 'work', viewSession: '' };
     expect(await bytesWrittenAfterStart(adopt)).toEqual([]);
+  });
+});
+
+describe('the direct-PTY fallback', () => {
+  const adopt = { location: 'remote', socketPath: '/tmp/tmux-0/default', targetSession: 'work', viewSession: '' };
+
+  /** A wrapper that cannot start: `createSession` threw (a loaded tmux server timing out, say). */
+  const session = (mode: 'claude' | 'shell', opts: { adopt?: typeof adopt; useMux?: boolean } = {}) => {
+    const s = new Session({
+      name: 'work',
+      workingDir: '/tmp',
+      mode,
+      useMux: opts.useMux ?? true,
+      mux: {},
+      ...(opts.adopt ? { adopt: opts.adopt } : {}),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    const errors: string[] = [];
+    s.on('error', (message: string) => errors.push(message));
+    const priv = s as unknown as Record<string, unknown>;
+    priv._setupOrAttachMuxSession = async () => {
+      throw new Error('tmux new-session timed out');
+    };
+    return { s, priv, errors };
+  };
+
+  beforeEach(() => ptySpawn.mockClear());
+
+  it('still catches a session Codeman started, whose fallback is a real PTY', async () => {
+    // The control: without it, "nothing spawned" below is equally explained by a mock
+    // that never sees a spawn. A shell, because a claude fallback also probes the real binary.
+    const { s } = session('shell');
+    await s.startShell();
+    expect(ptySpawn).toHaveBeenCalledTimes(1);
+    await s.stop(true).catch(() => {});
+  });
+
+  it.each([
+    ['claude', 'startInteractive'],
+    ['shell', 'startShell'],
+  ] as const)('never starts a local %s for an adopted session (%s)', async (mode, start) => {
+    // ⚠️ The tab still says it is someone else's session. A fallback here runs
+    // `claude --dangerously-skip-permissions` or a server-account shell in `/tmp` on THIS
+    // host, so whoever opened an ssh or container session ends up typing into this one.
+    const { s, errors } = session(mode, { adopt });
+    await expect(s[start]()).rejects.toThrow(/tmux new-session timed out/);
+    expect(ptySpawn).not.toHaveBeenCalled();
+    expect(s.pid).toBeNull();
+    expect(s.status).toBe('stopped');
+    // The browser's re-attach does not read the POST's answer, so this is what the tab shows.
+    expect(errors.join()).toMatch(/work/);
+  });
+
+  it('leaves the wrapper to be tried again', async () => {
+    const { s, priv } = session('shell', { adopt });
+    await expect(s.startShell()).rejects.toThrow();
+    const disposable = () => ({ dispose() {} });
+    priv._setupOrAttachMuxSession = async () => {
+      priv.ptyProcess = { write: vi.fn(), onData: disposable, onExit: disposable, kill() {}, pid: 1 };
+      return { isRestored: true, respawnedDeadPane: false };
+    };
+    await s.startShell();
+    expect(s.pid).toBe(1);
+    expect(ptySpawn).not.toHaveBeenCalled();
+    priv.ptyProcess = null;
+    await s.stop(true).catch(() => {});
+  });
+
+  it.each([
+    ['claude', 'startInteractive'],
+    ['shell', 'startShell'],
+  ] as const)('never starts a local %s for an adopted session with no mux at all (%s)', async (mode, start) => {
+    const { s } = session(mode, { adopt, useMux: false });
+    await expect(s[start]()).rejects.toThrow(/tmux/);
+    expect(ptySpawn).not.toHaveBeenCalled();
   });
 });
