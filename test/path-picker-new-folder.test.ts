@@ -182,9 +182,13 @@ describe('PathPicker New folder', () => {
     expect(pickerOptions('openNewCasePathPicker')).toContain('allowNewFolder: true');
   });
 
-  it('is on for Link Existing and off for the Clone and Docker pickers', () => {
+  it("is on for Clone Repo's parent folder picker: that parent must already exist", () => {
+    expect(pickerOptions('openCloneCasePathPicker')).toContain('allowNewFolder: true');
+  });
+
+  it('is on for Link Existing and off for the Docker pickers', () => {
     expect(pickerOptions('openLinkCasePathPicker')).toContain('allowNewFolder: true');
-    for (const other of ['openDockerWorkspacePathPicker', 'openDockerWorkdirPicker', 'openCloneCasePathPicker']) {
+    for (const other of ['openDockerWorkspacePathPicker', 'openDockerWorkdirPicker']) {
       expect(pickerOptions(other), other).not.toContain('allowNewFolder');
     }
   });

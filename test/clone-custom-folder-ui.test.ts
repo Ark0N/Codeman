@@ -117,9 +117,16 @@ describe('Clone Repo custom folder', () => {
     (win as unknown as { PathPicker: { open: unknown } }).PathPicker = { open };
     (doc.getElementById('cloneCustomPathToggle') as HTMLInputElement).checked = true;
     app.openCloneCasePathPicker();
-    const options = open.mock.calls[0]![0] as { title: string; directoriesOnly: boolean; onSelect(p: string): void };
+    const options = open.mock.calls[0]![0] as {
+      title: string;
+      directoriesOnly: boolean;
+      allowNewFolder: boolean;
+      onSelect(p: string): void;
+    };
     expect(options.title).toBe('Choose the parent folder for the clone');
     expect(options.directoriesOnly).toBe(true);
+    // A parent that does not exist yet is refused, so the picker has to be able to make it.
+    expect(options.allowNewFolder).toBe(true);
     options.onSelect('/mnt/projects');
     expect((doc.getElementById('cloneCasePath') as HTMLInputElement).value).toBe('/mnt/projects');
     expect(preview()).toBe('Will clone into: /mnt/projects/bifrost');

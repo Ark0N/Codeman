@@ -4301,6 +4301,7 @@ Object.assign(CodemanApp.prototype, {
       title: 'Choose the parent folder for the clone',
       initialPath: input.value.trim(),
       directoriesOnly: true,
+      allowNewFolder: true,
       onSelect: (path) => {
         input.value = path;
         this.updateCloneCasePathPreview();
