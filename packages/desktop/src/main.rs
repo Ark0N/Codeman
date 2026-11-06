@@ -22,6 +22,7 @@
 mod assets;
 mod config;
 mod credentials;
+mod gui_install;
 mod local_server;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -34,7 +35,8 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Command;
 use std::rc::Rc;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
@@ -267,6 +269,8 @@ struct App {
     menu: AppMenu,
     /// The one Keychain worker; every Keychain job goes through its queue.
     keychain: Keychain,
+    /// Which reader of the install's output is the current one.
+    install_reader: Arc<AtomicU64>,
     /// While the main window may still have to be put into the full screen it
     /// asked for at launch: when to look next, and how many retries were made.
     fullscreen_retry: Option<(Instant, u8)>,
@@ -350,6 +354,7 @@ fn main() {
         downloads: HashMap::new(),
         menu,
         keychain,
+        install_reader: Arc::new(AtomicU64::new(0)),
         fullscreen_retry: wants_fullscreen.then(|| (Instant::now() + FULLSCREEN_FIRST_CHECK, 0)),
     };
 
@@ -1174,6 +1179,54 @@ impl App {
                     });
                 }
             }
+            ConnectCmd::InstallPrepare => {
+                if choosing {
+                    self.in_background(|| match gui_install::prepare() {
+                        Ok(plan) => json!({ "type": "installPlan", "plan": plan }),
+                        Err(message) => json!({ "type": "installPrepareFailed", "message": message }),
+                    });
+                }
+            }
+            ConnectCmd::InstallStart {
+                network_password,
+                ai_cli,
+            } => {
+                if choosing {
+                    let proxy = self.proxy.clone();
+                    let stale = self.next_install_reader();
+                    std::thread::spawn(move || {
+                        let plan = gui_install::Plan {
+                            port: setup::pick_install_port(),
+                            network_password,
+                            ai_cli,
+                        };
+                        let send = |msg| {
+                            let _ = proxy.send_event(UserEvent::ToConnectPage(msg));
+                        };
+                        match gui_install::start(&plan) {
+                            Ok(()) => {
+                                send(json!({ "type": "installRunning", "port": plan.port }));
+                                gui_install::follow(stale, send);
+                            }
+                            Err(message) => send(json!({ "type": "installStartFailed", "message": message })),
+                        }
+                    });
+                }
+            }
+            ConnectCmd::InstallAttach => {
+                if choosing {
+                    let proxy = self.proxy.clone();
+                    let stale = self.next_install_reader();
+                    std::thread::spawn(move || {
+                        gui_install::follow(stale, |msg| {
+                            let _ = proxy.send_event(UserEvent::ToConnectPage(msg));
+                        });
+                    });
+                }
+            }
+            ConnectCmd::InstallCancel => {
+                std::thread::spawn(gui_install::cancel);
+            }
             ConnectCmd::InstallRemote { target } => {
                 if choosing {
                     match setup::SshTarget::parse(&target) {
@@ -1203,6 +1256,14 @@ impl App {
                 });
             }
         }
+    }
+
+    /// A new reader of the install's output replaces the one before it: the
+    /// answer is how that new reader learns it was replaced in turn.
+    fn next_install_reader(&self) -> impl Fn() -> bool + Send + 'static {
+        let generation = self.install_reader.clone();
+        let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
+        move || generation.load(Ordering::SeqCst) != mine
     }
 
     /// Run `work` off the event loop (it may run a login shell, plutil,

@@ -1,12 +1,12 @@
-//! The connect screen's "This Mac" tab and its installs: where the Codeman on
-//! this Mac listens, whether it is installed, its login, and the installer runs
-//! for this Mac and for another machine over SSH.
+//! The connect screen's "This Mac" tab and its Terminal installs: where the
+//! Codeman on this Mac listens, whether it is installed, its login, and the
+//! installer runs in Terminal for this Mac and for another machine over SSH.
+//! The install most people get runs in the app, in `gui_install.rs`.
 //!
-//! The installer always runs in Terminal, never inside the app. `install.sh`
-//! asks for the administrator password on a terminal (Homebrew, its sudo
-//! keep-alive), the Xcode tools arrive as a system dialog, and ssh asks about
-//! host keys and passwords on a terminal too: a run without one fails on the
-//! first fresh Mac. So the app writes a small script that deletes itself and
+//! The Terminal route is for what that one cannot do. `install.sh` asks for
+//! the administrator password on a terminal (Homebrew, its sudo keep-alive),
+//! the Xcode tools arrive as a system dialog, and ssh asks about host keys and
+//! passwords on a terminal too. So the app writes a small script that deletes itself and
 //! hands it to Terminal (`open -b com.apple.Terminal`), which needs no
 //! permission, unlike scripting Terminal through osascript (an Automation
 //! prompt). Everything the scripts contain is built here and unit-tested; the
@@ -24,12 +24,22 @@ use std::time::Duration;
 use serde::Serialize;
 use url::Url;
 
+use crate::gui_install;
 use crate::local_server;
 use crate::policy;
 use crate::probe::{self, ProbeOutcome};
 
-/// Codeman's published installer (a redirect to `install.sh` on master).
-pub const INSTALLER_URL: &str = "https://getcodeman.com/install";
+/// Codeman's published installer (a redirect to `install.sh` on master). A test
+/// build of an installer change sets `CODEMAN_DESKTOP_INSTALLER_URL` when it is
+/// compiled; a shipped app has no way to point this anywhere else, at runtime
+/// or otherwise.
+pub const INSTALLER_URL: &str = match option_env!("CODEMAN_DESKTOP_INSTALLER_URL") {
+    Some(url) => url,
+    None => "https://getcodeman.com/install",
+};
+
+/// The branch that test build installs Codeman from (`CODEMAN_BRANCH`).
+pub const INSTALL_BRANCH: Option<&str> = option_env!("CODEMAN_DESKTOP_INSTALL_BRANCH");
 
 /// What to paste into a terminal on another machine; the SSH install runs the
 /// same thing there.
@@ -289,7 +299,7 @@ pub fn local_login(url: &Url) -> Option<(String, String)> {
 }
 
 /// This user's processes, as `ps` lists them: (pid, command line).
-fn list_processes() -> Vec<(u32, String)> {
+pub fn list_processes() -> Vec<(u32, String)> {
     let Ok(out) = Command::new("/bin/ps")
         .args(["-x", "-ww", "-o", "pid=", "-o", "command="])
         .stdin(Stdio::null())
@@ -329,8 +339,8 @@ pub fn is_codeman_server(command: &str) -> bool {
 }
 
 /// Whether a command line is an install the app started on this Mac (the
-/// Terminal script, or the installer it downloaded), and the port it asked
-/// for once the installer runs.
+/// Terminal script, the installer it downloaded, or the graphical install), and
+/// the port it asked for once the installer runs.
 pub fn install_in_progress(command: &str) -> Option<Option<u16>> {
     let words: Vec<&str> = command.split_whitespace().collect();
     let name = |w: &&str| w.rsplit('/').next().unwrap_or(w).to_string();
@@ -340,7 +350,7 @@ pub fn install_in_progress(command: &str) -> Option<Option<u16>> {
     }) {
         return Some(None);
     }
-    if words.iter().any(|w| name(w).starts_with("codeman-install.")) {
+    if words.iter().any(|w| name(w).starts_with("codeman-install.")) || gui_install::is_install_run(command) {
         let port = words
             .iter()
             .position(|w| *w == "--port")
@@ -349,6 +359,15 @@ pub fn install_in_progress(command: &str) -> Option<Option<u16>> {
         return Some(port);
     }
     None
+}
+
+/// The process of the graphical install running on this Mac, if one does. It
+/// leads its process group.
+pub fn install_in_app() -> Option<u32> {
+    list_processes()
+        .into_iter()
+        .find(|(_, command)| gui_install::is_install_run(command))
+        .map(|(pid, _)| pid)
 }
 
 fn codeman_servers(procs: &[(u32, String)]) -> Vec<u32> {
@@ -465,10 +484,13 @@ pub struct LocalStatus {
     pub installed: bool,
     /// `install.sh` finished its work (its `.install-complete` marker).
     pub install_complete: bool,
-    /// An install the app started is still running in Terminal, and the
-    /// port it asked for once that is known.
+    /// An install the app started is still running, and the port it asked
+    /// for once that is known.
     pub install_running: bool,
     pub install_port: Option<u16>,
+    /// That install is the graphical one, not a Terminal window: the page can
+    /// show it (gui_install::follow), also after the app was quit.
+    pub install_in_app: bool,
     /// For RunningElsewhere: the addresses that Codeman listens on.
     pub elsewhere: Vec<String>,
     /// The probe's outcome, for the connect page's explanations.
@@ -495,6 +517,7 @@ pub fn inspect(depth: Depth) -> LocalStatus {
     let servers = codeman_servers(&procs);
     let found = listeners(&servers);
     let install = procs.iter().find_map(|(_, c)| install_in_progress(c));
+    let install_in_app = procs.iter().any(|(_, c)| gui_install::is_install_run(c));
 
     // The login goes only to this user's own Codeman on that port.
     let auth = if serves_loopback_port(&found, url.port_or_known_default().unwrap_or(0)) {
@@ -587,6 +610,7 @@ pub fn inspect(depth: Depth) -> LocalStatus {
         install_complete,
         install_running: install.is_some(),
         install_port: install.flatten(),
+        install_in_app,
         elsewhere,
         outcome,
     }
@@ -597,7 +621,7 @@ pub fn inspect(depth: Depth) -> LocalStatus {
 /// attach to the first one's live sessions (src/config/instance.ts), and
 /// `codeman web -d` only notices a server it started itself or one at the
 /// same address.
-fn already_running() -> Option<String> {
+pub fn already_running() -> Option<String> {
     let servers = codeman_servers(&list_processes());
     let pid = servers.first()?;
     let found = listeners(&servers);

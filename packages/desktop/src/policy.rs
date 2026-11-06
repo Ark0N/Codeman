@@ -565,6 +565,18 @@ pub enum ConnectCmd {
     InstallLocal {
         network: bool,
     },
+    /// Fetch the installer and ask it what is on this Mac (gui_install).
+    InstallPrepare,
+    /// Run the graphical install. `network_password`: reachable from other
+    /// devices, with this password. `ai_cli`: an id in the shape of the
+    /// installer's catalogue, which checks it again.
+    InstallStart {
+        network_password: Option<String>,
+        ai_cli: Option<String>,
+    },
+    /// Show the graphical install that is running already.
+    InstallAttach,
+    InstallCancel,
     /// Run the installer on another machine over SSH, in Terminal. `target`
     /// is what the user typed; setup::SshTarget::parse checks it.
     InstallRemote {
@@ -619,6 +631,17 @@ enum RawConnect {
         #[serde(default)]
         network: bool,
     },
+    InstallPrepare,
+    InstallStart {
+        // rename_all above reaches variant names only, and deny_unknown_fields
+        // would refuse the page's spelling of these.
+        #[serde(default, rename = "networkPassword")]
+        network_password: Option<String>,
+        #[serde(default, rename = "aiCli")]
+        ai_cli: Option<String>,
+    },
+    InstallAttach,
+    InstallCancel,
     InstallRemote {
         target: String,
     },
@@ -633,6 +656,17 @@ enum RawHost {
     FocusWindow,
     OpenExternal { url: String },
     SessionExpired,
+}
+
+/// The shape of a CLI catalogue id. It becomes one argument of `install.sh`,
+/// so it could not be read as a flag even without this: it must start with a
+/// letter.
+fn is_cli_id(id: &str) -> bool {
+    id.len() <= 32
+        && id.starts_with(|c: char| c.is_ascii_lowercase())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 fn bounded(s: Option<String>, max: usize) -> Option<Option<String>> {
@@ -692,6 +726,21 @@ pub fn parse_ipc(frame_url: &str, body: &str, phase: &Phase, is_main_window: boo
             RawConnect::OpenExternal { url } if url.len() <= MAX_URL_LEN => ConnectCmd::OpenExternal(url),
             RawConnect::LocalStatus { quick, deep } => ConnectCmd::LocalStatus { quick, deep },
             RawConnect::InstallLocal { network } => ConnectCmd::InstallLocal { network },
+            RawConnect::InstallPrepare => ConnectCmd::InstallPrepare,
+            RawConnect::InstallStart {
+                network_password,
+                ai_cli,
+            } => {
+                if ai_cli.as_deref().is_some_and(|id| !is_cli_id(id)) {
+                    return None;
+                }
+                ConnectCmd::InstallStart {
+                    network_password: bounded(network_password, MAX_FIELD_LEN)?.filter(|p| !p.is_empty()),
+                    ai_cli,
+                }
+            }
+            RawConnect::InstallAttach => ConnectCmd::InstallAttach,
+            RawConnect::InstallCancel => ConnectCmd::InstallCancel,
             RawConnect::InstallRemote { target } if target.len() <= MAX_FIELD_LEN => {
                 ConnectCmd::InstallRemote { target }
             }
@@ -1478,6 +1527,73 @@ mod tests {
             None
         );
         assert_eq!(parse_ipc(page, r#"{"cmd":"installLocal"}"#, &loaded, true), None);
+    }
+
+    #[test]
+    fn ipc_graphical_install_commands() {
+        let page = "codemanapp://localhost/index.html";
+        let c = |body: &str| parse_ipc(page, body, &Phase::Connect, true);
+        assert_eq!(
+            c(r#"{"cmd":"installPrepare"}"#),
+            Some(Ipc::Connect(ConnectCmd::InstallPrepare))
+        );
+        assert_eq!(
+            c(r#"{"cmd":"installAttach"}"#),
+            Some(Ipc::Connect(ConnectCmd::InstallAttach))
+        );
+        assert_eq!(
+            c(r#"{"cmd":"installCancel"}"#),
+            Some(Ipc::Connect(ConnectCmd::InstallCancel))
+        );
+        // The spelling connect.html sends (test/desktop-connect-install.test.ts
+        // pins the page's side).
+        assert_eq!(
+            c(r#"{"cmd":"installStart","networkPassword":"s3cret","aiCli":"claude"}"#),
+            Some(Ipc::Connect(ConnectCmd::InstallStart {
+                network_password: Some("s3cret".into()),
+                ai_cli: Some("claude".into()),
+            }))
+        );
+        assert_eq!(
+            c(r#"{"cmd":"installStart"}"#),
+            Some(Ipc::Connect(ConnectCmd::InstallStart {
+                network_password: None,
+                ai_cli: None,
+            }))
+        );
+        // An empty password is no password: never a network install without one.
+        assert_eq!(
+            c(r#"{"cmd":"installStart","networkPassword":""}"#),
+            Some(Ipc::Connect(ConnectCmd::InstallStart {
+                network_password: None,
+                ai_cli: None,
+            }))
+        );
+        // Only the shape of an id: nothing that could read as a flag or more.
+        for id in ["--yes", "-y", "Claude", "a b", "a;b", "", "a/b"] {
+            assert_eq!(c(&format!(r#"{{"cmd":"installStart","aiCli":"{id}"}}"#)), None, "{id}");
+        }
+        let long = "a".repeat(33);
+        assert_eq!(c(&format!(r#"{{"cmd":"installStart","aiCli":"{long}"}}"#)), None);
+        let long = "a".repeat(MAX_FIELD_LEN + 1);
+        assert_eq!(
+            c(&format!(r#"{{"cmd":"installStart","networkPassword":"{long}"}}"#)),
+            None
+        );
+        // Nothing else rides along.
+        assert_eq!(c(r#"{"cmd":"installStart","args":["--yes"]}"#), None);
+        assert_eq!(c(r#"{"cmd":"installStart","ai_cli":"claude"}"#), None);
+        // Only the connect page, only in the main window, never a server page.
+        assert_eq!(
+            parse_ipc(page, r#"{"cmd":"installStart"}"#, &Phase::Connect, false),
+            None
+        );
+        let loaded = Phase::Loaded(u("http://127.0.0.1:3000/"));
+        assert_eq!(
+            parse_ipc("http://127.0.0.1:3000/", r#"{"cmd":"installStart"}"#, &loaded, true),
+            None
+        );
+        assert_eq!(parse_ipc(page, r#"{"cmd":"installCancel"}"#, &loaded, true), None);
     }
 
     #[test]

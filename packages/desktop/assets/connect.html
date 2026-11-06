@@ -25,10 +25,12 @@
     background: radial-gradient(1200px 600px at 50% -10%, #111a2b 0%, var(--bg) 60%) fixed, var(--bg);
     color: var(--text);
     font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
-    display: flex; align-items: center; justify-content: center;
+    display: flex; justify-content: center;
     -webkit-user-select: none; user-select: none;
   }
-  main { width: min(440px, calc(100vw - 48px)); }
+  /* margin:auto, not align-items:center: a flex child taller than the window
+     then starts at the top instead of being cut off above it. */
+  main { width: min(440px, calc(100vw - 48px)); margin: auto; padding: 24px 0; }
   header { text-align: center; margin-bottom: 26px; }
   header img { width: 76px; height: 76px; display: block; margin: 0 auto 12px; }
   h1 { font-size: 24px; font-weight: 650; letter-spacing: -0.01em; margin: 0; }
@@ -102,7 +104,6 @@
   @media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
   #local-title { font-weight: 600; }
   .sub { color: var(--muted); font-size: 12px; margin-top: 3px; -webkit-user-select: text; user-select: text; overflow-wrap: anywhere; }
-  #local-network-row[hidden] { display: none; }
   #elsewhere { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
   #elsewhere summary { color: var(--muted); font-size: 13px; cursor: default; list-style: none; }
   #elsewhere summary::-webkit-details-marker { display: none; }
@@ -118,6 +119,81 @@
   .statusrow { display: flex; gap: 10px; align-items: flex-start; }
   .statusrow #status { flex: 1; }
   .statusrow #cancel { margin-top: 10px; }
+  /* The graphical install takes over the card, and its steps differ in height:
+     anchored from the top, so the logo does not jump from one to the next. */
+  main:has(.card.wizard-on) { margin-top: max(0px, calc(14vh - 60px)); margin-bottom: auto; }
+  main:has(.card.wizard-on) header p { display: none; }
+  .card.wizard-on > .tabs, .card.wizard-on > #pane-local, .card.wizard-on > #form,
+  .card.wizard-on > .statusrow, .card.wizard-on > #suggest, .card.wizard-on > .prefs { display: none; }
+  #wizard[hidden], #wizard [hidden] { display: none; }
+  .wiz-head { display: flex; align-items: center; gap: 9px; }
+  .wiz-head .spinner { margin-top: 0; }
+  #wiz-title { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; margin: 0; }
+  #wiz-title:focus { outline: none; }
+  #wiz-lead { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+  #wiz-message {
+    margin: 12px 0 0; padding: 10px 12px; border: 1px solid rgba(248,113,113,0.4); border-radius: 9px;
+    background: rgba(248,113,113,0.08); color: var(--bad); font-size: 13px; white-space: pre-wrap;
+    overflow-wrap: anywhere; -webkit-user-select: text; user-select: text;
+  }
+  #wiz-message.warn { border-color: rgba(251,191,36,0.4); background: rgba(251,191,36,0.08); color: var(--warn); }
+  .wiz-group { margin-top: 14px; }
+  #wiz-agents { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .choice {
+    display: flex; gap: 9px; align-items: flex-start; padding: 9px 11px; border-radius: 9px;
+    border: 1px solid var(--line-strong); background: #0f1013; cursor: default;
+  }
+  .choice:hover { border-color: #454a55; }
+  .choice:has(input:checked) { border-color: var(--accent-2); background: rgba(59,130,246,0.1); }
+  .choice:has(input:focus-visible) { outline: 2px solid var(--accent-2); outline-offset: 1px; }
+  .choice input { accent-color: var(--accent-2); margin: 2px 0 0; flex: none; }
+  .choice b { display: block; font-weight: 600; }
+  .choice small { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; }
+  #wiz-reach .choice + .choice { margin-top: 6px; }
+  #wiz-password { margin-top: 10px; }
+  #wiz-agent-note { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+  #wiz-agent-note a, .wiz-link { all: unset; color: #7c8491; cursor: default; }
+  #wiz-agent-note a { color: var(--accent); white-space: nowrap; }
+  #wiz-agent-note a:hover, .wiz-link:hover { color: var(--text); }
+  .wiz-link:focus-visible, #wiz-agent-note a:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; border-radius: 3px; }
+  .wiz-link { display: block; margin: 12px auto 0; font-size: 12px; text-align: center; }
+  #wiz-summary { margin: 14px 0 0; padding: 12px 0 0; border-top: 1px solid var(--line); list-style: none; color: var(--muted); font-size: 12px; }
+  #wiz-summary li { padding: 2px 0 2px 14px; position: relative; }
+  #wiz-summary li::before { content: ''; position: absolute; left: 2px; top: 9px; width: 4px; height: 4px; border-radius: 50%; background: #5d626b; }
+  #wiz-summary li.warn { color: var(--warn); }
+  /* The install's rail: one node per phase, joined by a line that fills in as
+     the phases finish. The running node carries the phase's own clock, because
+     the longest phases print nothing while they work. */
+  #wiz-rail { margin: 16px 0 0; padding: 0; list-style: none; }
+  #wiz-rail li { position: relative; display: flex; align-items: baseline; gap: 10px; padding: 0 0 13px 24px; color: #6b717c; }
+  #wiz-rail li:last-child { padding-bottom: 0; }
+  #wiz-rail li::before {
+    content: ''; position: absolute; left: 4px; top: 6px; width: 8px; height: 8px; box-sizing: content-box;
+    border-radius: 50%; background: var(--panel); border: 1px solid #454a55; z-index: 1;
+  }
+  #wiz-rail li::after { content: ''; position: absolute; left: 8.5px; top: 12px; bottom: -6px; width: 1px; background: var(--line-strong); }
+  #wiz-rail li:last-child::after { display: none; }
+  #wiz-rail li.done { color: var(--text); }
+  #wiz-rail li.done::before { background: var(--ok); border-color: var(--ok); }
+  #wiz-rail li.done::after { background: rgba(74,222,128,0.45); }
+  #wiz-rail li.now { color: var(--text); font-weight: 600; }
+  #wiz-rail li.now::before { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 4px rgba(96,165,250,0.18); animation: pulse 1.2s ease-in-out infinite; }
+  #wiz-rail li.failed { color: var(--bad); font-weight: 600; }
+  #wiz-rail li.failed::before { background: var(--bad); border-color: var(--bad); }
+  @media (prefers-reduced-motion: reduce) { #wiz-rail li.now::before { animation: none; } }
+  #wiz-rail .clock { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+  #wiz-details { margin-top: 14px; }
+  #wiz-details summary { color: var(--muted); font-size: 12px; cursor: default; list-style: none; }
+  #wiz-details summary::-webkit-details-marker { display: none; }
+  #wiz-details summary::before { content: '\25B8'; display: inline-block; width: 13px; transition: transform 0.15s; }
+  #wiz-details[open] summary::before { transform: rotate(90deg); }
+  #wiz-details summary:hover { color: var(--text); }
+  #wiz-log {
+    margin: 8px 0 0; height: 124px; overflow: auto; padding: 8px 10px; border-radius: 8px; background: #0c0d10;
+    border: 1px solid var(--line); color: #aab1bb; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text;
+  }
+  #wizard .actions .wiz-busy { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
   footer { margin-top: 18px; text-align: center; color: #5d626b; font-size: 12px; }
   footer a { color: #7c8491; text-decoration: none; cursor: default; }
   footer a:hover { color: var(--accent); }
@@ -138,6 +214,45 @@
       <button type="button" role="tab" id="tab-remote" aria-controls="form" aria-selected="false" tabindex="-1">Another machine</button>
     </div>
 
+    <section id="wizard" aria-labelledby="wiz-title" hidden>
+      <div class="wiz-head"><span class="spinner" id="wiz-spinner" hidden></span><h2 id="wiz-title" tabindex="-1"></h2></div>
+      <p id="wiz-lead"></p>
+      <div id="wiz-message" role="alert" hidden></div>
+
+      <div class="wiz-group" id="wiz-agent-step" hidden>
+        <div id="wiz-agents" role="radiogroup" aria-labelledby="wiz-title"></div>
+        <p id="wiz-agent-note"></p>
+      </div>
+
+      <div class="wiz-group" id="wiz-reach-step" hidden>
+        <div id="wiz-reach" role="radiogroup" aria-labelledby="wiz-title">
+          <label class="choice"><input type="radio" name="reach" value="local" checked>
+            <span><b>Only this Mac</b><small>The safest choice. You can open it to other devices later.</small></span></label>
+          <label class="choice"><input type="radio" name="reach" value="network">
+            <span><b>This Mac and my local network</b><small>Phones and laptops on the same Wi-Fi sign in with a password.</small></span></label>
+        </div>
+        <div id="wiz-password" class="row" hidden>
+          <div><label class="field" for="wiz-pw">Password</label><input id="wiz-pw" type="password" autocomplete="new-password"></div>
+          <div><label class="field" for="wiz-pw2">Repeat it</label><input id="wiz-pw2" type="password" autocomplete="new-password"></div>
+        </div>
+        <ul id="wiz-summary"></ul>
+      </div>
+
+      <ol id="wiz-rail" hidden></ol>
+      <details id="wiz-details" hidden>
+        <summary>Show the installer’s output</summary>
+        <pre id="wiz-log"></pre>
+      </details>
+
+      <div class="actions">
+        <button class="secondary" id="wiz-back" type="button" hidden>Back</button>
+        <button class="secondary" id="wiz-skip" type="button" hidden>Skip for now</button>
+        <button class="primary" id="wiz-next" type="button" hidden></button>
+        <button class="secondary" id="wiz-cancel" type="button" hidden>Cancel install</button>
+      </div>
+      <button class="wiz-link" id="wiz-terminal" type="button" hidden>Install in Terminal instead (asks for your Mac password)</button>
+    </section>
+
     <p id="webkit" role="alert" hidden>Codeman needs a newer WebKit than this Mac has: macOS 13.3 or later, or Safari 16.4 or later on macOS 11 and 12.</p>
 
     <section id="pane-local" role="tabpanel" aria-labelledby="tab-local">
@@ -148,7 +263,6 @@
           <div class="sub" id="local-detail"></div>
         </div>
       </div>
-      <label class="check" id="local-network-row" hidden><input id="local-network" type="checkbox"> Also reach it from my phone and other computers (the installer asks how)</label>
       <div class="actions">
         <button class="primary" id="local-open" type="button" hidden>Open Codeman</button>
         <button class="primary" id="local-start" type="button" hidden>Start Codeman</button>
@@ -236,7 +350,13 @@
     auto: $('auto'), fullscreen: $('fullscreen'), version: $('version'), webkit: $('webkit'),
     tabLocal: $('tab-local'), tabRemote: $('tab-remote'), paneLocal: $('pane-local'),
     localDot: $('local-dot'), localTitle: $('local-title'), localDetail: $('local-detail'),
-    localNetworkRow: $('local-network-row'), localNetwork: $('local-network'),
+    card: document.querySelector('.card'),
+    wizard: $('wizard'), wizSpinner: $('wiz-spinner'), wizTitle: $('wiz-title'), wizLead: $('wiz-lead'), wizMessage: $('wiz-message'),
+    wizAgentStep: $('wiz-agent-step'), wizAgents: $('wiz-agents'), wizAgentNote: $('wiz-agent-note'),
+    wizReachStep: $('wiz-reach-step'), wizPassword: $('wiz-password'), wizPw: $('wiz-pw'), wizPw2: $('wiz-pw2'),
+    wizSummary: $('wiz-summary'), wizRail: $('wiz-rail'), wizDetails: $('wiz-details'), wizLog: $('wiz-log'),
+    wizBack: $('wiz-back'), wizSkip: $('wiz-skip'), wizNext: $('wiz-next'), wizCancel: $('wiz-cancel'),
+    wizTerminal: $('wiz-terminal'),
     localOpen: $('local-open'), localStart: $('local-start'), localInstall: $('local-install'),
     localStop: $('local-stop'), localCheck: $('local-check'),
     elsewhere: $('elsewhere'), ssh: $('ssh'), sshInstall: $('ssh-install'), copy: $('copy')
@@ -247,17 +367,21 @@
   // suggestion: the address the suggest button connects to.
   // tab: 'local' (This Mac) or 'remote' (Another machine). local: the last
   // This Mac status from the app. wait: set while an install runs in
-  // Terminal and this page polls for the server it brings up.
+  // Terminal and this page polls for the server it brings up. gui: the
+  // graphical install while its screens are up (newWizard), null otherwise.
   var state = {
     servers: [], busy: false, lastUrl: '', startUrl: '', suggestion: '',
     tab: 'local', local: null, localChecking: false, opening: false, wait: null, waitTimer: 0,
-    stoppedWaiting: false
+    stoppedWaiting: false, gui: null
   };
   // While an install runs: how often to look, how long a finished install may
   // take to answer before Start is offered, and when to stop looking.
   var WAIT_POLL_MS = 3000;
   var WAIT_START_GRACE_MS = 90 * 1000;
   var WAIT_MAX_MS = 30 * 60 * 1000;
+  // The phases `install.sh --progress` reports, in its order.
+  var PHASES = ['runtime', 'agent', 'source', 'packages', 'build', 'service'];
+  var MAX_LOG_LINES = 600;
 
   function post(msg) { try { window.ipc.postMessage(JSON.stringify(msg)); } catch (e) { /* not in the app */ } }
 
@@ -541,7 +665,7 @@
 
   function renderLocal() {
     var s = state.local;
-    var show = { open: false, start: false, install: false, stop: false, check: false, network: false };
+    var show = { open: false, start: false, install: false, stop: false, check: false };
     var dot = '';
     var title = '';
     var detail = '';
@@ -589,19 +713,17 @@
       show.check = true;
     } else if (s.state === 'notInstalled') {
       title = 'Codeman is not installed on this Mac.';
-      detail = 'Install runs Codeman’s installer in Terminal: a few minutes, and it may ask for your Mac password. ' +
+      detail = 'Install sets it up here in a few minutes, with no password and no Terminal. ' +
         'Codeman then runs in the background and starts when you log in, so your sessions keep running when this app is closed.';
       show.install = true;
-      show.network = true;
       show.check = true;
     } else if (!s.installed) {
       // Something else holds Codeman's port; a fresh install takes the next free one.
       var other = s.outcome || {};
       title = 'Codeman is not installed on this Mac.';
       detail = 'Something else answers at ' + s.url + (other.kind === 'notCodeman' ? ' (HTTP ' + other.status + ')' : '') +
-        ', so Install sets Codeman up on the next free port. It runs Codeman’s installer in Terminal: a few minutes, and it may ask for your Mac password.';
+        ', so Install sets Codeman up on the next free port: a few minutes, with no password and no Terminal.';
       show.install = true;
-      show.network = true;
       show.check = true;
     } else {
       var o = s.outcome || {};
@@ -624,16 +746,24 @@
     els.localInstall.hidden = !show.install;
     els.localStop.hidden = !show.stop;
     els.localCheck.hidden = !show.check;
-    els.localNetworkRow.hidden = !show.network;
     syncLocalButtons();
   }
 
   function onLocalStatus(s) {
     state.localChecking = false;
     state.local = s || null;
+    // The graphical install is running without this page (it was reloaded, or
+    // the app was quit and opened again): show it from its first line.
+    if (s && s.installInApp && !state.gui) {
+      state.gui = newWizard('installing');
+      state.gui.port = s.installPort || 3000;
+      post({ cmd: 'installAttach' });
+      renderWizard();
+      return;
+    }
     // An install from this app is still running (this page was shown again
     // while it ran): wait for it, unless the user stopped waiting.
-    if (!state.wait && s && s.installRunning && !state.stoppedWaiting && s.state !== 'running' && s.state !== 'needsLogin') {
+    if (!state.wait && s && s.installRunning && !s.installInApp && !state.stoppedWaiting && s.state !== 'running' && s.state !== 'needsLogin') {
       state.wait = { since: Date.now(), finishedAt: 0, port: s.installPort || 3000 };
       renderLocal();
       scheduleWait();
@@ -670,12 +800,402 @@
     post({ cmd: 'startServer', url: state.startUrl });
   }
 
-  function installLocal() {
+  // The Terminal route: what the graphical install cannot do, and what anyone
+  // may prefer. The installer asks its own questions there.
+  function installInTerminal() {
     if (state.busy || tooOld || state.opening) return;
+    var network = !!state.gui && state.gui.reach === 'network';
+    closeWizard();
+    selectTab('local');
     state.opening = true;
     syncLocalButtons();
     setStatus('busy', 'Opening Terminal…');
-    post({ cmd: 'installLocal', network: els.localNetwork.checked });
+    post({ cmd: 'installLocal', network: network });
+  }
+
+  function newWizard(step) {
+    return {
+      step: step, plan: null, agent: '', reach: 'local', port: 3000, message: '', phase: '',
+      phaseSince: 0, seen: {}, log: [], ok: false
+    };
+  }
+
+  function openWizard() {
+    if (state.busy || tooOld || state.opening) return;
+    state.gui = newWizard('preparing');
+    post({ cmd: 'installPrepare' });
+    renderWizard();
+  }
+
+  function closeWizard() {
+    clearInterval(state.clock);
+    state.gui = null;
+    renderWizard();
+    renderLocal();
+  }
+
+  function retryWizard() {
+    var reach = state.gui ? state.gui.reach : 'local';
+    var agent = state.gui ? state.gui.agent : '';
+    state.gui = newWizard('preparing');
+    state.gui.reach = reach;
+    state.gui.agent = agent;
+    post({ cmd: 'installPrepare' });
+    renderWizard();
+  }
+
+  function installedAgents() {
+    var g = state.gui;
+    return g && g.plan ? g.plan.clis.filter(function (c) { return c.installed; }) : [];
+  }
+
+  function offeredAgents() {
+    var g = state.gui;
+    return g && g.plan ? g.plan.clis.filter(function (c) { return c.installable; }) : [];
+  }
+
+  function agentById(id) {
+    return offeredAgents().filter(function (c) { return c.id === id; })[0] || null;
+  }
+
+  // The first step the installer's answer calls for. The agent step exists
+  // only when this Mac has no coding agent at all.
+  function onInstallPlan(plan) {
+    var g = state.gui;
+    if (!g || g.step !== 'preparing') return;
+    g.plan = plan;
+    if (plan.blocker) {
+      g.step = 'blocked';
+    } else if (!installedAgents().length && offeredAgents().length) {
+      // Kept across Try again; otherwise the first of the catalogue's order.
+      if (!agentById(g.agent)) g.agent = offeredAgents()[0].id;
+      g.step = 'agent';
+    } else {
+      g.step = 'reach';
+    }
+    renderWizard();
+  }
+
+  function renderAgents() {
+    var g = state.gui;
+    els.wizAgents.textContent = '';
+    offeredAgents().forEach(function (c) {
+      var label = document.createElement('label');
+      label.className = 'choice';
+      var input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'agent';
+      input.value = c.id;
+      input.checked = c.id === g.agent;
+      input.addEventListener('change', function () {
+        g.agent = c.id;
+        renderAgentNote();
+      });
+      var name = document.createElement('b');
+      name.textContent = c.label;
+      var text = document.createElement('span');
+      text.appendChild(name);
+      label.appendChild(input);
+      label.appendChild(text);
+      els.wizAgents.appendChild(label);
+    });
+    renderAgentNote();
+  }
+
+  function renderAgentNote() {
+    var c = agentById(state.gui.agent);
+    els.wizAgentNote.textContent = '';
+    if (!c) return;
+    els.wizAgentNote.appendChild(document.createTextNode('You sign in to ' + c.label + ' the first time you start it. '));
+    if (/^https:\/\//.test(c.docs)) {
+      var a = document.createElement('a');
+      a.href = '#';
+      a.textContent = 'About ' + c.label;
+      a.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        post({ cmd: 'openExternal', url: c.docs });
+      });
+      els.wizAgentNote.appendChild(a);
+    }
+  }
+
+  function renderSummary() {
+    var g = state.gui;
+    var plan = g.plan;
+    var lines = [{ text: 'Installs into your home folder (about 1 GB), with no administrator password' }];
+    var needs = [];
+    if (plan.needs.node) needs.push('Node.js');
+    if (plan.needs.tmux) needs.push('tmux');
+    if (needs.length) lines.push({ text: 'Downloads ' + needs.join(' and ') });
+    var found = installedAgents();
+    var chosen = agentById(g.agent);
+    if (found.length) {
+      lines.push({ text: 'Uses ' + found.map(function (c) { return c.label; }).join(', ') + ', already on this Mac' });
+    } else if (chosen) {
+      lines.push({ text: 'Installs ' + chosen.label });
+    } else {
+      lines.push({ text: 'No coding agent yet: Codeman opens, but sessions need one to run', warn: true });
+    }
+    lines.push({ text: 'Runs in the background and starts when you log in' });
+    if (plan.needs.git) lines.push({ text: 'This Mac has no git, so you update Codeman by running this install again' });
+    els.wizSummary.textContent = '';
+    lines.forEach(function (line) {
+      var li = document.createElement('li');
+      li.textContent = line.text;
+      if (line.warn) li.className = 'warn';
+      els.wizSummary.appendChild(li);
+    });
+  }
+
+  // Which rows the rail has. A run this page did not start has no plan, so it
+  // shows what the installer reported instead.
+  function railRows() {
+    var g = state.gui;
+    var plan = g.plan;
+    var chosen = agentById(g.agent);
+    var rows = [];
+    PHASES.forEach(function (id) {
+      var label = {
+        runtime: 'Getting Node.js and tmux',
+        agent: 'Installing ' + (chosen ? chosen.label : 'a coding agent'),
+        source: 'Downloading Codeman',
+        packages: 'Installing packages',
+        build: 'Building Codeman',
+        service: 'Starting Codeman'
+      }[id];
+      if (id === 'runtime' && plan) {
+        if (!plan.needs.node && !plan.needs.tmux) return;
+        if (!plan.needs.tmux) label = 'Getting Node.js';
+        if (!plan.needs.node) label = 'Getting tmux';
+      }
+      if (id === 'agent' && (plan ? !chosen : !g.seen.agent)) return;
+      rows.push({ id: id, label: label });
+    });
+    return rows;
+  }
+
+  function clockText(since) {
+    var s = Math.max(0, Math.floor((Date.now() - since) / 1000));
+    return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
+  }
+
+  function renderRail() {
+    var g = state.gui;
+    var current = PHASES.indexOf(g.phase);
+    els.wizRail.textContent = '';
+    railRows().forEach(function (row) {
+      var at = PHASES.indexOf(row.id);
+      var li = document.createElement('li');
+      var name = document.createElement('span');
+      name.textContent = row.label;
+      li.appendChild(name);
+      if (g.ok || at < current) {
+        li.className = 'done';
+      } else if (at === current && g.step === 'failed') {
+        li.className = 'failed';
+      } else if (at === current) {
+        li.className = 'now';
+        li.setAttribute('aria-current', 'step');
+        var clock = document.createElement('span');
+        clock.className = 'clock';
+        clock.id = 'wiz-clock';
+        clock.textContent = clockText(g.phaseSince);
+        li.appendChild(clock);
+      }
+      els.wizRail.appendChild(li);
+    });
+  }
+
+  function renderLog() {
+    var log = els.wizLog;
+    var atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+    log.textContent = state.gui.log.join('\n');
+    if (atEnd) log.scrollTop = log.scrollHeight;
+  }
+
+  function appendLog(lines) {
+    var g = state.gui;
+    if (!lines || !lines.length) return;
+    g.log = g.log.concat(lines).slice(-MAX_LOG_LINES);
+    renderLog();
+  }
+
+  function setPhase(phase) {
+    var g = state.gui;
+    if (!phase || phase === g.phase || PHASES.indexOf(phase) < 0) return;
+    g.phase = phase;
+    g.phaseSince = Date.now();
+    g.seen[phase] = true;
+    renderRail();
+  }
+
+  function onInstallUpdate(msg) {
+    var g = state.gui;
+    if (!g || g.step !== 'installing') return;
+    setPhase(msg.phase);
+    appendLog(msg.log);
+  }
+
+  function onInstallFinished(msg) {
+    var g = state.gui;
+    if (!g) return;
+    appendLog(msg.log);
+    clearInterval(state.clock);
+    if (msg.ok) {
+      g.ok = true;
+      g.step = 'finishing';
+      renderWizard();
+      // The same watch as a Terminal install: it opens Codeman at the first
+      // answer, and offers Start when none comes.
+      state.wait = { since: Date.now(), finishedAt: 0, port: g.port };
+      checkLocal('quick');
+      return;
+    }
+    if (msg.cancelled) {
+      closeWizard();
+      checkLocal('login');
+      setStatus('', 'Install cancelled.', 'Install again to pick up where it stopped.');
+      return;
+    }
+    g.step = 'failed';
+    g.message = msg.error || 'The installer stopped without saying why.';
+    renderWizard();
+    els.wizDetails.open = true;
+    renderLog();
+  }
+
+  // Each screen of the graphical install, drawn from state.gui alone.
+  function renderWizard() {
+    var g = state.gui;
+    els.card.classList.toggle('wizard-on', !!g);
+    els.wizard.hidden = !g;
+    if (!g) return;
+    var step = g.step;
+    var copy = {
+      preparing: ['Looking at this Mac', 'Getting the installer and checking what is already here.'],
+      blocked: ['This Mac needs something first', ''],
+      prepareFailed: ['Could not get the installer', ''],
+      agent: ['Choose a coding agent', 'Codeman runs coding agents, and this Mac has none yet. Pick one to install with Codeman. You can add more later.'],
+      reach: ['Who can reach Codeman?', ''],
+      installing: ['Installing Codeman', 'You can close this window. The install keeps going, and the app picks it up when you open it again.'],
+      finishing: ['Starting Codeman', 'Codeman opens here as soon as it answers.'],
+      failed: ['The install stopped', 'Its full log is in ~/.codeman/install.log. Try again picks up where it stopped.']
+    }[step];
+    els.wizSpinner.hidden = !(step === 'preparing' || step === 'finishing');
+    els.wizTitle.textContent = copy[0];
+    els.wizLead.textContent = copy[1];
+    els.wizLead.hidden = !copy[1];
+
+    var message = step === 'blocked' ? g.plan.blocker : (step === 'prepareFailed' || step === 'failed') ? g.message : '';
+    els.wizMessage.textContent = message;
+    els.wizMessage.hidden = !message;
+    els.wizMessage.className = step === 'blocked' ? 'warn' : '';
+
+    els.wizAgentStep.hidden = step !== 'agent';
+    els.wizReachStep.hidden = step !== 'reach';
+    var running = step === 'installing' || step === 'finishing' || step === 'failed';
+    els.wizRail.hidden = !running;
+    els.wizDetails.hidden = !running;
+
+    if (step === 'agent') renderAgents();
+    if (step === 'reach') {
+      renderSummary();
+      syncReach();
+    }
+    if (running) renderRail();
+    clearInterval(state.clock);
+    if (step === 'installing') {
+      state.clock = setInterval(function () {
+        var clock = $('wiz-clock');
+        if (clock) clock.textContent = clockText(state.gui.phaseSince);
+      }, 1000);
+    }
+
+    var next = {
+      agent: 'Continue', reach: 'Install Codeman', failed: 'Try again', prepareFailed: 'Try again', blocked: 'Install in Terminal'
+    }[step];
+    els.wizNext.hidden = !next;
+    els.wizNext.textContent = next || '';
+    // Not while preparing: a second prepare would clear the folder of the first.
+    els.wizBack.hidden = !(step === 'blocked' || step === 'prepareFailed' || step === 'agent' || step === 'reach');
+    els.wizSkip.hidden = step !== 'agent';
+    els.wizCancel.hidden = step !== 'installing';
+    els.wizCancel.disabled = false;
+    els.wizTerminal.hidden = !(step === 'reach' || step === 'failed' || step === 'prepareFailed');
+
+    if (step === 'agent') {
+      var checked = els.wizAgents.querySelector('input:checked');
+      if (checked) checked.focus();
+    } else if (step === 'reach' || step === 'blocked' || step === 'failed' || step === 'prepareFailed') {
+      els.wizNext.focus();
+    } else {
+      els.wizTitle.focus();
+    }
+  }
+
+  function syncReach() {
+    var g = state.gui;
+    var network = g.reach === 'network';
+    els.wizPassword.hidden = !network;
+    Array.prototype.forEach.call(document.getElementsByName('reach'), function (r) { r.checked = r.value === g.reach; });
+  }
+
+  function startInstall() {
+    var g = state.gui;
+    var password = '';
+    if (g.reach === 'network') {
+      password = els.wizPw.value;
+      if (!password) {
+        els.wizMessage.textContent = 'Set a password for the other devices to sign in with.';
+        els.wizMessage.hidden = false;
+        els.wizPw.focus();
+        return;
+      }
+      if (password !== els.wizPw2.value) {
+        els.wizMessage.textContent = 'The two passwords are different.';
+        els.wizMessage.hidden = false;
+        els.wizPw2.focus();
+        return;
+      }
+    }
+    var msg = { cmd: 'installStart' };
+    if (password) msg.networkPassword = password;
+    if (!installedAgents().length && agentById(g.agent)) msg.aiCli = g.agent;
+    els.wizPw.value = '';
+    els.wizPw2.value = '';
+    g.step = 'installing';
+    g.phase = '';
+    g.seen = {};
+    g.log = [];
+    renderLog();
+    renderWizard();
+    post(msg);
+  }
+
+  function wizardNext() {
+    var g = state.gui;
+    if (!g) return;
+    if (g.step === 'agent') {
+      g.step = 'reach';
+      renderWizard();
+    } else if (g.step === 'reach') {
+      startInstall();
+    } else if (g.step === 'failed' || g.step === 'prepareFailed') {
+      retryWizard();
+    } else if (g.step === 'blocked') {
+      installInTerminal();
+    }
+  }
+
+  function wizardBack() {
+    var g = state.gui;
+    if (!g) return;
+    if (g.step === 'reach' && !installedAgents().length && offeredAgents().length && !g.plan.blocker) {
+      g.step = 'agent';
+      renderWizard();
+    } else {
+      closeWizard();
+    }
   }
 
   function scheduleWait() {
@@ -686,6 +1206,7 @@
   function endWait() {
     clearTimeout(state.waitTimer);
     state.wait = null;
+    if (state.gui && state.gui.step === 'finishing') closeWizard();
   }
 
   // One answer while an install runs. It stops at the first answer from a
@@ -822,6 +1343,32 @@
           renderLocal();
           scheduleWait();
           break;
+        case 'installPlan':
+          onInstallPlan(msg.plan);
+          break;
+        case 'installPrepareFailed':
+          if (state.gui && state.gui.step === 'preparing') {
+            state.gui.step = 'prepareFailed';
+            state.gui.message = msg.message || 'Could not get the installer.';
+            renderWizard();
+          }
+          break;
+        case 'installRunning':
+          if (state.gui) state.gui.port = Number(msg.port) || 3000;
+          break;
+        case 'installStartFailed':
+          if (state.gui) {
+            state.gui.step = 'failed';
+            state.gui.message = msg.message || 'Could not start the installer.';
+            renderWizard();
+          }
+          break;
+        case 'installUpdate':
+          onInstallUpdate(msg);
+          break;
+        case 'installFinished':
+          onInstallFinished(msg);
+          break;
         case 'remoteInstallStarted':
           state.opening = false;
           syncLocalButtons();
@@ -875,7 +1422,28 @@
   });
   els.localOpen.addEventListener('click', openLocal);
   els.localStart.addEventListener('click', startLocal);
-  els.localInstall.addEventListener('click', installLocal);
+  els.localInstall.addEventListener('click', openWizard);
+  els.wizNext.addEventListener('click', wizardNext);
+  els.wizBack.addEventListener('click', wizardBack);
+  els.wizSkip.addEventListener('click', function () {
+    if (!state.gui) return;
+    state.gui.agent = '';
+    state.gui.step = 'reach';
+    renderWizard();
+  });
+  els.wizCancel.addEventListener('click', function () {
+    els.wizCancel.disabled = true;
+    post({ cmd: 'installCancel' });
+  });
+  els.wizTerminal.addEventListener('click', installInTerminal);
+  Array.prototype.forEach.call(document.getElementsByName('reach'), function (radio) {
+    radio.addEventListener('change', function () {
+      if (!state.gui) return;
+      state.gui.reach = radio.value;
+      els.wizMessage.hidden = true;
+      syncReach();
+    });
+  });
   els.localStop.addEventListener('click', function () { state.stoppedWaiting = true; endWait(); checkLocal('login'); });
   els.localCheck.addEventListener('click', function () { if (!state.busy && !state.localChecking) checkLocal('deep'); });
   els.sshInstall.addEventListener('click', installRemote);

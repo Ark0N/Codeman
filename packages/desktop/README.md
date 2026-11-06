@@ -28,7 +28,7 @@ cannot do.
 
 | | |
 | --- | --- |
-| **This Mac** | The connect screen's first tab looks for Codeman on this Mac and offers what fits: *Open Codeman* when it runs, *Start Codeman* when it is installed but stopped, *Install Codeman on this Mac* when it is not there. The address comes from Codeman's LaunchAgent (port, sub-path, HTTPS). When nothing answers there but one of your own Codeman servers runs (found with `ps` and `lsof`: a `codeman web --port 4000` in a terminal, say), the tab opens that one, or says where it listens; it never offers to start a second server, which would take over the first one's sessions, and Start refuses while one runs. Start asks launchd to run the LaunchAgent (`kickstart`, or `bootstrap` when it is not loaded), so the server keeps its own settings and supervision; without a LaunchAgent it runs `codeman web -d`. The login comes from where Codeman keeps it: the LaunchAgent's `CODEMAN_USERNAME`/`CODEMAN_PASSWORD`, else `~/.codeman/.env` (what Codeman's command-line clients read), `admin` by default. It goes only to `127.0.0.1` on that Codeman's port, only while one of your own Codeman processes holds that port, is never saved to the Keychain, and never reaches the page. Whether Codeman is installed is looked up in its files and processes, then the login shell; the interactive profile (nvm in `.zshrc`, say) only on *Check again*. Install opens Terminal with Codeman's installer (`install.sh --local --service --port N`): it may ask for the Mac password (Homebrew, Node.js, tmux) and which AI coding tools to set up, then Codeman runs as a LaunchAgent, so it keeps running when the app quits and starts at login. *Also reach it from my phone and other computers* drops `--local`, and the installer asks how (Tailscale, or the local network with a password). Port 3000 is used unless something else answers there, then the next free one. While the installer runs, the app looks every 3 seconds and opens Codeman as soon as it answers; it stops looking after the first answer, after 30 minutes, or 90 seconds after a finished install whose server never answered (then it offers Start). An install still running in Terminal is recognized by its process, so the tab waits for it instead of offering Install twice. |
+| **This Mac** | The connect screen's first tab looks for Codeman on this Mac and offers what fits: *Open Codeman* when it runs, *Start Codeman* when it is installed but stopped, *Install Codeman on this Mac* when it is not there. The address comes from Codeman's LaunchAgent (port, sub-path, HTTPS). When nothing answers there but one of your own Codeman servers runs (found with `ps` and `lsof`: a `codeman web --port 4000` in a terminal, say), the tab opens that one, or says where it listens; it never offers to start a second server, which would take over the first one's sessions, and Start refuses while one runs. Start asks launchd to run the LaunchAgent (`kickstart`, or `bootstrap` when it is not loaded), so the server keeps its own settings and supervision; without a LaunchAgent it runs `codeman web -d`. The login comes from where Codeman keeps it: the LaunchAgent's `CODEMAN_USERNAME`/`CODEMAN_PASSWORD`, else `~/.codeman/.env` (what Codeman's command-line clients read), `admin` by default. It goes only to `127.0.0.1` on that Codeman's port, only while one of your own Codeman processes holds that port, is never saved to the Keychain, and never reaches the page. Whether Codeman is installed is looked up in its files and processes, then the login shell; the interactive profile (nvm in `.zshrc`, say) only on *Check again*. Install sets Codeman up from the app itself, with no Terminal and no password (see Decisions). It fetches the installer, asks it what is on this Mac, then asks two things: which coding agent to install, only when this Mac has none (the list comes from the installer, and *Skip for now* is there), and who can reach Codeman (this Mac only, or the local network with a password). A checklist follows the install, the installer's output is one click away, and Cancel stops it; installing again picks up where it stopped. Codeman runs as a LaunchAgent, so it keeps running when the app quits and starts at login. Port 3000 is used unless something else answers there, then the next free one. Closing the app does not stop an install: it runs on its own, and the app picks it up when it opens again. When it is done the app looks every 3 seconds and opens Codeman as soon as it answers; it stops looking after the first answer, after 30 minutes, or 90 seconds after a finished install whose server never answered (then it offers Start). *Install in Terminal instead* runs the installer in a Terminal window, for what the app cannot do (see Known limits): it may ask for the Mac password (Homebrew) and asks its own questions there. The app offers it by itself on a Mac where the graphical install cannot finish. An install still running in Terminal is recognized by its process, so the tab waits for it instead of offering Install twice. |
 | **Another machine** | The second tab connects to a server by address (below). *Codeman is not installed there yet?* opens Terminal, connects with `ssh -t` and runs Codeman's installer on that machine, which asks its questions there; the app then suggests `http://<host>:3000` and the installer prints the real address at the end. The SSH login is checked to the characters of a user and host name (no option can be slipped in) and may carry a `:port`. The remote command runs under `bash -o pipefail`, so a failed download fails the install instead of reporting success. The same tab shows the one-line install command, with a Copy button, to run on a machine by hand. |
 | **Connect screen** | Server address, recent servers, a login for password-protected servers (password kept in the macOS Keychain), auto-connect at launch. It explains each failure: nothing listening; wrong password; too many failed logins (the password field stays open, since a single-user Codeman accepts the right password even then); unknown host name; an address this Mac cannot reach (with a pointer to the Local Network setting); an `http://` address on a port that only speaks HTTPS; an untrusted certificate; a redirect, with a button for the suggested `https://` address; not a Codeman server. A multi-user account that must change its password connects, and Codeman's own dialog asks for the new one. If the server page has not started showing within 15 seconds, or you press Cancel while it opens, the connect screen comes back with a notice. On a Mac whose WebKit is too old for Codeman it says so and Connect stays off (see Known limits). |
 | **Start Codeman** | On the This Mac tab, and when `http://127.0.0.1:<port>` or `http://localhost:<port>` answers nothing, one click runs `codeman web -d` (or `~/.codeman/app`) with your login shell's environment, so the server gets your real PATH (Homebrew, nvm) for the agents it spawns. zsh, bash and other POSIX shells run the start themselves; fish, nu, xonsh, tcsh and other shells only report their environment, and the start runs under `/bin/sh` with it. Offered for those two addresses only: `codeman web -d` listens on 127.0.0.1. |
@@ -53,6 +53,11 @@ cargo test                                  # unit tests
 ./scripts/bundle-macos.sh --universal --dmg # Apple Silicon + Intel, plus dist/Codeman-<version>.dmg
 open dist/Codeman.app
 ```
+
+To try a change to `install.sh` before it is merged, build with
+`CODEMAN_DESKTOP_INSTALLER_URL` (where to get the installer) and
+`CODEMAN_DESKTOP_INSTALL_BRANCH` (the branch it installs from) set. Both are
+read at compile time: a shipped app cannot be pointed at another installer.
 
 The script builds with `--locked` against the committed `Cargo.lock`, targets
 the macOS version in `macos/Info.plist` (`LSMinimumSystemVersion`, 11.3), and
@@ -133,19 +138,40 @@ classes of wry's own delegates, so wry stays an unmodified crates.io dependency.
 - `codeman web -d` gets the port and base path as separate arguments, never as
   shell text.
 
-**The installer runs in Terminal, not inside the app.** `install.sh` asks for
-the administrator password on a terminal (Homebrew, its sudo keep-alive), the
-Xcode tools arrive as a system dialog, and ssh asks about host keys and
-passwords on a terminal too, so an install without one fails on the first
-fresh Mac. The app writes a short script to the per-user temporary folder
-(mode 0700, created fresh, deleted by the script as it starts) and opens it
-with `open -b com.apple.Terminal`, which needs no permission; scripting
-Terminal with osascript would ask for Automation access. The script prints
-what it runs. A This Mac install downloads the installer to a temporary file
-and runs it from there, so the installer's input is the terminal. Everything in
-the scripts is built and unit-tested in `src/setup.rs`; the page sends only
-which install it wants, whether other devices should reach it, and the SSH
-login, which is checked before it is quoted.
+**The app runs the installer itself; Terminal is the fallback.** `install.sh
+--no-admin` puts Node.js and tmux in the home folder, so a This Mac install needs
+no password and therefore no terminal, and the two questions only a person can
+answer arrive as flags (`src/gui_install.rs`). The app downloads the installer
+once to a private folder, asks it what is on this Mac (`install.sh preflight`,
+which prints JSON and changes nothing) and draws its choices from that answer.
+So the app has no list of coding agents of its own: a new one appears without a
+new app, and the list always matches what the installer can really install
+here. The installer runs with the login shell's environment, so it finds what
+this person already has. The page sends only the agent's id, whether other
+devices may reach Codeman, and that password; the password reaches the
+installer through its environment, never its command line, where `ps` shows it.
+
+**The install outlives the app.** Its output goes to a file, never a pipe, and
+it runs in a process group of its own. With a pipe, quitting the app would kill
+the installer at its next write; in the app's group, launchd would kill it with
+the app. The file holds the whole run, so a page that was reloaded, or an app
+that was opened again, finds the process in `ps` and replays the file from the
+first line. That is why the app keeps no state about a run. A run that ends
+without the installer's last `done` line failed, and the first error it reported
+is the one shown: the ones after it are consequences.
+
+**Terminal stays for what the app cannot do.** The route with Homebrew asks for
+the administrator password on a terminal, the Xcode tools arrive as a system
+dialog, and ssh asks about host keys and passwords on a terminal too. The app
+writes a short script to the per-user temporary folder (mode 0700, created
+fresh, deleted by the script as it starts) and opens it with `open -b
+com.apple.Terminal`, which needs no permission; scripting Terminal with
+osascript would ask for Automation access. The script prints what it runs. A
+This Mac install downloads the installer to a temporary file and runs it from
+there, so the installer's input is the terminal. Everything in the scripts is
+built and unit-tested in `src/setup.rs`; the page sends only which install it
+wants, whether other devices should reach it, and the SSH login, which is
+checked before it is quoted.
 
 **This Mac's own login comes from where Codeman keeps it.** A Codeman
 installed with a password keeps it in its LaunchAgent (`install.sh`) or in
@@ -249,6 +275,20 @@ and the Dock icon bounces.
 - **No desktop notifications yet.** WKWebView has no Web Notification API.
   Native notifications are the first item on the list below.
 - **No service worker.** Codeman works without it; it is only an offline cache.
+- **The graphical install needs macOS 15, or a tmux that is already there.**
+  tmux comes from the tmux project's own builds, which need macOS 15. On an
+  older Mac without tmux the app says so and offers Terminal, where Homebrew
+  installs it (that takes an administrator once).
+- **Who can reach it stops at the local network.** Tailscale needs its own
+  login and setup, which the installer does at a terminal. Choose *Install in
+  Terminal instead*, or run `install.sh tailscale` later.
+- **The agent is chosen during the install.** With Codeman already installed,
+  or after *Skip for now*, an agent is added by hand: its commands are in the
+  installer's closing notes and in [Installing an agent CLI](../../docs/wiki/Installation.md#installing-an-agent-cli).
+- **An agent only your interactive profile finds counts as missing.** The app
+  reads the login shell's environment, without `.zshrc`, so a CLI on an nvm
+  PATH set up there is offered again as if it were not installed. Installing
+  it again is harmless; *Skip for now* leaves it as it is.
 - **Installing from the app is macOS only so far**, and installing on another
   machine needs ssh access to it and `curl` or `wget` there. The app does not
   know when a remote install is done or which address it chose: the installer

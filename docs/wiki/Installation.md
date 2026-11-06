@@ -78,6 +78,7 @@ install.sh uninstall    # remove (offers to undo a rename it performed)
 install.sh tailscale    # retrofit Tailscale access onto an existing install
 install.sh name [<n>]   # rename this machine on your tailnet (default codeman-<hostname>)
 install.sh cloudflared  # install cloudflared for the in-app Cloudflare tunnel
+install.sh preflight    # print what is on this machine as JSON; changes nothing
 ```
 
 **Flags** answer the questions from the command line and pipe through `bash -s --`:
@@ -94,10 +95,14 @@ the name, `--service` / `--run` / `--no-start` the last one. `--yes` takes every
 `--port <n>` moves Codeman off 3000; the service file and the serve mapping follow it. On an
 existing install, `--port` and `--password` re-run the setup so the service file picks them up,
 and a re-run with `--lan` or `--tailscale` keeps the password the service already has.
+`--ai-cli <id>` answers the agent menu that appears when no agent CLI is found, with no
+terminal needed (`--ai-cli claude`, `--ai-cli codex`, ...), and `--ai-cli none` skips it.
 
 **Automation and CI**: with no terminal attached, any step that would change the system
 aborts with instructions instead of running silently. Set `CODEMAN_NONINTERACTIVE=1` to
-approve those steps. `CODEMAN_TAILSCALE=1` preselects the Tailscale answer, and never
+approve those steps. With nothing else said, that also installs the first agent CLI of the
+catalogue when none is found; `--ai-cli` (or `CODEMAN_AI_CLI`) says which one, or none.
+`CODEMAN_TAILSCALE=1` preselects the Tailscale answer, and never
 installs Tailscale itself non-interactively; a non-interactive run never renames the
 machine and never starts a service. Everything the unattended steps print goes to
 `~/.codeman/install.log`, and the last lines of it are shown when a step fails.
