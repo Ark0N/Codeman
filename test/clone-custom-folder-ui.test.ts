@@ -72,4 +72,18 @@ describe('Clone Repo custom folder', () => {
     const { body } = await requestBody(fetchMock);
     expect(body.path).toBeUndefined();
   });
+
+  it('refreshes the preview when the preflight replaces the case name', () => {
+    const { app, doc, set } = bootClone();
+    set('cloneRepoUrl', 'https://github.com/opticon454/bifrost?tab=readme-ov-file');
+    set('cloneCaseName', 'bifrost-tab-readme-ov-file');
+    set('cloneCasePath', '/mnt/projects');
+    app.updateCloneCasePathPreview();
+    expect(doc.getElementById('cloneCasePathPreview')?.textContent).toBe(
+      'Will clone into: /mnt/projects/bifrost-tab-readme-ov-file'
+    );
+    app._applyClonePreflight({ gitAvailable: true, parse: { cloneable: true, suggestedName: 'bifrost' } }, '');
+    expect((doc.getElementById('cloneCaseName') as HTMLInputElement).value).toBe('bifrost');
+    expect(doc.getElementById('cloneCasePathPreview')?.textContent).toBe('Will clone into: /mnt/projects/bifrost');
+  });
 });
