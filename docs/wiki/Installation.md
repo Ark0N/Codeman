@@ -117,7 +117,8 @@ installer says so in its summary (`Admin  not used (...)`) and gets those anothe
 
 This route is taken by itself when `sudo` is not installed, when the account is outside the
 `sudo`, `wheel` and `admin` groups and `sudo` will not run without a password, when the
-`sudo` password is refused, and on a Mac for an account that is not an administrator.
+`sudo` password is refused, and on a Mac for an account that is not an administrator and
+has no Homebrew it can write to.
 `--no-admin` (or `CODEMAN_NO_ADMIN=1`) forces it on an account that does have the rights;
 `CODEMAN_NO_ADMIN=0` switches the detection off. Nothing on this route runs `sudo`,
 Homebrew or the Xcode tools installer.
