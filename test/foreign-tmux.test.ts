@@ -38,6 +38,12 @@ import { bashCArg, buildAdoptSessionCommand } from '../src/tmux-manager.js';
 import type { RemoteHost, SessionAdopt } from '../src/types/session.js';
 import { PROC_WALK_MAX_NODES } from '../src/proc-tree.js';
 import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
+import {
+  FOREIGN_MAX_ARGV_CHARS,
+  FOREIGN_MAX_PANES,
+  FOREIGN_MAX_PROCS,
+  FOREIGN_PROBE_MAX_BYTES,
+} from '../src/config/foreign-tmux.js';
 import { hooksAvailableForMode, sessionHookOptions } from '../src/web/session-wait-registry.js';
 
 // A probe transcript in exactly the shape a real run produces. The pane rows use
@@ -911,5 +917,92 @@ describe('hooksAvailableForMode for an adopted session', () => {
   it('derives `adopted` from the session, so every call site inherits it', () => {
     expect(sessionHookOptions({ adopt: { targetSession: 'work' } }).adopted).toBe(true);
     expect(sessionHookOptions({}).adopted).toBe(false);
+  });
+});
+
+/**
+ * Parsing and classifying runs synchronously on the server's event loop, over text that
+ * a process in someone's pane, a container or an ssh host wrote. Each budget below is
+ * 100 times what the fixed code needs and a small fraction of what the unfixed code took.
+ */
+describe('a probe someone else wrote cannot stall the server', () => {
+  const SEC = 1000;
+  const elapsed = (work: () => void) => {
+    const startedAt = performance.now();
+    work();
+    return performance.now() - startedAt;
+  };
+
+  it('keeps a bounded piece of an endless argv and of an endless pane command', () => {
+    const long = 'x'.repeat(FOREIGN_MAX_ARGV_CHARS * 4);
+    const pane = `CMFP\\t/tmp/tmux-0/s\\t7\\t0\\t1\\t0\\t0\\t%0\\t${long}\\twork\\t/srv`;
+    const out = parseForeignProbeOutput(`${pane}\nCMFQ\n 7 1 ${long}\n`);
+    expect(out.argvByPid.get(7)).toHaveLength(FOREIGN_MAX_ARGV_CHARS);
+    expect(out.panes[0]?.paneCurrentCommand).toHaveLength(FOREIGN_MAX_ARGV_CHARS);
+  });
+
+  it('classifies an argv of repeated `/pi/` tokens in linear time', () => {
+    // Unfixed, the `cli.js` tail was retried from every token: 4.6 s for this input.
+    const argv = '/pi/'.repeat(32 * 1024);
+    const probe = { byParent: new Map(), argvByPid: new Map([[7, argv]]) };
+    expect(elapsed(() => classifyForeignPaneMode({ panePid: 7, paneCurrentCommand: 'x' }, probe))).toBeLessThan(SEC);
+  });
+
+  it('still needs the `cli.js` to come after the CLI directory, inside one word', () => {
+    const empty = new Map<number, number[]>();
+    const classify = (argv: string) =>
+      classifyForeignPaneMode(
+        { panePid: 7, paneCurrentCommand: 'node' },
+        { byParent: empty, argvByPid: new Map([[7, argv]]) }
+      ).mode;
+    expect(classify('node /opt/.pi/lib/cli.js')).toBe('pi');
+    expect(classify('node /opt/pi/cli.js --flag')).toBe('pi');
+    expect(classify('node /opt/.pi/lib/cli.json')).toBe('pi');
+    expect(classify('node cli.js/.pi/lib')).toBe('shell');
+    expect(classify('node /opt/.pi/lib tool/cli.js')).toBe('shell');
+  });
+
+  it('dedupes socket rows in linear time', () => {
+    // Unfixed: 7 s for this many, and 65 s for the 2 MiB a probe may carry.
+    const lines = Array.from({ length: 20_000 }, (_, i) => `CMFS /tmp/tmux-0/s${i}`);
+    let sockets: string[] = [];
+    expect(elapsed(() => (sockets = parseForeignProbeOutput(lines.join('\n')).sockets))).toBeLessThan(SEC);
+    expect(sockets).toHaveLength(20_000);
+    expect(parseForeignProbeOutput('CMFS /a\nCMFS /a\n').sockets).toEqual(['/a']);
+  });
+
+  it('parses a process row whose argv holds a line terminator in linear time', () => {
+    // `.` stops at a bare CR, so `$` used to fail and `\s+` gave its spaces back one at a
+    // time: 4 s for this row, and about an hour for a row at the 2 MiB cap. `ps` escapes
+    // control characters here, a hostile container or ssh host has no such manners.
+    let out = parseForeignProbeOutput('');
+    const row = `CMFQ\n 7 1 ${' '.repeat(64 * 1024)}x\ry\n`;
+    expect(elapsed(() => (out = parseForeignProbeOutput(row)))).toBeLessThan(SEC);
+    expect(out.argvByPid.has(7)).toBe(true);
+  });
+
+  it('survives the worst scan the caps allow', () => {
+    // Every pane may claim one process tree, so a walk per pane repeats the same rows:
+    // FOREIGN_MAX_PANES walks over the longest argv rows the byte cap leaves room for,
+    // none of them matching, so no walk ends early. Only a hostile host can say that.
+    const panes = Array.from(
+      { length: FOREIGN_MAX_PANES },
+      (_, i) => `CMFP\\t/tmp/tmux-0/s\\t7\\t0\\t1\\t0\\t0\\t%${i}\\tnode\\tw${i}\\t/srv`
+    );
+    const argv = `cli.js${'/pi/'.repeat(Math.floor((FOREIGN_MAX_ARGV_CHARS - 16) / 4))}`;
+    const rows: string[] = [];
+    let bytes = panes.join('\n').length;
+    for (let pid = 1000; rows.length < FOREIGN_MAX_PROCS; pid += 1) {
+      const row = `${pid} 7 ${argv}${pid}`;
+      if (bytes + row.length + 1 > FOREIGN_PROBE_MAX_BYTES) break;
+      bytes += row.length + 1;
+      rows.push(row);
+    }
+    const stdout = `${panes.join('\n')}\nCMFQ\n${rows.join('\n')}\n`;
+    let found: { mode: string }[] = [];
+    const took = elapsed(() => (found = candidatesFrom(stdout, 'remote', 'h', {}, 'remote h', [])));
+    expect(found).toHaveLength(FOREIGN_MAX_PANES);
+    expect(found.every((session) => session.mode === 'shell')).toBe(true);
+    expect(took).toBeLessThan(SEC);
   });
 });

@@ -46,3 +46,11 @@ export const FOREIGN_MAX_PROCS = 4000;
 
 /** Max bytes of probe stdout kept. A runaway `ps` must not become a heap problem. */
 export const FOREIGN_PROBE_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Longest argv or pane command kept from one row. The caps above bound how many rows a
+ * probe carries, this bounds what one costs: a row is text from someone else's process,
+ * and `ps` prints a 128 KiB argv in full. A launcher that needed more than this to be
+ * recognised reads as `shell`, which only changes the label on its row.
+ */
+export const FOREIGN_MAX_ARGV_CHARS = 4096;

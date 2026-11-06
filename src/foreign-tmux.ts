@@ -87,7 +87,12 @@
 import { collectDescendants } from './proc-tree.js';
 import { listClis } from './config/cli-registry/registry.js';
 import { withRemoteTmuxPath } from './remote-hosts.js';
-import { FOREIGN_MAX_PANES, FOREIGN_MAX_PROCS, FOREIGN_SOCKET_TIMEOUT_SECONDS } from './config/foreign-tmux.js';
+import {
+  FOREIGN_MAX_ARGV_CHARS,
+  FOREIGN_MAX_PANES,
+  FOREIGN_MAX_PROCS,
+  FOREIGN_SOCKET_TIMEOUT_SECONDS,
+} from './config/foreign-tmux.js';
 import type { ForeignPaneProbe, ForeignTmuxLocationKind } from './types/foreign-tmux.js';
 import type { SessionAdopt, SessionMode } from './types/session.js';
 
@@ -200,14 +205,20 @@ export interface ForeignProbeOutput {
   hungSockets: string[];
 }
 
-/** Parse one probe's stdout. Never throws: a malformed row is skipped, not fatal. */
+/**
+ * Parse one probe's stdout. Never throws: a malformed row is skipped, not fatal.
+ *
+ * ⚠️ Runs synchronously on the server's event loop over text a process in a pane, a
+ * container or an ssh host wrote, so nothing here may cost more than linear time in it:
+ * the row caps do not help when one row is the whole 2 MiB.
+ */
 export function parseForeignProbeOutput(stdout: string): ForeignProbeOutput {
   const panes: ForeignPaneProbe[] = [];
-  const sockets: string[] = [];
+  const sockets = new Set<string>();
   const hungSockets: string[] = [];
   const byParent = new Map<number, number[]>();
   const argvByPid = new Map<number, string>();
-  if (!stdout) return { panes, byParent, argvByPid, sockets, hungSockets };
+  if (!stdout) return { panes, byParent, argvByPid, sockets: [], hungSockets };
 
   let inProcs = false;
   let procCount = 0;
@@ -224,13 +235,15 @@ export function parseForeignProbeOutput(stdout: string): ForeignProbeOutput {
     if (inProcs) {
       if (procCount >= FOREIGN_MAX_PROCS) continue;
       // `<pid> <ppid> <argv...>` — leading spaces are how `ps -o pid=` pads.
-      const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+      // ⚠️ `s`, so `.*$` cannot fail: without it a bare CR in an argv stopped the `.`, and
+      // `\s+` handed its spaces back one at a time, quadratic in a row this long.
+      const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/s.exec(line);
       if (!m) continue;
       const pid = Number(m[1]);
       const ppid = Number(m[2]);
       if (!Number.isSafeInteger(pid) || !Number.isSafeInteger(ppid)) continue;
       procCount += 1;
-      argvByPid.set(pid, m[3] ?? '');
+      argvByPid.set(pid, (m[3] ?? '').slice(0, FOREIGN_MAX_ARGV_CHARS));
       const siblings = byParent.get(ppid);
       if (siblings) siblings.push(pid);
       else byParent.set(ppid, [pid]);
@@ -239,7 +252,7 @@ export function parseForeignProbeOutput(stdout: string): ForeignProbeOutput {
 
     if (line.startsWith(`${SOCKET_MARKER} `)) {
       const sock = line.slice(SOCKET_MARKER.length + 1);
-      if (sock && !sockets.includes(sock)) sockets.push(sock);
+      if (sock) sockets.add(sock);
       continue;
     }
 
@@ -272,7 +285,7 @@ export function parseForeignProbeOutput(stdout: string): ForeignProbeOutput {
       windowIndex: Number.isSafeInteger(windowIndex) ? windowIndex : 0,
       paneId: fields[7] ?? '',
       panePid,
-      paneCurrentCommand: fields[8] ?? '',
+      paneCurrentCommand: (fields[8] ?? '').slice(0, FOREIGN_MAX_ARGV_CHARS),
       paneCurrentPath,
       sessionAttached: fields[6] === '1',
       sessionCreated: Number.isSafeInteger(created) && created > 0 ? created : 0,
@@ -280,7 +293,7 @@ export function parseForeignProbeOutput(stdout: string): ForeignProbeOutput {
     });
   }
 
-  return { panes, byParent, argvByPid, sockets, hungSockets };
+  return { panes, byParent, argvByPid, sockets: [...sockets], hungSockets };
 }
 
 // ===========================================================================
@@ -309,10 +322,14 @@ export function parseForeignProbeOutput(stdout: string): ForeignProbeOutput {
  * while the schema's SHELL_TOKEN already refuses the dangerous shapes, building
  * a pattern out of an unescaped foreign string is how a config value turns into
  * a regex. Escaping means the worst a bad name can do is match nothing.
+ *
+ * ⚠️ Keep these free of unbounded tails, since each one runs over someone else's argv on
+ * the event loop. The node launcher shape needs one, so it lives in `launcherPrefixes()`
+ * and `launcherDir` only has to name the directory.
  */
-export function foreignCliSignatures(): ReadonlyArray<{ mode: SessionMode; test: RegExp }> {
+export function foreignCliSignatures(): ReadonlyArray<{ mode: SessionMode; test: RegExp; launcherDir: RegExp }> {
   const seen = new Set<string>();
-  const out: { mode: SessionMode; test: RegExp }[] = [];
+  const out: { mode: SessionMode; test: RegExp; launcherDir: RegExp }[] = [];
   // `listClis()`, not `enabledClis()`: classification is a description of what is
   // ALREADY running in someone else's pane, not a decision to launch anything.
   // A disabled CLI still deserves its real name on the row.
@@ -338,11 +355,10 @@ export function foreignCliSignatures(): ReadonlyArray<{ mode: SessionMode; test:
     const n = escapeRegExp(name);
     out.push({
       mode,
-      test: new RegExp(
-        // the command itself · a `bin/` path · a node launcher under the CLI's
-        // own dot-directory (`~/.claude/local/.../cli.js`)
-        `(^|[/\\\\])${n}(\\s|$)|[/\\\\]bin[/\\\\]${n}\\b|[/\\\\]\\.?${n}[/\\\\][^\\s]*cli\\.js`
-      ),
+      // the command itself · a `bin/` path
+      test: new RegExp(`(^|[/\\\\])${n}(\\s|$)|[/\\\\]bin[/\\\\]${n}\\b`),
+      // a node launcher under the CLI's own dot-directory (`~/.claude/local/.../cli.js`)
+      launcherDir: new RegExp(`[/\\\\]\\.?${n}[/\\\\]`),
     });
   }
   return out;
@@ -388,11 +404,12 @@ const COMMAND_DISPLAY_MAX = 160;
  */
 export function classifyForeignPaneMode(
   pane: Pick<ForeignPaneProbe, 'panePid' | 'paneCurrentCommand'>,
-  probe: Pick<ForeignProbeOutput, 'byParent' | 'argvByPid'>
+  probe: Pick<ForeignProbeOutput, 'byParent' | 'argvByPid'>,
+  match: ForeignSignatureMatcher = createForeignSignatureMatcher()
 ): ClassifiedPane {
   const own = probe.argvByPid.get(pane.panePid) ?? pane.paneCurrentCommand;
 
-  const direct = matchSignature(own);
+  const direct = match(own);
   if (direct) return { mode: direct, command: truncate(own) };
 
   // ⚠️ Report truncation. A walk that stopped at a cap returns "nothing matched",
@@ -406,7 +423,7 @@ export function classifyForeignPaneMode(
   for (const pid of descendants) {
     const argv = probe.argvByPid.get(pid);
     if (!argv) continue;
-    const hit = matchSignature(argv);
+    const hit = match(argv);
     if (hit) return { mode: hit, command: truncate(argv) };
   }
 
@@ -414,7 +431,7 @@ export function classifyForeignPaneMode(
   // is the pane's FOREGROUND process, whereas `pane_pid` is the shell hosting it,
   // so this catches an agent whose process tree was unreadable (no `ps` on the
   // host) or deeper than the walk's cap.
-  const fromTmux = matchSignature(pane.paneCurrentCommand);
+  const fromTmux = match(pane.paneCurrentCommand);
   if (fromTmux) return { mode: fromTmux, command: truncate(pane.paneCurrentCommand) };
 
   // Nothing recognised. `shell` is the honest answer AND the primary case this
@@ -423,14 +440,55 @@ export function classifyForeignPaneMode(
   return { mode: 'shell', command: truncate(own || pane.paneCurrentCommand) };
 }
 
-function matchSignature(argv: string): SessionMode | null {
+export type ForeignSignatureMatcher = (argv: string) => SessionMode | null;
+
+/**
+ * One scan's answer to "which CLI is this argv?".
+ *
+ * ⚠️ Scoped to a scan, because this is the cost no row cap bounds. A pane's walk reads up
+ * to PROC_WALK_MAX_NODES rows and every pane of a hostile host can claim the same tree, so
+ * the walks repeat one set of rows FOREIGN_MAX_PANES times. Building the regexes once and
+ * asking about each distinct argv once ties the work to the bytes the probe really carried.
+ */
+export function createForeignSignatureMatcher(): ForeignSignatureMatcher {
+  const signatures = foreignCliSignatures();
+  const answers = new Map<string, SessionMode | null>();
+  return (argv) => {
+    let answer = answers.get(argv);
+    if (answer === undefined) {
+      answer = matchSignature(argv, signatures);
+      answers.set(argv, answer);
+    }
+    return answer;
+  };
+}
+
+function matchSignature(argv: string, signatures: ReturnType<typeof foreignCliSignatures>): SessionMode | null {
   if (!argv) return null;
   const base = basenameOf(argv);
   if (SHELL_COMMANDS.has(base)) return null;
-  for (const sig of foreignCliSignatures()) {
-    if (sig.test.test(argv)) return sig.mode;
+  const launchers = launcherPrefixes(argv);
+  for (const sig of signatures) {
+    if (sig.test.test(argv) || launchers.some((prefix) => sig.launcherDir.test(prefix))) return sig.mode;
   }
   return null;
+}
+
+/**
+ * What comes before the last `cli.js` of each word, which is where a CLI's own directory
+ * has to be for that word to be its node launcher.
+ *
+ * ⚠️ A scan rather than a `[^\s]*cli\.js` tail on the signature. That tail was retried from
+ * every `/pi/` in an argv, which is quadratic in someone else's text: 4.6 s of event loop
+ * for a 128 KiB argv. A bounded tail only shrinks the constant, and a scan pays it per row.
+ */
+function launcherPrefixes(argv: string): string[] {
+  const prefixes: string[] = [];
+  for (const word of argv.split(/\s+/)) {
+    const end = word.lastIndexOf('cli.js');
+    if (end > 0) prefixes.push(word.slice(0, end));
+  }
+  return prefixes;
 }
 
 function basenameOf(argv: string): string {

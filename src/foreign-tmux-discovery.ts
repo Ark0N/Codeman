@@ -42,6 +42,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import {
   buildForeignProbeScript,
   classifyForeignPaneMode,
+  createForeignSignatureMatcher,
   foreignRemoteShellCommand,
   foreignSessionId,
   isAdoptableSessionName,
@@ -158,6 +159,7 @@ export function candidatesFrom(
   notes: string[]
 ): ForeignTmuxSession[] {
   const probe = parseForeignProbeOutput(stdout);
+  const match = createForeignSignatureMatcher();
   const ownSocket = resolveTmuxSocketName();
   const out: ForeignTmuxSession[] = [];
   const seen = new Set<string>();
@@ -183,7 +185,7 @@ export function candidatesFrom(
     if (seen.has(key)) continue;
     seen.add(key);
 
-    const classified = classifyForeignPaneMode(pane, probe);
+    const classified = classifyForeignPaneMode(pane, probe, match);
     out.push({
       id: foreignSessionId(location, hostKey, pane.socketPath, pane.sessionName),
       location,
