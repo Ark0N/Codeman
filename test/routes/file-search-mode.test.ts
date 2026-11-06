@@ -172,8 +172,8 @@ describe('files endpoint search mode', () => {
     }
   });
 
-  it('copes with the root itself being unfinished', async () => {
-    // The root has no node to flag. Its folders are listed before its files, and none is read.
+  it('copes with the root itself being unfinished, and its subfolders still get read', async () => {
+    // The root has no node to flag. Its files stop the walk, but only after the folder it found.
     const wide = mkdtempSync(join(tmpdir(), 'codeman-file-root-'));
     mkdirSync(join(wide, 'first'));
     writeFileSync(join(wide, 'first', 'inside.txt'), '');
@@ -185,9 +185,99 @@ describe('files endpoint search mode', () => {
     try {
       const { data } = await get('');
       expect(data.truncated).toBe(true);
-      expect(data.tree).toHaveLength(5000);
-      expect(data.tree[0]).toMatchObject({ name: 'first', incomplete: true, children: [] });
-      expect(data.tree.filter((node: { incomplete?: boolean }) => node.incomplete)).toHaveLength(1);
+      expect(data.totalFiles + data.totalDirectories).toBe(5000);
+      expect(data.tree[0]).toMatchObject({ name: 'first', children: [{ name: 'inside.txt' }] });
+      expect(data.tree[0]).not.toHaveProperty('incomplete');
+
+      const search = await get('?q=inside');
+      expect(search.data.matches.map((match: { path: string }) => match.path)).toEqual([join('first', 'inside.txt')]);
+      expect(search.data.truncated).toBe(true);
+    } finally {
+      rmSync(wide, { recursive: true, force: true });
+    }
+  });
+
+  it('does not let a large folder alone in its round starve the subfolders it holds', async () => {
+    // One level below the walk root, with a second level of subfolder to reach.
+    const wide = mkdtempSync(join(tmpdir(), 'codeman-file-sole-'));
+    mkdirSync(join(wide, 'repo', 'src', 'lib'), { recursive: true });
+    writeFileSync(join(wide, 'repo', 'src', 'lib', 'needle.ts'), '');
+    for (let index = 0; index < 5100; index++) {
+      writeFileSync(join(wide, 'repo', `item-${index}.txt`), '');
+    }
+    harness.ctx._session.workingDir = wide;
+
+    try {
+      const { data } = await get('?q=needle');
+      expect(data.matches.map((match: { path: string }) => match.path)).toEqual([
+        join('repo', 'src', 'lib', 'needle.ts'),
+      ]);
+      expect(data.truncated).toBe(true);
+    } finally {
+      rmSync(wide, { recursive: true, force: true });
+    }
+  });
+
+  it('does not let large sibling folders starve the subfolders they hold', async () => {
+    // Two in a round, so "alone in its round" is not what makes this go wrong: each folder's
+    // equal share used to be spent on its own files, leaving nothing for what it had just found.
+    const wide = mkdtempSync(join(tmpdir(), 'codeman-file-pair-'));
+    for (const name of ['a-big', 'b-big']) {
+      mkdirSync(join(wide, name, 'src'), { recursive: true });
+      writeFileSync(join(wide, name, 'src', 'needle.ts'), '');
+      for (let index = 0; index < 5100; index++) {
+        writeFileSync(join(wide, name, `item-${index}.txt`), '');
+      }
+    }
+    harness.ctx._session.workingDir = wide;
+
+    try {
+      const { data } = await get('?q=needle');
+      expect(data.matches.map((match: { path: string }) => match.path).sort()).toEqual([
+        join('a-big', 'src', 'needle.ts'),
+        join('b-big', 'src', 'needle.ts'),
+      ]);
+    } finally {
+      rmSync(wide, { recursive: true, force: true });
+    }
+  });
+
+  it('calls a workspace of exactly 5,000 nodes finished', async () => {
+    const exact = mkdtempSync(join(tmpdir(), 'codeman-file-exact-'));
+    mkdirSync(join(exact, 'empty'));
+    for (let index = 0; index < 4999; index++) {
+      writeFileSync(join(exact, `item-${index}.txt`), '');
+    }
+    harness.ctx._session.workingDir = exact;
+
+    try {
+      const { data } = await get('');
+      expect(data.totalFiles + data.totalDirectories).toBe(5000);
+      expect(data.truncated).toBe(false);
+      expect(JSON.stringify(data)).not.toContain('incomplete');
+    } finally {
+      rmSync(exact, { recursive: true, force: true });
+    }
+  });
+
+  it('does not flag a folder whose only unread entries are ones the listing leaves out', async () => {
+    // 3,000 folders leave 2,000 of the budget, which buys each of the first 2,000 its `src`. All
+    // that is left unread in them is `vendor` and `.hidden`, which would never be listed anyway.
+    const wide = mkdtempSync(join(tmpdir(), 'codeman-file-excluded-'));
+    for (let index = 0; index < 3000; index++) {
+      const dir = join(wide, `dir-${String(index).padStart(4, '0')}`);
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      mkdirSync(join(dir, 'vendor'));
+      writeFileSync(join(dir, '.hidden'), '');
+    }
+    harness.ctx._session.workingDir = wide;
+
+    try {
+      const { data } = await get('');
+      expect(data.truncated).toBe(true);
+      expect(data.tree[0].children.map((node: { name: string }) => node.name)).toEqual(['src']);
+      expect(data.tree[0]).not.toHaveProperty('incomplete');
+      expect(data.tree[2999]).toMatchObject({ incomplete: true, children: [] });
     } finally {
       rmSync(wide, { recursive: true, force: true });
     }

@@ -8,7 +8,7 @@
 
 import { FastifyInstance, type FastifyReply } from 'fastify';
 import { basename as pathBasename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { createReadStream, realpathSync } from 'node:fs';
+import { createReadStream, realpathSync, type Dirent } from 'node:fs';
 import type { Readable } from 'node:stream';
 import fs from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
@@ -780,6 +780,72 @@ const FILESYSTEM_DOCUMENT_PREVIEW_EXTENSIONS = new Set(['pdf', 'docx', 'pptx']);
 export function isPathWithinRoot(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
+}
+
+/**
+ * Folder entries one Files panel listing may read, summed over the folders it opens. The budget of
+ * the walk caps what a listing RETURNS, but taking turns means opening every folder found so far,
+ * so this is what caps the reading: past it, folders not opened yet stay unread and are reported as
+ * unfinished. It also bounds what the walk holds, since a folder keeps only entries it has read. A
+ * folder is read whole, so the one that crosses this line overshoots by its own size.
+ */
+const MAX_WALK_ENTRIES_READ = 250_000;
+
+/** One folder of a Files panel walk, tree or search. */
+interface WalkCursor {
+  dirPath: string;
+  depth: number;
+  /** What the listing can use of this folder, folders first. Unset until its first turn. */
+  entries?: Dirent[];
+  index: number;
+  /** The read kept fewer entries than the folder lists, so running out of `entries` does not finish it. */
+  more?: boolean;
+}
+
+/**
+ * First turn of a folder: reads it and sets `cursor.entries` to the part the listing could use,
+ * which is the entries it lists, sorted, up to what is left of the budget. Leaves `entries` unset
+ * for a folder it could not read. Answers the number of entries read, for the walk's read ceiling.
+ */
+async function readWalkFolder(
+  cursor: WalkCursor,
+  budgetLeft: number,
+  isListed: (entry: Dirent) => boolean
+): Promise<number> {
+  // The walk's root is the session's own folder. Below it any folder can be a mount that stopped
+  // answering, and a bulk scan keeps the stall cap (#516): an unbounded readdir there would hold a
+  // threadpool worker for good. Skipped like an unreadable one: it is not the file limit's doing.
+  if (cursor.depth > 1 && (await probePathKind(cursor.dirPath)) !== 'directory') return 0;
+
+  let read: Dirent[];
+  try {
+    read = await fs.readdir(cursor.dirPath, { withFileTypes: true });
+  } catch {
+    // Can't read directory (permission denied, etc.).
+    return 0;
+  }
+  const listed = read.filter(isListed).sort((a, b) => {
+    if (a.isDirectory() && !b.isDirectory()) return -1;
+    if (!a.isDirectory() && b.isDirectory()) return 1;
+    return a.name.localeCompare(b.name);
+  });
+  cursor.more = listed.length > budgetLeft;
+  cursor.entries = cursor.more ? listed.slice(0, budgetLeft) : listed;
+  return read.length;
+}
+
+/**
+ * Where a folder's turn ends, given a `share` of the budget. Folders sort first, and each one found
+ * here waits for a later round, by which time a folder that spent the rest of its share on its own
+ * files has left nothing to read it with. So those files count as one more folder: they take an
+ * equal part of what the subfolders left and the remainder stays in the budget. A turn that found
+ * no subfolder has nothing to hold back for, and a turn always covers at least one entry.
+ */
+function walkTurnEnd(entries: Dirent[], start: number, share: number): number {
+  const end = Math.min(start + share, entries.length);
+  let firstFile = start;
+  while (firstFile < end && entries[firstFile].isDirectory()) firstFile++;
+  return firstFile + Math.floor((end - firstFile) / (firstFile - start + 1));
 }
 
 /**
@@ -1665,7 +1731,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       size?: number;
       extension?: string;
       children?: FileTreeNode[];
-      /** Set only on a folder the file limit stopped the walk short of, so `children` is not all of it. */
+      /** Set only on a folder the walk's limits stopped it short of, so `children` is not all of it. */
       incomplete?: boolean;
     }
 
@@ -1673,6 +1739,9 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     let totalDirectories = 0;
     let truncated = false;
     const maxFiles = 5000;
+    let entriesRead = 0;
+    const isListed = (entry: Dirent): boolean =>
+      (includeHidden || !entry.name.startsWith('.')) && !(entry.isDirectory() && excludeDirs.has(entry.name));
 
     // ===== Search mode =====
     // A query turns this endpoint into a FLAT match list rather than a nested
@@ -1684,19 +1753,15 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       const matches: FileTreeNode[] = [];
       const maxMatches = 1000;
 
-      interface SearchDirectoryCursor {
-        dirPath: string;
-        depth: number;
-        entries?: import('node:fs').Dirent[];
-        index: number;
-      }
-
-      const queue: SearchDirectoryCursor[] = [{ dirPath: walkRoot, depth: 1, index: 0 }];
+      const queue: WalkCursor[] = [{ dirPath: walkRoot, depth: 1, index: 0 }];
+      // Folders the read ceiling kept shut. What was already read still gets its turns.
+      const unread: WalkCursor[] = [];
       while (queue.length > 0 && totalFiles + totalDirectories < maxFiles && matches.length < maxMatches) {
         // Per-directory round-robin (breadth-first): each queued directory gets an equal share of what
         // is left before any of them gets more, so results arrive shallow-first. Fair per directory,
         // not per subtree: a folder of thousands of small subfolders queues thousands of directories
-        // and can still take most of the budget one level down.
+        // and can still take most of the budget one level down. Reading a folder costs the same
+        // whatever its share, so this never bounds the reading: MAX_WALK_ENTRIES_READ does.
         const directoriesInRound = queue.length;
         const nodesPerDirectory = Math.max(
           1,
@@ -1713,25 +1778,17 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
             continue;
           }
           if (!cursor.entries) {
-            try {
-              cursor.entries = await fs.readdir(cursor.dirPath, { withFileTypes: true });
-              cursor.entries.sort((a, b) => {
-                if (a.isDirectory() && !b.isDirectory()) return -1;
-                if (!a.isDirectory() && b.isDirectory()) return 1;
-                return a.name.localeCompare(b.name);
-              });
-            } catch {
-              // Can't read directory (permission denied, etc.).
+            if (entriesRead >= MAX_WALK_ENTRIES_READ) {
+              unread.push(cursor);
               continue;
             }
+            entriesRead += await readWalkFolder(cursor, maxFiles - totalFiles - totalDirectories, isListed);
+            if (!cursor.entries) continue;
           }
 
-          const endIndex = Math.min(cursor.index + nodesPerDirectory, cursor.entries.length);
+          const endIndex = walkTurnEnd(cursor.entries, cursor.index, nodesPerDirectory);
           while (cursor.index < endIndex && totalFiles + totalDirectories < maxFiles && matches.length < maxMatches) {
             const entry = cursor.entries[cursor.index++];
-            if (!includeHidden && entry.name.startsWith('.')) continue;
-            if (entry.isDirectory() && excludeDirs.has(entry.name)) continue;
-
             const fullPath = join(cursor.dirPath, entry.name);
             const relativePath = relative(workingDir, fullPath);
             const listedPath = relative(walkRoot, fullPath);
@@ -1762,10 +1819,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
               }
             }
           }
-          if (cursor.index < cursor.entries.length) queue.push(cursor);
+          if (cursor.index < cursor.entries.length || cursor.more) queue.push(cursor);
         }
       }
-      if (queue.length > 0) truncated = true;
+      if (queue.length > 0 || unread.length > 0) truncated = true;
 
       return {
         success: true,
@@ -1784,18 +1841,15 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       };
     }
 
-    interface TreeDirectoryCursor {
-      dirPath: string;
-      depth: number;
+    interface TreeDirectoryCursor extends WalkCursor {
       /** This directory's node. The root of the walk has none: `tree` is its list of children. */
       node?: FileTreeNode;
       nodes: FileTreeNode[];
-      entries?: import('node:fs').Dirent[];
-      index: number;
     }
 
     const tree: FileTreeNode[] = [];
     const queue: TreeDirectoryCursor[] = [{ dirPath: walkRoot, depth: 1, nodes: tree, index: 0 }];
+    const unread: TreeDirectoryCursor[] = [];
     while (queue.length > 0 && totalFiles + totalDirectories < maxFiles) {
       // The same per-directory round-robin as the search walk above, with the same limits.
       const directoriesInRound = queue.length;
@@ -1814,25 +1868,17 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
           continue;
         }
         if (!cursor.entries) {
-          try {
-            cursor.entries = await fs.readdir(cursor.dirPath, { withFileTypes: true });
-            cursor.entries.sort((a, b) => {
-              if (a.isDirectory() && !b.isDirectory()) return -1;
-              if (!a.isDirectory() && b.isDirectory()) return 1;
-              return a.name.localeCompare(b.name);
-            });
-          } catch {
-            // Can't read directory (permission denied, etc.).
+          if (entriesRead >= MAX_WALK_ENTRIES_READ) {
+            unread.push(cursor);
             continue;
           }
+          entriesRead += await readWalkFolder(cursor, maxFiles - totalFiles - totalDirectories, isListed);
+          if (!cursor.entries) continue;
         }
 
-        const endIndex = Math.min(cursor.index + nodesPerDirectory, cursor.entries.length);
+        const endIndex = walkTurnEnd(cursor.entries, cursor.index, nodesPerDirectory);
         while (cursor.index < endIndex && totalFiles + totalDirectories < maxFiles) {
           const entry = cursor.entries[cursor.index++];
-          if (!includeHidden && entry.name.startsWith('.')) continue;
-          if (entry.isDirectory() && excludeDirs.has(entry.name)) continue;
-
           const fullPath = join(cursor.dirPath, entry.name);
           const relativePath = fullPath.slice(workingDir.length + 1);
           if (entry.isDirectory()) {
@@ -1858,15 +1904,15 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
             cursor.nodes.push({ name: entry.name, path: relativePath, type: 'file', size, extension: ext });
           }
         }
-        if (cursor.index < cursor.entries.length) queue.push(cursor);
+        if (cursor.index < cursor.entries.length || cursor.more) queue.push(cursor);
       }
     }
     // Every directory still queued is unread or half read, and an empty `children` would read as an
     // empty folder. The root has no node to flag: `truncated` says the same for it.
-    for (const cursor of queue) {
+    for (const cursor of [...queue, ...unread]) {
       if (cursor.node) cursor.node.incomplete = true;
     }
-    if (queue.length > 0) truncated = true;
+    if (queue.length > 0 || unread.length > 0) truncated = true;
 
     return {
       success: true,
