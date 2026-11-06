@@ -229,7 +229,9 @@ describe('the in-terminal truncation line is gone (static guard)', () => {
     expect(app).toContain(
       'const useFullHistory = !shellSession && (paneKeepsNoHistory || !this._fullHistoryLoaded.has(sessionId));'
     );
-    expect(app).toContain('!session?.remote && !session?.docker && this._paneHistoryLines?.get(sessionId) === 0;');
+    expect(app).toContain(
+      '!session?.remote && !session?.docker && !session?.adopt && this._paneHistoryLines?.get(sessionId) === 0;'
+    );
     // The shell's bounded load is tmux's rendered history, never the byte recording.
     expect(app).toContain('`/api/sessions/${sessionId}/terminal?${SHELL_LOAD_QUERY}`');
     expect(app).toContain("!restoredSnapshot && session?.mode !== 'shell'");
