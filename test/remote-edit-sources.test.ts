@@ -700,8 +700,10 @@ describe('a read too large for one ssh line', () => {
 });
 
 describe('a timeout ends ssh itself', () => {
-  // Node signals the local `sh -c`. On dash that shell stays the parent of a plain command, so
-  // only `exec` makes the signal reach ssh. The fake ssh records its pid and then just waits.
+  // Node's timeout signals the local `sh -c`. On dash that shell stays the parent of a plain
+  // command, so only `exec` makes the signal reach ssh. The fake ssh records its pid and then
+  // waits; the test sends the timeout's SIGTERM itself, once that pid is there, so a slow
+  // machine cannot kill the fake before it wrote it.
   it('kills the ssh process, not only the shell around it', async () => {
     const bin = mkdtempSync(join(tmpdir(), 'codeman-fake-ssh-'));
     const pidFile = join(bin, 'pid');
@@ -713,10 +715,10 @@ describe('a timeout ends ssh itself', () => {
       chmodSync(join(bin, 'ssh'), 0o755);
       const command = buildRemoteEditHistoryCommand(REMOTE, buildRemoteClaudeTranscriptLocateCommand(['conv-1']));
       expect(command).toMatch(/^exec ssh /);
-      await new Promise<void>((resolve) => {
-        exec(command, { timeout: 1000, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } }, () => resolve());
-      });
+      const child = exec(command, { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+      await expect.poll(() => existsSync(pidFile), { timeout: 10_000 }).toBe(true);
       const pid = Number(readFileSync(pidFile, 'utf8'));
+      child.kill();
       const alive = (): boolean => {
         try {
           process.kill(pid, 0);
