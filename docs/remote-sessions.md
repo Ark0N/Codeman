@@ -420,7 +420,8 @@ still has it.
 **Not available over ssh (by choice, not by accident):** editing a file (writes would
 need SFTP; `docs/file-viewer-edit-plan.md` §6), office-document previews and
 generated thumbnails (both need the bytes on the server's disk — no remote file is ever
-spilled onto the server), the file-tree/picker listings, and `tail-file`. Those routes
+spilled onto the server, the Edit history store's diffs being the one exception), the
+file-tree/picker listings, and `tail-file`. Those routes
 are still local-only, so with an `sshfs` mount in place they read the mounted copy —
 the two views can only disagree when that mount is stale. Docker cases are unaffected:
 their workspace is bind-mounted at the same absolute path, so local `fs` reads real bytes.

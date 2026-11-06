@@ -12,7 +12,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { exec, execFileSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -29,6 +29,7 @@ import { tmpdir } from 'node:os';
 import {
   RemoteFileAccessError,
   buildRemoteClaudeEditSourcesCommand,
+  buildRemoteEditHistoryCommand,
   buildRemoteClaudeTranscriptLocateCommand,
   isRemoteClaudeTranscriptPath,
   parseRemoteClaudeEditSources,
@@ -153,17 +154,21 @@ describe('the transcript lookup on a real shell', () => {
 
   describe('after a /clear: the conversation the pane’s claude writes now', () => {
     // Fake tmux (pane pid 100) and ps (100 → 200 wrapper → 300 claude); claude's own
-    // ~/.claude/sessions/<pid>.json names the current conversation.
+    // ~/.claude/sessions/<pid>.json names the current conversation. tmux sits in the temp
+    // $HOME/.local/bin, which withRemoteTmuxPath() puts ahead of the system dirs, so a real
+    // tmux on this machine is never asked.
     let bin: string;
     const pane = { socket: 'codeman-remote', sessionName: 'codeman-ssh-conv1abc' };
     beforeAll(() => {
       bin = mkdtempSync(join(tmpdir(), 'codeman-fake-tmux-'));
+      const localBin = join(home, '.local', 'bin');
+      mkdirSync(localBin, { recursive: true });
       writeFileSync(
-        join(bin, 'tmux'),
+        join(localBin, 'tmux'),
         '#!/bin/sh\ncase "$*" in *"=codeman-ssh-conv1abc"*) echo 100 ;; *) echo "no such session" >&2; exit 1 ;; esac\n'
       );
       writeFileSync(join(bin, 'ps'), '#!/bin/sh\nprintf "  1     0\\n100     1\\n200   100\\n300   200\\n"\n');
-      chmodSync(join(bin, 'tmux'), 0o755);
+      chmodSync(join(localBin, 'tmux'), 0o755);
       chmodSync(join(bin, 'ps'), 0o755);
       mkdirSync(join(home, '.claude', 'sessions'), { recursive: true });
     });
@@ -176,6 +181,15 @@ describe('the transcript lookup on a real shell', () => {
       // that has not written yet still wins.
       session('{"pid":300,"sessionId":"solo","cwd":"/w","kind":"interactive"}');
       expect(locateIn(pane)).toBe(join(projects(), 'old', 'solo.jsonl'));
+    });
+
+    it('finds the pane with tmux only under $HOME/.local/bin, on a PATH that does not list it', () => {
+      // A host where tmux is a per-user install: sshd's non-interactive PATH has no such dir.
+      const PATH = `${bin}:/usr/bin:/bin`;
+      expect(PATH).not.toContain('.local/bin');
+      expect(existsSync(join(bin, 'tmux'))).toBe(false);
+      session('{"pid":300,"sessionId":"solo"}');
+      expect(locate(['conv-1'], pane, { PATH })).toBe(join(projects(), 'old', 'solo.jsonl'));
     });
 
     it('falls back to the stored ids without a pane, for an unknown session, or a live id with no transcript', () => {
@@ -415,6 +429,43 @@ describe('the transcript read on a real shell', () => {
       }
     }
     expect(failures).toEqual([]);
+  });
+});
+
+describe('a timeout ends ssh itself', () => {
+  // Node signals the local `sh -c`. On dash that shell stays the parent of a plain command, so
+  // only `exec` makes the signal reach ssh. The fake ssh records its pid and then just waits.
+  it('kills the ssh process, not only the shell around it', async () => {
+    const bin = mkdtempSync(join(tmpdir(), 'codeman-fake-ssh-'));
+    const pidFile = join(bin, 'pid');
+    try {
+      writeFileSync(
+        join(bin, 'ssh'),
+        `#!/bin/sh\necho $$ > '${pidFile}.tmp'\nmv '${pidFile}.tmp' '${pidFile}'\nexec sleep 30\n`
+      );
+      chmodSync(join(bin, 'ssh'), 0o755);
+      const command = buildRemoteEditHistoryCommand(REMOTE, buildRemoteClaudeTranscriptLocateCommand(['conv-1']));
+      expect(command).toMatch(/^exec ssh /);
+      await new Promise<void>((resolve) => {
+        exec(command, { timeout: 1000, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } }, () => resolve());
+      });
+      const pid = Number(readFileSync(pidFile, 'utf8'));
+      const alive = (): boolean => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      try {
+        await expect.poll(alive, { timeout: 3000 }).toBe(false);
+      } finally {
+        if (alive()) process.kill(pid, 'SIGKILL');
+      }
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
   });
 });
 

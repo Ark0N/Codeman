@@ -147,8 +147,8 @@ session uses: one `realpath` plus `stat` probe for the file and the workspace ro
 streamed `cat` (or a slice of it, so video seeking works). Symlinks are resolved on the host
 that can resolve them, the size cap applies to the remote size before a byte is requested,
 and an unreachable host answers 502 rather than pretending the file is missing. Nothing is
-ever copied onto the Codeman host, and a same-named local file is never served under a
-remote name.
+ever copied onto the Codeman host, apart from the diffs the [edit history](#edit-history)
+stores, and a same-named local file is never served under a remote name.
 
 Not available over ssh, and said so with a 400 instead of a misleading 404: editing in
 place, Office previews and generated thumbnails (both need the bytes on the server's disk),

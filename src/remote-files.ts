@@ -30,7 +30,7 @@ import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { PassThrough, type Readable } from 'node:stream';
 import type { SessionRemote } from './types/session.js';
-import { buildSshConnectionArgs, remoteSshTarget, shellescape } from './remote-hosts.js';
+import { buildSshConnectionArgs, remoteSshTarget, shellescape, withRemoteTmuxPath } from './remote-hosts.js';
 import { runWithRemoteSshLimit } from './remote-ssh-limiter.js';
 import type { EditSourceReadOptions, EditSourceRequest, EditSources } from './edit-history-local-source.js';
 
@@ -429,7 +429,11 @@ const EDIT_SOURCE_META_REL_PATH_PATTERN = /^subagents\/agent-([A-Za-z0-9_-]+)\.m
 /** Cap on one subagent `.meta.json` record (outside the transcript budget), as in the local reader. */
 const EDIT_SOURCE_META_MAX_BYTES = 8192;
 
-/** Cap on all meta records of one read; a meta past it is sent with a later read. */
+/**
+ * Cap on all meta records of one read (the local reader has none). A meta comes only with a
+ * subagent's first read, so one past the cap is never sent: that subagent's transcript is read
+ * as usual, and the panel names it by its id instead of its description.
+ */
 const EDIT_SOURCE_META_BUDGET_BYTES = 4 * 1024 * 1024;
 
 /** Room for the record headers (one per transcript file) on top of budget and metas. */
@@ -449,6 +453,15 @@ const EDIT_SOURCE_MIN_BYTES_PER_SEC = 256 * 1024;
  */
 export function remoteEditSourcesTimeoutMs(maxBytes: number): number {
   return REMOTE_READ_TIMEOUT_MS + Math.ceil((Math.max(0, maxBytes) / EDIT_SOURCE_MIN_BYTES_PER_SEC) * 1000);
+}
+
+/**
+ * The ssh line of an edit-history lookup or read: {@link buildRemoteFileCommand} with `exec`, so a
+ * timeout reaches ssh itself. Node signals the local `sh -c`, and dash stays the parent of a
+ * plain command, which would leave ssh running and the remote read holding its connection.
+ */
+export function buildRemoteEditHistoryCommand(remote: SessionRemote, shellCommand: string): string {
+  return `exec ${buildRemoteFileCommand(remote, shellCommand)}`;
 }
 
 const TMUX_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -495,12 +508,17 @@ function claudeConfigDirLines(): string[] {
  * pane's pid, its children and grandchildren (a wrapper shell may sit in between), the first
  * of those with such a file. Only `[A-Za-z0-9._-]` survives the `sed`, the id pattern, so
  * `$live` is safe unquoted. `ps -A -o pid= -o ppid=` is POSIX (no GNU `--ppid`).
+ *
+ * ⚠️ tmux runs on the PATH of every other remote tmux call ({@link withRemoteTmuxPath}): sshd's
+ * non-interactive shell may not list the directory it lives in, and a silent miss here leaves
+ * the panel on the launch conversation after a `/clear`. The `export` stays inside the `$(…)`,
+ * and inside this script, which runs under `sh` whatever the remote user's login shell is.
  */
 function liveClaudeIdLines(pane: RemoteClaudePane | undefined): string[] {
   if (!pane || !TMUX_NAME_PATTERN.test(pane.socket) || !TMUX_NAME_PATTERN.test(pane.sessionName)) return [];
   return [
     'live=',
-    `pp=$(tmux -L ${shellescape(pane.socket)} list-panes -t ${shellescape(`=${pane.sessionName}`)} -F '#{pane_pid}' 2>/dev/null | head -n 1)`,
+    `pp=$(${withRemoteTmuxPath(`tmux -L ${shellescape(pane.socket)} list-panes -t ${shellescape(`=${pane.sessionName}`)} -F '#{pane_pid}' 2>/dev/null | head -n 1`)})`,
     "case $pp in ''|*[!0-9]*) pp= ;; esac",
     'if [ -n "$pp" ]; then',
     '  tree=$(ps -A -o pid= -o ppid= 2>/dev/null)',
@@ -582,7 +600,7 @@ export async function remoteLocateClaudeTranscript(
   pane?: RemoteClaudePane
 ): Promise<string | null> {
   assertNotUnderTest();
-  const command = buildRemoteFileCommand(remote, buildRemoteClaudeTranscriptLocateCommand(ids, pane));
+  const command = buildRemoteEditHistoryCommand(remote, buildRemoteClaudeTranscriptLocateCommand(ids, pane));
   let stdout: Buffer;
   try {
     const result = await runWithRemoteSshLimit(() =>
@@ -790,7 +808,10 @@ export async function remoteReadClaudeEditSources(
 ): Promise<EditSources | null> {
   assertNotUnderTest();
   const budget = Number.isFinite(budgetBytes) ? Math.max(0, Math.floor(budgetBytes)) : 0;
-  const command = buildRemoteFileCommand(remote, buildRemoteClaudeEditSourcesCommand(mainPath, requests, budget, opts));
+  const command = buildRemoteEditHistoryCommand(
+    remote,
+    buildRemoteClaudeEditSourcesCommand(mainPath, requests, budget, opts)
+  );
   const maxBytes = budget + EDIT_SOURCE_META_BUDGET_BYTES + EDIT_SOURCE_HEADER_SLACK_BYTES;
   let stdout: Buffer;
   try {
