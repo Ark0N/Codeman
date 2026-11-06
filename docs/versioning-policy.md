@@ -86,6 +86,19 @@ covered like any other stable behavior. Other agent commands and API routes keep
 their existing guarantees. Promotion to stable requires an explicit documented
 decision.
 
+### Experimental local model recommendation
+
+`GET /api/v1/local-model` (and its `/api` alias) is labeled experimental, so item 3
+above applies to it: its path, its payload (the hardware facts, the verdicts and
+reasons, the candidate fields and the English sentences in `headline` and
+`notes`) and its behavior may change or be removed in a MINOR or PATCH release.
+It is read-only today: it looks at the Mac the server runs on and says which
+local model fits. The step that sets a model up from Codeman is not built yet
+and will change what the route reports, which is why the shape is not promised.
+It is not behind a setting (it writes nothing and adds no settings key); it is
+admin only in multi-user mode. Promotion to stable requires an explicit
+documented decision.
+
 ## Deprecation policy
 
 When we need to change a covered surface:

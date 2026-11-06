@@ -6,6 +6,11 @@
  * `{ hardware, recommendation, catalogUpdated }`. Nothing is reformatted here: every size text
  * and every sentence in the payload was chosen by the modules that produced it.
  *
+ * EXPERIMENTAL (docs/versioning-policy.md, "Experimental local model recommendation"): the
+ * route and its payload are outside the stable `/api/v1` contract until the stage that sets a
+ * model up ships, because that stage will change what the fields mean. docs/api-reference.md
+ * says so in its section; keep the two in step, and drop both labels together.
+ *
  * Rules:
  *  - Read-only. It downloads nothing, installs nothing, writes no file and reads no setting.
  *  - A failed probe is an answer, never a 500. `readHardware()` reports a spawn that failed
