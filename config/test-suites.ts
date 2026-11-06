@@ -60,6 +60,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/fullscreen-tab-switch-capture.browser.test.ts',
   'test/terminal-touch-swipe-axis.browser.test.ts',
   'test/phone-press-feedback.browser.test.ts',
+  'test/local-model-ui.browser.test.ts',
 ];
 
 /**
