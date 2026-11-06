@@ -343,6 +343,13 @@ describe('Start-Codeman.sh first run (no docker/.env yet)', () => {
     ['a relative path', () => 'codeman-data', /absolute path/],
     ['the checkout, which is the image build context', ({ repo }: { repo: string }) => repo, /copied into the image/],
     ['a folder inside the checkout', ({ repo }: { repo: string }) => join(repo, 'data'), /copied into the image/],
+    // join() would resolve these, which is the whole point: the refusals above compare strings.
+    ['HOME spelled through ..', ({ home }: { home: string }) => `${home}/../home`, /without \. or \.\./],
+    ['the checkout spelled through ..', ({ home }: { home: string }) => `${home}/../repo/data`, /without \. or \.\./],
+    ['a path ending in ..', ({ home }: { home: string }) => `${home}/data/..`, /without \. or \.\./],
+    ['a native install spelled through .', ({ home }: { home: string }) => `${home}/./.codeman`, /without \. or \.\./],
+    ['a native install behind a doubled slash', ({ home }: { home: string }) => `${home}//.codeman`, /installed directly/],
+    ['the checkout behind a doubled slash', ({ repo }: { repo: string }) => `${repo}//data`, /copied into the image/],
   ])('refuses %s as the data folder and writes nothing', (_name, appdata, reason) => {
     const r = runStart(['--setup-only'], { appdata });
     expect(r.status).toBe(1);
@@ -400,6 +407,12 @@ describe('Start-Codeman.sh first run (no docker/.env yet)', () => {
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/already exists/);
     expect(r.envKind).toBe('symlink');
+  });
+
+  it('keeps a folder name that merely starts with a dot or dots', () => {
+    const r = runStart(['--setup-only'], { appdata: ({ home }) => `${home}/..data/.state` });
+    expect(r.status, r.stderr).toBe(0);
+    expect(envValue(r.env as string, 'CODEMAN_APPDATA_PATH')).toBe(`${r.home}/..data/.state`);
   });
 
   it('never rewrites an existing docker/.env', () => {

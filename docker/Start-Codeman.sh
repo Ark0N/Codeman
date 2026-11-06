@@ -230,6 +230,9 @@ accept_appdata_path() {
     '~') p=$HOME ;;
     '~/'*) p="$HOME/${p#\~/}" ;;
   esac
+  while [[ "$p" == *//* ]]; do
+    p=${p//\/\//\/}
+  done
   while [[ "$p" == */ && "$p" != / ]]; do
     p=${p%/}
   done
@@ -247,6 +250,14 @@ accept_appdata_path() {
     printf '  Use an absolute path, one that starts with /.\n' >&2
     return 1
   fi
+  # The refusals below compare strings, so a dot segment could spell any folder
+  # they exist to keep out.
+  case "$p/" in
+    */./* | */../*)
+      printf '  Spell the path out, without . or .. in it.\n' >&2
+      return 1
+      ;;
+  esac
   # The folder becomes the container's home directory, so its `.codeman` is
   # the server's state directory: $HOME itself would share state.json with a
   # Codeman installed directly on this machine.
