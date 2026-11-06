@@ -2814,7 +2814,11 @@ Object.assign(CodemanApp.prototype, {
     // Populate respawn config from saved state
     this.loadSavedRespawnConfig(sessionId);
 
-    // Populate auto-compact/clear from session state
+    // Populate auto-compact/clear from session state. A threshold above the model's window
+    // can never fire, so the inputs stop there once the statusline has reported it.
+    const maxThreshold = session.contextWindowSize ?? 1000000;
+    document.getElementById('modalAutoCompactThreshold').max = maxThreshold;
+    document.getElementById('modalAutoClearThreshold').max = maxThreshold;
     document.getElementById('modalAutoCompactEnabled').checked = session.autoCompactEnabled ?? false;
     document.getElementById('modalAutoCompactThreshold').value = session.autoCompactThreshold ?? 110000;
     document.getElementById('modalAutoCompactPrompt').value = session.autoCompactPrompt ?? '';

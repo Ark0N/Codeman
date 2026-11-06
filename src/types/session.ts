@@ -1006,6 +1006,8 @@ export interface SessionState {
    * `expiresAt` has passed reads as cold rather than as a stale warm.
    */
   promptCache?: PromptCacheStatus;
+  /** The model's context window in tokens from the last statusline report; absent until one arrives. */
+  contextWindowSize?: number;
   /** Why a cache report will or will not arrive (see `StatusLineExporter`); absent when unknown. */
   statusLineExporter?: StatusLineExporter;
   /** Prompt-cache keep-warm opt-in; absent = follow the app-wide `promptCacheKeepWarm` default. */

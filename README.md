@@ -438,6 +438,8 @@ The title is templated into the served HTML on first byte, so it's correct from 
 | **110k tokens** | Auto `/compact` | Context summarized, work continues |
 | **140k tokens** | Auto `/clear`   | Fresh start with `/init`           |
 
+Both are opt-in per session, and the thresholds go up to the model's window. Claude sessions are measured by the context size on the statusline, cache reads included; everything else by Codeman's token counter.
+
 ### Tab Alerts
 
 <p align="center">

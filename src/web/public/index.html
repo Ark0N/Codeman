@@ -1627,7 +1627,7 @@
                       <span class="set-row-desc">Summarizes the context at the threshold while preserving key information.</span>
                     </div>
                     <div class="set-row-actions">
-                      <input type="number" id="modalAutoCompactThreshold" class="set-num set-num-wide" value="110000" min="10000" max="500000" step="10000" onchange="app.autoSaveAutoCompact()">
+                      <input type="number" id="modalAutoCompactThreshold" class="set-num set-num-wide" value="110000" min="10000" max="1000000" step="10000" onchange="app.autoSaveAutoCompact()">
                       <span class="set-unit">tokens</span>
                       <label class="switch switch-sm"><input type="checkbox" id="modalAutoCompactEnabled" onchange="app.autoSaveAutoCompact()"><span class="slider"></span></label>
                     </div>
@@ -1645,7 +1645,7 @@
                       <span class="set-row-desc">Full context reset at the threshold. Keep it higher than auto-compact.</span>
                     </div>
                     <div class="set-row-actions">
-                      <input type="number" id="modalAutoClearThreshold" class="set-num set-num-wide" value="140000" min="10000" max="500000" step="10000" onchange="app.autoSaveAutoClear()">
+                      <input type="number" id="modalAutoClearThreshold" class="set-num set-num-wide" value="140000" min="10000" max="1000000" step="10000" onchange="app.autoSaveAutoClear()">
                       <span class="set-unit">tokens</span>
                       <label class="switch switch-sm"><input type="checkbox" id="modalAutoClearEnabled" onchange="app.autoSaveAutoClear()"><span class="slider"></span></label>
                     </div>
