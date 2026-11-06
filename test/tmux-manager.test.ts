@@ -18,6 +18,7 @@ import {
   parsePaneRows,
   derivePaneExits,
   hasObservablePaneSession,
+  endedAdoptedAttaches,
   type PaneRow,
   resolveActivePaneTarget,
 } from '../src/tmux-manager.js';
@@ -1720,4 +1721,72 @@ describe('hasObservablePaneSession', () => {
   // The predicate has to agree with `Session.paneExitApplies`, which is where
   // the rule is enforced; that pairing is pinned in session-pane-exit.test.ts,
   // where a real Session can answer for itself.
+});
+
+describe('an adopted wrapper whose pane died', () => {
+  const adopted = new Set(['codeman-aaaa1111']);
+
+  class WatchedManager extends TmuxManager {
+    rows = '';
+    detached: string[] = [];
+    protected override async readAttachRows(): Promise<string> {
+      return this.rows;
+    }
+    protected override async detachClients(muxName: string): Promise<void> {
+      this.detached.push(muxName);
+    }
+    adopt(sessionId: string, adopt?: MuxSession['adopt']): void {
+      const session = {
+        sessionId,
+        muxName: `codeman-${sessionId}`,
+        pid: 1,
+        createdAt: 0,
+        workingDir: '/tmp',
+        mode: 'shell',
+        attached: false,
+        adopt,
+      };
+      (this as unknown as { sessions: Map<string, MuxSession> }).sessions.set(sessionId, session as MuxSession);
+    }
+  }
+  const adoption = {
+    location: 'local',
+    socketPath: '/tmp/s',
+    targetSession: 'work',
+    viewSession: 'codeman-view-aaaa1111',
+  } as MuxSession['adopt'];
+
+  it('reads as ended only with a dead pane and a client still on it', () => {
+    expect(endedAdoptedAttaches('1 1 codeman-aaaa1111\n', adopted)).toEqual(['codeman-aaaa1111']);
+    expect(endedAdoptedAttaches('1 2 codeman-aaaa1111', adopted)).toEqual(['codeman-aaaa1111']);
+    // Nothing to detach: a second try would only print `no current client` every tick.
+    expect(endedAdoptedAttaches('1 0 codeman-aaaa1111', adopted)).toEqual([]);
+    expect(endedAdoptedAttaches('0 1 codeman-aaaa1111', adopted)).toEqual([]);
+    expect(endedAdoptedAttaches('', adopted)).toEqual([]);
+  });
+
+  it("leaves every other session's dead pane alone, since that one is an agent's exit", () => {
+    expect(endedAdoptedAttaches('1 1 codeman-bbbb2222', adopted)).toEqual([]);
+  });
+
+  it('detaches the client from a dead wrapper on the tick', async () => {
+    const manager = new WatchedManager();
+    manager.adopt('aaaa1111', adoption);
+    manager.adopt('bbbb2222');
+    manager.rows = '1 1 codeman-aaaa1111\n1 1 codeman-bbbb2222\n';
+
+    await manager.detachEndedAdoptedAttaches();
+
+    expect(manager.detached).toEqual(['codeman-aaaa1111']);
+  });
+
+  it('does not read tmux while nothing is adopted', async () => {
+    const manager = new WatchedManager();
+    manager.adopt('bbbb2222');
+    const read = vi.spyOn(manager as unknown as { readAttachRows: () => Promise<string> }, 'readAttachRows');
+
+    await manager.detachEndedAdoptedAttaches();
+
+    expect(read).not.toHaveBeenCalled();
+  });
 });

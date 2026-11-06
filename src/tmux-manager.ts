@@ -500,6 +500,19 @@ export function hasObservablePaneSession(sessions: Iterable<MuxSession>): boolea
 }
 
 /**
+ * Which adopted wrappers have a dead pane with a tmux client still attached, from rows of
+ * `#{pane_dead} #{session_attached} #{session_name}`. Exported for unit testing.
+ */
+export function endedAdoptedAttaches(rows: string, adopted: ReadonlySet<string>): string[] {
+  const ended: string[] = [];
+  for (const row of rows.split('\n')) {
+    const [dead, attached, muxName] = row.trim().split(' ');
+    if (dead === '1' && Number(attached) > 0 && adopted.has(muxName)) ended.push(muxName);
+  }
+  return ended;
+}
+
+/**
  * Resolve a target pane id from `tmux list-panes -F '#{pane_id}:#{pane_active}'`.
  * Prefers the active pane and falls back to the first valid pane.
  */
@@ -3989,7 +4002,49 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       } catch (err) {
         console.error('[TmuxManager] Remote reconnect watcher error:', err);
       }
+      void this.detachEndedAdoptedAttaches().catch((err) => {
+        console.error('[TmuxManager] Adopted attach watcher error:', err);
+      });
     }, intervalMs);
+  }
+
+  /**
+   * Let go of a wrapper whose pane died (#510). That pane holds the attach to someone
+   * else's tmux session, so it dies when that session ends, the transport drops or the
+   * view gets detached, and `paneExit` rightly reports none of them. But `remain-on-exit`
+   * keeps Codeman's own tmux client on the dead pane, so the tab kept its pid and `busy`,
+   * input went nowhere and both attach routes refused it.
+   *
+   * Detaching that client is an ordinary PTY exit with status 0: the pid goes null, the tab
+   * stays open, and selecting it starts the wrapper again, which joins the target if it is
+   * back and otherwise prints that it is gone. Only Codeman's own socket is touched.
+   */
+  async detachEndedAdoptedAttaches(): Promise<void> {
+    const adopted = new Set<string>();
+    for (const session of this.sessions.values()) {
+      if (session.adopt) adopted.add(session.muxName);
+    }
+    if (adopted.size === 0) return;
+    for (const muxName of endedAdoptedAttaches(await this.readAttachRows(), adopted)) {
+      await this.detachClients(muxName);
+    }
+  }
+
+  /** Rows for {@link endedAdoptedAttaches}. Empty when tmux did not answer. */
+  protected async readAttachRows(): Promise<string> {
+    if (IS_TEST_MODE) return '';
+    const format = '#{pane_dead} #{session_attached} #{session_name}';
+    const { stdout } = await execAsync(`${this.tmux()} list-panes -a -F '${format}' 2>/dev/null || true`, {
+      encoding: 'utf-8',
+      timeout: EXEC_TIMEOUT_MS,
+    });
+    return stdout;
+  }
+
+  /** Detach every tmux client from one of Codeman's own sessions. */
+  protected async detachClients(muxName: string): Promise<void> {
+    if (IS_TEST_MODE || !isValidMuxName(muxName)) return;
+    await execAsync(`${this.tmux()} detach-client -s "${muxName}"`, { timeout: EXEC_TIMEOUT_MS });
   }
 
   stopRemoteReconnectWatcher(): void {
