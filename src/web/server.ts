@@ -104,6 +104,7 @@ import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator } from '../plan-orchestrator.js';
 import { OrchestratorLoop } from '../orchestrator-loop.js';
 import { getLifecycleLog } from '../session-lifecycle-log.js';
+import { clampEnvOverridesForOwner } from '../session-env-clamp.js';
 import {
   applyWorkspaceHooks,
   pruneAgentSessionPreambles,
@@ -135,6 +136,7 @@ import { fetchWorkspaceOnce } from '../git-fetch.js';
 import { GitFetchScheduler } from '../git-fetch-scheduler.js';
 import { probePathKind } from '../utils/bounded-path-probe.js';
 import { defaultDockerWorkspaces } from './routes/git-status-routes.js';
+import { guardSessionConfigDirHome } from './routes/session-routes.js';
 import { composerIsEmpty, plainFrame } from '../session-submit-verifier.js';
 import { detectUsageLimitPause } from '../usage-limit-patterns.js';
 import { EditHistorySync } from './edit-history-sync.js';
@@ -1519,7 +1521,8 @@ export class WebServer extends EventEmitter {
    */
   private async _rebuildCustomModelEnv(
     session: Session,
-    saved: CustomModelBookkeeping
+    saved: CustomModelBookkeeping,
+    ownEnv: Record<string, string> = {}
   ): Promise<AppliedCustomModel | undefined> {
     const entry = getCli(session.mode);
     if (!entry) return undefined;
@@ -1531,19 +1534,21 @@ export class WebServer extends EventEmitter {
       return undefined;
     }
     try {
-      // Boot recovery omits both `workingDir` (no reason to re-answer a trust dialog that
-      // already fired once) and the session-env real-home lookup: the injected VALUES are
-      // never persisted, so after a real restart the session can no longer carry its
-      // allowlisted `DSH_HOME` either (`getEnvOverridesForPersist()` keeps only
-      // `CLAUDE_CODE_*`/`CLAUDE_CONFIG_DIR`): the lookup could only ever hit on the first
-      // apply in-process. Real-home resolution therefore falls back to the SERVER's
+      // Boot recovery omits `workingDir` (no reason to re-answer a trust dialog that already
+      // fired once). The real-home lookup reads the record's own values, since the session's
+      // overrides hold what the previous run injected. `linkRealHomeEntry()` keeps what is
+      // there, so this only decides an entry that is missing, which an own home skips when it
+      // does not hold one. With no own home, or one that does not answer (probed under the
+      // bulk cap, this walks every saved session), a missing entry links from the SERVER's
       // `DSH_HOME` or the recipe's `realHomeFallback` (~/.dsh).
       return applyCustomModelInjection(
         entry,
         endpoint,
         saved.modelId,
         session.id,
-        resolveCustomModelContextLength(endpoint, saved.modelId)
+        resolveCustomModelContextLength(endpoint, saved.modelId),
+        undefined,
+        await guardSessionConfigDirHome(entry, (envVar) => ownEnv[envVar], {})
       );
     } catch (err) {
       console.warn('[WebServer] Failed to rebuild custom-model env on recovery:', err);
@@ -1559,18 +1564,25 @@ export class WebServer extends EventEmitter {
    * while the new recipe writes one, and clearing it later could then never delete the
    * generated dir. `envKeys` is the UNION of saved and applied keys: the tmux session may
    * still carry `setenv`s from both, and a clear has to unset every one.
+   *
+   * `ownEnv` is always passed, empty for a record saved before it existed: `_envOverrides`
+   * holds what the previous run injected, and only this record says what was the session's
+   * own. It meets the owner's grant again, like every other env override rebuilt from disk.
    */
   private async _restoreCustomModel(session: Session, saved: CustomModelBookkeeping): Promise<void> {
-    const applied = await this._rebuildCustomModelEnv(session, saved);
+    const ownEnv = (await clampEnvOverridesForOwner(session.owner, saved.ownEnv)) ?? {};
+    const applied = await this._rebuildCustomModelEnv(session, saved, ownEnv);
     if (!applied) {
       // Endpoint gone or CLI unregistered: restore the bookkeeping exactly as saved, which
       // is what a later clear needs.
-      session.setCustomModel(saved);
+      session.setCustomModel({ ...saved, ownEnv });
       return;
     }
     session.setCustomModel(
       {
         ...saved,
+        ownEnv,
+        homeEnvVar: applied.homeEnvVar ?? saved.homeEnvVar,
         // Prefer the current recipe's dir; keep the saved one when the recipe writes none,
         // so a clear can still delete a directory an older recipe created.
         configDir: applied.configDir ?? saved.configDir,
@@ -1590,8 +1602,9 @@ export class WebServer extends EventEmitter {
     // __attachmentHistory keeps the private (externalPath-bearing) history on disk,
     // separate from the sanitized public attachmentHistory in toState().
     const attachmentHistory = session.getAttachmentHistoryForPersist();
-    // __customModel keeps the selection's bookkeeping (injected env KEYS, config dir,
-    // launch model; never the values) so recovery can restore and later clear it.
+    // __customModel keeps the selection's bookkeeping (injected env KEYS, config dir, launch
+    // model, the session's own home path; never an injected value or any other own value)
+    // so recovery can restore and later clear it.
     const customModel = session.getCustomModelForPersist();
     const state = {
       ...base,

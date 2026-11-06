@@ -324,7 +324,8 @@ CLI process in place** — same pane, same tmux session, fresh env. That
 restart is necessary, not incidental: every supported harness reads its
 endpoint config at process start, not per-turn, so there is no live
 hot-swap. A Claude session is relaunched with `--resume <conversation> ||
---session-id <id>`, so it continues the conversation it was on; pi, omp and
+--session-id <id>`, so it continues the conversation it was on (one exception:
+a session on its own `CLAUDE_CONFIG_DIR`, see below); pi, omp and
 grok are relaunched with the `--model` value that selects the injected
 provider (`custom/<modelId>` for pi and omp, `codeman-custom` for grok),
 since for those three the config file alone does not switch the model.
@@ -384,7 +385,14 @@ size`. Neither a `modelContextLengths` entry nor a `defaultContextLength`
   included), user-level agents and commands, and the MCP servers configured
   in `~/.claude.json` — none of those are symlinked back, only `projects` is.
   A fine trade for "point this session at my local llama.cpp," but worth
-  knowing before it surprises you mid-session.
+  knowing before it surprises you mid-session. ⚠️ **A session on its own
+  `CLAUDE_CONFIG_DIR` does not carry its conversation across an endpoint.**
+  The link goes to the server's Claude directory, never the session's own, so
+  the relaunch finds no transcript and starts a new conversation, and that
+  conversation's transcript lands in the server's tree. A clear goes back to
+  the own directory and resumes what that held from before the selection; a
+  session launched straight onto the endpoint has nothing there, so a clear
+  starts another new conversation.
 
 **That isolated directory needed one more fix to actually be usable
 non-interactively.** An otherwise-empty `CLAUDE_CONFIG_DIR` has none of a
@@ -535,13 +543,26 @@ id, model and injected key NAMES are persisted, the values are re-derived
 from the endpoint store on recovery, and the pane keeps running against the
 endpoint in between because tmux retains its environment.
 
-⚠️ Clearing removes injected keys **by name**, and `CLAUDE_CONFIG_DIR` is one
-of the names claude's selection injects — so a session that ALSO had
-`CLAUDE_CONFIG_DIR` set through the generic `envOverrides` field (the
-per-client-account case) loses that override on clear too, and silently
-falls back to the server's default Claude account. If you route a session
-to a specific account this way, re-apply the override after clearing a
-custom-model selection from it.
+A value the session set itself under an injected key comes back when the
+selection goes, on a clear or a switch to another endpoint. That is what
+keeps a session on its own `DSH_HOME`, `CODEX_HOME` or `GROK_HOME`, and on
+its own account through `CLAUDE_CONFIG_DIR` (the per-client-account case).
+
+⚠️ Across a Codeman restart only the home directory comes back, and only as
+an absolute path. The selection overwrote the tmux `setenv` that held it, so
+its record in `state.json` keeps that one path (`ownEnv`), and a non-granted
+owner loses it at recovery like any other privileged override. Any other own
+value can be a credential and stays in memory: a session that set its own
+`GEMINI_API_KEY`, picked an endpoint and then outlived a restart falls back to
+the server's key on clear. A selection saved by an older build has no such
+record, so its first clear still falls back to the server's default.
+
+⚠️ That record only exists when the selection was made before the restart. An
+own `DSH_HOME`, `CODEX_HOME` or `GROK_HOME` on a session with no selection is
+not persisted at all (a session's overrides keep only `CLAUDE_CODE_*` and
+`CLAUDE_CONFIG_DIR`), so a Codeman restart leaves nothing to record: an
+endpoint picked after it, and cleared later, falls back to the server's
+default. `CLAUDE_CONFIG_DIR` does not have this gap.
 
 **New sessions always default back to the harness's native backend.** A
 custom-endpoint selection is a per-session choice, never a sticky global
