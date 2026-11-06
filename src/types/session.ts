@@ -34,6 +34,7 @@
 import type { RespawnConfig } from './respawn.js';
 import type { AttachmentDetectedType } from './tools.js';
 import type { GitFetchStatus } from '../git-fetch.js';
+import type { LiveWorktree } from '../live-worktree.js';
 
 /** Status of a Claude session */
 export type SessionStatus = 'idle' | 'busy' | 'stopped' | 'error';
@@ -861,6 +862,16 @@ export interface SessionState {
    * routes like any other out-of-workspace path.
    */
   paneCwd?: string;
+  /**
+   * The linked git worktree inside `workingDir` that the pane is in NOW, when there is one:
+   * Claude Code's `.claude/worktrees/<name>`, or any other worktree of the repository under
+   * the session's folder. Derived from {@link paneCwd} by `live-worktree.ts`, so it is
+   * runtime-only and absent wherever `paneCwd` is, and absent for a worktree outside
+   * `workingDir`: the file routes never serve those. NOT a confinement root; the Files panel
+   * only starts its listing here, after `GET .../files` has checked that the real folder still
+   * lies inside `workingDir`, since a symlink can replace it without moving the pane.
+   */
+  liveWorktree?: LiveWorktree;
   /** Remote execution metadata, present when this session runs over SSH through local tmux */
   remote?: SessionRemote;
   /** Docker execution metadata, present when this session runs inside a container via local tmux + docker exec */

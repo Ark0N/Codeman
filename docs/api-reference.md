@@ -991,6 +991,29 @@ and never a confinement root: file routes stay confined to `workingDir`.
 tmux reports the resolved directory, so for a workspace reached through a symlink a
 directory at or under the resolved workspace is reported in `workingDir`'s spelling.
 
+## Live worktree (`liveWorktree`)
+
+Session state (`GET /api/v1/sessions`, the `session:updated` event) may carry `liveWorktree`,
+the linked git worktree the session's pane is in now, for example after Claude Code's
+EnterWorktree moved the running session:
+
+```json
+"liveWorktree": { "name": "feature-a", "path": "/home/me/repo/.claude/worktrees/feature-a" }
+```
+
+It is derived from `paneCwd`, so it is absent wherever that is, and it is only ever a folder
+strictly below `workingDir`: a worktree elsewhere is never reported. `path` is in `workingDir`'s
+spelling. Like `paneCwd` it is never restored after a restart and never a confinement root.
+
+`GET /api/v1/sessions/:id/files` takes an optional `root=live`, which starts the listing, or a
+`q` search, at that worktree instead of at `workingDir`. The response's `root` names the folder
+that was walked: it stays `workingDir` when the session is in no worktree, when the worktree has
+gone, and when the folder no longer resolves inside `workingDir`. A `path` in the response stays
+relative to `workingDir` either way, so it works unchanged on `file-content` and `file-raw`,
+while a `q` containing `/` is matched against paths relative to the folder walked. The response
+also carries `worktree`, the same `{ name, path }`, whenever the session has a `liveWorktree`,
+whichever folder was walked and with or without `root=live`.
+
 ## Session model (`displayModel`)
 
 Session state (`GET /api/v1/sessions`, the `session:updated` event) carries the model a
