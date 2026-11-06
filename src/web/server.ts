@@ -146,6 +146,7 @@ import { probeLocalPaths, readClaudeEditSources, resolveClaudeTranscript } from 
 import { remoteLocateClaudeTranscript, remoteProbePaths, remoteReadClaudeEditSources } from '../remote-files.js';
 import { remoteTmuxLocation } from '../tmux-manager.js';
 import { stopDeepSeekWeb } from '../deepseek-web-server.js';
+import { getLocalModelService } from '../local-model/install-job.js';
 import {
   wireRespawnListeners,
   setupTimedRespawn,
@@ -1418,7 +1419,7 @@ export class WebServer extends EventEmitter {
     registerDoctorRoutes(this.app);
     registerCustomModelRoutes(this.app);
     registerCliRegistryRoutes(this.app);
-    registerLocalModelRoutes(this.app);
+    registerLocalModelRoutes(this.app, ctx);
 
     // Cron: build the service from the same context, recompute
     // due times for any persisted jobs, then expose it to its routes.
@@ -3441,6 +3442,14 @@ export class WebServer extends EventEmitter {
       }
     }
 
+    // The model Codeman runs on this Mac (src/local-model/): a job a restart interrupted comes
+    // back paused and waits for a click, and an installed runtime that was not stopped is
+    // started again (an own orphan on its port is adopted or replaced). Off the startup path:
+    // boot() never throws, and nothing waits for a runtime to answer. Not in tests.
+    if (!this.testMode) {
+      void getLocalModelService().boot();
+    }
+
     // Sweep agent preamble caches whose sessions are gone (see
     // pruneAgentSessionPreambles). Once per boot, after restore, so every session this
     // instance owns is in the keep set. Best-effort and off the startup critical path.
@@ -4589,6 +4598,13 @@ export class WebServer extends EventEmitter {
     // port against the next start — the exact EADDRINUSE this feature already
     // got wrong once.
     void stopDeepSeekWeb();
+
+    // The local model runtime is a non-detached child, but a child is not ended by its
+    // parent's exit: it gets SIGTERM here, and an install job in flight is interrupted (the
+    // next start reads it as paused). An orphan a hard kill leaves is adopted at the next boot.
+    if (!this.testMode) {
+      void getLocalModelService().shutdown();
+    }
 
     // The header's GPU / CPU clock sampler is a Windows child process under WSL, and its idle sweep a timer.
     stopHostSensors();

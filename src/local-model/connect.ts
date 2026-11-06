@@ -2,9 +2,6 @@
  * @fileoverview Connecting the installed local model to Codeman, and undoing it: the endpoint
  * record, the settings flag, and the checks around them.
  *
- * CONTRACT STAGE: the two constants are final. Every function below has its final signature
- * and a body that throws; the bodies are written next.
- *
  * These are the ONLY two writes of the local model outside its own folder:
  *  1. One record in `custom-model-hosts.json`, through `mutateCustomModelHosts()`:
  *     `{ id: 'local-ollama', label: 'This Mac', baseUrl: 'http://127.0.0.1:<port>',
@@ -23,15 +20,20 @@
  *    switched it on AND no other endpoint is saved.
  *  - The model's digest is compared again before a session starts and at boot
  *    (`compareModelDigest()`): a model that changed under the same name is not launched.
+ *  - The record is MANAGED while the state file records it as ours (`isManagedLocalEndpoint()`):
+ *    the endpoint routes then refuse to edit or delete it and the discovery sweep leaves it
+ *    alone, so its `models` stays the one model the install job checked.
  */
 
+import { mutateCustomModelHosts } from '../custom-model-hosts-writer.js';
 import type { CustomModelHost } from '../custom-model-hosts.js';
-import type { LocalModelErrorCode } from '../types.js';
+import { getErrorMessage, type LocalModelErrorCode } from '../types.js';
+import { CustomModelHostSchema } from '../web/schemas.js';
+import { mutateSettingsFile } from '../web/settings-writer.js';
+import { readLocalModelState } from './state-store.js';
 
-/** Marks a body the contract stage left unwritten. */
-function notImplemented(what: string, ..._args: unknown[]): never {
-  throw new Error(`${what} is not implemented yet`);
-}
+/** The key of the settings flag that shows saved endpoints in the Run menu and runs the discovery sweep. */
+const ENDPOINTS_FLAG = 'customModelEndpointsEnabled';
 
 /** The id of the endpoint record this feature writes. Reserved: nobody else may use it. */
 export const LOCAL_MODEL_ENDPOINT_ID = 'local-ollama';
@@ -50,7 +52,15 @@ export interface LocalEndpointInput {
 
 /** The endpoint record of the file header. Pure; the caller validates it with `CustomModelHostSchema`. */
 export function buildLocalEndpointRecord(input: LocalEndpointInput): CustomModelHost {
-  return notImplemented('buildLocalEndpointRecord', input);
+  return {
+    id: LOCAL_MODEL_ENDPOINT_ID,
+    label: LOCAL_MODEL_ENDPOINT_LABEL,
+    baseUrl: `http://127.0.0.1:${input.port}`,
+    authStyle: 'bearer',
+    models: [input.modelId],
+    defaultModelId: input.modelId,
+    defaultContextLength: input.context,
+  };
 }
 
 export interface ConnectLocalModelInput extends LocalEndpointInput {
@@ -75,14 +85,88 @@ export type ConnectResult =
     }
   | { ok: false; code: Extract<LocalModelErrorCode, 'endpoint-id-taken' | 'connect-failed'>; detail?: string };
 
-/** Writes the record and the flag. Idempotent. Never throws: a refused write is `connect-failed` with its message as `detail`. */
+/**
+ * Writes the record and the flag. Idempotent. Never throws: a refused write is `connect-failed`
+ * with its message as `detail`.
+ *
+ * The record goes first, with the "is the id free" check in the same serialized step as the
+ * write, so a record that is somebody else's is found before anything is changed. Should the
+ * flag then fail to save, a record this call ADDED is taken out again: the pair is never left
+ * half done, and a later attempt starts from the same place.
+ */
 export async function connectLocalModel(input: ConnectLocalModelInput): Promise<ConnectResult> {
-  return notImplemented('connectLocalModel', input);
+  const parsed = CustomModelHostSchema.safeParse(buildLocalEndpointRecord(input));
+  if (!parsed.success) {
+    return { ok: false, code: 'connect-failed', detail: `The endpoint record is not valid: ${parsed.error.message}` };
+  }
+  const record: CustomModelHost = parsed.data;
+
+  let outcome: 'added' | 'replaced' | 'taken';
+  try {
+    outcome = await mutateCustomModelHosts<'added' | 'replaced' | 'taken'>((hosts) => {
+      const index = hosts.findIndex((host) => host.id === record.id);
+      if (index === -1) return { hosts: [...hosts, record], result: 'added' };
+      if (!input.ours) return { result: 'taken' };
+      const next = [...hosts];
+      next[index] = record;
+      return { hosts: next, result: 'replaced' };
+    });
+  } catch (err) {
+    return { ok: false, code: 'connect-failed', detail: getErrorMessage(err) };
+  }
+  if (outcome === 'taken') return { ok: false, code: 'endpoint-id-taken' };
+
+  let flagBefore: boolean;
+  try {
+    const { before } = await mutateSettingsFile((current) =>
+      current[ENDPOINTS_FLAG] === true ? undefined : { ...current, [ENDPOINTS_FLAG]: true }
+    );
+    flagBefore = before[ENDPOINTS_FLAG] === true;
+  } catch (err) {
+    if (outcome === 'added') await removeLocalEndpoint().catch(() => {});
+    return { ok: false, code: 'connect-failed', detail: getErrorMessage(err) };
+  }
+  return { ok: true, flagWasEnabled: input.flagWasEnabled ?? flagBefore };
+}
+
+/**
+ * Puts our record back when it is gone, and does nothing when a record with our id exists
+ * (it is never replaced here). For the start of the server while a model is installed: a
+ * config-backup restore can bring back an older endpoint store without our record while the
+ * model, the runtime and the state file stay. The settings flag is NOT touched: a person who
+ * switched it off meant to. Resolves true when the record was added. Never throws.
+ */
+export async function ensureLocalEndpoint(input: LocalEndpointInput): Promise<boolean> {
+  const parsed = CustomModelHostSchema.safeParse(buildLocalEndpointRecord(input));
+  if (!parsed.success) return false;
+  const record: CustomModelHost = parsed.data;
+  try {
+    return await mutateCustomModelHosts<boolean>((hosts) =>
+      hosts.some((host) => host.id === record.id) ? { result: false } : { hosts: [...hosts, record], result: true }
+    );
+  } catch {
+    // A store that must not be overwritten stays as it is; a session start then says what is wrong.
+    return false;
+  }
+}
+
+/** Takes our record out of the store. Resolves with how many OTHER endpoints are saved. */
+async function removeLocalEndpoint(): Promise<number> {
+  return mutateCustomModelHosts<number>((hosts) => {
+    const others = hosts.filter((host) => host.id !== LOCAL_MODEL_ENDPOINT_ID);
+    return others.length === hosts.length ? { result: others.length } : { hosts: others, result: others.length };
+  });
 }
 
 /** Moves our record to another port (the answer to "Use another port" once connected). A missing record is not an error. */
 export async function moveLocalEndpoint(port: number): Promise<void> {
-  return notImplemented('moveLocalEndpoint', port);
+  await mutateCustomModelHosts<void>((hosts) => {
+    const index = hosts.findIndex((host) => host.id === LOCAL_MODEL_ENDPOINT_ID);
+    if (index === -1) return { result: undefined };
+    const next = [...hosts];
+    next[index] = { ...next[index], baseUrl: `http://127.0.0.1:${port}` };
+    return { hosts: next, result: undefined };
+  });
 }
 
 /**
@@ -90,12 +174,28 @@ export async function moveLocalEndpoint(port: number): Promise<void> {
  * (`flagWasEnabled` is false) and no other endpoint is left. Idempotent.
  */
 export async function disconnectLocalModel(input: { flagWasEnabled: boolean }): Promise<void> {
-  return notImplemented('disconnectLocalModel', input);
+  const othersLeft = await removeLocalEndpoint();
+  if (input.flagWasEnabled || othersLeft > 0) return;
+  await mutateSettingsFile((current) =>
+    current[ENDPOINTS_FLAG] === true ? { ...current, [ENDPOINTS_FLAG]: false } : undefined
+  );
 }
 
 /** Whether `id` is the reserved endpoint id. For the endpoint routes and the discovery sweep, which leave that record alone. */
 export function isLocalModelEndpointId(id: string): boolean {
-  return notImplemented('isLocalModelEndpointId', id);
+  return id === LOCAL_MODEL_ENDPOINT_ID;
+}
+
+/**
+ * Whether the saved endpoint `id` is the record THIS feature wrote and still owns: the id is
+ * the reserved one and the state file records a connection under it. A record with the
+ * reserved id that somebody made by hand (before this feature, or while nothing is installed)
+ * is not managed, so its owner can still edit and delete it. Never throws.
+ */
+export async function isManagedLocalEndpoint(id: string): Promise<boolean> {
+  if (!isLocalModelEndpointId(id)) return false;
+  const state = await readLocalModelState();
+  return state.connection?.endpointId === id;
 }
 
 /**
@@ -106,7 +206,11 @@ export function sessionNamesUsingEndpoint(
   sessions: Iterable<{ name: string; customModel?: { endpointId: string } }>,
   endpointId: string = LOCAL_MODEL_ENDPOINT_ID
 ): string[] {
-  return notImplemented('sessionNamesUsingEndpoint', sessions, endpointId);
+  const names: string[] = [];
+  for (const session of sessions) {
+    if (session.customModel?.endpointId === endpointId) names.push(session.name);
+  }
+  return names;
 }
 
 /**
@@ -120,5 +224,18 @@ export function compareModelDigest(
   stored: string | undefined,
   current: string | undefined
 ): 'same' | 'changed' | 'unknown' {
-  return notImplemented('compareModelDigest', stored, current);
+  const a = normalizeDigest(stored);
+  const b = normalizeDigest(current);
+  if (!a || !b) return 'unknown';
+  return a === b ? 'same' : 'changed';
+}
+
+/** A digest as it is compared: lowercase hex, without the `sha256:` some listings put in front. */
+function normalizeDigest(digest: string | undefined): string | undefined {
+  if (typeof digest !== 'string') return undefined;
+  const hex = digest
+    .trim()
+    .toLowerCase()
+    .replace(/^sha256:/, '');
+  return hex === '' ? undefined : hex;
 }

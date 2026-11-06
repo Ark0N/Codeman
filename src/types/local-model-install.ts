@@ -22,15 +22,19 @@
  * | Route                            | Body                        | Refusals                                              |
  * |----------------------------------|-----------------------------|-------------------------------------------------------|
  * | `GET /api/local-model`           | none                        | none (a failed probe is an answer)                    |
- * | `POST /api/local-model/install`  | `LocalModelInstallRequest`  | 400 not a row the server offers; 409 `job-running`,   |
+ * | `POST /api/local-model/install`  | `LocalModelInstallRequest`  | 400 not a row the server offers, or a saved endpoint  |
+ * |                                  |                             | already has the reserved id; 409 `job-running`,       |
  * |                                  |                             | `already-installed`, `size-changed`                   |
  * | `POST /api/local-model/cancel`   | none                        | 409 `wrong-state` (no job is running)                 |
- * | `POST /api/local-model/resume`   | `LocalModelResumeRequest`   | 409 `wrong-state` (not paused or failed)              |
+ * | `POST /api/local-model/resume`   | `LocalModelResumeRequest`   | 409 `job-running`, `wrong-state` (not paused or       |
+ * |                                  |                             | failed)                                               |
  * | `POST /api/local-model/runtime`  | `LocalModelRuntimeRequest`  | 409 `wrong-state` (not installed), `job-running`      |
  * | `DELETE /api/local-model`        | `LocalModelRemoveRequest`   | 409 `job-running`, `sessions-open`                    |
  *
  * A 409 is the error envelope plus `data: LocalModelConflict`:
- * `{ success: false, error, errorCode: 'CONFLICT', data: { reason, message, ... } }`.
+ * `{ success: false, error, errorCode: 'CONFLICT', data: { reason, message, ... } }`. A 409
+ * WITHOUT `data` is a write of `settings.json` or of the endpoint store that was refused
+ * because the file does not parse; `error` names the fix.
  *
  * The rules of src/types/local-model.ts hold here too:
  *  1. A size a person reads travels twice: as bytes and as decimal GB text from `formatGb()`
@@ -427,18 +431,14 @@ export interface LocalModelInstallView {
   actions: LocalModelAction[];
 }
 
-/**
- * The `data` of `GET /api/local-model`. Admin only in multi-user mode.
- *
- * `install` is optional in the type only until the route emits it: from the stage that ships
- * the install verbs on it is always present.
- */
+/** The `data` of `GET /api/local-model`. Admin only in multi-user mode. */
 export interface LocalModelStatus {
   hardware: HardwareFacts;
   recommendation: Recommendation;
   /** `LocalModelCatalog.updated`. */
   catalogUpdated: string;
-  install?: LocalModelInstallView;
+  /** Where the install stands. Always present. */
+  install: LocalModelInstallView;
 }
 
 // ---------- Request bodies and answers ----------
@@ -557,6 +557,12 @@ export interface LocalModelStateFile {
     /** The digest `/api/tags` reported after the pull. Compared again at boot and before a session starts. */
     digest?: string;
   };
+  /**
+   * The model of the job this one replaced, when it was another model: what that job left in
+   * the model store is deleted once the runtime runs, before the new model is downloaded.
+   * Absent once that was done, and in `idle` and `installed`.
+   */
+  replacedModelId?: string;
   /** The coding agent of the job or of the installation. */
   cli?: { id: string; label: string };
   /** The runtime, once its port was chosen. */
