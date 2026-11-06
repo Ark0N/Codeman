@@ -4051,6 +4051,7 @@ Object.assign(CodemanApp.prototype, {
       title: 'Choose the folder to create the case in',
       initialPath: input.value.trim(),
       directoriesOnly: true,
+      allowNewFolder: true,
       onSelect: (path) => {
         input.value = path;
         this.updateNewCasePathPreview();
