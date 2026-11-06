@@ -4,11 +4,15 @@
  * module and a mocked `_api`.
  *
  * What is pinned:
- *  - every state the route can produce: loading, refused (403), failed, not macOS, each `none`
- *    reason, `limited`, `ok`;
- *  - the card stays hidden until the server answered for a Mac, and the Settings row carries
- *    the loading and failure sentences;
+ *  - every state the route can produce: loading, refused (403 FORBIDDEN), a 403 that is not a
+ *    refusal, failed, not macOS, each `none` sentence, `limited`, `ok`;
+ *  - the card stays hidden until the server answered for a Mac, and so does the Settings group
+ *    (never "Model on this Mac" on a server that is not one); the group carries the failure
+ *    sentence;
  *  - the card and the row show the SAME pick (one builder), the card folds the alternatives;
+ *  - the installed memory is the size the Mac is sold as, every other size is printed as sent;
+ *  - each fit and speed label says what it measures, and the line about the missing setup
+ *    sits right under the pick;
  *  - every payload string lands as text: an `<img onerror>` in a model, harness or chip name,
  *    or in a slot value of a server sentence, creates no element and runs nothing;
  *  - sizes are printed as sent (decimal GB text), and the word "Recommended" is the server's
@@ -42,8 +46,10 @@ const INDEX = readFileSync(resolve(PUBLIC, 'index.html'), 'utf8');
 const MODULE = readFileSync(resolve(PUBLIC, 'local-model-ui.js'), 'utf8');
 const I18N = readFileSync(resolve(PUBLIC, 'i18n.js'), 'utf8');
 
-const DISMISS_KEY = 'codeman:local-model-dismissed';
-const NEXT_STEP = 'Setting this up from Codeman is the next step. It is not built yet.';
+/** Named for the read-only stage, so the stage that can set a model up takes a key of its own. */
+const DISMISS_KEY = 'codeman:local-model-dismissed:readonly';
+const NEXT_STEP =
+  'Codeman cannot download or install this for you yet. That is the next step, and it is not built yet.';
 
 type ApiResponse = { ok: boolean; status: number; json(): Promise<unknown> } | null;
 
@@ -253,6 +259,18 @@ function none(reason: NoneReason, vars?: Record<string, string>, hardware: Parti
   return status({ verdict: 'none', reason, headline, budgetBytes: 0, budgetGb: '0.0' }, hardware);
 }
 
+/** A `none` answer whose headline is one of the other sentences of its reason. */
+function noneWith(
+  reason: NoneReason,
+  text: LocalModelMessage['text'],
+  vars?: Record<string, string>,
+  hardware: Partial<HardwareFacts> = {}
+) {
+  const answer = none(reason, undefined, hardware);
+  answer.recommendation.headline = { text, ...(vars ? { vars } : {}) };
+  return answer;
+}
+
 const NONE_CASES: Array<{ reason: Exclude<NoneReason, 'not-macos'>; answer: LocalModelStatus; sentence: string }> = [
   {
     reason: 'intel',
@@ -261,15 +279,15 @@ const NONE_CASES: Array<{ reason: Exclude<NoneReason, 'not-macos'>; answer: Loca
   },
   {
     reason: 'memory',
-    answer: none('memory', { memory: '8.6' }, { memGb: '8.6', memClassGb: 8 }),
+    answer: none('memory', { memory: '8' }, { memGb: '8.6', memClassGb: 8 }),
     sentence:
-      'This Mac has 8.6 GB of memory. That is too little to run a model that can drive a coding agent, so Codeman recommends none here.',
+      'This Mac has 8 GB of memory. That is too little to run a model that can drive a coding agent, so Codeman recommends none here.',
   },
   {
     reason: 'disk',
-    answer: none('disk', { download: '17.7', free: '12.0', missing: '16.4' }, { freeDiskGb: '12.0' }),
+    answer: none('disk', { download: '17.7', reserve: '10.7', free: '12.0', missing: '16.4' }, { freeDiskGb: '12.0' }),
     sentence:
-      'Not enough free disk space. The smallest model that fits this Mac is a 17.7 GB download and 12.0 GB is free. Free up about 16.4 GB.',
+      'Not enough free disk space. The smallest model that fits this Mac is a 17.7 GB download, and 10.7 GB must stay free after it. 12.0 GB is free now. Free up about 16.4 GB.',
   },
   {
     reason: 'macos',
@@ -328,18 +346,41 @@ describe('the markup the module fills', () => {
 });
 
 describe('before there is an answer', () => {
-  it('keeps the card hidden while the request is in flight, and says so in Settings', async () => {
-    const { newApp, card, row } = mount();
+  it('keeps the card and the Settings group hidden while the first request is in flight', async () => {
+    const { newApp, card, row, group } = mount();
     let answer!: (response: ApiResponse) => void;
     const app = newApp(() => new Promise<ApiResponse>((done) => (answer = done)));
     const loading = app.loadLocalModel();
     expect(card.hidden).toBe(true);
     expect(card.textContent).toBe('');
-    expect(row.textContent).toBe('Checking this Mac…');
+    // Nothing says yet that the server is a Mac, so no group titled "Model on this Mac" and no
+    // sentence about "this Mac" either: on most servers both would be false.
+    expect(group.style.display).toBe('none');
+    expect(row.textContent).toBe('');
     answer(ok(OK_STATUS));
     await loading;
     expect(card.hidden).toBe(false);
-    expect(row.textContent).not.toContain('Checking this Mac…');
+    expect(group.style.display).toBe('');
+    expect(texts(row, '.local-model-headline')).toEqual(['Best fit for this Mac']);
+  });
+
+  it('keeps an answer on screen, group included, while it is refreshed', async () => {
+    const { dom, newApp, row, group } = mount();
+    let now = 1_000_000;
+    (dom.window as unknown as { Date: DateConstructor }).Date.now = () => now;
+    let answer!: (response: ApiResponse) => void;
+    const answers: Array<() => Promise<ApiResponse>> = [
+      async () => ok(OK_STATUS),
+      () => new Promise<ApiResponse>((done) => (answer = done)),
+    ];
+    const app = newApp(() => (answers.shift() as () => Promise<ApiResponse>)());
+    await app.loadLocalModel();
+    now += 61_000;
+    const refreshing = app.loadLocalModel();
+    expect(group.style.display).toBe('');
+    expect(texts(row, '.local-model-headline')).toEqual(['Best fit for this Mac']);
+    answer(ok(OK_STATUS));
+    await refreshing;
   });
 
   it.each([
@@ -383,6 +424,41 @@ describe('a refused request (a non-admin in multi-user mode)', () => {
     expect(app._api).toHaveBeenCalledTimes(1);
   });
 
+  it('does not take another 403 for a refusal: an admin who must change the password is asked again', async () => {
+    // The auth layer answers 403 PASSWORD_CHANGE_REQUIRED for every /api route until the
+    // password is changed, and the dialog that changes it closes without a reload.
+    const { dom, document, newApp, card, row, group } = mount();
+    const win = dom.window as unknown as { __codemanUser?: { multiUser: boolean; role: string } };
+    win.__codemanUser = { multiUser: true, role: 'admin' };
+    const answers: ApiResponse[] = [refusal(403, 'PASSWORD_CHANGE_REQUIRED'), ok(OK_STATUS)];
+    const app = newApp(async () => answers.shift() ?? null);
+    await app.loadLocalModel();
+    expect(app._api).toHaveBeenCalledTimes(1);
+    expect(card.hidden).toBe(true);
+    // A failed request, not a refusal: the group stays, with the failure sentence.
+    expect(group.style.display).toBe('');
+    expect(row.textContent).toBe('Could not reach the server.');
+
+    // The password was changed: admin-ui.js announces the user again.
+    document.dispatchEvent(new dom.window.CustomEvent('codeman:me'));
+    await vi.waitFor(() => expect(card.hidden).toBe(false));
+    expect(app._api).toHaveBeenCalledTimes(2);
+    expect(group.style.display).toBe('');
+    expect(texts(row, '.local-model-headline')).toEqual(['Best fit for this Mac']);
+  });
+
+  it.each([
+    ['a 403 without a body', { ok: false, status: 403, json: async () => Promise.reject(new Error('no body')) }],
+    ['a 403 with another error code', refusal(403, 'SOMETHING_ELSE')],
+  ] as Array<[string, ApiResponse]>)('keeps asking after %s', async (_name, response) => {
+    const { newApp, group } = mount();
+    const app = newApp(response);
+    await app.loadLocalModel();
+    await app.loadLocalModel();
+    expect(app._api).toHaveBeenCalledTimes(2);
+    expect(group.style.display).toBe('');
+  });
+
   it('does not ask at all once the page knows the role, and asks when the role turns out to be admin', async () => {
     const { dom, document, newApp, card, group } = mount();
     const win = dom.window as unknown as { __codemanUser?: { multiUser: boolean; role: string } };
@@ -402,22 +478,45 @@ describe('a refused request (a non-admin in multi-user mode)', () => {
 });
 
 describe('a server that is not a Mac', () => {
-  it('hides the card and leaves one plain sentence in Settings', async () => {
+  const LINUX = none('not-macos', undefined, {
+    platform: 'linux',
+    arch: 'x64',
+    arm64: undefined,
+    chip: 'AMD Ryzen 9 7950X',
+    source: 'not-probed',
+  });
+
+  it('shows neither the card nor the Settings group: nothing there is about this server', async () => {
     const { newApp, card, row, group } = mount();
-    const answer = none('not-macos', undefined, {
-      platform: 'linux',
-      arch: 'x64',
-      arm64: undefined,
-      chip: 'AMD Ryzen 9 7950X',
-      source: 'not-probed',
-    });
-    await newApp(ok(answer)).loadLocalModel();
+    await newApp(ok(LINUX)).loadLocalModel();
     expect(card.hidden).toBe(true);
     expect(card.textContent).toBe('');
-    expect(group.style.display).toBe('');
-    expect(row.textContent).toBe('Codeman recommends a local model only on a Mac with Apple silicon.');
-    // No line listing another machine's parts under a heading that says "this Mac".
-    expect(row.querySelector('.local-model-hw')).toBeNull();
+    // A group titled "Model on this Mac", about "the Mac that Codeman runs on", on a Linux
+    // server: hidden, the same lever as a refused request.
+    expect(group.style.display).toBe('none');
+    expect(row.textContent).toBe('');
+  });
+
+  it('never shows the group at any point of the load, and keeps it away on a refresh', async () => {
+    const { dom, newApp, group, row } = mount();
+    let now = 1_000_000;
+    (dom.window as unknown as { Date: DateConstructor }).Date.now = () => now;
+    const seen: string[] = [];
+    const app = newApp(async () => {
+      seen.push(group.style.display);
+      return ok(LINUX);
+    });
+    const first = app.loadLocalModel();
+    seen.push(group.style.display);
+    await first;
+    now += 61_000;
+    const second = app.loadLocalModel();
+    seen.push(group.style.display);
+    await second;
+    seen.push(group.style.display);
+    expect(app._api).toHaveBeenCalledTimes(2);
+    expect(seen).toEqual(['none', 'none', 'none', 'none', 'none']);
+    expect(row.textContent).toBe('');
   });
 });
 
@@ -441,6 +540,41 @@ describe('verdict none on a Mac', () => {
     const covered = [...NONE_CASES.map((c) => c.reason), 'not-macos'].sort();
     expect(covered).toEqual(Object.keys(LOCAL_MODEL_NONE_LABELS).sort());
   });
+
+  it('says both numbers when the Mac misses by a hair (the 16 GB Mac mini)', async () => {
+    const { newApp, card, row } = mount();
+    const answer = noneWith(
+      'memory',
+      LOCAL_MODEL_LABELS.noneMemoryContext,
+      { budget: '10.4', need: '10.3' },
+      { memGb: '17.2', memClassGb: 16, chip: 'Apple M4', freeDiskGb: '42.8' }
+    );
+    await newApp(ok(answer)).loadLocalModel();
+    for (const root of [card, row]) {
+      expect(texts(root, '.local-model-hw')).toEqual(['Apple M4, 16 GB memory, 42.8 GB free']);
+      expect(texts(root, '.local-model-headline')).toEqual([
+        'Codeman estimates that this Mac can give a model about 10.4 GB of memory. The smallest model a coding agent can work with needs about 10.3 GB. That leaves no safe margin, so Codeman recommends none here.',
+      ]);
+    }
+  });
+
+  it('states no memory size when the server could not read one', async () => {
+    const { newApp, card, row } = mount();
+    const answer = noneWith('memory', LOCAL_MODEL_LABELS.noneMemoryUnknown, undefined, {
+      memBytes: 0,
+      memGb: '0.0',
+      memClassGb: 0,
+    });
+    await newApp(ok(answer)).loadLocalModel();
+    for (const root of [card, row]) {
+      // The chip and nothing else: no "0 GB memory" in the hardware line, no size in the sentence.
+      expect(texts(root, '.local-model-hw')).toEqual(['Apple M5 Pro']);
+      expect(texts(root, '.local-model-headline')).toEqual([
+        'Codeman could not read how much memory this Mac has, so it recommends no model here.',
+      ]);
+      expect(root.textContent).not.toMatch(/\b0(\.0)? GB/);
+    }
+  });
 });
 
 describe('verdict ok', () => {
@@ -449,7 +583,12 @@ describe('verdict ok', () => {
     await newApp(ok(OK_STATUS)).loadLocalModel();
     expect(card.hidden).toBe(false);
     expect(texts(card, '.local-model-title')).toEqual(['Model on this Mac']);
-    expect(texts(card, '.local-model-hw')).toEqual(['Apple M5 Pro, 51.5 GB memory, 912 GB free']);
+    // The page can be open on another device: the title says whose Mac is meant.
+    expect((card.querySelector('.local-model-title') as HTMLElement).title).toBe(
+      'The Mac that Codeman runs on, which is not always the device you are reading on.'
+    );
+    // 48, the size this Mac is sold as and what About This Mac shows: not 51.5 (its bytes in decimal GB).
+    expect(texts(card, '.local-model-hw')).toEqual(['Apple M5 Pro, 48 GB memory, 912 GB free']);
     expect(texts(card, '.local-model-headline')).toEqual(['Best fit for this Mac']);
     expect(texts(card, '.local-model-note')).toEqual(['Not yet tested by us on a Mac like this.']);
 
@@ -486,8 +625,10 @@ describe('verdict ok', () => {
     const { newApp, card } = mount();
     await newApp(ok(OK_STATUS)).loadLocalModel();
     const alts = card.querySelector('.local-model-alts')!;
-    expect(texts(alts, '.local-model-alts-title')).toEqual(['Other models that fit2']);
-    expect(texts(alts, '.local-model-count')).toEqual(['2']);
+    // No count beside the title: the server lists four at most, so a number here would be
+    // the number of rows, not of models that fit.
+    expect(texts(alts, '.local-model-alts-title')).toEqual(['Other models that fit']);
+    expect(alts.querySelector('.local-model-count')).toBeNull();
     const rows = [...alts.querySelectorAll('.local-model-alt')];
     expect(rows.map((row) => texts(row, '.local-model-name')[0])).toEqual([
       'Qwen3.6 35B-A3B (qwen3.6:35b-a3b) with OpenCode',
@@ -495,10 +636,75 @@ describe('verdict ok', () => {
     ]);
     // A candidate whose speed is fine carries a fit label only.
     expect(rows.map((row) => texts(row, '.local-model-pill'))).toEqual([['Good'], ['Tight', 'Slow']]);
+    // An alternative with an estimate prints it: "Slow" alone does not say how slow.
     expect(rows.map((row) => texts(row, '.local-model-line')[0])).toEqual([
-      'Context 131,072 tokens · 26.4 GB of memory · 22.6 GB download',
-      'Context 65,536 tokens · 36.4 GB of memory · 30.0 GB download',
+      'Context 131,072 tokens · 26.4 GB of memory · 22.6 GB download · about 42 tokens per second',
+      'Context 65,536 tokens · 36.4 GB of memory · 30.0 GB download · about 5.2 tokens per second',
     ]);
+  });
+
+  it('says what each label measures, as its tooltip and its accessible name', async () => {
+    const { newApp, card, row } = mount();
+    await newApp(ok(OK_STATUS)).loadLocalModel();
+    for (const root of [card, row]) {
+      const pills = [...root.querySelectorAll('.local-model-pill')] as HTMLElement[];
+      expect(pills.map((pill) => [pill.textContent, pill.title])).toEqual([
+        // The pick: 0.79 of the budget, a chip in no chips row.
+        ['Good', 'Memory fit: needs 79% of what this Mac can give a model'],
+        ['Speed unknown', 'No speed estimate for this model on this chip'],
+        ['Good', 'Memory fit: needs 70% of what this Mac can give a model'],
+        ['Tight', 'Memory fit: needs 97% of what this Mac can give a model'],
+        ['Slow', 'About 5.2 tokens per second (estimated).'],
+      ]);
+      for (const pill of pills) {
+        expect(pill.getAttribute('role')).toBe('note');
+        expect(pill.getAttribute('aria-label')).toBe(`${pill.textContent}. ${pill.title}`);
+      }
+    }
+  });
+
+  it('leaves a fit label without a share bare instead of inventing a number', async () => {
+    const { newApp, card } = mount();
+    const bare = candidate({ budgetShare: undefined as unknown as number, speedLabel: undefined, speed: 'ok' });
+    await newApp(ok(status({ pick: bare }))).loadLocalModel();
+    const pill = card.querySelector('.local-model-pill') as HTMLElement;
+    expect(pill.textContent).toBe('Good');
+    expect(pill.title).toBe('');
+    expect(pill.hasAttribute('aria-label')).toBe(false);
+  });
+
+  it('puts the line about the missing setup right under the pick and its notes, above the list', async () => {
+    const { newApp, card, row } = mount();
+    const withNotes = status({
+      notes: [
+        { text: LOCAL_MODEL_LABELS.noteSmallPick },
+        { text: LOCAL_MODEL_LABELS.noteDiskDropped, vars: { model: 'Qwen3.6 35B-A3B', missing: '0.4' } },
+        { text: LOCAL_MODEL_LABELS.noteUntested },
+      ],
+      pick: candidate(),
+      alternatives: [ALT_FAST, ALT_SLOW],
+    });
+    await newApp(ok(withNotes)).loadLocalModel();
+    for (const root of [card, row]) {
+      const body = root.querySelector('.local-model-body')!;
+      expect([...body.children].map((el) => el.className)).toEqual([
+        'local-model-hw',
+        'local-model-headline',
+        'local-model-pick',
+        'local-model-note',
+        'local-model-note',
+        'local-model-note',
+        'local-model-next',
+        'local-model-alts',
+      ]);
+      // A note with slots is filled like a headline.
+      expect(texts(root, '.local-model-note')).toEqual([
+        'The best fit is a small model. It handles small edits and questions. It does not replace a cloud model.',
+        'Qwen3.6 35B-A3B fits the memory of this Mac too, but its download needs about 0.4 GB more free disk space.',
+        'Not yet tested by us on a Mac like this.',
+      ]);
+      expect(texts(root, '.local-model-next')).toEqual([NEXT_STEP]);
+    }
   });
 
   it('prints every size exactly as sent, in one unit', async () => {
@@ -507,11 +713,14 @@ describe('verdict ok', () => {
     for (const root of [card, row]) {
       const text = root.textContent ?? '';
       expect(text).not.toMatch(/GiB|MiB|\bMB\b|bytes/);
-      // Every number in front of the unit is one the payload carries as text.
+      // Every number in front of the unit is one the payload carries: as text for the computed
+      // sizes, and `memClassGb` (48) for the installed memory.
       const printed = [...text.matchAll(/([\d.,]+) GB/g)].map((m) => m[1]);
-      const sent = ['51.5', '912', '37.6', '29.6', '17.7', '26.4', '22.6', '36.4', '30.0'];
+      const sent = ['48', '912', '37.6', '29.6', '17.7', '26.4', '22.6', '36.4', '30.0'];
       expect(printed.length).toBeGreaterThanOrEqual(sent.length);
       expect(printed.filter((value) => !sent.includes(value))).toEqual([]);
+      // The decimal figure of the installed memory (`memGb`) is on neither surface.
+      expect(text).not.toContain('51.5');
     }
   });
 
@@ -546,10 +755,18 @@ describe('verdict ok', () => {
   it('describes the hardware with whatever parts the probe got', async () => {
     const { newApp, card } = mount();
     const cases: Array<[Partial<HardwareFacts>, string]> = [
-      [{ freeDiskBytes: undefined, freeDiskGb: undefined }, 'Apple M5 Pro, 51.5 GB memory'],
-      [{ chip: undefined }, 'Mac17,13, 51.5 GB memory, 912 GB free'],
-      [{ chip: undefined, model: undefined }, '51.5 GB memory, 912 GB free'],
-      [{ chip: undefined, model: undefined, freeDiskBytes: undefined, freeDiskGb: undefined }, '51.5 GB memory'],
+      [{ freeDiskBytes: undefined, freeDiskGb: undefined }, 'Apple M5 Pro, 48 GB memory'],
+      [{ chip: undefined }, 'Mac17,13, 48 GB memory, 912 GB free'],
+      [{ chip: undefined, model: undefined }, '48 GB memory, 912 GB free'],
+      [{ chip: undefined, model: undefined, freeDiskBytes: undefined, freeDiskGb: undefined }, '48 GB memory'],
+      // The sizes Macs are sold in, as sold.
+      [{ memGb: '17.2', memClassGb: 16 }, 'Apple M5 Pro, 16 GB memory, 912 GB free'],
+      [{ memGb: '34.4', memClassGb: 32 }, 'Apple M5 Pro, 32 GB memory, 912 GB free'],
+      [{ memGb: '137', memClassGb: 128 }, 'Apple M5 Pro, 128 GB memory, 912 GB free'],
+      // An unknown size is left out, whatever else the payload carries for it.
+      [{ memGb: '0.0', memClassGb: 0 }, 'Apple M5 Pro'],
+      [{ memClassGb: undefined as unknown as number }, 'Apple M5 Pro'],
+      [{ memClassGb: '48' as unknown as number }, 'Apple M5 Pro'],
     ];
     for (const [hardware, line] of cases) {
       await newApp(ok(status({ pick: candidate() }, hardware))).loadLocalModel();
@@ -567,7 +784,7 @@ describe('verdict limited', () => {
       expect(texts(root, '.local-model-headline')).toEqual([
         'This Mac can run a small model. It handles small edits and questions. It does not replace a cloud model.',
       ]);
-      expect(texts(root, '.local-model-hw')).toEqual(['Apple M4, 19.3 GB memory, 912 GB free']);
+      expect(texts(root, '.local-model-hw')).toEqual(['Apple M4, 18 GB memory, 912 GB free']);
       expect(texts(root, '.local-model-name')).toEqual(['Qwen3.5 9B (qwen3.5:9b) with OpenCode']);
       expect(texts(root, '.local-model-pill')).toEqual(['Tight']);
       expect(texts(root, '.local-model-pick .local-model-line')).toEqual([
@@ -633,7 +850,8 @@ describe('payload text is text', () => {
     for (const root of [card, row]) {
       expect(root.querySelector('img')).toBeNull();
       expect(root.querySelector('script, iframe, a, [onerror]')).toBeNull();
-      expect(texts(root, '.local-model-hw')[0]).toBe(`${EVIL}, ${EVIL} GB memory, ${EVIL} GB free`);
+      // The memory is a number or nothing: text in its place (`memGb` here) is never printed.
+      expect(texts(root, '.local-model-hw')[0]).toBe(`${EVIL}, 48 GB memory, ${EVIL} GB free`);
       expect(texts(root, '.local-model-headline')[0]).toBe(
         `This Mac runs macOS ${EVIL}. Local models need macOS ${EVIL} or newer.`
       );
@@ -768,10 +986,13 @@ describe('with the real translator', () => {
     const app = newApp(ok(OK_STATUS));
     await app.loadLocalModel();
     expect(texts(card, '.local-model-headline')).toEqual(['最适合此 Mac 的选择']);
-    expect(texts(card, '.local-model-pill')).toEqual(['良好', '速度未知', '良好', '紧张', '较慢']);
+    expect(texts(card, '.local-model-pill')).toEqual(['良好', '速度未知', '良好', '偏紧', '较慢']);
+    expect((card.querySelector('.local-model-pill') as HTMLElement).title).toBe(
+      '内存占用：需要此 Mac 可分配给模型的内存的 79%'
+    );
     // Names and numbers ride the slots untouched.
     expect(texts(card, '.local-model-name')[0]).toBe('Qwen3.8 27B（qwen3.8:27b），搭配 OpenCode');
-    expect(texts(row, '.local-model-hw')).toEqual(['Apple M5 Pro，内存 51.5 GB，可用磁盘空间 912 GB']);
+    expect(texts(row, '.local-model-hw')).toEqual(['Apple M5 Pro，内存 48 GB，可用磁盘空间 912 GB']);
 
     // Both containers are data-i18n-skip, so the module itself must repaint.
     i18n.configure({ language: 'en' });
@@ -782,7 +1003,7 @@ describe('with the real translator', () => {
     i18n.configure({ displayName: 'Acme' });
     await settle();
     expect(texts(card, '.local-model-next')).toEqual([
-      'Setting this up from Acme is the next step. It is not built yet.',
+      'Acme cannot download or install this for you yet. That is the next step, and it is not built yet.',
     ]);
   });
 

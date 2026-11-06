@@ -15,10 +15,12 @@
  *
  * Three rules every producer and consumer follows:
  *
- * 1. ONE unit for a size a person reads: decimal GB, computed from bytes by `formatGb()` in
- *    src/local-model/format.ts. Every such size travels twice, as bytes (`needBytes`) and as the
- *    text to show (`needGb`, a number without the unit, such as '25.5'). The browser prints the
- *    text and never divides bytes itself. GiB appears only inside the budget math.
+ * 1. ONE unit for a computed size a person reads: decimal GB, computed from bytes by
+ *    `formatGb()` in src/local-model/format.ts. Every such size travels twice, as bytes
+ *    (`needBytes`) and as the text to show (`needGb`, a number without the unit, such as
+ *    '25.5'). The browser prints the text and never divides bytes itself. GiB appears only
+ *    inside the budget math. The one exception is the NAME of the installed memory: the card
+ *    says `HardwareFacts.memClassGb` (48 for a Mac sold with 48 GB), see that field.
  * 2. Every sentence or label the SERVER chooses comes from `LOCAL_MODEL_LABELS` below, so the
  *    browser can translate it (`codemanT(text, vars)`) and its i18n test can list every string.
  *    Numbers are never spliced into a sentence here: they travel in `vars` and fill the
@@ -33,7 +35,8 @@
  * How `HardwareFacts` was obtained.
  *  - `sysctl`: the spawn answered and `hw.memsize` parsed.
  *  - `os-fallback`: on macOS, but the spawn failed or timed out; memory, architecture and the chip
- *    string come from `node:os`, the rest is absent.
+ *    string come from `node:os` and the free disk from `statfs`. What only sysctl knows (`arm64`,
+ *    `translated`, `model`, `macosVersion`, `macosMajor`, `wiredLimitMb`) is absent.
  *  - `not-probed`: not macOS, so `sysctl` was never spawned.
  */
 export type HardwareProbeSource = 'sysctl' | 'os-fallback' | 'not-probed';
@@ -54,9 +57,19 @@ export interface HardwareFacts {
   translated?: boolean;
   /** Installed memory in bytes (`hw.memsize`, else `os.totalmem()`). The ONLY memory input of the budget math. */
   memBytes: number;
-  /** `memBytes` as a person reads it: decimal GB from `formatGb()`, without the unit ('17.2' for a Mac sold as 16 GB). */
+  /**
+   * `memBytes` in the unit of every computed size: decimal GB from `formatGb()`, without the unit
+   * ('17.2' for a Mac sold as 16 GB). NOT what the card calls the installed memory: that is
+   * `memClassGb`, see there.
+   */
   memGb: string;
-  /** The memory size the Mac is sold as: whole binary gigabytes (16, 32, 48). Tier rules and `TestedOn.memGb` use it. */
+  /**
+   * The memory size the Mac is sold as: whole binary gigabytes (16, 32, 48), 0 when the size is
+   * unknown. Tier rules and `TestedOn.memGb` use it, and it is the ONE size a person reads that
+   * is not decimal GB: the hardware line and the `memory` slot of `noneMemory` print it, because
+   * it is the number on the box and in About This Mac ("48 GB"), and '51.5 GB memory' reads as a
+   * different machine. Every computed size (need, budget, download, free disk) stays decimal GB.
+   */
   memClassGb: number;
   /** `machdep.cpu.brand_string` ('Apple M4 Pro'), else `os.cpus()[0].model`. */
   chip?: string;
@@ -97,7 +110,7 @@ export interface LocalModelEntry {
   label: string;
   /** SPDX id of the license ('Apache-2.0'). */
   license: string;
-  /** Parameter count in billions. Under 12 the verdict is `limited`, never `ok`. */
+  /** Parameter count in billions. When no model that fits has 12 or more, the verdict is `limited`, never `ok`. */
   paramsB: number;
   /** Size of the weights in bytes: both the download and what they take in memory. */
   bytes: number;
@@ -200,7 +213,10 @@ export type SpeedGrade = 'ok' | 'slow' | 'unknown';
  * Why the verdict is `none`.
  *  - `not-macos`: the server does not run on macOS (the card is hidden).
  *  - `intel`: a Mac without Apple silicon.
- *  - `memory`: no model fits the memory budget with any harness.
+ *  - `memory`: no model fits the memory budget at a context a usable harness needs. Three
+ *    headlines share this reason: `noneMemory` (nothing fits at any context), `noneMemoryContext`
+ *    (a model fits, but only below the context a harness needs: the sentence carries the budget
+ *    and the need) and `noneMemoryUnknown` (the memory size could not be read).
  *  - `disk`: models fit the memory, but for every one of them free disk minus the download is below 10 GiB.
  *  - `macos`: macOS is older than `LocalModelCatalog.minMacosMajor`.
  *  - `no-harness`: no catalogue harness is installed or installable and accepts a model.
@@ -228,12 +244,17 @@ export interface DeviceBudget {
  * `{placeholder}` slots are filled by the browser from `LocalModelMessage.vars`. `{name}` is
  * taken (the translator fills it with the display name), so no slot here is called `name`.
  *
- * | Key           | Slots (all text; sizes are decimal GB without the unit)                         |
- * |---------------|---------------------------------------------------------------------------------|
- * | `noneMemory`  | `memory`: `HardwareFacts.memGb`                                                 |
- * | `noneDisk`    | `download`: smallest download among the models that fit the memory; `free`:     |
- * |               | `HardwareFacts.freeDiskGb`; `missing`: download + 10 GiB - free                 |
- * | `noneMacos`   | `version`: `HardwareFacts.macosVersion`; `minimum`: the catalogue's minimum     |
+ * | Key                 | Slots (all text; sizes are decimal GB without the unit)                   |
+ * |---------------------|---------------------------------------------------------------------------|
+ * | `noteDiskDropped`   | `model`: label of the best model left out for disk space; `missing`: its  |
+ * |                     | download + the disk reserve - free                                        |
+ * | `noneMemory`        | `memory`: `HardwareFacts.memClassGb`, the size the Mac is sold as         |
+ * | `noneMemoryContext` | `budget`: `Recommendation.budgetGb`; `need`: the smallest need of any     |
+ * |                     | model at a context a usable harness works at                              |
+ * | `noneDisk`          | `download`: smallest download among the models that fit the memory;       |
+ * |                     | `reserve`: what must stay free after it (10 GiB, as decimal GB); `free`:  |
+ * |                     | `HardwareFacts.freeDiskGb`; `missing`: download + reserve - free          |
+ * | `noneMacos`         | `version`: `HardwareFacts.macosVersion`; `minimum`: the catalogue minimum |
  *
  * The word "Recommended" exists only in `headlineTested`, which may be used only when the
  * pick's `tested` is true. No catalogue row has a tested entry today, so it is never sent.
@@ -243,21 +264,33 @@ export const LOCAL_MODEL_LABELS = {
   headlineOk: 'Best fit for this Mac',
   /** Verdict `ok`, pick tested by us on a Mac like this one. */
   headlineTested: 'Recommended for this Mac',
-  /** Verdict `limited`. */
+  /** Verdict `limited`: no model with 12 billion parameters or more fits this Mac. */
   headlineLimited:
     'This Mac can run a small model. It handles small edits and questions. It does not replace a cloud model.',
   /** A note under an `ok` or `limited` pick whose `tested` is false. */
   noteUntested: 'Not yet tested by us on a Mac like this.',
+  /** A note under an `ok` pick that is itself a small model: larger ones fit this Mac, but rank lower or have no room on the disk. */
+  noteSmallPick:
+    'The best fit is a small model. It handles small edits and questions. It does not replace a cloud model.',
+  /** A note when a model that fits the memory was left out because its download would not leave the disk reserve. */
+  noteDiskDropped:
+    '{model} fits the memory of this Mac too, but its download needs about {missing} GB more free disk space.',
   fitGood: 'Good',
   fitTight: 'Tight',
   speedSlow: 'Slow',
   speedUnknown: 'Speed unknown',
   noneNotMacos: 'Codeman recommends a local model only on a Mac with Apple silicon.',
   noneIntel: 'This Mac has an Intel processor. Local coding models need Apple silicon.',
+  /** Reason `memory`: nothing fits at any context. */
   noneMemory:
     'This Mac has {memory} GB of memory. That is too little to run a model that can drive a coding agent, so Codeman recommends none here.',
+  /** Reason `memory`: a model fits, but only below the context a harness needs. Says both numbers, and that they are an estimate. */
+  noneMemoryContext:
+    'Codeman estimates that this Mac can give a model about {budget} GB of memory. The smallest model a coding agent can work with needs about {need} GB. That leaves no safe margin, so Codeman recommends none here.',
+  /** Reason `memory`: the memory size could not be read, so no size is stated. */
+  noneMemoryUnknown: 'Codeman could not read how much memory this Mac has, so it recommends no model here.',
   noneDisk:
-    'Not enough free disk space. The smallest model that fits this Mac is a {download} GB download and {free} GB is free. Free up about {missing} GB.',
+    'Not enough free disk space. The smallest model that fits this Mac is a {download} GB download, and {reserve} GB must stay free after it. {free} GB is free now. Free up about {missing} GB.',
   noneMacos: 'This Mac runs macOS {version}. Local models need macOS {minimum} or newer.',
   noneNoHarness: 'No coding agent that Codeman can connect to a local model is available on this Mac.',
 } as const;
@@ -265,7 +298,7 @@ export const LOCAL_MODEL_LABELS = {
 /** One of the texts in `LOCAL_MODEL_LABELS`. The payload's label fields are typed with it, so an off-list string does not compile. */
 export type LocalModelLabel = (typeof LOCAL_MODEL_LABELS)[keyof typeof LOCAL_MODEL_LABELS];
 
-/** The headline of each `none` reason. */
+/** The headline of each `none` reason. `memory` has two more (`noneMemoryContext`, `noneMemoryUnknown`), see `NoneReason`. */
 export const LOCAL_MODEL_NONE_LABELS: Record<NoneReason, LocalModelLabel> = {
   'not-macos': LOCAL_MODEL_LABELS.noneNotMacos,
   intel: LOCAL_MODEL_LABELS.noneIntel,
@@ -317,7 +350,7 @@ export interface Candidate {
   speed: SpeedGrade;
   /** `speedSlow` or `speedUnknown`. Absent when `speed` is `ok`. */
   speedLabel?: LocalModelLabel;
-  /** Estimated generation speed. Present exactly when `speed` is not `unknown`. */
+  /** Estimated generation speed, rounded to one decimal. Present exactly when `speed` is not `unknown`. `speed` is decided on the unrounded figure. */
   tokensPerSecond?: number;
   /** A `TestedOn` entry of the model matches this Mac (same chip, same `memClassGb`) and this harness. */
   tested: boolean;
@@ -325,22 +358,25 @@ export interface Candidate {
 
 /**
  * The answer of `recommend()`.
- *  - `ok`: `pick` is the best candidate and its model has at least 12 billion parameters.
- *  - `limited`: `pick` is the best candidate, but its model has fewer than 12 billion parameters.
- *    The card says so and never says "Recommended".
+ *  - `ok`: `pick` is the best candidate, and at least one model with 12 billion parameters or
+ *    more fits this Mac's memory at a context a usable harness works at. The pick itself can be
+ *    smaller (a larger model may fit only tightly, have no speed figure, or have no room on the
+ *    disk): `notes` then carries `noteSmallPick`.
+ *  - `limited`: `pick` is the best candidate, and NO model with 12 billion parameters or more
+ *    fits. The card says so and never says "Recommended".
  *  - `none`: no pick; `reason` says why.
  */
 export interface Recommendation {
   verdict: 'ok' | 'limited' | 'none';
   /** Present exactly when `verdict` is `none`. */
   reason?: NoneReason;
-  /** What the card says first: `headlineOk`, `headlineTested`, `headlineLimited` or the `none` reason's sentence. */
+  /** What the card says first: `headlineOk`, `headlineTested`, `headlineLimited` or a `none` sentence. */
   headline: LocalModelMessage;
-  /** Further sentences under the headline (`noteUntested` today). May be empty. */
+  /** Further sentences under the pick, in this order: `noteSmallPick`, `noteDiskDropped`, `noteUntested`. May be empty. */
   notes: LocalModelMessage[];
   /** Present exactly when `verdict` is `ok` or `limited`. */
   pick?: Candidate;
-  /** The next models that fit (at most four, each at its best context and harness), best first. Empty when `verdict` is `none`. */
+  /** The next models that fit and have room on the disk (at most four, each at its best context and harness), best first. Empty when `verdict` is `none`. */
   alternatives: Candidate[];
   /** `DeviceBudget.budgetBytes`. 0 when no budget is computed: not macOS, or a Mac without Apple silicon. */
   budgetBytes: number;

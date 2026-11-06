@@ -8,7 +8,11 @@
  * size for display, the browser included: it prints the text it was sent.
  *
  * GiB and MiB exist only for the budget math (reserves, the wired limit, the prompt cache) and
- * never reach a person.
+ * never reach a person, with one exception: `memClassGb()`, the memory size a Mac is sold as,
+ * is how the card names the installed memory ("48 GB memory", what About This Mac shows). It
+ * is a name of the machine, not a computed size: `formatGb()` of the same bytes reads 51.5,
+ * which no owner recognises. Every computed size (need, budget, download, free disk) is
+ * `formatGb()`.
  *
  * Pure: no IO, no state.
  */
@@ -33,8 +37,10 @@ export function formatGb(bytes: number): string {
 
 /**
  * The memory size a Mac is sold as: whole binary gigabytes (17179869184 bytes is 16). This is
- * `HardwareFacts.memClassGb`: the key of the tier rules ("below 36 GB") and of `TestedOn.memGb`.
- * It names a class of Mac. A size for display is `formatGb()`.
+ * `HardwareFacts.memClassGb`: the key of the tier rules ("below 36 GB") and of `TestedOn.memGb`,
+ * and what the card and the `noneMemory` sentence call the installed memory. It names a class
+ * of Mac; 0 means the size is unknown and is never shown. Any other size for display is
+ * `formatGb()`.
  */
 export function memClassGb(memBytes: number): number {
   if (!Number.isFinite(memBytes) || memBytes <= 0) return 0;

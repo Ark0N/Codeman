@@ -2879,9 +2879,11 @@
               <!-- What the Mac the server runs on can run as a local model (local-model-ui.js).
                    Read-only: the module fills the row from GET /api/local-model, the same body
                    the welcome card shows, through its own translator call (hence data-i18n-skip
-                   on the row's text). The route is admin-only in multi-user mode, so the module
-                   hides the whole group for a non-admin. Not gated on the endpoints toggle
-                   above: the answer does not depend on it. -->
+                   on the row's text). The module shows the group only once the server has
+                   answered for a Mac: it hides it for a server on another system (the title
+                   and hint are about "this Mac"), while the first request is in flight, and
+                   for a non-admin in multi-user mode (the route is admin-only). Not gated on
+                   the endpoints toggle above: the answer does not depend on it. -->
               <div class="set-group" id="localModelGroup">
                 <div class="set-group-head"><h4>Model on this Mac</h4></div>
                 <p class="set-group-hint">What the Mac that Codeman runs on can run as a local coding model. Read-only: nothing is downloaded or installed from here.</p>

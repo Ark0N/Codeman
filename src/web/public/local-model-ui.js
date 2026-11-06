@@ -4,11 +4,13 @@
  * Reads `GET /api/local-model` (hardware of the machine the server runs on, the recommendation,
  * the catalogue date) and shows, read-only:
  *  - the hardware line (chip, memory, free disk);
- *  - the verdict: the headline and notes the server sent, then the pick with its numbers
- *    (model, harness, context, memory need against the budget, download size, speed);
- *  - the other models that fit, each with its fit and speed label;
- *  - one line saying that setting the model up from Codeman is the next step and is not built
- *    yet.
+ *  - the verdict: the headline the server sent, then the pick with its numbers (model, harness,
+ *    context, memory need against the budget, download size, speed) and the notes;
+ *  - one line saying that Codeman cannot download or install the model yet: that is the next
+ *    step and is not built. It sits right under the pick, where a reader looks for a button;
+ *  - the other models that fit, each with its fit and speed label. A label says what it
+ *    measures in its tooltip and accessible name ("Good" is the memory fit, not a rating of
+ *    the model), and an alternative with a speed estimate prints the figure.
  *
  * ## One body, two containers
  *
@@ -23,9 +25,18 @@
  * hidden while the first request is in flight and after a failed one (nothing is known about the
  * machine then, and an error card would be the only thing this feature ever showed on a server
  * that is not a Mac), when the answer is `not-macos`, when the request is refused (a non-admin in
- * multi-user mode gets a 403, which is an answer: stop asking) and after the user hid it on this
- * device. The Settings row is where the loading and failure sentences show, and it is the way
- * back to the numbers after a Hide.
+ * multi-user mode gets a `403 FORBIDDEN`, which is an answer: stop asking) and after the user hid
+ * it on this device.
+ *
+ * The Settings group ("Model on this Mac") follows the same knowledge: it is hidden for
+ * `not-macos` (most servers are not a Mac, and a group about "this Mac" there is false), for a
+ * refused request and while the first request is in flight (nothing says yet that the server is
+ * a Mac). It shows the answer for a Mac, and one failure sentence when the first request
+ * failed. It is the way back to the numbers after a Hide.
+ *
+ * "Refused" means the envelope's `errorCode` is `FORBIDDEN`. The auth layer has a second 403 for
+ * every /api route (`PASSWORD_CHANGE_REQUIRED`, an admin who must change the password first):
+ * that one is a failed request, asked again on the next show and on `codeman:me`.
  *
  * Rules:
  *  - Read-only: no control here downloads, installs or writes anything but the per-device
@@ -36,8 +47,10 @@
  *    (`<html lang>` is written by every i18n `configure()`).
  *  - Names and labels come from the payload: this file holds no list of models or harnesses and
  *    never compares a CLI id with a literal.
- *  - Sizes are printed exactly as sent (`needGb`, `downloadGb`, `budgetGb`, `memGb`,
- *    `freeDiskGb`: decimal GB as text). Bytes are never divided here.
+ *  - Sizes are printed exactly as sent (`needGb`, `downloadGb`, `budgetGb`, `freeDiskGb`:
+ *    decimal GB as text). Bytes are never divided here. The installed memory is the one size
+ *    that is not decimal GB: the hardware line prints `memClassGb`, the size the Mac is sold as
+ *    (48, not 51.5), which is what About This Mac shows.
  *  - A sentence the server chose arrives as `{ text, vars }` and goes through
  *    `localModelT(text, vars)`; this file's own strings are literals in that same call, in
  *    `{placeholder}` form, so the i18n test can harvest them. Both kinds need a zh-CN entry in
@@ -52,8 +65,12 @@
  * @loadorder 12.59 of 16, after edit-history-ui.js, before entrance-animations.js
  */
 
-/** Per-device dismissal of the welcome card. */
-const LOCAL_MODEL_DISMISS_KEY = 'codeman:local-model-dismissed';
+/**
+ * Per-device dismissal of the welcome card, named for THIS stage (the read-only card). The stage
+ * that can set a model up takes a key of its own, so hiding a card that offers nothing yet does
+ * not hide the offer later.
+ */
+const LOCAL_MODEL_DISMISS_KEY = 'codeman:local-model-dismissed:readonly';
 
 /** The server caches its hardware probe for a minute, so asking again sooner cannot change the answer. */
 const LOCAL_MODEL_MAX_AGE_MS = 60000;
@@ -100,18 +117,41 @@ function localModelNotAdmin() {
   return !!(me.multiUser && me.role !== 'admin');
 }
 
-/** Chip, memory and free disk in one line. Every part but the memory may be missing. */
+/**
+ * Chip, memory and free disk in one line. The memory is the size the Mac is sold as
+ * (`memClassGb`: 48 for a Mac whose 48 x 2^30 bytes are 51.5 decimal GB), a number or nothing:
+ * an unknown size (0) is left out, never printed.
+ */
 function localModelHardwareLine(hw) {
   const chip = String(hw.chip || hw.model || '');
-  const sizes = { chip, memory: hw.memGb, free: hw.freeDiskGb };
-  if (!hw.memGb) return chip;
+  const memory = Number.isFinite(hw.memClassGb) && hw.memClassGb > 0 ? String(hw.memClassGb) : '';
+  const sizes = { chip, memory, free: hw.freeDiskGb };
+  if (!memory) return chip;
   if (chip && hw.freeDiskGb) return localModelT('{chip}, {memory} GB memory, {free} GB free', sizes);
   if (chip) return localModelT('{chip}, {memory} GB memory', sizes);
   if (hw.freeDiskGb) return localModelT('{memory} GB memory, {free} GB free', sizes);
   return localModelT('{memory} GB memory', sizes);
 }
 
-/** "Qwen3.8 27B (qwen3.8:27b) with OpenCode", then the fit and speed labels the server chose. */
+/** What the fit label measures: the share of the memory budget the model needs. */
+function localModelFitHint(candidate) {
+  if (!Number.isFinite(candidate.budgetShare)) return '';
+  const share = String(Math.round(candidate.budgetShare * 100));
+  return localModelT('Memory fit: needs {share}% of what this Mac can give a model', { share });
+}
+
+/** What the speed label stands for: the estimate behind "Slow", or that there is none. */
+function localModelSpeedHint(candidate) {
+  const speed = localModelSpeed(candidate.tokensPerSecond);
+  if (speed) return localModelT('About {speed} tokens per second (estimated).', { speed });
+  return localModelT('No speed estimate for this model on this chip');
+}
+
+/**
+ * "Qwen3.8 27B (qwen3.8:27b) with OpenCode", then the fit and speed labels the server chose.
+ * A bare "Good" next to a model name reads as a rating of the model, so each label carries what
+ * it measures as its tooltip and its accessible name.
+ */
 function localModelCandidateHead(candidate) {
   const head = localModelEl('div', 'local-model-name-row');
   const name = localModelT('{model} ({id}) with {harness}', {
@@ -120,19 +160,36 @@ function localModelCandidateHead(candidate) {
     harness: candidate.cliLabel || candidate.cli,
   });
   head.appendChild(localModelEl('span', 'local-model-name', name));
-  for (const label of [candidate.fitLabel, candidate.speedLabel]) {
+  const pills = [
+    [candidate.fitLabel, localModelFitHint],
+    [candidate.speedLabel, localModelSpeedHint],
+  ];
+  for (const [label, hint] of pills) {
     if (typeof label !== 'string' || !label) continue;
-    head.appendChild(localModelEl('span', 'local-model-pill', localModelT(label)));
+    const pill = localModelEl('span', 'local-model-pill', localModelT(label));
+    const meaning = hint(candidate);
+    if (meaning) {
+      pill.title = meaning;
+      pill.setAttribute('role', 'note');
+      pill.setAttribute('aria-label', `${pill.textContent}. ${meaning}`);
+    }
+    head.appendChild(pill);
   }
   return head;
 }
 
-/** The dim line under a candidate's name: context, memory need (alternatives), download, license (the pick). */
-function localModelMeta(candidate, { need = false, license = false } = {}) {
+/**
+ * The dim line under a candidate's name: context, then for an alternative its memory need and,
+ * when there is an estimate, its speed (so "Slow" comes with a number on a screen without
+ * hover), the download, and for the pick the license.
+ */
+function localModelMeta(candidate, { alternative = false } = {}) {
   const bits = [localModelT('Context {context} tokens', { context: localModelCount(candidate.context) })];
-  if (need && candidate.needGb) bits.push(localModelT('{need} GB of memory', { need: candidate.needGb }));
+  if (alternative && candidate.needGb) bits.push(localModelT('{need} GB of memory', { need: candidate.needGb }));
   if (candidate.downloadGb) bits.push(localModelT('{download} GB download', { download: candidate.downloadGb }));
-  if (license && candidate.license) bits.push(String(candidate.license));
+  const speed = alternative ? localModelSpeed(candidate.tokensPerSecond) : '';
+  if (speed) bits.push(localModelT('about {speed} tokens per second', { speed }));
+  if (!alternative && candidate.license) bits.push(String(candidate.license));
   return bits.join(' · ');
 }
 
@@ -140,7 +197,7 @@ function localModelMeta(candidate, { need = false, license = false } = {}) {
 function localModelPick(pick, recommendation) {
   const box = localModelEl('div', 'local-model-pick');
   box.appendChild(localModelCandidateHead(pick));
-  box.appendChild(localModelEl('div', 'local-model-line', localModelMeta(pick, { license: true })));
+  box.appendChild(localModelEl('div', 'local-model-line', localModelMeta(pick)));
   const sizes = { need: pick.needGb, budget: recommendation.budgetGb };
   // A wired limit is a setting of this Mac; anything else is the formula's estimate, and says so.
   const need =
@@ -165,17 +222,19 @@ function localModelPick(pick, recommendation) {
   return box;
 }
 
-/** The other models that fit. Folded behind a native disclosure on the welcome card, open in Settings. */
+/**
+ * The other models that fit. Folded behind a native disclosure on the welcome card, open in
+ * Settings. No count beside the title: the server lists four at most, so the number of rows is
+ * not the number of models that fit.
+ */
 function localModelAlternatives(alternatives, fold) {
   const wrap = localModelEl(fold ? 'details' : 'div', 'local-model-alts');
-  const title = localModelEl(fold ? 'summary' : 'div', 'local-model-alts-title');
-  title.appendChild(localModelEl('span', '', localModelT('Other models that fit')));
-  title.appendChild(localModelEl('span', 'local-model-count', String(alternatives.length)));
+  const title = localModelEl(fold ? 'summary' : 'div', 'local-model-alts-title', localModelT('Other models that fit'));
   wrap.appendChild(title);
   for (const candidate of alternatives) {
     const row = localModelEl('div', 'local-model-alt');
     row.appendChild(localModelCandidateHead(candidate));
-    row.appendChild(localModelEl('div', 'local-model-line', localModelMeta(candidate, { need: true })));
+    row.appendChild(localModelEl('div', 'local-model-line', localModelMeta(candidate, { alternative: true })));
     wrap.appendChild(row);
   }
   return wrap;
@@ -200,12 +259,16 @@ function localModelBody(status, { fold }) {
     const text = localModelMessage(note);
     if (text) body.appendChild(localModelEl('div', 'local-model-note', text));
   }
-  const alternatives = pick && Array.isArray(recommendation.alternatives) ? recommendation.alternatives : [];
-  if (alternatives.length) body.appendChild(localModelAlternatives(alternatives, fold));
+  // Right under the pick and its notes, above the list: the pick names a download and maybe a
+  // harness that is not installed, so this is where a reader looks for a button.
   if (pick) {
-    const next = localModelT('Setting this up from Codeman is the next step. It is not built yet.');
+    const next = localModelT(
+      'Codeman cannot download or install this for you yet. That is the next step, and it is not built yet.'
+    );
     body.appendChild(localModelEl('div', 'local-model-next', next));
   }
+  const alternatives = pick && Array.isArray(recommendation.alternatives) ? recommendation.alternatives : [];
+  if (alternatives.length) body.appendChild(localModelAlternatives(alternatives, fold));
   return body;
 }
 
@@ -249,24 +312,27 @@ Object.assign(CodemanApp.prototype, {
   },
 
   async _fetchLocalModel() {
-    // `_api`, not `_apiJson`: a 403 (admin-only in multi-user mode) is an answer and must be told
-    // apart from a request that failed.
+    // `_api`, not `_apiJson`: a refusal (admin-only in multi-user mode) is an answer and must be
+    // told apart from a request that failed.
     const res = await this._api(localModelUrl('/api/local-model'));
-    if (res?.status === 403) {
-      this._localModelState = 'refused';
-      this._localModelStatus = null;
-      this.renderLocalModel();
-      return;
-    }
     let body = null;
-    if (res?.ok) {
+    if (res?.ok || res?.status === 403) {
       try {
         body = await res.json();
       } catch {
         body = null;
       }
     }
-    const data = localModelPayload(body);
+    // Only the route's own refusal is final. The auth layer answers 403 too, with
+    // PASSWORD_CHANGE_REQUIRED, for an admin who must change the password first: that is a
+    // failed request, asked again once the password is changed.
+    if (res?.status === 403 && body?.errorCode === 'FORBIDDEN') {
+      this._localModelState = 'refused';
+      this._localModelStatus = null;
+      this.renderLocalModel();
+      return;
+    }
+    const data = res?.ok ? localModelPayload(body) : null;
     if (!data) {
       // A failed refresh must not blank an answer the user is reading: keep the last good one.
       if (!this._localModelStatus) this._localModelState = 'failed';
@@ -336,6 +402,8 @@ Object.assign(CodemanApp.prototype, {
     const head = localModelEl('div', 'local-model-head');
     const title = localModelEl('h3', 'local-model-title', localModelT('Model on this Mac'));
     title.id = 'localModelCardTitle';
+    // The page can be open on another laptop or a tablet: "this Mac" is the server's.
+    title.title = localModelT('The Mac that Codeman runs on, which is not always the device you are reading on.');
     head.appendChild(title);
     const hide = localModelEl('button', 'local-model-hide', localModelT('Hide'));
     hide.type = 'button';
@@ -353,21 +421,20 @@ Object.assign(CodemanApp.prototype, {
 
   _renderLocalModelSettings(row) {
     row.textContent = '';
-    const refused = this._localModelRefused();
-    // The whole group goes for a non-admin, the way the other admin-only groups of this modal do.
-    const group = document.getElementById('localModelGroup');
-    if (group) group.style.display = refused ? 'none' : '';
-    if (refused) return;
     const status = this._localModelStatus;
+    const failed = !status && this._localModelState === 'failed';
+    // The whole group goes for a non-admin, the way the other admin-only groups of this modal
+    // do, and for a server that is not a Mac: its title and hint are about "this Mac". Until
+    // the first answer nothing says the server is one, so the group waits for it.
+    const shown = !this._localModelRefused() && (failed || (!!status && status.recommendation.reason !== 'not-macos'));
+    const group = document.getElementById('localModelGroup');
+    if (group) group.style.display = shown ? '' : 'none';
+    if (!shown) return;
     if (status) {
       row.appendChild(localModelBody(status, { fold: false }));
       return;
     }
-    const text =
-      this._localModelState === 'failed'
-        ? localModelT('Could not reach the server.')
-        : localModelT('Checking this Mac…');
-    row.appendChild(localModelEl('div', 'local-model-headline', text));
+    row.appendChild(localModelEl('div', 'local-model-headline', localModelT('Could not reach the server.')));
   },
 
   /** Listeners that outlive a render, wired once. */

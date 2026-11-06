@@ -1412,10 +1412,11 @@
     'Model on this Mac': '此 Mac 上的模型',
     'What the Mac that Codeman runs on can run as a local coding model. Read-only: nothing is downloaded or installed from here.':
       '运行 {name} 的这台 Mac 可以运行哪种本地编程模型。只读：此处不会下载或安装任何内容。',
+    'The Mac that Codeman runs on, which is not always the device you are reading on.':
+      '指运行 {name} 的那台 Mac，不一定是你正在使用的这台设备。',
     Hide: '隐藏',
     'Hide this card on this device. It stays in App Settings, under Models.':
       '在此设备上隐藏此卡片。它仍保留在“应用设置”的“模型”中。',
-    'Checking this Mac…': '正在检查此 Mac…',
     '{chip}, {memory} GB memory, {free} GB free': '{chip}，内存 {memory} GB，可用磁盘空间 {free} GB',
     '{chip}, {memory} GB memory': '{chip}，内存 {memory} GB',
     '{memory} GB memory, {free} GB free': '内存 {memory} GB，可用磁盘空间 {free} GB',
@@ -1431,9 +1432,14 @@
     'About {speed} tokens per second (estimated).': '每秒约 {speed} 个 Token（估算）。',
     '{harness} is not installed on this Mac yet.': '此 Mac 上尚未安装 {harness}。',
     'With {harness}, the first answer can take minutes.': '使用 {harness} 时，第一次回答可能需要几分钟。',
-    'Other models that fit': '其他适合的模型',
-    'Setting this up from Codeman is the next step. It is not built yet.':
-      '下一步是直接在 {name} 中完成安装和设置，该功能尚未实现。',
+    'about {speed} tokens per second': '每秒约 {speed} 个 Token',
+    // What the fit and speed labels measure (their tooltip and accessible name).
+    'Memory fit: needs {share}% of what this Mac can give a model':
+      '内存占用：需要此 Mac 可分配给模型的内存的 {share}%',
+    'No speed estimate for this model on this chip': '此芯片上没有该模型的速度估算',
+    'Other models that fit': '其他装得下的模型',
+    'Codeman cannot download or install this for you yet. That is the next step, and it is not built yet.':
+      '{name} 目前还不能为你下载或安装它。这是下一步的功能，尚未实现。',
     // The sentences and labels the SERVER picks (LOCAL_MODEL_LABELS in src/types/local-model.ts), keyed
     // by their exact English text: changing a text there means changing its key here.
     'Best fit for this Mac': '最适合此 Mac 的选择',
@@ -1441,8 +1447,12 @@
     'This Mac can run a small model. It handles small edits and questions. It does not replace a cloud model.':
       '此 Mac 可以运行小型模型。它能处理小幅修改和问答，但不能替代云端模型。',
     'Not yet tested by us on a Mac like this.': '我们尚未在类似的 Mac 上测试过。',
+    'The best fit is a small model. It handles small edits and questions. It does not replace a cloud model.':
+      '最适合的是一个小型模型。它能处理小幅修改和问答，但不能替代云端模型。',
+    '{model} fits the memory of this Mac too, but its download needs about {missing} GB more free disk space.':
+      '{model} 也能装入此 Mac 的内存，但下载它还需要再腾出约 {missing} GB 的可用磁盘空间。',
     Good: '良好',
-    Tight: '紧张',
+    Tight: '偏紧',
     Slow: '较慢',
     'Speed unknown': '速度未知',
     'Codeman recommends a local model only on a Mac with Apple silicon.':
@@ -1451,8 +1461,12 @@
       '此 Mac 使用 Intel 处理器。本地编程模型需要 Apple 芯片。',
     'This Mac has {memory} GB of memory. That is too little to run a model that can drive a coding agent, so Codeman recommends none here.':
       '此 Mac 有 {memory} GB 内存，不足以运行能够驱动编程智能体的模型，因此 {name} 在此不推荐任何模型。',
-    'Not enough free disk space. The smallest model that fits this Mac is a {download} GB download and {free} GB is free. Free up about {missing} GB.':
-      '可用磁盘空间不足。适合此 Mac 的最小模型需要下载 {download} GB，而当前可用空间为 {free} GB。请腾出约 {missing} GB。',
+    'Codeman estimates that this Mac can give a model about {budget} GB of memory. The smallest model a coding agent can work with needs about {need} GB. That leaves no safe margin, so Codeman recommends none here.':
+      '据 {name} 估算，此 Mac 可分配给模型的内存约为 {budget} GB。编程智能体能够使用的最小模型约需 {need} GB。这样没有留出安全余量，因此 {name} 在此不推荐任何模型。',
+    'Codeman could not read how much memory this Mac has, so it recommends no model here.':
+      '{name} 无法读取此 Mac 的内存大小，因此在此不推荐任何模型。',
+    'Not enough free disk space. The smallest model that fits this Mac is a {download} GB download, and {reserve} GB must stay free after it. {free} GB is free now. Free up about {missing} GB.':
+      '可用磁盘空间不足。适合此 Mac 的最小模型需要下载 {download} GB，下载后还必须保留 {reserve} GB 的可用空间。当前可用空间为 {free} GB。请腾出约 {missing} GB。',
     'This Mac runs macOS {version}. Local models need macOS {minimum} or newer.':
       '此 Mac 运行的是 macOS {version}。本地模型需要 macOS {minimum} 或更高版本。',
     'No coding agent that Codeman can connect to a local model is available on this Mac.':

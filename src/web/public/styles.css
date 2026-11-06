@@ -22376,9 +22376,13 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   min-width: 0;
 }
 
+/* The line that says nothing can be set up from here yet (.local-model-next) is
+   the one a reader must not miss, so it reads like every other line: same size,
+   same --text-dim. --text-muted on this surface was 3.9:1. */
 .local-model-hw,
 .local-model-line,
-.local-model-note {
+.local-model-note,
+.local-model-next {
   font-size: 0.68rem;
   line-height: 1.45;
   color: var(--text-dim);
@@ -22418,8 +22422,8 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   min-width: 0;
 }
 
-.local-model-pill,
-.local-model-count {
+/* Each pill carries what it measures as its tooltip (a title), hence the cursor. */
+.local-model-pill {
   flex: 0 0 auto;
   font-size: 0.62rem;
   line-height: 1.5;
@@ -22428,12 +22432,7 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   border-radius: 999px;
   padding: 0 0.42rem;
   white-space: nowrap;
-}
-
-.local-model-count {
-  margin-inline-start: 0.4rem;
-  border-color: transparent;
-  background: var(--control-bg-hover);
+  cursor: help;
 }
 
 .local-model-alts-title {
@@ -22464,12 +22463,6 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
 .local-model-alt .local-model-name {
   font-size: 0.76rem;
   font-weight: 500;
-}
-
-.local-model-next {
-  font-size: 0.66rem;
-  line-height: 1.45;
-  color: var(--text-muted);
 }
 
 /* In App Settings the body sits inside an ordinary .set-row, so it takes that

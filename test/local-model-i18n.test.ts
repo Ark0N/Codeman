@@ -89,9 +89,14 @@ describe('the local model strings in zh-CN', () => {
     expect(FROM_MODULE).toContain('Model on this Mac');
     expect(FROM_MODULE).toContain('{model} ({id}) with {harness}');
     expect(FROM_MODULE).toContain('Needs about {need} GB of the {budget} GB this Mac can give a model (estimated).');
-    expect(FROM_MODULE).toContain('Setting this up from Codeman is the next step. It is not built yet.');
-    expect(FROM_MODULE).toContain('Checking this Mac…');
-    expect(FROM_MODULE.length).toBeGreaterThanOrEqual(18);
+    expect(FROM_MODULE).toContain(
+      'Codeman cannot download or install this for you yet. That is the next step, and it is not built yet.'
+    );
+    // What the fit and speed labels measure, and the speed of an alternative.
+    expect(FROM_MODULE).toContain('Memory fit: needs {share}% of what this Mac can give a model');
+    expect(FROM_MODULE).toContain('No speed estimate for this model on this chip');
+    expect(FROM_MODULE).toContain('about {speed} tokens per second');
+    expect(FROM_MODULE.length).toBeGreaterThanOrEqual(20);
     // The only other way the module calls its translator is with payload text (a server
     // sentence or label), so no string of its own can reach the page unharvested.
     const code = MODULE.split('\n')
@@ -107,10 +112,16 @@ describe('the local model strings in zh-CN', () => {
 
   it('lists every server label, the none reasons included', () => {
     // A label added to the contract later fails below by its text, not here by a count.
-    expect(FROM_SERVER.length).toBeGreaterThanOrEqual(14);
+    expect(FROM_SERVER.length).toBeGreaterThanOrEqual(18);
     for (const text of Object.values(LOCAL_MODEL_NONE_LABELS)) expect(FROM_SERVER).toContain(text);
     expect(FROM_SERVER).toContain('Best fit for this Mac');
     expect(FROM_SERVER).toContain('Speed unknown');
+    // The two other sentences of the `memory` reason and the two notes are not in the
+    // reason map, so they are named here.
+    expect(FROM_SERVER).toContain(LOCAL_MODEL_LABELS.noneMemoryContext);
+    expect(FROM_SERVER).toContain(LOCAL_MODEL_LABELS.noneMemoryUnknown);
+    expect(FROM_SERVER).toContain(LOCAL_MODEL_LABELS.noteSmallPick);
+    expect(FROM_SERVER).toContain(LOCAL_MODEL_LABELS.noteDiskDropped);
   });
 
   it('never uses the translator slot {name} for a value of its own', () => {

@@ -10,33 +10,48 @@
  *    catalogue for this Mac's memory.
  *  - Fit: F/B up to 0.85 is good, up to 0.98 is tight, above is out.
  *  - Speed: tokens per second = the model's `speedPer100Gbps` x the chip's bandwidth / 100.
- *    Below 10 is slow. A chip that is in no chips row, or a model without a speed figure, is
- *    UNKNOWN: a bandwidth is never guessed.
+ *    Below 10 is slow, decided on the unrounded product (9.96 is slow although it prints as
+ *    10). A chip that is in no chips row, or a model without a speed figure, is UNKNOWN: a
+ *    bandwidth is never guessed.
  *  - Candidates: (model, context, harness) with `ctx >= harness.minContext`, the harness not
  *    gated, installed or installable, and accepting the model id.
  *  - Ranking, lexicographic: good before tight; ok before unknown before slow; the higher model
  *    rank; the higher harness rank; the larger context. The pick is the first candidate, the
  *    alternatives are the next four MODELS, each at its own best context and harness.
+ *  - Disk: a model whose download would leave less than 10 GiB free is not offered. It is not
+ *    dropped in silence: the best-ranked model left out that way is named in `noteDiskDropped`
+ *    with what is missing.
  *
  * Verdict `none`, in this order (the first that applies is the reason):
  *  1. `not-macos`: the server does not run on macOS.
  *  2. `intel`: a Mac without Apple silicon.
  *  3. `macos`: macOS is older than the catalogue's minimum (an unknown version does not block).
- *  4. `memory`: no model fits the budget at any of its contexts, whatever the harness.
+ *  4. `memory`: no model fits the budget at any of its contexts, whatever the harness
+ *     (`noneMemory`, or `noneMemoryUnknown` when the memory size could not be read).
  *  5. `no-harness`: no harness row is usable (not gated, known to the caller, installed or
  *     installable).
- *  6. `memory`: models fit, but none at a context a usable harness needs.
+ *  6. `memory`: models fit, but none at a context a usable harness needs. Its own sentence
+ *     (`noneMemoryContext`) with the budget and the smallest need at such a context, because
+ *     this Mac can miss by a hair (the 16 GB Mac mini: 10.3 of 10.4 GB) and "too little
+ *     memory" would hide that the answer rests on an estimate.
  *  7. `no-harness`: models fit at such a context, but no usable harness accepts their id.
  *  8. `disk`: for every remaining model, free disk minus the download is below 10 GiB (an
  *     unknown free disk does not block).
  *
  * Rules:
- *  - Verdict `limited` when the pick's model has fewer than 12 billion parameters.
+ *  - Verdict `limited` when NO model with 12 billion parameters or more fits this Mac's memory
+ *    at a context a usable harness works at. It is a statement about the Mac ("This Mac can run
+ *    a small model"), so it is judged on everything that fits, BEFORE the disk filter and
+ *    whatever the pick is: a 36 GB Mac whose pick is a 9B model while a 20B, a 27B and a 35B
+ *    are listed under it is not a small-model Mac, and a 48 GB Mac does not become one because
+ *    its disk is full. A small pick under verdict `ok` carries `noteSmallPick` instead.
  *  - The word "Recommended" (`LOCAL_MODEL_LABELS.headlineTested`) only for verdict `ok` with a
  *    pick whose model has a `tested` entry for exactly this chip, this memory size and this
  *    harness. Otherwise `headlineOk` (or `headlineLimited`) plus `noteUntested`.
- *  - Every label in the result comes from `LOCAL_MODEL_LABELS`, every size text from
- *    `formatGb()`. No number is spliced into a sentence here.
+ *  - Every label in the result comes from `LOCAL_MODEL_LABELS`, every computed size text from
+ *    `formatGb()`. The one size that is not decimal GB is the installed memory in `noneMemory`:
+ *    `HardwareFacts.memClassGb`, the size the Mac is sold as. No number is spliced into a
+ *    sentence here.
  *  - No CLI id is ever compared with a literal: a harness is a catalogue row plus a
  *    `HarnessFact`.
  */
@@ -52,6 +67,8 @@ import {
   type LocalHarnessEntry,
   type LocalModelCatalog,
   type LocalModelEntry,
+  type LocalModelLabel,
+  type LocalModelMessage,
   type NoneReason,
   type Recommendation,
   type SpeedGrade,
@@ -65,7 +82,7 @@ export const FIT_GOOD_MAX_SHARE = 0.85;
 export const FIT_TIGHT_MAX_SHARE = 0.98;
 /** An estimated speed below this many tokens per second is `slow`. */
 export const SLOW_BELOW_TOKENS_PER_SECOND = 10;
-/** A pick whose model has fewer than this many billion parameters makes the verdict `limited`. */
+/** When no model that fits has at least this many billion parameters, the verdict is `limited`. A pick below it is a "small model". */
 export const LIMITED_BELOW_PARAMS_B = 12;
 /** What must stay free on the disk after the model download. */
 export const DISK_HEADROOM_BYTES = 10 * GIB;
@@ -134,9 +151,10 @@ function round(value: number, decimals: number): number {
   return Math.round(value * factor) / factor;
 }
 
-/** A candidate plus the two ranks the ordering needs, which are not part of the payload. */
+/** A candidate plus its catalogue row and the two ranks the ordering needs, none of which is part of the payload. */
 interface Ranked {
   candidate: Candidate;
+  model: LocalModelEntry;
   modelRank: number;
   harnessRank: number;
 }
@@ -181,12 +199,12 @@ function buildCandidate(
   budgetBytes: number
 ): Candidate {
   const gbps = chipBandwidthGbps(catalog.chips, hw.chip);
-  const tokensPerSecond =
-    gbps !== undefined && model.speedPer100Gbps !== undefined
-      ? round((model.speedPer100Gbps * gbps) / 100, 1)
-      : undefined;
+  const rawSpeed =
+    gbps !== undefined && model.speedPer100Gbps !== undefined ? (model.speedPer100Gbps * gbps) / 100 : undefined;
+  // Graded on the unrounded figure: 9.96 rounds to 10.0 for the payload and is still slow.
   const speed: SpeedGrade =
-    tokensPerSecond === undefined ? 'unknown' : tokensPerSecond < SLOW_BELOW_TOKENS_PER_SECOND ? 'slow' : 'ok';
+    rawSpeed === undefined ? 'unknown' : rawSpeed < SLOW_BELOW_TOKENS_PER_SECOND ? 'slow' : 'ok';
+  const tokensPerSecond = rawSpeed === undefined ? undefined : round(rawSpeed, 1);
   // "A Mac like this" is exact: the same chip string, the same memory size as sold, the same harness.
   const tested = model.tested.some(
     (entry) => entry.chip === hw.chip && entry.memGb === hw.memClassGb && entry.cli === harness.row.cli
@@ -216,11 +234,17 @@ function buildCandidate(
   };
 }
 
-function none(reason: NoneReason, budget: DeviceBudget, vars?: Record<string, string>): Recommendation {
+/** A `none` answer. `text` replaces the reason's default sentence (the `memory` reason has three). */
+function none(
+  reason: NoneReason,
+  budget: DeviceBudget,
+  vars?: Record<string, string>,
+  text: LocalModelLabel = LOCAL_MODEL_NONE_LABELS[reason]
+): Recommendation {
   return {
     verdict: 'none',
     reason,
-    headline: { text: LOCAL_MODEL_NONE_LABELS[reason], ...(vars ? { vars } : {}) },
+    headline: { text, ...(vars ? { vars } : {}) },
     notes: [],
     alternatives: [],
     budgetBytes: budget.budgetBytes,
@@ -260,7 +284,12 @@ export function recommend(
       if (fit !== 'out') fitting.push({ model, ctx, need, fit });
     }
   }
-  const tooLittleMemory = (): Recommendation => none('memory', budget, { memory: hw.memGb });
+  // Nothing fits at any context. The installed memory is named by the size the Mac is sold
+  // as; a size that could not be read is not stated at all (never "0 GB of memory").
+  const tooLittleMemory = (): Recommendation =>
+    Number.isFinite(hw.memClassGb) && hw.memClassGb > 0
+      ? none('memory', budget, { memory: String(hw.memClassGb) })
+      : none('memory', budget, undefined, LOCAL_MODEL_LABELS.noneMemoryUnknown);
   if (fitting.length === 0) return tooLittleMemory();
 
   // A gated row is never offered, whatever the caller knows about its CLI.
@@ -275,25 +304,46 @@ export function recommend(
   const atHarnessContext = fitting.flatMap((entry) =>
     usable.filter((harness) => entry.ctx >= harness.row.minContext).map((harness) => ({ ...entry, harness }))
   );
-  if (atHarnessContext.length === 0) return tooLittleMemory();
+  if (atHarnessContext.length === 0) {
+    // Models fit, but only below the context a harness needs. Say both numbers: the smallest
+    // need at such a context can sit a hair over the line, and the budget is an estimate.
+    const smallestContext = Math.min(...usable.map((harness) => harness.row.minContext));
+    let smallestNeed: number | undefined;
+    for (const model of catalog.models) {
+      for (const ctx of model.contexts) {
+        if (ctx < smallestContext) continue;
+        const need = needBytes(model, ctx, catalog, hw);
+        if (smallestNeed === undefined || need < smallestNeed) smallestNeed = need;
+      }
+    }
+    if (smallestNeed === undefined) return tooLittleMemory();
+    return none(
+      'memory',
+      budget,
+      { budget: formatGb(budget.budgetBytes), need: formatGb(smallestNeed) },
+      LOCAL_MODEL_LABELS.noneMemoryContext
+    );
+  }
 
   const accepted = atHarnessContext.filter((entry) => accepts(entry.harness.fact, entry.model.id));
   if (accepted.length === 0) return none('no-harness', budget);
 
   // The download must leave headroom on the disk. An unknown free disk does not block.
   const free = hw.freeDiskBytes;
-  const downloadable =
-    free === undefined ? accepted : accepted.filter((entry) => free - entry.model.bytes >= DISK_HEADROOM_BYTES);
-  if (free !== undefined && downloadable.length === 0) {
+  const hasRoom = (model: LocalModelEntry): boolean => free === undefined || free - model.bytes >= DISK_HEADROOM_BYTES;
+  if (free !== undefined && !accepted.some((entry) => hasRoom(entry.model))) {
     const smallest = Math.min(...accepted.map((entry) => entry.model.bytes));
     return none('disk', budget, {
       download: formatGb(smallest),
+      reserve: formatGb(DISK_HEADROOM_BYTES),
       free: hw.freeDiskGb ?? formatGb(free),
       missing: formatGb(smallest + DISK_HEADROOM_BYTES - free),
     });
   }
 
-  const ranked: Ranked[] = downloadable
+  // Everything that fits is ranked, the models without room on the disk included: the best of
+  // those is named in a note, so a full disk never removes a model without a word.
+  const ranked: Ranked[] = accepted
     .map((entry) => ({
       candidate: buildCandidate(
         entry.model,
@@ -305,28 +355,47 @@ export function recommend(
         catalog,
         budget.budgetBytes
       ),
+      model: entry.model,
       modelRank: entry.model.rank,
       harnessRank: entry.harness.row.rank,
     }))
     .sort(compareRanked);
 
   // The first candidate of each model is that model at its best context and harness.
-  const bestPerModel: Candidate[] = [];
-  for (const { candidate } of ranked) {
-    if (!bestPerModel.some((kept) => kept.modelId === candidate.modelId)) bestPerModel.push(candidate);
+  const bestPerModel: Ranked[] = [];
+  for (const entry of ranked) {
+    if (!bestPerModel.some((kept) => kept.model.id === entry.model.id)) bestPerModel.push(entry);
   }
-  const [pick, ...others] = bestPerModel;
+  const offered = bestPerModel.filter((entry) => hasRoom(entry.model)).map((entry) => entry.candidate);
+  const leftOutForDisk = bestPerModel.find((entry) => !hasRoom(entry.model));
+  const [pick, ...others] = offered;
 
-  const limited = pick.paramsB < LIMITED_BELOW_PARAMS_B;
+  // About the Mac, not the pick, and judged before the disk filter (see the file header).
+  const limited = !accepted.some((entry) => entry.model.paramsB >= LIMITED_BELOW_PARAMS_B);
   const headline = limited
     ? LOCAL_MODEL_LABELS.headlineLimited
     : pick.tested
       ? LOCAL_MODEL_LABELS.headlineTested
       : LOCAL_MODEL_LABELS.headlineOk;
+
+  const notes: LocalModelMessage[] = [];
+  // The limited headline already says it. Under `ok` a small pick must still be called small.
+  if (!limited && pick.paramsB < LIMITED_BELOW_PARAMS_B) notes.push({ text: LOCAL_MODEL_LABELS.noteSmallPick });
+  if (leftOutForDisk && free !== undefined) {
+    notes.push({
+      text: LOCAL_MODEL_LABELS.noteDiskDropped,
+      vars: {
+        model: leftOutForDisk.model.label,
+        missing: formatGb(leftOutForDisk.model.bytes + DISK_HEADROOM_BYTES - free),
+      },
+    });
+  }
+  if (!pick.tested) notes.push({ text: LOCAL_MODEL_LABELS.noteUntested });
+
   return {
     verdict: limited ? 'limited' : 'ok',
     headline: { text: headline },
-    notes: pick.tested ? [] : [{ text: LOCAL_MODEL_LABELS.noteUntested }],
+    notes,
     pick,
     alternatives: others.slice(0, MAX_ALTERNATIVES),
     budgetBytes: budget.budgetBytes,
