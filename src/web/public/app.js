@@ -10267,11 +10267,11 @@ class CodemanApp {
       // response re-reports the count, so a pane that starts keeping history
       // (claude switched to its inline view) goes back to the tail on the next
       // switch.
-      // A remote (ssh) or Docker session's local pane hosts a nested tmux client in the
-      // alternate screen, so it reports 0 while its byte tail is real scrollback.
+      // A remote (ssh), Docker or adopted session's local pane hosts a nested tmux client in
+      // the alternate screen, so it reports 0 while its byte tail is real scrollback.
       const shellSession = session?.mode === 'shell';
       const paneKeepsNoHistory =
-        !session?.remote && !session?.docker && this._paneHistoryLines?.get(sessionId) === 0;
+        !session?.remote && !session?.docker && !session?.adopt && this._paneHistoryLines?.get(sessionId) === 0;
       const useFullHistory = !shellSession && (paneKeepsNoHistory || !this._fullHistoryLoaded.has(sessionId));
       if (useFullHistory) this._fullHistoryLoaded.add(sessionId);
       const fetchStartedAt = performance.now();
@@ -10929,7 +10929,7 @@ class CodemanApp {
     if (keepTitle) keepTitle.textContent = adopted ? 'Close Tab' : 'Remove Tab';
     if (keepDesc) {
       keepDesc.textContent = adopted
-        ? `Detaches only — "${session.adopt.targetSession}" keeps running for whoever started it`
+        ? 'Detaches only. The tmux session keeps running for whoever started it.'
         : 'Tmux session keeps running in background';
     }
 

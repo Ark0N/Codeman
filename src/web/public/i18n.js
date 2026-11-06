@@ -1372,6 +1372,30 @@
     'Remove Tab': '移除标签页',
     'Remove All Tabs': '移除所有标签页',
     'Use arrows to reorder. Changes are saved automatically.': '使用方向键重新排序；更改会自动保存。',
+    // Sessions opened outside Codeman (foreign-sessions.js, the close dialog and Session Options).
+    'Opened outside Codeman': '在 Codeman 之外打开',
+    'Also scan containers and remote hosts (slower)': '同时扫描容器和远程主机（较慢）',
+    'Scan containers and remote hosts again': '重新扫描容器和远程主机',
+    '⟳ all': '⟳ 全部',
+    '⟳ local': '⟳ 本机',
+    'Scanning…': '扫描中…',
+    'Rescan': '重新扫描',
+    'Open': '打开',
+    'Opening…': '正在打开…',
+    'Go to tab': '转到标签页',
+    'this machine': '本机',
+    'container': '容器',
+    'remote': '远程',
+    'No sessions found outside Codeman.': '未发现在 Codeman 之外打开的会话。',
+    'Could not reach the server.': '无法连接服务器。',
+    'Could not open that session. Refreshing the list.': '无法打开该会话，正在刷新列表。',
+    'Close Tab': '关闭标签页',
+    'Detaches only. The tmux session keeps running for whoever started it.':
+      '仅断开连接。该 tmux 会话会继续运行，供其启动者使用。',
+    'Where the tmux session was when it was opened here. It was started outside Codeman and keeps running if this tab closes.':
+      '该 tmux 会话在此处打开时所在的位置。它是在 Codeman 之外启动的，关闭此标签页后仍会继续运行。',
+    'Git status is not available for a tmux session opened outside Codeman.':
+      '在 Codeman 之外打开的 tmux 会话无法使用 Git 状态。',
   });
 
   const ZH_CN_LOWER = new Map(Object.entries(ZH_CN).map(([key, value]) => [key.toLocaleLowerCase('en'), value]));

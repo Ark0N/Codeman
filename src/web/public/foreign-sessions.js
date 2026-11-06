@@ -38,27 +38,27 @@
  * (`_onSessionCreated` then `selectSession`) — never by inserting a tab here.
  *
  * @mixin Extends CodemanApp.prototype via Object.assign
- * @dependency app.js (this.sessions, _onSessionCreated, selectSession, _apiJson)
- * @dependency api-client.js (_apiJson / _apiPost envelope unwrapping)
+ * @dependency app.js (this.sessions, _onSessionCreated, selectSession)
+ * @dependency api-client.js (_api)
  * @dependency ralph-panel.js (formatRelativeTime)
- * @loadorder 12.57 of 16, after home-sessions.js, before entrance-animations.js
+ * @dependency i18n.js (codemanT, optional)
+ * @loadorder 12.565 of 16, after home-sessions.js, before git-status-ui.js
  */
 
 /** Fallback poll cadence; the server sends its own in `pollIntervalMs`. */
 const FOREIGN_POLL_FALLBACK_MS = 8000;
 
-/** Mode label shown on a row. Deliberately the same words the tab strip uses. */
-const FOREIGN_MODE_LABEL = {
-  claude: 'Claude',
-  codex: 'Codex',
-  opencode: 'OpenCode',
-  gemini: 'Gemini',
-  antigravity: 'Antigravity',
-  pi: 'Pi',
-  grok: 'Grok',
-  deepseek: 'DeepSeek',
-  shell: 'Shell',
-};
+/** i18n.js's translator, or the English source where it has not loaded. */
+function foreignT(source) {
+  return typeof codemanT === 'function' ? codemanT(source) : source;
+}
+
+/** A row's mode, in the registry's own word for it. Falls back to the id, never a list of ids here. */
+function foreignModeLabel(mode) {
+  const catalog =
+    typeof window !== 'undefined' && Array.isArray(window.__codemanCliCatalog) ? window.__codemanCliCatalog : [];
+  return catalog.find((entry) => entry.id === mode)?.label || mode;
+}
 
 const FOREIGN_LOCATION_LABEL = {
   local: 'this machine',
@@ -77,7 +77,7 @@ Object.assign(CodemanApp.prototype, {
    * stack another interval on top of the last.
    */
   startForeignPolling() {
-    if (this._foreignPollTimer) return;
+    if (this._foreignPollTimer || this._foreignRefused) return;
     void this.loadForeignSessions();
     this._foreignPollTimer = setInterval(() => {
       // Local only — see @fileoverview. The wide scan never rides the timer.
@@ -128,15 +128,24 @@ Object.assign(CodemanApp.prototype, {
    * ONLY an explicit user action ever passes it — never the interval.
    */
   async loadForeignSessions({ wide = false } = {}) {
+    if (this._foreignRefused) return;
     const qs = wide ? '?docker=1&remote=1' : '';
     if (wide) this._foreignWideLoading = true;
     this.renderAllForeignSessions();
-    let data;
-    try {
-      data = await this._apiJson(`/api/mux/foreign${qs}`);
-    } finally {
-      if (wide) this._foreignWideLoading = false;
+    const res = await this._api(`/api/mux/foreign${qs}`);
+    if (wide) this._foreignWideLoading = false;
+    // ⚠️ A 403 is an answer, not a failed poll. The list is admin-only in multi-user
+    // mode (it shows other people's processes), so a non-admin has nothing to see here
+    // and nothing later on this page changes that: stop asking and show no block,
+    // instead of "Could not reach the server" under a heading they cannot use.
+    if (res?.status === 403) {
+      this._foreignRefused = true;
+      this.stopForeignPolling();
+      this.renderAllForeignSessions();
+      return;
     }
+    const body = res?.ok ? await this._readJsonBody(res) : null;
+    const data = body?.success === true ? body.data : body?.success === false ? null : body;
     if (!data) {
       // A failed poll must not blank a list the user is looking at: keep the
       // last good result and let the next tick recover.
@@ -147,18 +156,21 @@ Object.assign(CodemanApp.prototype, {
     this._foreignError = false;
     const rows = Array.isArray(data.sessions) ? data.sessions : [];
     const notes = Array.isArray(data.notes) ? data.notes : [];
+    // Every note opens with its location (foreign-tmux-discovery.ts). A local one is
+    // re-read on each poll; a container or host one only by the next explicit scan,
+    // so it has to outlive the local polls in between.
+    const isLocalNote = (note) => String(note).startsWith('local:');
+    this._foreignNotes = notes.filter(isLocalNote);
     if (wide) {
       // Split by location: the local rows refresh on every tick, the rest only
       // here, so they have to be stored apart or the next local-only payload
       // (which cannot contain them) would read as "those sessions are gone".
       this._foreignSessions = rows.filter((r) => (r.location || 'local') === 'local');
       this._foreignWideSessions = rows.filter((r) => (r.location || 'local') !== 'local');
-      this._foreignNotes = notes;
-      this._foreignWideNotes = [];
+      this._foreignWideNotes = notes.filter((note) => !isLocalNote(note));
       this._foreignWideAt = Date.now();
     } else {
       this._foreignSessions = rows;
-      this._foreignNotes = notes;
     }
     this._foreignCanScanWide = data.canScanWide === true;
     if (Number.isFinite(data.pollIntervalMs)) this._foreignPollMs = data.pollIntervalMs;
@@ -176,16 +188,16 @@ Object.assign(CodemanApp.prototype, {
   /**
    * Adopt one candidate.
    *
-   * The in-flight lock is per BUTTON, not global: two different foreign sessions
-   * can legitimately be adopted back to back. The server holds the real
-   * one-wrapper-per-target guarantee; this only stops a double-click.
+   * The in-flight lock is global, one adoption at a time from this page: it only
+   * stops a double-click. The server holds the real one-wrapper-per-target
+   * guarantee.
    */
   async adoptForeignSession(id, buttonEl) {
     if (this._foreignAdoptInFlight) return;
     this._foreignAdoptInFlight = true;
     if (buttonEl) {
       buttonEl.disabled = true;
-      buttonEl.textContent = codemanT ? codemanT('Opening…') : 'Opening…';
+      buttonEl.textContent = foreignT('Opening…');
     }
     try {
       const body = { id };
@@ -202,9 +214,7 @@ Object.assign(CodemanApp.prototype, {
       const payload = await this._readJsonBody(res);
       const session = payload && payload.success !== false ? payload.data?.session : null;
       if (!session) {
-        const fallback = codemanT
-          ? codemanT('Could not open that session. Refreshing the list.')
-          : 'Could not open that session. Refreshing the list.';
+        const fallback = foreignT('Could not open that session. Refreshing the list.');
         this.showToast?.(payload?.error || fallback, 'error');
         await this.loadForeignSessions();
         return;
@@ -221,7 +231,7 @@ Object.assign(CodemanApp.prototype, {
       this._foreignAdoptInFlight = false;
       if (buttonEl) {
         buttonEl.disabled = false;
-        buttonEl.textContent = codemanT ? codemanT('Open') : 'Open';
+        buttonEl.textContent = foreignT('Open');
       }
     }
   },
@@ -258,6 +268,10 @@ Object.assign(CodemanApp.prototype, {
   renderForeignSessions(container) {
     const rows = this._allForeignRows();
     container.innerHTML = '';
+    if (this._foreignRefused) {
+      container.hidden = true;
+      return;
+    }
 
     if (!rows.length) {
       // Hidden rather than shown-empty: on a first run there is usually nothing,
@@ -279,12 +293,8 @@ Object.assign(CodemanApp.prototype, {
         empty.className = 'foreign-empty';
         this._appendForeignNotes(container);
         empty.textContent = this._foreignError
-          ? codemanT
-            ? codemanT('Could not reach the server.')
-            : 'Could not reach the server.'
-          : codemanT
-            ? codemanT('No sessions found outside Codeman.')
-            : 'No sessions found outside Codeman.';
+          ? foreignT('Could not reach the server.')
+          : foreignT('No sessions found outside Codeman.');
         container.appendChild(empty);
       }
       return;
@@ -339,7 +349,7 @@ Object.assign(CodemanApp.prototype, {
 
     const title = document.createElement('h3');
     title.className = 'foreign-title';
-    title.textContent = codemanT ? codemanT('Opened outside Codeman') : 'Opened outside Codeman';
+    title.textContent = foreignT('Opened outside Codeman');
     header.appendChild(title);
 
     if (count) {
@@ -355,9 +365,7 @@ Object.assign(CodemanApp.prototype, {
     scan.className = 'foreign-scan-toggle';
     scan.dataset.foreignAction = 'toggle-scan';
     scan.setAttribute('aria-pressed', String(this.foreignScanRemote()));
-    scan.title = codemanT
-      ? codemanT('Also scan containers and remote hosts (slower)')
-      : 'Also scan containers and remote hosts (slower)';
+    scan.title = foreignT('Also scan containers and remote hosts (slower)');
     scan.textContent = this.foreignScanRemote() ? '⟳ all' : '⟳ local';
     header.appendChild(scan);
 
@@ -369,16 +377,10 @@ Object.assign(CodemanApp.prototype, {
       rescan.className = 'foreign-scan-toggle';
       rescan.dataset.foreignAction = 'rescan-wide';
       rescan.disabled = this._foreignWideLoading === true;
-      rescan.title = codemanT
-        ? codemanT('Scan containers and remote hosts again')
-        : 'Scan containers and remote hosts again';
+      rescan.title = foreignT('Scan containers and remote hosts again');
       rescan.textContent = this._foreignWideLoading
-        ? codemanT
-          ? codemanT('Scanning…')
-          : 'Scanning…'
-        : codemanT
-          ? codemanT('Rescan')
-          : 'Rescan';
+        ? foreignT('Scanning…')
+        : foreignT('Rescan');
       header.appendChild(rescan);
     }
 
@@ -406,8 +408,8 @@ Object.assign(CodemanApp.prototype, {
     const line2 = document.createElement('span');
     line2.className = 'foreign-row-sub';
     line2.setAttribute('data-i18n-skip', '');
-    const bits = [FOREIGN_MODE_LABEL[row.mode] || row.mode];
-    const where = row.hostLabel || FOREIGN_LOCATION_LABEL[row.location] || row.location;
+    const bits = [foreignModeLabel(row.mode)];
+    const where = row.hostLabel || foreignT(FOREIGN_LOCATION_LABEL[row.location] || row.location);
     if (where) bits.push(where);
     if (row.workingDir) bits.push(row.workingDir);
     line2.textContent = bits.join(' · ');
@@ -422,11 +424,11 @@ Object.assign(CodemanApp.prototype, {
     if (row.adoptedBy) {
       action.dataset.foreignAction = 'select';
       action.dataset.foreignSession = row.adoptedBy;
-      action.textContent = codemanT ? codemanT('Go to tab') : 'Go to tab';
+      action.textContent = foreignT('Go to tab');
     } else {
       action.dataset.foreignAction = 'adopt';
       action.dataset.foreignId = row.id;
-      action.textContent = codemanT ? codemanT('Open') : 'Open';
+      action.textContent = foreignT('Open');
     }
     item.appendChild(action);
 

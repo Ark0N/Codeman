@@ -41,7 +41,7 @@ function stubEl(): Record<string, unknown> {
 }
 
 /** The module is a classic script that mixes into CodemanApp.prototype. */
-function loadApp() {
+function loadApp(window: Record<string, unknown> = {}) {
   const host = stubEl();
   const ctx: Record<string, unknown> = {
     console,
@@ -55,6 +55,7 @@ function loadApp() {
     setInterval: () => 1,
     clearInterval() {},
     codemanT: null,
+    window,
     document: {
       createElement: () => stubEl(),
       getElementById: (id: string) => (id === 'foreignSessions' ? host : null),
@@ -72,7 +73,15 @@ function loadApp() {
     adoptForeignSession(id: string, el?: unknown): Promise<void>;
     _allForeignRows(): Array<{ id: string }>;
     renderAllForeignSessions(): void;
+    startForeignPolling(): void;
+    renderForeignSessions(el: unknown): void;
+    _foreignRow(row: object): { children: Array<{ children: Array<{ textContent: string }> }> };
   };
+}
+
+/** A response as `_api` hands it over, the server's envelope included. */
+function ok(data: unknown) {
+  return { ok: true, status: 200, json: async () => ({ success: true, data }) };
 }
 
 const LOCAL = { id: 'L1', location: 'local', sessionName: 'work', mode: 'claude' };
@@ -82,11 +91,13 @@ describe('the wide scan is one-shot', () => {
   function wired() {
     const app = loadApp();
     const calls: string[] = [];
-    app._apiJson = vi.fn(async (path: string) => {
+    app._api = vi.fn(async (path: string) => {
       calls.push(path);
-      return path.includes('docker=1')
-        ? { sessions: [LOCAL, DOCKER], notes: [], canScanWide: true }
-        : { sessions: [LOCAL], notes: [], canScanWide: true };
+      return ok(
+        path.includes('docker=1')
+          ? { sessions: [LOCAL, DOCKER], notes: ['docker box: not running, no tmux, or engine unreachable'], canScanWide: true }
+          : { sessions: [LOCAL], notes: ['local: 1 session(s) skipped'], canScanWide: true }
+      );
     });
     return { app, calls };
   }
@@ -111,6 +122,17 @@ describe('the wide scan is one-shot', () => {
     await app.loadForeignSessions(); // the interval's call shape
     expect(calls[1]).toBe('/api/mux/foreign');
     expect(app._allForeignRows().map((r) => r.id)).toEqual(['L1', 'D1']);
+  });
+
+  it('keeps a container or host note across the local polls, and refreshes the local ones', async () => {
+    // Only a wide scan can re-read a container's note, so a local poll wiping it
+    // left "unreachable" gone while its stale rows stayed on the list.
+    const { app } = wired();
+    app.toggleForeignScanRemote();
+    await vi.waitFor(() => expect(app._allForeignRows()).toHaveLength(2));
+    await app.loadForeignSessions();
+    expect(app._foreignWideNotes).toEqual(['docker box: not running, no tmux, or engine unreachable']);
+    expect(app._foreignNotes).toEqual(['local: 1 session(s) skipped']);
   });
 
   it('discards the wide rows when the toggle goes off', async () => {
@@ -141,7 +163,6 @@ describe('an adoption failure reports what the server said', () => {
     const toasts: string[] = [];
     app.showToast = (msg: string) => void toasts.push(msg);
     app._api = vi.fn(async () => ({ ok: status < 400, status, json: async () => body }));
-    app._apiJson = vi.fn(async () => ({ sessions: [], notes: [], canScanWide: false }));
     app._onSessionCreated = vi.fn();
     app.selectSession = vi.fn(async () => {});
     return { app, toasts };
@@ -169,7 +190,6 @@ describe('an adoption failure reports what the server said', () => {
     const toasts: string[] = [];
     app.showToast = (msg: string) => void toasts.push(msg);
     app._api = vi.fn(async () => null); // network failure
-    app._apiJson = vi.fn(async () => ({ sessions: [], notes: [], canScanWide: false }));
     await app.adoptForeignSession('cand-1');
     expect(toasts[0]).toMatch(/Could not open that session/);
   });
@@ -180,5 +200,45 @@ describe('an adoption failure reports what the server said', () => {
     await app.adoptForeignSession('cand-1');
     expect(app._onSessionCreated).toHaveBeenCalledWith(session);
     expect(app.selectSession).toHaveBeenCalledWith('new-1');
+  });
+});
+
+describe('a non-admin in multi-user mode', () => {
+  // The list is admin-only, so every poll answers 403. That used to read as a failed
+  // poll: a "Could not reach the server" block, and a request every eight seconds.
+  it('stops asking and shows no block at all', async () => {
+    const app = loadApp();
+    const calls: string[] = [];
+    app._api = vi.fn(async (path: string) => {
+      calls.push(path);
+      return { ok: false, status: 403, json: async () => ({ success: false, errorCode: 'FORBIDDEN' }) };
+    });
+    await app.loadForeignSessions();
+    const box = stubEl();
+    app.renderForeignSessions(box);
+    expect(box.hidden).toBe(true);
+    expect(box.children).toEqual([]);
+    await app.loadForeignSessions();
+    app.startForeignPolling();
+    expect(calls).toHaveLength(1);
+  });
+
+  it('still reads any other failure as a failed poll', async () => {
+    const app = loadApp();
+    app._api = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ success: false }) }));
+    await app.loadForeignSessions();
+    expect(app._foreignError).toBe(true);
+    expect(app._foreignRefused).toBeFalsy();
+  });
+});
+
+describe('a row names its CLI in the registry\u2019s own word', () => {
+  it('has no list of CLI ids to fall behind: omp and copilot read like the rest', () => {
+    const app = loadApp({ __codemanCliCatalog: [{ id: 'copilot', label: 'GitHub Copilot' }] });
+    const sub = (mode: string) =>
+      app._foreignRow({ sessionName: 'x', mode, location: 'local' }).children[1].children[1].textContent;
+    expect(sub('copilot')).toBe('GitHub Copilot \u00b7 this machine');
+    // Absent from the catalog: the id itself, never a blank row.
+    expect(sub('newcli')).toBe('newcli \u00b7 this machine');
   });
 });
