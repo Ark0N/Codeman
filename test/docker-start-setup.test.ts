@@ -228,6 +228,21 @@ function envValue(text: string, key: string): string | undefined {
   return raw.startsWith("'") && raw.endsWith("'") ? raw.slice(1, -1) : raw;
 }
 
+/**
+ * What Compose reads from a single-quoted dotenv value, or null when it refuses
+ * the file with `unterminated quoted value`. A backslash there escapes the next
+ * character, so `'longpass\\'` never closes, while bash (and so the stub) ends
+ * the same value at that quote. Measured on Compose 2.33.0 and 5.5.0.
+ */
+function composeReads(quoted: string): string | null {
+  let escaped = false;
+  for (let i = 1; i < quoted.length; i++) {
+    if (quoted[i] === "'" && !escaped) return i === quoted.length - 1 ? quoted.slice(1, i) : null;
+    escaped = quoted[i] === '\\' && !escaped;
+  }
+  return null;
+}
+
 describe('Start-Codeman.sh first run (no docker/.env yet)', () => {
   it('parses under bash -n', () => {
     execFileSync('bash', ['-n', join(ROOT, 'docker/Start-Codeman.sh')]);
@@ -316,11 +331,31 @@ describe('Start-Codeman.sh first run (no docker/.env yet)', () => {
     ['a single quote', "it's-a-password"],
     ['the example placeholder', 'changeme'],
     ['fewer than 8 characters', 'short'],
+    ['a trailing backslash, which would escape the closing quote', 'longpass\\'],
   ])('refuses a preset password with %s', (_name, password) => {
     const r = runStart(['--setup-only'], { env: { CODEMAN_PASSWORD: password } });
     expect(r.status).toBe(1);
     expect(r.env).toBeNull();
   });
+
+  it('refuses a data folder ending in a backslash, even behind a trailing slash', () => {
+    for (const path of ['/srv/data\\', '/srv/data\\/']) {
+      const r = runStart(['--setup-only'], { env: { CODEMAN_APPDATA_PATH: path } });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/cannot end in a backslash/);
+      expect(r.env).toBeNull();
+    }
+  });
+
+  it.each(['mid\\dle-pass', 'pa$$ #word', 'back`tick"quote', 'tab\there'])(
+    'writes %j so Compose reads it back exactly',
+    (password) => {
+      const r = runStart(['--setup-only'], { env: { CODEMAN_PASSWORD: password } });
+      expect(r.status, r.stderr).toBe(0);
+      const line = (r.env as string).split('\n').find((l) => l.startsWith('CODEMAN_PASSWORD=')) as string;
+      expect(composeReads(line.slice('CODEMAN_PASSWORD='.length))).toBe(password);
+    }
+  );
 
   it('never rewrites an existing docker/.env', () => {
     const existing = '# hand-written\nCODEMAN_PASSWORD=mine-and-only-mine\nCODEMAN_APPDATA_PATH=/x\n';

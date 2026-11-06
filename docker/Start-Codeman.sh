@@ -209,8 +209,9 @@ generate_password() {
 
 # Compose reads .env values with its own dotenv rules: `$` interpolates and an
 # unquoted ` #` starts a comment. A single-quoted value is taken literally, so
-# anything beyond plain path characters is written that way (the accept_*
-# checks below refuse the one character it cannot hold, a single quote).
+# anything beyond plain path characters is written that way. It cannot hold a
+# single quote, and a backslash just before the closing quote escapes that quote,
+# so the whole file fails to parse: the accept_* checks below refuse both.
 env_quote() {
   local re='^[A-Za-z0-9._/@:+-]*$'
   if [[ "$1" =~ $re ]]; then
@@ -235,6 +236,10 @@ accept_appdata_path() {
   case "$p" in
     *"'"* | *$'\n'*)
       printf '  The path cannot contain a single quote or a line break.\n' >&2
+      return 1
+      ;;
+    *\\)
+      printf '  The path cannot end in a backslash.\n' >&2
       return 1
       ;;
   esac
@@ -275,6 +280,10 @@ accept_password() {
   case "$1" in
     *"'"* | *$'\n'*)
       printf '  The password cannot contain a single quote or a line break.\n' >&2
+      return 1
+      ;;
+    *\\)
+      printf '  The password cannot end in a backslash.\n' >&2
       return 1
       ;;
   esac
