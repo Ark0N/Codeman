@@ -21,6 +21,11 @@
  * tab keeps sweeping tmux sockets forever. `startForeignPolling` /
  * `stopForeignPolling` are called from `showWelcome`/`hideWelcome`.
  *
+ * A tab hidden while it shows the home screen skips its ticks as well. The TTL sits
+ * under the poll interval, so one tab never hits the cache: every tick is a full
+ * sweep, one fork or more per socket, for a list nobody is reading. It catches up
+ * on `visibilitychange`, and the cache is what bounds a flurry of tab switches.
+ *
  * ⚠️ Docker and remote locations are NOT in that poll. Each costs a `docker exec`
  * or a full ssh handshake per target, each with a ~12s timeout, so riding them
  * along on an 8s tick stacks connections on a slow host, the one cost the
@@ -78,11 +83,14 @@ Object.assign(CodemanApp.prototype, {
    */
   startForeignPolling() {
     if (this._foreignPollTimer || this._foreignRefused) return;
-    void this.loadForeignSessions();
-    this._foreignPollTimer = setInterval(() => {
-      // Local only: see @fileoverview. The wide scan never rides the timer.
-      void this.loadForeignSessions();
-    }, this._foreignPollMs || FOREIGN_POLL_FALLBACK_MS);
+    this._foreignPollTick();
+    this._foreignPollTimer = setInterval(
+      () => this._foreignPollTick(),
+      this._foreignPollMs || FOREIGN_POLL_FALLBACK_MS
+    );
+    // Stored, unlike a poller made once: this runs on every trip to the home screen.
+    this._foreignOnVisible = () => this._foreignPollTick();
+    document.addEventListener('visibilitychange', this._foreignOnVisible);
   },
 
   /** Stop polling. MUST run on leaving the home screen, see @fileoverview. */
@@ -90,6 +98,15 @@ Object.assign(CodemanApp.prototype, {
     if (!this._foreignPollTimer) return;
     clearInterval(this._foreignPollTimer);
     this._foreignPollTimer = null;
+    document.removeEventListener('visibilitychange', this._foreignOnVisible);
+    this._foreignOnVisible = null;
+  },
+
+  /** One poll, and the one gate every poll passes: a hidden tab skips it, see @fileoverview. */
+  _foreignPollTick() {
+    if (document.hidden) return;
+    // Local only: see @fileoverview. The wide scan never rides the timer.
+    void this.loadForeignSessions();
   },
 
   /** Whether the user asked for the expensive docker/remote scan too. */

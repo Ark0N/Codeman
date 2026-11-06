@@ -41,7 +41,7 @@ function stubEl(): Record<string, unknown> {
 }
 
 /** The module is a classic script that mixes into CodemanApp.prototype. */
-function loadApp(window: Record<string, unknown> = {}) {
+function loadApp(window: Record<string, unknown> = {}, page: Record<string, unknown> = {}) {
   const host = stubEl();
   const ctx: Record<string, unknown> = {
     console,
@@ -56,11 +56,13 @@ function loadApp(window: Record<string, unknown> = {}) {
     clearInterval() {},
     codemanT: null,
     window,
-    document: {
+    document: Object.assign(page, {
       createElement: () => stubEl(),
       getElementById: (id: string) => (id === 'foreignSessions' ? host : null),
       addEventListener() {},
-    },
+      removeEventListener() {},
+      ...page,
+    }),
     CodemanApp: function () {} as unknown,
   };
   vm.createContext(ctx);
@@ -74,6 +76,8 @@ function loadApp(window: Record<string, unknown> = {}) {
     _allForeignRows(): Array<{ id: string }>;
     renderAllForeignSessions(): void;
     startForeignPolling(): void;
+    stopForeignPolling(): void;
+    _foreignPollTick(): void;
     renderForeignSessions(el: unknown): void;
     _foreignRow(row: object): { children: Array<{ children: Array<{ textContent: string }> }> };
   };
@@ -158,6 +162,84 @@ describe('the wide scan is one-shot', () => {
     app.rescanForeignWide();
     await vi.waitFor(() => expect(calls).toHaveLength(2));
     expect(calls[1]).toContain('docker=1');
+  });
+});
+
+describe('a hidden tab does not sweep tmux sockets', () => {
+  // One scan forks once per socket and pane, and a tab left on the home screen in the
+  // background has nobody reading the list: 772 forks a tick was measured on a real box.
+  function harness(hidden: boolean) {
+    const listeners = new Set<() => void>();
+    const page: Record<string, unknown> = {
+      hidden,
+      addEventListener(type: string, listener: () => void) {
+        if (type === 'visibilitychange') listeners.add(listener);
+      },
+      removeEventListener(type: string, listener: () => void) {
+        if (type === 'visibilitychange') listeners.delete(listener);
+      },
+    };
+    const app = loadApp({}, page);
+    const calls: string[] = [];
+    app._api = vi.fn(async (path: string) => {
+      calls.push(path);
+      return ok({ sessions: [LOCAL], notes: [], canScanWide: false });
+    });
+    return { app, calls, page, listeners };
+  }
+
+  it('makes no first load for a home screen that opened in the background', () => {
+    const { app, calls } = harness(true);
+    app.startForeignPolling();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('skips the tick while hidden and runs it again once visible', () => {
+    const { app, calls, page } = harness(false);
+    app.startForeignPolling();
+    expect(calls).toHaveLength(1);
+
+    page.hidden = true;
+    app._foreignPollTick();
+    expect(calls).toHaveLength(1);
+
+    page.hidden = false;
+    app._foreignPollTick();
+    expect(calls).toHaveLength(2);
+  });
+
+  it('catches up the moment the tab comes back, without waiting out the interval', () => {
+    const { app, calls, page, listeners } = harness(true);
+    app.startForeignPolling();
+    expect(listeners.size).toBe(1);
+
+    page.hidden = false;
+    for (const listener of listeners) listener();
+
+    expect(calls).toEqual(['/api/mux/foreign']);
+  });
+
+  it('does not scan on the visibility event that hides the tab', () => {
+    const { app, calls, page, listeners } = harness(false);
+    app.startForeignPolling();
+    expect(listeners.size).toBe(1);
+
+    page.hidden = true;
+    for (const listener of listeners) listener();
+
+    expect(calls).toHaveLength(1);
+  });
+
+  it('holds one listener over repeated home screens and none after leaving', () => {
+    // showWelcome/hideWelcome run this on every trip, unlike a poller created once.
+    const { app, listeners } = harness(false);
+    for (let trip = 0; trip < 3; trip++) {
+      app.startForeignPolling();
+      app.startForeignPolling();
+      expect(listeners.size).toBe(1);
+      app.stopForeignPolling();
+      expect(listeners.size).toBe(0);
+    }
   });
 });
 
