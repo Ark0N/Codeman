@@ -91,7 +91,7 @@ builds the command that launches (or **reattaches** to) the remote session:
 
 ```
 ssh -o BatchMode=yes -t <connection-args> user@host \
-  'tmux -L codeman-remote new-session -A -s codeman-ssh-<id8> -c <remotePath> "cd <remotePath> && exec <cli>" \; \
+  'tmux -L codeman-remote new-session -A -s codeman-ssh-<id8> -c <remotePath> /bin/sh -c <pane-command> \; \
      set -t codeman-ssh-<id8> status off \; set -t codeman-ssh-<id8> mouse off \; \
      set -t codeman-ssh-<id8> prefix C-q \; set -s escape-time 0 \; \
      set -t codeman-ssh-<id8> window-size latest \; \
@@ -99,6 +99,9 @@ ssh -o BatchMode=yes -t <connection-args> user@host \
      bind-key -T prefix C-q send-prefix \; \
      set -t codeman-ssh-<id8> remain-on-exit failed'
 ```
+
+`<pane-command>` is `cd <remotePath> && exec <cli>`, shell-quoted as one token. With a
+`commands.*` override that token stands alone, with no `/bin/sh -c` in front of it.
 
 Key points:
 
@@ -133,6 +136,33 @@ Key points:
   **login shell**, not the agent.
 - The **whole tmux invocation is a single shell-quoted ssh argument**, and the
   pane command is independently quoted, so a `remotePath` with spaces is safe.
+- **That argument reaches the far end verbatim** (#760): the launch goes to the
+  local `bash -c` in single quotes, so `$HOME`, `$PATH` and `$SHELL` are the
+  remote user's. In double quotes the local `sh` expanded them first, which sent
+  this host's home and PATH to the remote. ⚠️ Every `$` in a `commands.*` override
+  now expands on the far end too, and a bare `$VAR` in an `extraSshOptions` value
+  reaches `ssh` as those literal characters at launch, as it always did in the link
+  and quick-start tmux probes. A Docker launch is verbatim as well, so a bare `$VAR`
+  in `extraCreateArgs`/`extraExecArgs` reaches `docker` the same way. Write those
+  values out.
+- **tmux picks the shell by argument count** (measured on 3.4): one argument runs
+  through the remote `default-shell`, two or more are exec'd directly. Codeman's own
+  pane command is POSIX, so it goes to `/bin/sh -c` as separate arguments, and a fish
+  login shell (or a `default-shell` set in the remote `~/.tmux.conf`) never parses it:
+  fish refuses `${SHELL:-/bin/sh}` with status 127, which is a dead pane. A `commands.*`
+  override stays one argument on purpose, since it is written for the user's own shell
+  (`source` and `[[` work in bash and zsh and die under a dash `/bin/sh`).
+- **Login shells**: POSIX shells and fish work. nushell and elvish cannot run the
+  PATH bootstrap at all, so no override helps. A `remotePath` holding an apostrophe
+  does not start under fish.
+- ⚠️ **A tcsh login shell stopped working in 1.49.0.** tcsh refuses `-l` beside any
+  other flag (``Unknown option: `-l'``), so every stock launch leaves a dead pane. On
+  1.48.0 the local `sh` rewrote `${SHELL:-/bin/sh}` to this host's shell, so such a
+  host ran that shell instead (when its path also exists on the remote) and came up.
+  It now needs a `commands.*` override per mode (`exec claude`). The Create Case
+  form's Remote tab offers codex only, the other modes go through
+  `PUT /api/remote-hosts/:id`, and a `commands.claude` override gives up the
+  `--session-id`/`--resume` pair, so a respawn starts a new conversation.
 - Connection options come from the **same `buildSshConnectionArgs(remote)`** as
   the prereq probe; `-t` is inserted right after `ssh -o BatchMode=yes`,
   preserving historical token order.

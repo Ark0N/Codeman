@@ -392,7 +392,7 @@ export function isAdoptedContainer(docker: Pick<SessionDocker, 'owned'>): boolea
 /**
  * POSIX single-quote shell-escaping (end-quote, escaped-quote, restart-quote).
  * Mirror of the helper in remote-hosts.ts / tmux-manager.ts. Every dynamic value
- * interpolated into the outer `bash -c "..."` launch layer is escaped through
+ * interpolated into the `bash -c` launch layer is escaped through
  * this so a path with spaces stays a single shell token. Operator-entered fields
  * are ALSO schema-rejected for `$`/backtick (NO_SHELL_META) as defense in depth.
  */

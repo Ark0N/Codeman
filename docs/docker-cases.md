@@ -202,7 +202,7 @@ The host-gateway mapping, `CODEMAN_API_URL` derivation, host-guard allowlist, an
 ## Notes & limits
 
 - Requires Docker (or Podman) with a reachable daemon; tmux must be present in the base image (a hard prerequisite, probed at link time).
-- Per-session `envOverrides` / `effort` / per-CLI config are rejected for docker cases (they do not cross into the container); configure the container via the docker host's per-mode command override instead.
+- Per-session `envOverrides` / `effort` / per-CLI config are rejected for docker cases (they do not cross into the container); configure the container via the docker host's per-mode command override instead. A `$` in that override expands inside the container, never on this host, and a bare `$VAR` in `extraCreateArgs`/`extraExecArgs` reaches `docker` as those literal characters, so write the value out.
 - macOS Docker Desktop takes a dedicated uid path (the baked image uid; memory caps are subject to the VM ceiling).
 
 Design + rationale: [`docker-cases-plan.md`](./docker-cases-plan.md).

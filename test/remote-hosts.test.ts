@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { listClis } from '../src/config/cli-registry/registry.js';
 import {
   defaultRemoteCommandForMode,
   readRemoteCases,
@@ -13,7 +14,7 @@ import {
   writeRemoteCases,
   writeRemoteHosts,
 } from '../src/remote-hosts.js';
-import { RemoteHostSchema } from '../src/web/schemas.js';
+import { DockerHostSchema, RemoteHostSchema } from '../src/web/schemas.js';
 
 describe('remote-hosts domain', () => {
   let dir: string | null = null;
@@ -123,6 +124,24 @@ describe('remote-hosts domain', () => {
       );
       expect(RemoteHostSchema.safeParse({ ...host, wakeMac: '04:d9:f5:80:c6' }).success).toBe(false);
       expect(RemoteHostSchema.safeParse({ ...host, wakeMac: '04:d9:f5:80:c6:58; rm -rf /' }).success).toBe(false);
+    });
+  });
+
+  describe('per-mode command overrides', () => {
+    const modes = ['shell', ...listClis().map((cli) => cli.id)];
+    const host = { id: 'h', label: 'H', host: '10.0.0.1', username: 'u' };
+
+    // `.strict()` refuses an unknown key, so a mode missing here cannot take an override, and
+    // `commands.*` is the documented way out for a login shell the stock launch cannot run.
+    it.each(modes)('accepts a %s override on a remote host and a docker host', (mode) => {
+      const commands = { [mode]: 'exec my-agent' };
+      const docker = { id: 'h', label: 'H', image: 'codeman/agent:base', commands };
+      expect(RemoteHostSchema.safeParse({ ...host, commands }).success).toBe(true);
+      expect(DockerHostSchema.safeParse(docker).success).toBe(true);
+    });
+
+    it('still refuses a key that is no mode', () => {
+      expect(RemoteHostSchema.safeParse({ ...host, commands: { nope: 'exec my-agent' } }).success).toBe(false);
     });
   });
 
