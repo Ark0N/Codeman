@@ -15,9 +15,9 @@ taking turns between folders, so one huge folder cannot use up that limit before
 or the folders inside it, get a turn. They also stop opening folders after reading 250,000 entries,
 so a workspace with several enormous folders can still leave later ones unread. When a workspace is
 bigger than either limit the status line says `(truncated)`, and an expanded folder the scan did
-not finish shows **Not fully scanned (file limit reached)** rather than looking empty. A folder that
-does not answer, such as a network mount that went away, is skipped rather than waited on, and
-looks empty.
+not finish shows **Not fully scanned** rather than looking empty. A folder that does not answer,
+such as a network mount that went away, is skipped rather than waited on and is marked the same way,
+so a search can miss what is inside it. The panel's Refresh button tries it again.
 
 It renders what it can:
 

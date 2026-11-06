@@ -1,8 +1,9 @@
 /**
- * @fileoverview The Files panel's row for a folder the scan's file limit stopped short of.
+ * @fileoverview The Files panel's row for a folder the scan stopped short of.
  *
  * `GET .../files` gives a directory its node before reading it, so a folder still queued when the
- * budget ends has `children: []` or a partial list (test/routes/file-search-mode.test.ts). Without
+ * budget ends, or one that did not answer, has `children: []` or a partial list
+ * (test/routes/file-search-mode.test.ts, test/routes/file-walk-bounds.test.ts). Without
  * `incomplete` that reads as an empty folder. What can go wrong here is the client: the flag lost
  * on the way in, the row drawn for a collapsed or finished folder, or the click wiring treating it
  * as a file.
@@ -76,7 +77,7 @@ const render = (app: Record<string, any>, tree: unknown[]) => {
   return [...treeEl().querySelectorAll('.file-tree-incomplete')] as HTMLElement[];
 };
 
-describe('Files panel, a folder the file limit stopped short of', () => {
+describe('Files panel, a folder the scan stopped short of', () => {
   it('keeps the flag through the envelope check, which ignores what it does not know', () => {
     const app = loadPanel();
     const data = app._validateFileBrowserTreeEnvelope(envelope([bulk, later]));
@@ -89,7 +90,7 @@ describe('Files panel, a folder the file limit stopped short of', () => {
     const rows = render(loadPanel(['a-bulk']), [bulk, later]);
 
     expect(rows).toHaveLength(1);
-    expect(rows[0].textContent).toBe('Not fully scanned (file limit reached)');
+    expect(rows[0].textContent).toBe('Not fully scanned');
     expect(rows[0].dataset.depth).toBe('1');
     const items = [...treeEl().children].map((el) => (el as HTMLElement).dataset.path ?? 'ROW');
     expect(items).toEqual(['a-bulk', 'a-bulk/one.txt', 'ROW', 'z-later']);

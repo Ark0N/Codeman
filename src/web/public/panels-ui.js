@@ -3795,10 +3795,10 @@ Object.assign(CodemanApp.prototype, {
         }
       }
 
-      // The scan's file limit stopped short of this folder, so what is listed above is not all of
-      // it. Not a .file-tree-item: the click wiring below would try to open it as a file.
+      // The scan stopped at a limit or the folder did not answer, so what is listed above is not all
+      // of it. Not a .file-tree-item: the click wiring below would try to open it as a file.
       if (isDir && isExpanded && node.incomplete === true) {
-        html.push(`<div class="file-tree-incomplete" data-depth="${depth + 1}">${escapeHtml('Not fully scanned (file limit reached)')}</div>`);
+        html.push(`<div class="file-tree-incomplete" data-depth="${depth + 1}">${escapeHtml('Not fully scanned')}</div>`);
       }
     };
 

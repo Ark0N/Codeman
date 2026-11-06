@@ -1144,7 +1144,7 @@
     Worktree: '工作树',
     'Session folder': '会话文件夹',
     'Back to worktree': '返回工作树',
-    'Not fully scanned (file limit reached)': '未完全扫描（已达到文件数量上限）',
+    'Not fully scanned': '未完全扫描',
     'Any status': '任意状态',
     'Any time': '任意时间',
     'Last hour': '最近一小时',

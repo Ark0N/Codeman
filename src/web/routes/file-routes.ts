@@ -800,12 +800,15 @@ interface WalkCursor {
   index: number;
   /** The read kept fewer entries than the folder lists, so running out of `entries` does not finish it. */
   more?: boolean;
+  /** Its probe answered `unknown`: it may hold anything, so it must not pass for an empty folder. */
+  unanswered?: boolean;
 }
 
 /**
  * First turn of a folder: reads it and sets `cursor.entries` to the part the listing could use,
  * which is the entries it lists, sorted, up to what is left of the budget. Leaves `entries` unset
- * for a folder it could not read. Answers the number of entries read, for the walk's read ceiling.
+ * for a folder it could not read, and sets `unanswered` when that was a probe that established
+ * nothing. Answers the number of entries read, for the walk's read ceiling.
  */
 async function readWalkFolder(
   cursor: WalkCursor,
@@ -814,8 +817,13 @@ async function readWalkFolder(
 ): Promise<number> {
   // The walk's root is the session's own folder. Below it any folder can be a mount that stopped
   // answering, and a bulk scan keeps the stall cap (#516): an unbounded readdir there would hold a
-  // threadpool worker for good. Skipped like an unreadable one: it is not the file limit's doing.
-  if (cursor.depth > 1 && (await probePathKind(cursor.dirPath)) !== 'directory') return 0;
+  // threadpool worker for good. `unknown` is never `absent`, so only a folder the filesystem says
+  // is gone drops out quietly: one that did not answer goes on the walk's unfinished list.
+  if (cursor.depth > 1) {
+    const kind = await probePathKind(cursor.dirPath);
+    cursor.unanswered = kind === 'unknown';
+    if (kind !== 'directory') return 0;
+  }
 
   let read: Dirent[];
   try {
@@ -1734,7 +1742,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       size?: number;
       extension?: string;
       children?: FileTreeNode[];
-      /** Set only on a folder the walk's limits stopped it short of, so `children` is not all of it. */
+      /** Set only on a folder the walk stopped short of or could not reach, so `children` is not all of it. */
       incomplete?: boolean;
     }
 
@@ -1757,7 +1765,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       const maxMatches = 1000;
 
       const queue: WalkCursor[] = [{ dirPath: walkRoot, depth: 1, index: 0 }];
-      // Folders the read ceiling kept shut. What was already read still gets its turns.
+      // Folders the read ceiling kept shut or that did not answer. What was already read still gets its turns.
       const unread: WalkCursor[] = [];
       while (queue.length > 0 && totalFiles + totalDirectories < maxFiles && matches.length < maxMatches) {
         // Per-directory round-robin (breadth-first): each queued directory gets an equal share of what
@@ -1786,6 +1794,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
               continue;
             }
             entriesRead += await readWalkFolder(cursor, maxFiles - totalFiles - totalDirectories, isListed);
+            if (cursor.unanswered) unread.push(cursor);
             if (!cursor.entries) continue;
           }
 
@@ -1876,6 +1885,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
             continue;
           }
           entriesRead += await readWalkFolder(cursor, maxFiles - totalFiles - totalDirectories, isListed);
+          if (cursor.unanswered) unread.push(cursor);
           if (!cursor.entries) continue;
         }
 

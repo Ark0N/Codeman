@@ -1024,11 +1024,11 @@ as one more share beside the subfolders it has just found, so one huge folder ca
 listing limit before its later siblings or its own subfolders are read, and the `matches` of a `q`
 search come back shallow-first. A folder made of thousands of small subfolders can still use most
 of the limit one level down, and folders that add up to the read limit can leave later ones
-unread. In the tree, a directory node either limit stopped short of also carries
-`incomplete: true`: its `children` hold what was listed before the limit, which can be nothing.
-The key is absent on every other node. A folder below the start of the walk that does not answer a
-bounded probe (a mount that stopped responding) is skipped like an unreadable one: it is listed
-with empty `children` and no `incomplete`.
+unread. A folder below the start of the walk that does not answer a bounded probe (a mount that
+stopped responding) is not read either, and counts as left over the same way. In the tree, a
+directory node the walk stopped short of for either reason also carries `incomplete: true`: its
+`children` hold what was listed before it stopped, which can be nothing. The key is absent on every
+other node.
 
 ## Session model (`displayModel`)
 

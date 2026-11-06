@@ -143,9 +143,11 @@ describe('files endpoint read bounds', () => {
     it('answers without it, and costs it one stuck stat however often the panel asks', async () => {
       const first = await deadline(get(''));
 
+      // Nothing was read from it, so `children: []` alone would pass it off as an empty folder (#516:
+      // unknown is never absent).
       const dead = first.tree.find((node: { name: string }) => node.name === 'z-nas');
-      expect(dead).toEqual({ name: 'z-nas', path: 'z-nas', type: 'directory', children: [] });
-      expect(first.truncated).toBe(false);
+      expect(dead).toEqual({ name: 'z-nas', path: 'z-nas', type: 'directory', children: [], incomplete: true });
+      expect(first.truncated).toBe(true);
       expect(first.tree[0].children.map((node: { name: string }) => node.name)).toEqual(['needle.ts']);
       expect(deadReads).toBe(0);
 
@@ -153,7 +155,23 @@ describe('files endpoint read bounds', () => {
       const stats = statCalls();
       const search = await deadline(get('?q=needle'));
       expect(search.matches.map((match: { path: string }) => match.path)).toEqual([join('a-fine', 'needle.ts')]);
+      // A hit could be behind it, which is what the search's own `truncated` is for.
+      expect(search.truncated).toBe(true);
       expect(statCalls()).toBe(stats);
+      expect(deadReads).toBe(0);
+    });
+
+    it('leaves a folder alone once the filesystem says it is gone: that is not an unfinished scan', async () => {
+      vi.mocked(fs.stat).mockImplementation((async (path: string) => {
+        if (path === deadFolder) throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+        return { size: 1, isDirectory: () => true };
+      }) as never);
+
+      const data = await deadline(get(''));
+
+      const gone = data.tree.find((node: { name: string }) => node.name === 'z-nas');
+      expect(gone).toEqual({ name: 'z-nas', path: 'z-nas', type: 'directory', children: [] });
+      expect(data.truncated).toBe(false);
       expect(deadReads).toBe(0);
     });
   });
