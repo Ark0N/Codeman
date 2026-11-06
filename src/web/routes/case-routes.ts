@@ -86,6 +86,7 @@ import {
   SettingsWriteRefusedError,
   settingsWriteErrorResponse,
 } from '../settings-writer.js';
+import { LinkedCasesWriteRefusedError, linkedCasesPath, mutateLinkedCases } from '../linked-cases-writer.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import type { AuthUser } from '../../types.js';
 import { SseEvent } from '../sse-events.js';
@@ -126,7 +127,6 @@ import {
   writeRemoteHosts,
 } from '../../remote-hosts.js';
 
-const LINKED_CASES_FILE = dataPath('linked-cases.json');
 const CODEMAN_CONFIG_DIR = getDataDir();
 const SAFE_CASE_NAME = /^[a-zA-Z0-9_-]+$/;
 const DOCKER_EXPORTS_DIR = dataPath('docker-exports');
@@ -212,10 +212,20 @@ function agentCreatedInfo(marker: AgentCaseMarker): NonNullable<CaseInfo['agentC
   };
 }
 
-/** Read and parse linked-cases.json, returning empty object on missing/invalid file. */
+/**
+ * Read and parse linked-cases.json, returning empty object on missing/invalid file. For reads only:
+ * every write goes through `mutateLinkedCases()`, which re-reads the file inside its own critical
+ * section and refuses one that does not parse.
+ */
 async function readLinkedCases(): Promise<Record<string, string>> {
-  return readJsonConfig<Record<string, string>>(LINKED_CASES_FILE, 'linked cases', {});
+  return readJsonConfig<Record<string, string>>(linkedCasesPath(), 'linked cases', {});
 }
+
+/** A conflict thrown from inside a `mutateLinkedCases()` callback: answered 409, nothing written. */
+function linkedConflict(message: string): Error {
+  return Object.assign(new Error(message), { conflict: true });
+}
+const isLinkedConflict = (err: unknown): boolean => (err as { conflict?: boolean }).conflict === true;
 
 /**
  * Resolve a case name to its directory path, checking linked cases first, then the
@@ -553,15 +563,11 @@ export function registerCaseRoutes(
       made.push(join(casePath, '.claude')); // before the write, so a half-written one is undone too
       await writeHooksConfig(casePath);
 
-      const codemanDir = getDataDir();
-      if (!existsSync(codemanDir)) mkdirSync(codemanDir, { recursive: true });
-      // Re-read right before writing, so a case linked since the check above is not dropped. This only
-      // narrows the window: like POST /api/cases/link, the registry write is not serialized, and two
-      // requests that both read before either writes can still lose one entry.
-      const fresh = await readLinkedCases();
-      if (fresh[name]) throw Object.assign(new Error(`Case "${name}" was just linked`), { conflict: true });
-      fresh[name] = casePath;
-      await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(fresh, null, 2));
+      // The check above ran before the scaffold; a case linked since then wins and this call is undone.
+      await mutateLinkedCases((current) => {
+        if (current[name]) throw linkedConflict(`Case "${name}" was just linked`);
+        return { ...current, [name]: casePath };
+      });
 
       ctx.broadcast(SseEvent.CaseCreated, { name, path: casePath });
       return { success: true, data: { case: { name, path: casePath } } };
@@ -569,9 +575,13 @@ export function registerCaseRoutes(
       // Undo only what this call made. The whole folder if we created it, otherwise the scaffold
       // entries inside the empty folder the user picked; never anything else.
       for (const p of made.reverse()) await fs.rm(p, { recursive: true, force: true }).catch(() => undefined);
-      if ((err as { conflict?: boolean }).conflict) {
+      if (isLinkedConflict(err)) {
         reply.code(409);
         return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, getErrorMessage(err));
+      }
+      if (err instanceof LinkedCasesWriteRefusedError) {
+        reply.code(409);
+        return createErrorResponse(ApiErrorCode.CONFLICT, err.message);
       }
       reply.code(500);
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
@@ -890,20 +900,20 @@ export function registerCaseRoutes(
       }
 
       if (customPath !== undefined) {
-        // Re-read right before writing so a case linked while git ran is not dropped. Like
-        // POST /api/cases/link the write is not serialized, so this only narrows the window.
+        // The name was checked before git ran, which can take minutes. Checked again where the entry is
+        // written, so of two clones that claimed one name only the first to finish links it.
         try {
-          const fresh = await readLinkedCases();
-          if (fresh[name])
-            throw Object.assign(new Error(`Case "${name}" was linked while the clone ran`), { conflict: true });
-          fresh[name] = casePath;
-          await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(fresh, null, 2));
+          await mutateLinkedCases((current) => {
+            if (current[name]) throw linkedConflict(`Case "${name}" was linked while the clone ran`);
+            return { ...current, [name]: casePath };
+          });
         } catch (err) {
           // The clone itself succeeded: keep the folder (the user waited for it) and say where it is.
-          const conflict = (err as { conflict?: boolean }).conflict;
-          reply.code(conflict ? 409 : 500);
+          const conflict = isLinkedConflict(err);
+          const refused = err instanceof LinkedCasesWriteRefusedError;
+          reply.code(conflict || refused ? 409 : 500);
           return createErrorResponse(
-            conflict ? ApiErrorCode.ALREADY_EXISTS : ApiErrorCode.OPERATION_FAILED,
+            conflict ? ApiErrorCode.ALREADY_EXISTS : refused ? ApiErrorCode.CONFLICT : ApiErrorCode.OPERATION_FAILED,
             `Cloned into ${casePath} but could not register the case (${getErrorMessage(err)}). Use Link Existing to add it.`
           );
         }
@@ -1713,28 +1723,17 @@ export function registerCaseRoutes(
       return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'A case with this name already exists in codeman-cases.');
     }
 
-    // Load existing linked cases
-    const linkedCases = await readLinkedCases();
-
-    // Check if name is already linked
-    if (linkedCases[name]) {
-      return createErrorResponse(
-        ApiErrorCode.ALREADY_EXISTS,
-        `Case "${name}" is already linked to ${linkedCases[name]}`
-      );
-    }
-
-    // Save the linked case
-    linkedCases[name] = expandedPath;
+    // The name check and the write are one step, so two links of one name cannot both succeed.
     try {
-      const codemanDir = getDataDir();
-      if (!existsSync(codemanDir)) {
-        mkdirSync(codemanDir, { recursive: true });
-      }
-      await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(linkedCases, null, 2));
+      await mutateLinkedCases((current) => {
+        if (current[name]) throw linkedConflict(`Case "${name}" is already linked to ${current[name]}`);
+        return { ...current, [name]: expandedPath };
+      });
       ctx.broadcast(SseEvent.CaseLinked, { name, path: expandedPath });
       return { success: true, data: { case: { name, path: expandedPath } } };
     } catch (err) {
+      if (isLinkedConflict(err)) return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, getErrorMessage(err));
+      if (err instanceof LinkedCasesWriteRefusedError) return createErrorResponse(ApiErrorCode.CONFLICT, err.message);
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }
   });
@@ -1815,13 +1814,19 @@ export function registerCaseRoutes(
     // must not unlink one either; skip so control falls through to their local delete.
     const linkedCases = await readLinkedCases();
     if (linkedCases[name] && (!isMultiUserMode() || isAdmin(req))) {
-      delete linkedCases[name];
       try {
-        await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(linkedCases, null, 2));
+        // Removes this one entry from the registry as it is now, keeping any linked since the read above.
+        await mutateLinkedCases((current) => {
+          if (!Object.hasOwn(current, name)) return undefined;
+          const next = { ...current };
+          delete next[name];
+          return next;
+        });
         ctx.broadcast(SseEvent.CaseDeleted, { name, type: 'unlinked' });
         await forgetCaseDefault();
         return { success: true, data: { name } };
       } catch (err) {
+        if (err instanceof LinkedCasesWriteRefusedError) return createErrorResponse(ApiErrorCode.CONFLICT, err.message);
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
       }
     }
@@ -2007,7 +2012,6 @@ export function registerCaseRoutes(
           stopped++;
         }
         if (moveFolder) await moveCaseFolder(oldPath, newPath);
-        const originalLinks = isLinked ? await readLinkedCases() : undefined;
         // The settings.json values this rename replaced, set only once it wrote them. A failure puts back
         // these keys alone, so a settings save that landed in between is kept.
         let settingsUndo: Record<string, unknown> | undefined;
@@ -2027,16 +2031,19 @@ export function registerCaseRoutes(
               settingsUndo = Object.fromEntries(keys.map((k) => [k, before[k]]));
             }
           }
-          if (originalLinks) {
-            const links = { ...originalLinks };
-            delete links[name];
-            links[newName] = newPath;
-            try {
-              await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(links, null, 2));
-            } catch (err) {
-              await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(originalLinks, null, 2)).catch(() => {});
-              throw err;
-            }
+          if (isLinked) {
+            // Checked again where the entry is written: the checks above ran before the sessions were
+            // stopped and the folder moved. A failed write leaves the registry as it was.
+            await mutateLinkedCases((current) => {
+              if (current[newName]) throw new CaseRenameError('EXISTS', `A case named "${newName}" already exists`);
+              if (current[name] !== oldPath) {
+                throw new CaseRenameError('BUSY', `Case "${name}" was changed while it was being renamed`);
+              }
+              const links = { ...current };
+              delete links[name];
+              links[newName] = newPath;
+              return links;
+            });
           }
         } catch (err) {
           // The folder moved but the registries did not follow: put settings.json and the folder back
@@ -2080,6 +2087,9 @@ export function registerCaseRoutes(
               ? ApiErrorCode.CONFLICT
               : ApiErrorCode.OPERATION_FAILED;
         return fail(status, code, err.message, { renameCode: err.code, stoppedSessions: stopped });
+      }
+      if (err instanceof LinkedCasesWriteRefusedError) {
+        return fail(409, ApiErrorCode.CONFLICT, err.message, { stoppedSessions: stopped });
       }
       return fail(500, ApiErrorCode.OPERATION_FAILED, getErrorMessage(err), { stoppedSessions: stopped });
     }

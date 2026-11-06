@@ -8,7 +8,7 @@
  * to start there. Each test's folders sit in a fresh mkdtemp dir, and everything is removed through
  * safeRmHomeTree, so a run can only ever delete what it created.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   existsSync,
   mkdirSync,
@@ -19,6 +19,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import fs from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
@@ -40,7 +41,7 @@ beforeEach(() => {
   if (!sandboxed()) {
     throw new Error('case-custom-path-routes.test.ts deletes the linked-cases registry: run it via npm test');
   }
-  // Recursive: the rollback tests turn the registry into a directory.
+  // Recursive, so a test that left anything at the registry's path cannot leak into the next one.
   safeRmHomeTree(LINKED());
   // Resolved, because the server answers with the symlink-resolved folder (macOS temp is under /private).
   workDir = realpathSync(mkdtempSync(join(homedir(), 'case-custom-path-')));
@@ -134,20 +135,36 @@ describe('POST /api/cases with a custom path', () => {
 
   it('undoes what it created when registering fails (a new folder is removed entirely)', async () => {
     const { app } = await createRouteTestHarness(registerCaseRoutes);
-    mkdirSync(LINKED(), { recursive: true }); // writeFile onto a directory fails
-    const res = await create(app, { name: 'doomed', path: join(work(), 'doomed') });
+    // The registry is replaced by renaming a temp file over it: fail that rename.
+    const realRename = fs.rename;
+    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (to === LINKED()) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      return realRename(from, to);
+    });
+    let res;
+    try {
+      res = await create(app, { name: 'doomed', path: join(work(), 'doomed') });
+    } finally {
+      spy.mockRestore();
+    }
     expect(res.statusCode).toBe(500);
     expect(existsSync(join(work(), 'doomed'))).toBe(false);
+    expect(linked()).toEqual({});
   });
 
-  it('undoes only the scaffold inside an empty folder the user picked, leaving the folder', async () => {
+  it('undoes only the scaffold inside an empty folder the user picked when the registry is refused', async () => {
     const { app } = await createRouteTestHarness(registerCaseRoutes);
     mkdirSync(join(work(), 'picked'));
-    mkdirSync(LINKED(), { recursive: true });
+    // A registry that does not parse is never written over (that would unlink every other case).
+    const torn = '{\n  "kept": "/somewhere"\n}tail"\n}';
+    writeFileSync(LINKED(), torn);
     const res = await create(app, { name: 'picked', path: join(work(), 'picked') });
-    expect(res.statusCode).toBe(500);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().errorCode).toBe('CONFLICT');
+    expect(res.json().error).toContain('is not a valid JSON object');
     expect(existsSync(join(work(), 'picked'))).toBe(true);
     expect(readdirSync(join(work(), 'picked'))).toEqual([]);
+    expect(readFileSync(LINKED(), 'utf8')).toBe(torn);
   });
 
   it('a request without a path still creates under the cases directory, as before', async () => {
