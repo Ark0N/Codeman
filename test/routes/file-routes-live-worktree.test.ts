@@ -163,6 +163,35 @@ describe('Files panel listing of a live worktree', () => {
     expect(data.worktree).toEqual({ name: 'probe', path: worktree });
   });
 
+  it('walks a large worktree in fair rounds, and the paths stay relative to the session folder', async () => {
+    mkdirSync(join(worktree, 'a-bulk'));
+    mkdirSync(join(worktree, 'z-later'));
+    for (let index = 0; index < 5100; index++) {
+      writeFileSync(join(worktree, 'a-bulk', `item-${index}.txt`), '');
+    }
+    writeFileSync(join(worktree, 'z-later', 'needle.ts'), 'x');
+    // The main checkout must play no part: this is the folder a walk seeded wrongly would list.
+    writeFileSync(join(repo, 'src', 'needle.ts'), 'main');
+
+    const data = await list('&root=live');
+    expect(data.root).toBe(worktree);
+    expect(data.truncated).toBe(true);
+    expect(names(data.tree)).toEqual(['a-bulk', 'src', 'z-later']);
+    const [bulk, , later] = data.tree;
+    expect(bulk).toMatchObject({ path: `${PREFIX}/a-bulk`, incomplete: true });
+    expect(bulk.children[0].path.startsWith(`${PREFIX}/a-bulk/`)).toBe(true);
+    expect(later).not.toHaveProperty('incomplete');
+    expect(later.children[0].path).toBe(`${PREFIX}/z-later/needle.ts`);
+
+    // A `/` in the query reads the listing's paths, and only the answer is in workingDir's terms.
+    const found = await list(`&root=live&q=${encodeURIComponent('z-later/*.ts')}`);
+    expect(found.root).toBe(worktree);
+    expect(found.matches.map((match: { path: string }) => match.path)).toEqual([`${PREFIX}/z-later/needle.ts`]);
+    expect(found.truncated).toBe(true);
+    const anywhere = await list('&root=live&q=needle');
+    expect(anywhere.matches.map((match: { path: string }) => match.path)).toEqual([`${PREFIX}/z-later/needle.ts`]);
+  });
+
   it('serves a listed path through the unchanged preview route', async () => {
     const path = `${PREFIX}/src/worktree-only.ts`;
     const res = await harness.app.inject({

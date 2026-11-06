@@ -1014,6 +1014,14 @@ while a `q` containing `/` is matched against paths relative to the folder walke
 also carries `worktree`, the same `{ name, path }`, whenever the session has a `liveWorktree`,
 whichever folder was walked and with or without `root=live`.
 
+The walk reads at most 5,000 files and folders and sets `truncated` when it stops early. It is
+a per-directory round-robin (breadth-first): each folder found so far gets an equal share of what
+is left before any of them gets more, so one huge folder cannot hide its later siblings, and the
+`matches` of a `q` search come back shallow-first. A folder made of thousands of small subfolders
+can still use most of the limit one level down. In the tree, a directory node the limit stopped
+short of also carries `incomplete: true`: its `children` hold what was read before the limit,
+which can be nothing. The key is absent on every other node.
+
 ## Session model (`displayModel`)
 
 Session state (`GET /api/v1/sessions`, the `session:updated` event) carries the model a

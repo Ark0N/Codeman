@@ -1665,6 +1665,8 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       size?: number;
       extension?: string;
       children?: FileTreeNode[];
+      /** Set only on a folder the file limit stopped the walk short of, so `children` is not all of it. */
+      incomplete?: boolean;
     }
 
     let totalFiles = 0;
@@ -1691,7 +1693,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
 
       const queue: SearchDirectoryCursor[] = [{ dirPath: walkRoot, depth: 1, index: 0 }];
       while (queue.length > 0 && totalFiles + totalDirectories < maxFiles && matches.length < maxMatches) {
-        // Give each discovered directory a slice before returning to a large sibling.
+        // Per-directory round-robin (breadth-first): each queued directory gets an equal share of what
+        // is left before any of them gets more, so results arrive shallow-first. Fair per directory,
+        // not per subtree: a folder of thousands of small subfolders queues thousands of directories
+        // and can still take most of the budget one level down.
         const directoriesInRound = queue.length;
         const nodesPerDirectory = Math.max(
           1,
@@ -1699,6 +1704,8 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         );
 
         for (let directoryIndex = 0; directoryIndex < directoriesInRound; directoryIndex++) {
+          // Spent part way through a round: the rest stay queued unread rather than sorted for nothing.
+          if (totalFiles + totalDirectories >= maxFiles || matches.length >= maxMatches) break;
           const cursor = queue.shift();
           if (!cursor) break;
           if (cursor.depth > maxDepth) {
@@ -1734,7 +1741,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
               if (matcher(entry.name, listedPath)) {
                 matches.push({ name: entry.name, path: relativePath, type: 'directory' });
               }
-              // Queue siblings together so one large subtree cannot starve later branches.
+              // Queued, not entered: it waits for a later round with every other directory found.
               queue.push({ dirPath: fullPath, depth: cursor.depth + 1, index: 0 });
             } else {
               totalFiles++;
@@ -1756,7 +1763,6 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
             }
           }
           if (cursor.index < cursor.entries.length) queue.push(cursor);
-          if (matches.length >= maxMatches) break;
         }
       }
       if (queue.length > 0) truncated = true;
@@ -1781,6 +1787,8 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     interface TreeDirectoryCursor {
       dirPath: string;
       depth: number;
+      /** This directory's node. The root of the walk has none: `tree` is its list of children. */
+      node?: FileTreeNode;
       nodes: FileTreeNode[];
       entries?: import('node:fs').Dirent[];
       index: number;
@@ -1789,6 +1797,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     const tree: FileTreeNode[] = [];
     const queue: TreeDirectoryCursor[] = [{ dirPath: walkRoot, depth: 1, nodes: tree, index: 0 }];
     while (queue.length > 0 && totalFiles + totalDirectories < maxFiles) {
+      // The same per-directory round-robin as the search walk above, with the same limits.
       const directoriesInRound = queue.length;
       const nodesPerDirectory = Math.max(
         1,
@@ -1796,6 +1805,8 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       );
 
       for (let directoryIndex = 0; directoryIndex < directoriesInRound; directoryIndex++) {
+        // Before the shift, so a cursor this skips stays queued and is flagged below.
+        if (totalFiles + totalDirectories >= maxFiles) break;
         const cursor = queue.shift();
         if (!cursor) break;
         if (cursor.depth > maxDepth) {
@@ -1833,7 +1844,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
               children: [],
             };
             cursor.nodes.push(node);
-            queue.push({ dirPath: fullPath, depth: cursor.depth + 1, nodes: node.children!, index: 0 });
+            queue.push({ dirPath: fullPath, depth: cursor.depth + 1, node, nodes: node.children!, index: 0 });
           } else {
             totalFiles++;
             const ext = entry.name.includes('.') ? entry.name.split('.').pop()?.toLowerCase() : undefined;
@@ -1849,6 +1860,11 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         }
         if (cursor.index < cursor.entries.length) queue.push(cursor);
       }
+    }
+    // Every directory still queued is unread or half read, and an empty `children` would read as an
+    // empty folder. The root has no node to flag: `truncated` says the same for it.
+    for (const cursor of queue) {
+      if (cursor.node) cursor.node.incomplete = true;
     }
     if (queue.length > 0) truncated = true;
 

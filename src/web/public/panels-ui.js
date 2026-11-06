@@ -3794,6 +3794,12 @@ Object.assign(CodemanApp.prototype, {
           renderNode(child, depth + 1);
         }
       }
+
+      // The scan's file limit stopped short of this folder, so what is listed above is not all of
+      // it. Not a .file-tree-item: the click wiring below would try to open it as a file.
+      if (isDir && isExpanded && node.incomplete === true) {
+        html.push(`<div class="file-tree-incomplete" data-depth="${depth + 1}">${escapeHtml('Not fully scanned (file limit reached)')}</div>`);
+      }
     };
 
     for (const node of tree) {

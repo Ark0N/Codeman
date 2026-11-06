@@ -10,6 +10,11 @@ A panel that browses the active session's working directory, or the git worktree
 moved into ([Git Worktrees](Git-Worktrees#when-an-agent-moves-into-a-worktree)). Its header
 button is on by default; if it is missing, re-enable it in **App Settings → Header & Panels**.
 
+The panel and its search scan up to 5,000 files and folders per load, shallow levels first and
+taking turns between folders, so one huge folder cannot hide the ones after it. When a workspace
+is bigger than that the status line says `(truncated)`, and an expanded folder the scan did not
+finish shows **Not fully scanned (file limit reached)** rather than looking empty.
+
 It renders what it can:
 
 | Kind                     | Behaviour                                                                 |

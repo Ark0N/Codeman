@@ -94,27 +94,138 @@ describe('files endpoint search mode', () => {
 
   it('shares the scan budget across sibling folders in both tree and search modes', async () => {
     const bulk = join(root, 'a-bulk');
+    const middle = join(root, 'm-middle');
     const later = join(root, 'z-later');
     mkdirSync(bulk);
+    mkdirSync(middle);
     mkdirSync(later);
     for (let index = 0; index < 5100; index++) {
       writeFileSync(join(bulk, `item-${index}.txt`), '');
     }
+    writeFileSync(join(middle, 'middle.ts'), 'x\n');
     writeFileSync(join(later, 'needle.ts'), 'x\n');
 
     try {
       const tree = await get('');
       const treePaths = tree.data.tree.map((entry: { path: string }) => entry.path);
       expect(treePaths).toContain('a-bulk');
+      expect(treePaths).toContain('m-middle');
+      expect(treePaths).toContain('src');
       expect(treePaths).toContain('z-later');
       expect(tree.data.truncated).toBe(true);
+      expect(tree.data.totalFiles + tree.data.totalDirectories).toBeLessThanOrEqual(5000);
+
+      const node = (path: string) => tree.data.tree.find((entry: { path: string }) => entry.path === path);
+      expect(node('a-bulk').incomplete).toBe(true);
+      expect(node('a-bulk').children.length).toBeGreaterThan(0);
+      // Finished folders do not carry the key at all, not even as false.
+      expect(node('z-later')).not.toHaveProperty('incomplete');
+      expect(node('z-later').children.map((entry: { path: string }) => entry.path)).toEqual([
+        join('z-later', 'needle.ts'),
+      ]);
+      expect(node('m-middle')).not.toHaveProperty('incomplete');
 
       const search = await get('?q=needle');
       expect(search.data.matches.map((match: { path: string }) => match.path)).toContain(join('z-later', 'needle.ts'));
       expect(search.data.truncated).toBe(true);
     } finally {
       rmSync(bulk, { recursive: true, force: true });
+      rmSync(middle, { recursive: true, force: true });
       rmSync(later, { recursive: true, force: true });
+    }
+  });
+
+  it('adds nothing to a listing that fits the budget', async () => {
+    const { data } = await get('');
+
+    expect(data.truncated).toBe(false);
+    expect(JSON.stringify(data)).not.toContain('incomplete');
+    const dir = data.tree.find((entry: { name: string }) => entry.name === 'src');
+    expect(Object.keys(dir)).toEqual(['name', 'path', 'type', 'children']);
+    const file = data.tree.find((entry: { name: string }) => entry.name === 'README.md');
+    expect(Object.keys(file)).toEqual(['name', 'path', 'type', 'size', 'extension']);
+  });
+
+  it('flags folders the budget ran out on part way through a round, read or not', async () => {
+    // 3,000 folders use 3,000 of the 5,000 in the first round. The 2,000 left then buy one file
+    // each, so the round ends with 1,000 folders never read: the last of those is the one a budget
+    // check after the shift would drop from the queue, and with it the flag.
+    const wide = mkdtempSync(join(tmpdir(), 'codeman-file-wide-'));
+    for (let index = 0; index < 3000; index++) {
+      const dir = join(wide, `dir-${String(index).padStart(4, '0')}`);
+      mkdirSync(dir);
+      writeFileSync(join(dir, 'one.txt'), '');
+      writeFileSync(join(dir, 'two.txt'), '');
+    }
+    harness.ctx._session.workingDir = wide;
+
+    try {
+      const { data } = await get('');
+      expect(data.truncated).toBe(true);
+      expect(data.tree).toHaveLength(3000);
+      expect(data.tree.filter((node: { incomplete?: boolean }) => node.incomplete === true)).toHaveLength(3000);
+      const sizes = data.tree.map((node: { children: unknown[] }) => node.children.length);
+      expect(sizes.filter((size: number) => size === 1)).toHaveLength(2000);
+      expect(sizes.filter((size: number) => size === 0)).toHaveLength(1000);
+    } finally {
+      rmSync(wide, { recursive: true, force: true });
+    }
+  });
+
+  it('copes with the root itself being unfinished', async () => {
+    // The root has no node to flag. Its folders are listed before its files, and none is read.
+    const wide = mkdtempSync(join(tmpdir(), 'codeman-file-root-'));
+    mkdirSync(join(wide, 'first'));
+    writeFileSync(join(wide, 'first', 'inside.txt'), '');
+    for (let index = 0; index < 5100; index++) {
+      writeFileSync(join(wide, `item-${index}.txt`), '');
+    }
+    harness.ctx._session.workingDir = wide;
+
+    try {
+      const { data } = await get('');
+      expect(data.truncated).toBe(true);
+      expect(data.tree).toHaveLength(5000);
+      expect(data.tree[0]).toMatchObject({ name: 'first', incomplete: true, children: [] });
+      expect(data.tree.filter((node: { incomplete?: boolean }) => node.incomplete)).toHaveLength(1);
+    } finally {
+      rmSync(wide, { recursive: true, force: true });
+    }
+  });
+
+  it('returns search results shallow-first', async () => {
+    const deep = join(root, 'a-deep', 'b', 'c');
+    mkdirSync(deep, { recursive: true });
+    mkdirSync(join(root, 'z-shallow'));
+    writeFileSync(join(deep, 'order-probe.ts'), 'x\n');
+    writeFileSync(join(root, 'z-shallow', 'order-probe.ts'), 'x\n');
+
+    try {
+      const { data } = await get('?q=order-probe');
+      expect(data.matches.map((match: { path: string }) => match.path)).toEqual([
+        join('z-shallow', 'order-probe.ts'),
+        join('a-deep', 'b', 'c', 'order-probe.ts'),
+      ]);
+    } finally {
+      rmSync(join(root, 'a-deep'), { recursive: true, force: true });
+      rmSync(join(root, 'z-shallow'), { recursive: true, force: true });
+    }
+  });
+
+  it('stops at the match limit and says so', async () => {
+    const many = mkdtempSync(join(tmpdir(), 'codeman-file-many-'));
+    for (let index = 0; index < 1100; index++) {
+      writeFileSync(join(many, `hit-${index}.txt`), '');
+    }
+    harness.ctx._session.workingDir = many;
+
+    try {
+      const { data } = await get('?q=hit-');
+      expect(data.matches).toHaveLength(1000);
+      expect(data.matchCount).toBe(1000);
+      expect(data.truncated).toBe(true);
+    } finally {
+      rmSync(many, { recursive: true, force: true });
     }
   });
 });
