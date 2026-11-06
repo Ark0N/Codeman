@@ -359,8 +359,10 @@ export function resolveWaitSignals(
       // A dsh session is the one case where the mode is capable and THIS session
       // is not, so saying "never fire for deepseek sessions" would send the
       // caller looking for a bug that is really a setting they chose.
-      error:
-        options.mode === 'deepseek'
+      error: options.adopted
+        ? `Signal(s) ${rejected.join(', ')} never fire for an adopted session: Codeman did not start it, so it ` +
+          `installed no hooks there. Use ${unsupported.has('blocked') ? 'idle or exit' : 'idle, blocked or exit'}.`
+        : options.mode === 'deepseek'
           ? options.deepSeekBridgeUnreachable
             ? `Signal(s) ${rejected.join(', ')} never fire for this deepseek session: it runs in a container or on ` +
               `a remote host, where the local status bridge cannot reach the harness. Use idle or exit.`

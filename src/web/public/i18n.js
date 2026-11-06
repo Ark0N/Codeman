@@ -567,6 +567,8 @@
     'Could not read the edit history.': '无法读取编辑历史。',
     'Edit history is only available for Claude sessions outside Docker.':
       '编辑历史仅适用于 Docker 之外的 Claude 会话。',
+    'Edit history is not available for a tmux session opened outside Codeman.':
+      '在 Codeman 之外打开的 tmux 会话无法使用编辑历史。',
     'Showing saved entries only: {reason}': '仅显示已保存的条目：{reason}',
     'No transcript found for this session yet. It is picked up with the next prompt; until then a CLAUDE_CONFIG_DIR set outside Codeman cannot be found.':
       '尚未找到此会话的记录。它会在下一次提示时被识别；在此之前，在 Codeman 之外设置的 CLAUDE_CONFIG_DIR 无法被找到。',

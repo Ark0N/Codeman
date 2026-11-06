@@ -170,6 +170,17 @@ describe('resolveWaitSignals', () => {
     expect(resolveWaitSignals('blocked', { mode: 'gemini' as SessionMode }).error).toBeTruthy();
   });
 
+  it('names adoption, not the mode, when an adopted session refuses `stop`', () => {
+    // An adopted session can be `mode: claude` with no hooks installed, and "no Claude
+    // Code hooks for claude sessions" sent the caller looking for a bug in the wrong place.
+    const refusal = resolveWaitSignals('stop', { ...claude, adopted: true });
+
+    expect(refusal.until).toEqual([]);
+    expect(refusal.error).toContain('adopted session');
+    expect(refusal.error).toContain('idle or exit');
+    expect(refusal.error).not.toContain('claude sessions');
+  });
+
   it('accepts `blocked` on codex, whose dialogs are read off the screen, but still not `stop`', () => {
     // capabilities.workDetect.blockedLine gives codex a source for `blocked`; nothing on a
     // screen says a turn ended, so `stop` keeps its 400.

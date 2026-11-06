@@ -358,7 +358,13 @@ Object.assign(CodemanApp.prototype, {
     const data = h.data;
     if (data.state === 'unsupported') {
       body.append(
-        el('div', 'edit-history-empty', t('Edit history is only available for Claude sessions outside Docker.'))
+        el(
+          'div',
+          'edit-history-empty',
+          data.reason === 'adopted'
+            ? t('Edit history is not available for a tmux session opened outside Codeman.')
+            : t('Edit history is only available for Claude sessions outside Docker.')
+        )
       );
       return;
     }
