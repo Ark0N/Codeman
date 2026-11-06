@@ -905,10 +905,10 @@ html and svg are the ones deliberately kept out.
 `POST /api/filesystem/mkdir` with `{ path, name, sessionId?, showHidden? }` makes one
 folder directly inside `path`, which must be a folder the path picker may browse, and
 answers `{ path }`. `name` is one path segment (letters, numbers, spaces and `_ - . ~`, not
-starting with a dot or `~`). `400` for a cases folder (use Add Case → Create New with no
-custom folder) or a `path` that is not a directory, `403` for a blocked tree or a `path`
-outside the browse roots, `404` for a `path` that does not exist, `409` when the folder
-already exists, and `422` when the mount under `path` does not answer.
+starting with a dot or `~`). `400` for a cases folder (use Add Case → Create New or Clone
+Repo with no custom folder) or a `path` that is not a directory, `403` for a blocked tree
+or a `path` outside the browse roots, `404` for a `path` that does not exist, `409` when
+the folder already exists, and `422` when the mount under `path` does not answer.
 
 ## Rendered HTML files
 

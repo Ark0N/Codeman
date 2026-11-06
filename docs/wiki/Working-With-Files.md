@@ -192,7 +192,7 @@ In the **Link Existing**, **Create New** (custom folder) and **Clone Repo** (cus
 pickers, **+📁** (New folder) makes a folder inside the folder you are viewing and selects
 it. Names use letters, numbers, spaces and `_ - . ~` (not starting with a dot or `~`). The
 cases folder is refused, since every folder there is already a case: pick a folder outside
-it, or make the case with **Add Case → Create New** (no custom folder).
+it, or make the case with **Add Case → Create New** or **Clone Repo** (no custom folder).
 
 This is a separate file-serving surface from the viewer, with its own rules: it allowlists
 your home directory, the cases directory, and anything in `CODEMAN_FILE_PICKER_ROOTS`, and

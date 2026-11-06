@@ -1567,8 +1567,9 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     // The cases directories (shared, and the caller's own in multi-user mode) are what GET /api/cases lists as
     // local cases: a folder made there is a case with no scaffold, which Link then refuses by name and which
     // deleting would take the linked folder with. A case there is made through Add Case > Create New with no
-    // custom folder. The refusal has to read right from both pickers that offer New folder: a Create New user
-    // is already on that tab, with the custom folder ticked.
+    // custom folder. The refusal has to read right from every picker that offers New folder: a Create New or
+    // Clone Repo user is already on that tab, with the custom folder ticked, and this is where Browse opens
+    // while the field is empty.
     const casesDirs = await Promise.all(
       [...new Set([CASES_DIR, resolveCasesDir(getAuthUser(req))])].map((dir) =>
         fs.realpath(dir).catch(() => resolve(dir))
@@ -1578,7 +1579,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       reply.code(400);
       return createErrorResponse(
         ApiErrorCode.INVALID_INPUT,
-        'This is a cases folder: every folder in it is a case. Pick a folder outside it, or make the case with Add Case > Create New (no custom folder).'
+        'This is a cases folder: every folder in it is a case. Pick a folder outside it, or make the case with Add Case > Create New or Clone Repo (no custom folder).'
       );
     }
     // Like browse, a file is not a place to create in.
