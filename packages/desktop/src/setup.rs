@@ -1,6 +1,7 @@
 //! The connect screen's "This Mac" tab and its Terminal installs: where the
-//! Codeman on this Mac listens, whether it is installed, its login, and the
-//! installer runs in Terminal for this Mac and for another machine over SSH.
+//! Codeman on this Mac listens, whether it is installed, its login, which
+//! other Codeman servers of this user run here, and the installer runs in
+//! Terminal for this Mac and for another machine over SSH.
 //! The install most people get runs in the app, in `gui_install.rs`.
 //!
 //! The Terminal route is for what that one cannot do. `install.sh` asks for
@@ -93,43 +94,62 @@ pub fn parse_service(job: &serde_json::Value) -> ServiceConfig {
         .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_default();
 
-    let mut port = var("CODEMAN_PORT");
-    let mut base = var("CODEMAN_BASE_URL");
-    let mut https = false;
     // Only what follows the `web` subcommand: node's own flags come before it.
     let after_web = args
         .iter()
         .position(|a| *a == "web")
         .map_or(&[][..], |i| &args[i + 1..]);
-    let mut it = after_web.iter();
-    while let Some(arg) = it.next() {
-        match *arg {
-            "-p" | "--port" => port = it.next().map(|s| s.to_string()),
-            "--base-url" => base = it.next().map(|s| s.to_string()),
-            "--https" => https = true,
-            // Options that take a value: skip it, so it is never read as a flag.
-            "-H" | "--host" | "--title-hostname" => {
-                it.next();
-            }
-            other => {
-                if let Some(v) = other.strip_prefix("--port=") {
-                    port = Some(v.to_string());
-                } else if let Some(v) = other.strip_prefix("--base-url=") {
-                    base = Some(v.to_string());
-                }
-            }
-        }
+    let flags = WebFlags {
+        port: var("CODEMAN_PORT"),
+        base: var("CODEMAN_BASE_URL"),
+        https: false,
     }
+    .read(after_web);
     ServiceConfig {
-        port: port
+        port: flags
+            .port
             .and_then(|p| p.trim().parse::<u16>().ok())
             .filter(|p| *p > 0)
             .unwrap_or(DEFAULT_PORT),
-        base_path: normalize_base_path(base.as_deref().unwrap_or("")),
-        https,
+        base_path: normalize_base_path(flags.base.as_deref().unwrap_or("")),
+        https: flags.https,
         username: var("CODEMAN_USERNAME"),
         password: var("CODEMAN_PASSWORD"),
         daemon: false,
+    }
+}
+
+/// What Codeman's `web` command takes from the arguments after `web`
+/// (src/cli.ts). The fields start as what the environment says, or empty.
+#[derive(Debug, Default)]
+struct WebFlags {
+    port: Option<String>,
+    base: Option<String>,
+    https: bool,
+}
+
+impl WebFlags {
+    fn read(mut self, after_web: &[&str]) -> Self {
+        let mut it = after_web.iter();
+        while let Some(arg) = it.next() {
+            match *arg {
+                "-p" | "--port" => self.port = it.next().map(|s| s.to_string()),
+                "--base-url" => self.base = it.next().map(|s| s.to_string()),
+                "--https" => self.https = true,
+                // Options that take a value: skip it, so it is never read as a flag.
+                "-H" | "--host" | "--title-hostname" => {
+                    it.next();
+                }
+                other => {
+                    if let Some(v) = other.strip_prefix("--port=") {
+                        self.port = Some(v.to_string());
+                    } else if let Some(v) = other.strip_prefix("--base-url=") {
+                        self.base = Some(v.to_string());
+                    }
+                }
+            }
+        }
+        self
     }
 }
 
@@ -325,6 +345,12 @@ fn parse_ps(text: &str) -> Vec<(u32, String)> {
 /// `install.sh` clone's `dist/index.js web`, a source checkout's
 /// `src/index.ts web`), not one of its short-lived control commands.
 pub fn is_codeman_server(command: &str) -> bool {
+    server_args(command).is_some()
+}
+
+/// What follows `web` on a Codeman server's command line, or None for any
+/// other command.
+fn server_args(command: &str) -> Option<Vec<&str>> {
     let words: Vec<&str> = command.split_whitespace().collect();
     let is_entry = |w: &str| {
         let name = w.rsplit('/').next().unwrap_or(w);
@@ -332,11 +358,13 @@ pub fn is_codeman_server(command: &str) -> bool {
     };
     // Any entry word that `web` follows: an earlier word may only look like
     // one (a folder named codeman in `tsx watch --cwd ~/codeman src/index.ts web`).
-    (0..words.len()).any(|i| {
-        is_entry(words[i])
-            && words.get(i + 1) == Some(&"web")
-            && !words[i + 1..].iter().any(|w| matches!(*w, "--stop" | "--status"))
-    })
+    (0..words.len())
+        .find(|&i| {
+            is_entry(words[i])
+                && words.get(i + 1) == Some(&"web")
+                && !words[i + 1..].iter().any(|w| matches!(*w, "--stop" | "--status"))
+        })
+        .map(|i| words[i + 2..].to_vec())
 }
 
 /// Whether a command line is an install the app started on this Mac (the
@@ -438,14 +466,138 @@ fn serves_loopback_port(found: &[Listener], port: u16) -> bool {
         .any(|l| l.port == port && matches!(l.host.as_str(), "*" | "127.0.0.1" | "0.0.0.0"))
 }
 
-/// The address a listener is reached at: 127.0.0.1 for a loopback or
-/// all-interfaces bind, else its own address.
-fn listener_url(l: &Listener) -> Option<Url> {
-    let host = match l.host.as_str() {
-        "*" | "0.0.0.0" => "127.0.0.1",
-        h => h,
+/// Where the app can try each of this user's Codeman servers, from their
+/// command lines (`procs`) and listening sockets. `default` is the address the
+/// app opens by default (local_url); it comes first, then the others by port.
+///
+/// One address per server and port: 127.0.0.1 when the server listens there
+/// or on every interface, `[::1]` when its only loopback socket is the IPv6
+/// one, else each address it is bound to. A socket beside a loopback one on
+/// the same port is left out (the Docker bridge listener, which serves hook
+/// endpoints only). `https` when the command line carries `--https`, and its
+/// `--base-url` is the path. `ps` does not show a base path kept in the
+/// environment, which is where install.sh's launchd job keeps it, so a server
+/// at the default address with no `--base-url` of its own is the default one.
+pub fn found_addresses(procs: &[(u32, String)], listeners: &[Listener], default: &Url) -> Vec<Url> {
+    let mut urls: Vec<Url> = Vec::new();
+    for (pid, command) in procs {
+        let Some(args) = server_args(command) else {
+            continue;
+        };
+        let flags = WebFlags::default().read(&args);
+        let scheme = if flags.https { "https" } else { "http" };
+        let base = flags.base.as_deref().map(normalize_base_path);
+        let own: Vec<&Listener> = listeners.iter().filter(|l| l.pid == *pid).collect();
+        for l in &own {
+            let beside = |hosts: &[&str]| own.iter().any(|o| o.port == l.port && hosts.contains(&o.host.as_str()));
+            let host = if beside(&["*", "0.0.0.0", "[::]", "127.0.0.1"]) {
+                "127.0.0.1"
+            } else if beside(&["[::1]"]) {
+                "[::1]"
+            } else {
+                l.host.as_str()
+            };
+            let path = base.as_deref().unwrap_or("");
+            let Ok(mut url) = Url::parse(&format!("{scheme}://{host}:{}{path}/", l.port)) else {
+                continue;
+            };
+            if base.is_none() && policy::same_origin(&url, default) {
+                url = default.clone();
+            }
+            if !urls.contains(&url) {
+                urls.push(url);
+            }
+        }
+    }
+    urls.sort_by_key(|u| (u != default, u.port_or_known_default(), u.to_string()));
+    urls
+}
+
+/// What the This Mac tab says about one found server.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FoundState {
+    /// Codeman answers there: Connect opens it.
+    Running,
+    /// Codeman answers there and wants a login.
+    NeedsLogin,
+    /// It serves HTTPS with a certificate the app refuses (Codeman's own
+    /// self-signed one, from `codeman web --https`).
+    Certificate,
+    /// Codeman does not answer there.
+    Unreachable,
+}
+
+/// One of this user's Codeman servers on this Mac, for the This Mac tab's
+/// rows.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundServer {
+    /// Where the app can try it (found_addresses).
+    pub url: String,
+    pub version: Option<String>,
+    pub state: FoundState,
+    /// It is at the address the app opens by default (local_url).
+    pub is_default: bool,
+}
+
+/// The row for the server at `url`, from what it answered.
+fn found_server(url: &Url, answer: &ProbeOutcome, default: &Url) -> FoundServer {
+    let state = match answer {
+        ProbeOutcome::Ok { .. } | ProbeOutcome::PasswordChangeRequired => FoundState::Running,
+        _ if answers(answer) => FoundState::NeedsLogin,
+        // A Codeman started with --https closes a plain http connection.
+        ProbeOutcome::TlsUntrusted { .. } | ProbeOutcome::MaybeHttps => FoundState::Certificate,
+        _ => FoundState::Unreachable,
     };
-    Url::parse(&format!("http://{host}:{}/", l.port)).ok()
+    FoundServer {
+        url: url.to_string(),
+        version: match answer {
+            ProbeOutcome::Ok { version } => Some(version.clone()),
+            _ => None,
+        },
+        state,
+        is_default: url == default,
+    }
+}
+
+/// How long a found server gets to answer when the tab only lists it.
+const FOUND_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Ask the servers at `urls`, all at the same time, so the look takes as long
+/// as the slowest answer and no longer. Without a login: the one the app can
+/// read belongs to the default address (login_for).
+fn ask_found(urls: &[Url], patience: Duration) -> Vec<ProbeOutcome> {
+    std::thread::scope(|scope| {
+        let asking: Vec<_> = urls
+            .iter()
+            .map(|url| scope.spawn(move || probe::probe_within(url, None, patience)))
+            .collect();
+        asking
+            .into_iter()
+            .map(|a| {
+                a.join().unwrap_or_else(|_| ProbeOutcome::Failed {
+                    detail: "The check stopped.".into(),
+                })
+            })
+            .collect()
+    })
+}
+
+/// The address the This Mac tab is about, with its answer: the default one,
+/// or, when nothing answers there, the first found server that does (a
+/// `codeman web --port 4000` in a terminal, a bind to one network address).
+fn shown<'a>(
+    default: &'a Url,
+    answer: &'a ProbeOutcome,
+    found: &'a [(Url, ProbeOutcome)],
+) -> (&'a Url, &'a ProbeOutcome) {
+    if *answer == ProbeOutcome::Refused {
+        if let Some((url, answer)) = found.iter().find(|(_, a)| answers(a)) {
+            return (url, answer);
+        }
+    }
+    (default, answer)
 }
 
 /// What the This Mac tab shows.
@@ -459,8 +611,8 @@ pub enum LocalState {
     /// A Codeman server of this user runs but listens nowhere yet: it is
     /// still starting (the LaunchAgent at login, a restart).
     Starting,
-    /// A Codeman server of this user runs, but not at an address the app can
-    /// open (bound to one network address, say): see `elsewhere`.
+    /// A Codeman server of this user runs, but none answers at an address the
+    /// app can open (HTTPS with Codeman's own certificate, say): see `found`.
     RunningElsewhere,
     /// Nothing answers, and Codeman is installed.
     Stopped,
@@ -498,8 +650,9 @@ pub struct LocalStatus {
     /// A coding agent is being added the same way. Not an install: it says
     /// nothing about Codeman, which may well be running.
     pub agent_install_in_app: bool,
-    /// For RunningElsewhere: the addresses that Codeman listens on.
-    pub elsewhere: Vec<String>,
+    /// Every Codeman server of this user that listens on this Mac, the one at
+    /// the default address first: the tab offers to connect to each.
+    pub found: Vec<FoundServer>,
     /// The probe's outcome, for the connect page's explanations.
     pub outcome: ProbeOutcome,
 }
@@ -546,57 +699,44 @@ pub enum Depth {
 pub fn inspect(depth: Depth) -> LocalStatus {
     let home = dirs::home_dir().unwrap_or_default();
     let service = read_service();
-    let url = local_url(service.as_ref());
+    let default = local_url(service.as_ref());
     let procs = list_processes();
     let servers = codeman_servers(&procs);
-    let found = listeners(&servers);
+    let listening = listeners(&servers);
     let install = running_install(&procs);
     let install_in_app = procs.iter().any(|(_, c)| gui_install::Run::Codeman.matches(c));
     let agent_install_in_app = procs.iter().any(|(_, c)| gui_install::Run::Agent.matches(c));
 
     // The login goes only to this user's own Codeman on that port.
-    let auth = if serves_loopback_port(&found, url.port_or_known_default().unwrap_or(0)) {
-        login_for(&url, service.as_ref(), &read_env_file()).map(|(u, p)| policy::basic_auth_header(&u, &p))
+    let auth = if serves_loopback_port(&listening, default.port_or_known_default().unwrap_or(0)) {
+        login_for(&default, service.as_ref(), &read_env_file()).map(|(u, p)| policy::basic_auth_header(&u, &p))
     } else {
         None
     };
-    let mut outcome = probe::probe(&url, auth.as_deref());
-    let mut url = url;
-    let mut elsewhere = Vec::new();
+    let answer = probe::probe(&default, auth.as_deref());
 
-    // Nothing at the usual address, but a Codeman server of this user runs:
-    // find where (a `codeman web --port 4000` in a terminal, a bind to one
-    // network address), so the tab never offers to start a second server on
-    // the same sessions.
-    if outcome == ProbeOutcome::Refused && !servers.is_empty() {
-        let mut ports_seen = Vec::new();
-        for l in &found {
-            if ports_seen.contains(&(l.host.clone(), l.port)) {
-                continue;
-            }
-            ports_seen.push((l.host.clone(), l.port));
-            let Some(candidate) = listener_url(l) else {
-                continue;
-            };
-            let answer = probe::probe(&candidate, None);
-            if matches!(
-                answer,
-                ProbeOutcome::Ok { .. }
-                    | ProbeOutcome::NeedsLogin
-                    | ProbeOutcome::BadCredentials
-                    | ProbeOutcome::RateLimited { .. }
-                    | ProbeOutcome::PasswordChangeRequired
-            ) {
-                url = candidate;
-                outcome = answer;
-                break;
-            }
-            elsewhere.push(format!("{}:{}", l.host, l.port));
-        }
-        if outcome == ProbeOutcome::Refused && elsewhere.is_empty() {
-            elsewhere = servers.iter().map(|pid| format!("process {pid}")).collect();
-        }
+    // Every address one of this user's Codeman servers listens at. The one at
+    // the default address has just answered; the others are asked now, once
+    // each. With nothing at the default address, the first of them that
+    // answers is what the tab opens, as it always was, so each gets the
+    // probe's usual time; otherwise they are only listed, and get less.
+    let patience = if answer == ProbeOutcome::Refused {
+        probe::TIMEOUT
+    } else {
+        FOUND_TIMEOUT
+    };
+    let addresses = found_addresses(&procs, &listening, &default);
+    let others: Vec<Url> = addresses.iter().filter(|u| **u != default).cloned().collect();
+    let mut answered: Vec<(Url, ProbeOutcome)> = others.iter().cloned().zip(ask_found(&others, patience)).collect();
+    // found_addresses puts the default address first.
+    if addresses.first() == Some(&default) {
+        answered.insert(0, (default.clone(), answer.clone()));
     }
+    let found: Vec<FoundServer> = answered.iter().map(|(u, a)| found_server(u, a, &default)).collect();
+    // The tab never offers to start a second server on the same sessions: it
+    // opens the one that answers, or lists where they listen.
+    let (url, outcome) = shown(&default, &answer, &answered);
+    let (url, outcome) = (url.clone(), outcome.clone());
 
     let app = home.join(".codeman/app");
     let install_complete = app.join(".install-complete").is_file();
@@ -614,10 +754,7 @@ pub fn inspect(depth: Depth) -> LocalStatus {
             Depth::Login => local_server::installed(false),
             Depth::Interactive => local_server::installed(true),
         };
-    let state = local_state(&outcome, !servers.is_empty(), !found.is_empty(), installed);
-    if state != LocalState::RunningElsewhere {
-        elsewhere.clear();
-    }
+    let state = local_state(&outcome, !servers.is_empty(), !listening.is_empty(), installed);
     let version = match &outcome {
         ProbeOutcome::Ok { version } => Some(version.clone()),
         _ => None,
@@ -634,7 +771,7 @@ pub fn inspect(depth: Depth) -> LocalStatus {
         install_port: install.flatten(),
         install_in_app,
         agent_install_in_app,
-        elsewhere,
+        found,
         outcome,
     }
 }
@@ -1409,9 +1546,375 @@ mod tests {
         assert!(serves_loopback_port(&found, 4000));
         assert!(!serves_loopback_port(&found, 3999));
         assert!(!serves_loopback_port(&found, 5000));
-        assert_eq!(listener_url(&found[1]).unwrap().as_str(), "http://172.17.0.1:3999/");
-        assert_eq!(listener_url(&found[2]).unwrap().as_str(), "http://127.0.0.1:4000/");
-        assert_eq!(listener_url(&found[3]).unwrap().as_str(), "http://[::1]:5000/");
+        // The same four sockets as the addresses the app can try, by port.
+        assert_eq!(
+            addresses(&procs, &found, "http://127.0.0.1:3000/"),
+            [
+                "http://127.0.0.1:3000/",
+                "http://172.17.0.1:3999/",
+                "http://127.0.0.1:4000/",
+                "http://[::1]:5000/"
+            ]
+        );
+    }
+
+    fn server(pid: u32, flags: &str) -> (u32, String) {
+        (pid, format!("node /opt/homebrew/bin/codeman web{flags}"))
+    }
+
+    fn listener(pid: u32, host: &str, port: u16) -> Listener {
+        Listener {
+            pid,
+            host: host.into(),
+            port,
+        }
+    }
+
+    /// found_addresses, as strings. The page sends one back in a `connect`,
+    /// so each must be an address the connect takes as it is: the app saves
+    /// a server, and finds its saved login, under that exact string.
+    fn addresses(procs: &[(u32, String)], listeners: &[Listener], default: &str) -> Vec<String> {
+        found_addresses(procs, listeners, &u(default))
+            .iter()
+            .map(|url| {
+                assert_eq!(policy::normalize_server_url(url.as_str()).as_ref(), Ok(url));
+                url.to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_found_server_becomes_an_address_the_app_can_try() {
+        let default = "http://127.0.0.1:3000/";
+        let one = |flags: &str, listeners: &[Listener]| addresses(&[server(1, flags)], listeners, default);
+
+        // Every interface and IPv4 loopback are reached at 127.0.0.1.
+        for host in ["*", "0.0.0.0", "[::]", "127.0.0.1"] {
+            assert_eq!(
+                one(" --port 4000", &[listener(1, host, 4000)]),
+                ["http://127.0.0.1:4000/"],
+                "{host}"
+            );
+        }
+        // IPv6 loopback keeps its own address only when it is the server's
+        // only loopback socket.
+        assert_eq!(one("", &[listener(1, "[::1]", 5000)]), ["http://[::1]:5000/"]);
+        assert_eq!(
+            one("", &[listener(1, "[::1]", 5000), listener(1, "127.0.0.1", 5000)]),
+            ["http://127.0.0.1:5000/"]
+        );
+        // A dual-stack bind shows as two sockets, both `*`: one address.
+        assert_eq!(
+            one("", &[listener(1, "*", 5000), listener(1, "*", 5000)]),
+            ["http://127.0.0.1:5000/"]
+        );
+        // A bind to one address stays that address.
+        assert_eq!(
+            one(" --host 192.168.1.5", &[listener(1, "192.168.1.5", 3000)]),
+            ["http://192.168.1.5:3000/"]
+        );
+
+        // --https and --base-url come from the command line, in both spellings.
+        assert_eq!(
+            one(" --https --port 4000 --base-url /codeman/", &[listener(1, "*", 4000)]),
+            ["https://127.0.0.1:4000/codeman/"]
+        );
+        assert_eq!(
+            one(" -p 4000 --base-url=cm", &[listener(1, "127.0.0.1", 4000)]),
+            ["http://127.0.0.1:4000/cm/"]
+        );
+        // The value of --host is never read as a flag, and a base path Codeman
+        // would refuse counts as none.
+        assert_eq!(
+            one(" --host --https -p 4000", &[listener(1, "127.0.0.1", 4000)]),
+            ["http://127.0.0.1:4000/"]
+        );
+        assert_eq!(
+            one(" -p 4000 --base-url /a?b", &[listener(1, "127.0.0.1", 4000)]),
+            ["http://127.0.0.1:4000/"]
+        );
+        // What comes before `web` is node's business.
+        assert_eq!(
+            addresses(
+                &[(1, "node --https /Users/k/.codeman/app/dist/index.js web".to_string())],
+                &[listener(1, "*", 4000)],
+                default
+            ),
+            ["http://127.0.0.1:4000/"]
+        );
+
+        // A server with two listeners. Beside a loopback socket on the same
+        // port, another one is the same server (the Docker bridge listener);
+        // on another port, or with no loopback socket, each is an address.
+        assert_eq!(
+            one("", &[listener(1, "127.0.0.1", 3001), listener(1, "172.17.0.1", 3001)]),
+            ["http://127.0.0.1:3001/"]
+        );
+        assert_eq!(
+            one("", &[listener(1, "172.17.0.1", 3999), listener(1, "127.0.0.1", 3001)]),
+            ["http://127.0.0.1:3001/", "http://172.17.0.1:3999/"]
+        );
+        assert_eq!(
+            one("", &[listener(1, "192.168.1.5", 3001), listener(1, "100.64.0.7", 3001)]),
+            ["http://100.64.0.7:3001/", "http://192.168.1.5:3001/"]
+        );
+
+        // Only the sockets of Codeman servers count: not a control command's,
+        // another program's, or one whose process `ps` did not list.
+        let procs = [
+            server(1, " --port 4000"),
+            (2, "node /opt/homebrew/bin/codeman attach w1".to_string()),
+            (3, "python3 -m http.server 8000".to_string()),
+        ];
+        let sockets = [
+            listener(2, "*", 4100),
+            listener(3, "*", 8000),
+            listener(9, "*", 9000),
+            listener(1, "*", 4000),
+        ];
+        assert_eq!(addresses(&procs, &sockets, default), ["http://127.0.0.1:4000/"]);
+        assert!(addresses(&procs, &sockets[..3], default).is_empty());
+        // An address that makes no URL is left out.
+        assert!(one("", &[listener(1, "not a host", 3001)]).is_empty());
+    }
+
+    #[test]
+    fn found_addresses_start_with_the_default_one_then_go_by_port() {
+        // install.sh's launchd job: a bare `web`, the base path in its environment.
+        let default = "http://127.0.0.1:3001/codeman/";
+        let procs = [
+            (
+                10,
+                "node /x/tsx/cli.mjs /Users/k/codeman/src/index.ts web --port 5000".to_string(),
+            ),
+            (
+                20,
+                "/opt/homebrew/bin/node /Users/k/.codeman/app/dist/index.js web".to_string(),
+            ),
+            server(30, " -p 4000 --https"),
+            // The same address twice: a second process on the port of the first.
+            server(40, " --port 5000"),
+        ];
+        let sockets = [
+            listener(10, "*", 5000),
+            listener(20, "*", 3001),
+            listener(30, "127.0.0.1", 4000),
+            listener(40, "127.0.0.1", 5000),
+        ];
+        assert_eq!(
+            addresses(&procs, &sockets, default),
+            [
+                "http://127.0.0.1:3001/codeman/",
+                "https://127.0.0.1:4000/",
+                "http://127.0.0.1:5000/"
+            ]
+        );
+        // The same list whatever order `ps` and `lsof` gave.
+        let mut reversed_procs = procs.to_vec();
+        reversed_procs.reverse();
+        let mut reversed_sockets = sockets.to_vec();
+        reversed_sockets.reverse();
+        assert_eq!(
+            addresses(&reversed_procs, &reversed_sockets, default),
+            addresses(&procs, &sockets, default)
+        );
+
+        // On the default port, a command line with its own base path or
+        // scheme is taken at its word: it may be another server than the job's.
+        let on_3001 = |flags: &str| addresses(&[server(1, flags)], &[listener(1, "*", 3001)], default);
+        assert_eq!(on_3001(" --port 3001"), [default]);
+        assert_eq!(on_3001(" --port 3001 --base-url /codeman"), [default]);
+        assert_eq!(
+            on_3001(" --port 3001 --base-url /other"),
+            ["http://127.0.0.1:3001/other/"]
+        );
+        assert_eq!(on_3001(" --port 3001 --base-url /"), ["http://127.0.0.1:3001/"]);
+        assert_eq!(on_3001(" --port 3001 --https"), ["https://127.0.0.1:3001/"]);
+        // 127.0.0.1 only: a bind to another address is not the default one.
+        assert_eq!(
+            addresses(&[server(1, "")], &[listener(1, "192.168.1.5", 3001)], default),
+            ["http://192.168.1.5:3001/"]
+        );
+    }
+
+    #[test]
+    fn a_found_server_row_says_what_answered() {
+        let default = u("http://127.0.0.1:3000/");
+        let at = u("http://127.0.0.1:4000/");
+        let row = |answer: ProbeOutcome| found_server(&at, &answer, &default);
+        assert_eq!(
+            row(ProbeOutcome::Ok {
+                version: "1.49.0".into()
+            }),
+            FoundServer {
+                url: "http://127.0.0.1:4000/".into(),
+                version: Some("1.49.0".into()),
+                state: FoundState::Running,
+                is_default: false,
+            }
+        );
+        let state = |answer: ProbeOutcome| {
+            let row = row(answer);
+            assert_eq!(row.version, None);
+            row.state
+        };
+        assert_eq!(state(ProbeOutcome::PasswordChangeRequired), FoundState::Running);
+        for login in [
+            ProbeOutcome::NeedsLogin,
+            ProbeOutcome::BadCredentials,
+            ProbeOutcome::RateLimited {
+                sent_credentials: false,
+                retry_after_secs: Some(60),
+            },
+        ] {
+            assert_eq!(state(login), FoundState::NeedsLogin);
+        }
+        for certificate in [
+            ProbeOutcome::TlsUntrusted {
+                detail: "invalid peer certificate: UnknownIssuer".into(),
+            },
+            ProbeOutcome::MaybeHttps,
+        ] {
+            assert_eq!(state(certificate), FoundState::Certificate);
+        }
+        for silent in [
+            ProbeOutcome::Refused,
+            ProbeOutcome::Timeout,
+            ProbeOutcome::Unreachable,
+            ProbeOutcome::HostNotAllowed,
+            ProbeOutcome::NotCodeman { status: 403 },
+            ProbeOutcome::Failed { detail: "x".into() },
+        ] {
+            assert_eq!(state(silent), FoundState::Unreachable);
+        }
+        assert!(found_server(&default, &ProbeOutcome::Refused, &default).is_default);
+
+        // As the connect page reads it.
+        assert_eq!(
+            serde_json::to_value(row(ProbeOutcome::Ok {
+                version: "1.49.0".into()
+            }))
+            .unwrap(),
+            json!({ "url": "http://127.0.0.1:4000/", "version": "1.49.0", "state": "running", "isDefault": false })
+        );
+        assert_eq!(
+            serde_json::to_value(found_server(&default, &ProbeOutcome::NeedsLogin, &default)).unwrap(),
+            json!({ "url": "http://127.0.0.1:3000/", "version": null, "state": "needsLogin", "isDefault": true })
+        );
+        assert_eq!(
+            serde_json::to_value([FoundState::Certificate, FoundState::Unreachable]).unwrap(),
+            json!(["certificate", "unreachable"])
+        );
+    }
+
+    #[test]
+    fn the_tab_is_about_the_default_address_unless_nothing_answers_there() {
+        let default = u("http://127.0.0.1:3000/");
+        let ok = ProbeOutcome::Ok {
+            version: "1.49.0".into(),
+        };
+        let refused = ProbeOutcome::Refused;
+        let found = vec![
+            (
+                u("https://127.0.0.1:4000/"),
+                ProbeOutcome::TlsUntrusted { detail: "x".into() },
+            ),
+            (u("http://127.0.0.1:5000/"), ProbeOutcome::NeedsLogin),
+            (u("http://127.0.0.1:6000/"), ok.clone()),
+        ];
+        // Nothing at the default address: the first found server that
+        // answers, one that wants a login included.
+        assert_eq!(
+            shown(&default, &refused, &found),
+            (&found[1].0, &ProbeOutcome::NeedsLogin)
+        );
+        assert_eq!(shown(&default, &refused, &found[2..]), (&found[2].0, &ok));
+        // None of them answers: the tab stays on the default address, and
+        // local_state makes that RunningElsewhere.
+        assert_eq!(shown(&default, &refused, &found[..1]), (&default, &refused));
+        assert_eq!(shown(&default, &refused, &[]), (&default, &refused));
+        // Whatever else the default address says is what the tab shows; the
+        // servers found elsewhere are only listed.
+        for answer in [
+            ok.clone(),
+            ProbeOutcome::NeedsLogin,
+            ProbeOutcome::NotCodeman { status: 404 },
+            ProbeOutcome::Timeout,
+            ProbeOutcome::MaybeHttps,
+        ] {
+            assert_eq!(shown(&default, &answer, &found), (&default, &answer));
+        }
+    }
+
+    /// Against real sockets: every address is asked, at the same time, and
+    /// the answers come back in the order of the addresses.
+    #[test]
+    fn found_servers_are_asked_together() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+
+        /// A server for one request: it reads it, and answers with `response`
+        /// if `ready` says so.
+        fn serve(response: String, ready: impl FnOnce() -> bool + Send + 'static) -> Url {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = l.local_addr().unwrap().port();
+            std::thread::spawn(move || {
+                if let Ok((mut s, _)) = l.accept() {
+                    let mut head = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match s.read(&mut buf) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => head.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    if ready() {
+                        let _ = s.write_all(response.as_bytes());
+                    }
+                }
+            });
+            u(&format!("http://127.0.0.1:{port}/"))
+        }
+        fn response(status_line: &str, body: &str) -> String {
+            format!(
+                "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        }
+
+        // The first server answers only once the second has been asked. Asked
+        // one after the other, it would hang up without an answer.
+        let (asked, was_asked) = mpsc::channel::<()>();
+        let first = serve(
+            response("200 OK", r#"{"success":true,"data":{"version":"9.9.9"}}"#),
+            move || was_asked.recv_timeout(Duration::from_secs(4)).is_ok(),
+        );
+        let second = serve(response("401 Unauthorized", "Unauthorized"), move || {
+            asked.send(()).is_ok()
+        });
+        let closed = {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            u(&format!("http://127.0.0.1:{}/", l.local_addr().unwrap().port()))
+        };
+        assert_eq!(
+            ask_found(&[first, second, closed], probe::TIMEOUT),
+            [
+                ProbeOutcome::Ok {
+                    version: "9.9.9".into()
+                },
+                ProbeOutcome::NeedsLogin,
+                ProbeOutcome::Refused,
+            ]
+        );
+
+        // One that does not answer in the time it is given.
+        let slow = serve(String::new(), || {
+            std::thread::sleep(Duration::from_secs(2));
+            false
+        });
+        assert_eq!(ask_found(&[slow], Duration::from_millis(300)), [ProbeOutcome::Timeout]);
+        assert!(ask_found(&[], FOUND_TIMEOUT).is_empty());
     }
 
     #[test]

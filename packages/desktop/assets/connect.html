@@ -125,6 +125,20 @@
   @media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
   #local-title { font-weight: 600; }
   .sub { color: var(--muted); font-size: 12px; margin-top: 3px; -webkit-user-select: text; user-select: text; overflow-wrap: anywhere; }
+  /* The Codeman servers found on this Mac: a row each, in the look of a choice
+     in the install, with the row's own Connect button. */
+  #local-found-note { margin: 8px 0 0; }
+  #local-also { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+  #local-also-head { color: var(--muted); font-size: 12px; margin: 0 0 6px; }
+  .found {
+    display: flex; gap: 10px; align-items: center; padding: 9px 11px; border-radius: 9px;
+    border: 1px solid var(--line-strong); background: #0f1013;
+  }
+  .found + .found { margin-top: 6px; }
+  .found > span { flex: 1; min-width: 0; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
+  .found b { display: block; font-weight: 600; }
+  .found small { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; }
+  .found button { flex: none; }
   #elsewhere { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
   #elsewhere[hidden] { display: none; }
   #elsewhere summary { color: var(--muted); font-size: 13px; cursor: default; list-style: none; }
@@ -287,6 +301,8 @@
           <div class="sub" id="local-detail"></div>
         </div>
       </div>
+      <div id="local-found" role="list" aria-labelledby="local-title" hidden></div>
+      <p class="sub" id="local-found-note" hidden>Starting another server here would take over its sessions.</p>
       <div class="actions">
         <button class="primary" id="local-open" type="button" hidden>Open Codeman</button>
         <button class="primary" id="local-start" type="button" hidden>Start Codeman</button>
@@ -295,6 +311,10 @@
         <button class="secondary" id="local-check" type="button" hidden>Check again</button>
       </div>
       <button class="wiz-link" id="local-agents" type="button" hidden>Add a coding agent</button>
+      <div id="local-also" hidden>
+        <div id="local-also-head">Also running on this Mac</div>
+        <div id="local-also-list" role="list" aria-labelledby="local-also-head"></div>
+      </div>
     </section>
 
   <form id="form" role="tabpanel" aria-labelledby="tab-remote" autocomplete="off" novalidate hidden>
@@ -386,6 +406,8 @@
     wizTerminal: $('wiz-terminal'),
     localOpen: $('local-open'), localStart: $('local-start'), localInstall: $('local-install'),
     localStop: $('local-stop'), localCheck: $('local-check'), localAgents: $('local-agents'),
+    localFound: $('local-found'), localFoundNote: $('local-found-note'),
+    localAlso: $('local-also'), localAlsoList: $('local-also-list'),
     elsewhere: $('elsewhere'), ssh: $('ssh'), sshInstall: $('ssh-install'), copy: $('copy')
   };
   var manual = /[?&]manual=1/.test(location.search);
@@ -399,10 +421,11 @@
   // graphical install while its screens are up (newWizard), null otherwise.
   // reopen: a connect to this Mac was refused, so open it if it turns out to
   // be starting. startingLooks: how often the page has looked again at a
-  // starting server.
+  // starting server. askedFound: the connect under way was asked from the row
+  // of a server found on this Mac.
   var state = {
     servers: [], busy: false, lastUrl: '', startUrl: '', suggestion: '',
-    tab: 'local', askedFrom: 'local', local: null, localChecking: false, opening: false,
+    tab: 'local', askedFrom: 'local', askedFound: false, local: null, localChecking: false, opening: false,
     wait: null, waitTimer: 0, stoppedWaiting: false, gui: null, wantAgents: false,
     reopen: false, startingLooks: 0, startingTimer: 0
   };
@@ -566,7 +589,8 @@
     else els.password.placeholder = '';
   }
 
-  function connect() {
+  // found: asked from the row of a server found on this Mac (connectFound).
+  function connect(found) {
     if (state.busy || tooOld) return;
     var url = els.url.value.trim();
     if (!url) { setStatus('bad', 'Enter the address of your Codeman server.'); els.url.focus(); return; }
@@ -579,6 +603,7 @@
     }
     state.lastUrl = url;
     state.askedFrom = state.tab;
+    state.askedFound = found === true;
     setBusy(true);
     setStatus('busy', 'Connecting to ' + url + '…');
     var msg = { cmd: 'connect', url: url, remember: els.remember.checked };
@@ -638,8 +663,10 @@
       selectTab('remote');
       showLogin();
     } else if (asked === 'local') {
-      // Opening the Codeman on this Mac failed: look at it again.
-      state.reopen = o.kind === 'refused';
+      // Opening the Codeman on this Mac failed: look at it again. Opening it
+      // once it is up is for the one the tab's first line shows (openLocal),
+      // never for a found server's row, which may be another server.
+      state.reopen = o.kind === 'refused' && !state.askedFound;
       selectTab('local');
       // selectTab starts the look itself when there has been none yet.
       if (!state.localChecking) checkLocal('login');
@@ -741,6 +768,66 @@
     els.localCheck.disabled = state.busy || state.localChecking;
     els.localAgents.disabled = state.busy || tooOld || state.opening;
     els.sshInstall.disabled = state.busy || state.opening;
+    Array.prototype.forEach.call(els.paneLocal.querySelectorAll('.found button'), function (b) {
+      b.disabled = state.busy || tooOld;
+    });
+  }
+
+  // A Codeman on this Mac that serves HTTPS, stopped or running.
+  var HTTPS_REFUSED = 'It is set up with HTTPS (codeman web --https), whose self-signed certificate this app refuses. Run it without --https to open it here.';
+
+  // The Codeman servers the app found on this Mac (setup.rs, inspect), other
+  // than the one the tab's first line is about.
+  function otherServers(s) {
+    return (s.found || []).filter(function (f) { return f && f.url !== s.url; });
+  }
+
+  function canConnect(f) {
+    return f.state === 'running' || f.state === 'needsLogin';
+  }
+
+  // What a found server's row says under its address: its version, or why the
+  // app cannot open it.
+  function foundNote(f) {
+    if (f.state === 'running') return f.version ? 'version ' + f.version : '';
+    if (f.state === 'needsLogin') return 'Asks for a login.';
+    if (f.state === 'certificate') return HTTPS_REFUSED;
+    return 'It does not answer at this address.';
+  }
+
+  // One row per found server: its address, a note, and Connect when the app
+  // can open it. primary: the first Connect is the tab's main action.
+  function renderFound(list, servers, primary) {
+    list.textContent = '';
+    servers.forEach(function (f) {
+      var url = String(f.url || '');
+      var row = document.createElement('div');
+      row.className = 'found';
+      row.setAttribute('role', 'listitem');
+      var text = document.createElement('span');
+      var where = document.createElement('b');
+      where.textContent = url;
+      text.appendChild(where);
+      var note = foundNote(f);
+      if (note) {
+        var small = document.createElement('small');
+        small.textContent = note;
+        text.appendChild(small);
+      }
+      row.appendChild(text);
+      if (canConnect(f)) {
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = primary ? 'primary' : 'secondary';
+        primary = false;
+        button.textContent = 'Connect';
+        button.title = 'Connect to ' + url;
+        button.setAttribute('aria-label', 'Connect to ' + url);
+        button.addEventListener('click', function () { connectFound(url); });
+        row.appendChild(button);
+      }
+      list.appendChild(row);
+    });
   }
 
   function renderLocal() {
@@ -749,6 +836,10 @@
     var dot = '';
     var title = '';
     var detail = '';
+    // Found servers: `main` when they are what the tab is about, `also` when
+    // they run beside the one its first line shows.
+    var main = [];
+    var also = [];
     if (state.wait) {
       dot = 'busy';
       title = 'Installing Codeman in Terminal…';
@@ -768,27 +859,34 @@
       detail = 'It will answer at ' + s.url + ' in a moment.';
       show.check = true;
     } else if (s.state === 'runningElsewhere') {
-      dot = 'warn';
-      title = 'A Codeman server is already running on this Mac.';
-      detail = 'It listens at ' + (s.elsewhere || []).join(', ') + ', which this app cannot open as ' + s.url +
-        '. Connect to its address under Another machine. Starting another server here would take over its sessions.';
+      // Not at the address the app opens by default: each one gets a row.
+      main = (s.found || []).filter(Boolean);
+      dot = main.some(canConnect) ? 'ok' : 'warn';
+      title = 'Codeman is already running on this Mac.';
+      // No row: the app found the server's process, but no address to try.
+      if (!main.length) {
+        detail = 'The app could not find the address it listens at: connect to it under Another machine. ' +
+          'Starting another server here would take over its sessions.';
+      }
       show.check = true;
     } else if (s.state === 'running') {
       dot = 'ok';
       title = 'Codeman is running on this Mac.';
       detail = s.url + (s.version ? '  ·  version ' + s.version : '');
       show.open = true;
+      also = otherServers(s);
     } else if (s.state === 'needsLogin') {
       dot = 'ok';
       title = 'Codeman is running on this Mac.';
       detail = s.url + ' asks for a login: Open asks for the password.';
       show.open = true;
+      also = otherServers(s);
     } else if (s.state === 'stopped') {
       title = 'Codeman is installed on this Mac, but not running.';
       if (s.daemon) {
         detail = 'A system LaunchDaemon runs it, which an administrator starts: sudo launchctl kickstart -k system/com.codeman.web';
       } else if (/^https:/i.test(s.url)) {
-        detail = 'It is set up with HTTPS (codeman web --https), whose self-signed certificate this app refuses. Run it without --https to open it here.';
+        detail = HTTPS_REFUSED;
       } else {
         detail = s.service
           ? 'It is set up to start when you log in, but nothing answers at ' + s.url + '. Start asks launchd to run it now.'
@@ -813,9 +911,11 @@
     } else {
       var o = s.outcome || {};
       dot = 'warn';
+      also = otherServers(s);
       if (o.kind === 'notCodeman') {
         title = 'Something else answers at ' + s.url;
-        detail = 'It is not Codeman (HTTP ' + o.status + '). Stop what runs on that port, or connect to Codeman’s real address under Another machine.';
+        detail = 'It is not Codeman (HTTP ' + o.status + '). Stop what runs on that port, or connect to ' +
+          (also.some(canConnect) ? 'the Codeman listed below.' : 'Codeman’s real address under Another machine.');
       } else {
         var e = explain[o.kind];
         title = e ? e[1] : 'Could not reach Codeman on this Mac.';
@@ -833,6 +933,11 @@
     els.localInstall.hidden = !show.install;
     els.localStop.hidden = !show.stop;
     els.localCheck.hidden = !show.check;
+    renderFound(els.localFound, main, true);
+    els.localFound.hidden = !main.length;
+    els.localFoundNote.hidden = !main.length;
+    renderFound(els.localAlsoList, also, false);
+    els.localAlso.hidden = !also.length;
     // Codeman is here, in whatever state: adding an agent asks nothing of it.
     els.localAgents.hidden = !s || !s.installed || !!state.wait || state.localChecking || (s.installRunning && !show.open);
     syncLocalButtons();
@@ -911,6 +1016,15 @@
     if (state.busy || tooOld || !state.local) return;
     useAddress(state.local.url);
     connect();
+  }
+
+  // Connect on a found server's row. It is the connect of an address typed
+  // under Another machine, and of Open: the app checks the address, uses the
+  // login saved for it and remembers the server the same way.
+  function connectFound(url) {
+    if (state.busy || tooOld) return;
+    useAddress(url);
+    connect(true);
   }
 
   function startLocal() {
@@ -1677,7 +1791,8 @@
       (next === 'local' ? els.tabLocal : els.tabRemote).focus();
     });
   });
-  // Return opens or starts the Codeman on this Mac and Esc cancels a connect,
+  // Return opens or starts the Codeman on this Mac, or connects to the one
+  // found here when that is the tab's main action, and Esc cancels a connect,
   // as in a Mac dialog. Install is left to a click: a stray Return must not
   // start an installer.
   document.addEventListener('keydown', function (ev) {
@@ -1687,7 +1802,8 @@
     if (ev.target && ev.target.closest && ev.target.closest('button, a, input, summary')) return;
     // offsetParent: really on screen, whatever hides it (its own `hidden`, or
     // a container that is not shown).
-    var main = [els.localOpen, els.localStart].filter(function (b) { return b.offsetParent && !b.disabled; })[0];
+    var main = [els.localOpen, els.localStart, els.localFound.querySelector('button.primary')]
+      .filter(function (b) { return b && b.offsetParent && !b.disabled; })[0];
     if (main) { ev.preventDefault(); main.click(); }
   });
   els.localOpen.addEventListener('click', openLocal);
