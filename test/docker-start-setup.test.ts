@@ -32,6 +32,7 @@ import {
   writeFileSync,
   mkdirSync,
   statSync,
+  lstatSync,
   existsSync,
   symlinkSync,
   readdirSync,
@@ -118,6 +119,10 @@ interface Run {
   dir: string;
   /** What was in HOME when the run ended; the sandbox is gone by the time a test reads this. */
   homeEntries: string[];
+  /** What `docker/.env` is when the run ended, without following a symlink. */
+  envKind: 'file' | 'directory' | 'symlink' | null;
+  /** What a `docker/.env` that is a directory holds. */
+  envDirEntries: string[];
 }
 
 /**
@@ -130,6 +135,8 @@ function runStart(
   opts: {
     env?: Record<string, string>;
     existingEnv?: string;
+    /** Makes `docker/.env` something other than a regular file. */
+    envShape?: 'directory' | 'dangling-symlink' | 'symlink-to-file';
     noDocker?: boolean;
     /** A real Unix socket to use as DOCKER_SOCKET (the start path checks `-S`). */
     socket?: string;
@@ -158,6 +165,12 @@ function runStart(
     // Hashed by the start path for the updater's fingerprint baseline.
     writeFileSync(join(dockerDir, 'server.Dockerfile'), readFileSync(join(ROOT, 'docker/server.Dockerfile')));
     if (opts.existingEnv !== undefined) writeFileSync(join(dockerDir, '.env'), opts.existingEnv);
+    if (opts.envShape === 'directory') mkdirSync(join(dockerDir, '.env'));
+    if (opts.envShape === 'dangling-symlink') symlinkSync(join(dir, 'no-such-file'), join(dockerDir, '.env'));
+    if (opts.envShape === 'symlink-to-file') {
+      writeFileSync(join(dir, 'real.env'), 'CODEMAN_PASSWORD=mine-and-only-mine\n');
+      symlinkSync(join(dir, 'real.env'), join(dockerDir, '.env'));
+    }
 
     const binDir = join(dir, 'bin');
     mkdirSync(binDir);
@@ -200,7 +213,15 @@ function runStart(
             input: opts.terminal,
           });
     const envPath = join(dockerDir, '.env');
-    const hasEnv = existsSync(envPath);
+    const envEntry = lstatSync(envPath, { throwIfNoEntry: false });
+    const envKind = !envEntry
+      ? null
+      : envEntry.isSymbolicLink()
+        ? 'symlink'
+        : envEntry.isDirectory()
+          ? 'directory'
+          : 'file';
+    const hasEnv = envKind === 'file' || (envKind === 'symlink' && existsSync(envPath));
     return {
       status: res.status ?? 1,
       // A terminal turns every line end into CRLF.
@@ -214,6 +235,8 @@ function runStart(
       home,
       dir,
       homeEntries: readdirSync(home),
+      envKind,
+      envDirEntries: envKind === 'directory' ? readdirSync(envPath) : [],
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -356,6 +379,28 @@ describe('Start-Codeman.sh first run (no docker/.env yet)', () => {
       expect(composeReads(line.slice('CODEMAN_PASSWORD='.length))).toBe(password);
     }
   );
+
+  it('refuses a dangling docker/.env symlink instead of replacing the link', () => {
+    const r = runStart(['--setup-only'], { envShape: 'dangling-symlink' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/not a regular file/);
+    expect(r.envKind).toBe('symlink');
+  });
+
+  it('refuses a docker/.env directory instead of writing a password file into it', () => {
+    const r = runStart(['--setup-only'], { envShape: 'directory' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/not a regular file/);
+    expect(r.envKind).toBe('directory');
+    expect(r.envDirEntries).toEqual([]);
+  });
+
+  it('treats a docker/.env symlink to a real file as an existing install', () => {
+    const r = runStart(['--setup-only'], { envShape: 'symlink-to-file' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/already exists/);
+    expect(r.envKind).toBe('symlink');
+  });
 
   it('never rewrites an existing docker/.env', () => {
     const existing = '# hand-written\nCODEMAN_PASSWORD=mine-and-only-mine\nCODEMAN_APPDATA_PATH=/x\n';

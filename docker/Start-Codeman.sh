@@ -441,8 +441,15 @@ run_first_run_setup() {
   printf 'proxy); docker/README.md explains each setting.\n\n'
 }
 
-if [[ ! -f "$env_file" ]]; then
+if [[ ! -e "$env_file" && ! -L "$env_file" ]]; then
   run_first_run_setup
+elif [[ ! -f "$env_file" ]]; then
+  # A dangling symlink or a directory is not "no .env yet": setup would replace
+  # the link, or leave its password file inside the directory and run again on
+  # every start.
+  printf 'Error: %s exists but is not a regular file.\n' "$env_file" >&2
+  printf 'Move it out of the way or repoint it, then rerun this script.\n' >&2
+  exit 1
 elif [[ "$setup_only" == '1' ]]; then
   printf '%s already exists; the setup only runs when it does not, and never edits it.\n' "$env_file"
 fi
