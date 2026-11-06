@@ -81,6 +81,21 @@ describe('Files panel listing of a live worktree', () => {
     expect(data.tree[0].children[0].path).toBe(`${PREFIX}/src/worktree-only.ts`);
   });
 
+  it('lists an inside worktree for root=live-any, the root the Files panel sends', async () => {
+    const data = await list('&root=live-any');
+    expect(data.root).toBe(worktree);
+    expect(data.worktree).toEqual({ name: 'probe', path: worktree });
+    expect(names(data.tree)).toEqual(['src']);
+    expect(data.tree[0].path).toBe(`${PREFIX}/src`);
+    expect(data.tree[0].children[0].path).toBe(`${PREFIX}/src/worktree-only.ts`);
+  });
+
+  it('walks the session folder for root=live-any when a symlink replaced the worktree', async () => {
+    rmSync(worktree, { recursive: true });
+    symlinkSync(makeOutsideFolder(), worktree);
+    expectSessionFolderListing(await list('&root=live-any&showHidden=true'));
+  });
+
   it('does not need hidden files on, though the worktree lives under a dot folder', async () => {
     const data = await list('&root=live&showHidden=false');
     expect(data.totalFiles).toBe(1);

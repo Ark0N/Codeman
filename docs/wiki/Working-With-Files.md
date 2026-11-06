@@ -24,7 +24,7 @@ It renders what it can:
 | Kind                     | Behaviour                                                                 |
 | ------------------------ | ------------------------------------------------------------------------- |
 | Text and code            | Plain preview with Lines (line numbers) and Wrap toggles in the header. Long files are truncated in plain preview. |
-| Markdown                 | Rendered by default: headings, tables, code blocks with copy buttons, images and links relative to the file (root-relative ones resolve from the workspace root, as on GitHub). Links to another heading of the same file (`[Install](#installation)`) scroll to it, with GitHub's heading names (lower-case, punctuation dropped, repeats numbered `-1`, `-2`), and never leave the page. Opened from an attachment card, where the file's folder is unknown, relative images show their alt text and relative links show as plain text. Persian, Arabic and Hebrew read right to left, each block following its own first letter, while code stays left to right. The MD pill in the header flips to source. |
+| Markdown                 | Rendered by default: headings, tables, code blocks with copy buttons, images and links relative to the file (root-relative ones resolve from the workspace root, as on GitHub; for a file in a worktree beside the workspace that the agent is in, they resolve from the top of that worktree). Links to another heading of the same file (`[Install](#installation)`) scroll to it, with GitHub's heading names (lower-case, punctuation dropped, repeats numbered `-1`, `-2`), and never leave the page. Opened from an attachment card, where the file's folder is unknown, relative images show their alt text and relative links show as plain text. Persian, Arabic and Hebrew read right to left, each block following its own first letter, while code stays left to right. The MD pill in the header flips to source. |
 | Images                   | Inline.                                                                    |
 | Audio and video          | Inline with a working scrub bar, because range requests are supported.     |
 | Spreadsheets (`.xlsx`)   | Read-only grid, parsed in your browser (never on the server), up to 10 MB. `.xls` and `.ods` are download only. |
@@ -116,6 +116,8 @@ of an agent's output lands: a screenshot in `/tmp`, a capture in its own scratch
 another checkout. Those are served through the attachment routes rather than the workspace
 ones, so the same rules apply as to any other attachment: secret trees are blocked, the
 extension allowlist decides what can be opened, and symlinks are resolved before either check.
+
+One exception: while the agent works in a worktree of the session's repository beside it (see [Git Worktrees](Git-Worktrees)), a file in that worktree opens through the workspace routes like a workspace file, and you can edit it there. Two things differ from a workspace file: a text file there that you click in the terminal opens in the preview, not the live tail viewer, and secret files such as `.env` there are not served.
 
 Outside the workspace the allowlist is images, video, audio, PDF, Office documents, and text
 files, where "text" is the same list the viewer will let you edit: code, config, logs, csv,

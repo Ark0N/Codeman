@@ -2367,7 +2367,13 @@ Object.assign(CodemanApp.prototype, {
           }
           // An HTML file renders as a page in the preview, never as source
           // in the log viewer (markdown is in FILE_PREVIEW_EXTENSIONS).
-          if (previewsInFileViewer(target) || rendersAsPage(target) || self._isExternalPreviewPath(target, sessionId)) {
+          // The log viewer's tail-file stays confined to workingDir, so a path in a worktree outside it previews.
+          if (
+            previewsInFileViewer(target) ||
+            rendersAsPage(target) ||
+            self._isExternalPreviewPath(target, sessionId) ||
+            self._isOutsideWorktreePath(target, sessionId)
+          ) {
             self.openFilePreview(target, sessionId);
             return;
           }

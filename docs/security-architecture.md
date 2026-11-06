@@ -342,6 +342,25 @@ escapes the session working directory (`..`, absolute paths, and symlinks that
 resolve outside). The realpath‑before‑check ordering closes the validation‑time
 TOCTOU window.
 
+A local session has one more root while its agent works in a git worktree of the
+same repository OUTSIDE its folder (published as `outsideWorktree`). An absolute path inside
+that worktree is confined to it by `validateLocalSessionFilePath()`, and only while the
+worktree folder still `realpath`s to the path recorded for it. The edit route
+(`PUT /api/sessions/:id/file-content`) uses the same check, so a file in that worktree can be
+written as well as read. Codeman records such a
+worktree only after the session's own repository vouches for it, and never `/`, the
+home folder or above, a folder holding the working directory, or a folder at, inside or
+around a Docker case workspace (`src/live-worktree.ts`). It also refuses a folder that is
+itself a sensitive folder such as `.ssh`, and `validateLocalSessionFilePath()` never serves a
+file from the worktree that `isSensitivePath()` blocklists. In multi-user mode a regular
+owner's session also needs the owner's folder rule (their own space or the working directory);
+an admin's does not. It follows nothing while attachment workspace confinement is on, and
+nothing at, inside or around a blocked attachment tree. Codeman judges these rules when the pane
+changes directory, and the routes judge confinement and the blocked trees again on every request,
+so turning confinement on or blocking the folder stops serving it at once. The multi-user rule is
+judged only when the pane changes directory. On every request the routes also check that the
+folder still resolves to its recorded path. A relative path is still confined to the working directory alone.
+
 | Route | Cap | Notes |
 |-------|-----|-------|
 | `file-content` | 10 MB | text preview |
