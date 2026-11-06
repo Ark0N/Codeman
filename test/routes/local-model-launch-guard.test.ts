@@ -1,6 +1,7 @@
 /**
- * @fileoverview The launch guard of the endpoint the local model install manages: both ways a
- * session gets onto a custom model endpoint ask the install service first.
+ * @fileoverview The launch guard of the endpoint the local model install manages, at the two
+ * routes that put a session onto a custom model endpoint: they ask the install service before
+ * anything is written.
  *
  *  - `POST /api/sessions/:id/custom-model` (a running session switches to the endpoint), and
  *  - `POST /api/quick-start` with `customModel` (a session is created on it)
@@ -10,6 +11,10 @@
  * (`OPERATION_FAILED`); `undefined` lets the launch go on exactly as before. That is how a
  * model whose digest is no longer the one stored at install time is not launched, and how
  * nothing is launched against a port our runtime is not on.
+ *
+ * Every OTHER way a new agent process comes to be on the endpoint (the attach that finds no
+ * pane, the respawn of a dead pane, a restart in place, the rebuild after a reboot) is
+ * covered below the routes, by `Session`'s launch guard: test/local-model-session-launch-guard.test.ts.
  *
  * The service is replaced by a fake for most cases, and is the REAL one (over the real state
  * file, with no runtime running) for the cases that pin the default wiring.

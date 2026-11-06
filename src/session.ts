@@ -511,6 +511,18 @@ export class GuardedInputBusyError extends Error {
 }
 
 /**
+ * The session's launch guard refused the start of a new agent process
+ * (`Session.setLaunchGuard()`). Its message is the sentence for the user. A typed error, so a
+ * start that was refused is told apart from a tmux failure and never falls back to a direct PTY.
+ */
+export class LaunchRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LaunchRefusedError';
+  }
+}
+
+/**
  * Whether a programmatic write leaves the keep-alive turn running: the nudge itself, or a bare
  * Enter (which submits nothing new). Anything else carrying an Enter starts a turn of its own.
  */
@@ -879,6 +891,12 @@ export class Session extends EventEmitter {
   // previous injection (remove exactly the env keys it added, delete a previous isolated
   // config dir) without guessing what it once wrote. Persisted disk-only (`__customModel`).
   private _customModel: CustomModelBookkeeping | undefined;
+
+  // Asked right before a NEW agent process is started for this session (a fresh pane, the
+  // respawn of a dead one, a restart in place), never for an attach to an agent that runs.
+  // Resolves with the sentence that refuses the start, or undefined. Set by the web layer
+  // (`WebServer.setupSessionListeners()`); this file does not know who asks or why.
+  private _launchGuard: (() => Promise<string | undefined>) | null = null;
 
   // Env keys a retired custom-model selection injected that the NEXT respawn must
   // `tmux setenv -u`. Deleting a key from `_envOverrides` alone does nothing to the
@@ -2063,6 +2081,22 @@ export class Session extends EventEmitter {
     }
   }
 
+  /**
+   * Sets what is asked before a new agent process is started for this session (see
+   * `_launchGuard`). The first user is the model Codeman runs on this Mac: an agent is not
+   * started on it while its runtime is down or its model changed. `null` removes it.
+   */
+  setLaunchGuard(guard: (() => Promise<string | undefined>) | null): void {
+    this._launchGuard = guard;
+  }
+
+  /** Throws the guard's sentence (`LaunchRefusedError`) when a new agent process must not be started now. */
+  private async _assertLaunchAllowed(): Promise<void> {
+    if (!this._launchGuard) return;
+    const refusal = await this._launchGuard();
+    if (refusal) throw new LaunchRefusedError(refusal);
+  }
+
   // Custom Model Endpoint Profiles (docs/custom-model-endpoints-plan.md) — public-safe
   // subset only (never envKeys/configDir/launchModel, the bookkeeping for setCustomModel).
   get customModel(): CustomModelSelection | undefined {
@@ -2635,6 +2669,8 @@ export class Session extends EventEmitter {
     let respawnedResumeId: string | undefined;
     if (this._muxSession && mux.isPaneDead(this._muxSession.muxName)) {
       console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
+      // A new agent process: asked first (see `_launchGuard`). A refusal leaves the pane as it is.
+      await this._assertLaunchAllowed();
       // Confirmed dead — safe to resolve/pin now (see `_pinOmpRespawnId()`).
       // `options.respawnPaneOptions` was built eagerly before this dead-pane
       // check ran, so it still carries the pre-pin ompConfig; rebuild it.
@@ -2689,6 +2725,8 @@ export class Session extends EventEmitter {
           this._resumeSessionId = pinned;
         }
       }
+      // A new agent process: asked first (see `_launchGuard`).
+      await this._assertLaunchAllowed();
       this._muxSession = await mux.createSession(options.createSessionOptions);
       console.log('[Session] Created mux session:', this._muxSession.muxName);
       // No extra sleep — createSession() already waits for tmux readiness
@@ -2808,6 +2846,9 @@ export class Session extends EventEmitter {
       return false;
     }
 
+    // A new agent process: asked first (see `_launchGuard`). A refusal rejects, and the pane
+    // keeps what runs in it.
+    await this._assertLaunchAllowed();
     this._pinOmpRespawnId();
     const newPid = await mux.respawnPane(await this._buildRespawnPaneOptionsWithResumePin());
     if (!newPid) {
@@ -3461,6 +3502,9 @@ export class Session extends EventEmitter {
           this._armPaneSettle(true);
         }
       } catch (err) {
+        // A refused launch is an answer, not a tmux failure: it must not fall through to
+        // the direct PTY below, which would start the very process that was refused.
+        if (err instanceof LaunchRefusedError) throw err;
         if (this._adopt) this._failAdoptedStart(err);
         console.error('[Session] Failed to create mux session, falling back to direct PTY:', err);
         this._useMux = false;
@@ -3482,6 +3526,8 @@ export class Session extends EventEmitter {
         throw new Error(`${getModeLabel(this.mode)} sessions require tmux. Direct PTY fallback is not supported.`);
       }
       if (this._adopt) this._failAdoptedStart(new Error('tmux is not available'));
+      // A new agent process on this path too: asked first (see `_launchGuard`).
+      await this._assertLaunchAllowed();
       try {
         // Pass --session-id to use the SAME ID as the Codeman session
         // This ensures subagents can be directly matched to the correct tab.
@@ -4485,6 +4531,8 @@ export class Session extends EventEmitter {
           }, 100);
         }
       } catch (err) {
+        // As in startInteractive(): a refused launch never falls back to a direct PTY.
+        if (err instanceof LaunchRefusedError) throw err;
         if (this._adopt) this._failAdoptedStart(err);
         console.error('[Session] Failed to create mux session, falling back to direct PTY:', err);
         this._useMux = false;

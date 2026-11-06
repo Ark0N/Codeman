@@ -2194,6 +2194,17 @@ export class WebServer extends EventEmitter {
     // First keep-warm evaluation: publishes the effective opt-in for the Session Options
     // readout even before any cache report arrives.
     void this.keepWarmService.schedule(session.id);
+    // Before every start of a NEW agent process the session asks this (a fresh pane, the
+    // respawn of a dead one, a restart in place; never an attach to an agent that runs).
+    // The model Codeman runs on this Mac is the one endpoint with something to say: no agent
+    // is started on it while its runtime is down or its model is not the one that was
+    // installed. Every other session, and every other endpoint, is answered `undefined`.
+    // Set on every call, above the idempotency return: it holds no state of its own.
+    session.setLaunchGuard(async () => {
+      const selection = session.customModel;
+      if (!selection) return undefined;
+      return getLocalModelService().launchRefusalMessage(selection.endpointId, selection.modelId);
+    });
     // Idempotent: the wiring exit handler detaches ALL listeners on every PTY exit
     // (removeSessionListenerRefs), so the re-attach routes (/interactive,
     // /interactive-respawn, /shell) call this again to restore observability
