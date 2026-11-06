@@ -233,11 +233,18 @@ export async function discoverLocalForeign(force = false): Promise<ForeignDiscov
 
   localInFlight = (async (): Promise<ForeignDiscoveryResult> => {
     const notes: string[] = [];
-    // argv array: no outer shell, so the script's own `$TMUX_TMPDIR`/`$(id -u)`
-    // reach the inner sh intact (see @fileoverview).
-    const run = await runForeignProbe(['sh', '-c', buildForeignProbeScript()]);
-    const sessions = candidatesFrom(run.stdout, 'local', 'local', {}, 'local', notes);
-    if (!run.ok) notes.push(probeFailureNote('local', run, 'tmux probe produced no result'));
+    let sessions: ForeignTmuxSession[] = [];
+    try {
+      // argv array: no outer shell, so the script's own `$TMUX_TMPDIR`/`$(id -u)`
+      // reach the inner sh intact (see @fileoverview).
+      const run = await runForeignProbe(['sh', '-c', buildForeignProbeScript()]);
+      sessions = candidatesFrom(run.stdout, 'local', 'local', {}, 'local', notes);
+      if (!run.ok) notes.push(probeFailureNote('local', run, 'tmux probe produced no result'));
+    } catch {
+      // The probe answers rather than throws, so this is the classifier. "Nothing to
+      // adopt here" is the only honest answer and it is never an error to the caller.
+      notes.push('local: tmux probe produced no result');
+    }
     const result: ForeignDiscoveryResult = { sessions, scannedAt: Date.now(), notes };
     localCache = { at: Date.now(), result };
     return result;
@@ -322,18 +329,22 @@ export async function discoverDockerForeign(cases: DockerCase[]): Promise<Foreig
   await Promise.all(
     targets.map(async (t) => {
       const where = `docker ${t.containerName}`;
-      const run = await runForeignProbe(foreignDockerProbeArgv(t));
-      sessions.push(
-        ...candidatesFrom(
-          run.stdout,
-          'docker',
-          `${t.hostId} ${t.containerName}`,
-          { hostId: t.hostId, hostLabel: t.label, containerName: t.containerName },
-          where,
-          notes
-        )
-      );
-      if (!run.ok) notes.push(probeFailureNote(where, run, 'not running, no tmux, or engine unreachable'));
+      try {
+        const run = await runForeignProbe(foreignDockerProbeArgv(t));
+        sessions.push(
+          ...candidatesFrom(
+            run.stdout,
+            'docker',
+            `${t.hostId} ${t.containerName}`,
+            { hostId: t.hostId, hostLabel: t.label, containerName: t.containerName },
+            where,
+            notes
+          )
+        );
+        if (!run.ok) notes.push(probeFailureNote(where, run, 'not running, no tmux, or engine unreachable'));
+      } catch {
+        notes.push(`${where}: not running, no tmux, or engine unreachable`);
+      }
     })
   );
 

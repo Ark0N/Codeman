@@ -98,6 +98,10 @@ Adoption is **admin-only in multi-user mode**. Linking creates Codeman's own con
 with one bind mount that has already been checked; an adopted container's mounts belong to
 whoever started it, and one that mounts `/` hands the adopter the host.
 
+That is about a container. A tmux session someone started by hand inside a container is opened
+from the home screen instead, and it needs a Docker case pointing at that container: see
+[Opened outside Codeman](The-Dashboard#opened-outside-codeman).
+
 ## Credentials
 
 Your existing host logins work inside the container without logging in again. Credentials

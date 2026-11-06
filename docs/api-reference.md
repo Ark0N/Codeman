@@ -1125,8 +1125,10 @@ browser sends them only on an explicit scan. `?force=1` skips the local cache.
 `adoptedBy` names the session already wrapping that target. `notes` says why a location
 gave nothing, each opening with where it came from (`local`, `docker <name>`,
 `remote <label>`). A session whose name or socket path holds characters Codeman will not
-pass to a shell is skipped and counted in a note. Sessions on a Codeman socket never
-appear.
+pass to a shell, or whose name tmux reads as a target rather than a name (one starting
+with `=`, `@` or `%`, or a bare `~`), is skipped and counted in a note. A tmux server that
+does not answer within 2 seconds costs only its own rows and gets a note, and a scan cut
+short keeps the rows it read and says so in one. Sessions on a Codeman socket never appear.
 
 `POST /api/v1/sessions/adopt` wraps one, with `{ "id": "...", "docker": true, "remote":
 true }` (the two flags must match the listing the id came from; `name` and
@@ -1144,8 +1146,10 @@ comes from the pane's process tree.
 Closing the session detaches. The foreign session keeps running, and only Codeman's
 wrapper and its grouped `codeman-view-<id>` session go, so `DELETE` removes nothing that
 belongs to someone else. Codeman did not start this agent, so these refuse an adopted
-session: respawn, Ralph, auto-clear, auto-compact, auto-resume, custom model endpoints,
-prompt uploads and the image watcher. `stop` and `blocked` waits are a 400, the git
+session: respawn, Ralph (its config and the `fix-plan/write`, `fix-plan/read` and
+`ralph-prompt/write` file routes), auto-clear, auto-compact, auto-resume, custom model
+endpoints, prompt uploads and the image watcher. `stop` waits are a 400, and so are
+`blocked` waits unless Codeman reads that CLI's dialogs off its screen (codex), the git
 routes answer `unsupported` with `reason: "adopted"`, and `last-response` answers empty,
 since Codeman knows no transcript for it. Its `paneExit` stays absent, because the pane
 holds a `tmux attach` and not the agent. Reboot restore does not rebuild one.

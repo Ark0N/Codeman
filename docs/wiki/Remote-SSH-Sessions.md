@@ -73,6 +73,10 @@ Attaching to someone else's session and closing your tab must not end their run,
 not. Several clients can attach the same remote session at different window sizes without
 clamping each other, and discovery shows a shared badge with the client count.
 
+This list holds Codeman's own sessions. A tmux session someone started by hand on the host is
+found by the home screen instead: see
+[Opened outside Codeman](The-Dashboard#opened-outside-codeman).
+
 ## Files
 
 Previews, downloads and text reads in a remote case go over the same ssh connection the

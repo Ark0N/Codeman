@@ -79,11 +79,15 @@ export interface ForeignTmuxSession {
   attached: boolean;
   /** Epoch MILLISECONDS (tmux reports seconds; normalized on parse). */
   createdAt: number;
-  /** What the active pane is running, from the bounded process-tree walk. */
+  /**
+   * What the session's FIRST LISTED pane is running, from the bounded process-tree
+   * walk. Not the active window: claude in window 1 of a session whose window 0 holds
+   * a shell reads as `shell`. The tab lands on that same first window, so the two agree.
+   */
   mode: SessionMode;
   /** Truncated command line behind the classification, for the UI subtitle. */
   command: string;
-  /** The active pane's cwd. Informational — an adopted pane is never `cd`'d. */
+  /** That same pane's cwd. Informational: an adopted pane is never `cd`'d. */
   workingDir: string;
   /** Codeman session id already wrapping this target, when one exists. */
   adoptedBy?: string;

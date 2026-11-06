@@ -176,6 +176,12 @@ when the tab closes.
   session. `remoteSessionName` holds its existing tmux name. Closing the tab
   **detaches**, never kills.
 
+⚠️ This covers `codeman-*` sessions on the `codeman-remote` socket, the ones another
+Codeman runs. A tmux session a HUMAN started on the host is a separate path:
+`GET /api/mux/foreign?remote=1` finds it and `POST /api/sessions/adopt` wraps it, with
+the connection on `Session.adopt.remote` and `session.remote` undefined. Closing that tab
+detaches too. See `docs/architecture-invariants.md#adopted-foreign-tmux-sessions`.
+
 ### Discovery
 
 `listRemoteCodemanSessions(host)` lists the remote's `codeman-*` sessions:
