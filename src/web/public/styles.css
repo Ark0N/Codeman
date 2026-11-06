@@ -22327,9 +22327,31 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
    body scrolling between them. A click never moves the next button away.
    ═══════════════════════════════════════════════════════════════ */
 
-/* The welcome button: one more chip, on its own line under the launchers. */
+/* The welcome button: a second large button under the launchers, in the size
+   of the primary one, so a model on this Mac is offered as a main way in and
+   not as a footnote (the owner asked for it big and in the middle). It keeps
+   the chip's markup and the chip family's rules for everything it does not
+   restate here. */
 .welcome-local-model {
   margin-top: 1.1rem;
+  height: 46px;
+  gap: 0.65rem;
+  padding: 0 1.4rem 0 0.45rem;
+  border: 1px solid var(--accent);
+  border-radius: 23px;
+  background: var(--control-bg);
+  color: var(--accent);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.005em;
+  box-shadow: 0 8px 24px -14px rgba(var(--accent-rgb), 0.5);
+}
+
+.welcome-local-model:hover,
+.welcome-local-model:focus-visible {
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 /* `.welcome-chip` is inline-flex, so `[hidden]` needs re-asserting or the
@@ -22338,8 +22360,15 @@ html[data-tile-anim="soft"] .tile-grid-ghosts.tile-grid-ghosts--release:not(.til
   display: none;
 }
 
+/* The chip's 14 px glyph sits in a 34 px disc, the primary button's logo size. */
 .welcome-local-model svg {
   flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: rgba(var(--accent-rgb), 0.16);
 }
 
 /* The window: App Settings' chrome (`.modal`, `.modal-header`, the boxed
