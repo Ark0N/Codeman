@@ -860,6 +860,15 @@ cli_offerable() {
     return 0
 }
 
+# Tell a running Codeman to look again: it remembers a missing CLI for up to 5
+# minutes (cliResolveRetryDelayMs), and its Run button reads that memory. The name
+# is CLI_INSTALLED_MARKER in src/utils/cli-executable-resolver.ts. With no data
+# folder there is no Codeman to tell, which is why a failure here is not one.
+mark_cli_installed() {
+    touch "$HOME/.codeman/cli-installed" 2>/dev/null || true
+    return 0
+}
+
 # run_offered_cli <index>: run the trusted command of one entry and look again
 # at what is installed. What that means is the caller's to judge.
 run_offered_cli() {
@@ -873,6 +882,7 @@ run_offered_cli() {
     detect_all_clis
     if [[ -n "${CLI_FOUND_PATH[$idx]}" ]]; then
         success "${CLI_LABELS[$idx]} installed at ${CLI_FOUND_PATH[$idx]}"
+        mark_cli_installed
     else
         warn "${CLI_LABELS[$idx]} installation failed."
     fi
@@ -907,6 +917,7 @@ agent_subcommand() {
     idx=$(cli_index "$AI_CLI_CHOICE")
     if [[ -n "${CLI_FOUND_PATH[$idx]}" ]]; then
         success "${CLI_LABELS[$idx]} is already installed at ${CLI_FOUND_PATH[$idx]}"
+        mark_cli_installed
         progress_phase done
         return 0
     fi

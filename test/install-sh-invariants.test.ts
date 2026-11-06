@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
+import { CLI_INSTALLED_MARKER } from '../src/utils/cli-executable-resolver.js';
 import { ARCHIVE_INSTALL_MARKER } from '../src/web/self-update.js';
 
 const INSTALL_SH = fileURLToPath(new URL('../install.sh', import.meta.url));
@@ -582,6 +583,40 @@ describe('install.sh agent, one AI CLI and nothing else', () => {
     const stderr = result.stderr ?? '';
     return { status: result.status, stdout, stderr, ran: [...stdout.matchAll(/^RAN=(.+)$/gm)].map((m) => m[1]) };
   }
+
+  /** The same, in a home folder of its own, reporting whether the marker was written. */
+  function agentInHome(args: string[], env: Record<string, string> = {}) {
+    const home = mkdtempSync(join(tmpdir(), 'codeman-agent-marker-'));
+    try {
+      mkdirSync(join(home, '.codeman'));
+      const run = agent(args, { HOME: home, ...env });
+      return { ...run, marked: existsSync(join(home, '.codeman', CLI_INSTALLED_MARKER)) };
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it('tells a running server when the agent landed, and only then', () => {
+    expect(agentInHome(['--ai-cli', 'codex', '--no-admin'], { LEAVES: 'codex' }).marked).toBe(true);
+    expect(agentInHome(['--ai-cli', 'codex', '--no-admin']).marked).toBe(false);
+    // Installed by hand a minute ago, and the server may still remember it as missing.
+    expect(agentInHome(['--ai-cli', 'codex', '--no-admin'], { FOUND: 'codex' }).marked).toBe(true);
+  });
+
+  it('a home folder with no Codeman in it is no failure', () => {
+    const home = mkdtempSync(join(tmpdir(), 'codeman-agent-marker-'));
+    try {
+      const run = agent(['--ai-cli', 'codex', '--no-admin'], { HOME: home, LEAVES: 'codex' });
+      expect(run.status, run.stderr).toBe(0);
+      expect(readdirSync(home)).toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('writes the file the server reads', () => {
+    expect(SOURCE).toContain(`"$HOME/.codeman/${CLI_INSTALLED_MARKER}"`);
+  });
 
   it('installs the one it was told to, and says done', () => {
     const run = agent(['--no-admin', '--progress', '--ai-cli', 'codex'], { LEAVES: 'codex' });
