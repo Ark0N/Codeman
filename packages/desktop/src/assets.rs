@@ -184,17 +184,21 @@ pub const HOST_SHIM: &str = r#"(function () {
   }
 })();"#;
 
-/// A toast inside Codeman when a download finished (Codeman's own
-/// `showToast`; nothing happens on a page without it).
+/// A toast inside Codeman (its own `showToast`; nothing happens on a page
+/// without it). `kind` is one of Codeman's fixed toast kinds.
+pub fn toast_script(text: &str, kind: &str) -> String {
+    let text = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
+    format!("try {{ window.app && window.app.showToast && window.app.showToast({text}, \"{kind}\"); }} catch (e) {{}}")
+}
+
+/// A toast inside Codeman when a download finished.
 pub fn download_toast_script(file_name: &str, ok: bool) -> String {
     let text = if ok {
         format!("Downloaded {file_name} to Downloads")
     } else {
         format!("Download of {file_name} failed")
     };
-    let text = serde_json::to_string(&text).unwrap_or_else(|_| "\"Download finished\"".into());
-    let kind = if ok { "\"success\"" } else { "\"error\"" };
-    format!("try {{ window.app && window.app.showToast && window.app.showToast({text}, {kind}); }} catch (e) {{}}")
+    toast_script(&text, if ok { "success" } else { "error" })
 }
 
 /// Runs in the window that asked for a window the native side did not open

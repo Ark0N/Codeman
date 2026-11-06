@@ -6,8 +6,9 @@
 //! installs Codeman on this machine (`setup`, `local_server`) and installs it
 //! on another one over SSH, real full screen, native menus, pop-outs as app
 //! windows (Codeman's `window.CodemanHost` bridge), downloads to ~/Downloads,
-//! passwords in the Keychain, and on macOS the JavaScript dialogs and HTTP
-//! Basic challenges wry leaves out (`macos`).
+//! passwords in the Keychain, on macOS the JavaScript dialogs and HTTP Basic
+//! challenges wry leaves out (`macos`), and on a MacBook Pro with a lit Apple
+//! logo a blink while agents work (`logo`).
 //!
 //! Every URL and message decision is in `policy` (pure, unit-tested); this file
 //! only wires those decisions to windows. The main window moves through
@@ -19,10 +20,12 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agents;
 mod assets;
 mod config;
 mod credentials;
 mod local_server;
+mod logo;
 #[cfg(target_os = "macos")]
 mod macos;
 mod policy;
@@ -51,6 +54,7 @@ use wry::{NewWindowResponse, PageLoadEvent, PermissionResponse, WebView, WebView
 
 use config::{Config, Rect, WindowFrame};
 use credentials::Keychain;
+use logo::BlinkStyle;
 use policy::{ConnectCmd, HostCmd, Ipc, Navigation, NewWindow, OpenBudget, Phase, Recovery, Via};
 use probe::ProbeOutcome;
 
@@ -96,6 +100,7 @@ const AUTH_RATE_LIMITED: &str = "Too many failed logins from this address. The s
 enter it again (a single-user Codeman accepts the right password at once), or wait up to 15 minutes.";
 const KEYCHAIN_UNREADABLE: &str = "The saved password could not be read from the Keychain. Enter it again.";
 const PAGE_KEEPS_STOPPING: &str = "Codeman's page stopped twice in a row, so it was closed. Connect again.";
+const LOGO_SWITCHED_OFF: &str = "The Apple logo is switched off on this Mac, so it cannot blink.";
 const START_REFUSED: &str = "Codeman can only be started here for an http://127.0.0.1 or http://localhost address.";
 
 mod menu_id {
@@ -234,6 +239,9 @@ struct AppMenu {
     window_menu: Submenu,
     help_menu: Submenu,
     start_fullscreen: CheckMenuItem,
+    /// One item per style. Empty on a Mac without a lit logo, which has no
+    /// such menu.
+    logo_styles: Vec<(BlinkStyle, CheckMenuItem)>,
 }
 
 enum Load<'a> {
@@ -289,9 +297,16 @@ struct App {
     /// While the main window may still have to be put into the full screen it
     /// asked for at launch: when to look next, and how many retries were made.
     fullscreen_retry: Option<(Instant, u8)>,
+    /// The child that watches the connected server and blinks the logo.
+    logo_watch: logo::Watcher,
 }
 
 fn main() {
+    // The blinker is this binary without a window (logo.rs).
+    if std::env::args().nth(1).as_deref() == Some(logo::BLINK_ARG) {
+        logo::blink_main();
+    }
+
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
@@ -320,6 +335,7 @@ fn main() {
     };
     let config_path = config_path.filter(|_| can_save);
     let notice = (!can_save).then(|| SETTINGS_UNREADABLE.to_string());
+    logo::recover_at_launch();
     let menu = build_menu(&config).unwrap_or_else(|e| fatal(&format!("Could not build the menu: {e}")));
     let phase = Rc::new(RefCell::new(Phase::Connect));
     // Started once: the probe workers and the event loop share this queue,
@@ -371,6 +387,7 @@ fn main() {
         menu,
         keychain,
         fullscreen_retry: wants_fullscreen.then(|| (Instant::now() + FULLSCREEN_FIRST_CHECK, 0)),
+        logo_watch: logo::Watcher::default(),
     };
 
     event_loop.run(move |event, target, control_flow| app.handle(event, target, control_flow));
@@ -459,6 +476,22 @@ fn build_menu(config: &Config) -> muda::Result<AppMenu> {
             ),
         ],
     )?;
+    // Only a Mac with a lit Apple logo has this menu at all.
+    let mut logo_styles = Vec::new();
+    if logo::available() {
+        let submenu = Submenu::new("Blink Apple Logo While Agents Work", true);
+        for style in BlinkStyle::ALL {
+            let chosen = style == config.logo_blink;
+            let item = CheckMenuItem::with_id(style.menu_id(), style.label(), true, chosen, None);
+            submenu.append(&item)?;
+            if style == BlinkStyle::Off {
+                submenu.append(&PredefinedMenuItem::separator())?;
+            }
+            logo_styles.push((style, item));
+        }
+        // Right under "Always Open in Full Screen", before the separator.
+        view.insert(&submenu, 4)?;
+    }
     let window_menu = Submenu::with_items(
         "Window",
         true,
@@ -485,6 +518,7 @@ fn build_menu(config: &Config) -> muda::Result<AppMenu> {
         window_menu,
         help_menu,
         start_fullscreen,
+        logo_styles,
     })
 }
 
@@ -925,6 +959,7 @@ impl App {
                     if let Some(next) = next {
                         *self.phase.borrow_mut() = next;
                     }
+                    self.sync_logo_watch();
                 }
                 if let Some(w) = self.windows.get_mut(&window) {
                     w.committed = Url::parse(&url).ok();
@@ -1102,7 +1137,40 @@ impl App {
         }
     }
 
+    /// The logo is watched while a style is chosen and a server is open.
+    fn sync_logo_watch(&mut self) {
+        let style = self.config.logo_blink;
+        let phase = self.phase.borrow();
+        let server = phase.loaded().filter(|_| style != BlinkStyle::Off && logo::available());
+        self.logo_watch
+            .sync(server.map(|url| (url.as_str(), self.auth.as_deref(), style)));
+    }
+
+    fn choose_logo_blink(&mut self, style: BlinkStyle) {
+        // A click flips the item it landed on, the chosen one included, so all
+        // of them are set.
+        for (item_style, item) in &self.menu.logo_styles {
+            item.set_checked(*item_style == style);
+        }
+        let was_off = self.config.logo_blink == BlinkStyle::Off;
+        self.config.logo_blink = style;
+        self.config_dirty = true;
+        self.sync_logo_watch();
+        // Only from off: with a style running, a dark logo may be our own.
+        if was_off && style != BlinkStyle::Off && logo::switched_off() {
+            if let Some(main) = self.windows.get(&self.main_id) {
+                let _ = main
+                    .webview
+                    .evaluate_script(&assets::toast_script(LOGO_SWITCHED_OFF, "warning"));
+            }
+        }
+    }
+
     fn on_menu(&mut self, id: &str) {
+        if let Some(style) = BlinkStyle::from_menu_id(id) {
+            self.choose_logo_blink(style);
+            return;
+        }
         match id {
             menu_id::SWITCH => self.show_connect_page(None, true),
             menu_id::RELOAD => self.reload_focused(),

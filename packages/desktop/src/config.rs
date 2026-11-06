@@ -3,6 +3,7 @@
 //! (`~/Library/Application Support/Codeman/desktop.json` on macOS). Passwords
 //! never go here; they live in the Keychain (see `credentials`).
 
+use crate::logo::BlinkStyle;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -43,6 +44,11 @@ pub struct Config {
     pub auto_connect: bool,
     /// Always open in full screen (otherwise the last state is restored).
     pub start_fullscreen: bool,
+    /// What the lit Apple logo does while agents work (logo.rs). The menu only
+    /// shows on a Mac that has one. A value this version does not know reads as
+    /// off: a bad style must not make the whole file unreadable.
+    #[serde(deserialize_with = "lenient_blink")]
+    pub logo_blink: BlinkStyle,
     /// Anything that is not a whole frame reads as None: a bad frame must not
     /// make the whole file unreadable, which would cost the server list.
     #[serde(deserialize_with = "lenient_window")]
@@ -54,12 +60,18 @@ fn lenient_window<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Windo
     Ok(serde_json::from_value(value).ok())
 }
 
+fn lenient_blink<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BlinkStyle, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
             servers: Vec::new(),
             auto_connect: true,
             start_fullscreen: false,
+            logo_blink: BlinkStyle::Off,
             window: None,
         }
     }
@@ -397,6 +409,27 @@ mod tests {
         assert_eq!(c, Config::default());
         assert!(c.auto_connect);
         assert!(can_save);
+    }
+
+    #[test]
+    fn the_logo_blink_style_round_trips_and_a_bad_one_reads_as_off() {
+        let mut c = Config::default();
+        assert_eq!(c.logo_blink, BlinkStyle::Off);
+        c.logo_blink = BlinkStyle::Heartbeat;
+        let text = serde_json::to_string(&c).unwrap();
+        assert!(text.contains(r#""logoBlink":"heartbeat""#), "{text}");
+        assert_eq!(
+            serde_json::from_str::<Config>(&text).unwrap().logo_blink,
+            BlinkStyle::Heartbeat
+        );
+        for bad in [
+            r#"{"logoBlink":"strobe"}"#,
+            r#"{"logoBlink":3}"#,
+            r#"{"logoBlink":null}"#,
+        ] {
+            let c: Config = serde_json::from_str(bad).unwrap();
+            assert_eq!(c.logo_blink, BlinkStyle::Off, "{bad}");
+        }
     }
 
     #[test]
