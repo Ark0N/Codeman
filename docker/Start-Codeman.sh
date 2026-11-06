@@ -111,8 +111,10 @@ if version_older_than "$compose_version" "$min_compose_version"; then
   exit 1
 fi
 
-if ! docker_info_error=$(docker info --format '{{.ServerVersion}}' 2>&1 >/dev/null); then
-  case "$docker_info_error" in
+# `docker version`, not `docker info`: on CLI 24 through 27 `info --format` exits
+# 0 with the daemon unreachable (measured on 27.5.1), so this check never fired.
+if ! docker_error=$(docker version --format '{{.Server.Version}}' 2>&1 >/dev/null); then
+  case "$docker_error" in
     *[Pp]ermission\ denied*)
       account=$(id -un 2>/dev/null || printf 'your account')
       printf 'Error: %s is not allowed to use Docker yet.\n' "$account" >&2
@@ -124,7 +126,7 @@ if ! docker_info_error=$(docker info --format '{{.ServerVersion}}' 2>&1 >/dev/nu
     *)
       printf 'Error: the Docker daemon is not reachable. Start it (Linux: sudo systemctl start\n' >&2
       printf 'docker; macOS and Windows: open Docker Desktop), then rerun this script.\n' >&2
-      printf 'Docker said: %s\n' "$docker_info_error" >&2
+      printf 'Docker said: %s\n' "$docker_error" >&2
       ;;
   esac
   exit 1

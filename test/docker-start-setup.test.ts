@@ -60,8 +60,15 @@ const REWRITTEN_KEYS = ['TZ', 'CODEMAN_APPDATA_PATH', 'CODEMAN_CASES_PATH', 'COD
 const STUB = [
   '#!/usr/bin/env bash',
   'echo "docker $*" >> "$CMDLOG"',
+  // Docker CLI 24 to 27 answer `info --format` with exit 0 and the error on
+  // stderr when the daemon is unreachable (measured on 27.5.1); `version --format`
+  // exits 1 on every release.
   'if [[ "$1" == "info" ]]; then',
-  '  if [[ -n "${STUB_INFO_ERR:-}" ]]; then echo "$STUB_INFO_ERR" >&2; exit 1; fi',
+  '  if [[ -n "${STUB_DAEMON_ERR:-}" ]]; then echo "$STUB_DAEMON_ERR" >&2; exit 0; fi',
+  '  echo 27.0.0; exit 0',
+  'fi',
+  'if [[ "$1" == "version" ]]; then',
+  '  if [[ -n "${STUB_DAEMON_ERR:-}" ]]; then echo "$STUB_DAEMON_ERR" >&2; exit 1; fi',
   '  echo 27.0.0; exit 0',
   'fi',
   'if [[ "$1" == "compose" ]]; then',
@@ -310,7 +317,7 @@ describe('Start-Codeman.sh preflight', () => {
   it('names the docker group (not sudo) when the account cannot reach the daemon', () => {
     const r = runStart(['--setup-only'], {
       env: {
-        STUB_INFO_ERR: 'permission denied while trying to connect to the docker API at unix:///var/run/docker.sock',
+        STUB_DAEMON_ERR: 'permission denied while trying to connect to the docker API at unix:///var/run/docker.sock',
       },
     });
     expect(r.status).toBe(1);
@@ -321,7 +328,7 @@ describe('Start-Codeman.sh preflight', () => {
 
   it('says to start Docker when the daemon is not running, quoting what Docker said', () => {
     const r = runStart(['--setup-only'], {
-      env: { STUB_INFO_ERR: 'failed to connect to the docker API at unix:///var/run/docker.sock' },
+      env: { STUB_DAEMON_ERR: 'failed to connect to the docker API at unix:///var/run/docker.sock' },
     });
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/daemon is not reachable/);
