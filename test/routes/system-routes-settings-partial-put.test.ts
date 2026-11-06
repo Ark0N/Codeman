@@ -47,18 +47,34 @@ const { EXISTING_SETTINGS, subagentWatcher, imageWatcher, workflowRunWatcher } =
     };
   };
   return {
-    // Persisted settings.json for these tests: two watchers ON, subagent tracking OFF.
-    EXISTING_SETTINGS: { subagentTrackingEnabled: false, imageWatcherEnabled: true, showUltracodeAgents: true },
+    // Persisted settings.json for these tests: two watchers ON, subagent tracking OFF,
+    // agent inbox snapshot ON.
+    EXISTING_SETTINGS: {
+      subagentTrackingEnabled: false,
+      imageWatcherEnabled: true,
+      showUltracodeAgents: true,
+      promptCacheKeepWarm: false,
+      promptCacheKeepWarmMaxHours: 2,
+      agentInboxPersistEnabled: true,
+    },
     subagentWatcher: makeWatcher(false),
     imageWatcher: makeWatcher(true),
     workflowRunWatcher: makeWatcher(true),
   };
 });
 
+// setEnabled(false) deletes the snapshot file, so a wrong default here loses mail.
+const { agentInboxPersistence } = vi.hoisted(() => ({ agentInboxPersistence: { setEnabled: vi.fn() } }));
+
 vi.mock('node:fs/promises', () => ({
   default: {
     readFile: vi.fn(async () => JSON.stringify(EXISTING_SETTINGS)),
     writeFile: vi.fn(async () => undefined),
+    // settings.json is written to a temp file and renamed over the real one (settings-writer.ts).
+    realpath: vi.fn(async (p: string) => p),
+    mkdir: vi.fn(async () => undefined),
+    rename: vi.fn(async () => undefined),
+    rm: vi.fn(async () => undefined),
   },
 }));
 
@@ -70,6 +86,7 @@ vi.mock('node:fs', async (importOriginal) => {
 vi.mock('../../src/subagent-watcher.js', () => ({ subagentWatcher }));
 vi.mock('../../src/image-watcher.js', () => ({ imageWatcher }));
 vi.mock('../../src/workflow-run-watcher.js', () => ({ workflowRunWatcher }));
+vi.mock('../../src/web/agent-inbox-persistence.js', () => ({ agentInboxPersistence }));
 
 describe('PUT /api/settings — partial body must not reset service toggles', () => {
   let harness: RouteTestHarness;
@@ -81,6 +98,7 @@ describe('PUT /api/settings — partial body must not reset service toggles', ()
       w.stop.mockClear();
       w.__resetRunning(); // running state, not just call records — see makeWatcher
     }
+    agentInboxPersistence.setEnabled.mockClear();
   });
 
   afterEach(async () => {
@@ -142,5 +160,44 @@ describe('PUT /api/settings — partial body must not reset service toggles', ()
     expect(res.statusCode).toBe(200);
     // showUltracodeAgents is still true in settings.json, so it stays up.
     expect(workflowRunWatcher.stop).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The browser sends both keep-warm keys on every App Settings save, so testing for the keys in
+   * the body re-read the settings and re-evaluated every session on each save of anything.
+   */
+  it('re-evaluates the prompt-cache keep-warm only when its default or cap changes', async () => {
+    const put = (payload: Record<string, unknown>) =>
+      harness.app.inject({ method: 'PUT', url: '/api/settings', payload });
+
+    expect((await put({ promptCacheKeepWarm: false, promptCacheKeepWarmMaxHours: 2 })).statusCode).toBe(200);
+    expect(harness.ctx.keepWarm.rescheduleAll).not.toHaveBeenCalled();
+
+    expect((await put({ promptCacheKeepWarm: false, promptCacheKeepWarmMaxHours: 3 })).statusCode).toBe(200);
+    expect(harness.ctx.keepWarm.rescheduleAll).toHaveBeenCalledTimes(1);
+
+    expect((await put({ promptCacheKeepWarm: true })).statusCode).toBe(200);
+    expect(harness.ctx.keepWarm.rescheduleAll).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the agent inbox snapshot on when the body omits its key', async () => {
+    const res = await harness.app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: { showPlanUsageLimits: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(agentInboxPersistence.setEnabled).toHaveBeenCalledWith(true);
+    expect(agentInboxPersistence.setEnabled).not.toHaveBeenCalledWith(false);
+  });
+
+  it('switches the agent inbox snapshot off when the body says so', async () => {
+    const res = await harness.app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: { agentInboxPersistEnabled: false },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(agentInboxPersistence.setEnabled).toHaveBeenCalledWith(false);
   });
 });

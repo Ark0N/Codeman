@@ -86,6 +86,13 @@ const LITERAL_SEARCH_PATHS: Record<string, string[]> = {
     '$HOME/.npm-global/bin/omp',
     '$HOME/bin/omp',
   ],
+  COPILOT: [
+    '$HOME/.local/bin/copilot',
+    '/usr/local/bin/copilot',
+    '$HOME/.bun/bin/copilot',
+    '$HOME/.npm-global/bin/copilot',
+    '$HOME/bin/copilot',
+  ],
 };
 
 /** Array prefix in `install.sh` -> registry id, for the two that differ. */
@@ -99,6 +106,7 @@ const ARRAY_PREFIX_TO_CLI_ID: Record<string, string> = {
   GROK: 'grok',
   ANTIGRAVITY: 'antigravity',
   OMP: 'omp',
+  COPILOT: 'copilot',
 };
 
 /**

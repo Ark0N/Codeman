@@ -21,7 +21,7 @@ by sourcing the preamble file the §0 bootstrap wrote, and checking its version 
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
-[ "${CODEMAN_PREAMBLE:-}" = 1.33.4 ] || { echo "preamble missing or stale; re-run the §0 bootstrap"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.44.0 ] || { echo "preamble missing or stale; re-run the §0 bootstrap"; exit 1; }
 ```
 
 Do **not** re-paste the preamble body into each call. Sourcing it is what retires the
@@ -188,7 +188,7 @@ for _ in $(seq 1 10); do
 done
 printf '%s\n' "$TXT"
 #    (.data is {text,timestamp}; text is also "" before the first completed turn and
-#     always "" for shell/opencode/gemini/antigravity/pi/grok/omp, which have no transcript, use
+#     always "" for shell/opencode/gemini/antigravity/pi/grok/omp/copilot, which have no transcript, use
 #     the terminal tail there, and here only to diagnose an unsubmitted prompt.)
 
 # 6. clean up: exact id, own list only, through the fail-closed preamble helper
@@ -391,10 +391,10 @@ the worker remembering to print a token.
 
 ## Flow 5: watch for a worker stuck on a prompt
 
-Claude workers can block on a permission dialog. `blocked` is a wait signal
-(claude-mode only, and it needs Codeman's hooks in the worker's directory: see Flow 7
-step 4), so watch for it and surface the question to the user instead of guessing an
-answer. Expect it routinely on a server whose `claudeMode` is not the default bypass
+Claude workers can block on a permission dialog. `blocked` is a wait signal (a claude
+worker needs Codeman's hooks in its directory for it: see Flow 7 step 4; a codex worker
+gets it from its screen, see below), so watch for it and surface the question to the user
+instead of guessing an answer. Expect it routinely on a server whose `claudeMode` is not the default bypass
 one (the same setting that decides whether the readiness marker in Flow 1 ever
 appears):
 
@@ -409,10 +409,13 @@ if [ "$(jq -r '.data.wait.signal' <<<"$R")" = blocked ]; then
 fi
 ```
 
-Where the worker has no hooks, `blocked` never fires and a stuck worker looks exactly
-like a slow one: your marker wait burns its whole bound. The fallback is the same
-terminal tail, taken when a bound runs out, and the same rule about not answering it
-yourself.
+Codex workers are the one exception without hooks: Codeman reads their approval,
+question and trust dialogs off the screen, so the same watch works with
+`until=blocked,exit` (codex has no `stop`, a `400`), and the dialog is answered in the
+terminal, never through the Approvals Inbox. Anywhere else without hooks, `blocked` never
+fires and a stuck worker looks exactly like a slow one: your marker wait burns its whole
+bound. The fallback is the same terminal tail, taken when a bound runs out, and the same
+rule about not answering it yourself.
 
 ## Flow 6: claude fan-out over messaging
 

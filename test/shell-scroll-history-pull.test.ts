@@ -24,6 +24,10 @@
  * the real `_setHistoryTruncation` and the real `computeHistoryTruncationNotice`
  * to pin what the user is actually told.
  *
+ * The last block pins the pull's own tab-switch guard: a capture that lands
+ * after A -> B -> A is dropped by the select generation, since the session id
+ * alone matches again while the switch back is still replaying.
+ *
  * The method is extracted from app.js and run in a `vm` against stubs (no jsdom
  * on this box; see connection-indicator.test.ts), with the REAL row estimators
  * from terminal-ui.js, which decide both the downgrade and the no-gain skip.
@@ -118,17 +122,19 @@ function makeApp(
     activeSessionId: 's1',
     sessions: new Map([['s1', { mode }]]),
     detachedSessions: new Set<string>(),
+    _selectGeneration: 7,
     _fullHistoryRepullInFlight: false,
     _isLoadingBuffer: false,
     _fullHistoryRepullAt: new Map<string, number>(),
     _fullHistoryRepullUseless: new Set<string>(),
+    _paneHistoryLines: new Map<string, number>(),
     terminalBufferCache: new Map<string, string>(),
     terminal: {
       cols: 80,
       rows: 30,
       // xterm's scrollback option; 0 leaves the browser-cap check out of a test.
       options: { scrollback },
-      buffer: { active: { length: bufferRows } },
+      buffer: { active: { length: bufferRows, baseY: 0 } },
       scrollToLine: vi.fn(),
       scrollToTop: vi.fn(),
     },
@@ -144,6 +150,7 @@ function makeApp(
     }),
     _recordTerminalLoadTiming: vi.fn(),
     _logScrollRouting: vi.fn(),
+    _notePaneHistory: vi.fn(),
     // The real method behind a spy, so a test sees both what it was called with
     // and the banner state (`_historyTruncation`) it leaves behind.
     _historyTruncation: new Map<string, unknown>(),
@@ -356,5 +363,79 @@ describe('_replayWouldShrinkBuffer takes rows the caller already estimated', () 
     const ctx = make();
     expect(shrink.call(ctx, lines(300))).toBe(false);
     expect(ctx._estimateReplayRows).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a pull that outlives a tab switch never rewrites the terminal', () => {
+  it('drops the capture when the select generation moved during the fetch, even back to the same session', async () => {
+    // A -> B -> A while the request was out: the active id matches again, but
+    // selectSession is replaying its own capture, and a reset here would land
+    // in the middle of that write.
+    const { app } = makeApp('claude', { bufferRows: 40, capture: lines(300) });
+    app._fetchTerminalCapture.mockImplementationOnce(async () => {
+      app._selectGeneration = 9;
+      return {
+        headersAt: performance.now(),
+        headers: { get: () => '' },
+        json: { data: { terminalBuffer: lines(300), source: 'mux-full-history' } },
+      };
+    });
+    await refetch.call(app);
+    expect(app._resetTerminalForReplay).not.toHaveBeenCalled();
+    expect(app.chunkedTerminalWrite).not.toHaveBeenCalled();
+    expect(app._fullHistoryRepullInFlight).toBe(false);
+    // Nor does the stale response overwrite what the switch back recorded about the pane.
+    expect(app._notePaneHistory).not.toHaveBeenCalled();
+  });
+
+  it('replays when no switch happened, and records the pane', async () => {
+    const { app } = makeApp('claude', { bufferRows: 40, capture: lines(300) });
+    await refetch.call(app);
+    expect(app._resetTerminalForReplay).toHaveBeenCalledTimes(1);
+    expect(app.chunkedTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(app._notePaneHistory).toHaveBeenCalledWith('s1', expect.objectContaining({ source: 'mux-full-history' }));
+  });
+});
+
+describe('an unloaded buffer is not held to an older downgrade refusal', () => {
+  it('pulls on the normal cooldown when the buffer is one screen and the pane holds scrollback', async () => {
+    // A refused pull latches a 60 s cooldown because the browser then held MORE
+    // than tmux. A tab switch that replays a hollow tail voids that premise, and
+    // with paging suppressed for such a buffer the latch would leave the gesture
+    // dead for up to a minute.
+    const { app, urls } = makeApp('claude', { bufferRows: 30, capture: lines(300) });
+    app._fullHistoryRepullUseless.add('s1');
+    app._fullHistoryRepullAt.set('s1', Date.now() - 10_000);
+    app.terminal.buffer.active.baseY = 0;
+    app._paneHistoryLines.set('s1', 11_344);
+    await refetch.call(app);
+    expect(urls).toEqual(['/api/sessions/s1/terminal?full=1']);
+    expect(app._resetTerminalForReplay).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the latch while the buffer still holds the history the refusal was about', async () => {
+    const { app, urls } = makeApp('claude', { bufferRows: 300, capture: lines(300) });
+    app._fullHistoryRepullUseless.add('s1');
+    app._fullHistoryRepullAt.set('s1', Date.now() - 10_000);
+    app.terminal.buffer.active.baseY = 270;
+    app._paneHistoryLines.set('s1', 11_344);
+    await refetch.call(app);
+    expect(urls).toEqual([]);
+  });
+
+  it('records nothing from an error envelope, so the remembered count survives for the retry', async () => {
+    // A JSON 5xx parses like any response. Recording its empty data would
+    // forget the count and hand the next gesture back to the paging fallback.
+    const { app } = makeApp('claude', { bufferRows: 30, capture: lines(300) });
+    app._paneHistoryLines.set('s1', 11_344);
+    app._fetchTerminalCapture.mockImplementationOnce(async () => ({
+      headersAt: performance.now(),
+      headers: { get: () => '' },
+      json: { success: false, error: 'tmux capture failed' },
+    }));
+    await refetch.call(app);
+    expect(app._notePaneHistory).not.toHaveBeenCalled();
+    expect(app._resetTerminalForReplay).not.toHaveBeenCalled();
+    expect(app._fullHistoryRepullInFlight).toBe(false);
   });
 });

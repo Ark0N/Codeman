@@ -42,11 +42,14 @@ afterAll(() => {
   en.dom.window.close();
 });
 
-/** Latin words left after removing what may stay: key names, the AI acronym, the N placeholder. */
+/**
+ * Latin words left after removing what may stay: key names, the AI acronym, the N placeholder,
+ * and Git, a product name every translation that names it keeps (the Git status rows too).
+ */
 const leftover = (text: string) =>
   text
     .replace(/\b(Ctrl|Cmd|Shift|Alt|Option)\+\w+/g, '')
-    .replace(/\b(Ctrl|Cmd|Shift|Alt|Option|Enter|Tab|Space|End|Home|Escape|G|AI|N)\b/g, '')
+    .replace(/\b(Ctrl|Cmd|Shift|Alt|Option|Enter|Tab|Space|End|Home|Escape|G|AI|N|Git)\b/g, '')
     .match(/[A-Za-z]+/g) ?? [];
 
 const helpers = new Function(
@@ -204,7 +207,7 @@ describe('the case picker rows and the host-window and dictation toasts in zh-CN
   );
 
   it('finds the strings it checks (the check is not vacuous)', () => {
-    expect(pickerLabels).toEqual(['New or link a case\u2026', 'Case settings\u2026']);
+    expect(pickerLabels).toEqual(['New or link a case\u2026', 'Case settings\u2026', 'Git worktrees\u2026']);
     expect(SESSION_UI).toContain('<div class="case-combobox-empty">No cases match</div>');
     expect(toasts.sort()).toEqual([
       'Could not open a new window for this dashboard',

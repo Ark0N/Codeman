@@ -4,7 +4,7 @@ Point a case at another machine and the agent runs **there**, with the same dash
 mobile UI, and autonomy features. Your laptop becomes a window onto a session living on the
 remote host.
 
-Like Docker, this is a **location overlay** on a case, not a run mode. All ten run modes
+Like Docker, this is a **location overlay** on a case, not a run mode. All eleven run modes
 work remotely. See [Core Concepts](Core-Concepts).
 
 ## Why bother

@@ -29,6 +29,9 @@ const SOURCE = 'skills/codeman';
 const PLUGIN_DIR = `plugins/${PLUGIN_NAME}`;
 const MIRROR = `${PLUGIN_DIR}/skills/codeman`;
 const MANIFESTS = [`${PLUGIN_DIR}/.claude-plugin/plugin.json`, '.claude-plugin/marketplace.json'];
+// The MCP registry manifest for `codeman mcp` (published with `mcp-publisher` from its
+// directory): the server and its npm package both carry the release version.
+const MCP_REGISTRY_MANIFEST = 'config/mcp-registry/server.json';
 
 const check = process.argv.includes('--check');
 const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
@@ -76,6 +79,21 @@ for (const file of MANIFESTS) {
     }
   }
   if (changed && !check) writeFileSync(file, JSON.stringify(json, null, 2) + '\n');
+}
+
+// 3. The MCP registry manifest.
+{
+  const json = JSON.parse(readFileSync(MCP_REGISTRY_MANIFEST, 'utf8'));
+  const targets = [json, ...(json.packages ?? []).filter((p) => p.registryType === 'npm')];
+  let changed = false;
+  for (const target of targets) {
+    if (target.version !== version) {
+      drift.push(`${MCP_REGISTRY_MANIFEST}: ${target.version} -> ${version}`);
+      target.version = version;
+      changed = true;
+    }
+  }
+  if (changed && !check) writeFileSync(MCP_REGISTRY_MANIFEST, JSON.stringify(json, null, 2) + '\n');
 }
 
 if (drift.length === 0) {

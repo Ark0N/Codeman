@@ -13,8 +13,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   AgentGuardError,
   EXIT,
+  agentAck,
+  agentInboxRead,
   agentInterrupt,
   agentLs,
+  agentPost,
   agentRead,
   agentRm,
   agentSend,
@@ -27,14 +30,18 @@ import {
   buildSendBody,
   deleteRefusal,
   describeFailure,
+  describeRequestError,
   httpRequest,
+  inboxCell,
   inputRefusal,
   isSelfSession,
   MIN_ID_PREFIX_LENGTH,
   parsePositiveInt,
+  postTextFromArgs,
   registerAgentCommands,
   resolveAgentContext,
   stripAnsi,
+  terminalSafeText,
   waitExitCode,
   type AgentContext,
   type AgentDeps,
@@ -506,6 +513,8 @@ describe('agent spawn', () => {
   it('takes the readiness mark from the CLI registry, not from a mode list', () => {
     expect(composerReadyMark('claude')).toBe('shift+tab');
     expect(composerReadyMark('deepseek')).toBe('❯');
+    // Copilot's trust dialog draws `❯ 1. Yes`, so its mark is the composer's footer hint instead.
+    expect(composerReadyMark('copilot')).toBe('/ commands · ? help');
     expect(composerReadyMark('pi')).toBeUndefined();
     expect(composerReadyMark('no-such-cli')).toBeUndefined();
   });
@@ -539,6 +548,75 @@ describe('agent spawn', () => {
     expect(await agentSpawn(deps, { caseName: 'c', mode: 'claude', ready: true, timeoutMs: 1000 })).toBe(EXIT.error);
     expect(deps.calls).toHaveLength(1);
     expect(deps.err.join('')).toMatch(/SESSION_BUSY/);
+  });
+
+  it.each([false, true])('preserves the created id when readiness throws (json=%s)', async (json) => {
+    const deps = fakeDeps((options) => {
+      if (options.path === '/api/v1/quick-start') return ok({ sessionId: OTHER, caseName: 'c' });
+      throw new Error('readiness connection reset');
+    }, json);
+    const exit = await agentSpawn(deps, { caseName: 'c', mode: 'claude', ready: true, timeoutMs: 1000 }).catch(
+      () => undefined
+    );
+
+    if (json) {
+      expect(deps.out).toHaveLength(1);
+      expect(JSON.parse(deps.out[0])).toEqual({
+        sessionId: OTHER,
+        caseName: 'c',
+        readinessError: 'readiness connection reset',
+      });
+      expect(deps.err).toEqual([]);
+    } else {
+      expect(deps.out).toEqual([OTHER]);
+      expect(deps.err.join('')).toContain('readiness check failed: readiness connection reset');
+      expect(deps.err.join('')).not.toMatch(/composer not seen|startup dialog/);
+    }
+    expect(exit).toBe(EXIT.error);
+    expect(deps.calls.map(({ method, path }) => ({ method, path }))).toEqual([
+      { method: 'POST', path: '/api/v1/quick-start' },
+      { method: 'GET', path: `/api/v1/sessions/${OTHER}/wait-output` },
+    ]);
+  });
+
+  it.each([
+    { error: new Error(''), kind: 'Error' },
+    { error: '', kind: 'string' },
+  ])('reports a readiness failure when the thrown $kind has no message', async ({ error }) => {
+    const deps = fakeDeps((options) => {
+      if (options.path === '/api/v1/quick-start') return ok({ sessionId: OTHER });
+      throw error;
+    }, true);
+
+    expect(await agentSpawn(deps, { caseName: 'c', mode: 'claude', ready: true, timeoutMs: 1000 })).toBe(EXIT.error);
+    expect(deps.out).toHaveLength(1);
+    expect(JSON.parse(deps.out[0])).toEqual({ sessionId: OTHER, readinessError: 'request failed without a message' });
+    expect(deps.calls).toHaveLength(2);
+  });
+
+  it('keeps the error code when a refused connection rejects with an empty AggregateError', async () => {
+    // Node 22 on a host resolving to ::1 and 127.0.0.1: message '', code ECONNREFUSED.
+    const refused = Object.assign(new AggregateError([new Error('connect ECONNREFUSED ::1:3000')], ''), {
+      code: 'ECONNREFUSED',
+    });
+    const deps = fakeDeps((options) => {
+      if (options.path === '/api/v1/quick-start') return ok({ sessionId: OTHER });
+      throw refused;
+    }, true);
+
+    expect(await agentSpawn(deps, { caseName: 'c', mode: 'claude', ready: true, timeoutMs: 1000 })).toBe(EXIT.error);
+    expect(JSON.parse(deps.out[0])).toEqual({ sessionId: OTHER, readinessError: 'ECONNREFUSED' });
+  });
+});
+
+describe('describeRequestError', () => {
+  it('prefers the message, then the code, then a generic line', () => {
+    expect(describeRequestError(new Error('socket hang up'))).toBe('socket hang up');
+    expect(describeRequestError(Object.assign(new AggregateError([], ''), { code: 'ECONNREFUSED' }))).toBe(
+      'ECONNREFUSED'
+    );
+    expect(describeRequestError(new Error(''))).toBe('request failed without a message');
+    expect(describeRequestError('')).toBe('request failed without a message');
   });
 });
 
@@ -605,6 +683,196 @@ describe('session id prefixes', () => {
   });
 });
 
+describe('agent inbox verbs', () => {
+  const MSG = {
+    id: 'm-1',
+    from: OTHER,
+    text: 'line one\nline two',
+    createdAt: 1_700_000_000_000 - 90_000,
+    seen: false,
+  };
+
+  it('ls merges the inbox summary into an INBOX column', async () => {
+    const deps = fakeDeps((o) =>
+      o.path === '/api/v1/agent-inbox/summary'
+        ? ok({
+            sessions: {
+              [SELF]: { pending: 2, unseen: 1, oldestUnseenAt: 1, parked: false },
+              [OTHER]: { pending: 0, unseen: 0, oldestUnseenAt: null, parked: true },
+            },
+          })
+        : ok([
+            { id: SELF, mode: 'claude', status: 'busy', name: 'me' },
+            { id: OTHER, mode: 'codex', status: 'idle', name: 'worker' },
+          ])
+    );
+    expect(await agentLs(deps)).toBe(EXIT.ok);
+    const text = deps.out.join('\n');
+    expect(text).toMatch(/ID\s+MODE\s+STATUS\s+INBOX\s+NAME/);
+    expect(text).toMatch(/058ee7b5\s+claude\s+busy\s+2 \(1 new\)\s+me/);
+    expect(text).toMatch(/94990c6d\s+codex\s+idle\s+parked\s+worker/);
+  });
+
+  it('ls --json carries each session’s inbox row (null when it has none)', async () => {
+    const deps = fakeDeps(
+      (o) =>
+        o.path === '/api/v1/agent-inbox/summary'
+          ? ok({ sessions: { [OTHER]: { pending: 1, unseen: 1, oldestUnseenAt: 5, parked: false } } })
+          : ok([{ id: SELF }, { id: OTHER }]),
+      true
+    );
+    await agentLs(deps);
+    const parsed = JSON.parse(deps.out.join('')) as Array<{ id: string; inbox: unknown }>;
+    expect(parsed.map((s) => s.inbox)).toEqual([null, { pending: 1, unseen: 1, oldestUnseenAt: 5, parked: false }]);
+  });
+
+  it('ls still lists sessions when the server has no summary route', async () => {
+    const deps = fakeDeps((o) =>
+      o.path === '/api/v1/agent-inbox/summary' ? apiError(404, 'NOT_FOUND', 'Route not found') : ok([{ id: OTHER }])
+    );
+    expect(await agentLs(deps)).toBe(EXIT.ok);
+    expect(deps.out.join('\n')).not.toContain('INBOX');
+  });
+
+  it('inboxCell', () => {
+    expect(inboxCell(undefined)).toBe('');
+    expect(inboxCell({ pending: 3, unseen: 0, oldestUnseenAt: null, parked: false })).toBe('3');
+    expect(inboxCell({ pending: 3, unseen: 2, oldestUnseenAt: 1, parked: true })).toBe('3 (2 new), parked');
+  });
+
+  it('post sends the text as data to the resolved session and never to /input', async () => {
+    const deps = fakeDeps([ok({ message: MSG, pending: 1, unseen: 1 })]);
+    expect(await agentPost(deps, { id: OTHER, text: 'line one\nline two' })).toBe(EXIT.ok);
+    expect(deps.calls).toEqual([
+      expect.objectContaining({
+        method: 'POST',
+        path: `/api/v1/sessions/${OTHER}/inbox`,
+        body: { text: 'line one\nline two' },
+      }),
+    ]);
+    expect(deps.out.join('')).toMatch(/posted to 94990c6d \(1 pending, 1 unseen\)/);
+  });
+
+  it('post passes a full inbox (409) through as an error', async () => {
+    const deps = fakeDeps([apiError(409, 'CONFLICT', 'Inbox of x is full (200 messages).')]);
+    expect(await agentPost(deps, { id: OTHER, text: 'x' })).toBe(EXIT.error);
+    expect(deps.err.join('')).toMatch(/CONFLICT: Inbox of x is full/);
+  });
+
+  it('post takes ONE argument and refuses an empty one before any request', async () => {
+    expect(postTextFromArgs(['a\nb'])).toEqual({ text: 'a\nb' });
+    expect(postTextFromArgs(['a', 'b'])).toEqual({ error: expect.stringMatching(/ONE argument, got 2/) });
+    const deps = fakeDeps([]);
+    expect(await agentPost(deps, { id: OTHER, text: '' })).toBe(EXIT.refused);
+    expect(deps.calls).toEqual([]);
+  });
+
+  it('inbox reads this session’s own inbox by default and prints full ids plus the ack hint', async () => {
+    const deps = fakeDeps([ok({ receiver: true, messages: [MSG], pending: 1, unseen: 0 })]);
+    expect(await agentInboxRead(deps, {})).toBe(EXIT.ok);
+    expect(deps.calls[0]).toMatchObject({ method: 'GET', path: `/api/v1/sessions/${SELF}/inbox` });
+    expect(deps.calls[0].query).toEqual({ wait: undefined });
+    const text = deps.out.join('\n');
+    expect(text).toMatch(/── m-1 from 94990c6d, 2m ago, new/);
+    expect(text).toContain('line one\nline two');
+    expect(deps.err.join('')).toMatch(/codeman agent ack <id>/);
+  });
+
+  it('inbox prints message text with escape sequences and control characters neutralized', async () => {
+    const hostile = {
+      ...MSG,
+      text: 'title \x1b]0;pwned\x07ok\r\nred \x1b[31mtext\x1b[0m\rover\bwrite\ttab\x9b2J\nend',
+    };
+    const deps = fakeDeps([ok({ receiver: true, messages: [hostile], pending: 1, unseen: 0 })]);
+    expect(await agentInboxRead(deps, {})).toBe(EXIT.ok);
+    // out[0] is the `── <id> from …` header (styled by the palette), out[1] the text.
+    expect(deps.out).toHaveLength(2);
+    expect(deps.out[1]).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+    expect(deps.out[1]).toBe('title ok\nred text\\x0dover\\x08write\ttab\\x9b2J\nend');
+  });
+
+  it('terminalSafeText keeps newline and tab and escapes every other control', () => {
+    expect(terminalSafeText('a\nb\tc')).toBe('a\nb\tc');
+    expect(terminalSafeText('a\r\nb')).toBe('a\nb');
+    expect(terminalSafeText('\x1b[2J\x1bc\x00\x7f')).toBe('\\x1bc\\x00\\x7f');
+    expect(terminalSafeText('ünïcödé ✓')).toBe('ünïcödé ✓');
+  });
+
+  it('inbox --json hands the text out as stored', async () => {
+    const raw = { ...MSG, text: 'red \x1b[31mtext' };
+    const deps = fakeDeps([ok({ receiver: true, messages: [raw], pending: 1, unseen: 0 })], true);
+    await agentInboxRead(deps, {});
+    expect((JSON.parse(deps.out.join('')) as { messages: Array<{ text: string }> }).messages[0].text).toBe(
+      'red \x1b[31mtext'
+    );
+  });
+
+  it('inbox <id> is a peek and says so', async () => {
+    const deps = fakeDeps([ok([{ id: OTHER }]), ok({ receiver: false, messages: [MSG], pending: 1, unseen: 1 })]);
+    expect(await agentInboxRead(deps, { id: OTHER.slice(0, 8) })).toBe(EXIT.ok);
+    expect(deps.calls[1].path).toBe(`/api/v1/sessions/${OTHER}/inbox`);
+    expect(deps.err.join('')).toMatch(/peek: nothing was marked seen/);
+  });
+
+  it('inbox --wait passes the budget and maps timeout to exit 2', async () => {
+    const timedOut = fakeDeps([ok({ receiver: true, messages: [], pending: 0, unseen: 0, wait: { timedOut: true } })]);
+    expect(await agentInboxRead(timedOut, { waitMs: 30_000 })).toBe(EXIT.timeout);
+    expect(timedOut.calls[0]).toMatchObject({ query: { wait: 30_000 }, timeoutMs: 40_000 });
+  });
+
+  describe('a wait the server ended', () => {
+    const ended = ok({ receiver: true, messages: [], pending: 0, unseen: 0, wait: { ended: true } });
+
+    it('is exit 3 only when the session list confirms the session is gone', async () => {
+      const deps = fakeDeps([ended, ok([{ id: OTHER }])]);
+      expect(await agentInboxRead(deps, { waitMs: 30_000 })).toBe(EXIT.dead);
+      expect(deps.calls[1]).toMatchObject({ method: 'GET', path: '/api/v1/sessions' });
+      expect(deps.err.join('')).toMatch(/went away/);
+    });
+
+    it('is exit 2 (wait again) while the session is still listed: a restart or detach', async () => {
+      const deps = fakeDeps([ended, ok([{ id: SELF }])]);
+      expect(await agentInboxRead(deps, { waitMs: 30_000 })).toBe(EXIT.timeout);
+      expect(deps.err.join('')).toMatch(/ended the wait early/);
+    });
+
+    it('is exit 2 when the list cannot be had (the server is still coming back)', async () => {
+      const deps = fakeDeps([ended, apiError(503, 'INTERNAL_ERROR', 'restarting')]);
+      expect(await agentInboxRead(deps, { waitMs: 30_000 })).toBe(EXIT.timeout);
+    });
+  });
+
+  it('ack posts the ids to this session’s own inbox', async () => {
+    const deps = fakeDeps([ok({ removed: 2, pending: 0 })]);
+    expect(await agentAck(deps, { ids: ['m-1', ' m-2 '] })).toBe(EXIT.ok);
+    expect(deps.calls[0]).toMatchObject({
+      method: 'POST',
+      path: `/api/v1/sessions/${SELF}/inbox/ack`,
+      body: { ids: ['m-1', 'm-2'] },
+    });
+    expect(deps.out.join('')).toMatch(/acked 2 \(0 still pending\)/);
+  });
+
+  it('ack refuses without ids and passes a 403 through', async () => {
+    const none = fakeDeps([]);
+    expect(await agentAck(none, { ids: [' '] })).toBe(EXIT.refused);
+    expect(none.calls).toEqual([]);
+    const forbidden = fakeDeps([apiError(403, 'FORBIDDEN', 'Only x itself can acknowledge its inbox')]);
+    expect(await agentAck(forbidden, { ids: ['m-1'] })).toBe(EXIT.error);
+  });
+
+  it('none of the inbox verbs writes to a pane', async () => {
+    const deps = fakeDeps((o) =>
+      o.path === '/api/v1/sessions' ? ok([{ id: OTHER }]) : ok({ messages: [], pending: 0, unseen: 0 })
+    );
+    await agentPost(deps, { id: OTHER, text: 'x' });
+    await agentInboxRead(deps, {});
+    await agentInboxRead(deps, { id: OTHER, waitMs: 1000 });
+    await agentAck(deps, { ids: ['m'] });
+    for (const call of deps.calls) expect(call.path).not.toMatch(/\/input$/);
+  });
+});
+
 describe('help texts carry the traps the skill documents', () => {
   const agent = registerAgentCommands(new Command());
   const sub = (name: string) => agent.commands.find((c) => c.name() === name)!;
@@ -617,6 +885,26 @@ describe('help texts carry the traps the skill documents', () => {
 
   it('send names the -- escape for a prompt that starts with "-"', () => {
     expect(sub('send').description()).toContain('send <id> -- "- fix the bug"');
+  });
+
+  it('post takes text that starts with "-" (markdown from a file) without --', async () => {
+    const program = new Command();
+    program.exitOverride();
+    const post = registerAgentCommands(program).commands.find((c) => c.name() === 'post')!;
+    const got: Array<{ words: string[]; json: boolean }> = [];
+    post.action((_id: string, words: string[], o: { json?: boolean }) => {
+      got.push({ words, json: Boolean(o.json) });
+    });
+    for (const text of ['- [ ] item\nnext', '---\ntitle: a', '-v is great']) {
+      await program.parseAsync(['node', 'codeman', 'agent', 'post', 'abcdefgh', text]);
+    }
+    await program.parseAsync(['node', 'codeman', 'agent', 'post', 'abcdefgh', 'hi', '--json']);
+    expect(got).toEqual([
+      { words: ['- [ ] item\nnext'], json: false },
+      { words: ['---\ntitle: a'], json: false },
+      { words: ['-v is great'], json: false },
+      { words: ['hi'], json: true },
+    ]);
   });
 
   it('rm does not claim a lineage check it does not make', () => {
@@ -660,6 +948,13 @@ describe('httpRequest', () => {
           res.writeHead(401, { 'Content-Type': 'text/plain' }).end('Unauthorized');
           return;
         }
+        if (req.url?.startsWith('/reset')) {
+          // Headers and half a body, then the connection drops (a restart mid-answer).
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.write('{"success":true,"data":');
+          setTimeout(() => req.socket.destroy(), 50);
+          return;
+        }
         res
           .writeHead(200, { 'Content-Type': 'application/json' })
           .end(JSON.stringify({ success: true, data: { echo: true } }));
@@ -700,6 +995,10 @@ describe('httpRequest', () => {
     expect(JSON.parse(last.body)).toEqual({ input: 'hi\r', seq: 1 });
     expect(last.headers['content-type']).toBe('application/json');
     expect(last.headers.authorization).toBeUndefined();
+  });
+
+  it('rejects, rather than hanging, when the connection drops mid-body', async () => {
+    await expect(httpRequest(ctx({ apiUrl }), { method: 'GET', path: '/reset', timeoutMs: 5000 })).rejects.toThrow();
   });
 
   it('keeps a plain-text body when the answer is not JSON', async () => {

@@ -138,8 +138,8 @@ describe('smart-copy wiring invariants', () => {
     // the copy action were reachable from there, Ctrl+C would be swallowed with
     // no selection and the user would lose the interrupt key.
     const actionsBlock = APP_SOURCE.slice(
-      APP_SOURCE.indexOf('const SHORTCUT_ACTIONS = {'),
-      APP_SOURCE.indexOf('// Use capture to handle before terminal')
+      APP_SOURCE.indexOf('_shortcutActions() {'),
+      APP_SOURCE.indexOf('isUserBoundShortcutEvent(e) {')
     );
     expect(actionsBlock.length).toBeGreaterThan(0);
     expect(actionsBlock).not.toContain('copyTerminalSelection');

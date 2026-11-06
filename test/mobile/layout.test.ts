@@ -199,13 +199,24 @@ describe('Mobile Layout', () => {
       }
     });
 
-    it('uses phone upload and voice controls without toolbar overlap', async () => {
+    it('keeps the desktop voice control visible and the phone attach button hidden', async () => {
+      const { context, page } = await createDevicePage(iPadPro, baseUrl, 'chromium');
+      try {
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await page.waitForTimeout(WAIT.PAGE_SETTLE);
+        await assertVisible(page, '#voiceInputBtn');
+        await assertHidden(page, SELECTORS.ATTACH_MOBILE_WRAP);
+      } finally {
+        await context.close();
+      }
+    });
+
+    it('uses phone attach and voice controls without toolbar overlap', async () => {
       const device = REPRESENTATIVE_DEVICES['small-phone'];
       const { context, page } = await createDevicePage(device, baseUrl, 'chromium');
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
-        expect(await page.locator('.toolbar-center .btn-upload').isVisible()).toBe(false);
-        await assertVisible(page, '.btn-upload-mobile');
+        await assertVisible(page, SELECTORS.ATTACH_MOBILE);
         await assertVisible(page, '#voiceInputBtnMobile');
 
         const violations = await page.evaluate(() => {
@@ -260,30 +271,6 @@ describe('Mobile Layout', () => {
 
         expect(shadow).toContain('inset');
         expect(shadow).not.toContain(' 6px ');
-      } finally {
-        await context.close();
-      }
-    });
-
-    it('keeps desktop upload and voice controls in one centered row', async () => {
-      const { context, page } = await createDevicePage(iPadPro, baseUrl, 'chromium');
-      try {
-        await page.setViewportSize({ width: 1280, height: 800 });
-        await page.waitForTimeout(WAIT.PAGE_SETTLE);
-        await assertVisible(page, '.toolbar-center .btn-upload');
-        await assertVisible(page, '#voiceInputBtn');
-
-        const layout = await page.evaluate(() => {
-          const upload = document.querySelector('.toolbar-center .btn-upload')!.getBoundingClientRect();
-          const voice = document.querySelector('#voiceInputBtn')!.getBoundingClientRect();
-          return {
-            centerYDifference: Math.abs(upload.top + upload.height / 2 - (voice.top + voice.height / 2)),
-            centerXDifference: Math.abs(upload.left + upload.width / 2 - (voice.left + voice.width / 2)),
-          };
-        });
-
-        expect(layout.centerYDifference).toBeLessThanOrEqual(2);
-        expect(layout.centerXDifference).toBeGreaterThan(20);
       } finally {
         await context.close();
       }

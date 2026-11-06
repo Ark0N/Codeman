@@ -21,7 +21,7 @@ import { isMultiUserMode } from '../../config/multiuser.js';
 import { getDataDir } from '../../config/instance.js';
 import { isBlockedWebviewUrl } from '../webview-egress-policy.js';
 import { egressBlockedReason, webviewFetch } from '../webview-egress.js';
-import { CustomModelHostSchema } from '../schemas.js';
+import { CustomModelHostSchema, MAX_DISCOVERED_CONTEXT_TOKENS } from '../schemas.js';
 import { readCustomModelHosts, writeCustomModelHosts, type CustomModelHost } from '../../custom-model-hosts.js';
 import type { CliEntry } from '../../config/cli-registry/types.js';
 
@@ -56,11 +56,31 @@ export const CLAUDE_MIN_SAFE_CONTEXT_TOKENS = 40000;
  */
 export function exceedsSafeContextFloor(
   entry: Pick<CliEntry, 'capabilities'>,
-  contextLength: number | undefined
+  contextLength: number | undefined,
+  slotCount?: number
 ): boolean {
   const cap = entry.capabilities.customModelInjection;
   if (cap.kind !== 'env' || !cap.contextLengthVar) return false;
-  return typeof contextLength === 'number' && contextLength < CLAUDE_MIN_SAFE_CONTEXT_TOKENS;
+  if (typeof contextLength !== 'number') return false;
+  if (contextLength < CLAUDE_MIN_SAFE_CONTEXT_TOKENS) return true;
+  return perSlotContext(contextLength, slotCount) < CLAUDE_MIN_SAFE_CONTEXT_TOKENS;
+}
+
+/**
+ * The context one request can rely on when the server runs `slotCount` parallel slots.
+ * llama-server divides its context across `--parallel` slots (by default they share ONE
+ * unified KV pool), and Claude Code sends concurrent requests: the main session plus every
+ * parallel subagent, each carrying the full `CLAUDE_MIN_SAFE_CONTEXT_TOKENS` of its own
+ * system prompt and tools. With N busy slots each request therefore gets roughly
+ * `contextLength / N`, and once the pool is spent llama.cpp answers HTTP 500 "Context size
+ * has been exceeded" (measured: 4 slots, ~131k pool, four simultaneous 40k-token requests
+ * all failed; the same requests against one slot all succeeded). An unknown or single slot
+ * count leaves the context whole.
+ */
+export function perSlotContext(contextLength: number, slotCount: number | undefined): number {
+  const slots =
+    typeof slotCount === 'number' && Number.isFinite(slotCount) && slotCount > 1 ? Math.floor(slotCount) : 1;
+  return Math.floor(contextLength / slots);
 }
 
 function adminOnly(req: FastifyRequest, reply: { code: (n: number) => unknown }): ApiResponse<never> | null {
@@ -109,7 +129,7 @@ function applyStoredApiKey(incoming: CustomModelHost, existing: CustomModelHost)
 }
 
 /**
- * `modelContextLengths`/`modelSizesGB` are server-populated by discovery, never
+ * `modelContextLengths`/`modelSlotCounts`/`modelSizesGB` are server-populated by discovery, never
  * user-entered, and PUT replaces the whole record — so merge them back in from the
  * stored host rather than trust whatever the editor's body carried (or omitted).
  * The editor only ever sends `models`/`lastDiscoveredAt` verbatim from its cached
@@ -117,7 +137,12 @@ function applyStoredApiKey(incoming: CustomModelHost, existing: CustomModelHost)
  * future caller forgets, same class of bug `applyStoredApiKey` exists to prevent.
  */
 function applyDiscoveredFields(incoming: CustomModelHost, existing: CustomModelHost): CustomModelHost {
-  return { ...incoming, modelContextLengths: existing.modelContextLengths, modelSizesGB: existing.modelSizesGB };
+  return {
+    ...incoming,
+    modelContextLengths: existing.modelContextLengths,
+    modelSlotCounts: existing.modelSlotCounts,
+    modelSizesGB: existing.modelSizesGB,
+  };
 }
 
 function authHeaders(host: Pick<CustomModelHost, 'apiKey' | 'authStyle'>): Record<string, string> {
@@ -133,8 +158,15 @@ function authHeaders(host: Pick<CustomModelHost, 'apiKey' | 'authStyle'>): Recor
 
 export interface DiscoveryResult {
   models: string[];
-  /** See `CustomModelHost.modelContextLengths` — only ever populated for models already loaded. */
+  /**
+   * See `CustomModelHost.modelContextLengths`: populated from a model's own `/v1/models`
+   * entry (`context_length`, else `context_window`) whenever the server states one, and
+   * from the launch command or `/props` for loaded models, which overwrite (and so win
+   * over) any listed figure for the same model.
+   */
   contextLengths: Record<string, number>;
+  /** See `CustomModelHost.modelSlotCounts`; populated only for models the server reports loaded (launch command or `/props`). No listing states a slot count, unlike `contextLengths`. */
+  slotCounts: Record<string, number>;
   /** See `CustomModelHost.modelSizesGB` — populated for every model whose own listing states one. */
   sizesGB: Record<string, number>;
 }
@@ -156,8 +188,22 @@ function parseSizeGB(description: unknown): number | undefined {
 }
 
 /**
+ * Best-effort: reads a context length (tokens) stated by a model's OWN entry in
+ * `GET /v1/models`. OpenRouter-style servers call the field `context_length`; current
+ * llama-swap sends both `context_length` and `context_window` per model, and current
+ * Bifrost (a gateway in front of llama-swap) passes `context_window` through. Older
+ * servers send neither, and a server that states nothing gets no entry, never a guess.
+ * Non-numeric, zero, negative, fractional or over-the-ceiling values are ignored, the
+ * same rule the stored field's schema enforces: a wrong figure here is worse than none.
+ */
+function parseListedContextLength(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) return undefined;
+  return value <= MAX_DISCOVERED_CONTEXT_TOKENS ? value : undefined;
+}
+
+/**
  * Best-effort: fetches `GET /props?model=<id>` (llama.cpp-native, llama-swap-proxied) for
- * ONE already-loaded model and pulls its real `n_ctx` out. Never called for a model that
+ * ONE already-loaded model and pulls its `n_ctx` and `total_slots` out. Never called for a model that
  * isn't already loaded — see the caller and `CustomModelHost.modelContextLengths` for why
  * that's a hard safety requirement, not just a nicety: llama-swap treats this endpoint's
  * `?model=` as a routing hint, and asking it about an unloaded model risks triggering an
@@ -173,20 +219,39 @@ function parseSizeGB(description: unknown): number | undefined {
  * (below), which reads the actual launch flag `/running` reports, is the primary source;
  * this is only used when that parse comes up empty (no recognized flag in `cmd`, or `cmd`
  * itself unavailable).
+ *
+ * ⚠️ `/props` only ever RAISES the slot warning, never skips it: its `n_ctx` is the context
+ * fallback when `cmd` states no context flag at all, and `total_slots` is the slot count when
+ * `cmd` has no `--parallel`. It never widens the pool the slot check divides. And it is not
+ * free: llama-swap routes it through the model's process handler, which refreshes the model's
+ * last-use time, so probing a model with a `ttl` on every 5-minute sweep would keep it loaded
+ * forever. `discoverModels` therefore probes once per launch command (`propsByCmd`).
+ *
+ * Returns `undefined` when the request itself failed (network error, timeout, unreadable body),
+ * which is retried next sweep; a non-2xx status, or a 2xx without the fields, gives an object with
+ * them unset, which `propsForLaunch` remembers.
  */
-async function fetchContextLength(
+async function fetchServerProps(
   host: Pick<CustomModelHost, 'baseUrl'>,
   modelId: string,
   headers: Record<string, string>
-): Promise<number | undefined> {
+): Promise<{ nCtx?: number; totalSlots?: number } | undefined> {
   try {
     const url = new URL(`${host.baseUrl.replace(/\/+$/, '')}/props`);
     url.searchParams.set('model', modelId);
     const res = await webviewFetch(url, { headers, signal: AbortSignal.timeout(PROPS_TIMEOUT_MS) });
-    if (!res.ok) return undefined;
-    const body = (await res.json()) as { n_ctx?: unknown; default_generation_settings?: { n_ctx?: unknown } };
+    // A non-2xx answer (an upstream that does not serve /props) is a real answer: empty, so it is
+    // remembered per launch command instead of being re-probed every sweep.
+    if (!res.ok) return {};
+    const body = (await res.json()) as {
+      n_ctx?: unknown;
+      total_slots?: unknown;
+      default_generation_settings?: { n_ctx?: unknown };
+    };
     const nCtx = body.n_ctx ?? body.default_generation_settings?.n_ctx;
-    return typeof nCtx === 'number' && Number.isFinite(nCtx) && nCtx > 0 ? nCtx : undefined;
+    const positive = (v: unknown): number | undefined =>
+      typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
+    return { nCtx: positive(nCtx), totalSlots: positive(body.total_slots) };
   } catch {
     return undefined;
   }
@@ -196,7 +261,7 @@ async function fetchContextLength(
  * Parses the REAL configured context size out of llama-swap's own launch command for a
  * model (`/running`'s `cmd` field, e.g. `"llama-server -m ... --fit-ctx 16384 ..."`) —
  * the primary source for `modelContextLengths`, preferred over `/props`'s `n_ctx` (see
- * `fetchContextLength`'s own doc comment for why that field is unreliable here). Checks
+ * `fetchServerProps`'s own doc comment for why that field is unreliable here). Checks
  * `--fit-ctx` first (llama-swap's own auto-fit flag), then the plain llama.cpp
  * `-c`/`--ctx-size`/`--ctx_size` flags a hand-written launch command might use instead.
  * Returns `undefined` when `cmd` has none of these — not every launch command needs to
@@ -211,6 +276,51 @@ function parseCtxFromCmd(cmd: unknown): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+/**
+ * Parses an explicit `--parallel N` / `-np N` (or `--parallel=N`) out of a launch command.
+ * Returns `undefined` when the command states none, including `-np -1` (llama.cpp's "pick
+ * automatically"), because a llama-server started without it chooses the slot count itself
+ * (4 on the build this was measured on) and only `/props`'s `total_slots` can say what it chose.
+ */
+function parseSlotsFromCmd(cmd: unknown): number | undefined {
+  if (typeof cmd !== 'string') return undefined;
+  const match = /(?:^|\s)(?:-np|--parallel)(?:\s+|=)(\d+)(?=\s|$)/.exec(cmd);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/** The `/props` answer for the launch command a model was last probed under, by host and model id. */
+const propsByCmd = new Map<string, { cmd: string; props: { nCtx?: number; totalSlots?: number } }>();
+
+/** Forget what was probed (tests only: a changed launch command already probes again). */
+export function clearPropsProbeCache(): void {
+  propsByCmd.clear();
+}
+
+/**
+ * `/props` for one loaded model, but only once per launch command: the probe refreshes the model's
+ * last-use time in llama-swap, so repeating it on every rediscovery sweep would stop a model with a
+ * `ttl` from ever unloading. A changed `cmd` (a reloaded or reconfigured model) probes again; a
+ * `cmd` that is not a string cannot be told apart, so it is probed each time; a probe that did not
+ * answer (network error, timeout) is not remembered; a non-2xx status is. Held in memory only, so a restart probes once more.
+ */
+async function propsForLaunch(
+  host: Pick<CustomModelHost, 'baseUrl'>,
+  modelId: string,
+  cmd: unknown,
+  headers: Record<string, string>
+): Promise<{ nCtx?: number; totalSlots?: number } | undefined> {
+  const key = `${host.baseUrl}\0${modelId}`;
+  if (typeof cmd === 'string') {
+    const cached = propsByCmd.get(key);
+    if (cached?.cmd === cmd) return cached.props;
+  }
+  const props = await fetchServerProps(host, modelId, headers);
+  if (props && typeof cmd === 'string') propsByCmd.set(key, { cmd, props });
+  return props;
+}
+
 async function discoverModels(
   host: Pick<CustomModelHost, 'baseUrl' | 'apiKey' | 'authStyle'>
 ): Promise<DiscoveryResult> {
@@ -221,24 +331,42 @@ async function discoverModels(
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = (await res.json()) as {
-    data?: Array<{ id?: unknown; status?: { value?: unknown }; description?: unknown }>;
+    data?: Array<{
+      id?: unknown;
+      status?: { value?: unknown };
+      description?: unknown;
+      context_length?: unknown;
+      context_window?: unknown;
+    }>;
   };
   const entries = body.data ?? [];
   const models = entries.map((m) => m.id).filter((id): id is string => typeof id === 'string' && id.length > 0);
 
   const sizesGB: Record<string, number> = {};
+  // The lowest-precedence context source, and the only one a gateway without /running or
+  // /props of its own (e.g. Bifrost) can offer: the figure a model's own listing states
+  // (`context_length`, else `context_window`). The loaded-model pass below OVERWRITES
+  // these for whatever it reads from the launch command or /props, so precedence per
+  // model stays: `/running` cmd, then `/props`, then this listed figure.
+  const contextLengths: Record<string, number> = {};
   for (const entry of entries) {
     if (typeof entry.id !== 'string' || !entry.id) continue;
     const size = parseSizeGB(entry.description);
     if (size !== undefined) sizesGB[entry.id] = size;
+    const listed = parseListedContextLength(entry.context_length) ?? parseListedContextLength(entry.context_window);
+    if (listed !== undefined) contextLengths[entry.id] = listed;
   }
 
   // llama-swap-specific, feature-detected: a server that never mentions `status` on ANY
-  // entry gets no context-length enrichment at all, rather than treating "no status field"
-  // as "assume unloaded" — either reading is a guess, and skipping is the safe one, since
-  // fetchContextLength must only ever run against a model this server itself calls loaded.
+  // entry gets no launch-command/props context enrichment at all, rather than treating
+  // "no status field" as "assume unloaded"; either reading is a guess, and skipping is
+  // the safe one, since fetchContextLength must only ever run against a model this server
+  // itself calls loaded. Listed figures above are unaffected: reading them triggers nothing.
   const hasStatusField = entries.some((m) => m && typeof m === 'object' && 'status' in m);
-  const contextLengths: Record<string, number> = {};
+  const slotCounts: Record<string, number> = {};
+  // Ids whose figure THIS round's loaded-model probe answered: the listed figure remains
+  // the source only for the ids NOT in this set (see the per-slot correction below).
+  const ctxFromProbe = new Set<string>();
   if (hasStatusField) {
     const loadedIds = entries
       .filter((m) => m.status && typeof m.status === 'object' && (m.status as { value?: unknown }).value === 'loaded')
@@ -252,13 +380,51 @@ async function discoverModels(
       const swapStatus = await getLlamaSwapStatus(host);
       const cmdById = new Map(swapStatus.running.map((r) => [r.model, r.cmd]));
       for (const id of loadedIds) {
-        const fromCmd = parseCtxFromCmd(cmdById.get(id));
-        const ctx = fromCmd ?? (await fetchContextLength(host, id, headers));
-        if (ctx !== undefined) contextLengths[id] = ctx;
+        const cmd = cmdById.get(id);
+        let ctx = parseCtxFromCmd(cmd);
+        const cmdSlots = parseSlotsFromCmd(cmd);
+        let slots = cmdSlots;
+        // /props is only needed for whatever the launch command did not answer. The context
+        // still comes from the command whenever it states one (see fetchServerProps's doc
+        // comment for why /props's n_ctx is only a fallback); the slot count usually cannot
+        // come from the command at all, since an unset --parallel is chosen by the server.
+        if (ctx === undefined || slots === undefined) {
+          const props = await propsForLaunch(host, id, cmd, headers);
+          const ctxFromProps = ctx === undefined && props?.nCtx !== undefined;
+          ctx ??= props?.nCtx;
+          slots ??= props?.totalSlots;
+          // With an explicit --parallel N, llama.cpp reports /props's n_ctx PER SLOT (the unified
+          // KV pool is only the default when the count is auto), so it is already the figure one
+          // request can use, so the count is 1: recording N would divide it a second time, and
+          // recording nothing would leave an earlier round's count in place (applyDiscoveredModels
+          // merges onto what was learned before).
+          if (cmdSlots !== undefined && ctxFromProps) slots = 1;
+        }
+        // Assigning only when a probe answered keeps the listed figure (if any) when
+        // neither the launch command nor /props stated one, and replaces it with the
+        // stronger source whenever they did: cmd > /props > listed, never the reverse.
+        if (ctx !== undefined) {
+          contextLengths[id] = ctx;
+          ctxFromProbe.add(id);
+        }
+        if (slots !== undefined) slotCounts[id] = slots;
       }
     }
   }
-  return { models, contextLengths, sizesGB };
+  // llama-swap documents the LISTED `context_length` as the PER-SLOT window, so whenever
+  // the listed figure is the one taken this round (the model was not loaded, or the
+  // probe answered nothing), its slot count is 1 by definition: the floor check must NOT
+  // divide a per-slot figure a second time. Without recording 1 here, the count a loaded
+  // round stored survives the merge (applyDiscoveredModels keeps what a later round does
+  // not overwrite): 262144 @ 4 slots stored, model unloaded, listed 65536 → 65536 with 4
+  // slots → a false 16384-per-slot warning. Even a count this round's launch command
+  // parsed must yield: pairing a per-slot listed figure with the cmd's --parallel is the
+  // same double division. Same rule the /props branch above applies. Ids whose figure the
+  // probe DID answer keep their probe-derived count untouched.
+  for (const id of Object.keys(contextLengths)) {
+    if (!ctxFromProbe.has(id)) slotCounts[id] = 1;
+  }
+  return { models, contextLengths, slotCounts, sizesGB };
 }
 
 /**
@@ -573,7 +739,7 @@ export function triggerLlamaSwapLoad(
 }
 
 function applyDiscoveredModels(host: CustomModelHost, result: DiscoveryResult): CustomModelHost {
-  const { models, contextLengths, sizesGB } = result;
+  const { models, contextLengths, slotCounts, sizesGB } = result;
   const defaultModelId = host.defaultModelId && models.includes(host.defaultModelId) ? host.defaultModelId : undefined;
   // Merge onto what's already known rather than replacing: a model not probed this round
   // (not currently loaded) keeps whatever context length an earlier round already learned
@@ -581,6 +747,10 @@ function applyDiscoveredModels(host: CustomModelHost, result: DiscoveryResult): 
   const merged = { ...host.modelContextLengths, ...contextLengths };
   const kept = Object.fromEntries(Object.entries(merged).filter(([id]) => models.includes(id)));
   const modelContextLengths = Object.keys(kept).length > 0 ? kept : undefined;
+  // Slot counts follow the same loaded-only, keep-what-an-earlier-round-learned rule.
+  const mergedSlots = { ...host.modelSlotCounts, ...slotCounts };
+  const keptSlots = Object.fromEntries(Object.entries(mergedSlots).filter(([id]) => models.includes(id)));
+  const modelSlotCounts = Object.keys(keptSlots).length > 0 ? keptSlots : undefined;
   // sizesGB, unlike contextLengths, is populated for every model in the SAME pass (no
   // loaded-only restriction — see parseSizeGB), so this is closer to a plain replace, but
   // still merges onto the previous round rather than dropping a size for a model whose
@@ -593,6 +763,7 @@ function applyDiscoveredModels(host: CustomModelHost, result: DiscoveryResult): 
     models,
     defaultModelId,
     modelContextLengths,
+    modelSlotCounts,
     modelSizesGB,
     lastDiscoveredAt: new Date().toISOString(),
   };

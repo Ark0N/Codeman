@@ -7,11 +7,16 @@
  * lets a request *block* until something happens instead, so an orchestrating
  * agent can `curl` and wait. Plan: `docs/agent-control-plan.md`.
  *
- * Two waiter kinds:
+ * Three waiter kinds:
  * - **signal waiters** resolve on the first of a requested set of lifecycle
  *   signals (`idle`, `working`, `stop`, `blocked`, `exit`).
  * - **output waiters** resolve when a literal string appears in a session's
  *   ANSI-stripped output.
+ * - **inbox waiters** resolve when a message is posted to the session's agent
+ *   inbox (`agent-inbox.ts`). The registry knows nothing about messages: the
+ *   route decides whether to park (nothing unseen) and `notifyInbox()` is the
+ *   post's "something arrived". Kept here so `GET .../inbox?wait=` is charged to
+ *   the same per-session / per-owner / total caps as the other two.
  *
  * ## What "ANSI-stripped output" means here
  *
@@ -28,11 +33,17 @@
  * `idle` / `working` / `exit` come from `Session`'s own events (heuristic: output
  * stabilization plus prompt detection), so `idle` can flap mid-turn when a spinner
  * pauses. `stop` and `blocked` come from Claude Code hooks (`POST /api/hook-event`)
- * and are definitive. Only `claude` mode installs those hooks, so `stop` and
- * `blocked` never fire for anything else: callers must be rejected up front rather
- * than left to hit the timeout. `hooksAvailableForMode()` keeps that rule in one
- * place, and it is keyed on the MODE rather than on `isExternalCliMode()` because
- * `shell` is not an external CLI yet installs no hooks either.
+ * and are definitive. Only `claude` mode installs those hooks (and `deepseek`'s status
+ * bridge reports the same two), so `stop` never fires for anything else: callers must
+ * be rejected up front rather than left to hit the timeout. `hooksAvailableForMode()`
+ * keeps that rule in one place, and it is keyed on the MODE rather than on
+ * `isExternalCliMode()` because `shell` is not an external CLI yet installs no hooks
+ * either.
+ *
+ * `blocked` has a second source: a CLI with no hook for it can declare the dialogs it
+ * blocks on (`capabilities.workDetect.blockedLine`, codex), and `Session` reads them off
+ * the screen (`web/screen-blocked.ts`). `blockedSignalAvailable()` is the rule for that
+ * signal. `stop` has no such source, because nothing on a screen says a turn is over.
  *
  * ## Ordering contract for the wiring
  *
@@ -152,7 +163,9 @@ export function parseWaitSignals(raw: unknown): ParsedWaitSignals {
  * `stopped` and `error` both map to `exit` because both mean "not running", so a
  * caller that does catch one of them does not block. `blocked` is deliberately
  * underivable here, it exists only as a hook event until it becomes a real
- * `SessionStatus` (see the deferred Part 3 in the plan).
+ * `SessionStatus` (see the deferred Part 3 in the plan). A screen-read dialog IS a
+ * level a later caller can find (`Session.screenBlocked`), and the wait route answers
+ * that one itself.
  */
 export function signalForStatus(status: SessionStatus): WaitSignal | null {
   switch (status) {
@@ -167,9 +180,6 @@ export function signalForStatus(status: SessionStatus): WaitSignal | null {
       return null;
   }
 }
-
-/** Signals that arrive only via Claude Code hooks, so only `claude` mode can emit them. */
-const HOOK_ONLY_SIGNALS: readonly WaitSignal[] = ['stop', 'blocked'];
 
 /** Per-session facts that can turn a mode's hook capability OFF for one session. */
 export interface HookCapabilityOptions {
@@ -266,6 +276,19 @@ export function sessionHookOptions(session: {
   };
 }
 
+/**
+ * Whether `blocked` can ever fire for this session: its CLI reports it through hooks
+ * (`hooksAvailableForMode()`), or Codeman reads the dialogs it blocks on off its screen
+ * (`capabilities.workDetect.blockedLine`, codex). The screen half needs no per-session
+ * facts: a remote or Docker pane is still a local tmux pane showing the CLI's screen
+ * (their nested tmux runs with `status off`, so nothing is drawn below the CLI).
+ *
+ * ⚠️ Says nothing about `stop`. A screen shows a dialog; it never says a turn ended.
+ */
+export function blockedSignalAvailable(mode: SessionMode, options: HookCapabilityOptions = {}): boolean {
+  return hooksAvailableForMode(mode, options) || !!getCli(mode)?.capabilities.workDetect?.blockedLine;
+}
+
 /** Outcome of resolving a caller-supplied wait target against a session's mode. */
 export interface ResolvedWaitSignals {
   /** Signals to actually wait on. Empty when `error` is set. */
@@ -279,9 +302,9 @@ export interface ResolvedWaitSignals {
  * every wait endpoint shares:
  *
  * 1. An unknown token is an ERROR, never a silent fallback to the default.
- * 2. Hook-only signals are rejected when asked for EXPLICITLY on a mode that emits
- *    no hooks, but merely dropped from the DEFAULT set: omitting the parameter must
- *    never 400.
+ * 2. A signal the session can never emit (`stop` without hooks, `blocked` without
+ *    hooks or a screen-read `blockedLine`) is rejected when asked for EXPLICITLY, but
+ *    merely dropped from the DEFAULT set: omitting the parameter must never 400.
  *
  * Shared by `GET .../wait` and the `wait` field on `POST .../input` so the two can
  * not drift; the second-guessing that produces is worse than the duplication.
@@ -304,7 +327,9 @@ export function resolveWaitSignals(
     };
   }
 
-  const unsupported = new Set<WaitSignal>(hooksAvailableForMode(options.mode, options) ? [] : HOOK_ONLY_SIGNALS);
+  const unsupported = new Set<WaitSignal>();
+  if (!hooksAvailableForMode(options.mode, options)) unsupported.add('stop');
+  if (!blockedSignalAvailable(options.mode, options)) unsupported.add('blocked');
 
   if (parsed.signals.length === 0) {
     return { until: DEFAULT_WAIT_SIGNALS.filter((signal) => !unsupported.has(signal)), error: null };
@@ -324,7 +349,8 @@ export function resolveWaitSignals(
               `a remote host, where the local status bridge cannot reach the harness. Use idle or exit.`
             : `Signal(s) ${rejected.join(', ')} never fire for this deepseek session: its status bridge is off ` +
               `(deepSeekConfig.statusReporting: false), so nothing posts hook events. Use idle or exit.`
-          : `Signal(s) ${rejected.join(', ')} never fire for ${options.mode} sessions (no Claude Code hooks). Use idle or exit.`,
+          : `Signal(s) ${rejected.join(', ')} never fire for ${options.mode} sessions (no Claude Code hooks). ` +
+            `Use ${unsupported.has('blocked') ? 'idle or exit' : 'idle, blocked or exit'}.`,
     };
   }
   return { until: parsed.signals, error: null };
@@ -367,6 +393,12 @@ export interface OutputWaitResult extends WaitResultBase {
   matched: boolean;
   /** Bounded window of output around the match, or null if nothing matched. */
   snippet: string | null;
+}
+
+/** Outcome of an inbox wait. */
+export interface InboxWaitResult extends WaitResultBase {
+  /** True when a post released the wait (the caller should read the inbox now). */
+  posted: boolean;
 }
 
 /**
@@ -437,6 +469,15 @@ export interface OutputWaitOptions extends WaitOptionsBase {
   initialText?: string;
 }
 
+export interface InboxWaitOptions extends WaitOptionsBase {
+  /**
+   * The caller IS the receiving session (as resolved by the route), not a coordinator
+   * peeking. Counted separately so the inbox summary's `parked` means "the receiver is
+   * listening", which is what a sender deciding whether to nudge needs to know.
+   */
+  receiver?: boolean;
+}
+
 export interface SessionWaitRegistryOptions {
   maxWaitersPerSession?: number;
   maxWaitersPerOwner?: number;
@@ -462,6 +503,11 @@ interface SignalWaiter extends WaiterBase {
   settle: (result: SignalWaitResult) => void;
 }
 
+interface InboxWaiter extends WaiterBase {
+  receiver: boolean;
+  settle: (result: InboxWaitResult) => void;
+}
+
 interface OutputWaiter extends WaiterBase {
   /** Original-case needle, kept for reporting. */
   needle: string;
@@ -484,6 +530,7 @@ interface OutputWaiter extends WaiterBase {
 export class SessionWaitRegistry {
   private readonly signalWaiters = new Map<string, Set<SignalWaiter>>();
   private readonly outputWaiters = new Map<string, Set<OutputWaiter>>();
+  private readonly inboxWaiters = new Map<string, Set<InboxWaiter>>();
   /**
    * Live waiter count per owner. A derived count would mean walking every waiter in
    * the process on each registration, so it is maintained incrementally instead:
@@ -523,20 +570,34 @@ export class SessionWaitRegistry {
     return this.outputWaiters.get(sessionId)?.size ?? 0;
   }
 
-  /** Pending waiters of both kinds for a session. */
-  waiterCount(sessionId: string): number {
-    return this.signalWaiterCount(sessionId) + this.outputWaiterCount(sessionId);
+  /**
+   * Pending inbox waiters for a session; with `receiverOnly`, only those whose caller
+   * is the receiving session itself (the inbox summary's `parked`).
+   */
+  inboxWaiterCount(sessionId: string, receiverOnly = false): number {
+    const set = this.inboxWaiters.get(sessionId);
+    if (!set) return 0;
+    if (!receiverOnly) return set.size;
+    let count = 0;
+    for (const waiter of set) if (waiter.receiver) count++;
+    return count;
   }
 
-  /** Pending waiters of both kinds across every session. */
+  /** Pending waiters of every kind for a session. */
+  waiterCount(sessionId: string): number {
+    return this.signalWaiterCount(sessionId) + this.outputWaiterCount(sessionId) + this.inboxWaiterCount(sessionId);
+  }
+
+  /** Pending waiters of every kind across every session. */
   totalWaiterCount(): number {
     let total = 0;
     for (const set of this.signalWaiters.values()) total += set.size;
     for (const set of this.outputWaiters.values()) total += set.size;
+    for (const set of this.inboxWaiters.values()) total += set.size;
     return total;
   }
 
-  /** Pending waiters of both kinds charged to one owner. */
+  /** Pending waiters of every kind charged to one owner. */
   ownerWaiterCount(owner: string): number {
     return this.ownerCounts.get(owner) ?? 0;
   }
@@ -899,6 +960,105 @@ export class SessionWaitRegistry {
     }
   }
 
+  // ── Inbox waits ──
+
+  /**
+   * Block until a message is posted to this session's inbox, the timeout elapses, or
+   * the session ends.
+   *
+   * There is no "already satisfied" shortcut here: whether the inbox holds unseen mail
+   * is the store's business, so the route checks that first and only calls this when
+   * there is nothing to hand out. A post that lands between that check and this call
+   * is not lost either: both run in the same tick, and `notifyInbox` is called by the
+   * post route after the message is stored.
+   *
+   * @throws {WaitCapacityError} when a waiter cap is already reached.
+   */
+  waitForInbox(sessionId: string, options: InboxWaitOptions): Promise<InboxWaitResult> {
+    const base = { posted: false, timedOut: false, immediate: false, waitedMs: 0, timeoutMs: options.timeoutMs };
+    if (options.abortSignal?.aborted) return Promise.resolve({ ...base, ended: true, aborted: true });
+    if (this.stopped) return Promise.resolve({ ...base, ended: true, aborted: false });
+
+    this.assertCapacity(sessionId, options.owner);
+
+    return new Promise<InboxWaitResult>((resolve) => {
+      let set = this.inboxWaiters.get(sessionId);
+      if (!set) {
+        set = new Set<InboxWaiter>();
+        this.inboxWaiters.set(sessionId, set);
+      }
+
+      const waiter: InboxWaiter = {
+        receiver: options.receiver === true,
+        startedAt: Date.now(),
+        timeoutMs: options.timeoutMs,
+        owner: options.owner,
+        timer: setTimeout(() => {
+          this.removeInboxWaiter(sessionId, waiter);
+          resolve({
+            posted: false,
+            timedOut: true,
+            immediate: false,
+            ended: false,
+            aborted: false,
+            waitedMs: Date.now() - waiter.startedAt,
+            timeoutMs: waiter.timeoutMs,
+          });
+        }, options.timeoutMs),
+        settle: resolve,
+      };
+      set.add(waiter);
+      this.chargeOwner(options.owner);
+      waiter.detachAbort = this.attachAbort(options.abortSignal, () => {
+        this.removeInboxWaiter(sessionId, waiter);
+        resolve({
+          posted: false,
+          timedOut: false,
+          immediate: false,
+          ended: true,
+          aborted: true,
+          waitedMs: Date.now() - waiter.startedAt,
+          timeoutMs: waiter.timeoutMs,
+        });
+      });
+    });
+  }
+
+  /**
+   * A message was posted to this session's inbox: release every inbox waiter on it.
+   *
+   * @returns how many waiters were resolved.
+   */
+  notifyInbox(sessionId: string): number {
+    const set = this.inboxWaiters.get(sessionId);
+    if (!set || set.size === 0) return 0;
+    let resolved = 0;
+    for (const waiter of [...set]) {
+      this.removeInboxWaiter(sessionId, waiter);
+      waiter.settle({
+        posted: true,
+        timedOut: false,
+        immediate: false,
+        ended: false,
+        aborted: false,
+        waitedMs: Date.now() - waiter.startedAt,
+        timeoutMs: waiter.timeoutMs,
+      });
+      resolved++;
+    }
+    return resolved;
+  }
+
+  private removeInboxWaiter(sessionId: string, waiter: InboxWaiter): void {
+    clearTimeout(waiter.timer);
+    waiter.detachAbort?.();
+    const set = this.inboxWaiters.get(sessionId);
+    if (!set) return;
+    if (!set.delete(waiter)) return;
+    this.releaseOwner(waiter.owner);
+    if (set.size === 0) this.inboxWaiters.delete(sessionId);
+  }
+
   // ── Teardown ──
 
   /**
@@ -948,6 +1108,23 @@ export class SessionWaitRegistry {
       }
     }
 
+    const inbox = this.inboxWaiters.get(sessionId);
+    if (inbox) {
+      for (const waiter of [...inbox]) {
+        this.removeInboxWaiter(sessionId, waiter);
+        waiter.settle({
+          posted: false,
+          timedOut: false,
+          immediate: false,
+          ended: true,
+          aborted: false,
+          waitedMs: Date.now() - waiter.startedAt,
+          timeoutMs: waiter.timeoutMs,
+        });
+        resolved++;
+      }
+    }
+
     this.pendingAnsi.delete(sessionId);
     return resolved;
   }
@@ -978,7 +1155,7 @@ export class SessionWaitRegistry {
   cancelEverything(): number {
     this.stopped = true;
     let resolved = 0;
-    const ids = new Set([...this.signalWaiters.keys(), ...this.outputWaiters.keys()]);
+    const ids = new Set([...this.signalWaiters.keys(), ...this.outputWaiters.keys(), ...this.inboxWaiters.keys()]);
     for (const id of ids) resolved += this.cancelAll(id);
     return resolved;
   }

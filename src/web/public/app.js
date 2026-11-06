@@ -193,6 +193,8 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.SESSION_RESPAWN_BREAKER_TRIPPED, '_onSessionRespawnBreakerTripped'],
   [SSE_EVENTS.SESSION_CLI_INFO, '_onSessionCliInfo'],
   [SSE_EVENTS.SESSION_STATUS_TELEMETRY, '_onSessionStatusTelemetry'],
+  [SSE_EVENTS.SESSION_PROMPT_CACHE, '_onSessionPromptCache'],
+  [SSE_EVENTS.SESSION_KEEP_WARM, '_onSessionKeepWarm'],
 
   // Scheduled runs
   [SSE_EVENTS.SCHEDULED_CREATED, '_onScheduledCreated'],
@@ -283,6 +285,10 @@ const _SSE_HANDLER_MAP = [
   // Images
   [SSE_EVENTS.IMAGE_DETECTED, '_onImageDetected'],
   [SSE_EVENTS.ATTACHMENT_DETECTED, '_onAttachmentDetected'],
+
+  // Edit history (edit-history-ui.js): an open panel follows its session's tool ends
+  // (and its turn ends, from _onSessionIdle: one handler per event in this map)
+  [SSE_EVENTS.TRANSCRIPT_TOOL_END, '_onEditHistoryTranscriptEvent'],
 
   // Tunnel
   [SSE_EVENTS.TUNNEL_STARTED, '_onTunnelStarted'],
@@ -532,8 +538,8 @@ const DEFAULT_SHORTCUTS = [
     group: 'Session',
     label: 'Toggle Session Sidebar',
     // Alt+B, not Ctrl+B: Ctrl+B must reach the terminal (tmux prefix,
-    // readline backward-char). The Alt block below claims only Digit1-9 and
-    // the brackets, and the registry claims Alt for KeyK and Slash only.
+    // readline backward-char). The Alt block below claims only Digit1-9; the
+    // brackets are registry entries, and the registry claims Alt for KeyK and Slash only.
     bindings: [{ modifiers: ['alt'], key: 'b', code: 'KeyB' }],
     action: 'toggleSessionSidebar',
   },
@@ -637,11 +643,22 @@ const DEFAULT_SHORTCUTS = [
     bindings: [],
     action: 'removeTile',
   },
+  // Physical key codes, so macOS Option layouts that print "“" for Option+[ still match.
   {
-    id: 'previous-next-session',
+    id: 'previous-session',
     group: 'Session',
-    label: 'Previous / Next Session',
-    displayBindings: ['Alt/Option+[', 'Alt/Option+]'],
+    label: 'Previous Session',
+    displayBindings: ['Alt/Option+['],
+    bindings: [{ modifiers: ['alt'], code: 'BracketLeft' }],
+    action: 'previousSession',
+  },
+  {
+    id: 'next-session-alt',
+    group: 'Session',
+    label: 'Next Session (alternate)',
+    displayBindings: ['Alt/Option+]'],
+    bindings: [{ modifiers: ['alt'], code: 'BracketRight' }],
+    action: 'nextSession',
   },
   {
     id: 'switch-tab-n',
@@ -673,6 +690,14 @@ const DEFAULT_SHORTCUTS = [
     label: 'Close Panels',
     displayBindings: ['Escape'],
   },
+  // Handled by the File Viewer's own capture-phase listener while it is open
+  // (_bindFilePreviewChrome, panels-ui.js), never through the registry.
+  {
+    id: 'file-preview-history',
+    group: 'Panels',
+    label: 'File Viewer Back / Forward',
+    displayBindings: ['Alt/Option+ArrowLeft', 'Alt/Option+ArrowRight'],
+  },
 ];
 
 
@@ -687,6 +712,12 @@ const DEFAULT_SHORTCUTS = [
  * setInterval fire on every frame, and constants.js is cached independently.
  */
 const SIDEBAR_RICH_CLOCK_MS = 20000;
+// Header connection pill: a queue above CONNECTION_BACKLOG_HINT_BYTES is only worth a " · NB queued"
+// suffix once it has STAYED above it for CONNECTION_BACKLOG_HOLD_MS. A paste, an IME commit or a fast
+// word sits above the threshold for a few milliseconds until its ACK lands, and surfacing that made the
+// pill grow to the right and shrink back on every such burst.
+const CONNECTION_BACKLOG_HINT_BYTES = 4;
+const CONNECTION_BACKLOG_HOLD_MS = 1200;
 
 /**
  * How long a `#session=<id>` link waits for the session list to name its id
@@ -702,6 +733,9 @@ const URL_SESSION_WAIT_MS = 30000;
  * seconds; an older copy is from a tab that sat closed or a different visit.
  */
 const TAB_LAYOUT_PENDING_MAX_AGE_MS = 60000;
+
+/** How long a collapsed group's header stays marked after a tab arrives in it. */
+const TAB_GROUP_ARRIVAL_MS = 2000;
 
 class CodemanApp {
   constructor() {
@@ -768,6 +802,12 @@ class CodemanApp {
     // their scrollback can be very large; full history stays available on demand.
     // Tracked PER SESSION rather than as a single "first load" flag (issue #205).
     this._fullHistoryLoaded = new Set();
+    // Rows of scrollback tmux reported above the visible frame on this session's
+    // last capture (`paneHistoryLines`). 0 marks a pane with no history to load
+    // (a fullscreen CLI in the alternate screen), which a tab switch serves from
+    // the small `full=1` capture instead of the 1 MiB byte tail: see
+    // _notePaneHistory and selectSession.
+    this._paneHistoryLines = new Map(); // Map<sessionId, number>
     // Cooldown per session for the scroll-to-top "load more history" re-pull.
     this._fullHistoryRepullAt = new Map(); // Map<sessionId, timestamp>
     this._fullHistoryRepullInFlight = false;
@@ -961,6 +1001,12 @@ class CodemanApp {
     this._sseLastMessageAt = 0;
     this._sseStaleTimeoutMs = window.CodemanSseStale?.TIMEOUT_MS ?? 45000;
     this._sseStaleWatchdog = null;
+    // Connect timeout: the watchdog only judges a 'connected' stream, and an
+    // attempt whose request hangs never opens AND never errors. Each attempt
+    // is bounded by this timer (armed in connectSSE, cleared on open, on
+    // failure and at the top of every connectSSE so timers never stack).
+    this._sseConnectTimeout = null;
+    this._sseConnectTimeoutMs = window.CodemanSseStale?.CONNECT_TIMEOUT_MS ?? 15000;
 
     // Connection-loss UI (banner + full-screen overlay). The decision itself is
     // pure and lives in constants.js (computeConnectionLossUi); these are just
@@ -1378,19 +1424,7 @@ class CodemanApp {
     // getShortcutRegistry()). The command palette chord is deliberately NOT in
     // this map — shouldOpenCommandPaletteFromShortcut() dispatches it above with
     // focus-target awareness (it must fire from the terminal but not from inputs).
-    const SHORTCUT_ACTIONS = {
-      showShortcutOverlay: () => this.showShortcutOverlay(),
-      killActiveSession: () => this.killActiveSession(),
-      nextSession: () => this.nextSession(),
-      clearTerminal: () => this.clearTerminal(),
-      restoreTerminalSize: () => this.restoreTerminalSize(),
-      increaseFontSize: () => this.increaseFontSize(),
-      decreaseFontSize: () => this.decreaseFontSize(),
-      toggleVoiceInput: () => VoiceInput.toggle(),
-      moveActiveTabLeft: () => this.moveActiveTabLeft(),
-      moveActiveTabRight: () => this.moveActiveTabRight(),
-      toggleSessionSidebar: () => this.toggleSessionSidebar(),
-    };
+    const SHORTCUT_ACTIONS = this._shortcutActions();
 
     // Use capture to handle before terminal
     document.addEventListener('keydown', (e) => {
@@ -1437,6 +1471,7 @@ class CodemanApp {
         this.closeAllPanels();
         this.closeHelp();
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();
+        this.closeWorktreeModal?.();
         this.closeSessionManager();
         this.closeCommandPalette?.();
         this.closeShortcutOverlay?.();
@@ -1453,7 +1488,8 @@ class CodemanApp {
       // Option/Alt session navigation uses physical key CODES, not e.key, so macOS
       // keyboard layouts that emit special characters under Option (Option+1 -> ¡,
       // Option+[ -> "“") still switch sessions. e.code is the physical key regardless
-      // of layout. Option+1-9 = switch by index; Option+[ / Option+] = prev / next.
+      // of layout. Option+1-9 = switch by index. Option+[ / ] (prev / next) live in the
+      // shortcut registry, so they can be rebound.
       if (e.altKey && !e.ctrlKey && !e.shiftKey) {
         const code = e.code || '';
         const digitMatch = code.match(/^Digit([1-9])$/);
@@ -1477,16 +1513,6 @@ class CodemanApp {
               this.openWebview(webId);
             }
           }
-          return;
-        }
-        if (e.code === 'BracketLeft') {
-          e.preventDefault();
-          this.prevSession();
-          return;
-        }
-        if (e.code === 'BracketRight') {
-          e.preventDefault();
-          this.nextSession();
           return;
         }
       }
@@ -1667,8 +1693,12 @@ class CodemanApp {
    * side-effect-light. Calling it again for an already-open window just raises
    * that window.
    * @param {string} id session id
+   * @param {{width?: number, height?: number, left?: number, top?: number}} [placement]
+   *   the new window's size and screen position (a detached tile opens its own
+   *   size, where it was let go); omitted, the default 960x680 wherever the
+   *   browser puts it. A host window ignores it.
    */
-  detachSession(id) {
+  detachSession(id, placement = null) {
     if (this.isSoloWindow) return;            // a solo window can't spawn more
     if (!this.sessions.has(id)) return;
     // Already detached → raise the existing popup instead of opening (or
@@ -1696,7 +1726,7 @@ class CodemanApp {
       this._postWindowMessage({ type: 'detached', id });
       return;
     }
-    const features = 'width=960,height=680,menubar=no,toolbar=no,location=no,status=no';
+    const features = this._detachWindowFeatures(placement);
     let win = null;
     try { win = window.open(CodemanBase.url('/session/' + encodeURIComponent(id)), 'codeman-session-' + id, features); } catch {}
     if (!win) {
@@ -1708,6 +1738,21 @@ class CodemanApp {
     this._watchDetachedWindow(id, win);
     this._postWindowMessage({ type: 'detached', id });
     try { win.focus(); } catch {}
+  }
+
+  /**
+   * The window.open features of a pop-out: `placement`'s size (default
+   * 960x680) and, when it has one, its screen position. Only finite numbers
+   * make it into the string.
+   */
+  _detachWindowFeatures(placement) {
+    const int = (v) => (Number.isFinite(v) ? Math.round(v) : null);
+    const width = int(placement?.width) ?? 960;
+    const height = int(placement?.height) ?? 680;
+    const left = int(placement?.left);
+    const top = int(placement?.top);
+    const at = left !== null && top !== null ? `,left=${left},top=${top}` : '';
+    return `width=${width},height=${height}${at},menubar=no,toolbar=no,location=no,status=no`;
   }
 
   /**
@@ -1878,11 +1923,15 @@ class CodemanApp {
     if (!msg || typeof msg !== 'object') return;
     if (this.isSoloWindow) {
       // Roll-call has no id (broadcast to all) — answer before the id filter.
-      if (msg.type === 'roll-call') { this._postWindowMessage({ type: 'detached', id: this.soloSessionId }); return; }
+      // A window that has handed its session back stays silent.
+      if (msg.type === 'roll-call') {
+        if (!this._soloReleased) this._postWindowMessage({ type: 'detached', id: this.soloSessionId });
+        return;
+      }
       if (msg.id !== this.soloSessionId) return;
       // A host window ignores window.close()/focus() from script it did not
       // open by window.open, so ask the host when it offers the call.
-      if (msg.type === 'close-request') { this._closeSoloWindow(); }
+      if (msg.type === 'close-request') { this._releaseSoloWindow(); }
       else if (msg.type === 'focus-request') {
         try { if (typeof window.CodemanHost?.focusWindow === 'function') window.CodemanHost.focusWindow(); else window.focus(); } catch {}
       }
@@ -1890,6 +1939,10 @@ class CodemanApp {
     }
     // Dashboard side.
     if (msg.type === 'detached' && msg.id) {
+      // A pop-out this window just docked as a tile (Detach Tiles), answering
+      // a roll-call on its way out: not a new pop-out, which would take the
+      // tile straight back off.
+      if (this._tileDockedRecently?.(msg.id)) return;
       this._cancelPendingRedock(msg.id);    // a re-announce (e.g. popup reload) cancels a deferred redock
       this._detachPingPending?.delete(msg.id);  // and proves liveness for this tick
       this._detachOrphanStrikes.delete(msg.id); // any answer clears accumulated misses
@@ -1899,6 +1952,9 @@ class CodemanApp {
     } else if (msg.type === 'detach-request' && msg.id) {
       // Future gesture hook: another window asks the dashboard to detach a tab.
       this.detachSession(msg.id);
+    } else if (msg.type === 'tile-adopted' && msg.id && msg.by !== this._wsTabNonce) {
+      // Another window docked a tile dragged out of this one (tile-grid.js).
+      this._onTileAdoptedElsewhere?.(msg.id);
     }
   }
 
@@ -1945,6 +2001,41 @@ class CodemanApp {
     } catch {}
   }
 
+  /**
+   * Solo window: a dashboard took the session back (its re-dock, or a
+   * dashboard docked it as a tile). Says so at once and stops answering
+   * roll-calls, then closes. A window the browser will not let a script
+   * close (one opened by typing its URL) says where the session went
+   * instead, rather than staying a live pop-out that every dashboard would
+   * mark detached again at its next roll-call.
+   */
+  _releaseSoloWindow() {
+    if (this._soloReleased) return;
+    this._soloReleased = true;
+    this._postWindowMessage({ type: 'redocked', id: this.soloSessionId });
+    this._closeSoloWindow();
+    setTimeout(() => {
+      if (!window.closed) this._showSoloReleased();
+    }, 300);
+  }
+
+  /** Solo window: the session went back to a dashboard and this window could not close. */
+  _showSoloReleased() {
+    if (document.querySelector('.solo-gone-overlay')) return;
+    const el = document.createElement('div');
+    el.className = 'solo-gone-overlay';
+    const title = document.createElement('h2');
+    title.textContent = 'Session moved';
+    const text = document.createElement('p');
+    text.textContent = 'This session is back in a Codeman window. This one can be closed.';
+    const btn = document.createElement('button');
+    btn.className = 'btn-primary';
+    btn.textContent = 'Close window';
+    btn.addEventListener('click', () => this._closeSoloWindow());
+    el.append(title, text, btn);
+    document.body.appendChild(el);
+  }
+
   /** Solo window: select the target session and apply minimal single-session
    *  chrome. Called from handleInit once the session list has loaded. */
   _applySoloMode() {
@@ -1960,6 +2051,8 @@ class CodemanApp {
     if (titleEl) { titleEl.textContent = name; titleEl.style.display = ''; }
     const redock = document.getElementById('soloRedockBtn');
     if (redock) redock.style.display = '';
+    // Detach Tiles: the title drags onto a dashboard's tiles to dock there.
+    this._installSoloTileHandle?.();
     document.title = name + ' — ' + (window.CodemanI18n?.displayName || 'Codeman');
     if (this.notificationManager) this.notificationManager.originalTitle = document.title;
     // Neutralize the dashboard-only brand click in a solo window.
@@ -1983,6 +2076,10 @@ class CodemanApp {
   }
 
   connectSSE() {
+    // First, before the offline early return: any path into connectSSE
+    // supersedes the previous attempt, and its deadline must go with it.
+    this._clearTimer('_sseConnectTimeout');
+
     // Check if browser is offline
     if (!navigator.onLine) {
       this.setConnectionStatus('offline');
@@ -2026,7 +2123,21 @@ class CodemanApp {
     const _sseParams = new URLSearchParams({ clientId: this._clientId });
     const _sseFilterId = this._sseFilterSessionId(this.activeSessionId);
     if (_sseFilterId) _sseParams.set('sessions', _sseFilterId);
-    this.eventSource = new EventSource(CodemanBase.url(`/api/events?${_sseParams.toString()}`));
+    const eventSource = new EventSource(CodemanBase.url(`/api/events?${_sseParams.toString()}`));
+    this.eventSource = eventSource;
+
+    // Bound the attempt. A request that never gets response headers leaves
+    // the EventSource in CONNECTING with no `open` and no `error`, so without
+    // this the page waits forever. readyState OPEN covers the narrow race
+    // where the connection opened but its `open` callback has not run yet.
+    const connectTimeout = setTimeout(() => {
+      if (this._sseConnectTimeout !== connectTimeout) return;
+      this._sseConnectTimeout = null;
+      if (this.eventSource !== eventSource || eventSource.readyState === EventSource.OPEN) return;
+      console.warn(`[SSE] connection did not open within ${this._sseConnectTimeoutMs}ms, retrying`);
+      this._handleSseConnectionFailure(eventSource);
+    }, this._sseConnectTimeoutMs);
+    this._sseConnectTimeout = connectTimeout;
 
     // Store all event listeners for cleanup on reconnect.
     //
@@ -2055,6 +2166,7 @@ class CodemanApp {
     };
 
     this.eventSource.onopen = () => {
+      this._clearTimer('_sseConnectTimeout');
       this.reconnectAttempts = 0;
       // Start the liveness clock here, not at the first frame: the watchdog
       // only ever fires while the status is 'connected', and this is the
@@ -2062,31 +2174,7 @@ class CodemanApp {
       this._sseLastMessageAt = Date.now();
       this.setConnectionStatus('connected');
     };
-    this.eventSource.onerror = () => {
-      this.reconnectAttempts++;
-      if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-        this.setConnectionStatus('disconnected');
-      } else {
-        this.setConnectionStatus('reconnecting');
-      }
-      // Close the failed connection before scheduling reconnect
-      if (this.eventSource) {
-        this.eventSource.close();
-        this.eventSource = null;
-      }
-      // Clear any existing reconnect timeout before setting new one (prevents orphaned timeouts)
-      this._clearTimer('sseReconnectTimeout');
-      // Exponential backoff: 200ms, 500ms, 1s, 2s, 4s, ... up to 30s
-      // Fast first retry (200ms) for server-restart case (COM deploy),
-      // then ramp up for real network issues.
-      const delay = this.reconnectAttempts <= 1 ? 200
-        : Math.min(500 * Math.pow(2, this.reconnectAttempts - 2), 30000);
-      // Feeds the "Retrying in Ns" countdown. With a 30s cap on the backoff, a
-      // silent wait that long is indistinguishable from a hung app.
-      this._nextSseRetryAt = Date.now() + delay;
-      this._updateConnectionLossUi();
-      this.sseReconnectTimeout = setTimeout(() => this.connectSSE(), delay);
-    };
+    this.eventSource.onerror = () => this._handleSseConnectionFailure(eventSource);
 
     // Create stable handler wrappers once (reused across reconnects so
     // removeEventListener always matches the original reference)
@@ -2250,6 +2338,38 @@ class CodemanApp {
   }
 
   /**
+   * Close a failed SSE attempt (onerror, or the connect timeout) and schedule
+   * the normal exponential-backoff retry.
+   */
+  _handleSseConnectionFailure(eventSource) {
+    // A late error or timeout from an EventSource that has since been
+    // replaced must not close or reschedule the connection that replaced it.
+    if (this.eventSource !== eventSource) return;
+    this._clearTimer('_sseConnectTimeout');
+    this.reconnectAttempts++;
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      this.setConnectionStatus('disconnected');
+    } else {
+      this.setConnectionStatus('reconnecting');
+    }
+    // Close the failed connection before scheduling reconnect
+    this.eventSource = null;
+    eventSource.close();
+    // Clear any existing reconnect timeout before setting new one (prevents orphaned timeouts)
+    this._clearTimer('sseReconnectTimeout');
+    // Exponential backoff: 200ms, 500ms, 1s, 2s, 4s, ... up to 30s
+    // Fast first retry (200ms) for server-restart case (COM deploy),
+    // then ramp up for real network issues.
+    const delay = this.reconnectAttempts <= 1 ? 200
+      : Math.min(500 * Math.pow(2, this.reconnectAttempts - 2), 30000);
+    // Feeds the "Retrying in Ns" countdown. With a 30s cap on the backoff, a
+    // silent wait that long is indistinguishable from a hung app.
+    this._nextSseRetryAt = Date.now() + delay;
+    this._updateConnectionLossUi();
+    this.sseReconnectTimeout = setTimeout(() => this.connectSSE(), delay);
+  }
+
+  /**
    * Force a reconnect if the SSE stream has gone quiet while still claiming to
    * be connected. Called by the 5s watchdog and on tab-visible.
    *
@@ -2300,10 +2420,13 @@ class CodemanApp {
     // A session this tab is closing stays closed until the server answers.
     if (this._closingSessions?.has(data.id)) return;
     this.sessions.set(data.id, data);
-    // Add new session to end of tab order
     if (!this.sessionOrder.includes(data.id)) {
-      this.sessionOrder.push(data.id);
-      this.saveSessionOrder();
+      // The server placed it when it recorded the creation (a child after its
+      // parent, a grouped creation in its group) and broadcast that order
+      // (session:orderChanged); adopt it, appending only while that broadcast is
+      // still on its way. Never echo it back through PUT /api/session-order:
+      // the server reads that as a hand arrangement of every tab.
+      this.syncSessionOrder();
     }
     // Idempotent per id: the POST response and the session:created event both
     // land here, and a batch launched together cascades in creation order.
@@ -2316,8 +2439,6 @@ class CodemanApp {
     if (data.parentSessionId) this.markConnectionLineEntering?.('lineage:' + data.id);
     this.renderSessionTabs();
     this.updateCost();
-    // Start stats polling when first session appears
-    if (this.sessions.size === 1) this.startSystemStatsPolling();
     if (this._urlSessionId === data.id) this._selectUrlSession();
   }
 
@@ -2335,9 +2456,15 @@ class CodemanApp {
     if (session.id === this.activeSessionId && session.tokens) {
       this.updateRespawnTokens(session.tokens);
     }
+    // cliMouseTracking (Claude's fullscreen mode) ends a keyboard row hold.
+    if (session.id === this.activeSessionId) this._reconcileKeyboardHold?.();
     // Update parentSessionName for any subagents belonging to this session
     // (fixes stale name display after session rename)
     this.updateSubagentParentNames(session.id);
+    // A scheduled fetch publishes the session's result on this same event, so an open Session Options modal
+    // on that session shows it without polling its own (session-ui.js: updateGitFetchStatus, which leaves the
+    // control being typed in alone).
+    if (this.editingSessionId === session.id) this.updateGitFetchStatus(session.id);
     // If claudeSessionId was just set, re-check orphan subagents
     // This connects subagents that were waiting for the session to identify itself
     if (claudeSessionIdJustSet) {
@@ -2373,8 +2500,8 @@ class CodemanApp {
     this.renderSessionTabs();
     this.renderRalphStatePanel();  // Update ralph panel after session deleted
     this.renderProjectInsightsPanel();  // Update project insights panel after session deleted
-    // Stop stats polling when no sessions remain
-    if (this.sessions.size === 0) this.stopSystemStatsPolling();
+    // Stats polling keeps going with no session left: the header shows CPU, MEM and the opt-in readings
+    // regardless, and would sit at "--" otherwise.
   }
 
   // SSE wrappers — skip terminal events while WebSocket owns active terminal I/O.
@@ -2734,7 +2861,9 @@ class CodemanApp {
   _bindResponseViewerInteractions(body) {
     if (!body || body.dataset.rvBound === '1') return;
     body.dataset.rvBound = '1';
-    body.addEventListener('click', async (ev) => {
+    // The two link kinds whose href is a placeholder the browser cannot open
+    // (`#`, `#fragment`). Returns true when it took the event.
+    const openPlaceholderLink = (ev) => {
       // File path (_linkifyFilePaths): open it in the preview overlay, which
       // resolves workspace and out-of-workspace paths alike.
       const pathLink = ev.target.closest('a.rv-path');
@@ -2744,8 +2873,14 @@ class CodemanApp {
         const filePath = pathLink.dataset.path;
         // A rendered document's links name the session the preview was opened
         // for (_rebaseFilePreviewMarkdownRefs), which need not be the active tab.
-        if (filePath) this.openFilePreview(filePath, pathLink.dataset.sessionId || this.activeSessionId);
-        return;
+        // A path the linkifier found in prose may be relative: resolve it against
+        // that session's working directory. A markdown document's own links
+        // (rebased, no `linkified` mark) already are what the routes expect.
+        const sessionId = pathLink.dataset.sessionId || this.activeSessionId;
+        const target = pathLink.dataset.linkified ? this._resolveLinkedFilePath?.(filePath, sessionId) : filePath;
+        if (filePath && pathLink.dataset.folder) this.openFolderGrid(target || filePath, sessionId);
+        else if (filePath) this.openFilePreview(target || filePath, sessionId);
+        return true;
       }
 
       // An in-document link (`[Install](#installation)`). The browser must not follow it: with
@@ -2762,8 +2897,18 @@ class CodemanApp {
           const calm = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
           target.scrollIntoView({ block: 'start', behavior: calm ? 'auto' : 'smooth' });
         }
-        return;
+        return true;
       }
+      return false;
+    };
+    // A middle click fires auxclick, never click, so the browser followed the
+    // placeholder and opened the dashboard root in a new tab: do what a click
+    // does instead. A real URL keeps the browser's own middle click.
+    body.addEventListener('auxclick', (ev) => {
+      if (ev.button === 1) openPlaceholderLink(ev);
+    });
+    body.addEventListener('click', async (ev) => {
+      if (openPlaceholderLink(ev)) return;
 
       // A `localhost` URL in the agent's answer: from another device that can
       // only load through the server, so hand it to a proxied web tab
@@ -2862,7 +3007,8 @@ class CodemanApp {
   }
 
   /**
-   * Make absolute file paths in a rendered message clickable.
+   * Make file paths in a rendered message clickable: absolute, `~/` and
+   * relative ones (`findFilePathLinks`, constants.js).
    *
    * The terminal's link provider never sees these: the response viewer is
    * markdown, and a path the agent wrote as prose or inline code renders as
@@ -2875,13 +3021,48 @@ class CodemanApp {
    * output. Subtrees already inside an `<a>` are skipped so an autolinked URL
    * is never re-cut, and the anchor's textContent is the path verbatim, so
    * "copy code" still yields exactly what the agent printed.
+   *
+   * Before that walk it also rewrites an existing anchor whose href is a path
+   * (no scheme, not `//host`, not a bare `#fragment`) into the same `a.rv-path`
+   * shape, on purpose WITHOUT `FILE_PATH_LINK_PATTERN`'s root and extension
+   * filter: the agent chose that href as a link target, and left alone it opens
+   * as a same-origin URL (a 404 page in a new tab).
    */
   _linkifyFilePaths(root) {
     if (!root || typeof document === 'undefined') return;
     // Guarded: a stale cached constants.js must degrade to plain text, not throw
     // out of the middle of rendering a message.
-    if (typeof absoluteFilePathPattern !== 'function') return;
-    const pattern = absoluteFilePathPattern();
+    if (typeof findFilePathLinks !== 'function') return;
+
+    // A markdown link whose destination is a path (`[report](/home/me/run/x.json)`,
+    // Codex's usual way of citing a file) resolved against Codeman's own origin
+    // and opened a 404 in a new tab. Give it the linkified-path shape instead;
+    // links with a scheme or `//host` keep their own behaviour.
+    for (const a of root.querySelectorAll('a[href]')) {
+      // The URL parser drops tabs and newlines, so `http&#9;://` is still http.
+      const href = (a.getAttribute('href') || '').replace(/[\t\n\r]/g, '');
+      if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('//')) continue;
+      // `#L42`, `?plain=1` and a `:42:7` suffix name a spot in the file, not the
+      // file. The suffix is cut before decoding, so an encoded `%3A` stays a name.
+      let path = href.split('#')[0].split('?')[0].replace(/:\d+(?::\d+)?$/, '');
+      try {
+        path = decodeURIComponent(path);
+      } catch {
+        /* malformed escape: keep the path as written */
+      }
+      // A bare `#fragment` (and every `.rv-path`, whose href is `#`) ends up empty.
+      if (!path) continue;
+      // rv-path-link keeps the label in the prose font (styles.css): it is a label,
+      // not a path, and break-all would split it mid-word on a phone.
+      a.className = 'rv-path rv-path-link';
+      a.dataset.path = path;
+      a.dataset.linkified = '1';
+      if (path.endsWith('/') || findFilePathLinks(path).some((f) => f.folder && f.path === path)) a.dataset.folder = '1';
+      a.title = path;
+      a.setAttribute('href', '#');
+      a.removeAttribute('target');
+      a.removeAttribute('rel');
+    }
 
     // Collect first: replacing a node while the walker is positioned on it
     // invalidates the traversal.
@@ -2889,27 +3070,46 @@ class CodemanApp {
     const targets = [];
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (node.parentElement?.closest('a')) continue;
-      pattern.lastIndex = 0;
-      if (pattern.test(node.nodeValue || '')) targets.push(node);
+      // Markdown puts **Saved to:** in a separate <strong> node. Carry a bold
+      // label that starts its line into detection and let spacedFilePathOnLine()
+      // judge it, as it does the same line in the terminal (`Note:` is not a
+      // path label); never a label from another block. Chat renders with
+      // `breaks: true`, so a later line of a paragraph starts after a <br>.
+      // A text node after any other inline element (`Use <code>--config</code>
+      // /a/b c.json`) starts mid-line, so a placeholder word stands in for what
+      // precedes it. The label itself stays untouched.
+      const label = node.previousSibling;
+      let beforeLabel = label?.previousSibling;
+      if (beforeLabel?.nodeType === 3 && !beforeLabel.nodeValue.trim()) beforeLabel = beforeLabel.previousSibling;
+      const leadingLabel =
+        label?.nodeName === 'STRONG' &&
+        /^(?:P|LI)$/.test(node.parentElement?.tagName || '') &&
+        (!beforeLabel || beforeLabel.nodeName === 'BR');
+      let prefix = '';
+      if (leadingLabel) prefix = `${label.textContent} `;
+      else if (label?.nodeType === 1 && label.nodeName !== 'BR') prefix = 'x ';
+      const found = findFilePathLinks(prefix + (node.nodeValue || ''))
+        .filter((hit) => hit.index >= prefix.length)
+        .map((hit) => ({ ...hit, index: hit.index - prefix.length }));
+      if (found.length > 0) targets.push([node, found]);
     }
 
-    for (const node of targets) {
+    for (const [node, found] of targets) {
       const value = node.nodeValue;
       const frag = document.createDocumentFragment();
       let cursor = 0;
-      let match;
-      pattern.lastIndex = 0;
-      while ((match = pattern.exec(value)) !== null) {
-        const path = match[1];
-        if (match.index > cursor) frag.appendChild(document.createTextNode(value.slice(cursor, match.index)));
+      for (const { path, index, folder } of found) {
+        if (index > cursor) frag.appendChild(document.createTextNode(value.slice(cursor, index)));
         const link = document.createElement('a');
         link.className = 'rv-path';
         link.href = '#';
         link.dataset.path = path;
+        link.dataset.linkified = '1';
+        if (folder) link.dataset.folder = '1';
         link.title = path;
         link.textContent = path;
         frag.appendChild(link);
-        cursor = match.index + path.length;
+        cursor = index + path.length;
       }
       if (cursor < value.length) frag.appendChild(document.createTextNode(value.slice(cursor)));
       node.parentNode?.replaceChild(frag, node);
@@ -2932,9 +3132,11 @@ class CodemanApp {
                 ? 'DeepSeek'
                 : mode === 'omp'
                   ? 'OMP'
-                  : mode === 'opencode'
-                    ? 'OpenCode'
-                    : 'Claude';
+                  : mode === 'copilot'
+                    ? 'GitHub Copilot'
+                    : mode === 'opencode'
+                      ? 'OpenCode'
+                      : 'Claude';
   }
 
   async toggleResponseViewer() {
@@ -3203,15 +3405,16 @@ class CodemanApp {
     this._terminalRefreshOwner = refreshOwner;
     try {
       // A shell can retain a multi-megabyte/100k-line tmux history. Automatic
-      // recovery stays bounded just like normal shell selection; only the
-      // explicit "Load full history" action is allowed to pay for a full replay.
+      // recovery stays bounded just like normal shell selection (tmux's rendered
+      // history, SHELL_LOAD_QUERY); only the explicit "Load full history" action
+      // is allowed to pay for a full replay.
       // TUI modes still recover the whole picture, with the downgrade guard for
       // repaint-mode panes whose tmux capture can be smaller than xterm's buffer.
       const useFullHistory = this.sessions.get(sessionId)?.mode !== 'shell';
       let capture = await this._fetchTerminalCapture(
         useFullHistory
           ? `/api/sessions/${sessionId}/terminal?full=1`
-          : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`,
+          : `/api/sessions/${sessionId}/terminal?${SHELL_LOAD_QUERY}`,
         { full: useFullHistory }
       );
       let headersReceivedAt = capture.headersAt;
@@ -3223,8 +3426,13 @@ class CodemanApp {
       }
       // Bail on a tab switch mid-fetch: writing here would paint this session's
       // history into the terminal the user is now looking at. The window is two
-      // fetches wide in the fallback case, so this guard is not optional.
+      // fetches wide in the fallback case, so this guard is not optional. The
+      // pane count is recorded only past it: a refresh that lost its owner is
+      // older than whatever the switch back read (it would have overwritten a
+      // fresh 0 with a stale count and held the paging fallback off a hollow
+      // pane), and an error envelope is not a capture at all.
       if (this.activeSessionId !== sessionId || this._terminalRefreshOwner !== refreshOwner) return false;
+      if (capture.json?.success !== false) this._notePaneHistory?.(sessionId, data);
       if (data.terminalBuffer) {
         // This refresh is SERVER-triggered, so a user quietly reading scrollback
         // did not ask for it and must not be dragged to the bottom by it (#259).
@@ -3308,8 +3516,13 @@ class CodemanApp {
       try {
         // No-param capture: `terminalBufferMaxBytes` (32MB) is its only ceiling,
         // so it needs the full-history budget. Defaulting to the tail budget
-        // gave the largest payload the smallest deadline.
-        const capture = await this._fetchTerminalCapture(`/api/sessions/${data.id}/terminal`, { full: true });
+        // gave the largest payload the smallest deadline. A shell reloads tmux's
+        // rendered history instead (SHELL_LOAD_QUERY), never the byte recording.
+        const shellSession = this.sessions.get(data.id)?.mode === 'shell';
+        const capture = await this._fetchTerminalCapture(
+          shellSession ? `/api/sessions/${data.id}/terminal?${SHELL_LOAD_QUERY}` : `/api/sessions/${data.id}/terminal`,
+          { full: !shellSession }
+        );
         const headersReceivedAt = capture.headersAt;
         const termData = capture.json?.data ?? {};
 
@@ -3378,8 +3591,13 @@ class CodemanApp {
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) this._updateLocalEchoState();
     }
-    // Start stuck detection timer (only if no respawn running)
-    if (!this.respawnStatus[data.id]?.enabled) {
+    // An open Edit history panel re-reads at the end of its session's turn (edit-history-ui.js),
+    // not after Codeman's own keep-alive turn, which edits nothing.
+    if (!data.keepAlive) this.onEditHistorySessionIdle?.(data.id);
+    // Start stuck detection timer (only if no respawn running). Not at the end of Codeman's
+    // own keep-alive turn (`keepAlive`): the session has been waiting since the last real
+    // turn, whose timer is still running or has already fired.
+    if (!data.keepAlive && !this.respawnStatus[data.id]?.enabled) {
       const threshold = this.notificationManager?.preferences?.stuckThresholdMs || 600000;
       clearTimeout(this.idleTimers.get(data.id));
       this.idleTimers.set(data.id, setTimeout(() => {
@@ -3401,8 +3619,9 @@ class CodemanApp {
       this.sendPendingCtrlL(data.id);
       if (data.id === this.activeSessionId) this._updateLocalEchoState();
     }
-    // Clear stuck detection timer
-    const timer = this.idleTimers.get(data.id);
+    // Clear stuck detection timer, unless this is Codeman's own keep-alive turn, which is
+    // no sign of life from the agent's side.
+    const timer = data.keepAlive ? null : this.idleTimers.get(data.id);
     if (timer) {
       clearTimeout(timer);
       this.idleTimers.delete(data.id);
@@ -3466,7 +3685,7 @@ class CodemanApp {
     }
   }
 
-  // Claude + Codex plan usage limits — account-global, so the latest sample
+  // Claude, Codex and Copilot plan usage limits — account-global, so the latest sample
   // drives the shared header chip.
   _onSessionStatusTelemetry(data) {
     this.updatePlanUsageChip(data);
@@ -3526,19 +3745,29 @@ class CodemanApp {
     };
     // The provider label only earns its space when there is more than one
     // provider to tell apart: a machine with Claude alone shows bare windows.
-    const hasWindows = (usage) => pct(usage?.fiveHour) !== null || pct(usage?.sevenDay) !== null;
-    const labelled = hasWindows(data) && hasWindows(data.codex);
+    const hasWindows = (usage) =>
+      pct(usage?.fiveHour) !== null || pct(usage?.sevenDay) !== null || pct(usage?.monthly) !== null;
+    const labelled = [data, data.codex, data.copilot].filter(hasWindows).length > 1;
     const row = (provider, usage, idle) => {
       // hasWindows() gates the row, so a placeholder can only ever appear
       // ALONGSIDE a real reading — a provider reporting nothing still renders
       // nothing, never a row of em dashes.
       if (!hasWindows(usage)) return '';
-      const windows = [seg('5h', pct(usage?.fiveHour), idle), seg('7d', pct(usage?.sevenDay), idle)].filter(Boolean);
+      // `mo` is Copilot's calendar-month premium-request quota; it is the only window that provider has.
+      const windows = [
+        seg('5h', pct(usage?.fiveHour), idle),
+        seg('7d', pct(usage?.sevenDay), idle),
+        seg('mo', pct(usage?.monthly), false),
+      ].filter(Boolean);
       if (!windows.length) return '';
-      const label = labelled ? `<span class="pu-provider">${provider}</span>` : '';
+      // data-short is what the narrowest header densities show instead of the name (header-divider.js).
+      const short = { Claude: 'CL', Codex: 'CX', Copilot: 'CP' }[provider] ?? provider.slice(0, 2).toUpperCase();
+      const label = labelled ? `<span data-short="${short}" class="pu-provider">${provider}</span>` : '';
       return `<span class="pu-row">${label}<span class="pu-windows">${windows.join('<span class="pu-sep">·</span>')}</span></span>`;
     };
-    const rows = [row('Claude', data, true), row('Codex', data.codex, false)].filter(Boolean);
+    const rows = [row('Claude', data, true), row('Codex', data.codex, false), row('Copilot', data.copilot, false)].filter(
+      Boolean
+    );
     chip.innerHTML = rows.length ? rows.join('') : '—';
     const resetStr = (w) => (w && w.resetAt ? new Date(w.resetAt).toLocaleString() : '—');
     const details = (provider, usage, idle) => {
@@ -3548,10 +3777,20 @@ class CodemanApp {
       if (five !== null) lines.push(`5-hour limit: ${five}% used (resets ${resetStr(usage.fiveHour)})`);
       else if (idle && seven !== null) lines.push('5-hour limit: no active session window');
       if (seven !== null) lines.push(`Weekly limit: ${seven}% used (resets ${resetStr(usage.sevenDay)})`);
+      const month = pct(usage?.monthly);
+      if (month !== null) {
+        // Counts are coerced finite numbers, so interpolating them stays XSS-safe like the rest.
+        const m = usage.monthly;
+        const counts =
+          Number.isFinite(m.used) && Number.isFinite(m.limit) ? `${Math.round(m.used)} of ${Math.round(m.limit)} requests, ` : '';
+        lines.push(`Premium requests this month: ${month}% used (${counts}resets ${resetStr(m)})`);
+      }
       return lines.length ? `${provider} plan usage\n${lines.join('\n')}` : '';
     };
     chip.title =
-      [details('Claude', data, true), details('Codex', data.codex, false)].filter(Boolean).join('\n\n') ||
+      [details('Claude', data, true), details('Codex', data.codex, false), details('Copilot', data.copilot, false)]
+        .filter(Boolean)
+        .join('\n\n') ||
       'Plan usage limits';
   }
 
@@ -3847,8 +4086,8 @@ class CodemanApp {
     // Both transports refuse a frame over the server's limit (issue #484), and a
     // refused frame used to sit at the head of the durable queue for good. So an
     // oversized paste goes out as several in-limit frames, delivered in seq order
-    // as one contiguous stream. A mux write is line-oriented (it strips newlines
-    // and sends Enter on its own), so it is never split: refuse it instead.
+    // as one contiguous stream. A mux write is one paste that sends Enter on its
+    // own, so it is never split: refuse it instead.
     const limit = window.CodemanInputLimit;
     if (limit && input.length > limit.FRAME_MAX_CHARS) {
       if (useMux || input.length > limit.PASTE_MAX_CHARS) {
@@ -4281,19 +4520,26 @@ class CodemanApp {
     }
   }
 
-  // Pure render of the header connection indicator: reads only `this.*` state,
+  // Pure render of the header connection indicator: reads only `this.*` state (and
+  // the pending totals it is handed, which default to a fresh `_pendingBytes()`),
   // touches NO DOM. Returns the exact { display, dotClass, text, title } tuple the
   // writer applies. When hidden (display:'none') the other three are normalized to
   // '' so the cache compare in _updateConnectionIndicator() is well-defined.
   // Every branch/string here must stay byte-identical to what's rendered today.
-  _computeConnectionDescriptor() {
-    const { bytes: totalBytes, count } = this._pendingBytes();
+  _computeConnectionDescriptor(pending = this._pendingBytes()) {
+    const { bytes: totalBytes, count } = pending;
     const hasQueue = count > 0;
     // Only surface a backlog once it's more than a few bytes. A single keystroke
     // (1B) ACKs in milliseconds, so without this the label flickered "sending 1B"
-    // on every key press. Above this threshold means input is genuinely backing up.
-    const BACKLOG_HINT_BYTES = 4;
-    const showBacklog = totalBytes > BACKLOG_HINT_BYTES;
+    // on every key press. Above this threshold means input is genuinely backing up,
+    // and only once it has stayed there (see CONNECTION_BACKLOG_HOLD_MS): a burst
+    // that drains in a moment must not widen the pill. `_backlogOverSince` is kept
+    // by _updateConnectionIndicator; `undefined` (never tracked, as when this pure
+    // compute is called directly) means no hold.
+    const since = this._backlogOverSince;
+    const heldLongEnough =
+      since === undefined || (since !== null && Date.now() - since >= CONNECTION_BACKLOG_HOLD_MS);
+    const showBacklog = totalBytes > CONNECTION_BACKLOG_HINT_BYTES && heldLongEnough;
     const formatBytes = (b) => (b < 1024 ? `${b}B` : `${(b / 1024).toFixed(1)}KB`);
     const queuedSuffix = showBacklog ? ` · ${formatBytes(totalBytes)} queued` : '';
 
@@ -4409,10 +4655,35 @@ class CodemanApp {
     const text = this.$('connectionText');
     if (!indicator || !dot || !text) return;
 
+    // Track how long the queue has stayed above the hint threshold, and make sure
+    // the pill is re-rendered when the hold elapses even if no keystroke or ACK
+    // arrives to trigger it.
+    // ⚠️ This runs before _drainSession() on every keystroke, so it must never throw: a throw here
+    // once skipped immediate delivery and made typing lag (COD-133; the combinatorial never-throws
+    // test in test/connection-indicator.test.ts pins it). The queue is walked ONCE per call and the
+    // same totals are handed to the compute below, since this is the hot input path.
+    const pending = this._pendingBytes();
+    if (pending.bytes > CONNECTION_BACKLOG_HINT_BYTES) {
+      if (this._backlogOverSince == null) this._backlogOverSince = Date.now();
+      if (!this._backlogHoldTimer && Date.now() - this._backlogOverSince < CONNECTION_BACKLOG_HOLD_MS) {
+        const wait = CONNECTION_BACKLOG_HOLD_MS - (Date.now() - this._backlogOverSince) + 25;
+        this._backlogHoldTimer = setTimeout(() => {
+          this._backlogHoldTimer = null;
+          this._updateConnectionIndicator();
+        }, wait);
+      }
+    } else {
+      this._backlogOverSince = null;
+      if (this._backlogHoldTimer) {
+        clearTimeout(this._backlogHoldTimer);
+        this._backlogHoldTimer = null;
+      }
+    }
+
     // Called on EVERY keystroke (_reliableSend) and EVERY ACK (_ackDelivery).
     // During fast typing the rendered tuple is usually identical, so skip the DOM
     // writes when nothing changed (COD-136) — the compute above is DOM-free.
-    const next = this._computeConnectionDescriptor();
+    const next = this._computeConnectionDescriptor(pending);
     const prev = this._lastIndicatorDescriptor;
     // The tile's value word is written in the UI language, so a language
     // switch counts as a change too.
@@ -4751,6 +5022,8 @@ class CodemanApp {
       }
     }
 
+    if (data.version) this.checkWhatsNew?.(data.version);
+
     // Stop any active voice recording on reconnect
     VoiceInput.cleanup();
 
@@ -4834,12 +5107,9 @@ class CodemanApp {
     // survive reloads and SSE reconnects (methods in approvals-ui.js).
     this.seedApprovals?.();
 
-    // Start/stop system stats polling based on session count
-    if (this.sessions.size > 0) {
-      this.startSystemStatsPolling();
-    } else {
-      this.stopSystemStatsPolling();
-    }
+    // Poll the header stats whether or not a session is open (fetchSystemStats skips the call while the
+    // stats pill is hidden); starting restarts the interval, so only start it once.
+    if (!this.systemStatsInterval) this.startSystemStatsPolling();
 
     // CRITICAL: Clean up all floating windows before loading new subagents
     // This prevents memory leaks from ResizeObservers, EventSources, and DOM elements
@@ -4941,6 +5211,8 @@ class CodemanApp {
         // backoff reconnect, but if it is not on this session (dead socket, or
         // a give-up) nothing else would re-establish it from here.
         if (this._wsSessionId !== restoreId) this._connectWs(restoreId);
+        // The fresh session record may no longer qualify for a keyboard row hold.
+        this._reconcileKeyboardHold?.();
         void this._onSessionNeedsRefresh({ id: restoreId });
         // The split pane's second terminal reconnects on its own backoff (up to
         // 10 s between tries); the server is back now, so skip the wait. A no-op
@@ -5685,7 +5957,7 @@ class CodemanApp {
     // tabs-auto-wrap is measured, not derived from settings — updateTabOverflowMode()
     // drops it in sidebar mode, but drop it here too so nothing paints wrapped
     // for a frame before the next measure.
-    if (sidebar) tabsEl.classList.remove('tabs-auto-wrap');
+    if (sidebar) tabsEl.classList.remove('tabs-auto-wrap', 'tabs-corner');
     // Collapse/expand changes whether the filter is reachable, so re-evaluate it
     // here too — not only at the render tails.
     this.applySidebarFilter(this._sidebarFilter);
@@ -6158,6 +6430,8 @@ class CodemanApp {
       }
     }
     this._syncTabTreeSelection(container);
+    // The Focus shortcut of the selected tab is marked aria-current.
+    this._renderTabFocus();
     // #257: selection used to stop at the class toggle. On phones/tablets the
     // strip scrolls horizontally, so a tab selected from the palette, a swipe,
     // Alt+N or a push notification could stay parked off-screen.
@@ -6649,6 +6923,10 @@ class CodemanApp {
     this._refreshMobileOverviewIfVisible?.();
     // Same deal for the desktop home screen's tab column.
     this._refreshHomeSessionsIfVisible?.();
+    // Focus shortcuts carry the status dot and alert of the tab they stand for.
+    // A no-op unless what the section would draw changed (and after a full
+    // rebuild above it already has).
+    this._renderTabFocus();
     // The full-render path already redraws the connection SVG; this incremental
     // one does not, and a badge appearing widens a tab and shifts every tab after
     // it, sliding the lineage lines off their anchors. Only pay for it when there
@@ -6670,7 +6948,14 @@ class CodemanApp {
   updateTabOverflowMode() {
     const container = this.$('sessionTabs');
     if (!container) return;
+    // The corner takes the toolbar out of the header's flow, which widens the
+    // strip, so it goes before the wrap is measured and comes back once decided.
+    container.classList.remove('tabs-corner');
+    this._decideTabOverflow(container);
+    this._syncTabStripCorner(container);
+  }
 
+  _decideTabOverflow(container) {
     // Lineage routing room (session-lineage.js) changes the strip's padding and
     // row gap, so it is decided before the wrap is measured below.
     this._syncLineageGutter?.();
@@ -6730,6 +7015,108 @@ class CodemanApp {
       : container.scrollWidth > container.clientWidth + 1;
 
     container.classList.toggle('tabs-auto-wrap', shouldWrap);
+  }
+
+  /**
+   * L-shaped header strip: once the classic strip wraps, the toolbar
+   * (#headerRight) sits over the strip's top-right corner (styles.css,
+   * `.tabs-corner`) and the rows under the first one run the header's full
+   * width beneath it. The strip keeps the toolbar's corner clear with a float
+   * sized here, from the toolbar's own box, so a toolbar that wraps onto more
+   * lines (header-divider.js) or gains a reading keeps every tab out from
+   * under it. The grouped arrangements (state, case, ledger) lay their rows
+   * out themselves and keep the plain strip.
+   */
+  _syncTabStripCorner(container) {
+    const right = this.$('headerRight');
+    const on =
+      !!right &&
+      container.offsetParent !== null &&
+      !!container.parentElement?.classList.contains('session-tabs-host') &&
+      (container.classList.contains('tabs-auto-wrap') || container.classList.contains('tabs-two-rows')) &&
+      !container.classList.contains('tabs-triage') &&
+      !container.classList.contains('tabs-clusters') &&
+      !container.classList.contains('tabs-ledger') &&
+      MobileDetection.getDeviceType() === 'desktop';
+    const off = () => {
+      container.classList.remove('tabs-corner');
+      container.style.removeProperty('--tab-corner-width');
+      container.style.removeProperty('--tab-corner-height');
+      container.style.removeProperty('--tab-corner-first-max');
+      for (const tab of container.querySelectorAll(':scope > .tab-corner-fit')) tab.classList.remove('tab-corner-fit');
+    };
+    // A strip past its max-height scrolls, and the float would scroll its tabs
+    // under the toolbar, which stays put: keep the plain wrap. The plain strip
+    // is measured here (updateTabOverflowMode took .tabs-corner off), before
+    // the class goes on; toggling it on a scrolled strip lets scroll anchoring
+    // move the strip.
+    if (!on || container.scrollHeight > container.clientHeight + 1) {
+      off();
+      return;
+    }
+    container.classList.add('tabs-corner');
+    if (!this._tabCornerObserver && typeof ResizeObserver !== 'undefined') {
+      let frame = 0;
+      // A toolbar that changes size (a reading arrives, the divider settles)
+      // moves the tabs without a render: re-decide the wrap and the corner, and
+      // redraw the lineage routes that follow the tabs.
+      this._tabCornerObserver = new ResizeObserver(() => {
+        if (frame) return;
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          const strip = this.$('sessionTabs');
+          if (!strip || !/\btabs-(corner|auto-wrap|two-rows)\b/.test(strip.className)) return;
+          this.updateTabOverflowMode();
+          this.updateConnectionLines?.();
+        });
+      });
+      this._tabCornerObserver.observe(right);
+    }
+    const style = getComputedStyle(container);
+    const strip = container.getBoundingClientRect();
+    const box = right.getBoundingClientRect();
+    // The float sits at the strip's content padding edge (the plain strip did
+    // not scroll, so scrollTop is 0).
+    const contentTop = strip.top + parseFloat(style.paddingTop);
+    const contentLeft = strip.left + container.clientLeft + parseFloat(style.paddingLeft);
+    const contentRight = strip.left + container.clientLeft + container.clientWidth - parseFloat(style.paddingRight);
+    // The first tab must fit beside the toolbar, or the whole first line drops
+    // below it and leaves an empty band. A selected tab is wider (gear and
+    // close show), so falling back to the plain strip here made the layout
+    // follow the selection; the first tab's name is trimmed to the room
+    // instead. Only a toolbar that leaves no usable room keeps the plain strip.
+    // The room is what the float (rounded up below) leaves, less the tab's 2px
+    // right margin and a pixel for subpixel layout; a tab at the exact width
+    // still wrapped under the float.
+    const floatWidth = Math.max(0, Math.ceil(contentRight - box.left + 8));
+    const room = Math.floor(contentRight - floatWidth - contentLeft) - 3;
+    if (room < TAB_CORNER_MIN_FIRST_TAB) {
+      off();
+      return;
+    }
+    const firstTab = container.querySelector(':scope > .session-tab');
+    // Capped every time, not only once it measures too wide: selectSession()
+    // widens a newly selected tab at once and this pass is debounced, so a cap
+    // set only here afterwards would leave the first row below the toolbar until
+    // it runs. The cap changes nothing on a tab narrower than the room.
+    for (const tab of container.querySelectorAll(':scope > .tab-corner-fit')) {
+      if (tab !== firstTab) tab.classList.remove('tab-corner-fit');
+    }
+    firstTab?.classList.add('tab-corner-fit');
+    if (container.style.getPropertyValue('--tab-corner-first-max') !== `${room}px`) {
+      container.style.setProperty('--tab-corner-first-max', `${room}px`);
+    }
+    const width = `${floatWidth}px`;
+    const height = `${Math.max(0, Math.ceil(box.bottom - contentTop))}px`;
+    if (container.style.getPropertyValue('--tab-corner-width') !== width) {
+      container.style.setProperty('--tab-corner-width', width);
+    }
+    if (container.style.getPropertyValue('--tab-corner-height') !== height) {
+      container.style.setProperty('--tab-corner-height', height);
+    }
+    // A plain strip just under its max-height can pass it once the float is in:
+    // fall back to the plain strip, which fit.
+    if (container.scrollHeight > container.clientHeight + 1) off();
   }
 
   /**
@@ -6910,7 +7297,9 @@ class CodemanApp {
         : `<span class="tab-harness run-mode-dot ${escapeHtml(mode)}" aria-hidden="true"></span>`;
 
       const inlineSessionActions = this.shouldInlineSessionActions();
-      const tabActionsHtml = `<span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span><button type="button" class="tab-more" onclick="event.stopPropagation(); app.openTabRailActionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="Session actions" aria-label="Session actions">&#x22EF;</button></span>`;
+      // The "+" announces a menu, so Enter and Space open it: the strip's own key
+      // handler acts only on a focused tab, and the header strip has no row menu.
+      const tabActionsHtml = `<span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-new" onclick="event.stopPropagation(); app.openTabNewSessionMenu(event, ${escapeHtml(JSON.stringify(id))})" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); app.openTabNewSessionMenu(event, ${escapeHtml(JSON.stringify(id))}); }" title="New session here" aria-label="New session in this tab's case" aria-haspopup="menu" tabindex="0">+</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span><button type="button" class="tab-more" onclick="event.stopPropagation(); app.openTabRailActionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="Session actions" aria-label="Session actions">&#x22EF;</button></span>`;
 
       rowHtml.set(id, `<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${paneExitBadge ? ' tab-agent-exited' : ''}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}${this._tileGrid?.has(id) ? ' in-tiles' : ''}"${richData}${railOrderStyle} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" data-aria-source="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
           ${_tabIdx < 9 ? '<span class="tab-number">' + (_tabIdx + 1) + '</span>' : ''}
@@ -6975,6 +7364,7 @@ class CodemanApp {
       this._applyTabTreeSemantics(container, { identity: focusIdentity, refocus: focusWasInside });
       this._syncTabGroupHeaderAlerts(container, groupProjection);
     }
+    this._noteTabGroupArrivals(container, groupProjection);
     this._syncTabTriageChrome(container, triage);
     this._syncTabArrangementClasses(container, { clusters: !!clusterLayout, groupProjection });
     const activeBandMoved = this._noteActiveTabBand(container) && this._isScrollingTabRow(container);
@@ -7000,6 +7390,10 @@ class CodemanApp {
 
     // Set up keyboard navigation for tabs
     this.setupTabKeyboardNavigation(container);
+
+    // The Focus section sits above this list in the rail, so it is drawn before
+    // the connection lines measure the rows.
+    this._renderTabFocus();
 
     // Update connection lines after tabs change (positions may have shifted)
     this.updateConnectionLines();
@@ -7043,24 +7437,7 @@ class CodemanApp {
       // the axis a user reaches for there.
       if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'Enter', ' '].includes(e.key)) return;
 
-      // Rows hidden by the sidebar filter must not be steppable.
-      const tabs = [...container.querySelectorAll('.session-tab:not(.tab-filtered-out)')];
-      // ⚠️ A sorted rail paints its rows with the flex `order` property while the
-      // DOM stays in `sessionOrder` (that is what keeps the Alt+N badge and the
-      // drag model honest), so a DOM-order walk steps around the screen instead of
-      // down it: ArrowDown from the top card lands wherever that session happens to
-      // sit in the tab order. Walk what the eye sees. Read the COMPUTED order, not
-      // the inline one, or web tabs (pinned past the cards by a CSS `order: 9999`
-      // rather than an inline style) read as 0 and the walk starts on them. Array
-      // sort is stable, so equal orders keep DOM order, which is the unsorted case.
-      if (this.isTabRailSorted() || container.classList.contains('tabs-triage')) {
-        const orderOf = (el) => Number(getComputedStyle(el).order) || 0;
-        // Case clusters are boxes in DOM order and a sorted rail orders rows
-        // INSIDE each one, so the box goes first in the key.
-        const boxes = [...container.querySelectorAll(':scope > .tab-cluster')];
-        const boxOf = (el) => boxes.indexOf(el.closest('.tab-cluster'));
-        tabs.sort((a, b) => boxOf(a) - boxOf(b) || orderOf(a) - orderOf(b));
-      }
+      const tabs = this._visibleTabRows(container);
       const currentIndex = tabs.indexOf(document.activeElement);
 
       // Enter or Space activates the tab
@@ -7108,6 +7485,52 @@ class CodemanApp {
       };
       container.addEventListener('focusin', this._tabTreeFocusinHandler);
     }
+  }
+
+  /**
+   * The strip's rows (session and web tabs) in the order the eye reads them,
+   * for any layout except the grouped tree (see _tabTreeItems).
+   */
+  _visibleTabRows(container) {
+    // Rows hidden by the sidebar filter must not be steppable.
+    const tabs = [...container.querySelectorAll('.session-tab:not(.tab-filtered-out)')];
+    // ⚠️ A sorted rail paints its rows with the flex `order` property while the
+    // DOM stays in `sessionOrder` (that is what keeps the Alt+N badge and the
+    // drag model honest), so a DOM-order walk steps around the screen instead of
+    // down it: ArrowDown from the top card lands wherever that session happens to
+    // sit in the tab order. Walk what the eye sees. Read the COMPUTED order, not
+    // the inline one, or web tabs (pinned past the cards by a CSS `order: 9999`
+    // rather than an inline style) read as 0 and the walk starts on them. Array
+    // sort is stable, so equal orders keep DOM order, which is the unsorted case.
+    if (this.isTabRailSorted() || container.classList.contains('tabs-triage')) {
+      const orderOf = (el) => Number(getComputedStyle(el).order) || 0;
+      // Case clusters are boxes in DOM order and a sorted rail orders rows
+      // INSIDE each one, so the box goes first in the key.
+      const boxes = [...container.querySelectorAll(':scope > .tab-cluster')];
+      const boxOf = (el) => boxes.indexOf(el.closest('.tab-cluster'));
+      tabs.sort((a, b) => boxOf(a) - boxOf(b) || orderOf(a) - orderOf(b));
+    }
+    return tabs;
+  }
+
+  /**
+   * Session ids in the order the session list DRAWS them: case boxes, state
+   * groups, a sorted rail and named groups all reorder the screen while
+   * `sessionOrder` stays canonical. Only the phone swipe walks this order
+   * (`nextSession({ visual: true })`); Alt+[ / Alt+], Ctrl+Tab and Alt+1..9 keep
+   * the canonical one, since grouping is a render layer. Web tabs are skipped.
+   */
+  _stripSessionOrder() {
+    const container = document.getElementById('sessionTabs');
+    if (!container) return this.sessionOrder;
+    const rows =
+      container.getAttribute('role') === 'tree'
+        ? this._tabTreeItems(container).filter((el) => el.classList.contains('session-tab'))
+        : this._visibleTabRows(container);
+    // An empty list is a real answer (every row filtered out, a tree collapsed
+    // to nothing): the swipe then goes nowhere, like the strip. Only a missing
+    // strip falls back to the canonical order.
+    return rows.map((row) => row.dataset.id).filter((id) => id && this.sessions.has(id));
   }
 
   /** Select a session row or open a web-tab row (Enter/Space, either layout). */
@@ -7246,6 +7669,38 @@ class CodemanApp {
       const alert = alerts[header.dataset.tabGroupHeader];
       header.classList.toggle('tab-alert-action', alert === 'action');
       header.classList.toggle('tab-alert-idle', alert === 'idle');
+    }
+  }
+
+  /**
+   * A tab that first appears inside a COLLAPSED group (a spawned child, a session
+   * another device placed there) would otherwise arrive silently, the header
+   * count being its only trace. Its group header is marked for a moment instead
+   * (`.tab-layout-group-arrived`). Only a ref absent from the previous grouped
+   * render counts, so collapsing a group, or the first paint, marks nothing.
+   */
+  _noteTabGroupArrivals(container, projection) {
+    const previous = this._renderedTabGroupRefs;
+    this._renderedTabGroupRefs = projection ? new Set(Object.keys(projection.sectionByRef || {})) : null;
+    if (!projection) return;
+    const now = Date.now();
+    const arrivals = (this._tabGroupArrivals ||= new Map());
+    if (previous) {
+      for (const [key, groupId] of Object.entries(projection.hiddenTabGroupByRef || {})) {
+        if (previous.has(key)) continue;
+        arrivals.set(groupId, now + TAB_GROUP_ARRIVAL_MS);
+        setTimeout(() => {
+          if ((arrivals.get(groupId) ?? 0) > Date.now()) return;
+          arrivals.delete(groupId);
+          for (const header of this.$('sessionTabs')?.querySelectorAll('[data-tab-group-header]') || []) {
+            if (header.dataset.tabGroupHeader === groupId) header.classList.remove('tab-layout-group-arrived');
+          }
+        }, TAB_GROUP_ARRIVAL_MS);
+      }
+    }
+    for (const header of container.querySelectorAll('[data-tab-group-header]')) {
+      const until = arrivals.get(header.dataset.tabGroupHeader) ?? 0;
+      header.classList.toggle('tab-layout-group-arrived', until > now);
     }
   }
 
@@ -7524,6 +7979,8 @@ class CodemanApp {
       this._tabLayoutEditor = null;
     }
     this.tabLayout = next;
+    // An open Case settings popover lists the groups as its Default session group options.
+    this._refreshCaseDefaultGroupOptions?.(next);
     const storage = this._getTabCollapseStorage();
     const collapsed = storage && next
       ? window.CodemanTabLayout.loadCollapsedGroupIds(storage, next.groups.map((group) => group.id))
@@ -7535,6 +7992,9 @@ class CodemanApp {
     // rail (always so on the flat rail, which is every owner without groups).
     // Rebuild only when what the rail would draw actually changed.
     if (this._isTabGroupStructureStale()) this._fullRenderSessionTabs();
+    // A Focus flag set on another device is not a structural change of the
+    // list, so it would not rebuild it: draw the section on its own.
+    else if (this._renderTabFocus()) this.updateConnectionLines?.();
     // Edits left unsaved by the previous page (see _persistPendingTabLayoutEdits).
     if (next && !this._tabLayoutRestoreChecked) {
       this._tabLayoutRestoreChecked = true;
@@ -7571,6 +8031,8 @@ class CodemanApp {
       collapsedGroupIds: this._tabRailSearchActive() ? [] : [...this.collapsedTabGroupIds],
       activeSessionId: this.activeSessionId,
       activeWebviewId: this.activeWebviewId,
+      // A session spawned by another one shows up in its parent's group at once.
+      parents: this._tabLayoutParents(),
     });
   }
 
@@ -7606,6 +8068,226 @@ class CodemanApp {
     // The full render also redraws connectors anchored to rows that just moved.
     this._fullRenderSessionTabs();
     return this.collapsedTabGroupIds.has(groupId) === shouldCollapse;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Owner tab layout: the Focus section (pinned shortcuts)
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // A ref flagged `focus: true` in the layout gets a SHORTCUT in a small
+  // "Focus" section pinned to the top of the vertical rail; the row itself stays
+  // in its group. The section is its own element in #tabRail, OUTSIDE
+  // #sessionTabs, on purpose: it shows above the flat rail as well as the
+  // grouped one, and nothing that walks #sessionTabs (Alt+N badges, the tree's
+  // roving stop and posinset, lineage lines, drag, the row filters, the rail
+  // sort) ever sees a shortcut. Its own keyboard model is a list with one tab
+  // stop and Up/Down/Home/End between shortcuts; each shortcut is a button, so
+  // Enter/Space select its tab, and the context-menu key opens "Remove from
+  // Focus". Collapse is per-device localStorage, like a group's.
+
+  /** True when `ref` carries `focus: true` in the held layout. */
+  _tabRefFocused(ref) {
+    const location = this._tabRefLocation(ref);
+    return location?.refs[location.index]?.focus === true;
+  }
+
+  /** Pin or unpin a row. One named operation through the edit coordinator. */
+  setTabRefFocus(ref, focused) {
+    if (!this._tabRefLocation(ref)) return false;
+    return this.editTabLayout({ type: 'setFocus', ref: { kind: ref.kind, id: ref.id }, focused: focused === true }, `${ref.kind}:${ref.id}`);
+  }
+
+  /** The row menu's Focus entry ([] where the rail cannot edit the layout). */
+  _tabRefFocusActions(ref) {
+    if (!this._tabLayoutEditable() || !this._tabRefLocation(ref)) return [];
+    const focused = this._tabRefFocused(ref);
+    return [{ label: focused ? 'Remove from Focus' : 'Add to Focus', run: () => this.setTabRefFocus(ref, !focused) }];
+  }
+
+  _tabFocusCollapsedNow() {
+    if (this._tabFocusCollapsed === undefined) {
+      const storage = this._getTabCollapseStorage();
+      const loaded = storage ? window.CodemanTabLayout.loadFocusCollapsed(storage) : { collapsed: false, ok: false };
+      if (!loaded.ok) this._tabCollapseStorageFailed = true;
+      this._tabFocusCollapsed = loaded.collapsed;
+    }
+    return this._tabFocusCollapsed;
+  }
+
+  /** Collapse/expand the Focus section. Per-device; a store failure leaves it expanded. */
+  toggleTabFocusCollapsed(forceCollapsed) {
+    const shouldCollapse = forceCollapsed === undefined ? !this._tabFocusCollapsedNow() : forceCollapsed === true;
+    const storage = this._getTabCollapseStorage();
+    const saved = storage ? window.CodemanTabLayout.saveFocusCollapsed(storage, shouldCollapse) : { collapsed: false, ok: false };
+    if (!saved.ok) this._tabCollapseStorageFailed = true;
+    this._tabFocusCollapsed = saved.collapsed;
+    if (this._renderTabFocus()) this.updateConnectionLines?.();
+    document.getElementById('tabFocusToggle')?.focus();
+    return this._tabFocusCollapsed === shouldCollapse;
+  }
+
+  /** The focused refs this rail draws now ([] off the vertical rail or without a layout). */
+  _tabFocusRefs() {
+    if (!this.tabLayout || this._tabOrientation() !== 'vertical' || !window.CodemanTabLayout) return [];
+    return window.CodemanTabLayout.focusRefs(this.tabLayout, {
+      liveSessionIds: this.sessionOrder.filter((id) => this.sessions.has(id)),
+      openWebviewIds: (this.webviewOrder || []).filter((id) => this.webviews?.has(id)),
+    });
+  }
+
+  /** The Focus section element, created once inside #tabRail just above the list. */
+  _tabFocusHost() {
+    let host = document.getElementById('tabFocus');
+    if (host) return host;
+    const rail = document.getElementById('tabRail');
+    if (!rail) return null;
+    host = document.createElement('section');
+    host.id = 'tabFocus';
+    host.className = 'tab-focus';
+    host.hidden = true;
+    host.setAttribute('aria-labelledby', 'tabFocusTitle');
+    // Delegated, so the listeners survive every repaint of the section.
+    host.addEventListener('keydown', (event) => this._handleTabFocusKeydown(event));
+    host.addEventListener('click', (event) => {
+      if (event.target?.closest?.('#tabFocusToggle')) {
+        this.toggleTabFocusCollapsed();
+        return;
+      }
+      const item = event.target?.closest?.('.tab-focus-item');
+      if (item) this.openTabFocusShortcut(event, item.dataset.focusKey);
+    });
+    host.addEventListener('contextmenu', (event) => {
+      const item = event.target?.closest?.('.tab-focus-item');
+      if (item) this.openTabFocusMenu(event, item.dataset.focusKey, item);
+    });
+    const list = this.$('sessionTabs');
+    if (list && list.parentElement === rail) rail.insertBefore(host, list);
+    else rail.appendChild(host);
+    return host;
+  }
+
+  /**
+   * Draw the Focus section from the held layout. Cheap enough for every render
+   * pass: the markup is compared with what was drawn last, and the DOM is only
+   * touched when it changed. Returns true when it did (the rail's list moved,
+   * so connector lines anchored to its rows need a redraw).
+   */
+  _renderTabFocus() {
+    const refs = this._tabFocusRefs();
+    const host = refs.length ? this._tabFocusHost() : document.getElementById('tabFocus');
+    if (!host) return false;
+    if (!refs.length) {
+      if (host.hidden && !host.firstChild) return false;
+      host.hidden = true;
+      host.replaceChildren();
+      this._lastTabFocusHtml = '';
+      return true;
+    }
+    // Keep the rail's list just below the section: applyTabOrientation()
+    // re-appends #sessionTabs to the rail when the orientation flips.
+    const list = this.$('sessionTabs');
+    const rail = host.parentElement;
+    if (list && rail && list.parentElement === rail && host.nextElementSibling !== list) rail.insertBefore(host, list);
+    const collapsed = this._tabFocusCollapsedNow();
+    const activeKey = this.activeWebviewId
+      ? `webview:${this.activeWebviewId}`
+      : this.activeSessionId
+        ? `session:${this.activeSessionId}`
+        : '';
+    const focusedEl = host.contains(document.activeElement) ? document.activeElement : null;
+    const focusedKey = focusedEl?.dataset?.focusKey || (focusedEl?.id === 'tabFocusToggle' ? 'toggle' : null);
+    const keys = refs.map((ref) => `${ref.kind}:${ref.id}`);
+    // One tab stop in the list: the shortcut that had it, else the selected
+    // tab's, else the first.
+    const stopKey = [focusedKey, this._tabFocusStopKey, activeKey].find((key) => key && keys.includes(key)) || keys[0];
+    const items = refs
+      .map((ref) => {
+        const key = `${ref.kind}:${ref.id}`;
+        let name;
+        let statusHtml;
+        let alertClass = '';
+        if (ref.kind === 'session') {
+          const session = this.sessions.get(ref.id);
+          name = this.getSessionName(session);
+          statusHtml = `<span class="tab-status ${escapeHtml(session.status || 'idle')}" aria-hidden="true"></span>`;
+          const alert = this.tabAlerts?.get(ref.id);
+          alertClass = alert === 'action' ? ' tab-alert-action' : alert === 'idle' ? ' tab-alert-idle' : '';
+        } else {
+          const webview = this.webviews.get(ref.id);
+          name = webview?.name || ref.id;
+          statusHtml = `<span class="tab-web-icon" aria-hidden="true">${webview?.icon ? escapeHtml(webview.icon) : this._webviewGlobeIcon?.() || ''}</span>`;
+        }
+        // The name is user text: the whole button is kept away from the
+        // translator (a session named "3 sessions" must not come out in Chinese).
+        return (
+          `<li class="tab-focus-entry"><button type="button" class="tab-focus-item${alertClass}" data-focus-key="${escapeHtml(key)}" data-i18n-skip ` +
+          `tabindex="${key === stopKey ? '0' : '-1'}" aria-current="${key === activeKey ? 'true' : 'false'}" aria-label="${escapeHtml(name)}" title="${escapeHtml(name)}">` +
+          `${statusHtml}<span class="tab-focus-name">${escapeHtml(name)}</span></button></li>`
+        );
+      })
+      .join('');
+    const html =
+      `<button type="button" id="tabFocusToggle" class="tab-focus-toggle" aria-expanded="${collapsed ? 'false' : 'true'}" aria-controls="tabFocusList">` +
+      `<span class="tab-layout-group-chevron" aria-hidden="true"></span><span class="tab-focus-title" id="tabFocusTitle">Focus</span>` +
+      `<span class="tab-focus-count" aria-hidden="true">${refs.length}</span></button>` +
+      `<ul class="tab-focus-list" id="tabFocusList" aria-labelledby="tabFocusTitle"${collapsed ? ' hidden' : ''}>${items}</ul>`;
+    if (!host.hidden && this._lastTabFocusHtml === html) return false;
+    host.classList.toggle('tab-focus--collapsed', collapsed);
+    host.innerHTML = html;
+    host.hidden = false;
+    this._lastTabFocusHtml = html;
+    if (focusedKey === 'toggle') document.getElementById('tabFocusToggle')?.focus();
+    else if (focusedKey) host.querySelector(`[data-focus-key="${CSS.escape(focusedKey)}"]`)?.focus();
+    return true;
+  }
+
+  _tabFocusRefFromKey(key) {
+    const at = typeof key === 'string' ? key.indexOf(':') : -1;
+    if (at < 0) return null;
+    const kind = key.slice(0, at);
+    return kind === 'session' || kind === 'webview' ? { kind, id: key.slice(at + 1) } : null;
+  }
+
+  /** A shortcut was clicked: select its tab, exactly as the row would. */
+  openTabFocusShortcut(event, key) {
+    const ref = this._tabFocusRefFromKey(key);
+    if (!ref) return undefined;
+    this._tabFocusStopKey = key;
+    if (ref.kind === 'webview') return this.handleWebviewTabClick?.(event, ref.id);
+    return this.handleSessionTabClick(event, ref.id);
+  }
+
+  /** Right-click, Shift+F10 or the menu key on a shortcut (`trigger` anchors the menu). */
+  openTabFocusMenu(event, key, trigger) {
+    const ref = this._tabFocusRefFromKey(key);
+    if (!ref) return false;
+    this._tabFocusStopKey = key;
+    // A delegated listener's currentTarget is the section; anchor on the shortcut.
+    const anchored = trigger
+      ? { preventDefault: () => event?.preventDefault?.(), stopPropagation: () => event?.stopPropagation?.(), currentTarget: trigger, type: event?.type, clientX: event?.clientX }
+      : event;
+    return this._openTabLayoutMenu(anchored, `focus:${key}`, 'Focus actions', [
+      { label: 'Remove from Focus', run: () => this.setTabRefFocus(ref, false) },
+    ]);
+  }
+
+  /** Up/Down/Home/End move between shortcuts; the list keeps one tab stop. */
+  _handleTabFocusKeydown(event) {
+    const current = event.target?.closest?.('.tab-focus-item');
+    if (!current || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const items = [...event.currentTarget.querySelectorAll('.tab-focus-item')];
+    const index = items.indexOf(current);
+    const next =
+      event.key === 'Home'
+        ? items[0]
+        : event.key === 'End'
+          ? items[items.length - 1]
+          : items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length];
+    if (!next) return;
+    event.preventDefault();
+    for (const item of items) item.tabIndex = item === next ? 0 : -1;
+    this._tabFocusStopKey = next.dataset.focusKey;
+    next.focus();
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -7771,8 +8453,8 @@ class CodemanApp {
     if (!this._tabLayoutEditable()) return [];
     const location = this._tabRefLocation(ref);
     if (!location) return [];
-    const actions = [];
     const grouped = this.tabLayout.groups.length > 0;
+    const actions = grouped ? this._tabRefPlacementActions(ref) : [];
     // Up/down follow the STORED order, which is what the rail paints unless a
     // sort is on (then the sort decides and there is nothing to reorder).
     if (grouped && !this.isTabRailSorted()) {
@@ -7797,12 +8479,149 @@ class CodemanApp {
     return actions;
   }
 
+  /**
+   * A child session's placement, for its row menu: an informational note (where
+   * it sits and why: plain text, never focusable) and, for a child placed by hand, "Follow
+   * parent again". A child follows its parent into the parent's group until it
+   * is moved by hand; a child whose parent is gone stands on its own and is
+   * never re-adopted automatically.
+   */
+  _tabRefPlacementActions(ref) {
+    // Following is the synced "Spawned tabs follow their parent" setting (off by
+    // default): off, every spawned tab is hand-placed, so there is nothing to say.
+    if (this.loadAppSettingsFromStorage?.()?.spawnedTabsFollowParent !== true) return [];
+    const parents = this._tabLayoutParents();
+    const placement = window.CodemanTabLayout.placementState(this.tabLayout, ref, parents);
+    if (!placement) return [];
+    const parent = this.sessions.get(placement.parentId);
+    const parentName = parent ? this.getSessionName(parent) : placement.parentId;
+    const summary = {
+      inherited: `Follows ${parentName}`,
+      manual: `Placed by hand (parent: ${parentName})`,
+      dangling: 'Parent closed; placed on its own',
+      cycle: 'Parent loop; placed on its own',
+    }[placement.state];
+    const actions = [{ label: summary, note: true }];
+    if (placement.canFollow) {
+      actions.push({
+        label: 'Follow parent again',
+        run: () => this.editTabLayout({ type: 'followParent', ref, parents: this._tabLayoutParents() }, `${ref.kind}:${ref.id}`),
+      });
+    }
+    return actions;
+  }
+
+  /**
+   * The group menu's "New session": launch ONE session with the current case and
+   * run mode, placed at the end of this group by the server in the same write
+   * that records it (the group id rides the create request). A collapsed group
+   * expands first so the new tab is visible when it arrives.
+   */
+  async createSessionInTabGroup(groupId) {
+    if (!this._tabLayoutEditable() || !this.tabLayout.groups.some((group) => group.id === groupId)) return false;
+    if (this._runInFlight) {
+      this.showToast?.('A session is already starting.', 'info');
+      return false;
+    }
+    this.toggleTabGroupCollapsed(groupId, false);
+    await this.run({ count: 1, tabGroupId: groupId });
+    return true;
+  }
+
+  /**
+   * A tab's "+" (and the row menu's "New session here…"): the CLIs that tab's
+   * case can start, each as its logo and name like the Run menus. A pick starts
+   * ONE session beside that tab: its case (or the managed worktree it runs in)
+   * and its named group, if it has one, through `_launchOnce`, so the Run
+   * button's mode and case are untouched.
+   */
+  openTabNewSessionMenu(event, sessionId) {
+    const session = this.sessions.get(sessionId);
+    const worktree = this._managedWorktreeOfSession?.(session) || null;
+    const caseEntry = worktree ? null : this._tabCaseOf(session);
+    if (!worktree && !caseEntry) {
+      event?.stopPropagation?.();
+      this.showToast?.("This tab's folder is not a case, so there is nothing to start beside it.", 'info');
+      return false;
+    }
+    const caseName = worktree ? worktree.caseName : caseEntry.name;
+    // An ungrouped tab sends no group, so the server's case default group (if the
+    // case has one) places the new session, as it does for a toolbar Run.
+    const tabGroupId = this._tabRefLocation({ kind: 'session', id: sessionId })?.groupId || null;
+    // The toolbar probes only the case it has selected, so ask this tab's container
+    // now: this open reads what is already known, the next one the container's answer.
+    if (caseEntry?.location === 'docker' && !this._dockerCaseModes?.[caseName]) {
+      void this._probeDockerCaseModes(caseEntry, null);
+    }
+    // The phone overview's list, gated by the Run menu's own rule for this case
+    // (_runModeAvailableForCase: the container's CLIs for a Docker case; shell is
+    // never gated), in the Run menu's order: agents in catalog order, the shell last.
+    const isShell = (entry) => registryCliById(entry.mode)?.kind === 'shell';
+    const available = mobileOverviewRunModes().filter(
+      (entry) => isShell(entry) || this._runModeAvailableForCase(entry.mode, caseName)
+    );
+    const modes = [...available.filter((entry) => !isShell(entry)), ...available.filter(isShell)];
+    const current = this.runMode;
+    const actions = modes.map((entry) => ({
+      label: entry.label,
+      icon: entry.mode,
+      className: 'run-mode-option',
+      selected: entry.mode === current,
+      run: () =>
+        this._launchOnce(entry.mode, {
+          ...(worktree ? { worktree } : { caseName }),
+          ...(tabGroupId ? { tabGroupId } : {}),
+        }),
+    }));
+    return this._openTabLayoutMenu(event, `new:${sessionId}`, 'New session here', actions, { anyLayout: true });
+  }
+
+  /**
+   * The case a session tab belongs to, by what the session runs on. GET /api/cases
+   * gives a remote or Docker case a DISPLAY path (`user@host:/path`,
+   * `container:/path`) with the raw values under `remote` / `docker`, while a
+   * session carries its raw folder, so a path match alone misses those cases or
+   * lands on a local case at the same folder. A Docker session belongs to its
+   * container's case on its own engine host, a remote one to the case on its own
+   * host whose path encloses its own, a local one to the deepest case enclosing
+   * its folder (a display path never encloses one). Null when none fits.
+   */
+  _tabCaseOf(session) {
+    if (!session) return null;
+    const cases = this.cases || [];
+    const deepestEnclosing = (dir, candidates, rootOf) => {
+      let best = null;
+      let bestLength = -1;
+      for (const c of candidates) {
+        const root = (rootOf(c) || '').replace(/\/+$/, '');
+        if (!root || (dir !== root && !dir.startsWith(`${root}/`)) || root.length <= bestLength) continue;
+        best = c;
+        bestLength = root.length;
+      }
+      return best;
+    };
+    if (session.docker) {
+      const { hostId, containerName } = session.docker;
+      return (
+        cases.find((c) => c.location === 'docker' && c.docker?.hostId === hostId && c.docker?.container === containerName) ||
+        null
+      );
+    }
+    if (session.remote) {
+      const { hostId, remotePath } = session.remote;
+      const onHost = cases.filter((c) => c.location === 'remote' && c.remote?.hostId === hostId);
+      return deepestEnclosing((remotePath || '').replace(/\/+$/, ''), onHost, (c) => c.remote.path);
+    }
+    return deepestEnclosing((session.workingDir || '').replace(/\/+$/, ''), cases, (c) => c.path);
+  }
+
   // ─── Group and web-tab menus (right-click, the header's ⋯, Shift+F10) ──
 
   /**
-   * Close the open group / web-tab menu. Every dismissal path lands here:
-   * Escape, a pointer outside it, focus leaving it, Tab, a viewport resize, an
-   * action, and any full re-render of the rail (which would orphan its trigger).
+   * Close the open group / web-tab / tab "+" menu. Every dismissal path lands
+   * here: Escape, a pointer outside it, focus moving to an element outside it,
+   * Tab, a viewport resize, an action, and any full re-render of the rail (which
+   * would orphan its trigger).
    */
   closeTabGroupMenu({ restoreFocus = false } = {}) {
     const menu = this._tabGroupMenu;
@@ -7819,10 +8638,11 @@ class CodemanApp {
     menu.remove();
     if (!restoreFocus) return;
     // The trigger may have been re-rendered while the menu was open; find the
-    // live tree item by identity.
+    // live tree item by identity. A flat-rail row (a web tab's menu opens there
+    // too, from ContextMenu or Shift+F10) is a `.session-tab` with role=tab.
     const rail = this.$('sessionTabs');
     const item =
-      (trigger?.isConnected && trigger.closest('[role="treeitem"]')) ||
+      (trigger?.isConnected && trigger.closest('[role="treeitem"], .tab-focus-item, .session-tab')) ||
       [...(rail?.querySelectorAll('[role="treeitem"]') || [])].find((el) => this._tabTreeIdentity(el) === identity);
     item?.focus();
   }
@@ -7837,6 +8657,7 @@ class CodemanApp {
     const index = groups.findIndex((group) => group.id === groupId);
     if (index < 0) return false;
     return this._openTabLayoutMenu(event, `group:${groupId}`, 'Group actions', [
+      { label: 'New session', run: () => this.createSessionInTabGroup(groupId) },
       ...(this.canOpenTileGrid?.() ? [{ label: 'Open group as tiles', run: () => this.openGroupAsTiles(groupId) }] : []),
       { label: 'Rename group', run: () => this.startTabGroupRename(groupId) },
       ...(this._canCreateTabGroup() ? [{ label: 'New group', run: () => this.createTabGroup({ index: index + 1 }) }] : []),
@@ -7848,7 +8669,8 @@ class CodemanApp {
 
   /** Keyboard actions for a web-tab row in the vertical rail: its settings plus group moves. */
   openTabWebviewMenu(event, webviewId) {
-    const moves = this._tabRefMoveActions({ kind: 'webview', id: webviewId });
+    const ref = { kind: 'webview', id: webviewId };
+    const moves = [...this._tabRefFocusActions(ref), ...this._tabRefMoveActions(ref)];
     if (!moves.length) {
       this.showWebviewModal?.(webviewId);
       return false;
@@ -7859,7 +8681,7 @@ class CodemanApp {
     ]);
   }
 
-  _openTabLayoutMenu(event, identity, ariaLabel, actions) {
+  _openTabLayoutMenu(event, identity, ariaLabel, actions, { anyLayout = false } = {}) {
     event?.preventDefault?.();
     event?.stopPropagation?.();
     const trigger = event?.currentTarget || null;
@@ -7870,7 +8692,7 @@ class CodemanApp {
     }
     this.closeTabGroupMenu();
     this.closeTabRailActionMenu?.();
-    if (!this._tabLayoutEditable()) return false;
+    if (!anyLayout && !this._tabLayoutEditable()) return false;
     const menu = document.createElement('div');
     menu.className = 'tab-rail-action-menu tab-layout-group-action-menu';
     menu.setAttribute('role', 'menu');
@@ -7879,8 +8701,17 @@ class CodemanApp {
       const button = document.createElement('button');
       button.type = 'button';
       button.setAttribute('role', 'menuitem');
-      button.textContent = action.label;
+      if (action.icon) {
+        // A Run menu entry's markup (renderRegistryRunOptions): the CLI's logo, then its name.
+        const dot = document.createElement('span');
+        dot.className = `run-mode-dot ${action.icon}`;
+        dot.setAttribute('aria-hidden', 'true');
+        button.append(dot, action.label);
+      } else {
+        button.textContent = action.label;
+      }
       if (action.className) button.className = action.className;
+      if (action.selected) button.classList.add('selected');
       button.addEventListener('click', () => {
         this.closeTabGroupMenu();
         action.run();
@@ -7915,6 +8746,12 @@ class CodemanApp {
     document.addEventListener('keydown', this._tabGroupMenuKeydown, true);
     window.addEventListener('resize', this._tabGroupMenuResize);
     menu.addEventListener('keydown', (keyEvent) => {
+      // A held Enter or Space that opened the menu repeats onto the entry it
+      // focuses; cancelling the repeat keeps it from also picking that entry.
+      if (keyEvent.repeat && (keyEvent.key === 'Enter' || keyEvent.key === ' ')) {
+        keyEvent.preventDefault();
+        return;
+      }
       const buttons = [...menu.querySelectorAll('button')];
       const at = buttons.indexOf(document.activeElement);
       if (keyEvent.key === 'ArrowDown' || keyEvent.key === 'ArrowUp') {
@@ -7929,13 +8766,20 @@ class CodemanApp {
         this.closeTabGroupMenu({ restoreFocus: true });
       }
     });
-    // Focus leaving by any other route (a click elsewhere, a programmatic move).
-    // Hops between the menu's own items are not a departure.
+    // Focus moving to another element outside the menu (a programmatic move;
+    // a click elsewhere is the pointerdown listener's). Hops between the
+    // menu's own items are not a departure, and neither is focus going nowhere:
+    // Safari never focuses a clicked button, so a press on an item blurs the
+    // focused one with no relatedTarget, and closing then dropped its click
+    // (the tile count menu's rule, tile-grid.js). Nor is focus landing on the
+    // trigger: a press on a focusable one (a tab's "+") focuses it before its
+    // click, and closing there let that click open the menu again.
     menu.addEventListener('focusout', (focusEvent) => {
-      if (focusEvent.relatedTarget && menu.contains(focusEvent.relatedTarget)) return;
+      const to = focusEvent.relatedTarget;
+      if (!to || menu.contains(to) || trigger?.contains?.(to)) return;
       if (this._tabGroupMenu === menu) this.closeTabGroupMenu();
     });
-    menu.querySelector('button')?.focus();
+    (menu.querySelector('button.selected') || menu.querySelector('button'))?.focus();
     return true;
   }
 
@@ -8725,10 +9569,23 @@ class CodemanApp {
     // `force` is the user pressing "Load full history" (#258): they asked once,
     // explicitly, so the scroll-gesture cooldown does not apply. The downgrade
     // guard below still does — a forced pull must not destroy history either.
-    const cooldown = this._fullHistoryRepullUseless?.has(sessionId) ? 60000 : 4000;
+    // A refused pull latches 60 s because the browser then held MORE than tmux
+    // (the downgrade guard below). A tab switch that replayed a hollow tail has
+    // voided that premise: one screen in the browser while the pane holds
+    // scrollback, the state `_maybePageCliTranscript` hands to this pull instead
+    // of paging the CLI. Hold such a buffer to the normal cooldown only, or the
+    // gesture is dead for up to a minute.
+    const unloaded =
+      (this._paneHistoryLines?.get(sessionId) ?? 0) > 0 && (this.terminal?.buffer?.active?.baseY ?? 0) === 0;
+    const cooldown = !unloaded && this._fullHistoryRepullUseless?.has(sessionId) ? 60000 : 4000;
     if (!force && now - (this._fullHistoryRepullAt.get(sessionId) || 0) < cooldown) return;
     this._fullHistoryRepullAt.set(sessionId, now);
     this._fullHistoryRepullInFlight = true;
+    // The session-id check below cannot see a tab switch that came BACK during
+    // the fetch (A -> B -> A): the id matches again while `selectSession` is
+    // replaying its own capture, and the reset below would land in the middle
+    // of that write. The select generation moves on every switch, so it can.
+    const selectGen = this._selectGeneration;
     try {
       const requestStartedAt = performance.now();
       const capture = await this._fetchTerminalCapture(
@@ -8740,6 +9597,13 @@ class CodemanApp {
       const headersReceivedAt = capture.headersAt;
       const payload = capture.json?.data ?? {};
       const bodyParsedAt = performance.now();
+      // A completion that outlived a tab switch is older than whatever that
+      // switch recorded about the pane (a switch back re-reads it): keep its
+      // count out of the memory, or it can overwrite a fresh count with a stale one.
+      // An error envelope (a JSON 5xx, `success: false`) is not a capture:
+      // recording its empty data would forget the count and hand the next
+      // gesture back to the paging fallback, the bug this pull exists to avoid.
+      if (selectGen === this._selectGeneration && capture.json?.success !== false) this._notePaneHistory?.(sessionId, payload);
       const buffer = payload.terminalBuffer;
       const timing = {
         trigger: force ? 'full-history-button' : 'full-history-scroll',
@@ -8755,8 +9619,9 @@ class CodemanApp {
         refused: false,
       };
       // Bail on a tab switch mid-fetch: writing here would paint another session's
-      // history into the terminal the user is now looking at.
-      if (!buffer || this.activeSessionId !== sessionId) return;
+      // history into the terminal the user is now looking at, or this session's
+      // over the load a switch back has started.
+      if (!buffer || this.activeSessionId !== sessionId || selectGen !== this._selectGeneration) return;
       const windowRows = this._estimateReplayRows(buffer, this.terminal.cols);
       // A bounded window no longer than the browser's buffer buys nothing, and
       // resetting to rewrite it would jump the viewport on every scroll that
@@ -8828,7 +9693,7 @@ class CodemanApp {
         this._bufferLoadFinishOpts(payload, headersReceivedAt)
       );
       timing.resetAndParseMs = parsedAt - replayStartedAt;
-      if (!completed || this.activeSessionId !== sessionId) return;
+      if (!completed || this.activeSessionId !== sessionId || selectGen !== this._selectGeneration) return;
       // Keep shell tab restores bounded too. A user-triggered full-history pull
       // may be tens of MB; caching it would replay that whole payload again on
       // the next tab switch before the normal 1MB tail fetch replaces it.
@@ -8850,6 +9715,10 @@ class CodemanApp {
       // reached only from a scroll-up gesture, so being dragged down is the
       // exact opposite of what the user asked for.
       this._syncStickyScrollBaseline();
+      // The prompt row moved with the rewrite: re-position the local-echo
+      // overlay there, as the refresh path does (a phone swipe reaches this
+      // pull with unsent text on the overlay).
+      this._localEchoOverlay?.rerender();
       timing.totalMs = performance.now() - requestStartedAt;
       this._recordTerminalLoadTiming(timing);
     } catch {
@@ -8874,9 +9743,14 @@ class CodemanApp {
       source: payload.source ?? null,
       fullSize: payload.fullSize ?? 0,
       retainedBytes: payload.retainedBytes ?? 0,
+      // tmux holds lines beyond a `lines=` window, so fullSize undercounts.
+      historyLinesCut: !!payload.historyLinesCut,
       // Set once a full-history pull has been refused as a downgrade: the
       // browser holds more than the server can return, so there is no more.
       exhausted: !!payload.exhausted,
+      // tmux scrollback above the frame (null = not reported). 0 is a pane with
+      // nothing a pull could add, which hides the notice outright.
+      paneHistoryLines: payload.paneHistoryLines ?? null,
     });
     if (sessionId === this.activeSessionId) this._renderHistoryTruncationBanner();
   }
@@ -8884,7 +9758,46 @@ class CodemanApp {
   /** Drop banner state for a session that is going away. */
   _clearHistoryTruncation(sessionId) {
     this._historyTruncation?.delete(sessionId);
+    this._historyNoticeDismissed?.delete(sessionId);
+    this._paneHistoryLines?.delete(sessionId);
     if (sessionId === this.activeSessionId) this._renderHistoryTruncationBanner();
+  }
+
+  /**
+   * Remember how much scrollback tmux holds for a session's pane, from any
+   * terminal response. Called whether or not the response was written, since
+   * it describes the PANE, not the payload. Three responses are skipped, since
+   * none is the newest word on the pane: an error envelope (`success: false`)
+   * on any path, a refresh that lost its owner, and a history pull whose select
+   * generation moved during the fetch. A response without the field (a
+   * byte-history fallback, an older server) forgets it, so the next tab switch
+   * goes back to the bounded tail: unknown never counts as empty.
+   */
+  _notePaneHistory(sessionId, payload) {
+    if (!sessionId) return;
+    const lines = payload?.paneHistoryLines;
+    if (typeof lines === 'number' && Number.isFinite(lines) && lines >= 0) {
+      (this._paneHistoryLines ||= new Map()).set(sessionId, lines);
+    } else {
+      this._paneHistoryLines?.delete(sessionId);
+    }
+  }
+
+  /**
+   * Bring the partial-history notice up for `sessionId`, or retire it (null).
+   *
+   * The notice is LAZY: a tail replay is truncated on nearly every tab switch,
+   * and a bar over the top rows on every switch described history the user had
+   * not reached for. It now waits for the scroll gesture that reaches the top of
+   * the browser's buffer (the moment the missing part matters, and the same
+   * gesture that already re-pulls history), and goes away again once the user
+   * scrolls back down to live output. A tab switch retires it (selectSession).
+   */
+  _setHistoryNoticeRevealed(sessionId) {
+    const next = sessionId || null;
+    if ((this._historyNoticeRevealedFor ?? null) === next) return;
+    this._historyNoticeRevealedFor = next;
+    this._renderHistoryTruncationBanner();
   }
 
   /**
@@ -8896,13 +9809,22 @@ class CodemanApp {
    *   - recoverable  → offer to load the rest
    *   - exhausted    → say so plainly, offer nothing
    *   - at the limit → the full capture ITSELF hit the byte ceiling
+   *
+   * Shown only while revealed (`_setHistoryNoticeRevealed`: the user scrolled
+   * to the top of this tab's buffer) and never again for a session whose notice
+   * the user dismissed on this page.
    */
   _renderHistoryTruncationBanner() {
     const bar = document.getElementById('historyTruncationBar');
     if (!bar) return;
-    const state = this.activeSessionId ? this._historyTruncation?.get(this.activeSessionId) : null;
+    const sessionId = this.activeSessionId;
+    const state = sessionId ? this._historyTruncation?.get(sessionId) : null;
     const notice = computeHistoryTruncationNotice(state || {});
-    if (!notice.visible) {
+    if (
+      !notice.visible ||
+      this._historyNoticeRevealedFor !== sessionId ||
+      this._historyNoticeDismissed?.has(sessionId)
+    ) {
       bar.hidden = true;
       return;
     }
@@ -8935,6 +9857,9 @@ class CodemanApp {
     dismiss.setAttribute('aria-label', 'Dismiss history notice');
     dismiss.textContent = '×';
     dismiss.onclick = () => {
+      // Sticky for this session until the page reloads: a dismissed notice used
+      // to come straight back on the next tab switch.
+      (this._historyNoticeDismissed ||= new Set()).add(sessionId);
       bar.hidden = true;
     };
     bar.appendChild(dismiss);
@@ -9046,9 +9971,14 @@ class CodemanApp {
     this._cleanupPreviousSession(sessionId);
     this.activeSessionId = sessionId;
     this._activateFileBrowserSession?.(sessionId);
+    // A keyboard row hold belongs to the session it was taken for: release it here
+    // if this one resizes instead (the geometry work below then fits it).
+    this._reconcileKeyboardHold?.({ resize: false });
     // Repaint the partial-history banner for the tab being switched TO. The
     // replay paths refresh it when their fetch lands; without this the previous
-    // session's notice stays on screen until then (#258).
+    // session's notice stays on screen until then (#258). The switch lands at
+    // live output, so the notice waits for a scroll to the top again.
+    this._historyNoticeRevealedFor = null;
     this._renderHistoryTruncationBanner();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     // Narrow SSE filter to the active session — server stops streaming
@@ -9085,6 +10015,8 @@ class CodemanApp {
     // Remote-host reachability banner: only meaningful for a remote session, so this
     // also clears it when the newly active tab is local.
     this.refreshHostWakeBanner?.(sessionId);
+    // An open Edit history panel follows the active session (edit-history-ui.js; no poll).
+    this.onEditHistoryActiveSession?.(sessionId);
 
     // Restore flushed offset AND text IMMEDIATELY so backspace/typing work during
     // the async buffer load.  Without this, the offset is 0 during the
@@ -9317,16 +10249,41 @@ class CodemanApp {
       // TUI sessions still get one canonical full replay per page (COD-47/#205).
       // A shell can retain hundreds of thousands of plain scrollback lines, so
       // automatically replaying all of them makes tab selection scale with the
-      // entire session. Load its bounded 1MB tail first; the existing truncation
-      // banner action fetches ?full=1 when the user explicitly asks for it.
-      const useFullHistory = session?.mode !== 'shell' && !this._fullHistoryLoaded.has(sessionId);
+      // entire session. Load a bounded window of tmux's RENDERED history first
+      // (SHELL_LOAD_QUERY: never the raw byte recording, whose repaints replay
+      // wrong at another pane height); the existing truncation banner action
+      // fetches ?full=1 when the user explicitly asks for it.
+      //
+      // A TUI pane whose last capture reported NO tmux scrollback (fullscreen
+      // claude: it lives in the alternate screen and keeps its transcript itself)
+      // takes `full=1` on every switch, not only the first. For such a pane that
+      // capture IS the visible frame, a few KB, while the tail is 1 MiB of the
+      // byte stream's old repaints. Measured on 11 live fullscreen claude panes:
+      // the tail took 250-1070 ms on the server and 70-510 ms to parse, and
+      // rendered one frame repeated (450 rows, 44 distinct); `full=1` took
+      // 150-330 ms and returned 0.9-5.6 KB. It also matches what a page load
+      // already shows, and an empty local buffer is what lets
+      // _maybePageCliTranscript send a wheel to the CLI's own transcript. The
+      // response re-reports the count, so a pane that starts keeping history
+      // (claude switched to its inline view) goes back to the tail on the next
+      // switch.
+      // A remote (ssh) or Docker session's local pane hosts a nested tmux client in the
+      // alternate screen, so it reports 0 while its byte tail is real scrollback.
+      const shellSession = session?.mode === 'shell';
+      const paneKeepsNoHistory =
+        !session?.remote && !session?.docker && this._paneHistoryLines?.get(sessionId) === 0;
+      const useFullHistory = !shellSession && (paneKeepsNoHistory || !this._fullHistoryLoaded.has(sessionId));
       if (useFullHistory) this._fullHistoryLoaded.add(sessionId);
       const fetchStartedAt = performance.now();
       const tailUrl = `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`;
       let capture;
       try {
         capture = await this._fetchTerminalCapture(
-          useFullHistory ? `/api/sessions/${sessionId}/terminal?full=1` : tailUrl,
+          useFullHistory
+            ? `/api/sessions/${sessionId}/terminal?full=1`
+            : shellSession
+              ? `/api/sessions/${sessionId}/terminal?${SHELL_LOAD_QUERY}`
+              : tailUrl,
           { full: useFullHistory }
         );
       } catch (err) {
@@ -9349,6 +10306,10 @@ class CodemanApp {
       }
       const data = capture.json?.data ?? {};
       const bodyParsedAt = performance.now();
+      // An error envelope (a JSON 5xx: _fetchTerminalCapture does not check
+      // `res.ok`) is not a capture: recording its empty data would forget the
+      // count the pane last reported, as in the refresh and the history pull.
+      if (capture.json?.success !== false) this._notePaneHistory?.(sessionId, data);
       // How this load must end, decided here because `chunkedTerminalWrite` is
       // what actually ends it for a non-empty buffer. A tmux pane capture is a
       // point-in-time frame, so nothing that reached the browser after the
@@ -9649,8 +10610,9 @@ class CodemanApp {
         //
         // UNREACHABLE as written, and kept for the invariant rather than the
         // branch. A `useFullHistory` pass sends `full=1`, and the route answers
-        // `full=1` with `mux-full-history` or `history`, never `mux-visible`
-        // (see the source ladder in session-routes.ts), so the gate above
+        // a `full=1` pass without `alt=recording` (every `useFullHistory` pass;
+        // only shell loads send it) with `mux-full-history` or `history`, never
+        // `mux-visible` (see the source ladder in session-routes.ts), so the gate above
         // already rules out every pass that consumed the flag. Do not read this
         // line as evidence that a page load retries: it does not, and the test
         // suite pins that it does not.
@@ -9793,8 +10755,8 @@ class CodemanApp {
     // Remove from tab order
     const orderIndex = this.sessionOrder.indexOf(sessionId);
     if (orderIndex !== -1) {
+      // Not saved: the server's deletion already re-projected and broadcast the order.
       this.sessionOrder.splice(orderIndex, 1);
-      this.saveSessionOrder();
     }
     this.terminalBuffers.delete(sessionId);
     this.terminalBufferCache.delete(sessionId);
@@ -9841,9 +10803,10 @@ class CodemanApp {
     delete this.respawnActionLogs[sessionId];
   }
 
+  /** Resolves true once the session is gone from the server, false when it is still there. */
   async closeSession(sessionId, killMux = true) {
     // Already on its way out (a repeated click, the mux panel racing the tab).
-    if (this._closingSessions.has(sessionId)) return;
+    if (this._closingSessions.has(sessionId)) return false;
     // The tab goes FIRST and the server is asked after. The kill takes the server
     // a few hundred ms (SIGTERM grace, the process tree, tmux), and a tab that sat
     // there that long after "Kill" read as a click that did nothing. A refused
@@ -9921,7 +10884,7 @@ class CodemanApp {
       } else {
         this.showToast('Tab hidden, tmux still running', 'info');
       }
-      return;
+      return true;
     }
 
     // Still on the server (or the server is unreachable, in which case the resync
@@ -9936,6 +10899,7 @@ class CodemanApp {
       this.renderSessionTabs();
     }
     this.showToast('Failed to close session', 'error');
+    return false;
   }
 
   // Request confirmation before closing a session
@@ -9949,6 +10913,20 @@ class CodemanApp {
     const name = this.getSessionName(session);
     const sessionNameEl = document.getElementById('closeConfirmSessionName');
     sessionNameEl.textContent = name;
+
+    // A session in a Codeman-managed git worktree also offers to remove the worktree
+    // (git worktree remove, never forced) once the session is gone. Read now, before the
+    // session leaves this.sessions.
+    const worktree = this._managedWorktreeOfSession?.(session) || null;
+    this.pendingCloseWorktree = worktree;
+    const wtOption = document.getElementById('closeConfirmWorktree');
+    if (wtOption) {
+      wtOption.hidden = !worktree;
+      const wtName = document.getElementById('closeConfirmWorktreeName');
+      if (wtName) wtName.textContent = worktree ? worktree.name : '';
+      const wtBranch = document.getElementById('closeConfirmWorktreeBranch');
+      if (wtBranch) wtBranch.checked = false;
+    }
 
     // Update kill button text based on session mode
     const killTitle = document.getElementById('closeConfirmKillTitle');
@@ -9969,7 +10947,9 @@ class CodemanApp {
                     ? 'Kill Tmux & DeepSeek'
                     : session.mode === 'omp'
                       ? 'Kill Tmux & OMP'
-                      : 'Kill Tmux & Claude Code';
+                      : session.mode === 'copilot'
+                        ? 'Kill Tmux & GitHub Copilot'
+                        : 'Kill Tmux & Claude Code';
     }
 
     document.getElementById('closeConfirmModal').classList.add('active');
@@ -9977,35 +10957,50 @@ class CodemanApp {
 
   cancelCloseSession() {
     this.pendingCloseSessionId = null;
+    this.pendingCloseWorktree = null;
     document.getElementById('closeConfirmModal').classList.remove('active');
   }
 
-  async confirmCloseSession(killMux = true) {
+  /**
+   * `removeWorktree`: Close Session's "Kill & remove worktree". The worktree is removed only
+   * after the server confirms the session is gone (a live session inside is refused anyway),
+   * and only ever through `git worktree remove` without --force.
+   */
+  async confirmCloseSession(killMux = true, { removeWorktree = false } = {}) {
     const sessionId = this.pendingCloseSessionId;
+    const worktree = removeWorktree ? this.pendingCloseWorktree : null;
+    const deleteBranch = !!document.getElementById('closeConfirmWorktreeBranch')?.checked;
     this.cancelCloseSession();
 
     if (sessionId) {
-      await this.closeSession(sessionId, killMux);
+      const gone = await this.closeSession(sessionId, killMux);
+      if (gone && worktree) await this._removeWorktreeAfterClose?.(worktree, deleteBranch);
     }
   }
 
-  nextSession() {
+  /** `{ visual: true }` walks the order the strip draws (the phone swipe), see _stripSessionOrder. */
+  nextSession(options = {}) {
     // With the tile grid open, Ctrl+Tab and Alt+[ / Alt+] cycle through the tiles.
     if (this._cycleTileFocus?.(1)) return;
-    if (this.sessionOrder.length <= 1) return;
-
-    const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
-    const nextIndex = (currentIndex + 1) % this.sessionOrder.length;
-    this.selectSession(this.sessionOrder[nextIndex]);
+    const order = options.visual ? this._stripSessionOrder() : this.sessionOrder;
+    // An active session the list does not show (filtered out, or none active on
+    // the home screen) steps in at the first row; a lone row that is not the
+    // active one is still a destination.
+    const currentIndex = order.indexOf(this.activeSessionId);
+    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % order.length;
+    if (!order[nextIndex] || order[nextIndex] === this.activeSessionId) return;
+    this.selectSession(order[nextIndex]);
   }
 
-  prevSession() {
+  prevSession(options = {}) {
     if (this._cycleTileFocus?.(-1)) return;
-    if (this.sessionOrder.length <= 1) return;
-
-    const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
-    const prevIndex = (currentIndex - 1 + this.sessionOrder.length) % this.sessionOrder.length;
-    this.selectSession(this.sessionOrder[prevIndex]);
+    const order = options.visual ? this._stripSessionOrder() : this.sessionOrder;
+    // As above, from the other end: a hidden or absent active session steps in
+    // at the last row (the old arithmetic landed on the second to last).
+    const currentIndex = order.indexOf(this.activeSessionId);
+    const prevIndex = currentIndex < 0 ? order.length - 1 : (currentIndex - 1 + order.length) % order.length;
+    if (!order[prevIndex] || order[prevIndex] === this.activeSessionId) return;
+    this.selectSession(order[prevIndex]);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -10203,6 +11198,54 @@ class CodemanApp {
   }
 
   // ─── Shortcut Registry ───────────────────────────────────────────────────────
+  /**
+   * Action name -> handler for the shortcut registry entries the document keydown
+   * handler dispatches generically (DEFAULT_SHORTCUTS + the user's rebinds). Entries
+   * absent here (copy selection, the palette, the tile chords) have their own dispatch.
+   */
+  _shortcutActions() {
+    return {
+      showShortcutOverlay: () => this.showShortcutOverlay(),
+      killActiveSession: () => this.killActiveSession(),
+      nextSession: () => this.nextSession(),
+      previousSession: () => this.prevSession(),
+      clearTerminal: () => this.clearTerminal(),
+      restoreTerminalSize: () => this.restoreTerminalSize(),
+      increaseFontSize: () => this.increaseFontSize(),
+      decreaseFontSize: () => this.decreaseFontSize(),
+      toggleVoiceInput: () => VoiceInput.toggle(),
+      moveActiveTabLeft: () => this.moveActiveTabLeft(),
+      moveActiveTabRight: () => this.moveActiveTabRight(),
+      toggleSessionSidebar: () => this.toggleSessionSidebar(),
+    };
+  }
+
+  /**
+   * True when `e` is a chord the USER rebound to a generically dispatched action.
+   * The document handler has already run the action, but its preventDefault() does not
+   * stop xterm, so without this gate a rebind to e.g. Alt+J would also type ESC j into the
+   * session. Defaults are not covered on purpose: several (Ctrl+L) rely on reaching the PTY,
+   * and neither is a chord that matches the entry's own default (a re-capture of it).
+   */
+  isUserBoundShortcutEvent(e) {
+    if (!e.ctrlKey && !e.metaKey && !e.altKey) return false;
+    const overrides = this.loadAppSettingsFromStorage().shortcutOverrides || {};
+    const actions = this._shortcutActions();
+    return this.getShortcutRegistry().some((shortcut) => {
+      if (shortcut.disabled || !Array.isArray(overrides[shortcut.id]?.bindings)) return false;
+      // toggleSessionSidebar has its own gate (shouldToggleSessionSidebarFromShortcut) that
+      // lets the chord through when the sidebar layout is off; swallowing it here would make a
+      // rebound sidebar key dead in the header layout.
+      if (shortcut.action === 'toggleSessionSidebar') return false;
+      if (typeof actions[shortcut.action] !== 'function') return false;
+      if (!this.matchesShortcutEvent(e, shortcut)) return false;
+      // Re-capturing the entry's own default (Ctrl+L for Clear Terminal) must keep reaching the
+      // CLI: clearTerminal() relies on ^L for the redraw.
+      const fallback = DEFAULT_SHORTCUTS.find((d) => d.id === shortcut.id);
+      return !this.matchesShortcutEvent(e, fallback);
+    });
+  }
+
   // Returns the merged shortcut list: DEFAULT_SHORTCUTS with any per-shortcut
   // overrides from settings.shortcutOverrides applied on top.
 

@@ -33,6 +33,9 @@ const SCANNED_FILES = [
   'terminal-split.js',
   'tile-grid.js',
   'terminal-tile.js',
+  // The command palette's new-session agent picker reads its agents from the
+  // injected catalog; panels-ui.js carries no id branch, so keep it that way.
+  'panels-ui.js',
 ];
 
 /**

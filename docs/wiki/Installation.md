@@ -12,7 +12,10 @@ Getting Codeman onto a machine, verifying it works, updating it, and removing it
 | **An agent CLI** | At least one of [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [OpenCode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli), [Antigravity](https://antigravity.google), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Pi](https://pi.dev), [Grok Build](https://github.com/xai-org/grok-build), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [OMP](https://github.com/can1357/oh-my-pi). Plain shell sessions need none. See [Agent CLIs](Agent-CLIs). |
 
 Codeman itself sends no telemetry and phones no home. The only network traffic is your
-browser to your server, and whatever the agent CLI you chose does on its own.
+browser to your server, and whatever the agent CLI you chose does on its own, plus the
+server's own few requests (Codex usage, web push, webhooks) and, on by default while Copilot
+CLI is installed and signed in, a read of your own GitHub Copilot quota every 10 minutes
+(Plan Usage Limits in App Settings turns it off; see [Agent CLIs](Agent-CLIs)).
 
 ## Route A: the installer (recommended)
 

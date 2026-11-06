@@ -121,7 +121,25 @@ afterAll(async () => {
   if (originalPlaywrightBrowsersPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
   else process.env.PLAYWRIGHT_BROWSERS_PATH = originalPlaywrightBrowsersPath;
 
-  rmSync(testHome, { recursive: true, force: true });
+  // A straggling writer can recreate files between rmSync's readdir and rmdir and fail the whole file
+  // with ENOTEMPTY after every test has passed. The usual culprit is a real agent CLI on a developer
+  // machine (the `claude` a test's code path probes or spawns) flushing its own `~/.claude.json` and
+  // `~/.claude/backups/` into the temp HOME a moment after the test ends; CI has no such CLI. Keep
+  // removing until it goes quiet, for at most about 5 s, and if it never does, leave the temp dir to
+  // the `exit` backstop below: a leaked temp folder must not fail a test file that passed.
+  // ⚠️ The bound is a deadline, not an attempt count: this hook runs under vitest's 10 s
+  // `hookTimeout`, and each failed attempt costs rmSync's own retry sleeps (50 + 100 + 150 ms) plus
+  // the wait below, so 20 attempts overran it and failed the file with "Hook timed out".
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    try {
+      rmSync(testHome, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      break;
+    } catch {
+      if (Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
 });
 
 // afterAll never fires for a fully-skipped test file (no tests execute), which

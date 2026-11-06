@@ -21,13 +21,17 @@ desktop.
 
 | Category                | Examples                                                                        |
 | ----------------------- | ------------------------------------------------------------------------------- |
-| **Per-device, local**   | Skin, WebGL renderer, local echo, CJK input, extended keyboard bar, File Viewer and Cron header buttons. Never sent to the server at all. |
+| **Per-device, local**   | Skin, WebGL renderer, local echo, keep size under keyboard, CJK input, extended keyboard bar, File Viewer and Cron header buttons. Never sent to the server at all. |
 | **Per-device policy**   | Most `show*` toggles, plan usage chip, language. Stored server-side, but a device only takes the server value when it has no local one of its own. |
 | **Synced**              | Models, effort, CLI options, notification preferences, voice settings, display name, the agent skill and approvals toggles. |
 
 The practical rule: **appearance and input are per device, behaviour is shared.** If a change
 did not follow you, it is in one of the first two rows, and you change it again on that
 device.
+
+In [Multi-User Mode](Multi-User-Mode) the server's settings are shared by every user, so
+only an **admin** can change them. A regular user's **Save** keeps their per-device settings
+as usual and tells them that server-wide settings can only be changed by an admin.
 
 ## App Settings
 
@@ -42,6 +46,7 @@ supervised by systemd or launchd; npm installs report as non-updatable. See
 | Setting                       | Default              | Notes                                                                 |
 | ----------------------------- | -------------------- | --------------------------------------------------------------------- |
 | Local Echo                    | On for touch devices | Paints keystrokes locally and flushes on Enter. See [Input And Voice](Input-And-Voice). |
+| Keep Size Under Keyboard      | On                   | For local Claude sessions, the on-screen keyboard no longer resizes the session: the terminal keeps its rows and the view scrolls so the prompt sits just above the keyboard. Resizing made Claude reprint its screen and drop transcript lines from history. Codex, Claude's fullscreen mode, remote and Docker sessions resize as before. See [Mobile Guide](Mobile-Guide). |
 | CJK Input                     | Off                  | IME composition through a dedicated text field.                        |
 | Extended Keyboard Bar         | Per device           | Which accessory bar phones get. Shell sessions override it while they are active. |
 | Wheel Scrolls Local History   | Off                  | Keeps the wheel on the local buffer instead of forwarding it to the CLI. |
@@ -57,9 +62,19 @@ supervised by systemd or launchd; npm installs report as non-updatable. See
 Chips for every optional header control, with a live preview of the resulting header:
 
 Run, Font Size, System Stats, Redraw Terminal, Response Viewer, Away Digest, Session
-Manager, Attachments, File Viewer, Multi-monitor, Split, Tiles, Plan Usage, Lifecycle Log, Monitor,
+Manager, Attachments, Edit history, File Viewer, Multi-monitor, Split, Tiles, Plan Usage, Lifecycle Log, Monitor,
 Project Insights, File Browser, Subagents, Approvals Inbox, Read My Mind, Ultracode Agents,
 Ultracode Windows, Cron.
+
+**Host readings** (opt-in, both off by default and per device): **GPU Stats** adds three items after CPU and MEM: GPU load, graphics memory and the GPU clock,
+and **CPU MHz** adds the live CPU clock. Both sets of items live inside **System Stats**, so they show only
+while that chip is on, and nothing is fetched while it is off. An item appears only when the
+host reports it, so a machine with no readable GPU shows nothing extra. Sources: `nvidia-smi` or the amdgpu
+sysfs files for the GPU; inside WSL, the Windows performance counters through `typeperf.exe`, which cover
+any vendor (an Intel GPU gives load and memory in use, but Windows publishes no clock for it, and its memory
+total is taken as half of Windows' RAM, the limit Windows applies to integrated GPUs); and
+`scaling_cur_freq`, `/proc/cpuinfo` or, inside WSL, the Windows `Processor Frequency` counter for the CPU
+clock. Nothing is read, and `nvidia-smi` and `typeperf.exe` are never run, while both are off.
 
 **Bottom bar** (below the chips): **Git status** shows a small indicator at the right of the
 bottom bar, off by default and per device. It reads `● N` uncommitted files, `↑ N` commits not
@@ -70,8 +85,32 @@ by folder** (per device, on by default) shows changed files under collapsed fold
 window; off lists every file by its full path. **Git status: max repositories** (per device,
 1 to 50, default 12) is how many repositories the window lists when a session's folder holds
 several projects. **Git status: git timeout** (per device, 5 to 120 seconds, default 30) is how
-long one git command may run before that repository is reported as unreadable; raise it for
-repositories on a slow network share.
+long one git command may run before that repository is reported as unreadable, and the same value
+bounds the Git window's Fetch button; raise it for repositories on a slow network share.
+
+**Git fetch on an interval** (synced, off by default) runs `git fetch` on a timer for the repositories the
+Git window lists, so the `behind` number is current without a click, and **Git fetch: how often** (synced,
+30 to 3600 seconds, default 300) is the gap between runs for a session that has no override of its own, timed from
+the start of a run, so a slow repository does not push the next one out. These are the only Git settings
+that are synced rather than per device, because the server's scheduler is what acts on them: kept per
+device, the scheduler would read nobody's number. **Session Options → Git** overrides both the switch and
+the interval for one session, and that override wins even while the app switch is off; a session that follows
+the app shows the app's values and its rows go inert until you turn **Follow the app setting** off. Nothing is
+ever fetched for a Docker or remote (SSH) session, and a repository a container can write to is refused
+before any git runs. Sessions open on the same folder share one run, and a folder is fetched when ANY session open on it is due, so the order the sessions were read cannot decide which interval wins. Both default to off because `git fetch`
+is the one git command the Git window runs that writes (cloning and worktree management write too, but only
+when you asked for them at the moment you asked), and the one that can run a repository's own hooks
+(`reference-transaction`, `pre-auto-gc` through the maintenance a fetch triggers, and config commands such as
+`credential.helper`), and the one that can run later by itself, on a timer. The ssh it runs is BatchMode so
+nothing waits for a login, and that is a default, never an override: your own `GIT_SSH_COMMAND`, or the
+repository's `core.sshCommand`, is used when either is set. ⚠️ The default's `StrictHostKeyChecking=accept-new`
+records an unknown host key in `~/.ssh/known_hosts` without asking: BatchMode stops a prompt, not a write.
+
+**Edit history** (per device, off by default, never on phones) adds a header button for the
+active session's edit history: every edit the agent and its subagents made, with its diff, and
+images it produced. Local Claude sessions only. Nothing is read until you open the window, and it
+stores those diffs (secrets included) under `~/.codeman/edit-history/`; see
+[Working With Files](Working-With-Files#edit-history).
 
 Most default to off. The stock desktop header is system stats, File Viewer, Tiles, and the gear.
 **Header Stats Style** picks how the system stats and plan usage are drawn: *Compact*
@@ -84,6 +123,21 @@ way; it also enables the `Ctrl+Shift+G` grid toggle on this device. See
 
 This section also holds background-agent tracking, including whether to track agents for
 every session or only the active tab.
+
+**Keep agent inbox across restarts** (under **Cross-session features**, synced, off by
+default) saves the pending `codeman agent post` messages to `agent-inbox.json` in the data
+dir, readable by you only, so they survive a server restart. Off, the agent inbox lives in
+memory and a restart empties it; switching it off deletes the file and keeps what is in
+memory. Messages expire 12 hours after they were posted either way. See
+[Driving Codeman From An Agent](Driving-Codeman-From-An-Agent#the-codeman-agent-commands).
+
+**Experimental agent coordination** (under **Cross-session features**, synced, off by
+default) turns on the `codeman agent inspect`, `stage` and `submit` commands: bounded,
+paged reads of another session's output, and typing a prompt into a local Codex composer
+that is sent with one Enter only after Codeman checks it is unchanged. Off, their HTTP
+routes answer `403 FORBIDDEN` naming the setting (`agentCoordinationEnabled`). They are
+experimental and may change in any release. See
+[Driving Codeman From An Agent](Driving-Codeman-From-An-Agent#the-codeman-agent-commands).
 
 ### Appearance
 
@@ -100,8 +154,10 @@ every session or only the active tab.
 | Tall Tabs              | Taller tab strip.                                                                          |
 | CLI Logos on Tabs      | Each agent tab, and its row on the desktop home rail, shows the CLI's logo before the name. Off hides those logos on this device; the status dot and the shell's SH badge stay, and tiles, split headers and the Run menus keep their logos. On by default. |
 | Pop-out Button on Tabs | Adds the detach control to tabs, with a per-tab override.                                  |
+| New Session Button on Tabs | Adds a **+** beside each tab's gear: pick a CLI the tab's case can start and one session starts in that case (or worktree) and named group, leaving the Run button alone. The row menu offers it as *New session here…*. Per device, off by default. See [The Dashboard](The-Dashboard#session-tabs). |
 | Spawn Lineage Lines    | Lines from each tab to the sessions it spawned; the selected tab's family is drawn thicker. Desktop only, on by default. |
 | Auto-name Sessions     | Titles a new tab after its first prompt, keeping the case prefix (`w3-myapp: fix the login redirect`). Synced, off by default. See [The Dashboard](The-Dashboard#automatic-session-names). |
+| Spawned Tabs Follow Their Parent | A session started by another one (an agent's worker, a `parentSessionId` spawn) follows its parent's tab into its group and moves with it until you move it by hand; the row menu then says where it sits and offers *Follow parent again*. Off, it starts right after its parent and stays put. Decided when the tab is created, so flipping it leaves existing tabs alone. Synced, off by default. |
 | Overview Home Screen   | The phone home screen. On by default.                                                      |
 
 ### Animations
@@ -145,7 +201,8 @@ instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-E
 | Allowed Tools                    | The list used by the explicit mode.                                                            |
 | Ralph / Todo Tracker             | Enables the Ralph loop surfaces.                                                               |
 | Agent Teams                      | Experimental teams. Also needs the CLI's own environment flag.                                 |
-| Codeman Agent Skill              | Injects the agent skill into new Claude sessions per case. Off by default. See [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent). |
+| Pin tab names on the CLI         | Launches every Claude session with `--name` set to its tab name, so Claude Code's prompt label and `/resume` list match your tabs. Claude then stops generating its own titles for those sessions, and a rename in Codeman holds only until the next turn. Synced, off by default; applies from the next session start or respawn. |
+| Codeman Agent Skill              | Under **All agent CLIs**. Injects the agent skill into each new session's case, where that session's CLI looks for skills (every CLI except Pi and a plain shell). Off by default. See [The Codeman Skill](Codeman-Skill). |
 | Remote auto-reconnect            | Reattaches dropped remote SSH sessions. On by default.                                         |
 | Nice priority / value            | Runs agent processes at a lower CPU priority.                                                  |
 | Default Codex model              | Model for new local Codex sessions; empty uses Codex's own config. Letters, digits, `.` `_` `-` `/` only. |
@@ -162,8 +219,9 @@ how long a desktop notification stays up before Codeman closes it (**Browser
 notification display time**, default 8; both per device, and your OS may close a
 desktop notification sooner), the idle
 threshold that decides when a quiet session counts as needing you, and the server-wide
-webhook (ntfy, Slack, Discord or generic JSON; admins only in multi-user mode). See
-[Notifications And Approvals](Notifications-And-Approvals).
+webhook (ntfy, Slack, Discord or generic JSON; admins only in multi-user mode), and the
+Discord group for the two-way bot (token, IDs, thread and ping options; see
+[Discord Bridge](Discord-Bridge)). See [Notifications And Approvals](Notifications-And-Approvals).
 
 ### Voice
 
@@ -178,11 +236,19 @@ Rebinding for the shortcut registry. See [Keyboard Shortcuts](Keyboard-Shortcuts
 
 ### System
 
-`CLAUDE.md` template for new cases, default working directory, the image watcher, and
+`CLAUDE.md` template for new cases, default working directory, the image watcher, the prompt-cache keep-warm default (**Keep prompt caches warm**, off) and its cap (**Keep warm for at most**, 2 hours after a session's last prompt; see [Keeping Agents Running](Keeping-Agents-Running)), and
 Cloudflare tunnel controls including the tunnel URL. The **Diagnostics** group runs
 `codeman doctor` on the server and lists the agent CLIs, tmux, Node and the optional office
 tools with their versions and install hints (admin only in multi-user mode). In multi-user
 mode, the **Users** administration entry is injected here.
+
+The **Config backups** group controls timestamped copies of your configuration files: an
+on/off switch (on by default), the backup folder (default `~/.codeman/backups/config`), how
+many backups to keep (2 to 500, default 20) and how many days to keep them (0 to 3650, default
+30; 0 means no age limit). A value that is not saved in `settings.json` (a reset file) is whatever
+the newest backup in that folder recorded, and the default only when none did, plus **Back up now** and a list with **Restore**. These are
+server-side settings, read fresh. Details, naming and restore behaviour are on
+[Config Backups](Config-Backups).
 
 ## Session Options
 
@@ -190,7 +256,7 @@ Per session, from the tab.
 
 | Panel            | Contains                                                                                   |
 | ---------------- | ------------------------------------------------------------------------------------------- |
-| **Respawn**      | Auto-resume on usage limit, the respawn cycle configuration, presets, duration. See [Keeping Agents Running](Keeping-Agents-Running). |
+| **Respawn**      | Auto-resume on usage limit, the prompt cache readout and keep-warm switch, the respawn cycle configuration, presets, duration. See [Keeping Agents Running](Keeping-Agents-Running). |
 | **Session**      | Name, working directory, environment overrides, per-tab pop-out override.                    |
 | **Ralph / Todo** | Loop configuration, iteration and todo caps, circuit breaker reset. See [Autonomous Loops](Autonomous-Loops). |
 | **Summary**      | What this session has done: tokens, activity, run summary.                                   |
@@ -213,9 +279,13 @@ Some things are configured before the server starts, not in the UI:
 | `CODEMAN_GESTURE`                   | Makes gesture control available to be enabled.                          |
 | `CODEMAN_DOCKER_BRIDGE_HOOKS`       | Lets in-container hooks reach the host on a loopback bind.              |
 | `CODEMAN_FILE_PICKER_ROOTS`         | Extra roots for the path picker.                                        |
-| `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledges exposing the server with no password.                  |
+| `CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK` | Acknowledges binding a non-loopback address with no password. Does not cover the tunnel. |
+| `CODEMAN_ALLOW_UNAUTHENTICATED_TUNNEL` | Lets the Cloudflare tunnel start with no password (`--allow-unauthenticated-tunnel` on `codeman web`). The browser still asks first. |
 | `CODEMAN_BASE_URL`                  | Mounts Codeman under a sub-path behind a reverse proxy that forwards the prefix unchanged. See [Remote Access](Remote-Access). |
+| `CODEMAN_MAX_SESSIONS`              | Cap on concurrent sessions. 50 by default, 1 to 462 (a larger value is clamped to 462, anything that is not a positive integer falls back to 50). Read at startup. The 462 assumes the default `CODEMAN_MAX_WEBVIEWS` and no pinned closed sessions, which share the same 512-entry tab layout. In multi-user mode the per-user cap defaults to half of it unless `CODEMAN_MAX_SESSIONS_PER_USER` is set. |
 | `CODEMAN_MAX_DOWNLOAD_BYTES`        | Cap on raw file bodies and downloads. 2 GB by default, `0` for none.    |
+| `CODEMAN_MAX_PASTE_IMAGE_BYTES`     | Cap on one pasted, dropped or attached image or document. 50 MB by default. |
+| `CODEMAN_MAX_PASTE_VIDEO_BYTES`     | Cap on one attached video (phone Attach, drop). 1 GB by default; videos stream to disk, so this bounds disk use, not memory. |
 | `CODEMAN_MAX_REMOTE_FILE_SSH`       | Concurrent ssh reads for files in remote cases. 4 by default.           |
 | `CODEMAN_PATH_PROBE_TIMEOUT_MS`     | How long a linked case's folder may take to answer before it is shown as unreachable. 1500 ms by default; raise it for a slow but healthy mount. |
 | `CODEMAN_PATH_PROBE_MAX_STALLED`    | Unanswered folder checks allowed to pile up before new ones are refused. 2 by default: one below the threadpool size minus one, so it follows `UV_THREADPOOL_SIZE` (4 unless set), and it is never allowed above that ceiling. A check you start by opening one case or session may use the one slot left above it. |
@@ -235,3 +305,4 @@ Some things are configured before the server starts, not in the UI:
 - [The Dashboard](The-Dashboard) - what each control does once visible.
 - [Keeping Agents Running](Keeping-Agents-Running) - the Respawn panel in depth.
 - [Agent CLIs](Agent-CLIs) - model, effort, and permission modes.
+- [Config Backups](Config-Backups) - copies of your settings, and how to restore them.

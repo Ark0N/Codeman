@@ -132,20 +132,22 @@ describe('linked-cases.json tolerance', () => {
 });
 
 describe('skill command wiring', () => {
-  it('registers install and uninstall, both accepting --case and --global', () => {
+  it('registers install and uninstall, both accepting --case and --global, install also --mode', () => {
     const skill = program.commands.find((cmd) => cmd.name() === 'skill');
     expect(skill).toBeDefined();
 
     const subcommands = skill!.commands.map((cmd) => cmd.name());
     expect(subcommands).toEqual(expect.arrayContaining(['install', 'uninstall']));
 
-    for (const name of ['install', 'uninstall']) {
-      const flags = skill!.commands
+    const flagsOf = (name: string) =>
+      skill!.commands
         .find((cmd) => cmd.name() === name)!
         .options.map((opt) => opt.long)
         .sort();
-      expect(flags).toEqual(['--case', '--global']);
-    }
+    // --mode picks the skill and directory that run mode reads (capabilities.agentSkill);
+    // uninstall needs none, since --case removes every Codeman-managed copy.
+    expect(flagsOf('install')).toEqual(['--case', '--global', '--mode']);
+    expect(flagsOf('uninstall')).toEqual(['--case', '--global']);
   });
 });
 

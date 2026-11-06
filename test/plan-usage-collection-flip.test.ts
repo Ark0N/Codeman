@@ -70,8 +70,11 @@ describe('saveAppSettings wiring', () => {
     );
     // Stripped from serverSettings like the other per-device display keys.
     expect(save).toMatch(/showPlanUsageLimits: _pul,/);
-    // Decided once against the device's prior settings, before they are overwritten.
-    expect(save).toMatch(/const _chipFlip = this\.planUsageCollectionFlip\(_prev, settings\.showPlanUsageLimits\);/);
+    // Decided once against the device's prior settings, before they are overwritten (or, after a
+    // save the server did not store, against the settings that save started from).
+    expect(save).toMatch(
+      /const _chipFlip = this\.planUsageCollectionFlip\(_prevServer, settings\.showPlanUsageLimits\);/
+    );
     // And only a real flip reaches the PUT body.
     expect(save).toMatch(/\.\.\.\(_chipFlip !== undefined \? \{ showPlanUsageLimits: _chipFlip \} : \{\}\),/);
   });

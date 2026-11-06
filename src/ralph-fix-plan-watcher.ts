@@ -203,6 +203,9 @@ export class RalphFixPlanWatcher extends EventEmitter {
   /** Path to the @fix_plan.md file being watched */
   private _fixPlanPath: string | null = null;
 
+  /** The path is on a REMOTE host (`setRemoteWorkingDir`): never read or watch it locally. */
+  private _remote = false;
+
   /** File watcher for @fix_plan.md */
   private _fixPlanWatcher: FSWatcher | null = null;
 
@@ -238,6 +241,7 @@ export class RalphFixPlanWatcher extends EventEmitter {
    * @param workingDir - The session's working directory
    */
   setWorkingDir(workingDir: string): void {
+    this._remote = false;
     this._workingDir = workingDir;
     this._fixPlanPath = join(workingDir, '@fix_plan.md');
 
@@ -249,11 +253,27 @@ export class RalphFixPlanWatcher extends EventEmitter {
   }
 
   /**
+   * Record a REMOTE session's working directory (a path on the remote host) without reading or
+   * watching it: the local disk holds nothing of it. The fix plan stays authoritative exactly as for a
+   * local session, so the output-based completion guessers stay off (they are off for every session
+   * with a working directory); the file reaches the tracker only through an explicit import
+   * (`POST .../fix-plan/read`, which reads it over ssh).
+   * @param workingDir - The session's working directory on the remote host
+   */
+  setRemoteWorkingDir(workingDir: string): void {
+    this.stopWatchingFixPlan();
+    this._remote = true;
+    this._workingDir = workingDir;
+    this._fixPlanPath = join(workingDir, '@fix_plan.md');
+  }
+
+  /**
    * Load @fix_plan.md from disk if it exists.
-   * Called on initialization and when file changes are detected.
+   * Called on initialization and when file changes are detected. A remote path is never read here:
+   * the local disk would hold a missing path or an unrelated same-named file.
    */
   async loadFixPlanFromDisk(): Promise<number> {
-    if (!this._fixPlanPath) return 0;
+    if (!this._fixPlanPath || this._remote) return 0;
 
     try {
       if (!existsSync(this._fixPlanPath)) {
@@ -281,7 +301,7 @@ export class RalphFixPlanWatcher extends EventEmitter {
    * Reloads todos when the file is modified.
    */
   private startWatchingFixPlan(): void {
-    if (!this._fixPlanPath || !this._workingDir) return;
+    if (!this._fixPlanPath || !this._workingDir || this._remote) return;
 
     // Stop existing watcher if any
     this.stopWatchingFixPlan();

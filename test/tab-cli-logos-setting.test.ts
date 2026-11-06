@@ -82,6 +82,8 @@ const REAL = new Set([
   // Real so the save builds the body a browser would send (the schema check).
   'resolveHeaderStatsStyle',
   'resolveSessionSidebarFontSize',
+  // The display-key list the load merge reads (settings-ui.js keeps it in one method).
+  '_displaySettingKeySet',
 ]);
 
 /**

@@ -8,8 +8,9 @@ DECISIONS.md
 # Written by install.sh into end-user clones when setup finishes
 .install-complete
 
-# Dependencies
-node_modules/
+# Dependencies. No trailing slash: `node_modules/` matches only a directory, so a
+# worktree's `node_modules` symlink to a shared install got committed (#658, #662).
+node_modules
 
 # Build output
 dist/
@@ -83,6 +84,23 @@ tmp/
 # would swallow the whole web UI source dir and silently un-stage any new asset
 # added there). No trailing slash so it still matches the symlink, not just dirs.
 /public
+
+# Video never goes to GitHub (docs/media-assets.md). The only tracked moving
+# images are the GIFs a public page embeds, in docs/images/; masters, promo cuts,
+# drafts and captures live in the local media library pr/media/ (ignored above).
+# The promo branch tracks its Remotion render inputs, so those stay addable.
+# A deliberate exception elsewhere takes `git add -f`.
+*.mp4
+*.webm
+*.mov
+*.m4v
+*.mkv
+*.avi
+*.gif
+!/docs/images/*.gif
+!/scripts/remotion/public/**/*.mp4
+!/scripts/remotion/public/**/*.webm
+!/scripts/remotion/public/**/*.gif
 
 # Opt-in gesture overlay runtime assets: large MediaPipe wasm + model (~27 MB)
 # fetched at build/install by scripts/fetch-gesture-assets.mjs, kept out of git.

@@ -178,6 +178,30 @@
             </div>
             <span class="stat-value" id="statMem">--</span>
           </div>
+          <div class="stat-item stat-item--host" id="statGpuItem" hidden>
+            <span class="stat-ring" id="statGpuRing" aria-hidden="true"></span>
+            <span class="stat-label">GPU</span>
+            <div class="stat-bar">
+              <div class="stat-bar-fill stat-bar-cpu" id="statGpuBar"></div>
+            </div>
+            <span class="stat-value" id="statGpu">--%</span>
+          </div>
+          <div class="stat-item stat-item--host" id="statVramItem" hidden>
+            <span class="stat-ring" id="statVramRing" aria-hidden="true"></span>
+            <span class="stat-label">VRAM</span>
+            <div class="stat-bar">
+              <div class="stat-bar-fill stat-bar-cpu" id="statVramBar"></div>
+            </div>
+            <span class="stat-value" id="statVram">--%</span>
+          </div>
+          <div class="stat-item stat-item--host stat-item--ringless" id="statGpuMhzItem" hidden>
+            <span class="stat-label">GPU</span>
+            <span class="stat-value" id="statGpuMhz">-- MHz</span>
+          </div>
+          <div class="stat-item stat-item--host stat-item--ringless" id="statCpuMhzItem" hidden>
+            <span class="stat-label">CPU</span>
+            <span class="stat-value" id="statCpuMhz">-- MHz</span>
+          </div>
         </div>
         <button class="btn-icon-header btn-redraw-terminal btn-redraw-terminal--hidden" onclick="app.restoreTerminalSize()" title="Redraw terminal to fit current screen (Ctrl+Shift+R)" aria-label="Redraw terminal"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg></button>
         <button class="btn-icon-header btn-response-viewer-header btn-response-viewer-header--hidden" onclick="app.toggleResponseViewer()" title="View last response" aria-label="View last response"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
@@ -192,12 +216,19 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
           <span class="attachment-history-badge" id="attachmentHistoryBadge" style="display:none;">0</span>
         </button>
+        <!-- Edit history of the active session (edit-history-ui.js), next to Attachments: both show
+             what the session produced, and the panel opens right below. Optional and per-device
+             (App Settings → Header & Panels → Header, default OFF): hidden by its marker class,
+             never on phones (mobile.css). -->
+        <button type="button" class="btn-icon-header btn-edit-history btn-edit-history--hidden" id="editHistoryBtn" aria-expanded="false" aria-controls="editHistoryPanel" title="Edit history" aria-label="Open edit history" onclick="app.toggleEditHistoryPanel()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+        </button>
         <button class="btn-icon-header btn-file-viewer" onclick="app.toggleFileBrowserButton()" title="File Viewer" aria-label="Open file viewer" aria-expanded="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="icon-folder-closed" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><g class="icon-folder-open"><path d="M3 17V7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1.5"/><path d="M3 17l2.3-5.4A2 2 0 0 1 7.2 10.5H20a1.5 1.5 0 0 1 1.4 2l-1.9 5.2A2 2 0 0 1 17.6 19H5a2 2 0 0 1-2-2z"/></g></svg></button>
         <button class="btn-icon-header btn-multimonitor btn-multimonitor--hidden" onclick="app.launchMultiMonitor()" title="Open Codeman across all displays" aria-label="Open Codeman across all displays"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="13" height="9" rx="1.5"/><rect x="11" y="9" width="11" height="8" rx="1.5"/></svg></button>
         <button class="btn-icon-header btn-split btn-split--hidden" onclick="app.openSplitPicker(event)" title="Split: open a second session beside this one" aria-label="Split: open a second session beside this one" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg></button>
         <button class="btn-icon-header btn-tile-grid btn-tile-grid--hidden" onclick="app.toggleTileGrid()" oncontextmenu="app.openTileCountMenu(event)" aria-describedby="tileGridHint" aria-label="Tiles: show several sessions side by side (right-click for how many)" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg></button>
         <button class="btn-icon-header btn-ultracode-agents btn-ultracode-agents--hidden" onclick="app.toggleUltracodeAgentsPanel()" title="Ultracode / Workflow agents" aria-label="Open ultracode workflow agents"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.2 7.2 15.6 11M8.2 16.8 15.6 13"/></svg></button>
-        <div class="header-plan-usage header-plan-usage--hidden" id="planUsageChip" title="Claude and Codex plan usage limits">—</div>
+        <div class="header-plan-usage header-plan-usage--hidden" id="planUsageChip" title="Claude, Codex and Copilot plan usage limits">—</div>
         <button class="btn-icon-header btn-notifications" onclick="app.toggleNotifications()" title="Notifications" aria-label="Toggle notifications" style="display:none;">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
           <span class="notification-badge" id="notifBadge" style="display:none;">0</span>
@@ -601,11 +632,28 @@
         <span class="git-status-title">Git <span class="git-status-branch" id="gitStatusBranch" data-i18n-skip></span></span>
         <div class="git-status-actions">
           <button class="btn-icon-sm" onclick="app.refreshGitStatusNow()" title="Refresh" aria-label="Refresh git status">&#x21BB;</button>
+          <button class="btn-icon-sm" id="gitStatusFetchBtn" onclick="app.fetchGitStatusNow()" title="Fetch" aria-label="Fetch git status">&#x2913;</button>
           <button class="btn-icon-sm" onclick="app.closeGitStatusPanel()" title="Close" aria-label="Close git status">&times;</button>
         </div>
       </div>
       <div class="git-status-body" id="gitStatusBody" data-i18n-skip></div>
       <div class="git-status-footer" id="gitStatusFooter" data-i18n-skip></div>
+    </div>
+
+    <!-- Edit history panel (edit-history-ui.js): every file edit the active session's agents made. -->
+    <div class="edit-history-panel" id="editHistoryPanel" role="dialog" aria-label="Edit history">
+      <div class="edit-history-header">
+        <span class="edit-history-title">Edit history <span class="edit-history-count" id="editHistoryCount" data-i18n-skip></span></span>
+        <div class="edit-history-actions">
+          <button class="btn-icon-sm" onclick="app.refreshEditHistory()" title="Refresh" aria-label="Refresh edit history">&#x21BB;</button>
+          <button class="btn-icon-sm" onclick="app.closeEditHistoryPanel()" title="Close" aria-label="Close edit history">&times;</button>
+        </div>
+      </div>
+      <div class="edit-history-controls">
+        <label class="edit-history-toggle"><input type="checkbox" id="editHistoryGroupToggle" onchange="app.setEditHistoryGrouped(this.checked)"><span>Group by file</span></label>
+        <label class="edit-history-toggle"><input type="checkbox" id="editHistoryMainOnlyToggle" onchange="app.setEditHistoryMainOnly(this.checked)"><span>Main agent only</span></label>
+      </div>
+      <div class="edit-history-body" id="editHistoryBody" data-i18n-skip></div>
     </div>
 
     <!-- File Preview Overlay -->
@@ -614,12 +662,19 @@
         <div class="file-preview-header">
           <span class="file-preview-title" id="filePreviewTitle">file.ts</span>
           <div class="file-preview-actions">
+            <button class="btn-icon-sm" id="filePreviewBackBtn" onclick="app.stepFilePreviewHistory(-1)" title="Back (Alt+←)" aria-label="Back to the previous file" hidden disabled>&larr;</button>
+            <button class="btn-icon-sm" id="filePreviewForwardBtn" onclick="app.stepFilePreviewHistory(1)" title="Forward (Alt+→)" aria-label="Forward to the next file" hidden disabled>&rarr;</button>
+            <button class="btn-icon-sm" id="filePreviewPrevBtn" onclick="app.stepFolderPreview(-1)" title="Previous file in folder (←)" aria-label="Previous file in folder" hidden>&lsaquo;</button>
+            <button class="btn-icon-sm" id="filePreviewNextBtn" onclick="app.stepFolderPreview(1)" title="Next file in folder (→)" aria-label="Next file in folder" hidden>&rsaquo;</button>
+            <button class="btn-icon-sm" id="filePreviewFolderBtn" onclick="app.openFolderOfPreview()" title="Show folder" aria-label="Show folder" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
             <button class="btn-icon-sm file-preview-pill" id="filePreviewMdBtn" onclick="app.toggleFilePreviewMd()" title="Rendered markdown" aria-label="Rendered markdown" aria-pressed="true" hidden>MD</button>
+            <button class="btn-icon-sm file-preview-pill" id="filePreviewPageBtn" onclick="app.toggleFilePreviewPage()" title="Rendered page" aria-label="Rendered page" aria-pressed="true" hidden>Page</button>
             <button class="btn-icon-sm" id="filePreviewLinesBtn" onclick="app.toggleFilePreviewLines()" title="Line numbers" aria-label="Line numbers" aria-pressed="false" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
             <button class="btn-icon-sm" id="filePreviewWrapBtn" onclick="app.toggleFilePreviewWrap()" title="Wrap lines" aria-label="Wrap lines" aria-pressed="true" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><line x1="3" y1="18" x2="10" y2="18"/></svg></button>
             <button class="btn-icon-sm file-preview-edit-btn" id="filePreviewEditBtn" onclick="app.enterFilePreviewEdit()" title="Edit file" aria-label="Edit file" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg></button>
             <button class="btn-icon-sm" onclick="app.copyFilePreviewContent()" title="Copy content">&#x2398;</button>
             <button class="btn-icon-sm" id="filePreviewDetachBtn" onclick="app.detachFilePreview()" title="Open in new tab" aria-label="Open in new tab" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></button>
+            <button class="btn-icon-sm" id="filePreviewExpandBtn" onclick="app.toggleFilePreviewExpanded()" title="Expand" aria-label="Expand" aria-pressed="false"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
             <button class="btn-icon-sm" onclick="app.closeFilePreview()" title="Close">&times;</button>
           </div>
         </div>
@@ -631,6 +686,23 @@
           <button class="file-preview-editbar-btn file-preview-editbar-btn--save" id="filePreviewSaveBtn" onclick="app.saveFilePreviewEdit()" disabled>Save</button>
         </div>
         <div class="file-preview-footer" id="filePreviewFooter"></div>
+        <div class="file-preview-resize" id="filePreviewResize" title="Drag to resize" aria-hidden="true"></div>
+      </div>
+    </div>
+
+    <!-- Folder Grid: every previewable file of one folder (panels-ui.js openFolderGrid) -->
+    <div class="folder-grid-overlay" id="folderGridOverlay">
+      <div class="folder-grid-window">
+        <div class="file-preview-header">
+          <span class="file-preview-title" id="folderGridTitle" data-i18n-skip></span>
+          <div class="file-preview-actions">
+            <button class="btn-icon-sm" id="folderGridUpBtn" onclick="app.folderGridUp()" title="Parent folder" aria-label="Parent folder">&uarr;</button>
+            <button class="btn-icon-sm" onclick="app.closeFolderGrid()" title="Close" aria-label="Close">&times;</button>
+          </div>
+        </div>
+        <div class="folder-grid-folders" id="folderGridFolders" data-i18n-skip></div>
+        <div class="folder-grid-body" id="folderGridBody" data-i18n-skip></div>
+        <div class="file-preview-footer" id="folderGridFooter" data-i18n-skip></div>
       </div>
     </div>
 
@@ -754,9 +826,29 @@
                 <span>1M Opus Context</span>
               </label>
               <span class="form-hint">Use 1M token context window for new sessions</span>
+              <label class="case-default-group-label" for="caseDefaultGroup">Default session group</label>
+              <select id="caseDefaultGroup" class="case-default-group-select" onchange="app.onCaseDefaultGroupChanged(this)">
+                <option value="">Ungrouped</option>
+              </select>
+              <span class="form-hint">New sessions for this case land in this group</span>
             </div>
           </div>
           <!-- Mobile-only case button + gear -->
+          <!-- Phone-only Attach (wired in image-input.js): the button opens its own file input,
+               which sits invisibly over the button so iOS anchors the picker popover to it. The
+               Compose dialog is deliberately not involved: it focuses its textarea, which raises
+               the keyboard under the picker sheet. Sits BEFORE the mic so the two share order: 5
+               and source order keeps Attach on the left. -->
+          <span class="btn-attach-mobile-wrap">
+            <button type="button" class="btn-attach-mobile" id="attachBtnMobile" title="Attach" aria-label="Attach">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5"/>
+                <path d="m21 15-5-5L5 21"/>
+              </svg>
+            </button>
+            <input type="file" class="btn-attach-mobile-input" id="attachFileInput" accept="image/*,video/*,.pdf,.docx,.pptx,.xlsx,.zip,.txt,.md,.csv,.tsv,.json,.log,.yaml,.yml,.xml" multiple tabindex="-1" aria-hidden="true">
+          </span>
           <button class="btn-voice-mobile" id="voiceInputBtnMobile" onclick="VoiceInput.toggle()"
                   title="Voice input" aria-label="Start voice input" aria-pressed="false">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -783,6 +875,11 @@
               <span>1M Opus Context</span>
             </label>
             <span class="form-hint">Use 1M token context window</span>
+            <label class="case-default-group-label" for="caseDefaultGroupMobile">Default session group</label>
+            <select id="caseDefaultGroupMobile" class="case-default-group-select" onchange="app.onCaseDefaultGroupChanged(this)">
+              <option value="">Ungrouped</option>
+            </select>
+            <span class="form-hint">New sessions for this case land in this group</span>
           </div>
         </div>
 
@@ -860,6 +957,7 @@
               <div><kbd>Alt/Option</kbd>+<kbd>Shift</kbd>+<kbd>Arrows</kbd></div><div>Focus Tile Left / Right / Up / Down</div>
               <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Arrows</kbd></div><div>Move Tile Left / Right / Up / Down</div>
               <div><kbd>Drag</kbd> a tile's header</div><div>Move the Tile (onto Another: Swap)</div>
+              <div><kbd>Drag</kbd> a tile's header out of the window</div><div>Open the Tile in Its Own Window (Detach Tiles)</div>
               <div><kbd>Alt/Option</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd></div><div>Zoom Focused Tile</div>
               <div><kbd>Ctrl/Cmd</kbd>+<kbd>Click</kbd> a tab</div><div>Add the Session to the Tile Grid</div>
               <div><kbd>Right-click</kbd> the Tiles button</div><div>Choose How Many Tiles (2, 4 or 6)</div>
@@ -886,6 +984,7 @@
               <div><kbd>Ctrl</kbd>+<kbd>?</kbd></div><div>Show Shortcuts</div>
               <div><kbd>Alt/Option</kbd>+<kbd>?</kbd></div><div>Show Shortcuts</div>
               <div><kbd>Escape</kbd></div><div>Close Panels</div>
+              <div><kbd>Alt/Option</kbd>+<kbd>ArrowLeft</kbd> / <kbd>Alt/Option</kbd>+<kbd>ArrowRight</kbd></div><div>File Viewer Back / Forward</div>
             </div>
           </section>
         </div>
@@ -957,6 +1056,20 @@
         </div>
         <div class="modal-body">
           <p class="form-hint" id="customModelPickHint"></p>
+          <!-- Case-insensitive filter over the rendered rows (app.filterCustomModelPick):
+               a display layer only, the rows themselves are never re-rendered. Reset on every
+               open and focused only on non-touch devices, same in-memory rule as the rail's
+               search box. -->
+          <input type="search" id="customModelPickSearch" class="session-sidebar-filter-input custom-model-pick-search"
+            placeholder="Search models" aria-label="Search models"
+            autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search"
+            oninput="app.filterCustomModelPick(this.value)">
+          <p class="form-hint custom-model-pick-no-matches" id="customModelPickNoMatches" role="status" hidden>No models match</p>
+          <!-- Shown only when no row carries a loaded/in-use/last-used mark AND the
+               running-status probe answered `isLlamaSwap: false` (see
+               _openCustomModelPickModal): it says out loud WHY nothing is marked, in the user's language, rather than leaving an
+               alphabetical wall that looks like the question was ignored. -->
+          <p class="form-hint custom-model-pick-unknown" id="customModelPickUnknown" role="status" hidden>Nothing is marked: this endpoint did not report which model it has loaded, and none of your running sessions uses one. Pick the model to launch.</p>
           <div id="customModelPickList" class="run-mode-custom-models"></div>
         </div>
       </div>
@@ -1042,6 +1155,7 @@
                 <option value="grok">Grok</option>
                 <option value="deepseek">DeepSeek</option>
                 <option value="omp">OMP</option>
+                <option value="copilot">GitHub Copilot</option>
               </select>
             </div>
             <div class="form-row"><label>Working Directory</label><input type="text" id="schWorkingDir" placeholder="/absolute/path"></div>
@@ -1255,6 +1369,13 @@
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><polyline points="7 14 11 10 14 13 20 7"/></svg>
                 <span>Summary</span>
               </button>
+              <!-- Git is last: the section shows for every local session, but until the interval feature is
+                   in use it holds one toggle and a status row that has never run, so it earns its place at the
+                   end of the rail rather than among the tabs a session uses every day. -->
+              <button type="button" class="set-rail-item" data-tab="git" onclick="app.switchOptionsTab('git')">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 3v12"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+                <span>Git</span>
+              </button>
             </div>
             <p class="set-rail-foot">These options belong to the selected session and save as you change them.</p>
           </nav>
@@ -1286,6 +1407,33 @@
               <!-- Hidden wholesale for non-claude sessions and for a session with
                    no live process (session-ui.js: openSessionOptions). -->
               <div id="sessionRespawnSection">
+                <!-- Claude Code (v2.1.251+) reports the main conversation's prompt-cache
+                     state on the statusline; the exporter keeps it per session and this
+                     row shows it live (session-ui.js: updatePromptCacheStatus). -->
+                <div class="set-group">
+                  <div class="set-group-head"><h4>Prompt cache</h4></div>
+                  <p class="set-group-hint">While the cached conversation is warm, a turn re-reads it at the cheap cached rate. Once it sits idle past the cache lifetime, the next turn re-processes the whole context at the cache-write rate.</p>
+                  <div class="set-group-body">
+                    <div class="set-row">
+                      <div class="set-row-text">
+                        <span class="set-row-label">Status</span>
+                        <span class="set-row-desc" id="promptCacheStatus" data-i18n-skip>Not reported yet.</span>
+                        <span class="set-row-desc" id="keepWarmStatus" data-i18n-skip hidden></span>
+                      </div>
+                    </div>
+                    <!-- Per-session opt-in for the keep-alive nudge (prompt-cache-keepwarm.ts);
+                         the default for sessions that have not chosen lives in App Settings →
+                         Automation. Its status shares the Status row above: session-ui.js updateKeepWarmStatus. -->
+                    <div class="set-row">
+                      <div class="set-row-text">
+                        <span class="set-row-label">Keep the cache warm while idle</span>
+                        <span class="set-row-desc">Sends a one-line keep-alive just before the cache expires, so your next prompt still reads from cache. Runs only while idle, up to the limit in App Settings &rarr; System &rarr; Automation; switch on before launch to also stop Claude Code's own idle compaction.</span>
+                      </div>
+                      <label class="switch switch-sm"><input type="checkbox" id="modalKeepWarmEnabled" onchange="app.autoSaveKeepWarm()"><span class="slider"></span></label>
+                    </div>
+                  </div>
+                </div>
+
                 <div class="set-group">
                   <div class="set-group-head"><h4>Loop control</h4></div>
                   <div class="set-group-body">
@@ -1405,6 +1553,16 @@
                     <div class="set-row-actions">
                       <span id="modalSessionPrefix" class="set-static" style="display: none; white-space: nowrap;"></span>
                       <input type="text" id="modalSessionName" class="set-input" maxlength="128" placeholder="Auto (directory name)" onblur="app.saveSessionName()">
+                    </div>
+                  </div>
+                  <div class="set-row set-row-block">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Working folder</span>
+                      <span class="set-row-desc" id="modalSessionPathDesc">Where this session's CLI runs, on the machine hosting Codeman.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <code id="modalSessionPath" class="set-static mono" style="flex: 1; min-width: 0; word-break: break-all; user-select: all;"></code>
+                      <button type="button" class="btn-toolbar btn-sm" id="modalSessionPathCopy" onclick="app.copySessionPath()">Copy</button>
                     </div>
                   </div>
                   <div class="set-row set-row-block">
@@ -1606,6 +1764,54 @@
                 </div>
               </div>
             </section>
+
+            <!-- ══ Git ══════════════════════════════════════════════════════ -->
+            <section class="set-section hidden" id="git-tab" data-label="Git">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 3v12"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+                <h2>Git</h2>
+              </div>
+              <p class="set-section-blurb">Whether Codeman fetches this session's repositories on a timer.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Fetch on an interval</h4></div>
+                <p class="set-group-hint">Fetching is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer, so nothing runs until you turn it on (here, or in App Settings &rarr; Bottom bar). Cloning and worktree management write too, but only when you asked for them at the moment you asked. The panel's Fetch button is always just a click.</p>
+                <div class="set-group-body">
+                  <!-- Live from the session's own last run (session-ui.js: updateGitFetchStatus), which is the
+                       run its folder got: several sessions on one folder share one run and read the same row. -->
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Status</span>
+                      <span class="set-row-desc" id="gitFetchStatus" data-i18n-skip hidden></span>
+                    </div>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Follow the app setting</span>
+                      <span class="set-row-desc">Uses the app-wide switch and interval for this session. Switch it off to pick your own.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="modalGitFetchFollow" checked onchange="app.autoSaveGitFetch()"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="gitFetchEnabledRow">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Fetch this session</span>
+                      <span class="set-row-desc">Runs on its own even while the app-wide switch is off: a session that turned itself on means exactly that. Sessions sharing one folder share one run, and each sees that run's result.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="modalGitFetchEnabled" onchange="app.autoSaveGitFetch()"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="gitFetchIntervalRow">
+                    <div class="set-row-text">
+                      <span class="set-row-label">How often</span>
+                      <span class="set-row-desc">30 sec to 1 hr, timed from the start of a run, so a slow repository does not push the next one out.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <input type="number" id="modalGitFetchInterval" class="set-num set-num-wide" value="300" min="30" max="3600" step="30" onchange="app.autoSaveGitFetch()">
+                      <span class="set-unit">sec</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
       </div>
@@ -1631,9 +1837,67 @@
             <span class="close-option-title" id="closeConfirmKillTitle">Kill Tmux & Claude Code</span>
             <span class="close-option-desc">Terminate the session completely</span>
           </button>
+          <!-- Shown only for a session in a Codeman-managed git worktree (requestCloseSession,
+               app.js): kill it, then `git worktree remove` without --force. -->
+          <div class="close-option-worktree" id="closeConfirmWorktree" hidden>
+            <button class="close-option close-option-danger" onclick="app.confirmCloseSession(true, { removeWorktree: true })">
+              <span class="close-option-title">Kill &amp; remove worktree <span id="closeConfirmWorktreeName" data-i18n-skip></span></span>
+              <span class="close-option-desc">git refuses while the worktree has uncommitted or untracked files; nothing is forced</span>
+            </button>
+            <label class="close-option-worktree-branch">
+              <input type="checkbox" id="closeConfirmWorktreeBranch">
+              <span>Also delete its branch (git branch -d keeps a branch that is not merged)</span>
+            </label>
+          </div>
         </div>
         <div class="modal-footer-cancel">
           <button class="btn-toolbar btn-sm" onclick="app.cancelCloseSession()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Git worktrees of a case (session-ui.js openWorktreeModal; routes/worktree-routes.ts).
+         Opened from the case picker's "Git worktrees…" row and the phone case sheet. -->
+    <div class="modal" id="worktreeModal" role="dialog" aria-modal="true" aria-labelledby="worktreeModalTitle">
+      <div class="modal-backdrop" onclick="app.closeWorktreeModal()"></div>
+      <div class="modal-content worktree-modal">
+        <div class="modal-header">
+          <h3 id="worktreeModalTitle"><span>Git worktrees</span> <span class="worktree-modal-case" id="worktreeModalCase" data-i18n-skip></span></h3>
+          <button class="modal-close" onclick="app.closeWorktreeModal()" aria-label="Close git worktrees">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="form-hint worktree-intro">Each worktree is its own checkout of the case's repository, on its own branch, in .claude/worktrees/ of the case. Agents working in parallel then never share one folder.</p>
+          <div class="worktree-status" id="worktreeStatus" role="status" aria-live="polite" hidden></div>
+          <div class="worktree-list" id="worktreeList"></div>
+          <div class="form-row worktree-mode-row">
+            <label for="worktreeMode">Start sessions with</label>
+            <select id="worktreeMode" class="form-select"></select>
+          </div>
+          <fieldset class="worktree-new">
+            <legend>New worktree</legend>
+            <div class="form-row">
+              <label for="worktreeName">Name</label>
+              <input type="text" id="worktreeName" maxlength="64" placeholder="fix-login" autocomplete="off" autocapitalize="off" spellcheck="false" onkeydown="if (event.key === 'Enter') app.createWorktreeFromModal()">
+              <span class="form-hint">New branch worktree-&lt;name&gt; from the case's current commit, unless you pick another below.</span>
+            </div>
+            <details class="worktree-advanced">
+              <summary>Branch and start point</summary>
+              <div class="form-row">
+                <label for="worktreeBranch">Branch</label>
+                <input type="text" id="worktreeBranch" maxlength="200" placeholder="worktree-<name>" autocomplete="off" autocapitalize="off" spellcheck="false">
+              </div>
+              <div class="form-row">
+                <label for="worktreeBase">Start from</label>
+                <input type="text" id="worktreeBase" maxlength="200" placeholder="HEAD" autocomplete="off" autocapitalize="off" spellcheck="false">
+                <span class="form-hint">A branch, tag or commit. Default: the case's current commit (HEAD).</span>
+              </div>
+            </details>
+            <div class="worktree-form-error" id="worktreeFormError" role="alert" hidden></div>
+          </fieldset>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="wt-btn" onclick="app.closeWorktreeModal()">Close</button>
+          <button type="button" class="wt-btn wt-btn-primary" id="worktreeCreateBtn" onclick="app.createWorktreeFromModal()">Create &amp; start session</button>
         </div>
       </div>
     </div>
@@ -1772,6 +2036,13 @@
                       <span class="set-row-desc">Paint keystrokes instantly instead of waiting for the round trip. Recommended on phones and high-latency links.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsLocalEcho"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="keyboard hold rows resize redraw mobile">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Keep Size Under Keyboard</span>
+                      <span class="set-row-desc">For local Claude sessions, opening the on-screen keyboard keeps the session's size and scrolls the view instead, so Claude does not reprint its screen and lose transcript lines. Full-screen interfaces (Codex, Claude's fullscreen mode) are resized as before.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsKeyboardHoldsRows"><span class="slider"></span></label>
                   </div>
                   <div class="set-row" data-search="cjk input ime chinese japanese korean">
                     <div class="set-row-text">
@@ -1950,11 +2221,14 @@
                   <div class="set-chips" data-search="header buttons plan usage font stats lifecycle response file viewer attachments monitor session away cron redraw split tiles">
                     <label class="set-chip" data-preview="header" data-preview-order="1" data-preview-text="A+"><input type="checkbox" id="appSettingsShowFontControls"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20 10 5l6 15"/><path d="M6.5 15h7"/><path d="M18 12h4M20 10v4"/></svg><span>Font Size</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="2" data-preview-text="CPU 12%"><input type="checkbox" id="appSettingsShowSystemStats" checked><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-7 4 14L16 12h5"/></svg><span>System Stats</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="2" data-preview-text="GPU 8%"><input type="checkbox" id="appSettingsShowGpuStats"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 21v-4M12 21v-4M17 21v-4M7 7V3M17 7V3"/></svg><span>GPU Stats</span></label>
+                    <label class="set-chip" data-preview="header" data-preview-order="2" data-preview-text="3400 MHz"><input type="checkbox" id="appSettingsShowCpuMhz"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>CPU MHz</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="3"><input type="checkbox" id="appSettingsShowRedrawButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg><span>Redraw Terminal</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="4"><input type="checkbox" id="appSettingsShowResponseViewer"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><span>Response Viewer</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="5"><input type="checkbox" id="appSettingsShowAwayDigestButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg><span>Away Digest</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="6"><input type="checkbox" id="appSettingsShowSessionButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg><span>Session Manager</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="9"><input type="checkbox" id="appSettingsShowAttachmentsButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg><span>Attachments</span></label>
+                    <label class="set-chip" data-search="edit history edits changed files diffs" data-preview="header" data-preview-order="9.5"><input type="checkbox" id="appSettingsShowEditHistory"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg><span>Edit history</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="10"><input type="checkbox" id="appSettingsShowFileViewerButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>File Viewer</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="11"><input type="checkbox" id="appSettingsShowMultiMonitorButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="13" height="9" rx="1.5"/><rect x="11" y="9" width="11" height="8" rx="1.5"/></svg><span>Multi-monitor</span></label>
                     <label class="set-chip" data-search="split pane side by side two sessions" data-preview="header" data-preview-order="11.5"><input type="checkbox" id="appSettingsShowSplitButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg><span>Split</span></label>
@@ -1998,6 +2272,20 @@
                     <label class="set-chip" data-preview="header" data-preview-order="12"><input type="checkbox" id="appSettingsShowUltracodeAgents"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.2 7.2 15.6 11M8.2 16.8 15.6 13"/></svg><span>Ultracode Agents</span></label>
                     <label class="set-chip" data-preview="float" data-preview-order="1"><input type="checkbox" id="appSettingsUltracodeFloatingWindows"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><circle cx="6" cy="6.5" r="0.6"/></svg><span>Ultracode Windows</span></label>
                   </div>
+                  <div class="set-row" data-search="agent inbox messages persist restart disk codeman agent post">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Keep agent inbox across restarts</span>
+                      <span class="set-row-desc">Saves pending <code>codeman agent post</code> messages to <code>agent-inbox.json</code> in the data dir (readable by you only), so they survive a server restart. Off by default; turning it off deletes the file. Messages expire after 12 hours either way.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsAgentInboxPersist"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="experimental agent coordination inspect stage submit codeman agent guarded input">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Experimental agent coordination</span>
+                      <span class="set-row-desc">Lets agents read another session's output in bounded pages and type a prompt into a local Codex composer, then press Enter once after checking it is unchanged (the inspect, stage and submit commands). Experimental: the commands and their HTTP routes may change in any release. Off by default; while off those routes refuse every request.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsAgentCoordination"><span class="slider"></span></label>
+                  </div>
                 </div>
               </div>
 
@@ -2016,7 +2304,7 @@
                   <div class="set-row" data-search="git status uncommitted unpushed commit push indicator bottom bar toolbar">
                     <div class="set-row-text">
                       <span class="set-row-label">Git status <span class="set-scope">device</span></span>
-                      <span class="set-row-desc">Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only: Codeman never fetches or changes the repository. Not shown for Docker or remote sessions. Off by default.</span>
+                      <span class="set-row-desc">Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only apart from Fetch: Codeman never commits or changes the repository, and `git fetch` runs only when you click Fetch in that window, or on the interval below if you turned it on. It is the only git command the Git window runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked). Not shown for Docker or remote sessions. Off by default.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsShowGitStatus"><span class="slider"></span></label>
                   </div>
@@ -2040,6 +2328,20 @@
                       <span class="set-row-desc">Seconds one git command may run before that repository is reported as unreadable (5 to 120, default 30). Raise it for repositories on a slow network share.</span>
                     </div>
                     <input type="number" id="appSettingsGitStatusTimeout" class="set-num" value="30" min="5" max="120" step="1">
+                  </div>
+                  <div class="set-row" data-search="git fetch interval timer behind remote tracking refs poll run automatically">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Git fetch on an interval <span class="set-scope">synced</span></span>
+                      <span class="set-row-desc">Runs `git fetch` for the repositories the Git window lists on a timer, so the "behind" number is current without a click. Off by default: this is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked), so nothing runs until you turn it on. A session can override both the switch and the interval in Session Options → Git.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsGitFetchEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="git fetch how often seconds between runs interval case override session options">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Git fetch: how often <span class="set-scope">synced</span></span>
+                      <span class="set-row-desc">Seconds between runs for a session that has no override of its own (30 to 3600, default 300). Only a session that is on (here, or in Session Options → Git) is fetched, and sessions sharing one folder are fetched by one run.</span>
+                    </div>
+                    <input type="number" id="appSettingsGitFetchIntervalSeconds" class="set-num" value="300" min="30" max="3600" step="1">
                   </div>
                 </div>
               </div>
@@ -2233,6 +2535,20 @@
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsShowTabDetachButton"><span class="slider"></span></label>
                   </div>
+                  <div class="set-row" data-search="new session plus add tab same case group cli">
+                    <div class="set-row-text">
+                      <span class="set-row-label">New Session Button on Tabs</span>
+                      <span class="set-row-desc">A + on the tab that starts a session in the same case and group, in any installed CLI.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsShowTabNewButton"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="appSettingsTileDetachItem" data-search="detach tiles tile pop out window drag move another window">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Detach Tiles <span class="set-tag">desktop</span> <span class="set-tag set-tag-beta">beta</span></span>
+                      <span class="set-row-desc">Drag a tile's header out of the browser to open it in its own window, or onto another Codeman window's tiles to move it there. A popped-out window's title drags back onto tiles.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsTileDetach"><span class="slider"></span></label>
+                  </div>
                   <div class="set-row" id="appSettingsLineageLinesItem" data-search="lineage lines spawned worker parent connection">
                     <div class="set-row-text">
                       <span class="set-row-label">Spawn Lineage Lines <span class="set-tag">desktop</span></span>
@@ -2246,6 +2562,13 @@
                       <span class="set-row-desc">Title a new tab after its first prompt, keeping the case prefix. Renamed tabs are never touched.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsAutoNameSessions"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="appSettingsSpawnedTabsFollowParentItem" data-search="spawned child session follow parent tab group lineage move">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Spawned Tabs Follow Their Parent <span class="set-tag">synced</span></span>
+                      <span class="set-row-desc">A session started by another one keeps following its parent's tab into its group and moves with it, until you move it by hand. Off: it starts next to its parent and stays where it is.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsSpawnedTabsFollowParent"><span class="slider"></span></label>
                   </div>
                   <div class="set-row" id="appSettingsMobileOverviewItem" data-search="overview home screen phone logo">
                     <div class="set-row-text">
@@ -2507,6 +2830,10 @@
                         <input type="text" id="customModelHostBaseUrl" class="set-input" placeholder="http://192.168.1.50:8080">
                       </div>
                       <div class="set-row has-field">
+                        <div class="set-row-text"><span class="set-row-label">Default context length (tokens)</span><span class="set-row-desc">Used for models whose size cannot be discovered. The model's whole window; the Claude floor check divides it by any stored slot count. Leave empty to let each CLI assume its own default.</span></div>
+                        <input type="number" id="customModelHostDefaultContextLength" class="set-input" min="1" max="100000000" step="1" placeholder="131072">
+                      </div>
+                      <div class="set-row has-field">
                         <div class="set-row-text"><span class="set-row-label">API key</span><span class="set-row-desc">Optional. Left blank on edit keeps the existing key.</span></div>
                         <input type="password" id="customModelHostApiKey" class="set-input" autocomplete="new-password">
                       </div>
@@ -2597,6 +2924,19 @@
                 </div>
               </div>
 
+              <div class="set-group" id="agentSkillGroup">
+                <div class="set-group-head"><h4>All agent CLIs</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="agent skill codeman api workers codex gemini opencode pi grok deepseek omp antigravity">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Codeman Agent Skill</span>
+                      <span class="set-row-desc">Write Codeman's agent skill into each new session's folder, where that CLI looks for skills, so the agent in it can start workers in any installed CLI, send them prompts and wait for results. Every CLI except Pi and a plain shell.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsAgentSkill"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+
               <div class="set-group">
                 <div class="set-group-head"><h4>Claude</h4><span class="set-scope">synced</span></div>
                 <div class="set-group-body">
@@ -2633,19 +2973,19 @@
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsAgentTeams"><span class="slider"></span></label>
                   </div>
-                  <div class="set-row" data-search="agent skill codeman api workers">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Codeman Agent Skill</span>
-                      <span class="set-row-desc">Let new sessions start workers, send prompts and wait for results over the API.</span>
-                    </div>
-                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsAgentSkill"><span class="slider"></span></label>
-                  </div>
                   <div class="set-row" data-search="workspace hooks alerts approvals notifications settings.local.json">
                     <div class="set-row-text">
                       <span class="set-row-label">Workspace Hooks</span>
                       <span class="set-row-desc">Install Codeman's hooks in each Claude workspace, so tab alerts, the Approvals Inbox and idle detection also work in linked cases and existing repos. Off leaves your repos untouched.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsWorkspaceHooks"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="pin cli session name resume title tab label">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Pin tab names on the CLI</span>
+                      <span class="set-row-desc">Launch every Claude session with its tab name, so the CLI's prompt label and /resume list match your tabs. Claude then stops generating its own titles for those sessions, and a rename in Codeman holds only until the next turn. Applies from the next session start or respawn, no server restart needed.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsPinCliSessionName"><span class="slider"></span></label>
                   </div>
                   <div class="set-row" data-search="remote auto reconnect ssh">
                     <div class="set-row-text">
@@ -2936,6 +3276,97 @@
                   <div id="webhookResult" class="set-note" style="display:none" data-i18n-skip></div>
                 </div>
               </div>
+              <div class="set-group" id="discordGroup" style="display:none">
+                <div class="set-group-head"><h4>Discord (two-way, one thread per tab)</h4><span class="set-scope">server</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="discord bot thread reply phone notification blocked">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Talk to your sessions from Discord</span>
+                      <span class="set-row-desc">Posts alerts into a thread per tab and types your reply in that thread into the tab. Only the user IDs listed below can reply. Setup (bot, least-privilege permissions) is in docs/discord-bridge.md. This group has its own Save button.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="discordEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Bot token</span>
+                      <span class="set-row-desc" id="discordTokenHint">Nothing saved yet.</span>
+                    </div>
+                    <input type="password" id="discordToken" class="set-input" autocomplete="off" spellcheck="false" placeholder="Bot token from the Developer Portal">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Guild (server) ID</span></div>
+                    <input type="text" id="discordGuildId" class="set-input" autocomplete="off" spellcheck="false" inputmode="numeric">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Parent channel ID</span><span class="set-row-desc">Threads are created inside this channel.</span></div>
+                    <input type="text" id="discordParentChannelId" class="set-input" autocomplete="off" spellcheck="false" inputmode="numeric">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Allowed user IDs</span><span class="set-row-desc">Comma separated. Only these Discord users can reply into a session.</span></div>
+                    <input type="text" id="discordAllowedUserIds" class="set-input" autocomplete="off" spellcheck="false">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Create threads</span></div>
+                    <select id="discordThreadCreation" class="set-select">
+                      <option value="lazy">On the first alert</option>
+                      <option value="onSessionStart">For every new tab</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">When a tab is deleted</span><span class="set-row-desc">Deleting a thread needs the Manage Threads permission on the channel.</span></div>
+                    <select id="discordOnSessionDelete" class="set-select">
+                      <option value="keep">Keep the thread</option>
+                      <option value="archive">Archive the thread</option>
+                      <option value="delete">Delete the thread</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Stale threads</span><span class="set-row-desc">Threads this bot made that no tab uses any more, checked after startup and then daily. This includes threads that &quot;When a tab is deleted&quot; kept or archived. Threads under an hour old are skipped. Use one channel per Codeman.</span></div>
+                    <select id="discordStaleThreads" class="set-select">
+                      <option value="keep">Leave them</option>
+                      <option value="archive">Archive them</option>
+                      <option value="delete">Delete them</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">@ ping</span></div>
+                    <select id="discordPingMode" class="set-select">
+                      <option value="off">Never</option>
+                      <option value="critical">Critical events only</option>
+                      <option value="all">Every post</option>
+                    </select>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Tell Claude how to reach you</span>
+                      <span class="set-row-desc">Adds a short note about the codeman notify command to Claude's system prompt at launch, for when it is blocked on something only you can do. Nothing appears in the conversation. Local tabs only: remote and Docker tabs have no codeman command.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="discordStartupHint"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Which events</span>
+                      <span class="set-row-desc">"Needs attention" skips the routine "response complete" message.</span>
+                    </div>
+                    <select id="discordScope" class="set-select">
+                      <option value="attention">Needs attention</option>
+                      <option value="all">Everything</option>
+                    </select>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Save and test</span>
+                      <span class="set-row-desc">Send test saves first, then posts to the parent channel.</span>
+                    </div>
+                    <span>
+                      <button class="btn-toolbar btn-sm btn-primary" id="discordSaveBtn" onclick="app.saveDiscord()">Save</button>
+                      <button class="btn-toolbar btn-sm" id="discordTestBtn" onclick="app.testDiscord()">Send test</button>
+                      <button class="btn-toolbar btn-sm" id="discordClearBtn" onclick="app.clearDiscord()" style="display:none">Remove token</button>
+                    </span>
+                  </div>
+                  <div id="discordResult" class="set-note" style="display:none" data-i18n-skip></div>
+                </div>
+              </div>
             </section>
 
             <!-- ══ Voice ════════════════════════════════════════════════════ -->
@@ -3094,6 +3525,48 @@
                 </div>
               </div>
 
+              <div class="set-group" id="configBackupGroup">
+                <div class="set-group-head"><h4>Config backups</h4><span class="set-scope">server</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="config backup snapshot settings clis restore retention keep">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Back up my configuration</span>
+                      <span class="set-row-desc">Keeps timestamped copies of your settings, CLI overrides, custom endpoints, webhook, linked cases and (in multi-user mode) accounts. A copy is made at startup and whenever one of them changes. Some of these files hold credentials, so each copy is private to this user (mode 0700/0600).</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsConfigBackup"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row has-field" data-search="config backup folder location path directory">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Backup folder</span>
+                      <span class="set-row-desc">An absolute path (a leading <code>~</code> is expanded). Leave empty for the default shown. Only folders Codeman created there are ever pruned.</span>
+                    </div>
+                    <input type="text" id="appSettingsConfigBackupDir" class="set-input" placeholder="default: ~/.codeman/backups/config" data-i18n-skip>
+                  </div>
+                  <div class="set-row has-field" data-search="config backup retention keep count snapshots">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Keep this many backups</span>
+                      <span class="set-row-desc">2 to 500 (with 1, every change would delete the state before it). The newest backup is always kept.</span>
+                    </div>
+                    <input type="number" id="appSettingsConfigBackupKeepCount" oninput="this.dataset.touched=1" class="set-input" min="2" max="500" step="1" placeholder="20">
+                  </div>
+                  <div class="set-row has-field" data-search="config backup retention keep days age">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Delete backups older than (days)</span>
+                      <span class="set-row-desc">A backup is removed once a newer one has existed this many days. 0 keeps backups until the count above pushes them out.</span>
+                    </div>
+                    <input type="number" id="appSettingsConfigBackupKeepDays" oninput="this.dataset.touched=1" class="set-input" min="0" max="3650" step="1" placeholder="30">
+                  </div>
+                  <div class="set-row" data-search="config backup now restore list">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Backups</span>
+                      <span class="set-row-desc">Folder and retention changes apply after you save. Restoring puts a backup's files back and makes a copy of the current ones first. Compare shows what changed between two backups, or between a backup and the running config; credential values are never shown.</span>
+                    </div>
+                    <button class="btn-toolbar btn-sm btn-primary" id="configBackupNowBtn" onclick="app.backupConfigNow()">Back up now</button>
+                  </div>
+                  <div id="configBackupList" class="set-note" data-i18n-skip>Loading…</div>
+                </div>
+              </div>
+
               <div class="set-group">
                 <div class="set-group-head"><h4>Automation</h4><span class="set-scope">synced</span></div>
                 <div class="set-group-body">
@@ -3103,6 +3576,23 @@
                       <span class="set-row-desc">Detect and pop up new images found in session directories.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsImageWatcherEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="prompt cache keep warm keep-alive nudge idle expire">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Keep prompt caches warm</span>
+                      <span class="set-row-desc">Default for Claude sessions that have not chosen on their Respawn tab (a session an agent started needs its own switch): shortly before an idle session's prompt cache would expire, send a one-line keep-alive turn so the next prompt still reads the conversation from cache instead of re-processing it.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsPromptCacheKeepWarm"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="prompt cache keep warm hours limit cap window">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Keep warm for at most</span>
+                      <span class="set-row-desc">Hours after your last prompt in a session during which keep-alives are sent; past that the cache is left to expire. A keep-alive costs a small fraction of the re-write it prevents, so a few hours of them pay off, an overnight gap does not.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <input type="number" id="appSettingsPromptCacheKeepWarmMaxHours" class="set-num" min="0.5" max="24" step="0.5" value="2">
+                      <span class="set-unit">hours</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -3297,7 +3787,19 @@
             <div class="form-row">
               <label>Case Name</label>
               <input type="text" id="cloneCaseName" placeholder="repo" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="app.onCloneNameEdited()">
-              <span class="form-hint">Filled in from the URL. Cloned into ~/codeman-cases/&lt;name&gt;, so deleting the case deletes this working tree.</span>
+              <span class="form-hint" id="cloneCaseNameHint">Filled in from the URL. Cloned into ~/codeman-cases/&lt;name&gt;, so deleting the case deletes this working tree.</span>
+            </div>
+            <div class="form-row" id="cloneCustomPathToggleRow">
+              <label class="checkbox-row"><input type="checkbox" id="cloneCustomPathToggle" onchange="app.toggleCloneCustomPath()"> 📁 Clone into a custom folder</label>
+              <span class="form-hint">By default the clone goes under ~/codeman-cases. Choose a folder and the repository is cloned into that folder itself (an empty folder, or one that does not exist yet); it is listed like any other case, and deleting the case only unlinks it (your files stay).</span>
+            </div>
+            <div class="form-row" id="cloneCustomPathRow" style="display:none">
+              <label>Folder</label>
+              <div class="path-input-group">
+                <input type="text" id="cloneCasePath" placeholder="~/projects" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" oninput="app.updateCloneCasePathPreview()">
+                <button type="button" class="btn path-input-browse" onclick="app.openCloneCasePathPicker()">Browse&hellip;</button>
+              </div>
+              <span class="form-hint" id="cloneCasePathPreview">Pick an empty folder, or one that does not exist yet, to clone into.</span>
             </div>
             <div class="form-row">
               <label>Branch or Tag (optional)</label>
@@ -3318,6 +3820,7 @@
                 <option value="grok" data-cli="grok">Grok</option>
                 <option value="deepseek" data-cli="deepseek">DeepSeek</option>
                 <option value="omp" data-cli="omp">OMP</option>
+                <option value="copilot" data-cli="copilot">GitHub Copilot</option>
                 <option value="shell">Shell (no agent)</option>
               </select>
               <span class="form-hint">Which CLI to point the Run button at once the clone finishes. Changeable any time from the Run dropdown.</span>
@@ -3496,7 +3999,7 @@
             <div class="form-row docker-create-only">
               <label>Image</label>
               <input type="text" id="dockerImage" placeholder="codeman/agent:base" autocomplete="off" autocapitalize="off" spellcheck="false">
-              <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/opencode/codex/gemini/agy/pi/grok/dsh/omp + tmux.</span>
+              <span class="form-hint">Build it once with <code>node scripts/build-agent-image.mjs</code>. Contains node + claude/opencode/codex/gemini/agy/pi/grok/dsh/omp/copilot + tmux.</span>
             </div>
             <div class="form-row docker-create-only">
               <label>Network</label>
@@ -3558,6 +4061,35 @@
       </div>
     </div>
 
+    <!-- Rename a case (and its folder): opened by the Manage tab's pencil button, see renameCase() in session-ui.js.
+         Placed after the case modal so it stacks above it. -->
+    <div class="modal" id="renameCaseModal">
+      <div class="modal-backdrop" onclick="app.closeRenameCase()"></div>
+      <div class="modal-content modal-sm">
+        <div class="modal-header">
+          <h3>Rename case</h3>
+          <button class="modal-close" onclick="app.closeRenameCase()" aria-label="Cancel">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-row">
+            <label for="renameCaseInput" id="renameCaseLabel">New name</label>
+            <input type="text" id="renameCaseInput" class="set-input" maxlength="100" autocomplete="off" spellcheck="false"
+                   placeholder="letters, numbers, - and _" onkeydown="if (event.key === 'Enter') app.submitRenameCase()">
+          </div>
+          <div class="form-row hidden" id="renameCaseFolderRow">
+            <label class="checkbox-row"><input type="checkbox" id="renameCaseFolder"> Also rename the folder on disk</label>
+            <span class="form-hint" id="renameCaseFolderHint" data-i18n-skip></span>
+          </div>
+          <p class="form-hint" id="renameCaseNote">A case under the cases folder is renamed together with its folder.</p>
+          <p class="form-hint hidden" id="renameCaseError" role="alert" style="color: var(--danger, #e5534b);"></p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-toolbar" onclick="app.closeRenameCase()">Cancel</button>
+          <button class="btn-toolbar btn-primary" id="renameCaseSubmit" onclick="app.submitRenameCase()">Rename</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Mobile Case Picker (Bottom Sheet) -->
     <div class="modal mobile-case-picker" id="mobileCasePickerModal">
       <div class="modal-backdrop" onclick="app.closeMobileCasePicker()"></div>
@@ -3580,6 +4112,11 @@
           <button class="btn-toolbar btn-case-create-mobile" onclick="app.showCreateCaseFromMobile()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             Create New Case
+          </button>
+          <!-- The selected case's git worktrees (session-ui.js openWorktreeModal). -->
+          <button class="btn-toolbar btn-case-create-mobile btn-case-worktrees-mobile" onclick="app.showWorktreesFromMobile()">
+            <span aria-hidden="true">&#x2442;</span>
+            Worktrees
           </button>
         </div>
       </div>
@@ -4106,6 +4643,7 @@
   <script defer src="tab-layout-browser.js"></script>
   <script defer src="app.js"></script>
   <script defer src="tab-rail-resize.js"></script>
+  <script defer src="header-divider.js"></script>
   <script defer src="terminal-ui.js"></script>
   <script defer src="terminal-tile.js"></script>
   <script defer src="terminal-split.js"></script>
@@ -4127,6 +4665,7 @@
   <script defer src="mobile-overview.js"></script>
   <script defer src="home-sessions.js"></script>
   <script defer src="git-status-ui.js"></script>
+  <script defer src="edit-history-ui.js"></script>
   <script defer src="entrance-animations.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>

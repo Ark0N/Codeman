@@ -101,6 +101,10 @@ self.addEventListener('fetch', (event) => {
   if (request.headers.get('upgrade') === 'websocket') return;
   if (request.headers.get('accept') === 'text/event-stream') return;
   if (request.url.includes('/api/')) return;
+  // A rendered HTML page is served `no-store` behind a capability that logout
+  // revokes; caching a popped-out page here would let the offline fallback
+  // serve it after the capability is gone.
+  if (request.url.includes('/html-view/')) return;
 
   event.respondWith(
     fetch(request)

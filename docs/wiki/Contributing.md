@@ -53,7 +53,9 @@ something other than the checked-out HEAD, or when the tree has uncommitted chan
 checks would read. Skip it once with `CODEMAN_SKIP_PREPUSH=1 git push`; a
 `pre-push` hook of your own is never overwritten.
 
-`npm test` runs the same suite CI runs, so a green run locally means a green run there. It
+`npm test` runs the same suite CI runs, so a green run locally means a green run there. A bare
+`npx vitest run` resolves the same isolated config (a root `vitest.config.ts`), so it never
+touches your real `~/.codeman`; it did before that file existed. `npm test` also
 leaves out three suites that cannot pass on an arbitrary machine, each with its own command:
 `npm run test:browser` (Playwright, Chromium and a live server), `npm run test:mobile` (the
 same plus environment-specific screenshot baselines) and `npm run test:perf` (wall-clock
@@ -120,7 +122,7 @@ Conventions for wiki pages:
 - Images are referenced from the main repository over raw URLs rather than being copied into
   the wiki.
 - Say what the default is, especially when it is off. Most of Codeman is opt-in.
-- Label Claude-only behaviour every time it appears. Nine of the ten run modes are not
+- Label Claude-only behaviour every time it appears. Ten of the eleven run modes are not
   Claude.
 
 ## Conduct

@@ -188,18 +188,18 @@ describe('custom-model-injection contract (mock server)', () => {
     expect(mock.requests[0].headers.authorization).toBe('Bearer contract-test-key');
   });
 
-  it('deepseek: DEEPSEEK_BASE_URL already carries the /v1 suffix dsh itself never adds, reaching the mock at the real path dsh requests', async () => {
-    // Confirmed by reading dsh's own bundled source: it fetches
-    // `${DEEPSEEK_BASE_URL}/chat/completions` verbatim, no /v1 insertion of its own — so
-    // this call (unlike gemini's above) passes DEEPSEEK_BASE_URL to callOpenAiCompat
-    // UNMODIFIED, exactly mirroring what the real harness does, rather than the test
-    // helping it along.
+  it('deepseek: the session patch carries the /v1 base URL and exact model, reaching the mock at the real path', async () => {
+    // dsh fetches `${baseURL}/chat/completions` verbatim, so the patch's baseURL already
+    // carries /v1 and is passed to callOpenAiCompat unmodified.
     const injection = buildCustomModelInjection(entryOrThrow('deepseek'), endpointFor(mock), 'qwen3');
-    if (injection.kind !== 'env') throw new Error('unreachable');
-    expect(Object.keys(injection.envOverrides).sort()).toEqual(['DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL']);
-    expect(injection.envOverrides.DEEPSEEK_BASE_URL).toBe(`${mock.baseUrl}/v1`);
+    if (injection.kind !== 'configDir') throw new Error('unreachable');
+    expect(injection.dirEnvVar).toBe('DSH_HOME');
+    expect(Object.keys(injection.extraEnv ?? {})).toEqual(['CODEMAN_CUSTOM_MODEL_API_KEY']);
+    const provider = JSON.parse(injection.files[0].content)[0].config.providers['codeman-custom'];
+    expect(provider.baseURL).toBe(`${mock.baseUrl}/v1`);
+    expect(provider.models[0].id).toBe('qwen3');
 
-    await callOpenAiCompat(injection.envOverrides.DEEPSEEK_BASE_URL, injection.envOverrides.DEEPSEEK_API_KEY, 'qwen3');
+    await callOpenAiCompat(provider.baseURL, injection.extraEnv!.CODEMAN_CUSTOM_MODEL_API_KEY, 'qwen3');
 
     expect(mock.requests[0].path).toBe('/v1/chat/completions');
     expect(mock.requests[0].headers.authorization).toBe('Bearer contract-test-key');

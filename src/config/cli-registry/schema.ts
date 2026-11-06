@@ -15,7 +15,10 @@
 import { z } from 'zod';
 import { compileVersionRegex, countCaptureGroups, TOKEN_PATTERNS } from './patterns.js';
 import { isKnownLauncherProfile, isKnownSetenvProfile } from './profiles.js';
-import type { LaunchDefaultSettingKey, McpConfigFormat, ModelConfigResolverName } from './types.js';
+import type { AgentSkillDir, LaunchDefaultSettingKey, McpConfigFormat, ModelConfigResolverName } from './types.js';
+
+/** `capabilities.agentSkillDir`: every value must stay a fixed, relative, `..`-free path. */
+export const AGENT_SKILL_DIRS = ['.claude/skills', '.agents/skills'] as const satisfies readonly AgentSkillDir[];
 
 /** A bare CLI id: lowercase, starts with a letter, at most 24 chars. Also used as a CSS/URL token. */
 const cliId = z
@@ -77,6 +80,7 @@ const paramSpecSchema = z.union([
         'muxName',
         'effortLevel',
         'effortSettingsJson',
+        'appendSystemPrompt',
         'codemanPrefixedSessionId',
         'launcherDefaultTarget',
       ]),
@@ -221,6 +225,7 @@ const envExportSchema = z
             'muxName',
             'effortLevel',
             'effortSettingsJson',
+            'appendSystemPrompt',
             'codemanPrefixedSessionId',
             'launcherDefaultTarget',
           ]),
@@ -283,6 +288,14 @@ const launchModelTemplate = z
   .regex(/^[a-zA-Z0-9._\-/:{}]+$/)
   .optional();
 
+/** One entry name under a CLI's real home, for `linkFromRealHome`: single path segment,
+ * leading alphanumeric, no traversal or hidden-dot escape. */
+const homeSegmentName = z
+  .string()
+  .min(1)
+  .max(40)
+  .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
+
 const capabilitiesSchema = z
   .object({
     external: z.boolean(),
@@ -292,8 +305,15 @@ const capabilitiesSchema = z
     altScreen: z.enum(['strip-full', 'strip-mux-only', 'strip-mux-and-mouse', 'preserve']),
     echo: echoSchema,
     wheelForward: z
-      .object({ mode: z.enum(['never', 'version-gated']), minVersion: z.string().max(20).optional() })
+      .object({ mode: z.enum(['never', 'version-gated', 'always']), minVersion: z.string().max(20).optional() })
       .strict(),
+    // Whether a hollow pane's wheel/touch scroll may be turned into PageUp/PageDown for
+    // the CLI to page its own transcript. Distinct from wheelForward (SGR reports).
+    // Optional: absent means no paging, the safe default for an unmeasured CLI.
+    transcriptPageKeys: z.boolean().optional(),
+    // Keep the PTY's rows while a phone keyboard is up (inline renderers only).
+    // Optional: absent means the keyboard resizes, the safe default.
+    keyboardHold: z.literal('inline').optional(),
     keyboardAccessory: z.enum(['agent', 'shell']),
     privilegedCommandGate: z.boolean(),
     startMode: z.enum(['interactive', 'shell']),
@@ -302,6 +322,9 @@ const capabilitiesSchema = z
     respawn: z.boolean(),
     effort: z.boolean(),
     agentSkillInjection: z.boolean(),
+    // A closed list on purpose: it decides where the server WRITES, and this file is
+    // user-editable, so it can never be a free path (`..`, absolute).
+    agentSkillDir: z.enum(AGENT_SKILL_DIRS).optional(),
     statusLineTelemetry: z.boolean(),
     // How many columns this CLI indents its transcript body by, so a copy can take
     // that much off the clipboard. Bounded, because it is the whole strip: a copy
@@ -358,6 +381,51 @@ const capabilitiesSchema = z
             'awaitingLine must be a regex compileVersionRegex() accepts: at most 200 characters, no nested quantifiers'
           )
           .optional(),
+        // Same guard again: run over the foot of a pane capture every time a session
+        // settles and on a timer while a dialog is up, and ~/.codeman/clis.json can set it.
+        blockedLine: z
+          .string()
+          .min(1)
+          .refine(
+            (src) => compileVersionRegex(src) !== null,
+            'blockedLine must be a regex compileVersionRegex() accepts: at most 200 characters, no nested quantifiers'
+          )
+          .optional(),
+        // Wider than `watchingLines` because a dialog's options wrap at narrow widths (codex
+        // needs 20 at 36 columns). That is safe only for a pattern that ends on the dialog's
+        // own footer: the rows above it, which the agent may write, can then supply a
+        // marker but never the footer. Still bounded, since it is also how much text the
+        // pattern runs over.
+        blockedLines: z.number().int().min(1).max(24).optional(),
+        // Same guard again: run over the rows under the composer each time guarded
+        // input reads the pane, and ~/.codeman/clis.json can set it.
+        composerFooterLine: z
+          .string()
+          .min(1)
+          .refine(
+            (src) => compileVersionRegex(src) !== null,
+            'composerFooterLine must be a regex compileVersionRegex() accepts: at most 200 characters, no nested quantifiers'
+          )
+          .optional(),
+        // Same guard again: run over the rows just above the composer by the same reads.
+        composerPopupLine: z
+          .string()
+          .min(1)
+          .refine(
+            (src) => compileVersionRegex(src) !== null,
+            'composerPopupLine must be a regex compileVersionRegex() accepts: at most 200 characters, no nested quantifiers'
+          )
+          .optional(),
+        // Single ASCII punctuation characters, never letters, digits or whitespace: each one
+        // refuses every message that starts (or whose last word starts) with it.
+        composerCommandPrefixes: z
+          .string()
+          .regex(/^[!-/:-@[-`{-~]{1,8}$/, 'composerCommandPrefixes must be 1 to 8 ASCII punctuation characters')
+          .optional(),
+        composerCompletionSigils: z
+          .string()
+          .regex(/^[!-/:-@[-`{-~]{1,8}$/, 'composerCompletionSigils must be 1 to 8 ASCII punctuation characters')
+          .optional(),
       })
       .strict()
       // A window with nothing to search is a typo, not a configuration. Refused at LOAD
@@ -367,6 +435,10 @@ const capabilitiesSchema = z
       .refine(
         (v) => v.watchingLines === undefined || v.watchingLine !== undefined,
         'watchingLines has nothing to bound without a watchingLine'
+      )
+      .refine(
+        (v) => v.blockedLines === undefined || v.blockedLine !== undefined,
+        'blockedLines has nothing to bound without a blockedLine'
       )
       .optional(),
     model: z
@@ -434,8 +506,10 @@ const capabilitiesSchema = z
       )
       .max(8),
     // Exact env var NAMES, not prefixes: this list is a targeted deny, and a prefix here
-    // would let one entry silently strip a whole namespace off every owner's overrides.
-    privilegedEnvKeys: z.array(envName).max(8),
+    // would let one entry silently strip a whole namespace off every owner's overrides. The
+    // bound is generous because a longer list only takes more away from non-granted owners:
+    // copilot's COPILOT_ prefix covers dozens of variables that run code or redirect its token.
+    privilegedEnvKeys: z.array(envName).max(48),
     gates: z.record(z.string(), z.object({ minVersion: z.string().max(20), failClosed: z.boolean() }).strict()),
     maxFrameBytes: z.number().int().positive().optional(),
     newline: z.enum(['line-feed', 'esc-enter']).optional(),
@@ -443,6 +517,9 @@ const capabilitiesSchema = z
       .object({
         // Home-relative, no traversal: sync writes to this path.
         path: mcpRelativePath,
+        // Home-relative fallback used when `path` is absent. Same no-traversal rule as `path`:
+        // sync reads it and, when it parses as plain JSON, writes to it.
+        altPath: mcpRelativePath.optional(),
         // Every value must be a known McpConfigFormat (types.ts); mcp-sync.ts's dialect table is
         // keyed by the same type, so an adapter-less format fails to compile there.
         format: z.enum([
@@ -513,10 +590,61 @@ const capabilitiesSchema = z
           kind: z.literal('configDir'),
           dirEnvVar: envName,
           fileName: z.string().min(1).max(80),
-          template: z.enum(['codex-toml', 'pi-models-json', 'omp-models-yml', 'grok-toml']),
+          template: z.enum(['codex-toml', 'pi-models-json', 'omp-models-yml', 'grok-toml', 'deepseek-patch-json']),
           launchModel: launchModelTemplate,
+          // State that must survive the isolated-directory redirect, symlinked by name from
+          // the CLI's real home (deepseek: profiles/sessions/settings.yaml). Single path
+          // segments only: the consumer joins them, so a traversal here would escape the
+          // real home. See the field's comment in cli-registry/types.ts.
+          linkFromRealHome: z.array(homeSegmentName).max(8).optional(),
+          // Which of `linkFromRealHome` are directories (missing ones are created before
+          // linking; missing files are skipped). Same segment pattern, see types.ts.
+          linkFromRealHomeDirs: z.array(homeSegmentName).max(8).optional(),
+          // The real home's fallback location, relative to the user's home, ONE segment:
+          // a leading dot is legitimate (`.dsh` is what ships) but separators, `..` and
+          // bare `.` are not; the consumer joins it under the user's home, a traversal
+          // here escapes that home and `.` IS that home (linking THROUGH it unshielded).
+          realHomeFallback: z
+            .string()
+            .min(1)
+            .max(80)
+            .regex(/^(?!\.\.?$)[^/\\]+$/)
+            .optional(),
         })
-        .strict(),
+        .strict()
+        .superRefine((recipe, ctx) => {
+          // Both rules were comments before; the schema is the security boundary, so
+          // enforce them at load time (see the header of this file).
+          if (recipe.linkFromRealHome?.length && !recipe.realHomeFallback) {
+            ctx.addIssue({
+              code: 'custom',
+              message: 'realHomeFallback is required whenever linkFromRealHome is declared',
+              path: ['realHomeFallback'],
+            });
+          }
+          for (const name of recipe.linkFromRealHome ?? []) {
+            if (name === recipe.fileName) {
+              ctx.addIssue({
+                code: 'custom',
+                message: `linkFromRealHome must never include fileName (${JSON.stringify(name)}): the generated file owns that name in the isolated directory, a link there would write THROUGH into the user's real file`,
+                path: ['linkFromRealHome'],
+              });
+            }
+          }
+          // types.ts documents the dirs list as "must be a subset of linkFromRealHome";
+          // a name absent from it names nothing (missing-file entries are skipped as
+          // files), so the recipe would silently stop creating a directory it declares.
+          const linkedNames = new Set(recipe.linkFromRealHome ?? []);
+          for (const dir of recipe.linkFromRealHomeDirs ?? []) {
+            if (!linkedNames.has(dir)) {
+              ctx.addIssue({
+                code: 'custom',
+                message: `linkFromRealHomeDirs must be a subset of linkFromRealHome: ${JSON.stringify(dir)} is not linked, so the directory rule for it can never apply`,
+                path: ['linkFromRealHomeDirs'],
+              });
+            }
+          }
+        }),
       z.object({ kind: z.literal('unsupported') }).strict(),
     ]),
   })

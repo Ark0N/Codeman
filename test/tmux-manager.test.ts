@@ -52,11 +52,24 @@ vi.mock('node:child_process', async () => {
   };
 });
 
+// Paths realpathSync should resolve differently than this host does, e.g. a
+// macOS `/tmp` -> `/private/tmp`. Hoisted so it survives vi.resetModules().
+const realpathOverrides = vi.hoisted(() => new Map<string, string>());
+
 // Mock fs to avoid file I/O
 vi.mock('node:fs', async () => {
-  const actual = await vi.importActual('node:fs');
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  const realpathSync = Object.assign(
+    vi.fn((path: string, ...rest: unknown[]) =>
+      realpathOverrides.has(String(path))
+        ? realpathOverrides.get(String(path))
+        : (actual.realpathSync as (...args: unknown[]) => string)(path, ...rest)
+    ),
+    { native: actual.realpathSync.native }
+  );
   return {
     ...actual,
+    realpathSync,
     existsSync: vi.fn().mockReturnValue(false),
     readFileSync: vi.fn(),
     mkdirSync: vi.fn(),
@@ -714,20 +727,99 @@ describe('TmuxManager (unit)', () => {
     });
   });
 
-  describe('tmux launch cwd hardening', () => {
-    async function importWithTmuxCommandsEnabled(): Promise<typeof TmuxManager> {
-      const originalVitest = process.env.VITEST;
-      vi.resetModules();
+  async function importWithTmuxCommandsEnabled(): Promise<typeof TmuxManager> {
+    const originalVitest = process.env.VITEST;
+    vi.resetModules();
+    delete process.env.VITEST;
+    const module = await import('../src/tmux-manager.js');
+    if (originalVitest === undefined) {
       delete process.env.VITEST;
-      const module = await import('../src/tmux-manager.js');
-      if (originalVitest === undefined) {
-        delete process.env.VITEST;
-      } else {
-        process.env.VITEST = originalVitest;
+    } else {
+      process.env.VITEST = originalVitest;
+    }
+    return module.TmuxManager;
+  }
+
+  describe('prefix table on the codeman socket', () => {
+    it("reduces the socket's prefix table to send-prefix before the agent starts", async () => {
+      // Browser keystrokes reach the attach client; with the stock table Ctrl+B ) or s
+      // would move a tab onto another session (the behavior itself: tmux-prefix-table.test.ts).
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes('which tmux')) return '/usr/bin/tmux\n';
+        if (typeof cmd === 'string' && cmd.includes('display-message') && cmd.includes('#{pane_pid}')) return '4242\n';
+        // Not tmux's stock C-b, so a hardcoded prefix cannot pass for the one read from tmux.
+        if (typeof cmd === 'string' && cmd.includes(' show-options -gv prefix')) return 'C-a\n';
+        if (typeof cmd === 'string' && cmd.includes(' list-keys -T prefix')) {
+          return 'bind-key    -T prefix C-a send-prefix\nbind-key    -T prefix ) switch-client -n\n';
+        }
+        return '';
+      });
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+
+      try {
+        await nonTestManager.createSession({
+          sessionId: 'abc12345-1234-5678-90ab-cdef12345678',
+          workingDir: '/project',
+          mode: 'shell',
+        });
+        const commands = mockedExecSync.mock.calls.map(([cmd]) => String(cmd));
+        expect(commands).toContain(`tmux -L 'codeman' unbind-key -a -T prefix`);
+        const bind = commands.indexOf(`tmux -L 'codeman' bind-key -T prefix 'C-a' send-prefix`);
+        expect(bind).toBeGreaterThan(commands.indexOf(`tmux -L 'codeman' unbind-key -a -T prefix`));
+        expect(bind).toBeLessThan(commands.findIndex((c) => c.includes(' respawn-pane ')));
+      } finally {
+        nonTestManager.destroy();
       }
-      return module.TmuxManager;
+    });
+
+    /** execSync for a boot-time reconcile: `panes` is what `list-panes -a` prints. */
+    function mockReconcileTmux(panes: string): void {
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes('which tmux')) return '/usr/bin/tmux\n';
+        if (typeof cmd === 'string' && cmd.includes(' list-panes -a ')) return panes;
+        if (typeof cmd === 'string' && cmd.includes(' show-options -gv prefix')) return 'C-a\n';
+        if (typeof cmd === 'string' && cmd.includes(' list-keys -T prefix')) {
+          return 'bind-key    -T prefix C-a send-prefix\nbind-key    -T prefix ) switch-client -n\n';
+        }
+        return '';
+      });
     }
 
+    it('reduces it at boot too, for sessions that survived an upgrade', async () => {
+      mockReconcileTmux('codeman-abc12345|4242|0||\n');
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+
+      try {
+        await nonTestManager.reconcileSessions();
+        const commands = mockedExecSync.mock.calls.map(([cmd]) => String(cmd));
+        const unbind = commands.indexOf(`tmux -L 'codeman' unbind-key -a -T prefix`);
+        expect(unbind).toBeGreaterThan(-1);
+        expect(commands.indexOf(`tmux -L 'codeman' bind-key -T prefix 'C-a' send-prefix`)).toBeGreaterThan(unbind);
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
+    it('leaves the key tables alone at boot when the socket lists no pane', async () => {
+      // On an empty socket `list-keys` would start a throwaway tmux server.
+      mockReconcileTmux('');
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+
+      try {
+        await nonTestManager.reconcileSessions();
+        const commands = mockedExecSync.mock.calls.map(([cmd]) => String(cmd));
+        expect(commands.some((c) => c.includes(' list-panes -a '))).toBe(true);
+        expect(commands.filter((c) => /show-options -gv prefix|list-keys|unbind-key|bind-key/.test(c))).toEqual([]);
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+  });
+
+  describe('tmux launch cwd hardening', () => {
     beforeEach(() => {
       mockedExecSync.mockImplementation((cmd: string) => {
         if (typeof cmd === 'string' && cmd.includes('which tmux')) {
@@ -903,6 +995,92 @@ describe('TmuxManager (unit)', () => {
         nonTestManager.destroy();
       }
     });
+
+    it('gives a discovered session the directory tmux reports for its pane, not the server cwd', async () => {
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes(' list-panes ')) {
+          return [
+            'codeman-aaaa1111|101|0|||/home/user/project-a',
+            // A hand-split session answers with the pane tmux lists first.
+            'codeman-bbbb2222|102|0|||/home/user/project-b',
+            'codeman-bbbb2222|103|0|||/home/user/project-b/sub',
+            // Set by whoever owns the pane, so it must pass the same check as any workingDir.
+            'codeman-cccc3333|104|0|||/home/user/$(touch pwned)',
+            // A tmux that reported no path.
+            'codeman-dddd4444|105|0|||',
+            // The launch directory every pane starts in; a remote or docker pane never leaves it.
+            'codeman-eeee5555|106|0|||/tmp',
+            // A directory deleted while its pane ran, as tmux 3.4 on Linux reports it. isValidPath()
+            // rejects it for the parentheses; a relaxed path pattern must not adopt a dead directory.
+            'codeman-abcd7777|108|0|||/home/user/gone (deleted)',
+            // Last row, path ending in a space: the output must not be trimmed.
+            'codeman-ffff6666|107|0|||/home/user/trailing ',
+          ].join('\n');
+        }
+        return '';
+      });
+      const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+      const nonTestManager = new NonTestTmuxManager();
+
+      try {
+        const { discovered } = await nonTestManager.reconcileSessions();
+        expect(discovered).toEqual([
+          'restored-aaaa1111',
+          'restored-bbbb2222',
+          'restored-cccc3333',
+          'restored-dddd4444',
+          'restored-eeee5555',
+          'restored-abcd7777',
+          'restored-ffff6666',
+        ]);
+        const dirs = Object.fromEntries(nonTestManager.getSessions().map((s) => [s.muxName, s.workingDir]));
+        expect(dirs).toEqual({
+          'codeman-aaaa1111': '/home/user/project-a',
+          'codeman-bbbb2222': '/home/user/project-b',
+          'codeman-cccc3333': process.cwd(),
+          'codeman-dddd4444': process.cwd(),
+          'codeman-eeee5555': process.cwd(),
+          'codeman-abcd7777': process.cwd(),
+          'codeman-ffff6666': '/home/user/trailing ',
+        });
+
+        // The directory comes from the same list-panes call, as its last field.
+        const listCalls = mockedExecSync.mock.calls
+          .map(([cmd]) => cmd)
+          .filter((cmd): cmd is string => typeof cmd === 'string' && cmd.includes(' list-panes '));
+        expect(listCalls).toHaveLength(1);
+        expect(listCalls[0]).toContain("|#{pane_current_path}'");
+      } finally {
+        nonTestManager.destroy();
+      }
+    });
+
+    it('treats the resolved spelling of the launch directory as no answer too (macOS /private/tmp)', async () => {
+      // On macOS /tmp is a symlink and a pane reports its process cwd resolved.
+      realpathOverrides.set('/tmp', '/private/tmp');
+      mockedExecSync.mockImplementation((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes(' list-panes ')) {
+          return ['codeman-aaaa1111|101|0|||/private/tmp', 'codeman-bbbb2222|102|0|||/tmp'].join('\n');
+        }
+        return '';
+      });
+      try {
+        const NonTestTmuxManager = await importWithTmuxCommandsEnabled();
+        const nonTestManager = new NonTestTmuxManager();
+        try {
+          await nonTestManager.reconcileSessions();
+          const dirs = Object.fromEntries(nonTestManager.getSessions().map((s) => [s.muxName, s.workingDir]));
+          expect(dirs).toEqual({
+            'codeman-aaaa1111': process.cwd(),
+            'codeman-bbbb2222': process.cwd(),
+          });
+        } finally {
+          nonTestManager.destroy();
+        }
+      } finally {
+        realpathOverrides.clear();
+      }
+    });
   });
 });
 
@@ -1011,6 +1189,23 @@ describe('parsePaneRows', () => {
   it('calls a non-numeric dead flag unknown rather than false', () => {
     const [row] = parsePaneRows('codeman-aaaa|1234|?||');
     expect(row.dead).toBeUndefined();
+  });
+
+  it('reads the pane directory from the last field', () => {
+    const [row] = parsePaneRows('codeman-aaaa|1234|0|||/home/user/project');
+    expect(row.pid).toBe(1234);
+    expect(row.dead).toBe(false);
+    expect(row.currentPath).toBe('/home/user/project');
+  });
+
+  it('keeps a pane directory that contains the separator whole', () => {
+    const [row] = parsePaneRows('codeman-aaaa|1234|0|||/home/user/a|b');
+    expect(row.currentPath).toBe('/home/user/a|b');
+  });
+
+  it('leaves the pane directory undefined when tmux reported none', () => {
+    expect(parsePaneRows('codeman-aaaa|1234')[0].currentPath).toBeUndefined();
+    expect(parsePaneRows('codeman-aaaa|1234|0|||')[0].currentPath).toBeUndefined();
   });
 
   it('returns one row per pane of a split session, in tmux order', () => {

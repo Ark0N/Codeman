@@ -20,6 +20,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 const CONSTANTS_JS = readFileSync(new URL('../src/web/public/constants.js', import.meta.url), 'utf-8');
 const SESSION_UI_JS = readFileSync(new URL('../src/web/public/session-ui.js', import.meta.url), 'utf-8');
+// Only for the [hidden] CSS guard below: the filter toggles the `hidden` property, and
+// `.run-mode-option`'s own `display: flex` would silently defeat it without the
+// `!important` re-assertion in styles.css.
+const STYLES_CSS = readFileSync(new URL('../src/web/public/styles.css', import.meta.url), 'utf-8');
 // Only for the real _showCenterStatus DOM tests below (`bootAppWithRealCenterStatus`) —
 // every other test in this file stubs _showCenterStatus itself and has no need of it.
 const PANELS_UI_JS = readFileSync(new URL('../src/web/public/panels-ui.js', import.meta.url), 'utf-8');
@@ -40,6 +44,8 @@ function bootApp(
     cliAvailable?: (id: string) => boolean;
     activeCase?: { location?: string } | null;
     settingsEnabled?: boolean;
+    /** Live sessions for the "in use by a session" fallback, in `this.sessions` Map shape. */
+    sessions?: Array<Record<string, unknown>>;
   } = {}
 ) {
   const dom = new JSDOM(
@@ -55,6 +61,10 @@ function bootApp(
       <div class="modal" id="customModelPickModal">
         <h3 id="customModelPickTitle"></h3>
         <p id="customModelPickHint"></p>
+        <input type="search" id="customModelPickSearch" aria-label="Search models"
+          oninput="app.filterCustomModelPick(this.value)">
+        <p id="customModelPickNoMatches" role="status" hidden>No models match</p>
+        <p id="customModelPickUnknown" role="status" hidden>Nothing is marked: this endpoint did not report which model it has loaded, and none of your running sessions uses one. Pick the model to launch.</p>
         <div id="customModelPickList"></div>
       </div>
       <div class="modal" id="customModelSwapConfirmModal">
@@ -81,6 +91,10 @@ function bootApp(
   app.cases = options.activeCase ? [{ name: 'testcase', ...options.activeCase }] : [{ name: 'testcase' }];
   app.loadAppSettingsFromStorage = () => ({ customModelEndpointsEnabled: options.settingsEnabled ?? true });
   app.isCliAvailable = options.cliAvailable ?? (() => true);
+  // The real app keeps live sessions in a Map keyed by id (app.js), which is what
+  // _getCustomModelInUseBySession walks; empty by default so a test that says nothing
+  // about sessions sees no promotion, exactly like a box with none running.
+  app.sessions = new Map((options.sessions || []).map((s, i) => [String(i), s]));
   app.showToast = () => {};
   // Real implementation lives in panels-ui.js, not evaluated into this harness (only
   // constants.js + session-ui.js are — see below) — a no-op default handle matching its
@@ -315,6 +329,27 @@ describe('Custom Model Endpoint Profiles: the "which model" picker', () => {
     expect(buttons[0].textContent).not.toContain('Currently loaded');
   });
 
+  it('treats a remembered "last used" id the host no longer lists as nothing promoted: no tag, the line shows', async () => {
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3'] }],
+    });
+    const origApiJson = app._apiJson;
+    app._apiJson = async (path: string) => {
+      if (path === '/api/model-endpoints/llama-box/running-status') return { isLlamaSwap: false, running: [] };
+      return origApiJson(path);
+    };
+    // The remembered model was deleted from this endpoint since the last launch.
+    win.localStorage.setItem('codeman:customModelLastUsed:claude:llama-box', 'gone-model');
+
+    await app.selectCustomModelEntry('claude', 'llama-box');
+
+    const list = win.document.getElementById('customModelPickList')!;
+    expect(list.textContent).not.toContain('Last used');
+    // Without a promoted row the probe really did answer "nothing is known", so the
+    // explanation line must show rather than leave two unmarked rows unexplained.
+    expect(win.document.getElementById('customModelPickUnknown')!.hidden).toBe(false);
+  });
+
   it('prefers the currently-loaded model over a stale "last used" entry when both are present', async () => {
     const { win, app } = bootApp({
       hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3', 'phi4'] }],
@@ -532,9 +567,349 @@ describe('Custom Model Endpoint Profiles: the "which model" picker', () => {
     await app.selectCustomModelEntry('claude', 'llama-box');
     expect(toastMessage).toMatch(/no models discovered/i);
   });
+
+  it('resets and focuses the search box every time the picker opens', async () => {
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3'] }],
+    });
+    win.app = app;
+    await app.selectCustomModelEntry('claude', 'llama-box');
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    // The caret lands in the box, so the first keystroke filters with no click.
+    expect(win.document.activeElement).toBe(search);
+    // A stale query from a previous open must not survive into the next one.
+    search.value = 'zzz';
+    search.dispatchEvent(new win.Event('input'));
+    app.closeCustomModelPickModal();
+
+    await app.selectCustomModelEntry('claude', 'llama-box');
+    expect(search.value).toBe('');
+    expect(win.document.activeElement).toBe(search);
+    expect(win.document.getElementById('customModelPickNoMatches')!.hasAttribute('hidden')).toBe(true);
+    const visible = [...win.document.getElementById('customModelPickList')!.querySelectorAll('button')].filter(
+      (b) => !b.hasAttribute('hidden')
+    );
+    expect(visible).toHaveLength(2);
+  });
+
+  it('leaves the search box unfocused on touch devices so the OS keyboard stays off the list', async () => {
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3'] }],
+    });
+    win.app = app;
+    // The guard reads the global the browser defines (mobile-detection.js).
+    (win as unknown as { MobileDetection: { isTouchDevice: () => boolean } }).MobileDetection = {
+      isTouchDevice: () => true,
+    };
+
+    await app.selectCustomModelEntry('claude', 'llama-box');
+
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    expect(win.document.activeElement).not.toBe(search);
+    // Only the focus is skipped: the rows still render, unfiltered and functional.
+    const visible = [...win.document.getElementById('customModelPickList')!.querySelectorAll('button')].filter(
+      (b) => !b.hasAttribute('hidden')
+    );
+    expect(visible).toHaveLength(2);
+  });
+
+  it('filters rows case-insensitively on the model id, keeping the surviving row fully functional', async () => {
+    const { win, app } = bootApp({
+      hosts: [
+        {
+          id: 'llama-box',
+          label: 'llama.cpp',
+          baseUrl: 'http://x',
+          models: ['qwen3', 'llama3'],
+          defaultModelId: 'qwen3',
+        },
+      ],
+    });
+    let launched: unknown[] | null = null;
+    app.runCustomModelEntry = async (...args: unknown[]) => {
+      launched = args;
+    };
+    win.app = app;
+    await app.selectCustomModelEntry('claude', 'llama-box');
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    search.value = 'QWEN';
+    search.dispatchEvent(new win.Event('input'));
+
+    const buttons = [...win.document.getElementById('customModelPickList')!.querySelectorAll('button')];
+    expect(buttons.filter((b) => b.hasAttribute('hidden')).map((b) => b.textContent!.trim())).toEqual(['llama3']);
+    const [visible] = buttons.filter((b) => !b.hasAttribute('hidden'));
+    // The surviving row keeps its Default badge and its real, callable click handler.
+    expect(visible.textContent).toContain('qwen3');
+    expect(visible.textContent).toContain('Default');
+    (visible as unknown as HTMLButtonElement & { onclick: (e: unknown) => void }).onclick(
+      new (win as any).Event('click')
+    );
+    expect(launched).toEqual(['claude', 'llama-box', 'qwen3']);
+  });
+
+  it('shows the no-matches line only while a query matches nothing, and clears it with the query', async () => {
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3'] }],
+    });
+    win.app = app;
+    await app.selectCustomModelEntry('claude', 'llama-box');
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    const noMatches = win.document.getElementById('customModelPickNoMatches')!;
+    const isHidden = () =>
+      win.document.getElementById('customModelPickList')!.querySelectorAll('button[hidden]').length;
+
+    // Whitespace is not a query: everything stays visible, no message.
+    search.value = '   ';
+    search.dispatchEvent(new win.Event('input'));
+    expect(noMatches.hasAttribute('hidden')).toBe(true);
+    expect(isHidden()).toBe(0);
+
+    search.value = 'ghost';
+    search.dispatchEvent(new win.Event('input'));
+    expect(noMatches.hasAttribute('hidden')).toBe(false);
+    expect(isHidden()).toBe(2);
+
+    search.value = '';
+    search.dispatchEvent(new win.Event('input'));
+    expect(noMatches.hasAttribute('hidden')).toBe(true);
+    expect(isHidden()).toBe(0);
+  });
+
+  it('keeps an HTML-significant model id inert in the picker rows too, and filterable by its raw text', async () => {
+    // Same vector as the Run-menu row above, now via data-model-id: escapeHtml covers
+    // the double quote, and the filter reads the decoded raw id back off dataset.
+    const dangerousModel = '"><img src=x onerror=alert(1)>';
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', dangerousModel] }],
+    });
+    win.app = app;
+    await app.selectCustomModelEntry('claude', 'llama-box');
+    const list = win.document.getElementById('customModelPickList')!;
+    expect(list.querySelector('img')).toBeNull();
+
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    search.value = 'src=x';
+    search.dispatchEvent(new win.Event('input'));
+    const visible = list.querySelectorAll('button:not([hidden])');
+    expect(visible).toHaveLength(1);
+    expect(visible[0].getAttribute('data-model-id')).toBe(dangerousModel);
+  });
+
+  it('re-asserts display:none !important for hidden picker rows so the filter cannot be silently defeated', () => {
+    // `.run-mode-option` carries its own `display: flex` (styles.css, restated in
+    // mobile.css), which outranks the UA `[hidden]` rule: without this scoped
+    // !important re-assertion, toggling `hidden` would change nothing on screen.
+    const rule = STYLES_CSS.match(/#customModelPickModal \.run-mode-option\[hidden\]\s*\{[^}]*\}/);
+    expect(rule, 'picker rows need a [hidden] rule scoped to #customModelPickModal').toBeTruthy();
+    expect(rule![0]).toMatch(/display:\s*none\s*!important/);
+  });
+
+  it('pins "No models match" hidden with an empty query and shown only when a query hides every row, in CSS too', async () => {
+    // The visible symptom: the line carries `.form-hint`, whose `display: block`
+    // outranks the UA `[hidden]` rule, so `hidden` alone showed "No models match"
+    // while every model was listed with an empty search box. The attribute half
+    // was always right (session-ui.js's `filterCustomModelPick`); the CSS half
+    // needed the same `[hidden] { display: none !important }` re-assertion the
+    // rows above carry. This test pins both states AND the CSS that makes them
+    // actually render.
+    const rule = STYLES_CSS.match(/#customModelPickModal \.custom-model-pick-no-matches\[hidden\]\s*\{[^}]*\}/);
+    expect(rule, 'the no-matches line needs a [hidden] rule scoped to #customModelPickModal').toBeTruthy();
+    expect(rule![0]).toMatch(/display:\s*none\s*!important/);
+
+    const { win, app } = bootApp({
+      hosts: [{ id: 'llama-box', label: 'llama.cpp', baseUrl: 'http://x', models: ['qwen3', 'llama3'] }],
+    });
+    win.app = app;
+    await app.selectCustomModelEntry('claude', 'llama-box');
+    const noMatches = win.document.getElementById('customModelPickNoMatches')!;
+
+    // Empty query, models listed: the attribute must be set, and the CSS rule
+    // above is what makes that attribute actually hide the line.
+    expect(noMatches.hasAttribute('hidden')).toBe(true);
+
+    // A non-empty query that hides every row: shown again.
+    const search = win.document.getElementById('customModelPickSearch') as HTMLInputElement;
+    search.value = 'ghost';
+    search.dispatchEvent(new win.Event('input'));
+    expect(noMatches.hasAttribute('hidden')).toBe(false);
+  });
 });
 
-describe('Custom Model Endpoint Profiles: _getCustomModelCurrentlyLoaded is client-side bounded', () => {
+/**
+ * The reported bug: a gateway such as Bifrost (40 models, alphabetical, no llama-swap
+ * `/running` route of its own) showed "Choose a model" with nothing marked, so the user
+ * could not tell which model the endpoint was actually serving, while the same endpoint
+ * reached from the Codex CLI appeared to "default to alpha order" for every other CLI.
+ * The endpoint genuinely cannot answer, so the app falls back to what it does know: a
+ * live session it has itself pointed at that endpoint. And it says so plainly when it
+ * knows neither.
+ */
+describe('Custom Model Endpoint Profiles: gateways without /running fall back to a live session', () => {
+  const GATEWAY = {
+    id: 'bifrost',
+    label: 'bifrost',
+    baseUrl: 'https://bifrost.example',
+    models: ['llama-swap/alpha-3b', 'llama-swap/qwen3.8-flash-next-unsloth-ud-iq4_xs', 'llama-swap/zeta-70b'],
+  };
+
+  /** The gateway's exact shape: reachable, OpenAI-compatible, and not llama-swap. */
+  function gatewayApp(sessions: Array<Record<string, unknown>>) {
+    const booted = bootApp({ hosts: [GATEWAY], sessions });
+    const origApiJson = booted.app._apiJson;
+    booted.app._apiJson = async (path: string) => {
+      if (path === '/api/model-endpoints/bifrost/running-status') return { isLlamaSwap: false, running: [] };
+      return origApiJson(path);
+    };
+    return booted;
+  }
+
+  const live = (modelId: string, overrides: Record<string, unknown> = {}) => ({
+    name: 'w9-Gateway',
+    status: 'busy',
+    pid: 4242,
+    createdAt: 1_700_000_000_000,
+    customModel: { endpointId: 'bifrost', modelId, label: 'bifrost' },
+    ...overrides,
+  });
+
+  it('marks the model a live session is running, at the top, for EVERY CLI, not just claude', async () => {
+    const inUse = 'llama-swap/qwen3.8-flash-next-unsloth-ud-iq4_xs';
+    for (const mode of ['opencode', 'deepseek', 'codex', 'claude']) {
+      const { win, app } = gatewayApp([live(inUse)]);
+      await app._openCustomModelPickModal(mode, GATEWAY);
+      const buttons = [...win.document.getElementById('customModelPickList')!.querySelectorAll('button')];
+      expect(buttons).toHaveLength(3);
+      expect(buttons[0].textContent, mode).toContain(inUse);
+      expect(buttons[0].textContent, mode).toContain('In use by a session');
+      // The other rows keep discovery order and carry no tag of their own.
+      expect(buttons[1].textContent).toContain('llama-swap/alpha-3b');
+      expect(buttons[2].querySelectorAll('.set-scope')).toHaveLength(0);
+      // Nothing was fabricated about the endpoint itself.
+      expect(win.document.getElementById('customModelPickList')!.textContent).not.toContain('Currently loaded');
+      expect(win.document.getElementById('customModelPickUnknown')!.hasAttribute('hidden')).toBe(true);
+    }
+  });
+
+  it('a live session outranks this device’s "last used" memory, and both rank above nothing', async () => {
+    const { win, app } = gatewayApp([live('llama-swap/zeta-70b')]);
+    win.localStorage.setItem('codeman:customModelLastUsed:opencode:bifrost', 'llama-swap/alpha-3b');
+
+    await app._openCustomModelPickModal('opencode', GATEWAY);
+
+    const buttons = [...win.document.getElementById('customModelPickList')!.querySelectorAll('button')];
+    expect(buttons[0].textContent).toContain('llama-swap/zeta-70b');
+    expect(buttons[0].textContent).toContain('In use by a session');
+    expect(buttons[0].textContent).not.toContain('Last used');
+    // The remembered pick is still listed, just not promoted or double-tagged.
+    expect(buttons[1].textContent).toContain('llama-swap/alpha-3b');
+    expect(buttons[1].querySelectorAll('.set-scope')).toHaveLength(0);
+  });
+
+  it('a stopped session, an exited process, an exited pane, another endpoint or an undiscovered model mark nothing', async () => {
+    const inUse = 'llama-swap/qwen3.8-flash-next-unsloth-ud-iq4_xs';
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['stopped', { status: 'stopped' }],
+      ['process exited (pid null)', { pid: null }],
+      ['pane exited', { paneExit: { at: 1, status: 0 } }],
+      ['other endpoint', { customModel: { endpointId: 'other', modelId: inUse } }],
+      ['no custom model', { customModel: undefined }],
+      ['undiscovered model', { customModel: { endpointId: 'bifrost', modelId: 'llama-swap/retired-model' } }],
+    ];
+    for (const [label, overrides] of cases) {
+      const { win, app } = gatewayApp([live(inUse, overrides)]);
+      await app._openCustomModelPickModal('opencode', GATEWAY);
+      const list = win.document.getElementById('customModelPickList')!;
+      expect(list.textContent, label).not.toContain('In use by a session');
+      expect(list.textContent, label).not.toContain('Last used');
+      // Discovery order untouched: nothing got dragged to the top.
+      expect(list.querySelectorAll('button')![0].textContent).toContain('llama-swap/alpha-3b');
+    }
+  });
+
+  it('the most recently launched live session wins when two share an endpoint', async () => {
+    const { win, app } = gatewayApp([
+      live('llama-swap/alpha-3b', { createdAt: 1 }),
+      live('llama-swap/zeta-70b', { createdAt: 2 }),
+    ]);
+
+    await app._openCustomModelPickModal('opencode', GATEWAY);
+
+    const buttons = [...win.document.getElementById('customModelPickList')!.querySelectorAll('button')];
+    expect(buttons[0].textContent).toContain('llama-swap/zeta-70b');
+    expect(buttons.filter((b) => b.textContent!.includes('In use by a session'))).toHaveLength(1);
+  });
+
+  it('says so plainly when nothing is known (a down endpoint answers the very same shape)', async () => {
+    const { win, app } = gatewayApp([]);
+
+    await app._openCustomModelPickModal('opencode', GATEWAY);
+
+    const unknown = win.document.getElementById('customModelPickUnknown')!;
+    expect(unknown.hasAttribute('hidden')).toBe(false);
+    expect(unknown.textContent).toContain('did not report which model it has loaded');
+    // What REALLY arrives here, not a fiction: `getLlamaSwapStatus` (custom-model-routes.ts)
+    // turns EVERY upstream failure into `isLlamaSwap: false` (a gateway with no
+    // `/running` route, a closed port, an unresolvable host, a 401), so this stub is
+    // also exactly what a DOWN endpoint produces, which is why the line's wording says
+    // only "did not report" and never why.
+    // The same class-of-bug trap as the no-matches line: `.form-hint`'s `display: block`
+    // outranks the UA `[hidden]` rule, so the attribute needs the CSS re-assertion.
+    const rule = STYLES_CSS.match(/#customModelPickModal \.custom-model-pick-unknown\[hidden\]\s*\{[^}]*\}/);
+    expect(rule, 'the unknown-endpoint line needs a [hidden] rule scoped to #customModelPickModal').toBeTruthy();
+    expect(rule![0]).toMatch(/display:\s*none\s*!important/);
+  });
+
+  it('hides that line whenever a row IS marked, and for a probe that never got any answer', async () => {
+    // Marked by a live session: nothing to explain.
+    const marked = gatewayApp([live('llama-swap/alpha-3b')]);
+    await marked.app._openCustomModelPickModal('opencode', GATEWAY);
+    expect(marked.win.document.getElementById('customModelPickUnknown')!.hasAttribute('hidden')).toBe(true);
+
+    // `null` (no answer at all) only happens when Codeman's OWN request to the route
+    // failed or the client-side bound won the race. The route itself never answers this
+    // way for an unreachable endpoint: every fetch failure arrives as `isLlamaSwap:
+    // false`, pinned by the test above. The box may merely be asleep, so stay silent.
+    const asleep = bootApp({ hosts: [GATEWAY] });
+    asleep.app._apiJson = async (path: string) => (path.includes('running-status') ? null : []);
+    await asleep.app._openCustomModelPickModal('opencode', GATEWAY);
+    expect(asleep.win.document.getElementById('customModelPickUnknown')!.hasAttribute('hidden')).toBe(true);
+  });
+
+  it('llama-swap’s own answer still wins over a session pin, and keeps its own tag', async () => {
+    const booted = bootApp({
+      hosts: [GATEWAY],
+      sessions: [live('llama-swap/alpha-3b')],
+    });
+    const origApiJson = booted.app._apiJson;
+    booted.app._apiJson = async (path: string) => {
+      if (path === '/api/model-endpoints/bifrost/running-status') {
+        return { isLlamaSwap: true, running: [{ model: 'llama-swap/zeta-70b', state: 'ready' }] };
+      }
+      return origApiJson(path);
+    };
+
+    await booted.app._openCustomModelPickModal('opencode', GATEWAY);
+
+    const buttons = [...booted.win.document.getElementById('customModelPickList')!.querySelectorAll('button')];
+    expect(buttons[0].textContent).toContain('llama-swap/zeta-70b');
+    expect(buttons[0].textContent).toContain('Currently loaded');
+    expect(buttons[0].textContent).not.toContain('In use by a session');
+    // The session's model is an ordinary row again: one promotion, not two.
+    expect(buttons.filter((b) => b.querySelector('.set-scope'))).toHaveLength(1);
+  });
+
+  it('never trusts displayModel: a session whose terminal merely printed a model marks nothing', async () => {
+    const booted = gatewayApp([
+      { name: 'w9-Other', status: 'busy', createdAt: 1, displayModel: { model: 'llama-swap/zeta-70b', source: 'screen' } },
+    ]);
+
+    await booted.app._openCustomModelPickModal('opencode', GATEWAY);
+
+    expect(booted.win.document.getElementById('customModelPickList')!.textContent).not.toContain('In use by a session');
+  });
+});
+
+describe('Custom Model Endpoint Profiles: _getCustomModelRunningStatus is client-side bounded', () => {
   // `timeoutMs` driven in milliseconds rather than the real 800 — same reasoning as
   // `_watchLlamaSwapLoading`'s own `pollIntervalMs` a few describe blocks down: this
   // code runs inside the JSDOM window's own realm, whose setTimeout vi.useFakeTimers()
@@ -549,26 +924,31 @@ describe('Custom Model Endpoint Profiles: _getCustomModelCurrentlyLoaded is clie
     // endpoint that is asleep or firewalled, distinct from one that answers an error.
     app._apiJson = () => new Promise(() => {});
 
-    const result = await app._getCustomModelCurrentlyLoaded({ id: 'llama-box', models: ['qwen3'] }, 5);
+    const status = await app._getCustomModelRunningStatus({ id: 'llama-box', models: ['qwen3'] }, 5);
 
-    expect(result).toBeNull();
+    // `null` means "no answer at all" (Codeman's own request failed or the client-side
+    // bound won): the picker keeps its "Nothing is marked" line hidden for exactly this
+    // case (pinned in the gateway describe above). An endpoint that is merely down is
+    // NOT here: the route turns every fetch failure into `isLlamaSwap: false`.
+    expect(status).toBeNull();
+    expect(app._pickReadyRunningModel(status, { id: 'llama-box', models: ['qwen3'] })).toBeNull();
   });
 
   it('an endpoint that answers well within the bound is unaffected by it', async () => {
     const { app } = bootApp({});
     app._apiJson = async () => ({ isLlamaSwap: true, running: [{ model: 'qwen3', state: 'ready' }] });
 
-    const result = await app._getCustomModelCurrentlyLoaded({ id: 'llama-box', models: ['qwen3'] }, 5);
+    const status = await app._getCustomModelRunningStatus({ id: 'llama-box', models: ['qwen3'] }, 5);
 
-    expect(result).toBe('qwen3');
+    expect(app._pickReadyRunningModel(status, { id: 'llama-box', models: ['qwen3'] })).toBe('qwen3');
   });
 
   it('a rejected probe settles quietly to null rather than leaving an unhandled rejection once the timeout has already won the race', async () => {
     const { app } = bootApp({});
     app._apiJson = () => new Promise((_resolve, reject) => setTimeout(() => reject(new Error('boom')), 10));
 
-    const result = await app._getCustomModelCurrentlyLoaded({ id: 'llama-box', models: ['qwen3'] }, 2);
-    expect(result).toBeNull();
+    const status = await app._getCustomModelRunningStatus({ id: 'llama-box', models: ['qwen3'] }, 2);
+    expect(status).toBeNull();
     // Give the loser of the race a turn to actually reject and hit its own .catch —
     // an unswallowed rejection here would surface as an "Unhandled Errors" failure
     // for the whole test file, not a failed assertion in this test.
@@ -745,7 +1125,7 @@ describe('Custom Model Endpoint Profiles: applying a picked entry', () => {
   });
 
   it('routes through run() itself, so the Run in-flight lock actually engages', async () => {
-    // CLAUDE.md, Run launch synchronization: the lock exists so a double click
+    // src/web/CLAUDE.md, Run launch synchronization: the lock exists so a double click
     // cannot create duplicate sessions. A hardcoded dispatch table bypassing
     // run() would never set _runInFlight, which is what this pins.
     const { app } = bootApp({});
@@ -1281,12 +1661,35 @@ describe("Custom Model Endpoint Profiles: requiresContextWarning (this CLI's own
 
     await app.runCustomModelEntry('claude', 'llama-box', 'qwen3');
 
-    expect(confirmArgs).toEqual(['qwen3', 16384, 40000]);
+    expect(confirmArgs).toEqual(['qwen3', 16384, 40000, undefined]);
     expect(applyBodies).toEqual([
       { endpointId: 'llama-box', modelId: 'qwen3' },
       { endpointId: 'llama-box', modelId: 'qwen3', confirmedContext: true },
     ]);
     expect(win.localStorage.getItem('codeman:customModelLastUsed:claude:llama-box')).toBe('qwen3');
+  });
+
+  it('forwards the slot count from the apply response into the modal', async () => {
+    const { app, applyBodies } = launchHarness([
+      {
+        requiresContextWarning: true,
+        modelId: 'qwen3',
+        contextLength: 131072,
+        minSafeContextTokens: 40000,
+        slotCount: 4,
+      },
+      { customModel: { endpointId: 'llama-box' }, restarted: true, modelSwapInProgress: false },
+    ]);
+    let confirmArgs: unknown[] | undefined;
+    app._confirmContextWarning = async (...args: unknown[]) => {
+      confirmArgs = args;
+      return true;
+    };
+
+    await app.runCustomModelEntry('claude', 'llama-box', 'qwen3');
+
+    expect(confirmArgs).toEqual(['qwen3', 131072, 40000, 4]);
+    expect(applyBodies).toHaveLength(2);
   });
 
   it('declining the in-app context-warning modal keeps the native backend, never re-sends the apply, and must NEVER record this model as "last used" — it cannot work with this CLI at all', async () => {
@@ -1359,6 +1762,49 @@ describe('Custom Model Endpoint Profiles: _confirmContextWarning (in-app modal, 
     app._resolveContextWarningConfirm(false);
     expect(await promise).toBe(false);
     expect(win.document.getElementById('customModelContextWarningModal')!.classList.contains('active')).toBe(false);
+  });
+
+  it('explains shared parallel slots, and the --parallel 1 fix, when the context is enough only as a whole', async () => {
+    const { win, app } = bootApp({});
+    void app._confirmContextWarning('qwen3.8-27b-ud-q4_k_xl', 131072, 40000, 4);
+    const message = win.document.getElementById('customModelContextWarningMessage')!.textContent!;
+    expect(message).toContain('qwen3.8-27b-ud-q4_k_xl');
+    expect(message).toContain('4 parallel');
+    expect(message).toContain('131,072');
+    expect(message).toContain('32,768'); // per slot
+    expect(message).toContain('--parallel 1');
+    expect(message).toContain('Context size has been exceeded');
+    // this is not the "first message fails outright" case, so it must not claim that
+    expect(message).not.toMatch(/first message will fail/i);
+    expect(win.document.getElementById('customModelContextWarningModal')!.classList.contains('active')).toBe(true);
+    app._resolveContextWarningConfirm(false);
+  });
+
+  it('says the context is split across the slots, about N each, from the discovered context alone', async () => {
+    const { win, app } = bootApp({});
+    void app._confirmContextWarning('qwen3', 65536, 40000, 4);
+    const message = win.document.getElementById('customModelContextWarningMessage')!.textContent!;
+    expect(message).toContain('65,536 tokens of context are split across 4 parallel server slots, about 16,384 each');
+    app._resolveContextWarningConfirm(false);
+  });
+
+  it('keeps the too-small-context message for a small model and adds the slot advice when slots are known', async () => {
+    const { win, app } = bootApp({});
+    void app._confirmContextWarning('qwen3', 16384, 40000, 4);
+    const message = win.document.getElementById('customModelContextWarningMessage')!.textContent!;
+    expect(message).toContain('16,384');
+    expect(message).toMatch(/first message will fail/i);
+    expect(message).toContain('4 parallel slots');
+    expect(message).toContain('--parallel 1');
+    app._resolveContextWarningConfirm(false);
+  });
+
+  it('does not mention slots when there is one (or none known)', async () => {
+    const { win, app } = bootApp({});
+    void app._confirmContextWarning('qwen3', 16384, 40000, 1);
+    const message = win.document.getElementById('customModelContextWarningMessage')!.textContent!;
+    expect(message).not.toMatch(/parallel/i);
+    app._resolveContextWarningConfirm(false);
   });
 
   it('describes an unknown context length without printing a bogus number', async () => {

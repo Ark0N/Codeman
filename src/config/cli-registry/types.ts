@@ -29,6 +29,8 @@ export type EngineValue =
   | 'muxName'
   | 'effortLevel'
   | 'effortSettingsJson'
+  /** The Discord bridge's startup hint, passed to Claude as `--append-system-prompt`. */
+  | 'appendSystemPrompt'
   /** `sessionId` prefixed `codeman_<id>` — codex's unique per-pane rollout originator. */
   | 'codemanPrefixedSessionId'
   /**
@@ -68,6 +70,14 @@ export type Cond =
  * So the worst a wrong `quote` can do is make output uglier, never unsafe.
  */
 export type QuoteStyle = 'auto' | 'bare' | 'double' | 'single';
+
+/**
+ * Workspace-relative directories an agent CLI scans for project skills. A closed list
+ * rather than a free path: the value decides where the server WRITES, and
+ * `~/.codeman/clis.json` can set it, so it must never be able to name `..` or an
+ * absolute path.
+ */
+export type AgentSkillDir = '.claude/skills' | '.agents/skills';
 
 /** One argv element. */
 export type ArgSpec =
@@ -398,6 +408,65 @@ export interface CliCapabilities {
      * tested. See `isAwaitingWorkers()` in `session-activity.ts`.
      */
     awaitingLine?: string;
+    /**
+     * Source of a regex matching the dialog this CLI draws when it stops and waits for the
+     * user to answer something (an approval, a question, a trust prompt): Codeman reads
+     * such a pane as BLOCKED, with the same red "needs you" alert, push, webhook and
+     * `blocked` wait signal a Claude `permission_prompt` hook raises. It is the source of
+     * that state for a CLI with no hook of its own (`hooks: 'none'`); a CLI whose hooks
+     * report it never consults the screen for it.
+     *
+     * Tested against the last `blockedLines` non-blank rows of a pane capture, joined
+     * with `\n`, so the pattern can require several markers at once and anchor on the
+     * end of the window (no `m` flag: `$` is the last row). It must anchor on chrome
+     * only that CLI draws, at the FOOT of the screen, where a dialog replaces the
+     * composer: the text above is the agent's own, and it can print anything. A forged
+     * match may cost a false alert and nothing else, because Codeman never answers such a
+     * dialog. See `isBlockedScreen()` in `session-activity.ts`.
+     *
+     * A CLI that omits it is never blocked from the screen, which is what every CLI was
+     * before the field existed.
+     */
+    blockedLine?: string;
+    /**
+     * How many non-blank rows at the foot of the screen `blockedLine` sees. A dialog's
+     * options wrap at narrow widths, which is what pushes its markers up the screen, so
+     * this is sized for the narrowest pane the CLI was measured at. Default 1.
+     */
+    blockedLines?: number;
+    /**
+     * Source of a regex every non-blank row BELOW an idle composer must match (at most
+     * three rows): the footer and hint rows this CLI draws there and nowhere else. It is
+     * what lets the experimental guarded stage/submit routes (`agent-staging.ts`) prove
+     * that the `promptGlyph` row they read is this CLI's own composer, at rest, and not
+     * a dialog option or a transcript line the agent printed. A CLI that omits it never
+     * takes guarded input: stage and submit refuse it. Tested one row at a time.
+     */
+    composerFooterLine?: string;
+    /**
+     * Source of a regex matching a row of a suggestion popup this CLI draws directly
+     * ABOVE its composer (a slash-command list, a file or mention search, its key-hint
+     * row). The footer below such a composer is unchanged, so without this guarded
+     * stage/submit would read the popup frame as an idle composer, and Enter would
+     * accept the highlighted entry instead of sending the draft. Tested one row at a
+     * time against the contiguous block just above the composer row, never further
+     * up the pane: a match there refuses the frame. See `readGuardedComposer()`.
+     */
+    composerPopupLine?: string;
+    /**
+     * Characters that, as the first character of a draft, make Enter run a command
+     * rather than send a prompt (codex: `/` slash commands, `!` shell commands).
+     * Guarded stage refuses such a message before typing; commands go through the
+     * ordinary input route.
+     */
+    composerCommandPrefixes?: string;
+    /**
+     * Characters that, starting the word under the caret, open a completion popup
+     * whose highlighted entry Enter accepts (codex: `@` file and mention search, `$`
+     * skills). Guarded stage refuses a message whose LAST word starts with one,
+     * before typing: the caret ends there, and the popup follows the caret.
+     */
+    composerCompletionSigils?: string;
   };
   /**
    * How many columns this CLI indents its transcript body by, so a copy taken from its
@@ -491,7 +560,7 @@ export interface CliCapabilities {
    *   own mouse support must work in the pane (htop/vim in a shell).
    *
    * Stock CLIs: `strip-full` = claude, codex, gemini (Ink TUIs); `strip-mux-and-mouse` =
-   * opencode (a full-screen TUI that enables tracking itself); `strip-mux-only` =
+   * opencode and copilot (full-screen TUIs that enable tracking themselves); `strip-mux-only` =
    * antigravity, grok, deepseek, omp; `preserve` = shell, pi.
    *
    * A fourth combination is the point to split this into flags; three is still cheaper
@@ -505,8 +574,54 @@ export interface CliCapabilities {
     /** Names a PREDICT_PROFILES key. Unknown or absent degrades to 'buffer', never to broken. */
     predictProfile?: string;
   };
-  /** Forwarding the wheel to the CLI's own transcript. 'never' keeps local scrollback. */
-  wheelForward: { mode: 'never' | 'version-gated'; minVersion?: string };
+  /**
+   * Forwarding the wheel to the CLI's own transcript. 'never' keeps local scrollback;
+   * 'version-gated' forwards from `minVersion` on; 'always' forwards at any version. Either
+   * forwarding mode applies only while the CLI has mouse tracking on (`cliMouseTracking`).
+   *
+   * ⚠️ Declared only: nothing reads this field yet (see DECLARED-FOR-LATER below). The browser's
+   * gate is `_shouldForwardWheelToApp` in terminal-ui.js, which keeps its own hand-written
+   * per-CLI rules, so changing a value here changes nothing until that gate is changed too.
+   */
+  wheelForward: { mode: 'never' | 'version-gated' | 'always'; minVersion?: string };
+  /**
+   * The CLI pages its OWN transcript on PageUp/PageDown, so a wheel or touch scroll over
+   * a pane with no local history can be turned into those keys instead of doing nothing
+   * (`_maybePageCliTranscript` in terminal-ui.js). Read by the frontend through
+   * `window.__codemanTranscriptPageKeys`, which the server builds from this field.
+   *
+   * ⚠ NOT wheel forwarding. `wheelForward` above sends SGR mouse wheel REPORTS; this sends
+   * plain keys, and only when the local buffer is hollow (normal buffer, `baseY === 0`).
+   * A CLI can ignore one and honour the other: Codex without observed mouse tracking
+   * uses this fallback, while fullscreen Codex 0.163.0 accepts SGR wheel reports.
+   *
+   * Absent means no paging, so a CLI nobody has measured keeps plain local scrolling.
+   */
+  transcriptPageKeys?: boolean;
+  /**
+   * `'inline'`: the CLI renders inline (its content stacks at the bottom of the
+   * main screen), so while a phone's on-screen keyboard is up the browser keeps
+   * the PTY's rows and scrolls the view instead of resizing (`keyboardHoldsRows`,
+   * terminal-ui.js `_keyboardHoldEligible`). Read by the frontend through
+   * `window.__codemanKeyboardHoldModes`, which the server builds from this field.
+   *
+   * Why it exists: every PTY height change makes Claude Code's inline renderer
+   * clear the screen and reprint only the tail that fits (#672). Measured on
+   * Claude Code 2.1.306 with tmux 3.2a, a fresh session already at the phone's
+   * size printing 100 numbered lines: five keyboard open/close cycles (PTY
+   * 62x38 to 62x15 and back, one SIGWINCH per transition) left 75 of the 100 in
+   * `tmux capture-pane` history, the other 25 gone for good; with the rows held
+   * the PTY stayed 62x38, no SIGWINCH reached the pane and all 100 remained.
+   *
+   * ⚠ Only for a renderer that is inline. A CLI that lays out the FULL height
+   * (codex: banner at the top, composer pinned to the bottom) cannot fit both
+   * ends above the keyboard and must be resized instead, so it stays absent.
+   * Absent means resize, the safe default for an unmeasured CLI. Even when set,
+   * the hold stands aside while the CLI reports mouse tracking (Claude's
+   * fullscreen mode, which lays out the full height and has not been measured
+   * losing lines, so it resizes as before), and for remote and docker sessions.
+   */
+  keyboardHold?: 'inline';
   keyboardAccessory: 'agent' | 'shell';
   /** Multi-user: this CLI is a raw shell, so its commands need the privileged gate. */
   privilegedCommandGate: boolean;
@@ -515,7 +630,20 @@ export interface CliCapabilities {
   ralph: boolean;
   respawn: boolean;
   effort: boolean;
+  /**
+   * Codeman may write its agent skill (`skills/codeman`) into this CLI's workspace and
+   * seed its per-session preamble (behind the synced `agentSkillEnabled` setting,
+   * add-only, marker-owned). Where it lands comes from `agentSkillDir` below.
+   */
   agentSkillInjection: boolean;
+  /**
+   * The workspace-relative directory this CLI scans for project skills, so the skill
+   * lands at `<workspace>/<agentSkillDir>/codeman/SKILL.md` where the CLI discovers it.
+   * Measured per CLI. Absent with `agentSkillInjection: true` means Claude Code's
+   * `.claude/skills`, which is what the boolean meant before this field existed, so a
+   * `~/.codeman/clis.json` written against the old schema keeps its behaviour.
+   */
+  agentSkillDir?: AgentSkillDir;
   statusLineTelemetry: boolean;
   /** Where a model override is delivered. Claude uniquely writes settings.local.json. */
   model: { source: 'flag' | 'claude-settings-file' | 'none'; param?: string };
@@ -644,7 +772,12 @@ export interface CliCapabilities {
    * reported `skipped` rather than written somewhere the CLI never reads. Absent = the file
    * only follows `$HOME`.
    */
-  mcpConfig?: { path: string; format: McpConfigFormat; relocation?: { envVar: string; path: string } };
+  mcpConfig?: {
+    path: string;
+    altPath?: string;
+    format: McpConfigFormat;
+    relocation?: { envVar: string; path: string };
+  };
   /**
    * How this CLI is pointed at a user-supplied custom OpenAI-compatible
    * endpoint (local, e.g. llama.cpp, or cloud, e.g. Azure AI Foundry) — the
@@ -681,9 +814,11 @@ export interface CliCapabilities {
    * for pi and omp (`--model custom/<id>`, or the CLI stays on its own default
    * provider and reports "No API key found for the selected model") or for
    * grok (`--model codeman-custom`, the `[model.<name>]` block the config
-   * declares). Absent = the config alone selects the model (claude's env vars,
-   * opencode's blob, codex's top-level `model` key). Applied by the session's
-   * respawn options through the entry's `legacyConfigField`, never by id.
+   * declares), and codex carries its bare selected id (`{modelId}`, an id the
+   * entry's `model` token pattern must be able to carry). Absent = the config
+   * alone selects the model (claude's env vars, opencode's blob). Applied by
+   * the session's respawn options through the entry's `legacyConfigField`,
+   * never by id.
    *
    * `contextLengthVar` (env kind only): the env var a discovered per-model context-window
    * size is written to when known (claude's `CLAUDE_CODE_MAX_CONTEXT_TOKENS`) — without it,
@@ -725,19 +860,13 @@ export interface CliCapabilities {
    * reuses that file.
    *
    * `appendV1Suffix` (env kind only): the raw `endpoint.baseUrl` gets `withV1Suffix()`
-   * applied before being written to `baseUrlVar`, instead of being used verbatim.
-   * DeepSeek needs this and claude/gemini must NOT get it — a per-CLI asymmetry confirmed
-   * by reading each SDK's own request-building source, not assumed: DeepSeek Harness's
-   * bundled `@deepseek-ai/dsh-llm-deepseek` concatenates `${connection.baseURL}/chat/
-   * completions` with no `/v1` insertion of its own (its real public API base,
-   * `https://api.deepseek.com`, expects the caller's base URL to already carry any
-   * needed prefix), while llama-swap/llama.cpp only ever serves the OpenAI-conventional
-   * `/v1/chat/completions` — confirmed live: a bare `POST <baseUrl>/chat/completions`
-   * 404s, `POST <baseUrl>/v1/chat/completions` succeeds, and the harness's own error
-   * message template (`DeepSeek API error (HTTP ${status})`) reproduces the exact
-   * `HTTP_404` this feature originally shipped with unexplained. Claude Code's own SDK,
-   * by contrast, was already confirmed working end-to-end against the RAW `baseUrl` with
-   * no suffix — appending one there would be wrong, not just redundant.
+   * applied before being written to `baseUrlVar`, instead of being used verbatim. Only
+   * copilot declares it: its OpenAI-style route is `<base>/v1/chat/completions`, and a
+   * gateway saves the bare root. claude/gemini must NOT get it: Claude Code's own SDK was
+   * confirmed working end-to-end against the RAW `baseUrl`, so appending a suffix there
+   * would be wrong, not just redundant. The per-session config-file recipes do not need
+   * this flag at all: `renderConfigFile()` applies the suffix inside every template
+   * (deepseek's patch included), so no configDir entry carries a raw base URL.
    */
   customModelInjection:
     | {
@@ -757,8 +886,40 @@ export interface CliCapabilities {
         kind: 'configDir';
         dirEnvVar: string;
         fileName: string;
-        template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml';
+        template: 'codex-toml' | 'pi-models-json' | 'omp-models-yml' | 'grok-toml' | 'deepseek-patch-json';
         launchModel?: string;
+        /**
+         * Names of entries under this CLI's REAL home that must be symlinked into the
+         * isolated directory after the generated file is written: the same trick
+         * `linkSharedProjectsDir()` plays for claude's `projects`. Declared for CLIs whose
+         * home carries state that must survive the redirect (deepseek's `sessions` transcript
+         * root and `profiles` bundles, plus `settings.yaml`, which would otherwise stop
+         * applying and, for `sessions`, get deleted by `removeConfigDir` on clear/close).
+         * A CLI that saves a linked file by rename replaces the link: dsh does, so the first
+         * in-session settings write turns `settings.yaml` into a local file.
+         * Never include `fileName` itself: the generated file owns that name in the isolated
+         * directory, and a link there would write THROUGH into the user's real file.
+         * Consumed generically by custom-model-injection-apply.ts.
+         */
+        linkFromRealHome?: string[];
+        /**
+         * Which of `linkFromRealHome` are DIRECTORIES (`sessions`, `profiles`) rather than
+         * files (`settings.yaml`). A missing directory target is created (mode 0700, what
+         * dsh does itself on a first turn) before linking: linking a nonexistent directory
+         * leaves a dangling symlink the CLI's own `mkdir` under it fails on with ENOENT on
+         * EVERY turn. A missing FILE target is skipped instead of linked (dangling-file
+         * links serve no purpose the CLI could not do itself). Must be a subset of
+         * `linkFromRealHome`; entries absent from it are treated as files.
+         * Consumed generically by custom-model-injection-apply.ts.
+         */
+        linkFromRealHomeDirs?: string[];
+        /**
+         * Fallback location of the CLI's real home, relative to the user's home directory
+         * (deepseek's `.dsh`), used only when neither the session's own `dirEnvVar` override
+         * nor the server's environment sets it. Required whenever `linkFromRealHome` is
+         * declared, so no consumer has to hardcode a per-CLI default of its own.
+         */
+        realHomeFallback?: string;
       }
     | { kind: 'unsupported' };
 }

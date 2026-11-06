@@ -17,6 +17,7 @@ type Core = {
     limits: Record<string, number>
   ): { push(chunk: Uint8Array, final: boolean): void };
   buildAdmittedArchive(admission: unknown, zip: typeof fflate): Uint8Array;
+  repairExcelJsModel(model: unknown): unknown;
   excelJsEntryName(name: string): string;
   parseCellRef(ref: string): { row: number; col: number } | null;
   deriveExtent(cells: string[], merges: string[]): { rows: number; cols: number };
@@ -801,5 +802,129 @@ describe('spreadsheet XLSX colour resolution', () => {
     expect(core.resolveCellColors(undefined, undefined)).toEqual({});
     expect(core.resolveCellColors({ indexed: 64 }, { theme: 99 })).toEqual({});
     expect(core.resolveCellColors({ argb: 'bogus' }, { argb: '' })).toEqual({});
+  });
+});
+
+// ExcelJS 4.4.0's parsed model at the moment it reconciles, reduced to the parts
+// repairExcelJsModel reads. `excelShaped()` is what Excel itself writes (and
+// ExcelJS links cleanly); the openpyxl cases below are what made it throw.
+const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/';
+const rel = (Id: string, type: string, Target: string) => ({ Id, Type: REL + type, Target });
+type Model = Record<string, any>;
+
+function excelShaped(): Model {
+  return {
+    worksheets: [
+      {
+        sheetNo: '1',
+        tables: [{ rId: 'rId3' }],
+        drawing: { rId: 'rId4' },
+        hyperlinks: [{ rId: 'rId5', address: 'A1' }, { address: 'B2' }],
+      },
+    ],
+    worksheetRels: {
+      '1': [
+        rel('rId1', 'comments', '../comments1.xml'),
+        rel('rId2', 'vmlDrawing', '../drawings/vmlDrawing1.vml'),
+        rel('rId3', 'table', '../tables/table1.xml'),
+        rel('rId4', 'drawing', '../drawings/drawing1.xml'),
+        rel('rId5', 'hyperlink', 'https://example.com'),
+      ],
+    },
+    comments: { '../comments1.xml': { comments: [{ ref: 'B2' }] } },
+    vmlDrawings: { '../drawings/vmlDrawing1.vml': { comments: [{}] } },
+    tables: { '../tables/table1.xml': { name: 'Sales' } },
+    drawings: { drawing1: { anchors: [] } },
+    drawingRels: { drawing1: [] },
+  };
+}
+
+describe('repairExcelJsModel: links ExcelJS would dereference unchecked', () => {
+  it('leaves a model Excel itself wrote untouched', () => {
+    const model = excelShaped();
+    const before = structuredClone(model);
+    core.repairExcelJsModel(model);
+    expect(model).toEqual(before);
+  });
+
+  it("re-points openpyxl's absolute table Target to the key ExcelJS stored that table under", () => {
+    const model = excelShaped();
+    model.worksheetRels['1'][2].Target = '/xl/tables/table1.xml';
+    core.repairExcelJsModel(model);
+    expect(model.worksheetRels['1'][2].Target).toBe('../tables/table1.xml');
+    expect(model.worksheets[0].tables).toEqual([{ rId: 'rId3' }]);
+  });
+
+  it('drops comment and note links that resolve to nothing (openpyxl names the parts its own way)', () => {
+    const model = excelShaped();
+    model.worksheetRels['1'][0].Target = '/xl/comments/comment1.xml';
+    model.worksheetRels['1'][1].Target = '/xl/drawings/commentsDrawing1.vml';
+    model.comments = {};
+    model.vmlDrawings = {};
+    core.repairExcelJsModel(model);
+    expect(model.worksheetRels['1'].map((r: { Id: string }) => r.Id)).toEqual(['rId3', 'rId4', 'rId5']);
+  });
+
+  it('drops a note link whose VML has no comments list, as ExcelJS would index into it', () => {
+    const model = excelShaped();
+    model.vmlDrawings['../drawings/vmlDrawing1.vml'] = {};
+    core.repairExcelJsModel(model);
+    expect(model.worksheetRels['1'].some((r: { Id: string }) => r.Id === 'rId2')).toBe(false);
+  });
+
+  it('drops a drawing ExcelJS parsed to nothing and unhooks the sheet from it (openpyxl charts)', () => {
+    const model = excelShaped();
+    model.drawings.drawing1 = undefined;
+    model.worksheetRels['1'][3].Target = '/xl/drawings/drawing1.xml';
+    core.repairExcelJsModel(model);
+    expect(model.drawings).toEqual({});
+    expect(model.drawingRels).toEqual({});
+    expect(model.worksheets[0].drawing).toBeUndefined();
+  });
+
+  it('keeps a drawing link whose Target ExcelJS does not try to resolve', () => {
+    const model = excelShaped();
+    model.worksheetRels['1'][3].Target = 'drawing-without-extension';
+    core.repairExcelJsModel(model);
+    expect(model.worksheets[0].drawing).toEqual({ rId: 'rId4' });
+  });
+
+  it('unhooks a tablePart, drawing or hyperlink whose rId names no relationship', () => {
+    const model = excelShaped();
+    model.worksheets[0].tables = [{ rId: 'missing' }, { rId: 'rId5' }];
+    model.worksheets[0].drawing = { rId: 'missing' };
+    model.worksheets[0].hyperlinks = [{ rId: 'missing', address: 'A1' }, { address: 'B2' }];
+    core.repairExcelJsModel(model);
+    expect(model.worksheets[0].tables).toEqual([]);
+    expect(model.worksheets[0].drawing).toBeUndefined();
+    expect(model.worksheets[0].hyperlinks).toEqual([{ address: 'B2' }]);
+  });
+
+  it('drops a table rel whose part ExcelJS never stored, and its tablePart with it', () => {
+    const model = excelShaped();
+    model.worksheetRels['1'][2].Target = '/xl/somewhere/else.xml';
+    model.tables = { '../tables/table1.xml': undefined };
+    core.repairExcelJsModel(model);
+    expect(model.tables).toEqual({});
+    expect(model.worksheetRels['1'].some((r: { Id: string }) => r.Id === 'rId3')).toBe(false);
+    expect(model.worksheets[0].tables).toEqual([]);
+  });
+
+  it('never resolves a Target or rId through Object.prototype', () => {
+    const model = excelShaped();
+    model.worksheetRels['1'][0].Target = '__proto__';
+    model.worksheetRels['1'][2].Target = 'constructor';
+    model.worksheets[0].tables = [{ rId: 'toString' }];
+    model.worksheets[0].hyperlinks = [{ rId: 'hasOwnProperty', address: 'A1' }];
+    core.repairExcelJsModel(model);
+    expect(model.worksheetRels['1'].map((r: { Id: string }) => r.Id)).toEqual(['rId2', 'rId4', 'rId5']);
+    expect(model.worksheets[0].tables).toEqual([]);
+    expect(model.worksheets[0].hyperlinks).toEqual([]);
+  });
+
+  it('tolerates a model with no worksheets, rels or part maps', () => {
+    expect(() => core.repairExcelJsModel({})).not.toThrow();
+    expect(() => core.repairExcelJsModel({ worksheets: [null, { sheetNo: '9' }] })).not.toThrow();
+    expect(core.repairExcelJsModel(null)).toBeNull();
   });
 });

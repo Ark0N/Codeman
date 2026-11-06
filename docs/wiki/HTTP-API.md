@@ -72,7 +72,7 @@ Roughly 235 handlers across 26 route modules. By domain:
 | ------------------- | -------- | --------------------------------------------------- |
 | System              | 56       | Status, settings, digest, updates, tunnel.           |
 | Sessions            | 34       | Create, input, terminal, wait, last response, kill.  |
-| Cases               | 34       | Create, link, clone, remote and docker cases.        |
+| Cases               | 39       | Create, link, clone, worktrees, remote and docker cases. |
 | Files               | 17       | Preview, edit, raw, attachments, path picker.        |
 | Orchestrator        | 10       | Plans and phases.                                     |
 | Ralph               | 9        | Loop control and configuration.                       |
@@ -142,9 +142,10 @@ Three semantics that break callers who assume otherwise:
 `wait-output` matches a **literal substring, never a regex.** That is deliberate: no regex
 means no catastrophic backtracking on attacker-influenced output.
 
-Only `claude` and `deepseek` sessions emit `stop` and `blocked`: Claude's come from Claude
-Code hooks, DeepSeek's from the harness reporting its state to Codeman. Shell and the other
-external CLI sessions accept `idle`, `working`, and `exit`.
+Only `claude` and `deepseek` sessions emit `stop`: Claude's come from Claude Code hooks,
+DeepSeek's from the harness reporting its state to Codeman. `blocked` fires for those two
+and for `codex`, whose approval, question and trust dialogs Codeman reads off the screen.
+Shell and the other external CLI sessions accept `idle`, `working`, and `exit`.
 
 ## SSE
 
@@ -172,6 +173,10 @@ curl -s "$API/api/subagents" | jq                  # background agents
 curl -s "$API/api/search?q=deploy" | jq            # cross-session search
 curl -s "$API/api/mcp-sync" | jq                    # preview MCP server sync (opt-in: 403 until mcpSyncEnabled is on)
 curl -s -X POST "$API/api/mcp-sync" | jq             # apply it: add missing servers to each CLI config, never edit/remove
+curl -s "$API/api/config-backups" | jq              # config snapshots: folder, retention, list (admin only in multi-user mode)
+curl -s -X POST "$API/api/config-backups" | jq      # back up the customized config files now
+curl -s -X POST "$API/api/config-backups/cfg-20261011-120000/restore" | jq   # put a snapshot back (after a pre-restore copy)
+curl -s "$API/api/config-backups/diff?from=cfg-20261011-120000" | jq   # what differs from the running config (`to=` another snapshot id to compare two)
 
 # with ID set to a session id:
 curl -s "$API/api/sessions/$ID/last-response" | jq -r '.data.text'   # last answer, from the transcript (claude, codex, deepseek)
@@ -184,7 +189,7 @@ curl -s -X POST "$API/api/sessions/$ID/custom-model" -H 'Content-Type: applicati
 
 | Limit                 | Default                                    |
 | --------------------- | ------------------------------------------ |
-| Max sessions          | 50                                          |
+| Max sessions          | 50 (`CODEMAN_MAX_SESSIONS`)                 |
 | Max agent windows     | 500                                         |
 | Max SSE clients       | 100                                         |
 | Terminal buffer       | 32 MB per session                           |

@@ -23,14 +23,18 @@ stores, or refreshes your credentials.
 
 ### Which agent CLIs does it support?
 
-Claude Code, OpenCode, Codex, Gemini, Antigravity, Pi, Grok Build, DeepSeek Harness and
-OMP, plus a plain shell, chosen per session. Claude is the reference mode and a few features
+Claude Code, OpenCode, Codex, Gemini, Antigravity, Pi, Grok Build, DeepSeek Harness,
+OMP and GitHub Copilot CLI, plus a plain shell, chosen per session. Claude is the reference mode and a few features
 are Claude-only; [Agent CLIs](Agent-CLIs) has the table.
 
 ### Does Codeman send my code or prompts anywhere?
 
-No. There is no telemetry, no analytics, and no phone-home. The only network traffic
-Codeman itself makes is between your browser and your server.
+No. There is no telemetry, no analytics, and no phone-home. Beyond the traffic between
+your browser and your server, the server makes a few requests of its own for features you use
+(the Codex usage poll, web push, webhooks). One is on by default: while GitHub Copilot CLI is
+installed and signed in, every 10 minutes the server asks `api.github.com` for your own
+premium-request quota with Copilot's own token. Turn off Plan Usage Limits in App Settings to
+stop it (see [Agent CLIs](Agent-CLIs)).
 
 Your agent CLI is a separate matter: Claude Code talks to Anthropic, Codex talks to OpenAI,
 and so on. That traffic is the CLI's, on your own account, exactly as it would be in a
@@ -207,10 +211,13 @@ cover them properly.
 ### Can agents start and supervise other agents?
 
 Yes. Codeman ships an agent skill that lets an agent inside a session drive the HTTP API:
-list sessions, spawn workers, send prompts, and block until a worker's turn finishes. It is
-off by default and enabled per case.
+list sessions, spawn workers in any installed CLI, send prompts, and block until a worker's
+turn finishes. Install it once with `codeman skill install` or the Claude Code plugin, then
+ask in plain English, for example *"use codeman to start 5 claude workers, one per TODO
+item"*. The web UI setting that injects it into every new session's case is off by default.
 
-See [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent).
+See [The Codeman Skill](Codeman-Skill), with recordings of real runs, and
+[Driving Codeman From An Agent](Driving-Codeman-From-An-Agent) for the other routes.
 
 ### Can I run a case in a container?
 

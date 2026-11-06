@@ -26,6 +26,7 @@ function loadTerminalUiHarness() {
     performance: { now: () => now },
     requestAnimationFrame: (_fn: () => void) => 1,
     setTimeout: (_fn: () => void) => 1,
+    clearTimeout: vi.fn(),
     Blob: function Blob() {},
     URL: {
       createObjectURL: () => 'blob:yield',
@@ -43,6 +44,7 @@ function loadTerminalUiHarness() {
       },
     },
     DEC_SYNC_STRIP_RE: /\x1b\[\?2026[hl]/g,
+    OSC52_STRIP_RE: /\x1b\]52;[^\x07\x1b]*(?:\x07|\x1b\\)/g,
     TERMINAL_CHUNK_SIZE: 32 * 1024,
   });
 
@@ -736,17 +738,17 @@ describe('terminal touch tap mouse guard', () => {
     app.terminal = { rows: 40 };
 
     // DOM_DELTA_PIXEL (Chrome/WebKit, and every trackpad): ~110px per notch.
-    expect(app._wheelScrollLines({ deltaY: 110, deltaX: 0, deltaMode: 0, shiftKey: false })).toBe(4);
+    expect(app._wheelScrollLinesFloat({ deltaY: 110, deltaX: 0, deltaMode: 0, shiftKey: false })).toBe(4.4);
     // DOM_DELTA_LINE (Firefox mouse wheel): deltaY is already lines. Read as
     // pixels this rounded to 0 and fell through to the ±1 fallback.
-    expect(app._wheelScrollLines({ deltaY: 3, deltaX: 0, deltaMode: 1, shiftKey: false })).toBe(3);
-    expect(app._wheelScrollLines({ deltaY: -3, deltaX: 0, deltaMode: 1, shiftKey: false })).toBe(-3);
+    expect(app._wheelScrollLinesFloat({ deltaY: 3, deltaX: 0, deltaMode: 1, shiftKey: false })).toBe(3);
+    expect(app._wheelScrollLinesFloat({ deltaY: -3, deltaX: 0, deltaMode: 1, shiftKey: false })).toBe(-3);
     // DOM_DELTA_PAGE: one page is one screenful.
-    expect(app._wheelScrollLines({ deltaY: 1, deltaX: 0, deltaMode: 2, shiftKey: false })).toBe(40);
+    expect(app._wheelScrollLinesFloat({ deltaY: 1, deltaX: 0, deltaMode: 2, shiftKey: false })).toBe(40);
     // A pure horizontal swipe must not fall through to a phantom -1.
-    expect(app._wheelScrollLines({ deltaY: 0, deltaX: 90, deltaMode: 0, shiftKey: false })).toBe(0);
+    expect(app._wheelScrollLinesFloat({ deltaY: 0, deltaX: 90, deltaMode: 0, shiftKey: false })).toBe(0);
     // Shift + macOS trackpad reports the magnitude on deltaX (issue #154).
-    expect(app._wheelScrollLines({ deltaY: 0, deltaX: -100, deltaMode: 0, shiftKey: true })).toBe(-4);
+    expect(app._wheelScrollLinesFloat({ deltaY: 0, deltaX: -100, deltaMode: 0, shiftKey: true })).toBe(-4);
   });
 
   it('wheel: gates claude forwarding on CLI version 2.1.187+ (unknown or older stays local)', () => {
@@ -788,7 +790,7 @@ describe('terminal touch tap mouse guard', () => {
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
   });
 
-  it('wheel: only claude forwards — codex and gemini keep the local wheel', () => {
+  it('wheel: tracked fullscreen Codex forwards; inline Codex and Gemini do not', () => {
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
     app.terminal = {
@@ -802,10 +804,10 @@ describe('terminal touch tap mouse guard', () => {
     // (the codex transcript lives there — inline viewport, no in-app pager) sat unused.
     app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
-    // Tracking on and a high version, so only the mode check can say no: without
-    // them the gate is false for claude too and this would pin nothing.
-    app.sessions = new Map([['sess-1', { mode: 'codex', cliVersion: '9.9.9', cliMouseTracking: true }]]); // no version rescues it
-    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+    // Current fullscreen Codex requests tracking and supports native row scrolling.
+    // Its version is not published as Claude-specific cliInfo; observed tracking gates it.
+    app.sessions = new Map([['sess-1', { mode: 'codex', cliMouseTracking: true }]]);
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
 
     app.sessions = new Map([['sess-1', { mode: 'gemini', cliVersion: '9.9.9', cliMouseTracking: true }]]); // unverified TUI
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
@@ -836,22 +838,22 @@ describe('terminal touch tap mouse guard', () => {
     const { app } = loadTerminalUiHarness();
 
     // Plain vertical wheel: unchanged, driven by deltaY.
-    expect(app._wheelScrollLines({ shiftKey: false, deltaX: 0, deltaY: 100 })).toBe(4);
-    expect(app._wheelScrollLines({ shiftKey: false, deltaX: 0, deltaY: -50 })).toBe(-2);
+    expect(app._wheelScrollLinesFloat({ shiftKey: false, deltaX: 0, deltaY: 100 })).toBe(4);
+    expect(app._wheelScrollLinesFloat({ shiftKey: false, deltaX: 0, deltaY: -50 })).toBe(-2);
 
     // Shift on a macOS trackpad: deltaY≈0, deltaX carries direction+magnitude.
     // Old code collapsed this to a fixed -1; now it tracks the horizontal delta.
-    expect(app._wheelScrollLines({ shiftKey: true, deltaX: -100, deltaY: 0 })).toBe(-4); // scroll up
-    expect(app._wheelScrollLines({ shiftKey: true, deltaX: 75, deltaY: 0 })).toBe(3); // scroll down
+    expect(app._wheelScrollLinesFloat({ shiftKey: true, deltaX: -100, deltaY: 0 })).toBe(-4); // scroll up
+    expect(app._wheelScrollLinesFloat({ shiftKey: true, deltaX: 75, deltaY: 0 })).toBe(3); // scroll down
 
     // Shift with a real vertical wheel (mouse): deltaY dominates, deltaX ignored.
-    expect(app._wheelScrollLines({ shiftKey: true, deltaX: 2, deltaY: 100 })).toBe(4);
+    expect(app._wheelScrollLinesFloat({ shiftKey: true, deltaX: 2, deltaY: 100 })).toBe(4);
 
-    // Sub-25px delta still nudges one line in the gesture's direction.
-    expect(app._wheelScrollLines({ shiftKey: true, deltaX: -5, deltaY: 0 })).toBe(-1);
+    // Sub-25px deltas retain their fractional travel.
+    expect(app._wheelScrollLinesFloat({ shiftKey: true, deltaX: -5, deltaY: 0 })).toBe(-0.2);
   });
 
-  it('wheel: encodes SGR 64/65 ticks, caps per event, and coalesces into one flush', () => {
+  it('wheel: encodes SGR 64/65 ticks, caps per event, and sends the first report before batching the rest', () => {
     const { app } = loadTerminalUiHarness();
     const sent: Array<{ id: string; data: string }> = [];
     app.activeSessionId = 'sess-1';
@@ -870,13 +872,16 @@ describe('terminal touch tap mouse guard', () => {
 
     app._sendSyntheticSgrWheel(50, 50, -2); // 2 ticks up
     app._sendSyntheticSgrWheel(50, 50, 9); // capped at 5 ticks down
-    expect(sent).toEqual([]); // nothing until the flush timer fires
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[<64;7;4M'.repeat(2) }]); // leading report is immediate
 
     app._flushWheelSgrQueue();
-    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[<64;7;4M'.repeat(2) + '\x1b[<65;7;4M'.repeat(5) }]);
+    expect(sent).toEqual([
+      { id: 'sess-1', data: '\x1b[<64;7;4M'.repeat(2) },
+      { id: 'sess-1', data: '\x1b[<65;7;4M'.repeat(5) },
+    ]);
 
     app._flushWheelSgrQueue(); // queue drained — no duplicate send
-    expect(sent).toHaveLength(1);
+    expect(sent).toHaveLength(2);
   });
 
   it('forwarded scrolls (wheel AND touch) snap the viewport home first, then encode SGR ticks', () => {
@@ -1017,6 +1022,48 @@ describe('terminal link tap', () => {
     expect(app.openLogViewerWindow).toHaveBeenCalledWith('/var/log/app.log', 'sess-1');
   });
 
+  it('opens a tapped markdown or HTML path in the preview, and other text in the log viewer', () => {
+    // In-workspace paths (_isExternalPreviewPath is false here): markdown renders as a
+    // document and HTML as a page in the preview; other text keeps the live tail.
+    for (const path of ['/home/u/ws/notes.md', '/home/u/ws/README.markdown', '/home/u/ws/report/index.html']) {
+      const line = `wrote ${path} just now`;
+      const { app } = linkHarness([line, '', '❯ ']);
+      expect(app._handleMobileTerminalTap(at(line.indexOf('/home')), false, 'content'), path).toBe('link');
+      expect(app.openFilePreview, path).toHaveBeenCalledWith(path, 'sess-1');
+      expect(app.openLogViewerWindow, path).not.toHaveBeenCalled();
+    }
+    for (const path of ['/home/u/ws/run.log', '/home/u/ws/notes.txt', '/home/u/ws/data.json']) {
+      const line = `wrote ${path} just now`;
+      const { app } = linkHarness([line, '', '❯ ']);
+      expect(app._handleMobileTerminalTap(at(line.indexOf('/home')), false, 'content'), path).toBe('link');
+      expect(app.openLogViewerWindow, path).toHaveBeenCalledWith(path, 'sess-1');
+      expect(app.openFilePreview, path).not.toHaveBeenCalled();
+    }
+  });
+
+  it("routes a path clicked in a tile or split pane the same way, against that pane's session", () => {
+    // TerminalTile registers the SAME provider with its own terminal and session
+    // (terminal-tile.js), so a grid tile and the split's Pane B route like the main pane.
+    const { app } = linkHarness(['', '', '❯ ']);
+    const tileTerminal = createTerminalGrid(['see /home/u/ws/notes.md and /home/u/ws/run.log', '', '❯ '], 2);
+    let provider: any;
+    tileTerminal.registerLinkProvider = vi.fn((p: unknown) => {
+      provider = p;
+    });
+    app.registerFilePathLinkProvider({ terminal: tileTerminal, getSessionId: () => 'tile-2', setHovered: vi.fn() });
+
+    let links: any[] = [];
+    provider.provideLinks(1, (found: any[]) => {
+      links = found || [];
+    });
+    const byText = (text: string) => links.find((l) => l.text === text);
+    byText('/home/u/ws/notes.md').activate({}, '/home/u/ws/notes.md');
+    byText('/home/u/ws/run.log').activate({}, '/home/u/ws/run.log');
+
+    expect(app.openFilePreview).toHaveBeenCalledWith('/home/u/ws/notes.md', 'tile-2');
+    expect(app.openLogViewerWindow).toHaveBeenCalledWith('/home/u/ws/run.log', 'tile-2');
+  });
+
   it('activates a link in scrollback, where the tap sends no report at all', () => {
     // A scrolled-up tap deliberately reports nothing (it would land on whatever row now
     // occupies the cell), but reading old output and tapping a URL in it is the common case.
@@ -1051,6 +1098,63 @@ describe('terminal link tap', () => {
     expect(app._handleMobileTerminalTap(at(composer.indexOf('https'), 2), true, 'input')).toBe('input');
     expect(windowRef.open).not.toHaveBeenCalled();
     expect(sent).toHaveLength(1); // the tap still positions the caret via the mouse report
+  });
+
+  it('finds the caret line from the absolute cursor row while the viewport is parked above the bottom', () => {
+    // A tab switch parks the viewport above baseY when the frame keeps trailing blank
+    // rows (scrollToLastNonEmptyLine). cursorY is baseY-relative, so read as a screen
+    // row it points 2 rows too high here: at the history URL, not the composer.
+    const history = 'docs at https://example.com/guide';
+    const composer = '❯ summarize https://example.com/typed for me';
+    const lines = ['', '', '', 'older', 'old', history, 'more', composer, '', ''];
+    const { app, windowRef } = linkHarness(lines);
+    Object.assign(app.terminal, { rows: 4 });
+    Object.assign(app.terminal.buffer.active, { baseY: 6, viewportY: 4, cursorY: 1 });
+
+    // Screen row 3 is absolute line 7, the composer: the typed URL stays editable.
+    expect(app._handleMobileTerminalTap(at(composer.indexOf('https'), 3), true, 'history')).toBe('history');
+    expect(windowRef.open).not.toHaveBeenCalled();
+
+    // Screen row 1 is absolute line 5, scrollback: its URL opens.
+    expect(app._handleMobileTerminalTap(at(history.indexOf('https'), 1), true, 'history')).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledWith('https://example.com/guide', '_blank', 'noopener,noreferrer');
+  });
+
+  it('walks a soft-wrapped composer through absolute lines while the viewport is parked', () => {
+    // The composer spans absolute lines 2-3 (3 is its soft-wrapped tail, where the caret
+    // sits); the viewport is parked one row above the bottom, so screen row 1 is the
+    // composer's FIRST row and screen row 0 is scrollback.
+    const history = 'docs at https://example.com/guide';
+    const composer = '❯ summarize https://example.com/typed';
+    const lines = ['older', history, composer, ' for me', '', ''];
+    const { app, windowRef } = linkHarness(lines);
+    Object.assign(app.terminal, { rows: 3 });
+    Object.assign(app.terminal.buffer.active, { baseY: 3, viewportY: 1, cursorY: 0 });
+    const getLine = app.terminal.buffer.active.getLine;
+    app.terminal.buffer.active.getLine = (row: number) => {
+      const line = getLine(row);
+      return line && row === 3 ? { ...line, isWrapped: true } : line;
+    };
+
+    // The composer's first row is on the caret's logical line: its typed URL stays editable.
+    expect(app._handleMobileTerminalTap(at(composer.indexOf('https'), 1), true, 'history')).toBe('history');
+    expect(windowRef.open).not.toHaveBeenCalled();
+    // Screen row 0 is absolute line 1, scrollback: its URL opens.
+    expect(app._handleMobileTerminalTap(at(history.indexOf('https'), 0), true, 'history')).toBe('link');
+    expect(windowRef.open).toHaveBeenCalledWith('https://example.com/guide', '_blank', 'noopener,noreferrer');
+  });
+
+  it('stops the caret-line wrap walk at the buffer end even when every row is wrapped', () => {
+    // xterm's getLine indexes its circular list modulo capacity, so past the last row it
+    // returns earlier rows again; with all of them soft-wrapped an unbounded walk never ends.
+    const { app } = linkHarness(['❯ a', 'b', 'c'], 2);
+    let reads = 0;
+    app.terminal.buffer.active.getLine = (row: number) => {
+      if (++reads > 1000) throw new Error('wrap walk did not stop');
+      return { isWrapped: true, translateToString: () => ['❯ a', 'b', 'c'][((row % 3) + 3) % 3] };
+    };
+
+    expect(app._tapIsOnCaretLine(at(0, 2).clientX, at(0, 2).clientY)).toBe(true);
   });
 
   it('activates a link in a plain shell session, where every tap classifies as input', () => {

@@ -182,7 +182,8 @@ describe('selectSession acknowledgement gate', () => {
       // Alt+1..9 and Alt+[/] are a human asking for that tab, so they keep
       // acknowledging; only app-chosen selections are tagged.
       expect(APP_SOURCE).toContain('this.selectSession(live[idx]);');
-      expect(APP_SOURCE).toContain('this.selectSession(this.sessionOrder[nextIndex]);');
+      // Swipes walk the drawn order (`order` is sessionOrder or the strip's), same call.
+      expect(APP_SOURCE).toContain('this.selectSession(order[nextIndex]);');
     });
   });
 });

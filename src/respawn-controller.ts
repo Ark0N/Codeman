@@ -49,7 +49,13 @@ import { Session } from './session.js';
 import { AiIdleChecker, type AiCheckState } from './ai-idle-checker.js';
 import { AiPlanChecker } from './ai-plan-checker.js';
 import type { TeamWatcher } from './team-watcher.js';
-import { BufferAccumulator, ANSI_ESCAPE_PATTERN_SIMPLE, assertNever, CleanupManager } from './utils/index.js';
+import {
+  BufferAccumulator,
+  ANSI_ESCAPE_PATTERN_SIMPLE,
+  assertNever,
+  CleanupManager,
+  toSingleLine,
+} from './utils/index.js';
 import { MAX_RESPAWN_BUFFER_SIZE, TRIM_RESPAWN_BUFFER_TO as RESPAWN_BUFFER_TRIM_SIZE } from './config/buffer-limits.js';
 import {
   isCompletionMessage,
@@ -1621,7 +1627,7 @@ export class RespawnController extends EventEmitter {
       this.config.interStepDelayMs,
       async () => {
         if (this._state === 'stopped') return;
-        const prompt = this.config.kickstartPrompt!;
+        const prompt = toSingleLine(this.config.kickstartPrompt!);
         this.logAction('command', `Sending kickstart: "${prompt.substring(0, 40)}..."`);
         await this.session.writeViaMux(prompt + '\r'); // \r triggers key.return in Ink/Claude CLI
         // COD-51: stop() may have run during the await; re-check before reviving the
@@ -2826,12 +2832,13 @@ export class RespawnController extends EventEmitter {
 
         // Use RALPH_STATUS RECOMMENDATION if available, otherwise fall back to config
         const statusBlock = this.session.ralphTracker?.lastStatusBlock;
-        let updatePrompt = this.config.updatePrompt;
+        let updatePrompt = toSingleLine(this.config.updatePrompt);
 
         if (statusBlock?.recommendation) {
-          // Append RECOMMENDATION to the update prompt (single-line — writeViaMux breaks on newlines)
+          // Append RECOMMENDATION to the update prompt, on the same single line
+          // (see toSingleLine)
           const rec = statusBlock.recommendation.replace(/\n/g, ' ').substring(0, 200);
-          updatePrompt = `${this.config.updatePrompt} (Claude's last recommendation: ${rec})`;
+          updatePrompt = `${updatePrompt} (Claude's last recommendation: ${rec})`;
           this.logAction('ralph', `Using RECOMMENDATION: ${rec.substring(0, 50)}...`);
         }
 

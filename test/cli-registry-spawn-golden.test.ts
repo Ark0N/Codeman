@@ -102,6 +102,30 @@ describe('claude', () => {
       'claude --dangerously-skip-permissions --session-id "0f9c2b14-1111-2222-3333-444455556666"'
     );
   });
+
+  it('folds the keep-warm idleCompaction opt-out LAST into the one --settings JSON, and only when asked', () => {
+    const launch = {
+      claudeCliVersion: '2.1.300',
+      statusLineCommand: '/x/exporter.sh',
+      advisorModel: 'opus',
+      sessionName: 'w1 alpha',
+    };
+    // Keep-warm off: byte-identical to the launch from before keep-warm existed.
+    expect(claude(launch)).toBe(
+      'claude --dangerously-skip-permissions --session-id "0f9c2b14-1111-2222-3333-444455556666" ' +
+        '--settings \'{"advisorModel":"opus","statusLine":{"type":"command","command":"/x/exporter.sh"}}\' --name "w1 alpha"'
+    );
+    expect(claude({ ...launch, effort: 'ultracode', idleCompactionOff: true })).toBe(
+      'claude --dangerously-skip-permissions --session-id "0f9c2b14-1111-2222-3333-444455556666" ' +
+        '--settings \'{"ultracode":true,"advisorModel":"opus","statusLine":{"type":"command","command":"/x/exporter.sh"},"idleCompaction":false}\' --name "w1 alpha"'
+    );
+    // The builder folds the key whenever asked, even with nothing else in the JSON (the
+    // launch only asks alongside the exporter, but the builder does not rely on that).
+    expect(claude({ idleCompactionOff: true })).toBe(
+      'claude --dangerously-skip-permissions --session-id "0f9c2b14-1111-2222-3333-444455556666" ' +
+        '--settings \'{"idleCompaction":false}\''
+    );
+  });
 });
 
 describe('opencode', () => {
@@ -145,6 +169,15 @@ describe('codex', () => {
 
   it('resumes with a POSITIONAL subcommand, not a flag', () => {
     expect(cx({ model: 'gpt-5', resumeSessionId: 'roll_42' })).toBe('codex --model gpt-5 resume roll_42');
+  });
+
+  it('carries an Ollama-style `qwen3:32b` model id, and still drops a leading-flag shape', () => {
+    // `model-plain-colon`: the custom-model feature forces the selected id onto this param,
+    // and ids like `qwen3:32b` carry a colon. The leading-alphanumeric rule is what keeps a
+    // flag from riding the flag, so `:x` and `-x` must still drop out.
+    expect(cx({ model: 'qwen3:32b' })).toBe('codex --model qwen3:32b');
+    expect(cx({ model: ':leading' })).toBe('codex');
+    expect(cx({ model: '-yolo' })).toBe('codex');
   });
 
   it('sends reasoning effort as one model_reasoning_effort config value, for every level', () => {
@@ -318,5 +351,74 @@ describe('unsafe values are DROPPED, never escaped into the command', () => {
     const cmd = render({ mode: 'deepseek', sessionId: SID, deepSeekConfig: { profile: '../evil' } }) ?? '';
     expect(cmd).not.toContain('evil');
     expect(cmd).not.toContain('..');
+  });
+});
+
+describe('copilot', () => {
+  const cp = (copilotConfig?: SpawnBridgeOptions['copilotConfig']) =>
+    render({ mode: 'copilot' as never, sessionId: SID, copilotConfig });
+
+  it("spawns bare by default, in Copilot's own Manual Approval mode", () => {
+    expect(cp()).toBe('copilot');
+  });
+
+  it('emits --yolo only when asked, with the model', () => {
+    expect(cp({ allowAll: true, model: 'claude-sonnet-5.5' })).toBe('copilot --yolo --model claude-sonnet-5.5');
+    expect(cp({ allowAll: false })).toBe('copilot');
+  });
+
+  it("pins the tab's name as --name", () => {
+    expect(render({ mode: 'copilot' as never, sessionId: SID, sessionName: 'w4-Codeman' } as never)).toBe(
+      'copilot --name "w4-Codeman"'
+    );
+  });
+
+  it('drops --name next to --resume and --continue, which copilot refuses to combine', () => {
+    const named = (copilotConfig: SpawnBridgeOptions['copilotConfig']) =>
+      render({ mode: 'copilot' as never, sessionId: SID, sessionName: 'w4-Codeman', copilotConfig } as never);
+    expect(named({ resumeSessionId: '0c02c30f' })).toBe('copilot --resume 0c02c30f');
+    expect(named({ continueSession: true })).toBe('copilot --continue');
+    expect(named({ allowAll: true, model: 'auto' })).toBe('copilot --yolo --name "w4-Codeman" --model auto');
+  });
+
+  it('prefers an explicit resume id over --continue', () => {
+    expect(cp({ resumeSessionId: '0c02c30f-3383-4139-8b52-b28abad2ad43' })).toBe(
+      'copilot --resume 0c02c30f-3383-4139-8b52-b28abad2ad43'
+    );
+    expect(cp({ continueSession: true })).toBe('copilot --continue');
+    expect(cp({ continueSession: true, resumeSessionId: '0c02c30f' })).toBe('copilot --resume 0c02c30f');
+  });
+
+  it('drops unsafe values rather than escaping them', () => {
+    expect(cp({ model: 'a`b' })).toBe('copilot');
+    expect(cp({ resumeSessionId: 'my session; rm -rf /' })).toBe('copilot');
+  });
+
+  // `--resume`'s value is optional, so `--resume --yolo` would make `--yolo` its own flag and get
+  // around the allowAll clamp. A resume value must start with an alphanumeric.
+  it('drops a resume value that would be read as a flag', () => {
+    for (const resumeSessionId of ['--yolo', '-n', '--allow-all-tools', '.', '..', '.hidden']) {
+      expect(cp({ resumeSessionId })).toBe('copilot');
+    }
+    expect(cp({ allowAll: false, resumeSessionId: '--yolo' })).toBe('copilot');
+    // A plain word is still passed through (a session NAME also resumes).
+    expect(cp({ resumeSessionId: 'my-feature' })).toBe('copilot --resume my-feature');
+  });
+
+  // `--model --yolo` would make `--yolo` its own flag and get around the allowAll clamp, so a model id
+  // starts with an alphanumeric too. A provider/id value (the `/`) is still accepted.
+  it('drops a model value that would be read as a flag', () => {
+    for (const model of ['--yolo', '-n', '--allow-all-tools', '.', '/etc/passwd']) {
+      expect(cp({ model })).toBe('copilot');
+      expect(cp({ allowAll: false, model })).toBe('copilot');
+    }
+    expect(cp({ model: 'claude-sonnet-5.5' })).toBe('copilot --model claude-sonnet-5.5');
+    expect(cp({ model: 'openai/gpt-5' })).toBe('copilot --model openai/gpt-5');
+  });
+
+  it('never puts a credential on the command line', () => {
+    const cmd = cp({ allowAll: true, model: 'auto' }) ?? '';
+    expect(cmd).not.toContain('token');
+    expect(cmd).not.toContain('key');
   });
 });

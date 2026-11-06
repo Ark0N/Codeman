@@ -27,6 +27,7 @@ export { MAX_SESSION_TOKENS } from './token-validation.js';
 export { isSafePushEndpoint } from './push-endpoint-validation.js';
 export { stringSimilarity, fuzzyPhraseMatch, todoContentHash } from './string-similarity.js';
 export { assertNever } from './type-safety.js';
+export { toSingleLine } from './single-line.js';
 export { wrapWithNice } from './nice-wrapper.js';
 export { resolveLocalShell, loginShellArgs } from './shell-resolver.js';
 export {
@@ -69,6 +70,13 @@ export type { DeepSeekProfile, DeepSeekProfileKind } from './deepseek-cli-resolv
 export { compileFileQuery, matchFileQuery } from './file-query.js';
 export type { FileQueryMatcher } from './file-query.js';
 export { resolveOmpDir, isOmpAvailable, getOmpNotFoundMessage, getOmpCliVersion } from './omp-cli-resolver.js';
+export {
+  resolveCopilotDir,
+  isCopilotAvailable,
+  getCopilotNotFoundMessage,
+  getCopilotCliVersion,
+} from './copilot-cli-resolver.js';
+export { readCopilotPlanUsage, resolveCopilotToken } from './copilot-plan-usage.js';
 export {
   boundedPathExists,
   describeUnknownPath,

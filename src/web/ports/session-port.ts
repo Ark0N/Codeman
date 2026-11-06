@@ -5,11 +5,30 @@
 
 import type { Session } from '../../session.js';
 import type { SessionState } from '../../types.js';
+import type { TabLayout } from '../../tab-layout.js';
+import type { SessionPlacementHint } from '../../tab-layout-service.js';
 
 export interface SessionPort {
   readonly sessions: ReadonlyMap<string, Session>;
-  addSession(session: Session): Promise<void>;
+  /**
+   * The last-response reader (the body of `GET /api/sessions/:id/last-response`), filled in when the
+   * session routes register, so other server code reads the same per-CLI transcript the viewer does.
+   */
+  lastResponseFor?: (session: Session, context?: string) => Promise<{ text: string; timestamp?: string }>;
+  /**
+   * Register a created session with the owner's tab layout. `placement.tabGroupId`
+   * puts it at the end of that group in the same layout write (ignored when the
+   * group is not in the owner's layout); without one (and without a parent that
+   * places it), `placement.caseName`'s default session group does the same.
+   * Resolves to the committed layout.
+   */
+  addSession(session: Session, placement?: SessionPlacementHint): Promise<TabLayout>;
   cleanupSession(sessionId: string, killMux?: boolean, reason?: string): Promise<void>;
+  /**
+   * Delete a session's stored edit history once its record is gone. `cleanupSession` does it
+   * itself; this is for removing a record without a live session (DELETE route).
+   */
+  forgetEditHistory(sessionId: string): void;
   setupSessionListeners(session: Session): Promise<void>;
   persistSessionState(session: Session): void;
   persistSessionStateNow(session: Session): void;

@@ -6,6 +6,7 @@ import {
   detachSessionListeners,
 } from '../src/web/session-listener-wiring.js';
 import { SseEvent } from '../src/web/sse-events.js';
+import { approvalInbox } from '../src/web/approval-inbox.js';
 
 describe('session listener wiring', () => {
   it('forwards the attachment request source through registerAttachment', async () => {
@@ -60,6 +61,37 @@ describe('session listener wiring', () => {
     expect(persistSessionState).toHaveBeenCalledWith(session);
     detachSessionListeners(session, refs);
     expect(session.listenerCount('displayModelChanged')).toBe(0);
+  });
+
+  /**
+   * A working transition resolves a pending idle item (input arrived), except during Codeman's
+   * own keep-alive turn: only a human spends an idle alert. Both transitions of that turn are
+   * flagged `keepAlive`, which is what keeps the page's stuck-detection timer out of it.
+   */
+  it.each([
+    { keepAlive: false, resolved: true },
+    { keepAlive: true, resolved: false },
+  ])('working and idle with keepAlive=$keepAlive', ({ keepAlive, resolved }) => {
+    const session = new Session({ id: `wiring-keepalive-${keepAlive}`, workingDir: '/tmp', mode: 'claude' });
+    const broadcast = vi.fn();
+    const deps = {
+      broadcast,
+      broadcastSessionStateDebounced: vi.fn(),
+      getRunSummaryTracker: vi.fn(() => undefined),
+    } as unknown as Parameters<typeof createSessionListeners>[1];
+    const refs = createSessionListeners(session, deps);
+    approvalInbox.notePrompt({ sessionId: session.id, sessionName: 'w1', kind: 'idle' });
+    if (keepAlive) session.beginKeepAliveTurn(60_000);
+
+    refs.working();
+    refs.idle();
+
+    const pending = approvalInbox.getForSession(session.id);
+    approvalInbox.resolveForSession(session.id, 'dismissed');
+    expect(pending === undefined).toBe(resolved);
+    const flag = keepAlive ? { keepAlive: true } : {};
+    expect(broadcast).toHaveBeenCalledWith(SseEvent.SessionWorking, { id: session.id, ...flag });
+    expect(broadcast).toHaveBeenCalledWith(SseEvent.SessionIdle, { id: session.id, ...flag });
   });
 
   /** The listener reads the setting asynchronously; let its promise chain settle. */

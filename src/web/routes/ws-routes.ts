@@ -29,6 +29,11 @@
  *     {"t":"i","d":"...","seq":N,"cid":"..."} — input (keystroke or paste). seq+cid are
  *                          optional reliable-delivery tags: the server applies each
  *                          (cid,seq) at-most-once and ACKs with {"t":"ia","seq":N}.
+ *                          A frame that arrives while a guarded submit holds the
+ *                          session's input lease is held, then applied and ACKed in
+ *                          arrival order once it is released; when that hold queue
+ *                          is full the socket is closed with 1013 and nothing later
+ *                          from it is applied, so the client resends in order.
  *     {"t":"z","c":N,"r":N,"f":bool} — resize terminal (f=true forces SIGWINCH even if dims unchanged)
  */
 
@@ -169,12 +174,69 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
       const sizingToken = Symbol('ws-desktop-sizing');
       let holdsDesktopClaim = false;
 
+      // Set once an input frame could not be held behind a guarded submit's lease
+      // (the hold queue was full). Nothing later from this socket is applied: it is
+      // closed, and the browser reconnects and resends everything unACKed, in order.
+      let inputStalled = false;
+
+      // Apply one input frame and ACK it. Runs inline, or later and in arrival order
+      // when a guarded submit held the input lease as the frame arrived.
+      const applyInputFrame = (msg: { d: string; seq?: unknown; cid?: unknown }) => {
+        // Reliable delivery: when the frame carries a clientId + seq, apply it
+        // exactly once (skip a duplicate redelivery) but ACK it regardless so
+        // the client can drop it from its durable queue. Frames without seq
+        // (legacy/other tools) are applied as-is — no behavior change.
+        const cid = typeof msg.cid === 'string' ? msg.cid : null;
+        const seq = Number.isInteger(msg.seq) ? (msg.seq as number) : null;
+        const apply = cid && seq !== null ? session.shouldApplyInput(cid, seq) : true;
+        let delivered = true;
+        if (apply) {
+          // Typed input from a claim-holding desktop keeps the claim "hot"
+          // and re-asserts the desktop layout after a mobile override.
+          if (holdsDesktopClaim) session.noteDesktopActivity();
+          // Browser keystrokes are the user's own, so they may name the tab.
+          delivered = session.write(msg.d, { fromUser: true });
+          // A session whose PTY is gone swallows the write. ACKing anyway told
+          // the client to drop the frame from its durable queue and left the seq
+          // burnt, so the retry that reliable delivery exists for was rejected as
+          // a duplicate: the input was lost for good.
+          if (!delivered && cid && seq !== null) session.forgetInputSeq(cid, seq);
+        }
+        if (seq !== null && socket.readyState === 1) {
+          if (apply) {
+            if (delivered) socket.send(`{"t":"ia","seq":${seq}}`);
+          } else {
+            // REJECTED as a duplicate. ACK it — the client must still drop it
+            // from its durable queue — but say so, and hand back our watermark.
+            //
+            // A plain ACK here is indistinguishable from "applied", which is
+            // what made a client with a rolled-back counter unrecoverable: its
+            // seqs persist to localStorage on a DEBOUNCED write, so a tab killed
+            // between a send and that write comes back with a counter BELOW this
+            // watermark, every later keystroke lands at or under it, and each one
+            // is dropped-but-ACKed. The UI stays clean, nothing is delivered, and
+            // a reload restores the same stale counter. `last` is what lets the
+            // client lift itself out.
+            // ⚠️ Defensive: the session arrives through a structural port, and an
+            // implementation without this method must not take the whole input
+            // path down with it — a throw here aborts the message handler and the
+            // frame is never ACKed at all, which strands it in the client's queue.
+            const watermark =
+              typeof (session as { lastInputSeq?: (c: string) => number }).lastInputSeq === 'function'
+                ? (session as { lastInputSeq: (c: string) => number }).lastInputSeq(cid as string)
+                : seq;
+            socket.send(`{"t":"ia","seq":${seq},"dup":true,"last":${watermark}}`);
+          }
+        }
+      };
+
       // Attach message handler synchronously BEFORE any async work
       // (@fastify/websocket requirement to avoid dropped messages).
       socket.on('message', (raw) => {
         try {
           const msg = JSON.parse(String(raw));
           if (msg.t === 'i' && typeof msg.d === 'string') {
+            if (inputStalled) return;
             if (msg.d.length > MAX_INPUT_LENGTH) {
               // Refused for good, so say so: a silent return left the frame
               // unACKed and the client redelivered it every few seconds forever
@@ -185,51 +247,27 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
               }
               return;
             }
-            // Reliable delivery: when the frame carries a clientId + seq, apply it
-            // exactly once (skip a duplicate redelivery) but ACK it regardless so
-            // the client can drop it from its durable queue. Frames without seq
-            // (legacy/other tools) are applied as-is — no behavior change.
-            const cid = typeof msg.cid === 'string' ? msg.cid : null;
-            const seq = Number.isInteger(msg.seq) ? (msg.seq as number) : null;
-            const apply = cid && seq !== null ? session.shouldApplyInput(cid, seq) : true;
-            let delivered = true;
-            if (apply) {
-              // Typed input from a claim-holding desktop keeps the claim "hot"
-              // and re-asserts the desktop layout after a mobile override.
-              if (holdsDesktopClaim) session.noteDesktopActivity();
-              // Browser keystrokes are the user's own, so they may name the tab.
-              delivered = session.write(msg.d, { fromUser: true });
-              // A session whose PTY is gone swallows the write. ACKing anyway told
-              // the client to drop the frame from its durable queue and left the seq
-              // burnt, so the retry that reliable delivery exists for was rejected as
-              // a duplicate: the input was lost for good.
-              if (!delivered && cid && seq !== null) session.forgetInputSeq(cid, seq);
-            }
-            if (seq !== null && socket.readyState === 1) {
-              if (apply) {
-                if (delivered) socket.send(`{"t":"ia","seq":${seq}}`);
-              } else {
-                // REJECTED as a duplicate. ACK it — the client must still drop it
-                // from its durable queue — but say so, and hand back our watermark.
-                //
-                // A plain ACK here is indistinguishable from "applied", which is
-                // what made a client with a rolled-back counter unrecoverable: its
-                // seqs persist to localStorage on a DEBOUNCED write, so a tab killed
-                // between a send and that write comes back with a counter BELOW this
-                // watermark, every later keystroke lands at or under it, and each one
-                // is dropped-but-ACKed. The UI stays clean, nothing is delivered, and
-                // a reload restores the same stale counter. `last` is what lets the
-                // client lift itself out.
-                // ⚠️ Defensive: the session arrives through a structural port, and an
-                // implementation without this method must not take the whole input
-                // path down with it — a throw here aborts the message handler and the
-                // frame is never ACKed at all, which strands it in the client's queue.
-                const watermark =
-                  typeof (session as { lastInputSeq?: (c: string) => number }).lastInputSeq === 'function'
-                    ? (session as { lastInputSeq: (c: string) => number }).lastInputSeq(cid as string)
-                    : seq;
-                socket.send(`{"t":"ia","seq":${seq},"dup":true,"last":${watermark}}`);
-              }
+            // A guarded submit (agent-staging.ts) holds the input lease across its
+            // awaited Enter, so frames keep arriving while it is held. Refusing one
+            // lost it: this path does not wait for ACKs, so the next seq landed after
+            // the lease, moved the watermark past the refused one, and its redelivery
+            // was then dropped as a duplicate. Hold the frame instead; the session runs
+            // it, ACK included, in arrival order the moment the lease is released.
+            // ⚠️ Defensive, like `lastInputSeq` below: the session arrives through a
+            // structural port, and one without this method must still deliver input
+            // (a throw here would drop the frame unACKed).
+            const held =
+              typeof session.holdForGuardedLease === 'function'
+                ? session.holdForGuardedLease(() => applyInputFrame(msg), msg.d.length, msg.d)
+                : 'free';
+            if (held === 'free') {
+              applyInputFrame(msg);
+            } else if (held === 'full') {
+              // Not held, not applied, not ACKed, and no later frame from this socket
+              // is applied either, so nothing can overtake it.
+              inputStalled = true;
+              console.warn('[ws] input backlog during a guarded submit; closing for redelivery', { sessionId: id });
+              socket.close(1013, 'Input backlog during guarded submit');
             }
           } else if (
             msg.t === 'z' &&

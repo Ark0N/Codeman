@@ -20,6 +20,7 @@
 
 import { EventEmitter } from 'node:events';
 import { detectUsageLimitPause } from './usage-limit-patterns.js';
+import { toSingleLine } from './utils/index.js';
 
 // ============================================================================
 // Timing Constants
@@ -408,7 +409,11 @@ export class SessionAutoOps extends EventEmitter {
       );
 
       const action = async () => {
-        const compactCmd = this._autoCompactPrompt ? `/compact ${this._autoCompactPrompt}\r` : '/compact\r';
+        // One line: this fires unattended, and a multi-line focus prompt would go out
+        // as a multi-line paste (see toSingleLine).
+        const compactCmd = this._autoCompactPrompt
+          ? `/compact ${toSingleLine(this._autoCompactPrompt)}\r`
+          : '/compact\r';
         await this.callbacks.writeCommand(compactCmd);
         this.emit('autoCompact', {
           tokens: totalTokens,

@@ -4,91 +4,177 @@ Everything the dashboard does is HTTP, so an agent can do it too. This page is f
 that makes Codeman interesting: **Claude Code running inside a Codeman session, spawning and
 supervising other sessions.**
 
-Three routes. In a Claude session, start with the skill. In any other CLI mode, use the
-`codeman agent` commands. Raw HTTP is there for everything else.
+Three routes. Start with the skill, whichever CLI the agent is. Where the skill does not
+reach (a pi or shell session), use the `codeman agent` commands. Raw HTTP is there for
+everything else.
 
 ## The agent skill
 
-A Claude Code skill that teaches the agent the whole API, so you ask in plain English
-instead of pasting endpoint documentation into prompts.
+A skill in the `SKILL.md` format that Claude Code, Codex, Gemini CLI, OpenCode, Grok, OMP
+and most other agent CLIs read. It teaches the agent the whole API, so you ask in plain
+English instead of pasting endpoint documentation into prompts:
 
-### Install it
+```bash
+codeman skill install    # or: npx skills add Ark0N/Codeman --skill codeman -g
+```
 
-| How          | Command                                                     | Scope                                                       |
-| ------------ | ----------------------------------------------------------- | ----------------------------------------------------------- |
-| Skills CLI   | `npx skills add Ark0N/Codeman --skill codeman -g`            | Global, any skills-aware agent.                              |
-| Claude Code plugin | `/plugin marketplace add Ark0N/Codeman`, then `/plugin install codeman@codeman` | Global, through Claude Code's plugin manager. `/plugin update codeman` follows releases. Pick this or `codeman skill install`, not both, or the skill is listed twice (`codeman` and `codeman:codeman`). |
-| Bundled CLI  | `codeman skill install`                                      | Global, at `~/.claude/skills/codeman`.                       |
-| Bundled CLI  | `codeman skill install --case <name>`                        | One case.                                                    |
-| Web UI       | **App Settings → Agents & CLIs → Claude → Agent Skill**      | Injects into each case when a Claude session is created. Off by default. |
+Then ask the agent in a Codeman session something like *"use codeman to start 5 claude
+workers, one per TODO item"*. It starts the workers, hands each one its task, gathers the
+answers and deletes the sessions it created.
 
-`codeman skill uninstall [--case <name>]` reverses the CLI installs, and never touches a
-`skills/codeman` you wrote yourself.
-
-### Then just ask
-
-| You say                                                                                 | What happens                                                                             |
-| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| "What sessions are running right now?"                                                   | Lists them with name, mode, and status. Read-only.                                          |
-| "Start a shell worker on the `myapp` case, run the test suite, tell me if it passes."     | Spawns, waits on a completion marker, reads the exit code, cleans up.                       |
-| "Spin up 3 workers for lint, typecheck and tests, run them in parallel, report failures." | One session per task, all started first, then gathered as each finishes.                    |
-| "Have a claude worker summarize `src/session.ts`, then close it."                         | Spawns, runs the readiness ladder, sends and waits, reads the answer, deletes the session.  |
-| "Watch session w4 and tell me if it gets stuck on a permission prompt."                   | Blocks on the `blocked` signal and surfaces the question to **you**.                        |
-
-Sessions the agent creates get deleted when it is done. You can watch the tabs appear and
-disappear in the dashboard while it works.
-
-### What it will and will not do
-
-- **It self-gates.** Outside a Codeman session it refuses to act and does not guess an API
-  URL, so a global install costs an unrelated Claude Code session nothing.
-- **Unprompted, it may only** spawn sessions, prompt them, and delete ones **it created in
-  that conversation, by exact id**, behind a guard that refuses to delete the agent's own
-  session.
-- **It will not** answer another session's permission prompt on your behalf. It surfaces the
-  question instead.
-- **Deleting a case** (which erases a real directory of your code), bulk kills, respawn,
-  Ralph, cron, orchestrator, and settings writes all require you to ask, naming the target.
-
-Turning the setting back off **does not remove already-injected copies**, because a
-create-time sweep would yank the skill out from under other live sessions sharing that
-directory. Remove them per case with `codeman skill uninstall --case <name>`.
-
-The skill ships with the verb index always loaded, plus on-demand references for the verbs,
-worked multi-worker recipes, endpoint tables, and cross-session messaging. It drives
+**[The Codeman Skill](Codeman-Skill)** has the rest: recordings of real runs, every install
+route (Claude Code plugin, skills CLI, per case, the web UI setting), prompts that work as
+written, what it will and will not do on its own, and the notes for Codex. It drives
 DeepSeek Harness workers the same way it drives Claude ones (`spawn_workers alpha
 beta:deepseek` is a mixed fleet in one call), since those are the two modes with real
 completion signals.
 
 ## The `codeman agent` commands
 
-The skill is Claude-shaped: Codeman seeds its preamble for Claude sessions only. An
-`opencode`, `codex`, `pi` or `gemini` agent runs in the same environment but has nothing
-that teaches it the API, so `codeman agent` packages the same verbs as shell commands. It is
-a thin client over the endpoints in [the manual path](#the-manual-path), so auth and
-ownership apply unchanged, and it refuses to act outside a Codeman session. One line in a
-case's `AGENTS.md` is enough: *"other sessions: `codeman agent --help`"*.
+The skill drives the API with `curl` and `jq`. Where it does not reach (a pi or shell
+session, a machine without `jq`), the agent runs in the same environment, so `codeman agent`
+packages the same verbs as shell commands. It is a thin client over the endpoints in
+[the manual path](#the-manual-path), so auth and ownership apply unchanged, and it refuses to
+act outside a Codeman session. One line in a case's `AGENTS.md` is enough: *"other sessions:
+`codeman agent --help`"*.
 
 ```bash
 codeman agent ls                                          # sessions; * marks this one
 SID=$(codeman agent spawn scratch-1 --mode claude)        # quick-start + wait for the composer where the mode has a ready mark
+SID=$(codeman agent spawn --working-dir ~/src/app --mode codex)   # no case: an existing directory (cwd by default)
 codeman agent send "$SID" 'review src/, then say DONE' --until stop,exit --timeout 300000
 codeman agent read "$SID"                                 # last answer (as the server reads it for that mode)
 codeman agent read "$SID" --tail 3000                     # terminal tail, ANSI stripped (every mode)
+codeman agent inspect "$SID" --max-bytes 8192 --json     # experimental, opt-in: recent evidence + opaque cursor
+codeman agent stage "$SID" --message-file /tmp/prompt.txt --json  # experimental, opt-in: no Enter; local Codex composer only
+codeman agent submit "$SID" --stage-id "$STAGE_ID" --confirm-sha "$SHA256" --json  # experimental, opt-in: one conditional Enter
 codeman agent send "$SID" 'run the tests, then print WORKDONE followed by _4711'   # hook-less modes: the marker in halves …
 codeman agent wait "$SID" --match WORKDONE_4711           # … and the wait on the joined form
 codeman agent interrupt "$SID"                            # a bare ESC, conversation intact
+codeman agent post "$SID" 'context for later, not a prompt'   # stored in its inbox, not typed into the pane
+codeman agent inbox --wait --timeout 300000               # your own inbox: blocks while nothing is new
+codeman agent ack <msg-id>                                # remove what you handled (read never removes)
 codeman agent rm "$SID"                                   # any session except this one
 ```
 
+- **`spawn [case]`** uses the current directory when no case is supplied. Use
+  `codeman agent spawn --working-dir /path/to/project --mode codex` for another existing
+  local directory. A case and `--working-dir` cannot be combined. An empty case name
+  (`spawn "$CASE"` with `CASE` unset) is never read as "no case": it goes to quick-start,
+  which refuses it (exit 1). An empty `--working-dir` is refused before any request
+  (exit 4), so it never falls back to cwd.
+  A cwd that is your home directory is refused the same way, because Codeman's hooks would
+  land in `~/.claude`; pass `--working-dir ~` to start a worker there on purpose.
+  Explicit case names retain quick-start behavior (creating a scratch case if missing).
+  A directory launch is `POST /api/v1/sessions` followed by
+  `POST /api/v1/sessions/:id/interactive` (or `/shell`); it preserves the project and
+  parent lineage, and never labels it as agent scratch. Choose a separate worktree for
+  each worker that will edit code. If startup fails or its response is lost, the CLI
+  reports the exact created session ID and exits `1`; inspect that session before
+  deciding what to do next.
 - **Ids** may be the 8-character form `ls` prints. Anything shorter refuses, and so does an
   ambiguous prefix.
 - **`send`** takes ONE quoted argument of printable text and presses Enter. A prompt that
   starts with `-` goes after `--`: `codeman agent send "$SID" -- "- fix the bug"`.
 - **Markers** follow [the split-marker trick](#the-split-marker-trick): the echo of your own
   prompt is output too, so ask for the marker in halves and wait on the joined form.
+- **`post`, `inbox`, `ack`** are the agent inbox: a message for another session that starts
+  no turn. `post` stores ONE quoted argument (multi-line is fine, so `"$(cat task.md)"` works)
+  and types nothing into the pane. `inbox` reads this session's mail, or peeks at another's
+  with an id, and removes nothing; `ack <id>…` removes what you handled. `inbox --wait`
+  blocks while nothing is new, so mail you read but did not ack does not wake it again.
+  `ls` shows each session's mail in an INBOX column. Mail lives in memory unless
+  **Keep agent inbox across restarts** is on (see [Settings Reference](Settings-Reference)),
+  and goes when its session is deleted.
+- **`inspect`, `stage`, `submit`** are experimental and opt-in: they answer `403 FORBIDDEN`
+  naming the setting until **Experimental agent coordination** is on (see
+  [Settings Reference](Settings-Reference); `agentCoordinationEnabled`, synced, off by
+  default), and they may change in any release. `inspect` returns bounded evidence with an
+  opaque cursor. `stage` types one printable UTF8 line without trailing whitespace into a
+  local Codex composer, with no Enter, and returns a receipt that expires after two minutes
+  once the pane shows exactly that text; it refuses slash (`/`) and shell (`!`) commands
+  and a message whose last word starts with `@` or `$` (those open a Codex popup that Enter
+  would accept), so send commands with `send`. `submit` sends one Enter only if the
+  composer still shows exactly that text, and never replays it. `send --no-enter` alone has no receipt. Details:
+  [API reference](https://github.com/Ark0N/Codeman/blob/master/docs/api-reference.md#experimental-bounded-agent-inspection-and-guarded-input).
 - **Exit codes** are the same for every verb: `0` done, `1` error, `2` timeout, `3` the
-  worker exited, `4` refused. `--json` prints the response's `data`.
+  worker exited, `4` refused. `--json` prints the response's `data`, except a directory
+  `spawn`, which prints `{ sessionId, workingDir, created: true }`, plus `ready` when a
+  readiness wait ran, `readinessError` when that call failed, and `startupError` when the
+  start failed.
+
+## Reading saved Codex conversations
+
+`codeman history read` is the one command here that needs no server and no Codeman
+session: it reads Codex's own saved rollouts (`$CODEX_HOME/sessions`, else
+`~/.codex/sessions`) from disk and writes nothing.
+
+```bash
+codeman history read --session-id 019fc604                      # one conversation, by id or 8+ character prefix
+codeman history read --root-session-id <uuid> --topic auth       # it and every sub-agent or fork under it
+codeman history read --file /path/to/rollout.jsonl --format text
+```
+
+- **Filters** keep whole user/assistant turns: `--topic` is a literal, case-insensitive
+  match, and `--after`/`--before` are inclusive UTC dates.
+- **Forks and sub-agents**: a child's copy of its parent's history is dropped, so every
+  record belongs to the thread that wrote it.
+- **`complete: false`** in the JSON means the evidence is partial: a store file that could
+  not be attributed, a compressed `.jsonl.zst` rollout (not read), a record a running
+  Codex is still writing, an ancestor not found.
+- **Budgets** fail closed and are raisable: `--metadata-bytes` (attributing the store,
+  default 1 GiB), `--max-entries` (65536), `--scan-bytes` (the selected transcripts,
+  16 MiB) and `--max-bytes` (output, 8192). `--json` and `--format text` together are an
+  error.
+
+The full reference ships with the skill as
+[`reference/history.md`](https://github.com/Ark0N/Codeman/blob/master/skills/codeman/reference/history.md).
+
+## The MCP server
+
+`codeman mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP
+client (Claude Code, Claude Desktop, Codex, Gemini CLI, Cursor) can drive Codeman, from
+inside a Codeman session or from an assistant on your desktop. It is a client of the same
+HTTP API, with seven tools: `list_sessions`, `start_session`, `send_prompt`,
+`wait_for_session`, `read_output`, `interrupt_session` and `delete_session`.
+
+```bash
+# Claude Code
+claude mcp add codeman -e CODEMAN_API_URL=https://127.0.0.1:3000 -- codeman mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "codeman": {
+      "command": "codeman",
+      "args": ["mcp"],
+      "env": { "CODEMAN_API_URL": "https://127.0.0.1:3000" }
+    }
+  }
+}
+```
+
+```toml
+# Codex (~/.codex/config.toml): raise the 60 s default tool timeout for long waits
+[mcp_servers.codeman]
+command = "codeman"
+args = ["mcp"]
+env = { CODEMAN_API_URL = "https://127.0.0.1:3000" }
+env_vars = ["CODEMAN_MUX", "CODEMAN_SESSION_ID"]  # Codex passes MCP servers a minimal env; these let it know the Codeman session it runs in
+tool_timeout_sec = 120
+```
+
+The JSON form is what Claude Desktop, Cursor and Gemini CLI take. Add `CODEMAN_PASSWORD` to
+`env` when the server has a password.
+
+- **It never guesses a server.** Without `CODEMAN_API_URL` (or `--url`) every call says how
+  to configure it.
+- **Only its own sessions.** Prompting, interrupting and deleting are limited to sessions it
+  started; listing, reading and waiting work on everything. `codeman mcp
+  --allow-any-session` lifts that, for an assistant that should drive your existing tabs.
+- **Waits are short by default** (45 s, at most 600 s), so they fit a client's tool
+  timeout. A `timed_out` answer means call again.
 
 ## The manual path
 
@@ -110,11 +196,14 @@ These are set in every managed session. Read them rather than hardcoding anythin
 
 Read these before writing any code. Each one has cost somebody an afternoon.
 
-1. **Input is single line and must end with `\r`.** Enter fires only when the payload
-   contains a carriage return. Without it the text sits unsubmitted on the prompt, the
-   request still succeeds, and a combined wait burns its full timeout on a turn that never
-   started. Embedded newlines are stripped rather than rejected, so `"echo A\necho B\r"` runs
-   the joined `echo Aecho B`. One line per call.
+1. **Input must end with `\r`.** Enter fires only when the payload contains a carriage
+   return. Without it the text sits unsubmitted on the prompt, the request still succeeds,
+   and a combined wait burns its full timeout on a turn that never started. With
+   `useMux`, embedded newlines are kept: the text goes in as one paste and the Enter after
+   it submits all of it, so `"echo A\necho B\r"` runs both commands in a shell. The check
+   that re-presses a stranded Enter cannot reliably recognise a multi-line paste, so a
+   long multi-line prompt to a just-started agent is still safer in a file it is told to
+   read.
 2. **Make input idempotent.** Send a stable `clientId` and a monotonic per-session `seq`. The
    server deduplicates, so a retry after a dropped connection cannot double-deliver.
 3. **Auth.** With `CODEMAN_PASSWORD` set, use HTTP Basic or the session cookie. A missing
@@ -126,17 +215,20 @@ Read these before writing any code. Each one has cost somebody an afternoon.
 5. **Wait instead of polling, and a timeout is not an error.** The wait endpoints answer
    `200` with `wait.timedOut: true`. Loop over short waits rather than one long call, because
    tunnels cut idle connections.
-6. **Only `claude` and `deepseek` sessions emit `stop` and `blocked`.** Claude's come from
-   Claude Code hooks, DeepSeek's from the harness reporting its state to Codeman. Shell and
-   the other external CLIs accept only `idle`, `working`, and `exit`; asking for `stop`
-   explicitly there is a `400`, while omitting `until` is always safe. On a shell session
+6. **Only `claude` and `deepseek` sessions emit `stop`; `blocked` also fires for `codex`.**
+   Claude's come from Claude Code hooks, DeepSeek's from the harness reporting its state to
+   Codeman, and Codex's `blocked` from Codeman reading its approval, question and trust
+   dialogs off the screen (a wait that asks for `blocked` while such a dialog is already up
+   answers at once). Shell and the other external CLIs accept only `idle`, `working`, and
+   `exit`; asking for `stop` explicitly there (codex included) is a `400`, while omitting
+   `until` is always safe. On a shell session
    `idle` fires **once at startup and never again**, so synchronize hook-less sessions with an
    output marker instead.
 7. **Nothing reports "ready", so wait for it explicitly.** A new session answers
    `{"signal":"exit","immediate":true}` until its PID exists, and that means *not started*,
-   not *crashed*. A Claude worker in a fresh case then sits on the CLI's trust dialog; prompt
-   it there and the wait resolves on idle in about two seconds looking exactly like a finished
-   turn, while your text sits stuck in the dialog.
+   not *crashed*. A Claude worker in a fresh case then sits on the CLI's trust dialog, whose
+   highlighted option is `No, exit`: prompt it there and your Enter quits the CLI. Codeman
+   holds `idle` while the dialog is on screen, but that is not a readiness signal either.
 
 ### Recipes
 
@@ -227,6 +319,7 @@ failing the spawn, because a cosmetic field must never break a worker.
 
 ## Read next
 
+- [The Codeman Skill](Codeman-Skill) - the skill in action, its install routes and its limits.
 - [HTTP API](HTTP-API) - the endpoint map and the envelope.
 - [Hooks And Integrations](Hooks-And-Integrations) - events flowing the other way.
 - [Watching Agents Work](Watching-Agents-Work) - seeing the fan-out in the UI.

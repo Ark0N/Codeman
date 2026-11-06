@@ -373,11 +373,11 @@ describe('Tab Navigation', () => {
           var origPrev = app.prevSession;
           app.nextSession = function() {
             window.__swipeLog.push('next');
-            if (origNext) origNext.call(app);
+            if (origNext) origNext.apply(app, arguments);
           };
           app.prevSession = function() {
             window.__swipeLog.push('prev');
-            if (origPrev) origPrev.call(app);
+            if (origPrev) origPrev.apply(app, arguments);
           };
         }
       `);
@@ -420,11 +420,11 @@ describe('Tab Navigation', () => {
       expect(log).toEqual([]);
     });
 
-    it('slow swipe (>300ms) does not trigger navigation', async () => {
+    it('slow swipe (past the time limit) does not trigger navigation', async () => {
       await clearSwipeLog();
       await installSwipeSpy();
       // Duration exceeds MAX_TIME threshold
-      await swipeViaCDP(page, 'left', { distance: SWIPE.MIN_DISTANCE + 20, duration: 400 });
+      await swipeViaCDP(page, 'left', { distance: SWIPE.MIN_DISTANCE + 20, duration: SWIPE.MAX_TIME + 150 });
       await page.waitForTimeout(200);
       const log = await getSwipeLog();
       expect(log).toEqual([]);
@@ -482,7 +482,7 @@ describe('Tab Navigation', () => {
             var origNext = app.nextSession;
             app.nextSession = function() {
               window.__swipeLog.push('next');
-              if (origNext) origNext.call(app);
+              if (origNext) origNext.apply(app, arguments);
             };
           }
         `);
@@ -520,7 +520,7 @@ describe('Tab Navigation', () => {
             var origPrev = app.prevSession;
             app.prevSession = function() {
               window.__swipeLog.push('prev');
-              if (origPrev) origPrev.call(app);
+              if (origPrev) origPrev.apply(app, arguments);
             };
           }
         `);

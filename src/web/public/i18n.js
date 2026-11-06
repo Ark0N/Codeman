@@ -86,6 +86,17 @@
     'Web tab settings': '网页标签设置',
     'New group': '新建分组',
     'Rename group': '重命名分组',
+    'Rename case': '重命名案例',
+    Rename: '重命名',
+    'New name': '新名称',
+    'letters, numbers, - and _': '字母、数字、- 和 _',
+    'Also rename the folder on disk': '同时重命名磁盘上的文件夹',
+    'A case under the cases folder is renamed together with its folder.':
+      '案例文件夹下的案例会连同其文件夹一起重命名。',
+    'Stop sessions and rename': '停止会话并重命名',
+    'Enter a different name.': '请输入不同的名称。',
+    'Use only letters, numbers, hyphens and underscores.': '只能使用字母、数字、连字符和下划线。',
+    'Failed to rename the case.': '重命名案例失败。',
     'Move group up': '上移分组',
     'Move group down': '下移分组',
     'Delete group': '删除分组',
@@ -93,6 +104,23 @@
     'Move down': '下移',
     'Move to Ungrouped': '移到未分组',
     'Move to new group': '移到新分组',
+    'New session': '新建会话',
+    // The Cmd+K palette's new-session agent switch (panels-ui.js, its title tooltip).
+    'Agent for the new session (Left/Right to change)': '新会话使用的智能体（按左/右方向键切换）',
+    'New session here': '在此新建会话',
+    'New session here…': '在此新建会话…',
+    "New session in this tab's case": '在此标签页的案例中新建会话',
+    "This tab's folder is not a case, so there is nothing to start beside it.":
+      '此标签页的文件夹不是案例，无法在其旁边新建会话。',
+    'A session is already starting.': '已有会话正在启动。',
+    'Follow parent again': '重新跟随父会话',
+    'Parent closed; placed on its own': '父会话已关闭；单独放置',
+    'Parent loop; placed on its own': '父会话形成循环；单独放置',
+    // The Focus section pinned at the top of the vertical rail (shortcuts to tabs).
+    Focus: '焦点',
+    'Add to Focus': '添加到焦点',
+    'Remove from Focus': '从焦点移除',
+    'Focus actions': '焦点操作',
     'Could not save tab groups.': '无法保存标签分组。',
     'Tab groups changed elsewhere; part of your edit no longer applies.':
       '标签分组已在别处更改；你的部分编辑已不再适用。',
@@ -139,6 +167,8 @@
     Drag: '拖动',
     "a tile's header": '窗格的标题栏',
     'Move the Tile (onto Another: Swap)': '移动窗格（拖到另一个窗格上：互换位置）',
+    "a tile's header out of the window": '窗格的标题栏到窗口之外',
+    'Open the Tile in Its Own Window (Detach Tiles)': '在独立窗口中打开窗格（分离窗格）',
     'Zoom Focused Tile': '放大聚焦的窗格',
     'Remove Focused Tile': '移除聚焦的窗格',
     'Add the Session to the Tile Grid': '将该会话加入平铺网格',
@@ -156,8 +186,9 @@
     'Restore the grid': '恢复平铺网格',
     'Remove tile (the session keeps running)': '移除窗格（会话继续运行）',
     'Drop a tab or a tile here': '将标签页或窗格拖放到此处',
-    // A file dropped on a tile (tile-grid.js) or the single view (image-input.js).
-    'Only image files are supported': '仅支持图像文件',
+    // A file of an unsupported type dropped on a tile (tile-grid.js) or the single
+    // view (image-input.js).
+    'Unsupported file type': '不支持的文件类型',
     // Redraw (Ctrl+Shift+R, terminal-ui.js restoreTerminalSize) on the main pane, a tile or Pane B.
     'No active session': '没有活动会话',
     'This session is sized by its own window': '此会话的尺寸由它自己的窗口决定',
@@ -166,6 +197,11 @@
     'Failed to restore terminal size': '恢复终端尺寸失败',
     // A tile header's tooltip while tiles can move (with the state above it: a pattern below).
     'Drag to move the tile': '拖动可移动窗格',
+    // The same with Detach Tiles on (tile-grid.js _paintTileHandle), and a
+    // pop-out window's title as a handle back onto the tiles.
+    'Drag to move the tile, or out of the window to open it on its own': '拖动可移动窗格，拖出窗口可在独立窗口中打开',
+    'Drag out of the window to open the tile on its own': '拖出窗口可在独立窗口中打开此窗格',
+    "Drag onto a Codeman window's tiles to dock this session there": '拖到 {name} 窗口的窗格上，即可将此会话停靠到那里',
     'Resize tile columns': '调整窗格列宽',
     'Resize tile rows': '调整窗格行高',
     Attach: '附加',
@@ -214,6 +250,9 @@
     'Close window': '关闭窗口',
     'Session unavailable': '会话不可用',
     'This session has ended or is no longer available.': '此会话已结束或不再可用。',
+    // A pop-out whose session a dashboard took back, when it cannot close itself (app.js _showSoloReleased).
+    'Session moved': '会话已移走',
+    'This session is back in a Codeman window. This one can be closed.': '此会话已回到 {name} 窗口中。可以关闭此窗口。',
 
     // Welcome / quick start / common actions
     'Manage AI Coding tools in persistent tmux sessions.': '在持久化 tmux 会话中管理 AI 编程工具。',
@@ -233,6 +272,7 @@
     'Run Grok': '运行 Grok',
     'Run DeepSeek': '运行 DeepSeek',
     'Run OMP': '运行 OMP',
+    'Run GitHub Copilot': '运行 GitHub Copilot',
     'Run Shell': '运行 Shell',
     'More tools': '更多工具',
     'Select AI backend': '选择 AI 后端',
@@ -244,6 +284,50 @@
     'New or link a case…': '新建或关联案例…',
     'Case settings…': '案例设置…',
     'No cases match': '没有匹配的案例',
+    // Git worktrees of a case (session-ui.js openWorktreeModal, the case picker row, the
+    // phone case sheet and Close Session's worktree option). Worktree and branch names,
+    // paths and git's own messages are user/git text and pass through untranslated.
+    'Git worktrees…': 'Git 工作树…',
+    'Git worktrees': 'Git 工作树',
+    'Close git worktrees': '关闭 Git 工作树',
+    Worktrees: '工作树',
+    'Worktrees…': '工作树…',
+    "Each worktree is its own checkout of the case's repository, on its own branch, in .claude/worktrees/ of the case. Agents working in parallel then never share one folder.":
+      '每个工作树都是案例仓库的独立检出，有自己的分支，位于案例的 .claude/worktrees/ 中。并行工作的智能体因此不会共用同一个文件夹。',
+    'Start sessions with': '启动会话所用',
+    'New worktree': '新建工作树',
+    Branch: '分支',
+    'Start from': '起点',
+    "New branch worktree-<name> from the case's current commit, unless you pick another below.":
+      '从案例当前提交新建分支 worktree-<name>，除非在下方另行选择。',
+    'Branch and start point': '分支和起点',
+    "A branch, tag or commit. Default: the case's current commit (HEAD).":
+      '分支、标签或提交。默认：案例当前提交（HEAD）。',
+    'Create & start session': '创建并启动会话',
+    'Loading worktrees…': '正在加载工作树…',
+    'No worktrees yet. Create one below.': '还没有工作树。请在下方创建。',
+    'detached HEAD': '游离 HEAD',
+    'main checkout': '主检出',
+    'not created by Codeman': '非 {name} 创建',
+    locked: '已锁定',
+    missing: '已丢失',
+    Open: '打开',
+    'Start a session in this worktree': '在此工作树中启动会话',
+    'Remove…': '移除…',
+    'git worktree remove refuses while the worktree has uncommitted or untracked files. Codeman never forces it.':
+      '工作树中有未提交或未跟踪的文件时，git worktree remove 会拒绝执行。{name} 从不强制移除。',
+    'Its folder is gone. Removing it clears the record git keeps of it, so the name can be used again.':
+      '它的文件夹已不存在。移除它会清除 git 保存的记录，这个名称便可再次使用。',
+    'Remove worktree': '移除工作树',
+    'Kill & remove worktree': '终止并移除工作树',
+    'git refuses while the worktree has uncommitted or untracked files; nothing is forced':
+      '工作树中有未提交或未跟踪的文件时 git 会拒绝；不会强制执行',
+    'Also delete its branch (git branch -d keeps a branch that is not merged)':
+      '同时删除其分支（git branch -d 会保留未合并的分支）',
+    'Name: letters, digits, ".", "_" and "-", starting with a letter or digit, at most 64 characters.':
+      '名称：字母、数字、"."、"_" 和 "-"，以字母或数字开头，最多 64 个字符。',
+    'A launch is already in progress': '已有启动正在进行',
+    'Codeman did not answer.': '{name} 没有响应。',
     'Add Case': '添加案例',
     'Open sessions': '打开会话',
     'Recent Sessions': '最近会话',
@@ -272,6 +356,7 @@
     Delete: '删除',
     Remove: '移除',
     Edit: '编辑',
+    Fetch: '拉取',
     Refresh: '刷新',
     Back: '返回',
     Next: '下一步',
@@ -383,6 +468,8 @@
     'Header Displays': '顶部栏显示',
     'Font Controls': '字体控制',
     'System Stats': '系统状态',
+    'GPU Stats': 'GPU 状态',
+    'CPU MHz': 'CPU 频率',
     'Lifecycle Log': '生命周期日志',
     'Response Viewer': '回复查看器',
     'Attachments Button': '附件按钮',
@@ -402,9 +489,15 @@
       '会话列表显示为顶栏横向标签条，或左侧可折叠侧边栏（Alt+B）。完整侧边栏为每个会话显示与主界面相同的详细信息。',
     'Tall Tabs (Name + Folder)': '双行标签（名称 + 文件夹）',
     'Pop-out Button on Tabs': '标签页弹出窗口按钮',
+    'New Session Button on Tabs': '标签页新建会话按钮',
+    'A + on the tab that starts a session in the same case and group, in any installed CLI.':
+      '标签页上的 + 按钮，可在同一案例和分组中，用任一已安装的 CLI 启动新会话。',
     'CLI Logos on Tabs': '标签页上的 CLI 图标',
     "Show each agent's CLI logo before the session name on tabs and the home screen's tab list. Off leaves the status dot and the shell's SH badge. Tiles, split headers and the Run menus keep their logos.":
       '在标签页和主界面的标签列表中，于会话名称前显示每个智能体的 CLI 图标。关闭后仍保留状态圆点和 Shell 的 SH 标记。平铺、分屏标题栏和运行菜单中的图标不受影响。',
+    'Detach Tiles': '分离窗格',
+    "Drag a tile's header out of the browser to open it in its own window, or onto another Codeman window's tiles to move it there. A popped-out window's title drags back onto tiles.":
+      '将窗格的标题栏拖出浏览器，即可在独立窗口中打开它；拖到另一个 {name} 窗口的窗格上，即可将它移到那里。弹出窗口的标题也可以拖回窗格中。',
     // Tab Layout and Header Stats Style (Discussion #426). The header style's
     // "Tiles" is 磁贴, never 平铺: that is the tile grid's word (the Tiles
     // button), and "Tiles (label over value)" must not read as the grid.
@@ -435,12 +528,13 @@
     'Connection tile: offline': '离线',
     'Connection tile: queued': '已排队',
     'Connection tile: retry': '重连中',
-    // App Settings → Bottom bar, translated as one group (the Git status rows,
-    // #543's two included). Keys are the trimmed label text, without the scope tag.
+    // App Settings → Bottom bar, translated as one group (the Git status rows, #543's two included, and the
+    // two Git fetch rows, in the order the page lists them). Keys are the trimmed label text, without the
+    // scope tag. The Session Options → Git strings are in that group's own block further down.
     'Bottom bar': '底部栏',
     'Git status': 'Git 状态',
-    "Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only: Codeman never fetches or changes the repository. Not shown for Docker or remote sessions. Off by default.":
-      '在底部栏右侧显示当前会话的仓库（或其文件夹内向下两层以内的每个仓库）是否有未提交的文件或未推送的提交。点击可查看列表。只读：{name} 从不拉取或更改仓库。Docker 和远程会话不显示。默认关闭。',
+    "Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only apart from Fetch: Codeman never commits or changes the repository, and `git fetch` runs only when you click Fetch in that window, or on the interval below if you turned it on. It is the only git command the Git window runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked). Not shown for Docker or remote sessions. Off by default.":
+      '在底部栏右侧显示当前会话的仓库（或其文件夹内向下两层以内的每个仓库）是否有未提交的文件或未推送的提交。点击可查看列表。除拉取外只读：{name} 从不提交或更改仓库，而拉取是 Git 窗口运行的唯一会写入的 git 命令，也是 {name} 唯一会按间隔自行运行的命令（克隆和工作树管理也会写入，但只在您当时要求时才运行），它只在您点击该窗口中的拉取按钮时运行，或在您开启了下方的定时后按间隔运行。Docker 和远程会话不显示。默认关闭。',
     'Git status: group files by folder': 'Git 状态：按文件夹分组显示文件',
     'In the Git window, show changed files under their folders, collapsed until you click a folder. Off lists every file by its full path. On by default.':
       '在 Git 窗口中，将更改的文件显示在各自的文件夹下，点击文件夹前保持折叠。关闭时按完整路径列出每个文件。默认开启。',
@@ -450,8 +544,48 @@
     'Git status: git timeout': 'Git 状态：git 超时',
     'Seconds one git command may run before that repository is reported as unreadable (5 to 120, default 30). Raise it for repositories on a slow network share.':
       '单条 git 命令可运行的秒数，超时后该仓库会被报告为无法读取（5 到 120，默认 30）。仓库位于较慢的网络共享上时请调高此值。',
+    'Git fetch on an interval': 'Git 定时拉取',
+    'Runs `git fetch` for the repositories the Git window lists on a timer, so the "behind" number is current without a click. Off by default: this is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer (cloning and worktree management write too, but only when you asked for them at the moment you asked), so nothing runs until you turn it on. A session can override both the switch and the interval in Session Options → Git.':
+      '按间隔为 Git 窗口列出的仓库运行拉取，这样“落后”的数字无需点击就是最新的。默认关闭：这是 Git 窗口运行的唯一会写入的 git 命令，也是 {name} 唯一会按间隔自行运行的命令（克隆和工作树管理也会写入，但只在您当时要求时才运行），所以在您开启之前不会有任何运行。会话可以在“会话选项 → Git”中同时覆盖开关和间隔。',
+    'Git fetch: how often': 'Git 定时拉取：多久一次',
+    'Seconds between runs for a session that has no override of its own (30 to 3600, default 300). Only a session that is on (here, or in Session Options → Git) is fetched, and sessions sharing one folder are fetched by one run.':
+      '没有自己覆盖设置的会话，两次运行之间的秒数（30 到 3600，默认 300）。只有已开启的会话（这里，或在“会话选项 → Git”）才会被拉取，共用一个文件夹的会话由一次运行拉取。',
+    'Fetch git status': '拉取 Git 状态',
     'Refresh git status': '刷新 Git 状态',
     'Close git status': '关闭 Git 状态',
+    // Edit history (edit-history-ui.js): settings chip, header button and panel.
+    // The two row badges use scoped keys: a bare "new"/"edit" key would also
+    // translate unrelated words elsewhere (the lookup is case-insensitive).
+    'Edit history': '编辑历史',
+    'Open edit history': '打开编辑历史',
+    'Refresh edit history': '刷新编辑历史',
+    'Close edit history': '关闭编辑历史',
+    'Group by file': '按文件分组',
+    'Main agent only': '仅主智能体',
+    'Open a session to see its edits.': '打开一个会话以查看其编辑。',
+    'Reading the edit history…': '正在读取编辑历史…',
+    'Could not read the edit history.': '无法读取编辑历史。',
+    'Edit history is only available for local Claude sessions.': '编辑历史仅适用于本地 Claude 会话。',
+    'Showing saved entries only: {reason}': '仅显示已保存的条目：{reason}',
+    'No transcript found for this session yet. It is picked up with the next prompt; until then a CLAUDE_CONFIG_DIR set outside Codeman cannot be found.':
+      '尚未找到此会话的记录。它会在下一次提示时被识别；在此之前，在 Codeman 之外设置的 CLAUDE_CONFIG_DIR 无法被找到。',
+    'No edits yet.': '暂无编辑。',
+    'No edits by the main agent.': '主智能体没有编辑。',
+    'Load older': '加载更早的编辑',
+    'Loading older edits…': '正在加载更早的编辑…',
+    'Edit history badge: new': '新建',
+    'Edit history badge: edit': '编辑',
+    'File created': '已创建文件',
+    'File edited ({tool})': '已编辑文件（{tool}）',
+    Image: '图片',
+    Subagent: '子智能体',
+    'Open in the file preview': '在文件预览中打开',
+    'Show what changed': '显示更改内容',
+    'Hide the diff': '隐藏差异',
+    'Reading the diff…': '正在读取差异…',
+    'Could not read the diff.': '无法读取差异。',
+    'No textual changes.': '没有文本更改。',
+    'Diff cut short: it is larger than the viewer shows.': '差异已截断：内容超出查看器可显示的范围。',
     Panels: '面板',
     Monitor: '监视器',
     'Project Insights': '项目洞察',
@@ -461,6 +595,9 @@
     'Ultracode Floating Windows': 'Ultracode 浮动窗口',
     'Approvals Inbox': '审批收件箱',
     'Auto-name Sessions': '自动命名会话',
+    'Spawned Tabs Follow Their Parent': '派生的标签跟随父会话',
+    "A session started by another one keeps following its parent's tab into its group and moves with it, until you move it by hand. Off: it starts next to its parent and stays where it is.":
+      '由另一个会话启动的会话会跟随父会话的标签进入其分组并随之移动，直到你手动移动它。关闭时：它出现在父会话旁边并停留在原处。',
     Approvals: '审批',
     'Prompts waiting on you, across all sessions': '所有会话中等待您处理的提示',
     'No pending approvals': '没有待处理的审批',
@@ -475,7 +612,6 @@
     Send: '发送',
     Permission: '权限',
     Question: '问题',
-    Idle: '空闲',
     'Read My Mind': '读心术',
     'Read My Mind: predict your next prompt': '读心术：预测您的下一条提示',
     'Predict my next prompt': '预测我的下一条提示',
@@ -512,6 +648,9 @@
     'API key': 'API 密钥',
     'Optional. Left blank on edit keeps the existing key.': '可选。编辑时留空将保留现有密钥。',
     'Auth header': '认证请求头',
+    'Default context length (tokens)': '默认上下文长度（token 数）',
+    "Used for models whose size cannot be discovered. The model's whole window; the Claude floor check divides it by any stored slot count. Leave empty to let each CLI assume its own default.":
+      '用于无法自动发现上下文大小的模型。这是模型的完整窗口；Claude 下限检查会将其除以已存储的槽位数。留空则让各个 CLI 使用其自身的默认值。',
     'Never send both — some servers hang indefinitely.': '切勿同时发送两者 — 部分服务器会因此无限期挂起。',
     'Authorization: Bearer (default)': 'Authorization: Bearer（默认）',
     'api-key header (Azure)': 'api-key 请求头（Azure）',
@@ -521,9 +660,15 @@
     'Custom Endpoints': '自定义端点',
     'Choose a model': '选择模型',
     'Currently loaded': '当前已加载',
+    'In use by a session': '会话正在使用',
     'Last used': '上次使用',
+    'Nothing is marked: this endpoint did not report which model it has loaded, and none of your running sessions uses one. Pick the model to launch.':
+      '未标记任何模型：此端点没有报告它已加载了哪个模型，你运行中的会话也没有在使用它。请选择要启动的模型。',
     'That endpoint no longer exists': '该端点已不存在',
     'No models discovered for this endpoint yet': '此端点尚未发现任何模型',
+    // Model picker search box (index.html placeholder/aria-label and the no-matches line)
+    'Search models': '搜索模型',
+    'No models match': '没有匹配的模型',
     'Subagent Options': '子智能体选项',
     'Enable Tracking': '启用跟踪',
     'Active Tab Only': '仅活动标签页',
@@ -580,6 +725,9 @@
     'Weight for bold terminal text. Only useful with a family carrying something heavier than its bold face.':
       '终端粗体文本的字重。仅当字体提供比其粗体更重的字形时才有意义。',
     'Local Echo': '本地回显',
+    'Keep Size Under Keyboard': '键盘弹出时保持尺寸',
+    "For local Claude sessions, opening the on-screen keyboard keeps the session's size and scrolls the view instead, so Claude does not reprint its screen and lose transcript lines. Full-screen interfaces (Codex, Claude's fullscreen mode) are resized as before.":
+      '对于本地 Claude 会话，打开屏幕键盘时会保持会话尺寸并改为滚动视图，这样 Claude 不会重绘屏幕而丢失对话记录行。全屏界面（Codex、Claude 的全屏模式）仍像以前一样调整尺寸。',
     'CJK Input': '中日韩输入',
     'Extended Keyboard Bar': '扩展键盘栏',
     'Gesture Control (beta)': '手势控制（测试版）',
@@ -606,7 +754,16 @@
     'Agent Teams': '智能体团队',
     'Claude Model': 'Claude 模型',
     '1M Opus Context': 'Opus 100 万上下文',
+    'Default session group': '默认会话分组',
+    'New sessions for this case land in this group': '此案例的新会话将放入此分组',
+    'Could not save the default session group.': '无法保存默认会话分组。',
     'Remote auto-reconnect': '远程自动重连',
+    'Experimental agent coordination': '实验性智能体协作',
+    "Lets agents read another session's output in bounded pages and type a prompt into a local Codex composer, then press Enter once after checking it is unchanged (the inspect, stage and submit commands). Experimental: the commands and their HTTP routes may change in any release. Off by default; while off those routes refuse every request.":
+      '允许智能体分页读取另一个会话的输出（每页有上限），并把提示词输入本地 Codex 输入框，确认未被改动后只按一次 Enter（即 inspect、stage 和 submit 命令）。实验性功能：这些命令及其 HTTP 路由可能在任何版本中变化。默认关闭；关闭时这些路由拒绝所有请求。',
+    'Pin tab names on the CLI': '在 CLI 上固定标签名',
+    "Launch every Claude session with its tab name, so the CLI's prompt label and /resume list match your tabs. Claude then stops generating its own titles for those sessions, and a rename in Codeman holds only until the next turn. Applies from the next session start or respawn, no server restart needed.":
+      '以标签名启动每个 Claude 会话，让 CLI 的提示框标签和 /resume 列表与你的标签一致。Claude 随后不再为这些会话生成自己的标题，在 Codeman 中的重命名也只保留到下一轮。从下一次会话启动或重新生成时生效，无需重启服务器。',
     'Thinking Effort': '思考强度',
     Low: '低',
     Medium: '中',
@@ -663,6 +820,8 @@
     // placeholder and label are looked up by the module at build time, since
     // the DOM translator skips <textarea> subtrees.
     'Compose prompt': '撰写提示词',
+    'Open a session to attach a file': '请先打开一个会话再添加附件',
+    '📎 Attach': '📎 添加附件',
     'Compose prompt, draft saved': '撰写提示词，草稿已保存',
     'Resume saved prompt draft': '继续编辑已保存的提示词草稿',
     'Enter adds a new line': '按 Enter 换行',
@@ -699,6 +858,16 @@
     'Session Color': '会话颜色',
     'Working Directory': '工作目录',
     'Set working directory': '设置工作目录',
+    // Session Options > Session > Working folder (session-ui.js openSessionOptions).
+    'Working folder': '工作目录',
+    "Where this session's CLI runs, on the machine hosting Codeman.":
+      '此会话的 CLI 运行所在的目录，位于运行{name}的机器上。',
+    "Where this session's CLI runs, on the remote host it reaches over SSH, not on this machine.":
+      '此会话的 CLI 运行所在的目录，位于通过 SSH 连接的远程主机上，而不是本机。',
+    "On the machine hosting Codeman, mounted into the Docker container this session's CLI runs in.":
+      '位于运行{name}的机器上，并挂载到此会话 CLI 运行所在的 Docker 容器中。',
+    'Path copied': '路径已复制',
+    'Copy failed': '复制失败',
     'Resume Conversation': '继续对话',
     'Close Session': '关闭会话',
     'Choose how to close': '选择关闭方式',
@@ -726,6 +895,24 @@
     CPUs: 'CPU 数',
     Memory: '内存',
     GPUs: 'GPU',
+
+    // Session Options → Git (the tab's blurb, its group head, its hint and its three rows in index.html, plus
+    // the save toast session-ui.js raises). 'Status' is not a key here: that row's text is built at runtime
+    // by updateGitFetchStatus, and 'Git' stays a technical name.
+    "Whether Codeman fetches this session's repositories on a timer.": '{name} 是否按间隔拉取此会话的仓库。',
+    'Fetch on an interval': '按间隔拉取',
+    "Fetching is the only git command the Git panel runs that writes, and the only one Codeman runs on a timer, so nothing runs until you turn it on (here, or in App Settings → Bottom bar). Cloning and worktree management write too, but only when you asked for them at the moment you asked. The panel's Fetch button is always just a click.":
+      '拉取是 Git 窗口运行的唯一会写入的 git 命令，也是 {name} 唯一会按间隔自行运行的命令，所以在您开启之前（这里，或“应用设置 → 底部栏”）不会有任何运行。克隆和工作树管理也会写入，但只在您当时要求时才运行。该窗口中的拉取按钮始终只是一次点击。',
+    'Follow the app setting': '跟随应用设置',
+    'Uses the app-wide switch and interval for this session. Switch it off to pick your own.':
+      '为此会话使用应用级的开关和间隔。关闭它即可自行选择。',
+    'Fetch this session': '拉取此会话',
+    "Runs on its own even while the app-wide switch is off: a session that turned itself on means exactly that. Sessions sharing one folder share one run, and each sees that run's result.":
+      '即使应用级开关关闭也自行运行：一个自己开启的会话正是这个意思。共用一个文件夹的会话共享一次运行，每个会话都会看到该运行的结果。',
+    'How often': '多久一次',
+    '30 sec to 1 hr, timed from the start of a run, so a slow repository does not push the next one out.':
+      '30 秒到 1 小时，从一次运行的开始计时，所以较慢的仓库不会把下一次推远。',
+    'Git fetch settings saved': 'Git 定时拉取设置已保存',
 
     // Cron / lifecycle / panels
     'Cron Jobs': '定时任务',
@@ -759,9 +946,21 @@
 
     // Dynamic common status / toasts
     'Settings saved': '设置已保存',
+    // The once-per-release toast (settings-ui.js checkWhatsNew); its highlights stay English.
+    "See what's new": '查看更新内容',
+    // The security-notice cards' own eyebrow (panels-ui.js showSecurityNotice/showUpdateNotice);
+    // each notice's title, message and link label carry their own zh-CN text and are skipped.
+    'Security notice': '安全提示',
     'Settings applied': '设置已应用',
     'Save and keep Settings open': '保存并保持设置打开',
     'Settings saved locally': '设置已保存到本机',
+    // Multi-user mode, a non-admin (settings-ui.js / session-ui.js): server-wide settings
+    // writes are admin-only there.
+    'Saved on this device. Server-wide settings can only be changed by an admin.':
+      '已保存到本设备。服务器全局设置只能由管理员更改。',
+    'Server-wide settings can only be changed by an admin': '服务器全局设置只能由管理员更改',
+    // The reason a settings write gives when no answer came back (settings-ui.js _settingsWriteError).
+    'the server could not be reached': '无法连接到服务器',
     'Tunnel active': '隧道已启用',
     'Tunnel starting — QR code will appear when ready...': '隧道正在启动，准备好后将显示二维码…',
     'Push notifications enabled': '推送通知已启用',
@@ -865,6 +1064,19 @@
     'Enable Respawn': '启用重生',
     'Stop Respawn': '停止重生',
     'Auto-resume when usage limit resets': '使用限制重置后自动继续',
+    // Prompt-cache keep-warm (Session Options → Respawn, App Settings → System → Automation, session-ui.js toasts).
+    'Keep the cache warm while idle': '空闲时保持缓存预热',
+    "Sends a one-line keep-alive just before the cache expires, so your next prompt still reads from cache. Runs only while idle, up to the limit in App Settings → System → Automation; switch on before launch to also stop Claude Code's own idle compaction.":
+      '在缓存即将过期前发送一行保活消息，让您的下一条提示仍能从缓存读取。仅在空闲时运行，最长不超过“应用设置 → 系统 → 自动化”中的上限；在启动前开启还会关闭 Claude Code 自带的空闲压缩。',
+    'Keep prompt caches warm': '保持提示缓存预热',
+    "Default for Claude sessions that have not chosen on their Respawn tab (a session an agent started needs its own switch): shortly before an idle session's prompt cache would expire, send a one-line keep-alive turn so the next prompt still reads the conversation from cache instead of re-processing it.":
+      '未在“重生”标签页中单独设置的 Claude 会话的默认值（由智能体启动的会话需单独开启）：在空闲会话的提示缓存即将过期前发送一行保活消息，让下一条提示仍从缓存读取对话，而不必重新处理。',
+    'Keep warm for at most': '最长保持预热',
+    'Hours after your last prompt in a session during which keep-alives are sent; past that the cache is left to expire. A keep-alive costs a small fraction of the re-write it prevents, so a few hours of them pay off, an overnight gap does not.':
+      '会话中最后一条提示之后发送保活消息的小时数；超过之后任由缓存过期。一次保活的开销只是它所避免的重新写入的一小部分，因此几个小时的保活是值得的，整夜的空档则不值得。',
+    hours: '小时',
+    'Prompt-cache keep-warm enabled': '提示缓存预热已开启',
+    'Prompt-cache keep-warm disabled': '提示缓存预热已关闭',
     'Auto-restart sessions when context fills up (usually not needed)': '上下文已满时自动重启会话（通常不需要）',
     'Auto-Compact': '自动压缩',
     'Auto-Clear': '自动清空',
@@ -942,6 +1154,12 @@
     'Source type filter': '来源类型筛选',
     'Copy content': '复制内容',
     'Edit file': '编辑文件',
+    'Back (Alt+←)': '后退 (Alt+←)',
+    'Forward (Alt+→)': '前进 (Alt+→)',
+    'Back to the previous file': '返回上一个文件',
+    'Forward to the next file': '前进到下一个文件',
+    Expand: '展开',
+    'Drag to resize': '拖动以调整大小',
     'Rendered markdown': '渲染 Markdown',
     'Line numbers': '行号',
     'Wrap lines': '自动换行',
@@ -1138,8 +1356,11 @@
     'Voice input (Ctrl+Shift+V)': '语音输入（Ctrl+Shift+V）',
     'Insert Newline': '插入换行',
     'Close Panels': '关闭面板',
+    'File Viewer Back / Forward': '文件查看器后退 / 前进',
     'Previous / Next Session': '上一个 / 下一个会话',
     'Next Session': '下一个会话',
+    'Previous Session': '上一个会话',
+    'Next Session (alternate)': '下一个会话（备用）',
     'Switch to Tab N': '切换到第 N 个标签页',
     'Move Active Tab Left': '向左移动当前标签页',
     'Move Active Tab Right': '向右移动当前标签页',
@@ -1202,10 +1423,21 @@
       [/^Lifetime: (\d+) sessions created$/, (_m, count) => `累计已创建 ${count} 个会话`],
       [/^Tunnel active: (.+)$/, (_m, url) => `隧道已启用：${url}`],
       [/^Tunnel error: (.+)$/, (_m, error) => `隧道错误：${error}`],
+      [/^Tunnel not stopped: ([\s\S]+)$/, (_m, why) => `隧道未停止：${why}`],
       [/^Update to v(.+)$/, (_m, version) => `更新到 v${version}`],
       [/^You're up to date \(v(.+)\)\.$/, (_m, version) => `已是最新版本（v${version}）。`],
       [/^Update available: v(.+)$/, (_m, version) => `有可用更新：v${version}`],
+      [
+        /^Codeman updated to v([^:\s]+): (.+?)(?: \(\+(\d+) more\))?$/,
+        (_m, version, shown, more) => `Codeman 已更新到 v${version}：${shown}${more ? `（另有 ${more} 项）` : ''}`,
+      ],
       [/^Selected: (.+)$/, (_m, value) => `已选择：${value}`],
+      [/^Case renamed to "(.+)"$/, (_m, name) => `案例已重命名为“${name}”`],
+      [/^New name for "(.+)"$/, (_m, name) => `“${name}”的新名称`],
+      [
+        /^These sessions have the folder open: (.+)\. They will be closed \(their tabs go away and nothing is restarted\) before the folder is renamed\.$/,
+        (_m, list) => `这些会话正在使用该文件夹：${list}。重命名前将关闭它们（其标签页会消失，不会重新启动）。`,
+      ],
       [/^Failed to (.+)$/, (_m, action) => `操作失败：${action}`],
       [/^Will create: (.+)$/, (_m, path) => `将创建：${path}`],
       // The spreadsheet preview: an HTTP status, and the notice bar's counts.
@@ -1213,8 +1445,23 @@
       [/^Terminal restored to (\d+)x(\d+)$/, (_m, cols, rows) => `终端已恢复为 ${cols}x${rows}`],
       [/^View truncated to the first (\d+) cells$/, (_m, n) => `视图仅显示前 ${n} 个单元格`],
       [/^(\d+) unsupported number formats$/, (_m, n) => `${n} 种不支持的数字格式`],
+      // Git worktree toasts (session-ui.js): worktree and branch names and git's own
+      // words pass through untranslated.
+      [/^Worktree (\S+) created on branch (\S+)$/, (_m, wt, branch) => `已创建工作树 ${wt}，分支 ${branch}`],
+      [
+        /^Worktree (\S+) removed\. Branch (\S+) kept: ([\s\S]+)$/,
+        (_m, wt, branch, why) => `已移除工作树 ${wt}。保留了分支 ${branch}：${why}`,
+      ],
+      [/^Worktree (\S+) and branch (\S+) removed$/, (_m, wt, branch) => `已移除工作树 ${wt} 和分支 ${branch}`],
+      [/^Worktree (\S+) removed$/, (_m, wt) => `已移除工作树 ${wt}`],
+      [/^Worktree (\S+) was kept: ([\s\S]+)$/, (_m, wt, why) => `工作树 ${wt} 已保留：${why}`],
+      // A pick, drop or paste that mixed admitted files with refused ones (image-input.js).
+      [/^(\d+) files? skipped: unsupported type$/, (_m, n) => `已跳过 ${n} 个不支持类型的文件`],
       // Group names are user text: they pass through untranslated.
       [/^Move to "(.+)"$/, (_m, group) => `移到“${group}”`],
+      // Session names are user text too.
+      [/^Follows (.+)$/, (_m, parent) => `跟随 ${parent}`],
+      [/^Placed by hand \(parent: (.+)\)$/, (_m, parent) => `已手动放置（父会话：${parent}）`],
       [
         /^Delete group "(.+)"\? Its tabs move to Ungrouped\.$/,
         (_m, group) => `删除分组“${group}”？其中的标签将移到未分组。`,
@@ -1245,6 +1492,20 @@
         (_m, n) => `窗口太小，容纳不下 ${n} 个窗格：只显示聚焦的窗格`,
       ],
       [/^The agent exited \((-?\d+)\)$/, (_m, code) => `智能体已退出（${code}）`],
+      // A settings write the server did not store (settings-ui.js). The server's reason passes
+      // through untranslated; the one the page supplies itself has its own entry.
+      [
+        /^Saved on this device, not on the server: ([\s\S]+)$/,
+        (_m, why) => `已保存到本设备，但未保存到服务器：${ZH_CN[why] || why}`,
+      ],
+      [
+        /^(Run mode|Respawn presets) saved on this device, not on the server: ([\s\S]+)$/,
+        (_m, what, why) =>
+          `${what === 'Run mode' ? '运行模式' : '重生预设'}已保存到本设备，但未保存到服务器：${ZH_CN[why] || why}`,
+      ],
+      // A dialog read off a hook-less CLI's screen (src/web/screen-blocked.ts), as the
+      // notification drawer shows it. The CLI's label passes through.
+      [/^(.+) is waiting for your answer in the terminal$/, (_m, cli) => `${cli} 正在终端中等待你的回答`],
       [/^The agent exited \(signal (\d+)\)$/, (_m, signal) => `智能体已退出（信号 ${signal}）`],
       // A session header's harness logo (tile grid, split pane): "<harness> · <model>",
       // and where the model came from when the CLI did not report it. The harness
@@ -1280,9 +1541,8 @@
       // The same while tiles can move, with the drag hint on a second line.
       // Anchored on the hint, so a bare state word is safe here.
       [
-        /^(needs you|error|waiting|working|idle|done|exited)(?: (<1m|\d+[dhm](?: \d+[hm])?))?\nDrag to move the tile$/,
-        (_m, state, duration) =>
-          `${TILE_STATE_ZH[state]}${duration ? ` ${duration}` : ''}\n${ZH_CN['Drag to move the tile']}`,
+        /^(needs you|error|waiting|working|idle|done|exited)(?: (<1m|\d+[dhm](?: \d+[hm])?))?\n(Drag to move the tile|Drag to move the tile, or out of the window to open it on its own|Drag out of the window to open the tile on its own)$/,
+        (_m, state, duration, hint) => `${TILE_STATE_ZH[state]}${duration ? ` ${duration}` : ''}\n${ZH_CN[hint]}`,
       ],
     ];
     for (const [pattern, replacement] of patterns) {

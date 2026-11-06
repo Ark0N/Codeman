@@ -37,14 +37,17 @@ a bottom sheet rather than a dropdown. On a folding phone (iPhone Duo) dialogs s
 the hinge, and opening or closing the device is treated as the device changing shape, never
 as the keyboard appearing.
 
-**Swipe left and right** on the terminal to switch sessions.
+**Swipe left and right** on the terminal to switch sessions, in the order the tabs are shown
+(a grouped or sorted tab layout included). A visible text selection pauses the swipe, and a
+terminal wider than the screen pans sideways instead.
 
 ## The home screen
 
 Tapping the "C" logo gives a session overview rather than a welcome page:
 
-1. **NEEDS YOU** first: sessions blocked on a question, with answer strips so you can
-   resolve them without opening the session.
+1. **NEEDS YOU** first: sessions blocked on a question, with answer strips (Approvals Inbox
+   on) so you can resolve a Claude dialog without opening the session. A Codex or DeepSeek
+   Harness row offers **Answer in terminal** instead, which opens the session.
 2. **CURRENT SESSIONS** with live status.
 3. **PAST SESSIONS**, resumable.
 
@@ -66,7 +69,8 @@ autocorrect: Enter adds a new line, and only Send delivers the text, as one past
 by Enter, so your line breaks reach the agent intact. Anything already typed on the terminal
 prompt moves into the editor when it opens. Drafts are kept per session and in memory only,
 so switching tabs keeps them and a page reload forgets them; a dot on the key shows a draft
-is parked. The editor's Image button attaches photos and puts their paths into the draft.
+is parked. The editor's Attach button attaches photos, videos or documents and puts their paths
+into the draft.
 Destructive commands need a double press, so you cannot fire `/clear` with a stray thumb. On
 Codex sessions the bar also shows `⇧←` and `⇧→`, the Shift-modified arrows Codex binds to
 editing the last queued message and walking the prompt stack.
@@ -100,13 +104,42 @@ looks exactly like a dead button.
 On phones this button replaces the desktop's **Run Shell** control; starting a shell moved
 into the Run dropdown.
 
+## The Attach button
+
+The toolbar's **Attach** button (the picture icon beside the mic) is the keyboard-down way to
+hand the agent a photo, a video or a document. One tap opens the system's sheet (camera,
+photo library, or a file from Files or a cloud drive), nothing else: no editor, no keyboard.
+The chosen files upload and their paths land on the prompt, so you then tap the terminal,
+write the rest of your message and press Enter. Videos (mp4, webm, mov, m4v, ogv)
+upload as recorded, up to 1 GB each by default (`CODEMAN_MAX_PASTE_VIDEO_BYTES` on the
+server changes it), so a long 4K clip takes a moment on the way up. Documents are PDFs,
+Office files (docx, pptx, xlsx), zips and plain-text formats such as txt, md, csv and json;
+a document keeps the plain-letters part of its name in the saved file, so the agent and you
+can tell the uploads apart. See [Working With Files](Working-With-Files) for where they land and how long they
+stay.
+
+If the keyboard was up when you tapped Attach, iOS closes it to show the photo sheet and does
+not bring it back, so the tap on the terminal is how you get it again. That is the system's
+behaviour around its own picker rather than a Codeman setting.
+
+The paths go onto the prompt as unsent text, exactly like something you typed, which means
+they travel with it. Tap **Compose** afterwards and the editor opens holding the paths *and*
+anything you had already typed, so you can write in front of a path, fix a word, and Send.
+**Use terminal keyboard** hands a single-line message back the other way, onto the prompt,
+so neither surface holds a half of your message. A multi-line message cannot make that trip
+(the prompt is a single line), so it stays parked as a draft and the dot on the Compose key
+shows it is waiting. The Compose editor's own Attach button remains for the times you are
+already writing in the editor.
+
 ## Tapping, links and copying
 
-- **Tap a link** in terminal output and it opens in a new tab. Same for a link in an agent's
+- **Tap a link** in terminal output and it opens in a new tab. Same for a web link in an agent's
   answer in the response viewer — it opens a tab rather than navigating the dashboard away,
   which on a phone would unload the whole session view.
-- **Tap a file path** an agent printed and the file-preview overlay opens; a log path opens the
-  log viewer. Works in scrolled-up transcript too.
+- **Tap a file path** an agent printed, or a link to one in its answer (Codex writes
+  `[report](/tmp/report.json)`), and the file-preview overlay opens (Markdown rendered, HTML
+  as a page); a log or other plain-text path opens the log viewer. Works in scrolled-up
+  transcript too.
 - A tap on the prose *beside* a link still places the cursor as usual, and a tap on a dialog's
   numbered choice still answers the dialog even when the row contains a path — the dialog wins,
   because on a phone it is the only interaction that matters.
@@ -120,6 +153,12 @@ into the Run dropdown.
 
 - The terminal and toolbar shift up when the keyboard opens, tracked through the browser's
   visual viewport rather than guessed.
+- **Opening the keyboard does not resize a Claude session.** Each resize made Claude reprint
+  its screen at the new height and drop transcript lines from the session's history, so for a
+  local Claude session the terminal keeps its size while the keyboard is up and the view
+  scrolls instead, with the prompt and the line under it just above the keyboard. Codex,
+  Claude's fullscreen mode, remote and Docker sessions still resize. **Keep Size Under
+  Keyboard** in App Settings turns it off on this device.
 - **Two ways to dismiss the keyboard**: tap outside the terminal on inert space, or tap twice
   on inert terminal content. Tapping a control never dismisses it, and tapping the prompt row
   keeps focus so you can place the caret.
@@ -138,9 +177,9 @@ phone, and it is the main reason the feature exists.
 
 ## Notifications
 
-Push notifications reach you with no tab open, and with the Approvals Inbox on they carry
-**Approve** and **Deny** buttons handled by the service worker, so you can unblock an agent
-from the lock screen.
+Push notifications reach you with no tab open, and with the Approvals Inbox on, those for a
+Claude permission prompt carry **Approve** and **Deny** buttons handled by the service
+worker, so you can unblock a Claude agent from the lock screen.
 
 Setup in [Notifications And Approvals](Notifications-And-Approvals).
 

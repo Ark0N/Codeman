@@ -24,6 +24,7 @@ import { ApprovalAnswerSchema } from '../schemas.js';
 import { parseBody, getAuthUser, canAccessOwned, findSessionOrFail } from '../route-helpers.js';
 import { approvalInbox, type ApprovalItem } from '../approval-inbox.js';
 import { hooksAvailableForMode, sessionHookOptions } from '../session-wait-registry.js';
+import { getCli } from '../../config/cli-registry/registry.js';
 import type { SessionPort } from '../ports/index.js';
 
 /**
@@ -99,21 +100,22 @@ export function registerApprovalRoutes(app: FastifyInstance, ctx: SessionPort): 
     // Throws 404 (not 403) for sessions the caller does not own, same
     // no-existence-leak rule as every other session route.
     const session = findSessionOrFail(ctx, item.sessionId, req);
-    if (!hooksAvailableForMode(session.mode, sessionHookOptions(session))) {
-      return createErrorResponse(ApiErrorCode.CONFLICT, 'Session mode cannot have pending approvals');
-    }
-    // A dsh approval is an ALERT, not an answerable card: the dialog belongs to
-    // a third-party TUI whose keystroke contract Codeman has not measured, the
-    // Claude-shaped option parser never reads options off its frames, and
-    // verifyStillAnswerable() can therefore never be conclusive for it — so the
-    // '1'/Esc below would be a blind keystroke into a foreign composer. The item
-    // still raises the red alert and clears on the harness's own working/stop
-    // reports; answering happens in the terminal.
-    if (session.mode === 'deepseek') {
+    // Alert-only items: the dialog belongs to a TUI whose keystroke contract Codeman
+    // has not measured, so '1'/Esc would be a blind keystroke into a foreign composer.
+    // Two sources today: a supervised-hook CLI (DeepSeek Harness), whose item clears on
+    // the harness's own working/stop reports, and a dialog read off the screen of a
+    // hook-less CLI (codex, web/screen-blocked.ts), which clears when it leaves the
+    // screen and was read from text the agent writes, so it must never steer a key.
+    // Checked BEFORE the hooks gate below: a codex session has no hooks, and "this mode
+    // cannot have pending approvals" would be false about the item the caller holds.
+    if (item.answerInTerminal) {
       return createErrorResponse(
         ApiErrorCode.INVALID_INPUT,
-        'DeepSeek Harness approvals must be answered in the terminal: the dialog belongs to a third-party TUI whose keystrokes Codeman cannot verify.'
+        `${getCli(session.mode)?.label ?? session.mode} approvals must be answered in the terminal: the dialog belongs to a TUI whose keystrokes Codeman cannot verify.`
       );
+    }
+    if (!hooksAvailableForMode(session.mode, sessionHookOptions(session))) {
+      return createErrorResponse(ApiErrorCode.CONFLICT, 'Session mode cannot have pending approvals');
     }
 
     // Re-capture the pane before aiming keystrokes at it: if the dialog was

@@ -1,0 +1,598 @@
+/**
+ * @fileoverview Folder grid — `POST /api/sessions/:id/folders` grants + lists a
+ * folder, `GET …/folders/:folderId/files/:name/(raw|preview|thumbnail)` serves one
+ * of its files by name. Local folders are real temp dirs; a remote case mocks only
+ * the ssh IO, and the remote listing script itself runs on a real `sh`.
+ *
+ * Port: N/A (app.inject doesn't open ports)
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { Readable } from 'node:stream';
+import { execFileSync } from 'node:child_process';
+import {
+  closeSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
+import fs from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
+import { registerFileRoutes } from '../../src/web/routes/file-routes.js';
+import { folderGrants, validFolderFileName } from '../../src/folder-listing.js';
+import type { SessionRemote } from '../../src/types/session.js';
+
+vi.mock('../../src/remote-files.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/remote-files.js')>();
+  return {
+    ...actual,
+    remoteListFolder: vi.fn(),
+    remoteProbePaths: vi.fn(),
+    remoteCreateReadStream: vi.fn(),
+  };
+});
+
+vi.mock('../../src/utils/bounded-path-probe.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/utils/bounded-path-probe.js')>();
+  return { ...actual, probePathKind: vi.fn(actual.probePathKind) };
+});
+
+import { probePathKind } from '../../src/utils/bounded-path-probe.js';
+import {
+  buildRemoteFolderListCommand,
+  parseRemoteFolderListOutput,
+  remoteCreateReadStream,
+  remoteListFolder,
+  remoteProbePaths,
+} from '../../src/remote-files.js';
+
+const mockedProbePathKind = vi.mocked(probePathKind);
+const mockedListFolder = vi.mocked(remoteListFolder);
+const mockedProbePaths = vi.mocked(remoteProbePaths);
+const mockedCreateReadStream = vi.mocked(remoteCreateReadStream);
+
+function touch(path: string, body: string, mtimeSec: number) {
+  writeFileSync(path, body);
+  utimesSync(path, mtimeSec, mtimeSec);
+}
+
+describe('folder grid routes — local folder', () => {
+  let harness: RouteTestHarness;
+  let sessionId: string;
+  let root: string;
+  let dir: string;
+
+  beforeEach(async () => {
+    harness = await createRouteTestHarness(registerFileRoutes);
+    sessionId = harness.ctx._sessionId;
+    root = mkdtempSync(join(tmpdir(), 'codeman-folder-grid-'));
+    dir = join(root, 'renders');
+    mkdirSync(dir);
+    touch(join(dir, 'old.png'), 'old-png', 1_700_000_000);
+    touch(join(dir, 'new.PNG'), 'new-png', 1_700_000_500);
+    touch(join(dir, 'clip.mp4'), 'mp4', 1_700_000_100);
+    touch(join(dir, 'notes.xyz'), 'unsupported', 1_700_000_900);
+    touch(join(dir, '.hidden.png'), 'hidden', 1_700_000_900);
+    mkdirSync(join(dir, 'shots'));
+    mkdirSync(join(dir, '.cache'));
+    harness.ctx._session.workingDir = root;
+  });
+
+  afterEach(async () => {
+    await harness.app.close();
+    folderGrants.clearSession(sessionId);
+    rmSync(root, { recursive: true, force: true });
+    delete process.env.CODEMAN_ATTACHMENT_CONFINE;
+    delete process.env.CODEMAN_ATTACHMENT_BLOCKED_PATHS;
+  });
+
+  async function grant(path: string) {
+    return harness.app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/folders`, payload: { path } });
+  }
+
+  it('lists supported files newest first plus subfolders, skipping hidden + unsupported', async () => {
+    const res = await grant(dir);
+    expect(res.statusCode).toBe(200);
+    const data = JSON.parse(res.body).data;
+    expect(data.folderId).toMatch(/^fld_/);
+    expect(data.path).toBe(dir);
+    expect(data.files.map((f: { name: string }) => f.name)).toEqual(['new.PNG', 'clip.mp4', 'old.png']);
+    expect(data.files[0]).toMatchObject({ extension: 'png', attachmentType: 'image', size: 7 });
+    expect(data.folders).toEqual(['shots']);
+    expect(data.truncated).toBe(false);
+  });
+
+  it('grants the same folder the same id', async () => {
+    const a = JSON.parse((await grant(dir)).body).data.folderId;
+    const b = JSON.parse((await grant(`${dir}/`)).body).data.folderId;
+    expect(b).toBe(a);
+  });
+
+  it('rejects a relative path, a file, and a missing folder', async () => {
+    expect((await grant('renders')).statusCode).toBe(400);
+    expect((await grant(join(dir, 'old.png'))).statusCode).toBe(400);
+    expect((await grant(join(root, 'nope'))).statusCode).toBe(404);
+  });
+
+  it('refuses a blocked folder and a folder outside a confined workspace', async () => {
+    process.env.CODEMAN_ATTACHMENT_BLOCKED_PATHS = dir;
+    expect((await grant(dir)).statusCode).toBe(403);
+    delete process.env.CODEMAN_ATTACHMENT_BLOCKED_PATHS;
+
+    process.env.CODEMAN_ATTACHMENT_CONFINE = '1';
+    harness.ctx._session.workingDir = join(dir, 'shots');
+    expect((await grant(dir)).statusCode).toBe(403);
+    harness.ctx._session.workingDir = root;
+    expect((await grant(dir)).statusCode).toBe(200);
+  });
+
+  it('never reads a refused folder: the guard runs on the resolved folder first', async () => {
+    const readdir = vi.spyOn(fs, 'readdir');
+    try {
+      process.env.CODEMAN_ATTACHMENT_BLOCKED_PATHS = dir;
+      expect((await grant(dir)).statusCode).toBe(403);
+      expect(readdir).not.toHaveBeenCalled();
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it('answers a folder or file that does not respond with 503, never 404, and does not read it', async () => {
+    const readdir = vi.spyOn(fs, 'readdir');
+    try {
+      mockedProbePathKind.mockResolvedValueOnce('unknown');
+      const res = await grant(dir);
+      expect(res.statusCode).toBe(503);
+      expect(JSON.parse(res.body).error).toContain(`Folder is not responding or not readable: ${dir}`);
+      expect(readdir).not.toHaveBeenCalled();
+    } finally {
+      readdir.mockRestore();
+    }
+
+    const { folderId } = JSON.parse((await grant(dir)).body).data;
+    mockedProbePathKind.mockResolvedValueOnce('unknown');
+    const file = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${folderId}/files/old.png/raw`,
+    });
+    expect(file.statusCode).toBe(503);
+    expect(JSON.parse(file.body).error).toContain('File is not responding or not readable');
+  });
+
+  it('does not serve a hidden file by name, as the listing hides it', async () => {
+    const { folderId } = JSON.parse((await grant(dir)).body).data;
+    const res = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${folderId}/files/.hidden.png/raw`,
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('serves a granted file by name, with ranges', async () => {
+    const { folderId } = JSON.parse((await grant(dir)).body).data;
+    const res = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${folderId}/files/old.png/raw`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+    expect(res.body).toBe('old-png');
+
+    const ranged = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${folderId}/files/old.png/raw`,
+      headers: { range: 'bytes=0-2' },
+    });
+    expect(ranged.statusCode).toBe(206);
+    expect(ranged.body).toBe('old');
+  });
+
+  it('redirects a non-office preview to raw', async () => {
+    const { folderId } = JSON.parse((await grant(dir)).body).data;
+    const res = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${folderId}/files/clip.mp4/preview`,
+    });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe(`/api/sessions/${sessionId}/folders/${folderId}/files/clip.mp4/raw`);
+  });
+
+  it('never serves a name that leaves the folder or has an unsupported type', async () => {
+    const { folderId } = JSON.parse((await grant(dir)).body).data;
+    writeFileSync(join(root, 'outside.png'), 'outside');
+    for (const name of ['..%2Foutside.png', '..', '.', 'notes.xyz', 'shots%2Fx.png']) {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${sessionId}/folders/${folderId}/files/${name}/raw`,
+      });
+      expect(res.statusCode, name).not.toBe(200);
+    }
+    const missing = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${folderId}/files/gone.png/raw`,
+    });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it('refuses a file in the folder that symlinks to a blocked target', async () => {
+    const secret = join(root, 'secret');
+    mkdirSync(secret);
+    writeFileSync(join(secret, 'key.png'), 'secret');
+    symlinkSync(join(secret, 'key.png'), join(dir, 'innocent.png'));
+    const { folderId } = JSON.parse((await grant(dir)).body).data;
+    process.env.CODEMAN_ATTACHMENT_BLOCKED_PATHS = secret;
+    const res = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${folderId}/files/innocent.png/raw`,
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  // The attachment gate (`registerExternalAttachment`) judges the file a symlink
+  // RESOLVES to: its extension must be a supported one and it must be a regular
+  // file. The folder routes only looked at the requested name, so a name that
+  // passed (`shot.png`) could serve anything it pointed at.
+  describe('the resolved target is held to the attachment gate', () => {
+    const files = (folderId: string, name: string, leaf: 'raw' | 'preview' | 'thumbnail' = 'raw') =>
+      harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${sessionId}/folders/${folderId}/files/${encodeURIComponent(name)}/${leaf}`,
+      });
+
+    it('refuses a supported-looking name whose target has an unsupported extension', async () => {
+      writeFileSync(join(root, 'secret.bin'), 'secret');
+      symlinkSync(join(root, 'secret.bin'), join(dir, 'shot.png'));
+      const { folderId } = JSON.parse((await grant(dir)).body).data;
+      for (const leaf of ['raw', 'preview', 'thumbnail'] as const) {
+        const res = await files(folderId, 'shot.png', leaf);
+        expect(res.statusCode, leaf).toBe(400);
+        expect(res.body, leaf).not.toContain('secret');
+      }
+    });
+
+    it('refuses a name whose target has no extension at all', async () => {
+      writeFileSync(join(root, 'history'), 'private history');
+      symlinkSync(join(root, 'history'), join(dir, 'notes.txt'));
+      const { folderId } = JSON.parse((await grant(dir)).body).data;
+      const res = await files(folderId, 'notes.txt');
+      expect(res.statusCode).toBe(400);
+      expect(res.body).not.toContain('private history');
+    });
+
+    it('refuses a device node behind a supported name', async () => {
+      // /dev/null, not /dev/zero: the same class (character device, no
+      // extension), but it ends the stream instead of filling the test's memory
+      // should the guard ever be missing.
+      symlinkSync('/dev/null', join(dir, 'zero.txt'));
+      const { folderId } = JSON.parse((await grant(dir)).body).data;
+      const res = await files(folderId, 'zero.txt');
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('refuses a FIFO without opening it', async () => {
+      const fifo = join(dir, 'pipe.txt');
+      execFileSync('mkfifo', [fifo]);
+      // Hold both ends open from here: if the route ever did open it, the open
+      // returns at once and the read blocks, which the race below reports as a
+      // hang instead of leaving a libuv worker parked on a writer that never comes.
+      const fd = openSync(fifo, 'r+');
+      try {
+        const { folderId } = JSON.parse((await grant(dir)).body).data;
+        const outcome = await Promise.race([
+          files(folderId, 'pipe.txt').then((res) => res.statusCode),
+          new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 2000)),
+        ]);
+        expect(outcome).toBe(400);
+      } finally {
+        closeSync(fd);
+      }
+    });
+
+    it('still serves a symlink whose target is a supported regular file', async () => {
+      writeFileSync(join(root, 'real.png'), 'real-png');
+      symlinkSync(join(root, 'real.png'), join(dir, 'alias.png'));
+      const { folderId } = JSON.parse((await grant(dir)).body).data;
+      const res = await files(folderId, 'alias.png');
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe('real-png');
+    });
+  });
+
+  it('serves a file whose name is longer than the 100-character default of a route parameter', async () => {
+    // The listing shows it (names go up to 255), so the raw/preview/thumbnail
+    // routes have to be able to take it back.
+    const longName = `${'n'.repeat(146)}.png`;
+    expect(longName.length).toBe(150);
+    touch(join(dir, longName), 'long-png', 1_700_000_300);
+    const { folderId } = JSON.parse((await grant(dir)).body).data;
+    const res = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${folderId}/files/${longName}/raw`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('long-png');
+  });
+
+  // A Docker case is a LOCAL session for the file routes, but its `~` is the
+  // container's home: a separate, seeded directory. `~/x.png` printed inside the
+  // container used to open the HOST's `~/x.png`.
+  describe('~/ in a Docker case', () => {
+    beforeEach(() => {
+      (harness.ctx._session as { docker?: unknown }).docker = {
+        hostId: 'local',
+        label: 'local',
+        engine: 'docker',
+        image: 'codeman-sandbox',
+        containerName: 'codeman-case-test',
+        hostWorkspacePath: root,
+        containerWorkdir: root,
+        network: 'bridge',
+      };
+    });
+
+    it('refuses a ~/ folder, and still lists an absolute one', async () => {
+      const home = await grant('~/renders');
+      expect(home.statusCode).toBe(400);
+      expect(JSON.parse(home.body).error).toMatch(/docker/i);
+      // A bare `~` is this host's home as much as `~/` is.
+      expect((await grant('~')).statusCode).toBe(400);
+      expect((await grant(dir)).statusCode).toBe(200);
+    });
+
+    it('refuses a ~/ attachment, and still registers an absolute one', async () => {
+      const post = (path: string) =>
+        harness.app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/attachments`, payload: { path } });
+      const home = await post('~/renders/old.png');
+      expect(home.statusCode).toBe(400);
+      expect(JSON.parse(home.body).error).toMatch(/docker/i);
+      expect((await post(join(dir, 'old.png'))).statusCode).toBe(200);
+    });
+  });
+
+  it('keeps resolving ~/ for a session that is not in a Docker case', async () => {
+    // The contrast: only the Docker case is turned away, `~/` itself still works.
+    const res = await grant('~/this-folder-does-not-exist-codeman-test');
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('404s an unknown folder id and another session’s grant', async () => {
+    const res = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/fld_nope/files/old.png/raw`,
+    });
+    expect(res.statusCode).toBe(404);
+    const foreign = folderGrants.grant('another-session', dir);
+    const res2 = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${foreign}/files/old.png/raw`,
+    });
+    expect(res2.statusCode).toBe(404);
+    folderGrants.clearSession('another-session');
+  });
+});
+
+describe('folder grid routes — remote (SSH) case', () => {
+  const REMOTE_DIR = '/srv/remote/case';
+  const remote: SessionRemote = {
+    hostId: 'host-1',
+    label: 'testhost',
+    host: '192.0.2.10',
+    username: 'j',
+    remotePath: REMOTE_DIR,
+  };
+  let harness: RouteTestHarness;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    harness = await createRouteTestHarness(registerFileRoutes);
+    sessionId = harness.ctx._sessionId;
+    harness.ctx._session.workingDir = REMOTE_DIR;
+    harness.ctx._session.remote = { ...remote };
+    mockedListFolder.mockResolvedValue({
+      dir: '/mnt/raid/styleframes',
+      entries: [
+        { kind: 'file', name: 'a.png', size: 3, mtimeMs: 1000 },
+        { kind: 'file', name: 'b.jpg', size: 4, mtimeMs: 2000 },
+        { kind: 'directory', name: 'old', size: 0, mtimeMs: 0 },
+      ],
+      truncated: true,
+    });
+    mockedProbePaths.mockResolvedValue([
+      { realPath: '/mnt/raid/styleframes/a.png', kind: 'file', size: 3, mtimeMs: 1000 },
+      { realPath: REMOTE_DIR, kind: 'directory', size: 0, mtimeMs: 0 },
+    ]);
+    mockedCreateReadStream.mockReturnValue({ stream: Readable.from([Buffer.from('abc')]), close: vi.fn() } as never);
+  });
+
+  afterEach(async () => {
+    await harness.app.close();
+    folderGrants.clearSession(sessionId);
+    vi.clearAllMocks();
+  });
+
+  it('lists the folder on the remote host and serves its files over ssh', async () => {
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/folders`,
+      payload: { path: '~/styleframes' },
+    });
+    expect(res.statusCode).toBe(200);
+    const data = JSON.parse(res.body).data;
+    expect(mockedListFolder).toHaveBeenCalledWith(
+      expect.objectContaining({ host: '192.0.2.10' }),
+      '~/styleframes',
+      expect.arrayContaining(['png', 'pdf']),
+      expect.any(Number)
+    );
+    expect(data.path).toBe('/mnt/raid/styleframes');
+    expect(data.files.map((f: { name: string }) => f.name)).toEqual(['b.jpg', 'a.png']);
+    expect(data.folders).toEqual(['old']);
+    expect(data.truncated).toBe(true);
+
+    const raw = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${data.folderId}/files/a.png/raw`,
+    });
+    expect(raw.statusCode).toBe(200);
+    expect(raw.body).toBe('abc');
+    expect(mockedProbePaths).toHaveBeenCalledWith(expect.anything(), ['/mnt/raid/styleframes/a.png', REMOTE_DIR]);
+
+    const thumb = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/folders/${data.folderId}/files/a.png/thumbnail`,
+    });
+    expect(thumb.statusCode).toBe(400);
+  });
+
+  describe('the resolved remote target is held to the attachment gate', () => {
+    async function rawOf(name: string) {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/folders`,
+        payload: { path: '~/styleframes' },
+      });
+      const { folderId } = JSON.parse(res.body).data;
+      return harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${sessionId}/folders/${folderId}/files/${name}/raw`,
+      });
+    }
+
+    it('refuses a name whose remote symlink resolves to an unsupported extension', async () => {
+      mockedProbePaths.mockResolvedValue([
+        { realPath: '/mnt/raid/secret.bin', kind: 'file', size: 6, mtimeMs: 1000 },
+        { realPath: REMOTE_DIR, kind: 'directory', size: 0, mtimeMs: 0 },
+      ]);
+      const res = await rawOf('a.png');
+      expect(res.statusCode).toBe(400);
+      expect(mockedCreateReadStream).not.toHaveBeenCalled();
+    });
+
+    it('refuses a name that resolves to something that is not a regular file', async () => {
+      mockedProbePaths.mockResolvedValue([
+        { realPath: '/mnt/raid/styleframes/a.png', kind: 'other', size: 0, mtimeMs: 0 },
+        { realPath: REMOTE_DIR, kind: 'directory', size: 0, mtimeMs: 0 },
+      ]);
+      const res = await rawOf('a.png');
+      expect(res.statusCode).toBe(400);
+      expect(mockedCreateReadStream).not.toHaveBeenCalled();
+    });
+  });
+
+  it('answers 400 "Not a folder" for a remote file, so the client falls back to the preview', async () => {
+    mockedListFolder.mockResolvedValue('not-a-folder');
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/folders`,
+      payload: { path: '/srv/remote/case/Makefile' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/not a folder/i);
+  });
+
+  it('answers 404 for a missing remote folder', async () => {
+    mockedListFolder.mockResolvedValue(null);
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/folders`,
+      payload: { path: '/nope' },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('remote folder listing script (real sh)', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'codeman-folder-sh-'));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function run(dir: string, max = 100, home = root) {
+    const stdout = execFileSync('sh', ['-c', buildRemoteFolderListCommand(dir, ['png', 'pdf'], max)], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home },
+    });
+    return parseRemoteFolderListOutput(stdout);
+  }
+
+  it('lists supported files with size/mtime, subfolders, odd names; resolves ~ and symlinks', () => {
+    const dir = join(root, 'frames');
+    mkdirSync(dir);
+    touch(join(dir, "it's a | frame.PNG"), '12345', 1_700_000_000);
+    touch(join(dir, 'doc.pdf'), 'pdf', 1_700_000_100);
+    touch(join(dir, 'shot.Png'), 'x', 1_700_000_100);
+    touch(join(dir, 'skip.txt'), 'x', 1_700_000_100);
+    touch(join(dir, '.hidden.png'), 'x', 1_700_000_100);
+    mkdirSync(join(dir, 'sub dir'));
+    symlinkSync(dir, join(root, 'link'));
+
+    const listing = run('~/link');
+    expect(listing?.dir).toBe(dir);
+    expect(listing?.truncated).toBe(false);
+    const byName = Object.fromEntries((listing?.entries ?? []).map((e) => [e.name, e]));
+    // Any case, as the local listing: `shot.Png` too.
+    expect(Object.keys(byName).sort()).toEqual(['doc.pdf', "it's a | frame.PNG", 'shot.Png', 'sub dir']);
+    expect(byName["it's a | frame.PNG"]).toMatchObject({ kind: 'file', size: 5, mtimeMs: 1_700_000_000_000 });
+    expect(byName['sub dir']).toMatchObject({ kind: 'directory' });
+  });
+
+  it('is not thrown off by a login shell whose `cd` prints the directory (Hufflepuff: alias cd=folderprompt)', () => {
+    // sshd hands the command to the remote user's LOGIN shell. There `cd` is an
+    // alias that echoes the new directory, so `r=$(cd -P "$d" && pwd -P)` captured
+    // the path twice and the listing failed ("zsh: no matches found: /x\n/x/*").
+    // The script has to run under an explicit `sh`, which reads no rc file.
+    const dir = join(root, 'frames');
+    mkdirSync(dir);
+    touch(join(dir, 'a.png'), 'x', 1_700_000_000);
+    const stdout = execFileSync(
+      'bash',
+      ['-c', `cd() { builtin cd "$@" && pwd; }; ${buildRemoteFolderListCommand(dir, ['png'], 100)}`],
+      { encoding: 'utf8', env: { ...process.env, HOME: root } }
+    );
+    const listing = parseRemoteFolderListOutput(stdout);
+    expect(listing).not.toBeNull();
+    expect(listing).not.toBe('not-a-folder');
+    expect((listing as { dir: string }).dir).toBe(dir);
+    expect((listing as { entries: { name: string }[] }).entries.map((e) => e.name)).toEqual(['a.png']);
+  });
+
+  it('caps entries; tells a missing folder (null) from a file', () => {
+    for (let i = 0; i < 5; i++) touch(join(root, `f${i}.png`), 'x', 1_700_000_000);
+    const capped = run(root, 3);
+    expect(capped?.entries).toHaveLength(3);
+    expect(capped?.truncated).toBe(true);
+    expect(run(join(root, 'missing'))).toBeNull();
+    expect(run(join(root, 'f0.png'))).toBe('not-a-folder');
+  });
+});
+
+describe('validFolderFileName', () => {
+  it('accepts bare supported names only', () => {
+    expect(validFolderFileName('a b.png')).toBe('a b.png');
+    for (const bad of ['', '.', '..', '.hidden.png', 'a/b.png', 'a\\b.png', 'x.xyz', 'a\0.png', 42]) {
+      expect(validFolderFileName(bad)).toBeNull();
+    }
+  });
+});
+
+describe('server wiring', () => {
+  // The route harness builds its own Fastify instance, so a test through it
+  // cannot notice the real server losing the option. Same style as the other
+  // wiring guards: read the source, not a comment.
+  it('gives the real server the same route-parameter limit the folder routes are tested with', () => {
+    const source = readFileSync(join(__dirname, '../../src/web/server.ts'), 'utf-8');
+    const instances = source.match(/Fastify\(\{[^}]*\}[^)]*\)/g) ?? [];
+    expect(instances.length).toBeGreaterThanOrEqual(2);
+    for (const instance of instances) {
+      expect(instance).toContain('maxParamLength: MAX_ROUTE_PARAM_LENGTH');
+    }
+  });
+});

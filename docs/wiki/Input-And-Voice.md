@@ -125,9 +125,10 @@ Sending prompts over the API has one rule that catches everyone: **the payload m
 `\r`** or Enter is never sent. The request still succeeds, the text sits unsubmitted in the
 composer, and any wait burns its whole timeout on a turn that never started.
 
-Input is also **single line**. Embedded newlines are stripped rather than rejected, so
-`"echo A\necho B\r"` runs the joined `echo Aecho B`. Put multi-line content in a file and
-tell the agent to read it.
+With `useMux`, embedded newlines are kept: multi-line input goes in as one paste and the
+Enter after it submits all of it, so `"echo A\necho B\r"` runs both commands in a shell. The
+check that re-presses a stranded Enter cannot reliably recognise a multi-line paste, so long
+multi-line content is still safer in a file the agent is told to read.
 
 See [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent).
 

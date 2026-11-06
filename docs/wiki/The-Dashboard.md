@@ -29,7 +29,7 @@ Session List Layout** can move it into a vertical sidebar on the left instead, a
 | -------------------- | --------------------------------------------------------------------------------- |
 | **Header tab strip** | The default. One list in tab order unless you pick another [Tab layout](#tab-layouts); it scrolls sideways on a phone. |
 | **Left sidebar**     | A vertical list with a filter box and a live session count. `Alt+B` collapses it to a narrow rail that keeps the status dots and task badges visible. On a phone it is an off-canvas drawer rather than a docked rail. A detailed variant adds the home screen's per-session line (`created 3d ago · working 12m`) and a status pill. |
-| **Vertical rail**    | The strip turned vertical beside the terminal, resizable, with detailed rows by default. **Vertical Rail Order** sorts it by activity (blocked on you first, then longest running, then most recently quiet), the same order as the home screens; pick *Manual* to get your own order and drag-reordering back. **Tab groups:** pick *Move to new group* from a row's ⋯ menu (or Shift+F10 on it) to make the first one; a group header's menu (right-click, Shift+F10 or its ⋯ glyph) renames it (also F2), reorders or deletes it, rows move between groups from their own menu or by dragging with a mouse or pen, and a collapsed group stays collapsed on that device. **Search sessions** at the top of the rail narrows it to the tabs whose name matches (a web tab by its title), across every group, collapsed ones included, without changing the groups or the order; a tab with an alert stays visible even when its name does not match; Escape or × clears it, and it is never saved. Desktop and tablet only. |
+| **Vertical rail**    | The strip turned vertical beside the terminal, resizable, with detailed rows by default. **Vertical Rail Order** sorts it by activity (blocked on you first, then longest running, then most recently quiet), the same order as the home screens; pick *Manual* to get your own order and drag-reordering back. **Tab groups:** pick *Move to new group* from a row's ⋯ menu (or Shift+F10 on it) to make the first one; a group header's menu (right-click, Shift+F10 or its ⋯ glyph) renames it (also F2), reorders or deletes it, rows move between groups from their own menu or by dragging with a mouse or pen, and a collapsed group stays collapsed on that device. **Search sessions** at the top of the rail narrows it to the tabs whose name matches (a web tab by its title), across every group, collapsed ones included, without changing the groups or the order; a tab with an alert stays visible even when its name does not match; Escape or × clears it, and it is never saved. **Focus:** *Add to Focus* in a row's ⋯ menu (right-click on a web tab) pins a shortcut to that tab in a **Focus** section at the top of the rail, with or without groups; the tab itself stays where it is. Click a shortcut to switch to its tab, right-click it (or press the menu key) for *Remove from Focus*. Focus follows you across devices; whether it is collapsed is kept per device. Desktop and tablet only. |
 
 It is the same list either way, just re-hosted: tab order, drag-to-reorder, the `Alt+1`
 to `Alt+9` numbers and every status colour below behave identically in both. The setting is
@@ -76,6 +76,14 @@ One tab per session, in your order, and that order syncs across your devices.
 An agent tab shows its CLI's logo before the name, and a shell tab an `SH` badge. **CLI Logos
 on Tabs** (App Settings → Appearance → Tabs) hides the logos on that device; the tile and split
 headers and the Run menus keep theirs.
+
+**New Session Button on Tabs** (same place, per device, off by default) adds a **+** beside
+the tab's gear. It lists the CLIs that tab's case can start, each with its logo and name (a
+Docker case lists what its container has), and a pick starts one session in that tab's case,
+or the worktree it runs in, and in its named group. The Run button keeps its own mode and case.
+Wherever a tab has a row menu (the vertical rail, the sidebar, `Shift+F10` on a grouped row),
+the same list is its **New session here…** entry. From a tab outside any named group, the new
+session lands in the case's default group if the case has one, as a Run from the toolbar does.
 
 **Status is carried by the dot and the tab's own styling:**
 
@@ -148,7 +156,7 @@ The right side of the header. Almost all of these are off until you enable them 
 | CPU / MEM              | On                 | Server resource use. Drawn as a compact pill by default; see Header Stats Style below. |
 | File Viewer            | On                 | Toggles the file browser panel.                                                  |
 | Settings gear          | Always on          | App Settings.                                                                    |
-| Plan usage chip        | On, desktop only   | Live Claude subscription usage. Claude-only, and needs its telemetry exporter, which the same setting installs. |
+| Plan usage chip        | On, desktop only   | Live subscription usage: Claude (needs its telemetry exporter, which the same setting installs), Codex limits and the Copilot monthly quota. |
 | Session Manager        | Off                | The full session list, live and historical.                                      |
 | Approvals bell         | Off                | Cross-session queue of prompts waiting on a human. Appears only when the count is above zero. Never shown on phones. |
 | Read My Mind 🧠        | Off                | Predicts your next prompt for this case. Claude-only.                            |
@@ -178,6 +186,14 @@ The connection readout, CPU, MEM and the plan usage windows can be drawn three w
 
 Hiding System Stats or Plan Usage still hides them in every style.
 
+The line between the session tabs and the toolbar is a handle: drag it right to narrow the toolbar
+(it wraps onto a second line and the usage readings shed their labels, then their provider names,
+then, in the Compact style, their percentages), left to widen it. The GPU, VRAM and clock readings
+keep their labels, since their values look like CPU's and MEM's; at the narrowest Compact step a
+clock, which has no ring, is hidden. Arrow keys resize it, and
+double-click or Home resets it. It stops at the widest reading, the width is kept per device, and it
+is not shown on phones, in the sidebar layout, in the vertical rail or in a solo window.
+
 New header controls never appear on phones. Phone layout is deliberately minimal and is
 covered in [Mobile Guide](Mobile-Guide).
 
@@ -202,6 +218,15 @@ Both wait about 2.5 seconds before appearing, so a deploy that restarts the serv
 flash a warning at you every time. If the browser reports itself offline, the grace period
 is skipped.
 
+**The transport readout.** With a session open, the header shows how its terminal is
+connected: `WS` (WebSocket, the normal case), `WS…` (connecting or reconnecting) or `HTTP`
+(the WebSocket is unavailable and input goes over HTTP). If typed or pasted input is backing
+up faster than it is acknowledged, the readout grows a suffix such as `WS · 1.2KB queued`.
+That suffix appears only after the backlog has stayed up for about a second, so a paste or a
+fast burst that clears at once does not make the pill widen and shrink. (It is part of the
+text line, so you see it in the Compact and As before header styles; Tiles hides that line and
+shows `WS live`, and phones hide it too.)
+
 There is also a watchdog for the case where the connection stops delivering without
 erroring. If the server's heartbeat stops arriving, Codeman reconnects on its own rather
 than sitting on a green dot showing frozen data.
@@ -214,17 +239,28 @@ TUIs render correctly.
 Worth knowing:
 
 - **Scrollback.** Agent/TUI sessions pull their entire tmux scrollback on first open.
+  A fullscreen Claude tab keeps its history inside Claude, so switching back to it
+  reloads only the current screen, which keeps tab switches fast.
   Shell sessions open from a bounded recent tail so a large transcript cannot stall tab
   switching. Scrolling to the top of a Shell pane pulls the most recent 1 MiB of its tmux
-  history; press **Load full history** to pull the rest explicitly. Automatic output
+  history; press **Load full history** to pull the rest explicitly. That notice only
+  appears once you scroll to the top, leaves when you scroll back down, and stays away
+  for that tab once you close it. Sessions whose CLI keeps its own history (fullscreen
+  Claude) never show it, since there is nothing more to load. Automatic output
   recovery stays within the bounded browser buffer.
 - **Wheel and touch scrolling** are forwarded into Claude's own transcript when a recent
   Claude runs fullscreen (`CLAUDE_CODE_NO_FLICKER=1`, or `"tui": "fullscreen"` in
   `~/.claude/settings.json`), so the wheel scrolls the conversation rather than the terminal.
-  Claude's default inline view keeps its history in the terminal and scrolls locally. `Shift+Wheel` is
+  Codex with mouse tracking on gets the wheel forwarded like fullscreen Claude; otherwise
+  it pages its transcript or scrolls locally. Claude's default inline view keeps its history
+  in the terminal and scrolls locally. `Shift+Wheel` is
   always local scrollback. OpenCode's wheel and swipes page its own conversation
-  (PageUp/PageDown); in a grid tile or the split view's second pane the wheel does
-  too. Other CLIs scroll locally.
+  (PageUp/PageDown), as do untracked fullscreen Codex versions that leave the terminal
+  no history of its own (an older Codex that draws inline keeps
+  its history in the terminal and scrolls locally). The first small movement of a
+  gesture pages at once, then one page per half screen of travel; one finger on the
+  screen is one gesture however slowly it moves. In a grid tile or the split view's
+  second pane the wheel pages too. Other CLIs scroll locally.
 - **Selection copy.** `Ctrl+C` copies when text is selected and interrupts when it is not.
   `Ctrl+Shift+C` always copies.
 - **Selecting where the CLI owns the mouse.** `Shift+drag` starts a selection even in a pane

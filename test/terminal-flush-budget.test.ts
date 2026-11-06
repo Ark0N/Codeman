@@ -22,6 +22,7 @@ function loadTerminalUiHarness(mode: string) {
       this.postMessage = () => {};
     },
     DEC_SYNC_STRIP_RE: /\x1b\[\?2026[hl]/g,
+    OSC52_STRIP_RE: /\x1b\]52;[^\x07\x1b]*(?:\x07|\x1b\\)/g,
     TERMINAL_CHUNK_SIZE: 32 * 1024,
   });
 
@@ -159,11 +160,36 @@ describe('terminal flush budget', () => {
     const first = app._onSessionNeedsRefresh({ id: 'session-1' });
     const duplicate = app._onSessionNeedsRefresh({ id: 'session-1' });
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock).toHaveBeenCalledWith('/api/sessions/session-1/terminal?tail=1048576');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/sessions/session-1/terminal?full=1&tail=1048576&alt=recording&lines=10000'
+    );
 
     releaseFetch();
     await Promise.all([first, duplicate]);
     expect(app._terminalRefreshOwner).toBe(null);
+  });
+
+  it("reloads a cleared shell from tmux's rendered history and an agent from the byte recording", async () => {
+    const { CodemanApp, fetchMock } = loadAppHarness();
+    const app = Object.create(CodemanApp.prototype) as any;
+    app.sessions = new Map([
+      ['shell-1', { mode: 'shell' }],
+      ['agent-1', { mode: 'claude' }],
+    ]);
+    app._isLoadingBuffer = false;
+    app._resetTerminalForReplay = vi.fn();
+    app.sendResize = vi.fn();
+    fetchMock.mockResolvedValue({ json: async () => ({ data: { terminalBuffer: '' } }) });
+
+    app.activeSessionId = 'shell-1';
+    await app._onSessionClearTerminal({ id: 'shell-1' });
+    app.activeSessionId = 'agent-1';
+    await app._onSessionClearTerminal({ id: 'agent-1' });
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      '/api/sessions/shell-1/terminal?full=1&tail=1048576&alt=recording&lines=10000',
+      '/api/sessions/agent-1/terminal',
+    ]);
   });
 
   it('drains a large final batch without waiting for unrelated terminal output', () => {

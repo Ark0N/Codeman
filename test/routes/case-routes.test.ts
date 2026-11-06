@@ -647,6 +647,25 @@ describe('case-routes', () => {
       expect(body.success).toBe(false);
     });
 
+    it('says which field is wrong instead of a generic message', async () => {
+      const badName = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases/link',
+        payload: { name: 'bad name!', path: '/home/user/project' },
+      });
+      expect(badName.statusCode).toBe(400);
+      expect(JSON.parse(badName.body).error).toBe('Invalid case name format');
+
+      // A leading `~` is expanded later in the route but fails the absolute-path rule first.
+      const badPath = await harness.app.inject({
+        method: 'POST',
+        url: '/api/cases/link',
+        payload: { name: 'my-project', path: '~/project' },
+      });
+      expect(badPath.statusCode).toBe(400);
+      expect(JSON.parse(badPath.body).error).toMatch(/^Invalid path:/);
+    });
+
     it('returns not found when folder does not exist', async () => {
       mockedExistsSync.mockReturnValue(false);
 

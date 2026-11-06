@@ -761,9 +761,12 @@ workers. Tests: `test/name-flag-injection.test.ts`.
 Later narrowing: `--name` is not only the peer name but also the `/resume` picker
 entry and the terminal title, and a pinned title stops Claude generating its own, so
 pinning the `w1-myapp` placeholder listed every conversation of a case under the same
-name in `/resume`. Only a manual name is pinned now (`Session.cliPinnedName`,
+name in `/resume`. Only a manual name is pinned by default (`Session.cliPinnedName`,
 `nameSource === 'manual'`, carried to the builders as `cliName`); placeholder and auto
-names leave Claude to title the conversation. A rename in Codeman appends a
+names leave Claude to title the conversation. The opt-in synced `pinCliSessionName`
+(default OFF, re-read at every spawn and respawn) pins every tab name instead, at the
+cost of Claude's generated titles; a rename then holds only until the next turn, because
+a pane spawned with `--name` re-appends its in-memory title. A rename in Codeman appends a
 `custom-title` row to the conversation's transcript (`claude-session-title.ts`), the
 row `/rename` writes. Tests: `test/claude-resume-title.test.ts`,
 `test/routes/session-name-routes.test.ts`.
