@@ -11,14 +11,15 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import type { InfraPort } from '../ports/index.js';
+import type { InfraPort, SessionPort } from '../ports/index.js';
 import { STATS_COLLECTION_INTERVAL_MS } from '../../config/server-timing.js';
 import { requireAdmin } from '../route-helpers.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { discoverForeignSessions, readAllDockerCases, readAllRemoteHosts } from '../../foreign-tmux-discovery.js';
+import { adoptTargetIdentity, foreignTargetKey } from '../../foreign-tmux.js';
 import { FOREIGN_POLL_INTERVAL_MS } from '../../config/foreign-tmux.js';
 
-export function registerMuxRoutes(app: FastifyInstance, ctx: InfraPort): void {
+export function registerMuxRoutes(app: FastifyInstance, ctx: InfraPort & SessionPort): void {
   app.get('/api/mux-sessions', async (req, reply) => {
     // Multi-user: this recovery/debug surface exposes every user's tmux + workdirs → admin-only
     // (requireAdmin is a no-op allow-all in single-user mode, so flag-off is unchanged).
@@ -54,8 +55,9 @@ export function registerMuxRoutes(app: FastifyInstance, ctx: InfraPort): void {
    * per target, and having the home page fan those out on every load is the one
    * cost this design refuses to pay.
    *
-   * `adoptedBy` is filled from the live mux sessions, so a target Codeman already
-   * wraps renders as "open" rather than offering a second wrapper.
+   * `adoptedBy` is filled from the live sessions, so a target Codeman already wraps
+   * renders as "open" rather than offering a second wrapper. Sessions and not mux
+   * records: the tmux record only exists once the tab's first attach starts the pane.
    */
   app.get('/api/mux/foreign', async (req, reply) => {
     if (isMultiUserMode() && !requireAdmin(req, reply)) return;
@@ -77,18 +79,16 @@ export function registerMuxRoutes(app: FastifyInstance, ctx: InfraPort): void {
       remoteHosts: wantRemote ? remoteHosts : undefined,
     });
 
-    // Match on the (socket, session) pair rather than on our opaque candidate id:
-    // the id encodes a host key that a restored wrapper does not carry, while the
-    // pair is exactly what the wrapper stores and what it re-attaches to.
+    // The same key the adopt route's one-wrapper check reads (see foreignTargetKey).
     const wrapped = new Map<string, string>();
-    for (const m of ctx.mux.getSessions()) {
-      if (m.adopt) wrapped.set(`${m.adopt.socketPath}\u0000${m.adopt.targetSession}`, m.sessionId);
+    for (const session of ctx.sessions.values()) {
+      if (session.adopt) wrapped.set(foreignTargetKey(adoptTargetIdentity(session.adopt)), session.id);
     }
 
     return {
       sessions: result.sessions.map((f) => ({
         ...f,
-        adoptedBy: wrapped.get(`${f.socketPath}\u0000${f.sessionName}`),
+        adoptedBy: wrapped.get(foreignTargetKey(f)),
       })),
       scannedAt: result.scannedAt,
       notes: result.notes,

@@ -184,8 +184,11 @@ function dockerTargets(cases: DockerCase[], hosts: DockerHost[]): DockerTargetIn
   const seen = new Set<string>();
   for (const c of cases) {
     const container = c.container || `codeman-case-${c.name}`;
-    if (seen.has(container)) continue;
-    seen.add(container);
+    // Per engine, not global: two daemons can each run a container of one name,
+    // and collapsing them here would leave the second one unscanned.
+    const key = `${c.hostId}\u0000${container}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     const host = byId.get(c.hostId);
     out.push({
       hostId: c.hostId,
@@ -230,7 +233,7 @@ export async function discoverDockerForeign(cases: DockerCase[]): Promise<Foreig
           ...candidatesFrom(
             stdout,
             'docker',
-            t.containerName,
+            `${t.hostId} ${t.containerName}`,
             { hostId: t.hostId, hostLabel: t.label, containerName: t.containerName },
             notes
           )

@@ -11,6 +11,7 @@ import type {
   SessionStatus,
   SessionRemote,
 } from '../../src/types.js';
+import type { SessionAdopt } from '../../src/types/session.js';
 import type { GitFetchStatus } from '../../src/git-fetch.js';
 
 /**
@@ -33,6 +34,8 @@ export class MockSession extends EventEmitter {
    * boolean and the tests only ever need to set it.
    */
   isAdopted: boolean = false;
+  /** Mirrors `Session.adopt`, the record the one-wrapper-per-target check keys on. */
+  adopt?: SessionAdopt;
   /** Mirrors Session.attachmentHistory (the attachment panel's source of truth). */
   attachmentHistory: SessionAttachmentHistoryItem[] = [];
   /** Mirrors Session.getAttachmentHistoryForPersist(). */

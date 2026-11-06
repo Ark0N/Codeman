@@ -37,6 +37,8 @@ import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { registerRespawnRoutes } from '../../src/web/routes/respawn-routes.js';
 import { registerRalphRoutes } from '../../src/web/routes/ralph-routes.js';
 import { registerMuxRoutes } from '../../src/web/routes/mux-routes.js';
+import { adoptTargetIdentity, foreignTargetKey } from '../../src/foreign-tmux.js';
+import type { SessionAdopt } from '../../src/types/session.js';
 
 const SID = 'adopted-1';
 
@@ -188,6 +190,11 @@ describe('POST /api/sessions/adopt', () => {
   });
 });
 
+/** The adoption record of a local wrapper, as the route writes it. */
+function localAdopt(socketPath: string, targetSession: string): SessionAdopt {
+  return { location: 'local', socketPath, targetSession, viewSession: 'codeman-view-00000000' };
+}
+
 describe('a successful adoption', () => {
   /** A candidate whose cwd is BOTH unsafe for SAFE_PATH_PATTERN and not on this host. */
   const CANDIDATE = {
@@ -230,17 +237,48 @@ describe('a successful adoption', () => {
   });
 
   it('reuses the existing wrapper rather than making a second one for the same target', async () => {
-    // Keyed on (socket, session) and not on our opaque candidate id: a wrapper
-    // restored after a server restart does not carry that id.
+    // Keyed on the target and not on our opaque candidate id: a wrapper restored
+    // after a server restart does not carry that id.
     const { app, ctx } = await createRouteTestHarness(registerSessionRoutes);
     ctx.sessions.set('wrapper-1', ctx._session);
-    ctx.mux.getSessions = vi.fn(() => [
-      { sessionId: 'wrapper-1', adopt: { socketPath: CANDIDATE.socketPath, targetSession: CANDIDATE.sessionName } },
-    ]) as unknown as typeof ctx.mux.getSessions;
+    ctx._session.adopt = localAdopt(CANDIDATE.socketPath, CANDIDATE.sessionName);
     const res = await app.inject({ method: 'POST', url: '/api/sessions/adopt', payload: { id: 'cand-1' } });
     expect(res.statusCode).toBe(200);
     expect(res.json().alreadyAdopted).toBe(true);
     expect(ctx.addSession).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('sees a wrapper whose tab has not started yet, which has no mux record to find', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerSessionRoutes);
+    const first = await app.inject({ method: 'POST', url: '/api/sessions/adopt', payload: { id: 'cand-1' } });
+    expect(first.json().adopted).toBe(true);
+    expect(ctx.mux.getSessions()).toEqual([]);
+    const second = await app.inject({ method: 'POST', url: '/api/sessions/adopt', payload: { id: 'cand-1' } });
+    expect(second.json().alreadyAdopted).toBe(true);
+    expect(ctx.addSession).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('refuses a second adopt of a target whose wrapper is still being created', async () => {
+    // Two devices on one row: both pass the live-session check, because the first
+    // is parked on the layout lock and not yet in the map.
+    const { app, ctx } = await createRouteTestHarness(registerSessionRoutes);
+    const add = ctx.addSession.getMockImplementation()!;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    ctx.addSession.mockImplementationOnce(async (s: never) => {
+      await held;
+      return add(s);
+    });
+    const first = app.inject({ method: 'POST', url: '/api/sessions/adopt', payload: { id: 'cand-1' } });
+    await vi.waitFor(() => expect(ctx.addSession).toHaveBeenCalledTimes(1));
+    const second = await app.inject({ method: 'POST', url: '/api/sessions/adopt', payload: { id: 'cand-1' } });
+    expect(second.json().success).toBe(false);
+    expect(second.json().errorCode).toBe('SESSION_BUSY');
+    release();
+    expect((await first).json().adopted).toBe(true);
+    expect(ctx.addSession).toHaveBeenCalledTimes(1);
     await app.close();
   });
 
@@ -268,6 +306,74 @@ describe('a successful adoption', () => {
     expect(created.adopt?.targetSession).toBe(CANDIDATE.sessionName);
     // Derived from the Codeman session id, so it is provably ours to kill.
     expect(created.adopt?.viewSession).toMatch(/^codeman-view-/);
+    await app.close();
+  });
+});
+
+describe('same-named sessions in different locations', () => {
+  // Containers commonly run tmux as root with default names, so `0` in two
+  // containers is the same (socket, name) pair, and the same goes for this machine
+  // and an ssh host with the same uid.
+  const SHARED = {
+    socketPath: '/tmp/tmux-0/default',
+    sessionName: '0',
+    mode: 'shell' as const,
+    workingDir: '/workspace',
+    command: 'bash',
+    createdAt: 1,
+    windows: 1,
+    attached: false,
+  };
+  const IN_A = { ...SHARED, id: 'in-a', location: 'docker' as const, hostId: 'h1', containerName: 'box-a' };
+  const IN_B = { ...SHARED, id: 'in-b', location: 'docker' as const, hostId: 'h1', containerName: 'box-b' };
+  const OTHER_ENGINE = { ...SHARED, id: 'in-c', location: 'docker' as const, hostId: 'h2', containerName: 'box-a' };
+  const ON_THIS_HOST = { ...SHARED, id: 'here', location: 'local' as const };
+
+  beforeEach(() => {
+    discoverForeignSessions.mockResolvedValue({ sessions: [IN_A, IN_B, OTHER_ENGINE, ON_THIS_HOST], notes: [] });
+  });
+
+  it('gives each location its own key, and a wrapper the key of its candidate', () => {
+    const keys = [IN_A, IN_B, OTHER_ENGINE, ON_THIS_HOST].map(foreignTargetKey);
+    expect(new Set(keys).size).toBe(4);
+    expect(
+      foreignTargetKey(
+        adoptTargetIdentity({
+          ...localAdopt(SHARED.socketPath, SHARED.sessionName),
+          location: 'docker',
+          docker: { hostId: 'h1', label: 'one', engine: 'docker', containerName: 'box-b' },
+        })
+      )
+    ).toBe(foreignTargetKey(IN_B));
+  });
+
+  it('adopting one never returns the tab of another', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerSessionRoutes);
+    const a = await app.inject({ method: 'POST', url: '/api/sessions/adopt', payload: { id: 'in-a', docker: true } });
+    const b = await app.inject({ method: 'POST', url: '/api/sessions/adopt', payload: { id: 'in-b', docker: true } });
+    const local = await app.inject({ method: 'POST', url: '/api/sessions/adopt', payload: { id: 'here' } });
+    for (const res of [a, b, local]) expect(res.json().adopted).toBe(true);
+    expect(ctx.addSession).toHaveBeenCalledTimes(3);
+    const ids = [a, b, local].map((res) => res.json().session.id);
+    expect(new Set(ids).size).toBe(3);
+    await app.close();
+  });
+
+  it('marks only the row that is really open as open', async () => {
+    const { app, ctx } = await createRouteTestHarness(registerMuxRoutes);
+    ctx.sessions.set('wrapper-b', {
+      id: 'wrapper-b',
+      adopt: {
+        ...localAdopt(SHARED.socketPath, SHARED.sessionName),
+        location: 'docker',
+        docker: { hostId: 'h1', label: 'one', engine: 'docker', containerName: 'box-b' },
+      },
+    } as never);
+    const res = await app.inject({ method: 'GET', url: '/api/mux/foreign' });
+    const adoptedBy = Object.fromEntries(
+      (res.json().sessions as { id: string; adoptedBy?: string }[]).map((s) => [s.id, s.adoptedBy])
+    );
+    expect(adoptedBy).toEqual({ 'in-a': undefined, 'in-b': 'wrapper-b', 'in-c': undefined, here: undefined });
     await app.close();
   });
 });

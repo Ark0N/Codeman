@@ -72,7 +72,7 @@ import { collectDescendants } from './proc-tree.js';
 import { listClis } from './config/cli-registry/registry.js';
 import { FOREIGN_MAX_PANES, FOREIGN_MAX_PROCS, FOREIGN_MAX_SOCKETS } from './config/foreign-tmux.js';
 import type { ForeignPaneProbe, ForeignTmuxLocationKind } from './types/foreign-tmux.js';
-import type { SessionMode } from './types/session.js';
+import type { SessionAdopt, SessionMode } from './types/session.js';
 
 // ===========================================================================
 // Probe script
@@ -494,6 +494,54 @@ export function foreignSessionId(
   sessionName: string
 ): string {
   return `f${fnv1a(`${location} ${hostKey} ${socketPath} ${sessionName}`)}`;
+}
+
+/**
+ * What names one foreign tmux session across every location Codeman can reach.
+ * A socket path and a session name are not enough on their own: a socket path is
+ * only meaningful INSIDE its location. Containers commonly run tmux as root
+ * (`/tmp/tmux-0/default`) with default names `0`, `1`, so session `0` in two
+ * containers is the same pair, and so is the same name on this machine and on an
+ * ssh host with the same uid.
+ *
+ * A `ForeignTmuxSession` candidate is one of these as it stands. A wrapper's
+ * `SessionAdopt` is turned into one by `adoptTargetIdentity()`.
+ */
+export interface ForeignTargetIdentity {
+  location: ForeignTmuxLocationKind;
+  /** Registry id of the docker or remote host. Absent for local. */
+  hostId?: string;
+  /** The container (`location === 'docker'`), which is only unique per engine, hence beside `hostId`. */
+  containerName?: string;
+  socketPath: string;
+  sessionName: string;
+}
+
+/**
+ * The ONE key that decides "is this foreign session already wrapped?". The adopt
+ * route's one-wrapper-per-target check and the listing's `adoptedBy` both read it;
+ * two keys are how a row ends up offering a tab that belongs to another location.
+ *
+ * Unlike `foreignSessionId` this is not opaque, and it stays on the server: the
+ * opaque id encodes a discovery detail a restored wrapper does not carry, while
+ * everything here is on `SessionAdopt` too.
+ */
+export function foreignTargetKey(target: ForeignTargetIdentity): string {
+  // \u0000 as an ESCAPE: see the note in candidatesFrom() about NUL bytes in source.
+  return [target.location, target.hostId ?? '', target.containerName ?? '', target.socketPath, target.sessionName].join(
+    '\u0000'
+  );
+}
+
+/** A wrapper's adoption record, as the identity of the foreign session it wraps. */
+export function adoptTargetIdentity(adopt: SessionAdopt): ForeignTargetIdentity {
+  return {
+    location: adopt.location,
+    hostId: adopt.docker?.hostId ?? adopt.remote?.hostId,
+    containerName: adopt.docker?.containerName,
+    socketPath: adopt.socketPath,
+    sessionName: adopt.targetSession,
+  };
 }
 
 function fnv1a(input: string): string {

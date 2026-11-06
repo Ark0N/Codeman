@@ -41,9 +41,10 @@ import {
   readAllDockerCases,
   readAllRemoteHosts,
 } from '../../foreign-tmux-discovery.js';
-import { foreignViewSessionName } from '../../foreign-tmux.js';
+import { adoptTargetIdentity, foreignTargetKey, foreignViewSessionName } from '../../foreign-tmux.js';
 import { requireAdmin } from '../route-helpers.js';
 import type { SessionAdopt } from '../../types/session.js';
+import type { ForeignTmuxSession } from '../../types/foreign-tmux.js';
 import {
   GuardedInputBusyError,
   Session,
@@ -1500,6 +1501,21 @@ export function registerSessionRoutes(
   // ========== Adopt a foreign tmux session ==========
 
   /**
+   * The wrapper pane for an adopted session runs `tmux attach`, never the agent,
+   * so it needs no workspace, and must not borrow the foreign one. Same value
+   * `resolveMuxAttachCwd()` gives remote and docker panes.
+   */
+  const ADOPTED_WRAPPER_WORKING_DIR = '/tmp';
+
+  /**
+   * Targets with a wrapper being created right now. The live-session check alone
+   * leaves a gap: between it and `addSession` the route awaits the host registries,
+   * the history config and the owner's layout lock, so two devices opening one row
+   * could each pass it.
+   */
+  const adoptsInFlight = new Set<string>();
+
+  /**
    * Wrap a tmux session a HUMAN started (local, in a container, or over ssh) in a
    * Codeman session, so it appears as a tab and can be driven from the browser.
    *
@@ -1518,24 +1534,14 @@ export function registerSessionRoutes(
    *    double-click on one device.
    * 4. **Admin-only under multi-user.** Discovery already is (it exposes other
    *    users' processes), and adopting someone's `shell` is arbitrary execution
-   *    as the server account — which is exactly what the `can-bypass-permissions`
+   *    as the server account, which is exactly what the `can-bypass-permissions`
    *    grant gates elsewhere. The admin gate subsumes it, so there is deliberately
    *    no second grant check here.
    */
-  /**
-   * The wrapper pane for an adopted session runs `tmux attach`, never the agent,
-   * so it needs no workspace — and must not borrow the foreign one. Same value
-   * `resolveMuxAttachCwd()` gives remote and docker panes.
-   */
-  const ADOPTED_WRAPPER_WORKING_DIR = '/tmp';
-
   app.post('/api/sessions/adopt', async (req, reply) => {
     if (isMultiUserMode() && !requireAdmin(req, reply)) return;
 
     const owner = ownerFor(req);
-    const capMsg = sessionCapacityMessage(ctx.sessions, owner);
-    if (capMsg) return createErrorResponse(ApiErrorCode.SESSION_BUSY, capMsg);
-
     const body = parseBody(AdoptForeignSessionSchema, req.body, 'Invalid request body');
 
     // Re-resolve rather than trust: point 1 and 2 above.
@@ -1553,25 +1559,48 @@ export function registerSessionRoutes(
       // flaky link makes a perfectly live remote session read as deleted. Measured
       // against a real VM whose ssh path dropped ~10% of connections: clicking
       // Open failed with "no longer there" while the session was sitting right
-      // there. Discovery already knows which it was — it wrote a note — so say so.
+      // there. Discovery already knows which it was: it wrote a note, so say so.
       const reach = found.notes.filter((n) => !/skipped/.test(n));
       return createErrorResponse(
         ApiErrorCode.NOT_FOUND,
         reach.length
-          ? `Could not reach it just now (${reach.join('; ')}). It may still be running — try again.`
+          ? `Could not reach it just now (${reach.join('; ')}). It may still be running, try again.`
           : 'That tmux session is no longer there. Refresh the list and try again.'
       );
     }
 
-    // Point 3 — one wrapper per (socket, session).
-    const existing = ctx.mux
-      .getSessions()
-      .find((m) => m.adopt?.socketPath === target.socketPath && m.adopt?.targetSession === target.sessionName);
-    if (existing) {
-      const live = ctx.sessions.get(existing.sessionId);
-      if (live) return { session: ctx.getSessionStateWithRespawn(live), alreadyAdopted: true };
+    // Point 3: one wrapper per target. Live sessions and not mux records, which
+    // only exist once the first attach starts the pane, so reading those let a
+    // second adopt through before the first tab had started.
+    const targetKey = foreignTargetKey(target);
+    for (const session of ctx.sessions.values()) {
+      if (session.adopt && foreignTargetKey(adoptTargetIdentity(session.adopt)) === targetKey) {
+        return { session: ctx.getSessionStateWithRespawn(session), alreadyAdopted: true };
+      }
+    }
+    if (adoptsInFlight.has(targetKey)) {
+      return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'That tmux session is already being opened');
     }
 
+    // After the reuse above, which creates nothing and so must not be refused at capacity.
+    const capMsg = sessionCapacityMessage(ctx.sessions, owner);
+    if (capMsg) return createErrorResponse(ApiErrorCode.SESSION_BUSY, capMsg);
+
+    adoptsInFlight.add(targetKey);
+    try {
+      return await createAdoptedSession(req, target, owner, body);
+    } finally {
+      adoptsInFlight.delete(targetKey);
+    }
+  });
+
+  /** Everything past the guards in `POST /api/sessions/adopt`, held under its in-flight mark. */
+  async function createAdoptedSession(
+    req: FastifyRequest,
+    target: ForeignTmuxSession,
+    owner: string | undefined,
+    body: { name?: string; parentSessionId?: string }
+  ) {
     // Connection facts are copied onto the session rather than referenced by id:
     // a wrapper restored after a server restart must be able to rebuild its
     // command even if the host registry was edited in the meantime.
@@ -1648,7 +1677,7 @@ export function registerSessionRoutes(
     const lightState = ctx.getSessionStateWithRespawn(session);
     ctx.broadcast(SseEvent.SessionCreated, lightState);
     return { session: lightState, adopted: true };
-  });
+  }
 
   // ========== Rename Session ==========
 
