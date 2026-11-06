@@ -2,7 +2,10 @@
  * @fileoverview Frontend test for Clone Repo's custom folder (session-ui.js `cloneCase()` /
  * `_cloneTargetPath()`): the chosen folder is the PARENT, so the clone request carries
  * `<folder>/<case name>` exactly as Create New does, and without the checkbox no `path` is sent
- * (the server then clones to `~/codeman-cases/<name>`). Runs against the real index.html markup.
+ * (the server then clones to `~/codeman-cases/<name>`). The "Will clone into" line has to name the
+ * folder the request will really use, so it follows every way the name or the folder can change:
+ * typing, the URL, the preflight's suggested name and the Browse picker. Runs against the real
+ * index.html markup.
  *
  * Port: none.
  */
@@ -33,7 +36,8 @@ function bootClone() {
   const set = (id: string, value: string) => ((doc.getElementById(id) as HTMLInputElement).value = value);
   set('cloneRepoUrl', 'https://github.com/opticon454/bifrost');
   set('cloneCaseName', 'bifrost');
-  return { app, doc, set, fetchMock };
+  const preview = () => doc.getElementById('cloneCasePathPreview')?.textContent;
+  return { app, win, doc, set, preview, fetchMock };
 }
 
 async function requestBody(fetchMock: ReturnType<typeof vi.fn>) {
@@ -71,5 +75,81 @@ describe('Clone Repo custom folder', () => {
     await app.cloneCase();
     const { body } = await requestBody(fetchMock);
     expect(body.path).toBeUndefined();
+  });
+
+  it.each([
+    ['/mnt/projects', '/mnt/projects/bifrost'],
+    ['/mnt/projects///', '/mnt/projects/bifrost'],
+    ['  /mnt/projects/  ', '/mnt/projects/bifrost'],
+    ['/', '/bifrost'],
+    ['~', '~/bifrost'],
+    ['~/', '~/bifrost'],
+  ])('joins the parent %j to the case name', (parent, target) => {
+    const { app, set } = bootClone();
+    set('cloneCasePath', parent);
+    expect(app._cloneTargetPath()).toBe(target);
+  });
+
+  it('follows the name the preflight settles on, which is the one the request will carry', async () => {
+    const { app, doc, set, preview, fetchMock } = bootClone();
+    (doc.getElementById('cloneCustomPathToggle') as HTMLInputElement).checked = true;
+    set('cloneCasePath', '/mnt/projects');
+    // The page's own guess for a URL copied out of a browser tab; the server reads the repo as `repo`.
+    set('cloneCaseName', 'repo-tab-readme');
+    app.updateCloneCasePathPreview();
+    expect(preview()).toBe('Will clone into: /mnt/projects/repo-tab-readme');
+    app._applyClonePreflight(
+      {
+        parse: { cloneable: true, suggestedName: 'repo', provider: 'GitHub', owner: 'owner', repo: 'repo' },
+        gitAvailable: true,
+      },
+      'https://github.com/owner/repo?tab=readme'
+    );
+    expect(preview()).toBe('Will clone into: /mnt/projects/repo');
+    await app.cloneCase();
+    const { body } = await requestBody(fetchMock);
+    expect(body).toMatchObject({ name: 'repo', path: '/mnt/projects/repo' });
+  });
+
+  it('sends the folder Browse picked as the parent, and titles the picker as the parent', async () => {
+    const { app, win, doc, preview, fetchMock } = bootClone();
+    const open = vi.fn();
+    (win as unknown as { PathPicker: { open: unknown } }).PathPicker = { open };
+    (doc.getElementById('cloneCustomPathToggle') as HTMLInputElement).checked = true;
+    app.openCloneCasePathPicker();
+    const options = open.mock.calls[0]![0] as { title: string; directoriesOnly: boolean; onSelect(p: string): void };
+    expect(options.title).toBe('Choose the parent folder for the clone');
+    expect(options.directoriesOnly).toBe(true);
+    options.onSelect('/mnt/projects');
+    expect((doc.getElementById('cloneCasePath') as HTMLInputElement).value).toBe('/mnt/projects');
+    expect(preview()).toBe('Will clone into: /mnt/projects/bifrost');
+    await app.cloneCase();
+    const { body } = await requestBody(fetchMock);
+    expect(body.path).toBe('/mnt/projects/bifrost');
+  });
+
+  it('asks for the parent folder before cloning when the checkbox is on and the field is empty', async () => {
+    const { app, doc, fetchMock } = bootClone();
+    app.showToast = vi.fn();
+    (doc.getElementById('cloneCustomPathToggle') as HTMLInputElement).checked = true;
+    await app.cloneCase();
+    expect(app.showToast).toHaveBeenCalledWith('Choose the parent folder for the clone', 'error');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('builds no target and sends nothing without a case name', async () => {
+    const { app, doc, set, preview, fetchMock } = bootClone();
+    app.showToast = vi.fn();
+    (doc.getElementById('cloneCustomPathToggle') as HTMLInputElement).checked = true;
+    set('cloneCasePath', '/mnt/projects');
+    set('cloneCaseName', '');
+    app.updateCloneCasePathPreview();
+    expect(app._cloneTargetPath()).toBe('');
+    expect(preview()).toBe(
+      'Pick the folder the repository should be cloned inside. It goes into a subfolder named after the case.'
+    );
+    await app.cloneCase();
+    expect(app.showToast).toHaveBeenCalledWith('Please enter a case name', 'error');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

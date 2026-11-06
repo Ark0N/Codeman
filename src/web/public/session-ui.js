@@ -4291,7 +4291,7 @@ Object.assign(CodemanApp.prototype, {
   openCloneCasePathPicker() {
     const input = document.getElementById('cloneCasePath');
     PathPicker.open({
-      title: 'Choose the folder to clone into',
+      title: 'Choose the parent folder for the clone',
       initialPath: input.value.trim(),
       directoriesOnly: true,
       onSelect: (path) => {
@@ -4400,7 +4400,10 @@ Object.assign(CodemanApp.prototype, {
     // The server's suggestion wins over the local guess (it is the same function
     // the case name is validated against), but never over a name the user typed.
     const nameInput = document.getElementById('cloneCaseName');
-    if (nameInput && !this._cloneNameEdited && parse.suggestedName) nameInput.value = parse.suggestedName;
+    if (nameInput && !this._cloneNameEdited && parse.suggestedName) {
+      nameInput.value = parse.suggestedName;
+      this.updateCloneCasePathPreview();
+    }
 
     const where = parse.owner ? `${parse.provider} ${parse.owner}/${parse.repo}` : `${parse.provider} ${parse.repo}`;
     if (data.gitAvailable === false) {
@@ -4455,7 +4458,7 @@ Object.assign(CodemanApp.prototype, {
 
     const customFolder = !!document.getElementById('cloneCustomPathToggle')?.checked;
     if (customFolder && !(document.getElementById('cloneCasePath')?.value || '').trim()) {
-      this.showToast('Choose the folder to clone into', 'error');
+      this.showToast('Choose the parent folder for the clone', 'error');
       return;
     }
 
